@@ -1930,6 +1930,176 @@ fn show_in_folders_is_disabled_for_a_folder_below_the_trees_depth() {
 }
 
 #[test]
+fn show_in_album_navigates_to_the_requested_containing_album() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let photo = h.app.session.active().expect("demo has an active photo");
+    let folder = h.app.session.execute("album.create", &json!({"name": "Trip 2026", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let album =
+        h.app.session.execute("album.create", &json!({"name": "Favorites", "parent": folder, "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    assert!(h.app.session.catalog.albums_of(photo).contains(&lightcraft_catalog::AlbumId(album)));
+    h.step();
+    h.step();
+    h.view.ctx.data_mut(|data| data.insert_temp(egui::Id::unique(("folder-open", folder)), false));
+    assert_eq!(h.view.ctx.data(|data| data.get_temp::<bool>(egui::Id::unique(("folder-open", folder)))), Some(false));
+
+    h.app.run("view.sidebarSection", json!({"section": "albums", "show": false, "collapsed": true})).unwrap();
+    h.app.ui.left_panel = false;
+    let result = h.app.run("app.showInAlbum", json!({"album": album}));
+    assert!(result.is_ok(), "{result:?}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(album)));
+    assert_eq!(h.app.session.active(), Some(photo));
+    assert!(h.app.ui.left_panel);
+    assert!(!h.app.ui.sidebar.is_hidden(crate::sidebar::SidebarSection::Albums));
+    assert!(!h.app.ui.sidebar.is_collapsed(crate::sidebar::SidebarSection::Albums));
+    assert_eq!(h.app.session.selection.ids, vec![photo]);
+    assert_eq!(
+        h.view.ctx.data(|data| data.get_temp::<bool>(egui::Id::unique(("folder-open", folder)))),
+        Some(true),
+        "the ancestor folder is reopened"
+    );
+    assert!(has(&h, &format!("source:album:{album}")), "the containing album is revealed");
+}
+
+#[test]
+fn show_in_album_context_target_is_the_clicked_photo() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let visible = h.app.session.visible_cloned();
+    let (clicked, other) = (visible[0], visible[1]);
+    let album = h.app.session.execute("album.create", &json!({"name": "Clicked photo", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    h.app.session.execute("album.addPhotos", &json!({"id": album, "ids": [clicked.0]})).unwrap();
+    h.app.run("library.select", json!({"ids": [clicked.0, other.0], "active": other.0})).unwrap();
+    assert_eq!(h.app.session.active(), Some(other));
+
+    h.step();
+    assert_eq!(h.app.session.active(), Some(other), "the context-menu target can differ from the active photo");
+    assert!(crate::menus::albums_for_photo(&h.app, clicked).iter().any(|(id, _)| id.0 == album));
+    let thumb = widget(&h, &format!("thumb:{}", clicked.0));
+    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.active(), Some(other), "right-clicking an already-selected photo keeps the active photo");
+    let r = h.request("ui.hoverWidget", json!({"id": "button:contextShowInAlbum"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(has(&h, &format!("contextShowInAlbum:{album}")), "the clicked photo's containing album is offered");
+    let r = h.request("ui.clickWidget", json!({"id": format!("contextShowInAlbum:{album}")}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(album)));
+    assert_eq!(h.app.session.active(), Some(clicked));
+    assert_eq!(h.app.session.selection.ids, vec![clicked]);
+}
+
+#[test]
+fn show_in_album_opens_a_collapsed_stack_hiding_the_target() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let photo = h.app.session.active().expect("demo has an active photo");
+    let peer = h.app.session.catalog.photos().find(|p| p.id != photo).expect("demo has another photo").id;
+    h.app.session.execute("stack.group", &json!({"ids": [photo.0, peer.0], "top": peer.0, "collapsed": true})).unwrap();
+    let album = h.app.session.execute("album.create", &json!({"name": "Stack member", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    h.app.session.execute("album.addPhotos", &json!({"id": album, "ids": [photo.0]})).unwrap();
+    assert!(h.app.session.catalog.stack_of(photo).is_some_and(|stack| stack.collapsed && stack.top() == peer));
+
+    h.app.run("app.showInAlbum", json!({"album": album, "id": photo.0})).unwrap();
+    assert!(h.app.session.catalog.stack_of(photo).is_some_and(|stack| !stack.collapsed));
+    assert_eq!(h.app.session.active(), Some(photo));
+}
+
+#[test]
+fn show_in_album_includes_smart_albums_but_not_folders_or_nonmembers() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let photo = h.app.session.active().expect("demo has an active photo");
+    let folder = h.app.session.execute("album.create", &json!({"name": "Folder only", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let regular = h.app.session.execute("album.create", &json!({"name": "Regular", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    let smart = h.app.session.execute("album.createSmart", &json!({"name": "Every photo", "rules": {"rating": 0}})).unwrap()["id"].as_u64().unwrap();
+    let menus = crate::menus::albums_for_photo(&h.app, photo);
+    let ids: Vec<_> = menus.iter().map(|(id, _)| id.0).collect();
+    assert!(ids.contains(&regular));
+    assert!(ids.contains(&smart));
+    assert!(!ids.contains(&folder), "folders are destinations in the tree, not photo albums");
+
+    let other = h.app.session.catalog.photos().find(|p| p.id != photo).expect("demo has another photo").id;
+    assert!(!crate::menus::albums_for_photo(&h.app, other).iter().any(|(id, _)| id.0 == regular));
+    assert!(h.app.run("app.showInAlbum", json!({"album": regular, "id": other.0})).is_err());
+}
+
+#[test]
+fn show_in_album_preserves_a_filter_that_hides_the_target() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let photo = h.app.session.active().expect("demo has an active photo");
+    let album = h.app.session.execute("album.create", &json!({"name": "Filtered target", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    h.app.session.filter.only_none = true;
+    let source = h.app.session.source;
+    let result = h.app.run("app.showInAlbum", json!({"album": album, "id": photo.0}));
+    assert!(result.is_err(), "a filter-hidden target is not silently made visible: {result:?}");
+    assert_eq!(h.app.session.source, source);
+    assert!(h.app.session.filter.only_none);
+    assert_eq!(h.app.session.active(), Some(photo));
+}
+
+#[test]
+fn show_in_album_rejects_stale_and_empty_destinations_without_navigation() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let photo = h.app.session.active().expect("demo has an active photo");
+    let empty = h.app.session.execute("album.create", &json!({"name": "Empty", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let folder = h.app.session.execute("album.create", &json!({"name": "Folder", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let source = h.app.session.source;
+    assert!(h.app.run("app.showInAlbum", json!({"album": empty, "id": photo.0})).is_err());
+    assert!(h.app.run("app.showInAlbum", json!({"album": folder, "id": photo.0})).is_err());
+    assert!(h.app.run("app.showInAlbum", json!({"album": u64::MAX, "id": photo.0})).is_err());
+    assert!(h.app.run("app.showInAlbum", json!({"album": "stale", "id": photo.0})).is_err());
+    assert_eq!(h.app.session.source, source);
+    assert_eq!(h.app.session.active(), Some(photo));
+}
+
+#[test]
+fn show_in_album_menu_has_a_disabled_empty_state_without_an_active_photo() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    let nodes = crate::menus::menubar::expanded(&app, "Show in Album").expect("dynamic submenu");
+    assert!(matches!(nodes.as_slice(), [crate::menus::menubar::MenuNode::Item { id, params, label, enabled: false, .. }]
+        if id == "app.showInAlbum" && params.is_null() && label == "No containing albums"));
+    assert_eq!(
+        crate::menubar::display_item_label("app.showInAlbum", &serde_json::Value::Null, "No containing albums"),
+        crate::i18n::tr("No containing albums")
+    );
+}
+
+#[test]
+fn show_in_album_menu_lists_containing_albums_with_user_names_as_data() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let photo = h.app.session.active().expect("demo has an active photo");
+    let folder_a = h.app.session.execute("album.create", &json!({"name": "Folder A", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let folder_b = h.app.session.execute("album.create", &json!({"name": "Folder B", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let album =
+        h.app.session.execute("album.create", &json!({"name": "A & B", "parent": folder_a, "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    let album_b =
+        h.app.session.execute("album.create", &json!({"name": "A & B", "parent": folder_b, "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    let bar = crate::menus::menubar::menu_bar(&h.app);
+    let photo_menu = &bar.iter().find(|(name, _)| name == "Photo").unwrap().1;
+    let submenu = photo_menu
+        .iter()
+        .find_map(|node| match node {
+            crate::menus::menubar::MenuNode::Submenu { label, children } if label == "Show in Album" => Some(children),
+            _ => None,
+        })
+        .expect("Photo menu has Show in Album");
+    assert!(submenu.iter().any(|node| matches!(node,
+        crate::menus::menubar::MenuNode::Item { id, params, label, .. }
+        if id == "app.showInAlbum" && params["album"] == album && params["id"] == photo.0 && label == "Folder A / A & B"
+    )));
+    assert!(submenu.iter().any(|node| matches!(node,
+        crate::menus::menubar::MenuNode::Item { id, params, label, .. }
+        if id == "app.showInAlbum" && params["album"] == album_b && label == "Folder B / A & B"
+    )));
+    assert_eq!(crate::menubar::display_item_label("app.showInAlbum", &json!({"album": album}), "Folder A / A & B"), "Folder A / A & B");
+}
+
+#[test]
 fn a_renamed_folder_keeps_its_place_in_the_tree() {
     /// Removes the folder however the test ends.
     struct Cleanup(std::path::PathBuf);

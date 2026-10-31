@@ -45,6 +45,8 @@
   "Add to My Photos": "加入我的照片",
   "Can't be moved here": "無法移到這裡",
   "Import photos with File → Import Photos…, or drop them here": "使用「檔案 → 匯入照片…」，或將照片拖放至此",
+  "No containing albums": "沒有包含此照片的相簿",
+  "Show in Album": "在相簿中顯示",
   "This row covers more than one disk: drop on a folder inside it": "此列涵蓋多個磁碟：請拖放到其中的資料夾",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "本機照片尚未在照片庫中：請先「加入我的照片」，再移動",
   "Add to Selected Photos": "加入選取的照片",

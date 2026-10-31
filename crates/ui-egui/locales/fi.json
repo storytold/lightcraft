@@ -560,6 +560,8 @@
   "Download Place Names (GeoNames)": "Lataa paikannimet (GeoNames)",
   "Download the SAM 3 Model?": "Ladataanko SAM 3 -malli?",
   "Downloaded and checked. Installing…": "Ladattu ja tarkistettu. Asennetaan…",
+  "No containing albums": "Mikään albumi ei sisällä tätä kuvaa",
+  "Show in Album": "Näytä albumissa",
   "The download failed": "Lataus epäonnistui",
   "Downloading model": "Ladataan mallia",
   "Downloading place names": "Ladataan paikannimiä",

@@ -76,7 +76,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     // a vertical mouse wheel scrolls the strip sideways (horizontal trackpad scrolls still work)
     child.style_mut().always_scroll_the_only_direction = true;
     // only a new active photo (or the strip appearing) scrolls it; see `grid::follow_active`
-    let follow = crate::panels::grid::follow_active(child.ctx(), egui::Id::unique("film-follow-active"), active, app.session.source);
+    let follow = crate::panels::grid::follow_active(
+        child.ctx(),
+        egui::Id::unique("film-follow-active"),
+        active,
+        app.session.source,
+        app.follow_active_generation,
+    );
     // a wheel notch scrolls a third of its width; see `grid::wheel_step`
     register(ui, "filmstrip", child.max_rect());
     let wheel = crate::panels::grid::wheel_step(&child, egui::Id::unique("film-wheel"), child.max_rect(), child.max_rect().width(), true);
@@ -86,13 +92,19 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
         }
         let (area, _) = ui.allocate_exact_size(vec2(ids.len() as f32 * cell_w, r.height() - 16.0), Sense::hover());
         app.film_scroll = Some(vp.left());
+        // The active photo may be well outside the virtualization window below. Request its
+        // scroll before filtering cells so an explicit navigation can recover from any strip
+        // position, not only one that left the target within the four-cell prefetch margin.
+        if follow && let Some(i) = active.and_then(|id| ids.iter().position(|candidate| *candidate == id)) {
+            let local = Rect::from_min_size(pos2(i as f32 * cell_w, 0.0), vec2(cell_w, area.height()));
+            if !(local.left() >= vp.left() && local.right() <= vp.right()) {
+                let target = Rect::from_min_size(pos2(area.left() + i as f32 * cell_w, area.top()), local.size());
+                ui.scroll_to_rect(target, Some(egui::Align::Center));
+            }
+        }
         for (i, id) in ids.iter().enumerate() {
             let cr = Rect::from_min_size(pos2(area.left() + i as f32 * cell_w, area.top()), vec2(cell_w, area.height()));
             let local = Rect::from_min_size(pos2(i as f32 * cell_w, 0.0), cr.size());
-            // centred when it is (partly) off screen; a click on a visible thumbnail leaves the strip alone
-            if follow && Some(*id) == active && !(local.left() >= vp.left() && local.right() <= vp.right()) {
-                ui.scroll_to_rect(cr, Some(egui::Align::Center));
-            }
             if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
                 continue;
             }

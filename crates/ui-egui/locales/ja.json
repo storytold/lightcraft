@@ -44,6 +44,8 @@
   "Add to My Photos": "マイフォトに追加",
   "Can't be moved here": "ここには移動できません",
   "Import photos with File → Import Photos…, or drop them here": "「ファイル → 写真を読み込む…」から読み込むか、ここに写真をドロップしてください",
+  "No containing albums": "この写真を含むアルバムはありません",
+  "Show in Album": "アルバムに表示",
   "This row covers more than one disk: drop on a folder inside it": "この行は複数のディスクにまたがっています。中のフォルダにドロップしてください",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "ローカルの写真はまだライブラリにありません。先に「マイフォトに追加」してから移動してください",
   "Add to Selected Photos": "選択した写真に追加",
