@@ -891,15 +891,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("spot.add", "missing points"));
                 }
                 let d = Spot::default();
+                let size = f64_or(p, "size", d.size).clamp(SPOT_SIZE.0, SPOT_SIZE.1);
+                let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut spot = Spot {
                     mode,
-                    points: pts,
-                    size: f64_or(p, "size", d.size).clamp(SPOT_SIZE.0, SPOT_SIZE.1),
+                    points: thin_spot_points(&pts, size, super::develop::crop_dims(s, id)),
+                    size,
                     feather: f64_or(p, "feather", d.feather).clamp(0.0, 100.0),
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
                 };
-                let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 if spot.source_offset.is_none() && spot.mode != SpotMode::Fill {
                     // resolve the automatic source now: it gets a pin and stays put at every size
@@ -1092,6 +1093,37 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
     s.set_develop(id, d, label)
 }
 
+/// A brushed spot's points as stored: consecutive near-duplicates dropped and the stroke thinned to one point
+/// every `size / 4` (long-edge units, like the mask brush's dabs), the first and the last point kept. `dims` is
+/// the oriented photo's width and height: points are normalized per axis, so a distance counts in long-edge
+/// units (issue #2359). A caller that records a point per frame (the app's brush, an agent replaying a pointer)
+/// then stores a handful of points instead of dozens that all draw and render the same disc.
+fn thin_spot_points(pts: &[Point], size: f64, (w, h): (f64, f64)) -> Vec<Point> {
+    let long = w.max(h).max(1e-9);
+    let (kx, ky) = (w / long, h / long);
+    let dist = |a: Point, b: Point| ((b.x - a.x) * kx).hypot((b.y - a.y) * ky);
+    let spacing = size / 4.0;
+    let mut out: Vec<Point> = Vec::with_capacity(pts.len().min(64));
+    for &q in pts {
+        if out.last().is_none_or(|&last| dist(last, q) >= spacing) {
+            out.push(q);
+        }
+    }
+    // the stroke reaches where it ended: a last point closer than the spacing takes the place of the one
+    // before it (so a hold at the end doesn't leave a bump), unless it is at that one already
+    if let Some(&end) = pts.last()
+        && let Some(&last) = out.last()
+        && dist(last, end) > 0.0
+    {
+        match out.len() {
+            1 if dist(last, end) < spacing / 2.0 => {}
+            1 => out.push(end),
+            n => out[n - 1] = end,
+        }
+    }
+    out
+}
+
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
 fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
@@ -1166,5 +1198,36 @@ mod tests_color_range {
         cap_color_range_samples(&mut shape);
         let MaskShape::ColorRange { samples, .. } = shape else { panic!() };
         assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The thinning measures in long-edge units: on a portrait photo the y axis is the long one (issue #2359).
+    #[test]
+    fn spot_thinning_respects_the_aspect_ratio() {
+        let pts: Vec<Point> = (0..100).map(|i| Point::new(0.1, 0.1 + 0.002 * f64::from(i))).collect();
+        // size 0.04: one point per 0.01 long-edge units, which is 0.01 of y on a portrait photo but 0.015 on a landscape one
+        let tall = thin_spot_points(&pts, 0.04, (2.0, 3.0));
+        let wide = thin_spot_points(&pts, 0.04, (3.0, 2.0));
+        assert!(tall.len() > wide.len(), "{} vs {}", tall.len(), wide.len());
+        // 0.198 of y: 19.8 spacings of 0.01 (portrait), 13.2 of 0.015 (landscape), plus the first point
+        assert!((tall.len() as f64 - 21.0).abs() <= 2.0, "{}", tall.len());
+        assert!((wide.len() as f64 - 14.0).abs() <= 2.0, "{}", wide.len());
+        assert_eq!(tall.first(), pts.first());
+        assert_eq!(tall.last(), pts.last());
+        assert_eq!(wide.last(), pts.last());
+    }
+
+    #[test]
+    fn thinning_keeps_clicks_and_degenerate_input() {
+        let one = vec![Point::new(0.5, 0.5)];
+        assert_eq!(thin_spot_points(&one, 0.05, (3.0, 2.0)), one);
+        assert_eq!(thin_spot_points(&[one[0], one[0], one[0]], 0.05, (3.0, 2.0)), one);
+        assert!(thin_spot_points(&[], 0.05, (3.0, 2.0)).is_empty());
+        // a zero-sized photo doesn't divide by zero
+        assert_eq!(thin_spot_points(&[one[0], Point::new(0.6, 0.6)], 0.05, (0.0, 0.0)).len(), 1);
     }
 }
