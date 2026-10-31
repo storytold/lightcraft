@@ -537,3 +537,20 @@ fn a_split_default_parent_stays_one_keyword() {
     assert_eq!(parents, ["Ceremony"]);
     assert_eq!(s.catalog.default_keyword_parent().as_deref(), Some("Ceremony"));
 }
+
+/// The first name a default parent splits into stays the default parent when it is listed already (its other
+/// options are its own).
+#[test]
+fn a_split_default_parent_stays_one_when_its_first_name_is_listed() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let own = KeywordInfo { include_on_export: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony".into(), info: Some(own) }).unwrap();
+    let inside = KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony\nReception".into(), info: Some(inside) }).unwrap();
+    s.split_multiline_keywords();
+    let parents: Vec<&str> = s.catalog.listed_keywords().filter(|k| k.info.new_keywords_inside).map(|k| k.path.as_str()).collect();
+    assert_eq!(parents, ["Ceremony"]);
+    assert_eq!(s.catalog.default_keyword_parent().as_deref(), Some("Ceremony"));
+}

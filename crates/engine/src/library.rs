@@ -681,14 +681,16 @@ impl Session {
         for (path, info) in listed {
             let mut ops = Vec::new();
             for (i, name) in lightcraft_catalog::keywords::from_file(std::slice::from_ref(&path), &[]).into_iter().enumerate() {
+                // where new keywords go stays one keyword: the first name it splits into, listed already or not
+                let parent = info.new_keywords_inside && i == 0;
                 let moved = match self.catalog.keyword_info(&name) {
                     Some(kept) => {
                         let mut kept = kept.clone();
                         kept.include_on_export &= info.include_on_export;
+                        kept.new_keywords_inside |= parent;
                         kept
                     }
-                    // where new keywords go stays one keyword: the first name it splits into
-                    None => lightcraft_catalog::keywords::KeywordInfo { new_keywords_inside: info.new_keywords_inside && i == 0, ..info.clone() },
+                    None => lightcraft_catalog::keywords::KeywordInfo { new_keywords_inside: parent, ..info.clone() },
                 };
                 ops.push(lightcraft_catalog::Op::SetKeyword { path: name, info: Some(moved) });
             }
