@@ -15,7 +15,10 @@
 //!   the EXIF capture time (an X100T: 09:17:10 for a shot captured at 09:17:08). Files the camera
 //!   doesn't date are fetched, and the review's content check marks any duplicate among them.
 //! - **Already staged** (an earlier fetch that was cancelled, or a review that was closed): reused
-//!   when its size matches, so a second try doesn't read the card again. Anything else in the
+//!   when the staging folder's record ([`MANIFEST`]) says it came from this camera, at this path,
+//!   with the size and date the camera reports for it now, so a second try doesn't read the card
+//!   again. Without such a record (no date from the camera, another camera with the same name, a
+//!   different shot under the same name and size) it is read again. Anything else in the
 //!   staging folder (files no longer on the camera, or now in the library) is removed, except a
 //!   file a library photo still uses: a review set to Add (in place) catalogs the staged file
 //!   itself, so it is that photo's original.
@@ -40,6 +43,71 @@ pub const SAME_SHOT: i64 = 120;
 
 /// The staging folders' parent, in the system's temp folder.
 pub const STAGING: &str = "lightcraft-camera-import";
+
+/// In each staging folder: one JSON line per staged file, written once the file is complete
+/// (`{"camera", "path", "size", "created"}`), so a later fetch reuses only what it can tell is the
+/// same file from the same camera.
+pub const MANIFEST: &str = ".lightcraft-staged";
+
+/// A record larger than this is not read (it would take a card of millions of files).
+const MANIFEST_MAX: u64 = 64 << 20;
+
+/// What the record says about one staged file.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, Serialize)]
+struct StagedFile {
+    camera: String,
+    /// The file's path in the staging folder, `/`-joined.
+    path: String,
+    size: u64,
+    created: String,
+}
+
+/// `path` relative to `dir`, `/`-joined (`None` outside it).
+fn rel(dir: &Path, path: &Path) -> Option<String> {
+    let r = path.strip_prefix(dir).ok()?;
+    let parts: Vec<String> = r.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// The staging folder's record, by path (unreadable or damaged lines are skipped: those files are
+/// read again).
+fn read_manifest(dir: &Path) -> std::collections::HashMap<String, StagedFile> {
+    let path = dir.join(MANIFEST);
+    if std::fs::metadata(&path).map_or(true, |m| !m.is_file() || m.len() > MANIFEST_MAX) {
+        return Default::default();
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else { return Default::default() };
+    text.lines().filter_map(|l| serde_json::from_str::<StagedFile>(l).ok()).map(|e| (e.path.clone(), e)).collect()
+}
+
+/// Rewrite the record with just `entries` (written next to it, then renamed over it).
+fn write_manifest(dir: &Path, entries: &[&StagedFile]) {
+    let mut text = String::new();
+    for e in entries {
+        if let Ok(line) = serde_json::to_string(e) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    let tmp = dir.join(format!("{MANIFEST}.tmp"));
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join(MANIFEST));
+    }
+}
+
+/// Add one complete file to the record (best effort: without it the file is only read again).
+fn record(dir: &Path, e: &StagedFile) {
+    let Ok(line) = serde_json::to_string(e) else { return };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(MANIFEST)) {
+        let _ = writeln!(f, "{line}").and_then(|_| f.sync_data());
+    }
+}
+
+/// The record for `f` staged at `path` from `camera`, when the camera dates the file (without a
+/// date a different shot of the same name and size can't be told apart).
+fn identity(camera: &str, dir: &Path, f: &CameraFile, path: &Path) -> Option<StagedFile> {
+    Some(StagedFile { camera: camera.to_string(), path: rel(dir, path)?, size: f.size?, created: f.created.clone()? })
+}
 
 /// What a camera can do for an import: [`lightcraft_cameras::Session`], or a fake in tests.
 pub trait Source {
@@ -201,8 +269,9 @@ pub fn staged_path(dir: &Path, f: &CameraFile) -> PathBuf {
     p
 }
 
-/// Fetch what the library doesn't have from `source` into `dir` (see the module docs).
-pub fn fetch(source: &dyn Source, known: &Known, dir: &Path, progress: &Progress) -> Result<Fetched, Error> {
+/// Fetch what the library doesn't have from `source` (camera `camera`) into `dir` (see the module
+/// docs).
+pub fn fetch(source: &dyn Source, camera: &str, known: &Known, dir: &Path, progress: &Progress) -> Result<Fetched, Error> {
     let cancel = progress.cancel.clone();
     let files = source.files(&cancel, &mut |n| progress.listed.store(n as u64, Ordering::Relaxed))?;
     let mut out = Fetched { folder: dir.to_string_lossy().to_string(), ..Default::default() };
@@ -224,14 +293,26 @@ pub fn fetch(source: &dyn Source, known: &Known, dir: &Path, progress: &Progress
         }
     }
     clean_staging(dir, &seen_paths, known);
-    let to_fetch: Vec<&(CameraFile, PathBuf)> = wanted.iter().filter(|(f, p)| !already_staged(f, p)).collect();
+    // what can be reused: staged, complete, and recorded as this very file from this camera
+    let manifest = read_manifest(dir);
+    let reusable: Vec<bool> = wanted
+        .iter()
+        .map(|(f, p)| identity(camera, dir, f, p).is_some_and(|id| manifest.get(&id.path) == Some(&id)) && already_staged(f, p))
+        .collect();
+    if dir.is_dir() {
+        // keep the record to what is still staged and reusable
+        let keep: Vec<&StagedFile> =
+            wanted.iter().zip(&reusable).filter(|(_, r)| **r).filter_map(|((_, p), _)| rel(dir, p).and_then(|r| manifest.get(&r))).collect();
+        write_manifest(dir, &keep);
+    }
+    let to_fetch: Vec<&(CameraFile, PathBuf)> = wanted.iter().zip(&reusable).filter(|(_, r)| !**r).map(|(w, _)| w).collect();
     progress.files_total.store(to_fetch.len() as u64, Ordering::Relaxed);
     progress.bytes_total.store(to_fetch.iter().filter_map(|(f, _)| f.size).sum(), Ordering::Relaxed);
-    for (f, path) in &wanted {
+    for ((f, path), reuse) in wanted.iter().zip(reusable) {
         if cancel.load(Ordering::Relaxed) {
             return Err(Error::Cancelled);
         }
-        if already_staged(f, path) {
+        if reuse {
             out.reused += 1;
             out.staged.push(path.to_string_lossy().to_string());
             continue;
@@ -239,6 +320,9 @@ pub fn fetch(source: &dyn Source, known: &Known, dir: &Path, progress: &Progress
         let before = progress.bytes_done.load(Ordering::Relaxed);
         match fetch_one(source, f, path, &cancel, &mut |n| progress.bytes_done.store(before.saturating_add(n), Ordering::Relaxed)) {
             Ok(n) => {
+                if let Some(id) = identity(camera, dir, f, path) {
+                    record(dir, &id);
+                }
                 out.fetched += 1;
                 out.bytes = out.bytes.saturating_add(n);
                 out.staged.push(path.to_string_lossy().to_string());
@@ -346,7 +430,7 @@ fn remove_empty_dirs(dir: &Path, depth: usize) {
 /// Open camera `id` and fetch from it (see [`fetch`]); the session lives on this thread.
 pub fn fetch_camera(id: &str, known: &Known, dir: &Path, progress: &Progress) -> Result<Fetched, Error> {
     let session = lightcraft_cameras::Session::open(id)?;
-    fetch(&session, known, dir, progress)
+    fetch(&session, id, known, dir, progress)
 }
 
 #[cfg(test)]
@@ -420,7 +504,7 @@ mod tests {
             file("DCIM", "INDEX.DAT", 10, None),
         ]);
         let p = Progress::default();
-        let r = fetch(&cam, &Known::default(), &dir, &p).unwrap();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &p).unwrap();
         assert_eq!((r.fetched, r.reused, r.known, r.unsupported, r.failed.len()), (3, 0, 0, 1, 0), "{r:?}");
         assert_eq!(r.staged.len(), 3);
         for (f, data) in cam.files.iter().take(3) {
@@ -439,13 +523,13 @@ mod tests {
     fn staged_originals_a_library_photo_uses_are_kept() {
         let dir = temp("inplace");
         let cam = fake(vec![file("DCIM/100", "A.JPG", 16, Some("2026-10-11T09:17:08")), file("DCIM/100", "B.JPG", 16, Some("2026-10-11T09:17:09"))]);
-        let r = fetch(&cam, &Known::default(), &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
         let (a, b) = (PathBuf::from(&r.staged[0]), PathBuf::from(&r.staged[1]));
         let mut known = Known::default();
         known.add("A.JPG", 16, Some("2026-10-11T09:17:08"));
         known.add("B.JPG", 16, Some("2026-10-11T09:17:09"));
         known.uses(&a);
-        let r = fetch(&cam, &known, &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &known, &dir, &Progress::default()).unwrap();
         assert_eq!((r.known, r.fetched), (2, 0), "{r:?}");
         assert!(a.is_file(), "the library's original stays");
         assert!(!b.exists(), "a staged copy the library doesn't use is still cleaned away");
@@ -487,7 +571,7 @@ mod tests {
         let mut known = Known::default();
         // the camera dates the file 2 s after the EXIF capture time; any case of the name
         known.add("dscf3345.raf", 500, Some("2026-10-11T09:17:08"));
-        let r = fetch(&cam, &known, &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &known, &dir, &Progress::default()).unwrap();
         assert_eq!((r.fetched, r.known), (1, 1), "{r:?}");
         assert_eq!(*cam.reads.lock().unwrap(), ["DSCF3346.RAF"]);
         done(&dir);
@@ -520,7 +604,7 @@ mod tests {
             file("DCIM/100", "C.RAF", 1000, Some("2026-10-11T09:00:02")),
         ]);
         cam.fail = Some("B.RAF".into());
-        let r = fetch(&cam, &Known::default(), &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
         assert_eq!(r.fetched, 2);
         assert_eq!(r.failed, [Failure { name: "B.RAF".into(), error: "camera: read 500 of 1000 bytes".into() }]);
         let b = staged_path(&dir, &cam.files[1].0);
@@ -540,14 +624,70 @@ mod tests {
             file("DCIM/100", "C.RAF", 1000, Some("2026-10-11T09:00:02")),
         ]);
         cam.cancel_after = Some(1);
-        assert_eq!(fetch(&cam, &Known::default(), &dir, &Progress::default()), Err(Error::Cancelled));
+        assert_eq!(fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()), Err(Error::Cancelled));
         assert!(staged_path(&dir, &cam.files[0].0).is_file(), "the finished file stays staged");
         cam.cancel_after = None;
         cam.reads.lock().unwrap().clear();
-        let r = fetch(&cam, &Known::default(), &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
         assert_eq!((r.fetched, r.reused), (2, 1), "{r:?}");
         assert_eq!(*cam.reads.lock().unwrap(), ["B.RAF", "C.RAF"]);
         assert_eq!(r.staged.len(), 3);
+        done(&dir);
+    }
+
+    /// Review finding P2 on #1169: a staged file of the same folder, name and size as a different
+    /// shot now on the camera (a review was closed, the card reformatted, a new shot took the
+    /// number) must not stand in for it.
+    #[test]
+    fn a_different_shot_with_the_same_name_and_size_is_read_again() {
+        let dir = temp("identity");
+        let (mut first, a) = file("DCIM/100", "A.JPG", 16, Some("2026-10-11T09:00:00"));
+        let cam = fake(vec![(first.clone(), a.clone())]);
+        fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        // the new shot: same folder, name and size, another object, a later date, other bytes
+        first.object = "o-new".into();
+        first.created = Some("2026-10-20T15:30:00".into());
+        let b: Vec<u8> = a.iter().map(|x| x ^ 0xff).collect();
+        let cam = fake(vec![(first.clone(), b.clone())]);
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        assert_eq!((r.fetched, r.reused), (1, 0), "{r:?}");
+        assert_eq!(std::fs::read(staged_path(&dir, &first)).unwrap(), b, "the new shot's bytes");
+        // and once staged with its record, the same shot is reused
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        assert_eq!((r.fetched, r.reused), (0, 1), "{r:?}");
+        done(&dir);
+    }
+
+    /// Two cameras with the same name share a staging folder: one's files never stand in for the
+    /// other's.
+    #[test]
+    fn another_camera_with_the_same_name_reads_its_own_files() {
+        let dir = temp("othercam");
+        let cam = fake(vec![file("DCIM/100", "A.JPG", 16, Some("2026-10-11T09:00:00"))]);
+        fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        cam.reads.lock().unwrap().clear();
+        let r = fetch(&cam, "cam-2", &Known::default(), &dir, &Progress::default()).unwrap();
+        assert_eq!((r.fetched, r.reused), (1, 0), "{r:?}");
+        assert_eq!(*cam.reads.lock().unwrap(), ["A.JPG"]);
+        done(&dir);
+    }
+
+    /// Without a date from the camera, or with a damaged record, nothing is reused; a damaged
+    /// record is no error.
+    #[test]
+    fn files_that_cant_be_identified_are_read_again() {
+        let dir = temp("noid");
+        let cam = fake(vec![file("DCIM/100", "A.JPG", 16, None), file("DCIM/100", "B.JPG", 16, Some("2026-10-11T09:00:00"))]);
+        fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        std::fs::write(dir.join(MANIFEST), "{not json\n\u{0}\u{fffd}\n{\"camera\": 1}\n").unwrap();
+        cam.reads.lock().unwrap().clear();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        assert_eq!((r.fetched, r.reused), (2, 0), "{r:?}");
+        // the record is rebuilt: the dated file is reused next time, the undated one never
+        cam.reads.lock().unwrap().clear();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        assert_eq!((r.fetched, r.reused), (1, 1), "{r:?}");
+        assert_eq!(*cam.reads.lock().unwrap(), ["A.JPG"]);
         done(&dir);
     }
 
@@ -561,7 +701,7 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("KEEP.RAF"), b"x").unwrap();
         let cam = fake(vec![file("DCIM/100", "A.RAF", 10, None)]);
-        let r = fetch(&cam, &Known::default(), &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
         assert_eq!(r.fetched, 1);
         assert!(!dir.join("DCIM/099_OLD").exists(), "stale files and their empty folder are gone");
         assert!(outside.join("KEEP.RAF").is_file());
@@ -608,7 +748,7 @@ mod tests {
     fn two_names_that_sanitize_alike_are_not_mixed_up() {
         let dir = temp("collide");
         let cam = fake(vec![file("DCIM", "A?.JPG", 10, None), file("DCIM", "A*.JPG", 20, None)]);
-        let r = fetch(&cam, &Known::default(), &dir, &Progress::default()).unwrap();
+        let r = fetch(&cam, "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
         assert_eq!(r.fetched, 1);
         assert_eq!(r.failed.len(), 1, "{r:?}");
         done(&dir);
