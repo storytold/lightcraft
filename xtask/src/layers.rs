@@ -50,6 +50,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("lensdb", Class::Layer(2)),
     ("inpaint", Class::Layer(1)),
     ("faces", Class::Layer(1)),
+    ("vision", Class::Layer(1)),
     ("geocode", Class::Layer(1)),
     ("scenes", Class::Layer(1)),
     ("slideshow", Class::Layer(1)),
@@ -73,7 +74,8 @@ pub const TABLE: &[(&str, Class)] = &[
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
 /// L0: `raster` builds on `color` and `geom`; `color` uses `geom` for matrices.
-/// L1: `raw` and `codecs` read metadata through `meta`; `develop` uses `meta` for XMP.
+/// L1: `raw` and `codecs` read metadata through `meta`; `develop` uses `meta` for XMP; `vision`
+/// tests embed `scenes` images.
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["geom", "color", "raster"],
     &["tiff", "raster"],
@@ -82,6 +84,7 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "codecs"],
     &["meta", "develop"],
     &["develop", "scenes"],
+    &["scenes", "vision"],
     &["codecs", "raw"],
 ];
 
