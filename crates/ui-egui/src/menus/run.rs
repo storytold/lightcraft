@@ -144,10 +144,55 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     Ok(appearance_json(app))
 }
 
+/// `library.restore` in the app: without `dir`, the backup's folder is asked for; and a restore
+/// of the open library copies the backup while the library stays in use (its row is in the
+/// activity stack, and a toast says how it ended) unless `background` says otherwise.
+fn restore_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    const ID: &str = "library.restore";
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    if !params.contains_key("dir") {
+        // nothing is asked for a restore that can't be made now
+        if let Some(spec) = lightcraft_engine::cmd::command_specs().iter().find(|c| c.id == ID) {
+            (spec.enabled)(&app.session)?;
+        }
+        if app.services.picker.is_none() && app.services.pick_folder.is_none() {
+            return Err("no folder dialog on this platform: give the backup's folder as `dir`".into());
+        }
+        let req = crate::pick::PickRequest::folder(crate::i18n::tr("Restore Library from Backup"));
+        let dir = match crate::pick::ask(app, ID, p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+            crate::pick::Picked::Now(v) => v.into_iter().next(),
+            crate::pick::Picked::Later => return Ok(Value::Null),
+            // (there is a dialog: it was closed without a folder)
+            crate::pick::Picked::Unavailable => None,
+        };
+        let Some(dir) = dir else { return Ok(Value::Null) };
+        params.insert("dir".into(), Value::String(dir));
+    }
+    if !params.contains_key("background") && !params.contains_key("to") {
+        params.insert("background".into(), Value::Bool(true));
+    }
+    let r = app.session.execute(ID, &Value::Object(params)).map_err(|e| e.to_string())?;
+    if r["opened"] == Value::Bool(true) {
+        library_replaced(app);
+    }
+    Ok(r)
+}
+
+/// The session's library was replaced by another catalog (a restore): nothing drawn or
+/// remembered of the one before it applies any more.
+pub fn library_replaced(app: &mut LightcraftApp) {
+    app.lightroom_last = None;
+    app.renderer.forget_all();
+    app.ui.compare = None;
+}
+
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+    }
+    if id == "library.restore" {
+        return Some(restore_library(app, p));
     }
     if matches!(id, "library.inspectLightroom" | "library.importLightroom") {
         // the app's own context: a fresh one's repaints reach no window and its clock starts at zero
@@ -550,7 +595,10 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+                None => {
+                    Err("not available here: on the desktop the library is a folder; File ▸ Back Up Library (`library.backup`) backs up its catalog"
+                        .into())
+                }
             }
         }
         "view.filmstrip" => {
