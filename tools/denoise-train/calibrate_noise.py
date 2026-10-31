@@ -90,6 +90,8 @@ def main():
         result[cam].setdefault(str(iso), {"photos": counts[(cam, iso)]})[plane] = {"a": aa, "b": bb}
     out = {"model": "variance = a * mean + b, white = 1, black subtracted, per Bayer plane",
            "cameras": result}
+    # the documented `<scratch>/noise/camera.json` needs its folder: made here, not after the photos are measured and lost
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     json.dump(out, open(a.out, "w"), indent=1)
     for cam, isos in result.items():
         for iso, v in sorted(isos.items(), key=lambda kv: int(kv[0])):

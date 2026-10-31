@@ -227,6 +227,9 @@ mod tests {
         let own = lightcraft_bayer_from(urls_or_default(Some("https://example.org/m.onnx")));
         let d = own.download.as_ref().unwrap();
         assert_eq!((d.url.as_str(), d.fallbacks.len()), ("https://example.org/m.onnx", 0), "one address given: no other source");
+        // the terms and the status name every site the file may come from (CodeRabbit on #2929)
+        assert_eq!(hosts(k.download.as_ref().unwrap()), "github.com or radfilms.com.au");
+        assert_eq!(hosts(d), "example.org");
         // the same file wherever it comes from: both end in its name
         assert!(both.iter().all(|u| u.ends_with(&format!("/{}", d.file_name))));
         assert!(!lightcraft_bayer().manifest.licence.notice.contains("  "), "one space between words");
@@ -248,4 +251,16 @@ pub struct Download {
 
 pub fn host(url: &str) -> &str {
     url.strip_prefix("https://").and_then(|r| r.split('/').next()).unwrap_or("")
+}
+
+/// Every site `d` may come from, in the order they are tried ("github.com or radfilms.com.au"), so the terms and the
+/// download's status name the fallback that may supply the file too.
+pub fn hosts(d: &Download) -> String {
+    let mut all: Vec<&str> = Vec::new();
+    for h in std::iter::once(&d.url).chain(d.fallbacks.iter()).map(|u| host(u)) {
+        if !h.is_empty() && !all.contains(&h) {
+            all.push(h);
+        }
+    }
+    all.join(" or ")
 }

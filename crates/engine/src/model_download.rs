@@ -65,6 +65,26 @@ impl Shared {
     fn get(&self) -> State {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
+
+    /// The file is fetched and checked: done, unless the download was cancelled meanwhile (a copy already staged comes
+    /// back at once, without looking at the cancel flag). The check and the new state are one step, so a cancel never
+    /// reads as a success. A cancelled job keeps the verified copy: the next download uses it without fetching.
+    fn finish(&self, path: PathBuf, sha256: String) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        *state = if self.cancel.load(Ordering::Relaxed) { State::Cancelled } else { State::Done { path, sha256 } };
+    }
+}
+
+/// A cancelled download: its partial file goes, and when it can't be removed the job says so instead of reporting a clean
+/// cancel (the next download would resume from those bytes).
+#[cfg(not(target_arch = "wasm32"))]
+fn cancelled(part: &Path, shared: &Shared) {
+    match std::fs::remove_file(part) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            shared.set(State::Failed(format!("the download was cancelled, but its partial file could not be removed ({e})")));
+        }
+        _ => shared.set(State::Cancelled),
+    }
 }
 
 /// The downloads of one session, by model id.
@@ -226,13 +246,12 @@ fn run(spec: &Download, sources: &[String], staging: &Path, shared: &Shared) {
     for source in sources {
         match fetch(spec, source, staging, shared) {
             Ok(()) => {
-                shared.set(State::Done { path: target, sha256: spec.sha256.to_string() });
+                shared.finish(target, spec.sha256.to_string());
                 return;
             }
             #[cfg(not(target_arch = "wasm32"))]
             Err(lightcraft_fetch::DownloadError::Cancelled) => {
-                let _ = std::fs::remove_file(&part);
-                shared.set(State::Cancelled);
+                cancelled(&part, shared);
                 return;
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -394,6 +413,36 @@ mod tests {
         let again = Shared::new(spec.size_bytes);
         run(&spec, &["http://127.0.0.1:1/m".to_string()], &staging, &again);
         assert!(matches!(again.get(), State::Done { .. }), "{:?}", again.get());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cancel that lands while a copy already staged is checked reads as cancelled, not done (CodeRabbit on #2929).
+    #[test]
+    fn a_cancel_is_never_reported_as_a_success() {
+        let dir = scratch("cancel-staged");
+        let bytes: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+        let (staging, spec) = (dir.join(STAGING), spec_for(&bytes));
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join(&spec.file_name), &bytes).unwrap();
+        let shared = Shared::new(spec.size_bytes);
+        shared.cancel.store(true, Ordering::Relaxed);
+        run(&spec, &["http://127.0.0.1:1/m".to_string()], &staging, &shared);
+        assert_eq!(shared.get(), State::Cancelled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cancel whose partial file can't be removed says so instead of a clean cancel (CodeRabbit on #2929).
+    #[test]
+    fn a_partial_file_that_cannot_be_removed_is_reported() {
+        let dir = scratch("cancel-stuck");
+        let part = dir.join("test-model.onnx.part");
+        std::fs::create_dir_all(part.join("held")).unwrap(); // a folder: remove_file refuses it
+        let shared = Shared::new(1);
+        cancelled(&part, &shared);
+        assert!(matches!(shared.get(), State::Failed(ref why) if why.contains("could not be removed")), "{:?}", shared.get());
+        let gone = Shared::new(1);
+        cancelled(&dir.join("never-there.part"), &gone);
+        assert_eq!(gone.get(), State::Cancelled, "nothing to remove is a clean cancel");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

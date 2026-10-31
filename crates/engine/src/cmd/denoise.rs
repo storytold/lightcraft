@@ -51,7 +51,7 @@ fn row(m: &DenoiserManifest, download_host: Option<String>, installed: bool, sel
 }
 
 fn host_of(k: &Known) -> Option<String> {
-    k.download.as_ref().map(|d| lightcraft_denoise::known::host(&d.url).to_string())
+    k.download.as_ref().map(known::hosts)
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
@@ -391,7 +391,7 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     if installed_models(&dir).iter().any(|i| i.manifest.id == spec.id) {
         return Err(bad(C, "that model is already installed"));
     }
-    let host = lightcraft_denoise::known::host(&spec.url).to_string();
+    let host = known::hosts(&spec);
     s.denoise.downloads.start(spec, &dir, &s.activity, &k.manifest.name).map_err(|e| bad(C, e))?;
     Ok(json!({"started": id, "from": host}))
 }
