@@ -3,7 +3,7 @@
 //! The automatic preview cache budget grows with the library and has no ceiling
 //! ([`crate::media::default_disk_cache_bytes`]): a large library can fill its drive. Rather than cap
 //! it, the session looks at the drive's free space when the library opens and, at most every
-//! [`CHECK_EVERY`], while previews are built; when it is under [`LOW_FREE_PERCENT`] of the drive or
+//! [`CHECK_EVERY`] while the app runs (thumbnails and previews fill the cache); when it is under [`LOW_FREE_PERCENT`] of the drive or
 //! under [`LOW_FREE_BYTES`], it hands out one [`LowDiskAlert`] ([`crate::Session::take_disk_space_alert`])
 //! that the UI shows with a way to Settings ▸ Performance, where the cache can be given a limit. It is
 //! not repeated until the next library open or app run. Reading the free space can fail (a network
@@ -70,7 +70,7 @@ pub fn read(dir: &Path) -> Option<DiskSpace> {
 }
 
 /// Reads the free space of a drive ([`read`]; a test can put a slow one in its place).
-pub(crate) type Reader = std::sync::Arc<dyn Fn(&Path) -> Option<DiskSpace> + Send + Sync>;
+pub type Reader = std::sync::Arc<dyn Fn(&Path) -> Option<DiskSpace> + Send + Sync>;
 
 /// The session's state of the alert (reset when a library opens).
 #[derive(Default)]
@@ -197,6 +197,18 @@ impl crate::Session {
     pub fn take_disk_space_alert(&mut self) -> Option<LowDiskAlert> {
         self.poll_disk_space();
         self.disk_alert.pending.take()
+    }
+
+    /// Read the drive's space with `reader` instead of asking the system (tests of the app).
+    #[doc(hidden)]
+    pub fn set_disk_space_reader(&mut self, reader: Option<Reader>) {
+        self.disk_alert.reader = reader;
+    }
+
+    /// Forget when the space was last read, as if [`CHECK_EVERY`] had passed (tests of the app).
+    #[doc(hidden)]
+    pub fn forget_disk_space_check(&mut self) {
+        self.disk_alert.checked_at = None;
     }
 
     /// Whether the low-disk alert was raised since the library opened (`library.info` →

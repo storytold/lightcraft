@@ -23,11 +23,9 @@ pub fn logic(app: &mut LightcraftApp) {
         app.disk_notice = None;
     }
     if app.disk_space_notice {
-        // while previews are built the cache grows: the engine reads the free space at most every
-        // few minutes (this is a clock check otherwise)
-        if app.session.preview_build.as_ref().is_some_and(|b| b.running()) {
-            app.session.check_disk_space(false);
-        }
+        // the cache grows with every thumbnail and preview, not only while previews are built: the
+        // engine reads the free space at most every few minutes (a clock check otherwise)
+        app.session.check_disk_space(false);
         if let Some(alert) = app.session.take_disk_space_alert() {
             let text = disk_space_notice(&alert);
             app.disk_notice = Some((app.session.library_generation(), text.clone()));
