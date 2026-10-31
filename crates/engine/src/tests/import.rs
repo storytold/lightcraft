@@ -1802,23 +1802,23 @@ fn keep_offline_previews(case: &mut SmartLookCase) -> (Vec<u8>, Vec<u8>) {
     assert_eq!(std::fs::read(&case.file).unwrap(), old_bytes, "offline: the stored preview and curve are untouched");
     assert!(crate::smart::is_stale(&case.file), "and it stays marked for the next time");
     assert_eq!(crate::smart::decode(&old_bytes).unwrap().1, Some(case.old), "the old look is still there");
-    // ... and the opening refresh keeps it too, then marks the folder checked
+    // The opening refresh preserves the offline proxy and keeps the migration pending.
     assert!(!crate::smart::look_checked(&case.dir));
     crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
     assert_eq!(std::fs::read(&case.file).unwrap(), old_bytes);
-    assert!(crate::smart::look_checked(&case.dir));
+    assert!(!crate::smart::look_checked(&case.dir), "offline originals must not finish the refresh");
     (old_bytes, png_bytes)
 }
 
 fn refresh_online_previews(case: &mut SmartLookCase, old_bytes: &[u8], png_bytes: &[u8]) {
-    // the original comes back: the scan has run at this version, so the next opening leaves it;
-    // Build Smart Previews rebuilds it with the current look
+    // The original comes back: a later library opening retries the pending refresh.
     std::fs::rename(case.src.with_extension("offline"), &case.src).unwrap();
     case.calls.store(0, std::sync::atomic::Ordering::SeqCst);
-    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).is_none(), "checked once per version");
-    assert_eq!(std::fs::read(&case.file).unwrap(), old_bytes);
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert_ne!(std::fs::read(&case.file).unwrap(), old_bytes, "the opening refresh rebuilt the stale proxy");
+    assert!(crate::smart::look_checked(&case.dir), "the successful retry finishes the refresh");
     let r = case.session.execute("library.smartPreviews", &json!({})).unwrap();
-    assert_eq!((r["refreshed"].as_u64(), case.calls.load(std::sync::atomic::Ordering::SeqCst)), (Some(1), 1), "{r}");
+    assert_eq!((r["refreshed"].as_u64(), case.calls.load(std::sync::atomic::Ordering::SeqCst)), (Some(0), 1), "{r}");
     assert_eq!(smart_header(&case.file)["look_version"], json!(crate::camera_preview::LOOK_VERSION));
     assert_eq!(crate::smart::decode(&std::fs::read(&case.file).unwrap()).unwrap().1, Some(case.new), "rebuilt with the current look");
     assert!(!crate::smart::is_stale(&case.file));

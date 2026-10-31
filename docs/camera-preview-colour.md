@@ -43,6 +43,14 @@ No process-version bump is needed under the [rule for changes to source data](pr
 Compared with main `701f78ea` at a 1200-pixel long edge, all 15 public raw.pixls.us files across six makes and the private #1021 file retain their accepted look. The darkest 10% moves closer to the JPEG on all seven public deep-shadow files (at least 10% below L* 13) and #1021. On Sony RX100 V sample 1324, its mean L* changes from 4.79 to 2.13 against the JPEG's 2.14; on a6700 sample 6735, 7.20 to 5.23 against 4.60. On #1021 (numbers only), 9.28 to 3.25 against 3.50; the 10th percentile changes from 11.94 to 5.34 against 5.45, and mean CIEDE2000 at 200 pixels changes from 7.25 to 6.37. Five of eight controls are byte-identical. The largest control changes are on a7 IV sample 6928, which still has 6.8% below L* 13: mean CIEDE2000 improves by 0.048, whole-frame mean L* falls by 0.149, and the 5th percentile falls by 1.56 L*. This is a limited camera-JPEG comparison, not a claim of colour calibration or Lightroom parity.
 
 ## Source metadata and white balance
+Sony uncompressed files that declare 12-bit samples but store 16-bit words use the
+14-bit sample scale even when every sample is below 4096. Inferring the scale from
+bright pixels made dark ILCA-99M2 frames subtract black 128 instead of 512 and
+normalize against white 4095 instead of 16383, producing a purple cast. Header and
+full decodes now agree independently of scene brightness. Packed 12-bit data keep
+their existing scale. Look version 13, render cache version 72 and denoise algorithm
+2 refresh cached results; the original RAW is not modified.
+
 
 Previously `SourceRef::load()` discarded the decoder's `SourceInfo`, and render jobs used header-only facts (including a hard-coded RAW WB). Decoded pixels and source facts now travel and remain cached together, including across web-worker renders. Smart previews keep the tone curve in their header (the matrix is already in their pixels), so an offline original renders and exports with the same look; proxies built before this fall back to the generic curve until rebuilt. Pixel-statistics/colour-sampling commands use decoded facts too. Render cache version 6 invalidates old thumbnails and loupe renders.
 

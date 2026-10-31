@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Dark Sony uncompressed RAWs keep their colours
+- Uncompressed Sony files that report 12 bits but store 16-bit words now use the same sample scale in dark and
+  bright scenes. On affected ILCA-99M2 photos, the old brightness-dependent scale subtracted the wrong black level,
+  so the image turned purple after its camera preview was replaced by the RAW render. Existing cached previews
+  and denoise results are refreshed from the original when it is available; no conversion is needed.
+
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
