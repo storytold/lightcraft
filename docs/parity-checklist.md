@@ -599,7 +599,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| KEY-CROP | Crop & rotate — C | P0 | ✅ | `cmd:panel.crop` | |
+| KEY-CROP | Crop & geometry — C | P0 | ✅ | `cmd:panel.crop` | |
 | KEY-DETAIL | Detail — D | P0 | ✅ | `cmd:view.detail` | |
 | KEY-EDIT | Edit — E | P0 | ✅ | `cmd:panel.edit` | |
 | KEY-FULLSCREEN | Full-screen preview — F | P1 | ✅ | `cmd:view.fullScreenPreview` | |
