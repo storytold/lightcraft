@@ -180,9 +180,10 @@ fn measured_body(model: &str, w: usize, h: usize, bits: u32) -> Option<&'static 
 }
 
 /// Pixel height over width from the raw IFD's resolution tags: the D1X and D1H write 600 x 300 per inch for a
-/// 4028 x 1324 frame, rows twice as tall as the columns are wide. A D1X on firmware Ver.1.01 writes 600 x 600, so
-/// a `frame` over twice as wide as it is tall falls back to its shape over the embedded preview's (within 0.1 of a
-/// whole number). Only ratios from 1.5 to 4 count (a frame squashed 3:1 or 2:1), the rest is rounding or a stray tag.
+/// 4028 x 1324 frame, rows twice as tall as the columns are wide. When the tags give no such ratio (a D1X on firmware
+/// Ver.1.01 writes 600 x 600), any `frame` over twice as wide as it is tall, which no square-pixel body has, falls back
+/// to its shape over the embedded preview's (within 0.1 of a whole number). Only ratios from 1.5 to 4 count (a frame
+/// squashed 3:1 or 2:1), the rest is rounding or a stray tag.
 pub(crate) fn pixel_aspect_of(raw: &Ifd, bytes: &[u8], frame: Rect) -> f32 {
     let tall = |r: f64| (1.5..=4.0).contains(&r).then(|| r.round());
     let tagged = match (raw.f64(t::X_RESOLUTION), raw.f64(t::Y_RESOLUTION)) {
