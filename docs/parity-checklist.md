@@ -868,6 +868,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: Hasselblad 3FR and FFF show their uncompressed RGB preview (no JPEG in these files) in the grid and loupe until developed, and as the stand-in when a file fails to decode; status unchanged (🟡) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: a Hasselblad FFF develops with the camera's colour matrix from the original 3FR header it embeds (tag `0xC51B`) instead of the neutral matrix; status unchanged (🟡) |
+| 2026-10-16 | patch | LR-PROF-CAMERACOLOR: raw decoding keeps negative channels (noise near black) instead of clipping each at zero, which turned pushed shadows magenta; status unchanged (🟡) |
 | 2026-10-13 | minor | LRC-LIB-KEYWORDS: the Keyword List marks a keyword that has an applied keyword inside it (a dot in its box); status unchanged |
 | 2026-10-12 | minor | LR-IMP-FORMATS: folder discovery includes SR2/SRF; MCP and CLI reuse the engine extension list. DSC-F828 remains preview-only; decoder support and row status unchanged |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); status unchanged (🟡) |
