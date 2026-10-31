@@ -128,7 +128,9 @@ pub(crate) fn gpu_helper_choices(cards: &[lightcraft_engine::gpu::CardInfo], edi
     let others: Vec<&lightcraft_engine::gpu::CardInfo> = cards.iter().filter(|c| c.usable && Some(c.key.as_str()) != editing).collect();
     let auto = others.iter().find(|c| c.kind == "dedicated").or_else(|| others.iter().find(|c| c.kind != "virtual"));
     let auto = match auto {
-        Some(c) => format!("{} ({} {})", crate::i18n::tr("Automatic"), c.name, crate::i18n::tr("helps with exports, previews and AI")),
+        // (what the card does is in the hint below: a longer label is one button too wide for a
+        // small Settings window, which no wrapping can fix)
+        Some(c) => format!("{} ({})", crate::i18n::tr("Automatic"), c.name),
         None => format!("{} ({})", crate::i18n::tr("Automatic"), crate::i18n::tr("no other card found")),
     };
     let mut opts = vec![(String::new(), auto), ("off".to_string(), crate::i18n::tr("Don't use").to_string())];
@@ -443,19 +445,49 @@ mod tests {
         assert_eq!(editing.as_deref(), Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"), "Automatic edits on the screen's card");
         let o = super::gpu_helper_choices(&cards, editing.as_deref(), "");
         let labels: Vec<&str> = o.iter().map(|(_, l)| l.as_str()).collect();
-        assert_eq!(
-            labels,
-            ["Automatic (NVIDIA GeForce RTX 4070 SUPER helps with exports, previews and AI)", "Don't use", "NVIDIA GeForce RTX 4070 SUPER"]
-        );
+        assert_eq!(labels, ["Automatic (NVIDIA GeForce RTX 4070 SUPER)", "Don't use", "NVIDIA GeForce RTX 4070 SUPER"]);
         assert_eq!((o[0].0.as_str(), o[1].0.as_str()), ("", "off"));
         // editing on the 4070: the 5070 helps
         let editing = super::editing_card_key(&cards, "dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1", None);
         let o = super::gpu_helper_choices(&cards, editing.as_deref(), "");
-        assert_eq!(o[0].1, "Automatic (NVIDIA GeForce RTX 5070 helps with exports, previews and AI)");
+        assert_eq!(o[0].1, "Automatic (NVIDIA GeForce RTX 5070)");
         // one card: Automatic finds none
         let o = super::gpu_helper_choices(&cards[..1], Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"), "");
         assert_eq!(o[0].1, "Automatic (no other card found)");
         let ready = lightcraft_engine::gpu::HelperStatus { state: "ready", name: Some("NVIDIA GeForce RTX 4070 SUPER".into()), reason: None };
         assert_eq!(super::gpu_helper_line(&ready), "Helping now: NVIDIA GeForce RTX 4070 SUPER");
+    }
+
+    /// Every graphics-card choice fits beside the label column of the smallest Settings window
+    /// (640×480: a 582-point page): one button can't wrap, so a longer one widened the
+    /// Performance tab past the window on a machine with two cards.
+    #[test]
+    fn graphics_card_choices_fit_a_small_settings_window() {
+        let cards = [
+            card("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1", "NVIDIA GeForce RTX 5070", true, true),
+            card("dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1", "NVIDIA GeForce RTX 4070 SUPER", false, true),
+        ];
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(&[]));
+        crate::theme::apply(&ctx);
+        let mut labels: Vec<String> = Vec::new();
+        for editing in [&cards[0].key, &cards[1].key] {
+            labels.extend(super::gpu_helper_choices(&cards, Some(editing.as_str()), "").into_iter().map(|(_, l)| l));
+        }
+        labels.extend(super::gpu_card_choices(&cards, "").into_iter().map(|(_, l)| l));
+        let page = 582.0f32;
+        let controls = page - super::LABEL_W.min((page * 0.32).floor()).max(90.0);
+        // (a first frame loads the fonts)
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        let mut widest = 0.0f32;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for l in &labels {
+                let w = super::super::widgets::button_width(ui, l);
+                widest = widest.max(w);
+                assert!(w <= controls, "\"{l}\" is {w:.0} points wide, the controls {controls:.0}");
+            }
+        });
+        out.textures_delta.clear();
+        assert!(widest > 100.0, "the labels were measured: {widest}");
     }
 }
