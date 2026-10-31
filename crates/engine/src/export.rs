@@ -25,6 +25,8 @@ mod watermark;
 #[cfg(test)]
 use batch::run_batch_with;
 pub use batch::{export_parallelism, run_batch};
+#[cfg(test)]
+use encoding::FIT_ENCODES;
 pub use encoding::{
     encode_deep, encode_gain_map_jpeg, encode_image, encode_rendered, encode_with_metadata, export_metadata, named_space, output_sharpen,
     output_sharpen_deep, removes_location, srgb8_in,
