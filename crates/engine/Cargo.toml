@@ -39,7 +39,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 ab_glyph = { workspace = true }
 # Apply the font’s vertical substitutions and origins to Japanese watermarks.
-harfrust = { version = "0.13", default-features = false, features = ["std"] }
+harfrust = { version = "0.15", default-features = false, features = ["std"] }
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
 
