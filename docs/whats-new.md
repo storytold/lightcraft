@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Pick up sidecars other apps change
+- Preferences ▸ XMP sidecars has a new option, *Re-read sidecars changed by other apps*. With it on, an XMP sidecar
+  that another app or a sync tool changes while LightCraft is open is read again once the file is complete, a few
+  seconds later: the thumbnail and the Develop panel follow, as one undo step, and a quiet note says how many photos
+  were updated. The sidecar is not written back. A photo whose own sidecar write is still waiting is skipped.
+- It is off by default. `library.sidecarScan` does one pass on request.
+
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin

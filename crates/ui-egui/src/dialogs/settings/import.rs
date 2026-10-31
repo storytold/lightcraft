@@ -120,6 +120,10 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
     }
+    if check(ui, "settings.rereadChangedXmp", &mut xmp.reread_changed, "Re-read sidecars changed by other apps") {
+        let _ = app.run("library.xmpPreferences", json!({"rereadChanged": xmp.reread_changed}));
+    }
+    hint(ui, t, crate::i18n::tr("While LightCraft is open, a sidecar another app or a sync tool changed is read again once it is complete."));
     row(ui, t, crate::i18n::tr("Sidecar names"), |ui| {
         use lightcraft_engine::sidecar::SidecarNaming as N;
         let mut n = xmp.naming;

@@ -278,6 +278,8 @@ pub struct Session {
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
+    /// The sidecars followed for changes by other apps ([`sidecar::watch`]).
+    pub(crate) sidecar_watch: sidecar::watch::SidecarWatch,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
@@ -473,6 +475,7 @@ impl Session {
             skip_auto_write: false,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
+            sidecar_watch: Default::default(),
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),

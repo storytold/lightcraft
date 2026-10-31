@@ -42,6 +42,7 @@ mod process;
 mod recheck;
 mod segment;
 mod settings_files;
+mod sidecar_watch;
 mod slide;
 mod slideshow_export;
 mod spots;

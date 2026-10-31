@@ -41,6 +41,8 @@ use serde_json::Value;
 
 use crate::{EngineError, Result, Session};
 
+pub mod watch;
+
 /// Sidecar file naming.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -59,6 +61,8 @@ pub struct XmpPrefs {
     /// Write the sidecar after every change to a photo's metadata or develop settings.
     pub auto_write: bool,
     pub naming: SidecarNaming,
+    /// While running, re-read the sidecars other apps change (a poll of their size and modification time; see [`watch`]).
+    pub reread_changed: bool,
 }
 
 /// The sidecar path for an original, by naming convention.
@@ -818,6 +822,7 @@ impl Session {
         let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
+        self.note_own_sidecar(&path);
         Ok(SidecarSaved { path, merged, backup })
     }
 
