@@ -409,7 +409,7 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{path} already exists: choose another name")));
     }
     folder_on_disk("", &path).map_err(|e| bad(C, e))?;
-    let undo = crate::FolderMove { from: path.clone(), to: String::new() };
+    let undo = crate::FolderMove { from: path.clone(), to: String::new(), on_disk: true };
     if let Err(e) = s.commit_with_folder(&format!("Create Folder “{name}”"), Op::Batch { ops: vec![] }, undo) {
         let _ = remove_empty_folder(&path);
         return Err(e);
@@ -548,7 +548,7 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     let name = Path::new(to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let renamed = src.parent() == dst.parent();
     let label = if renamed { format!("Rename Folder to “{name}”") } else { format!("Move Folder “{name}”") };
-    let folder = crate::FolderMove { from: to.to_string(), to: from.to_string() };
+    let folder = crate::FolderMove { from: to.to_string(), to: from.to_string(), on_disk: true };
     if let Err(e) = s.commit_with_folder(&label, Op::Batch { ops }, folder) {
         // the catalog didn't take it: put the folder back where the photos still point
         let back = rename_folder_on_disk(to, from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();
