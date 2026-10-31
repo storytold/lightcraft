@@ -3612,6 +3612,32 @@ fn content_duplicates_name_their_match_and_can_be_imported_anyway() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A forced content duplicate still reads its own sidecar after a scan cached its probe.
+#[test]
+fn import_anyway_keeps_the_duplicates_own_sidecar() {
+    let src = temp_dir("dup-anyway-sidecar");
+    write_png(&src.join("original.png"), 1);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("original.png").to_string_lossy()]})).unwrap();
+    std::fs::copy(src.join("original.png"), src.join("copy.png")).unwrap();
+    std::fs::write(
+        src.join("copy.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let path = src.join("copy.png").to_string_lossy().to_string();
+    let found = crate::import::scan(&mut s, std::slice::from_ref(&path));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].duplicate.as_deref(), Some("content"));
+    let r = s.execute("library.import", &json!({"paths": [path], "importAnyway": [path]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(r["importedAnyway"], 1, "{r}");
+    assert_eq!(r["sidecars"], 1, "{r}");
+    let copy = s.catalog.photos().find(|p| p.file_name == "copy.png").unwrap();
+    assert_eq!(copy.rating, 4);
+}
+
 /// A ticked duplicate of a file in the same batch, with the other one not ticked, imports both files: the first stays the original.
 #[test]
 fn import_anyway_in_a_batch_keeps_the_first_file_as_the_original() {
