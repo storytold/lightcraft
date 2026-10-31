@@ -11,6 +11,15 @@
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
   the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
+### A Lightroom catalog import says where every photo went
+- When a catalog import finishes, the message counts the catalog's photos (virtual copies included) and how many
+  were added, and also how many were already in the library, are in Recently Deleted, aren't a file type LightCraft
+  reads (videos, for one), have paths it doesn't open, or have incomplete catalog records, when there are any. The
+  result window gives each of these its own line, and the lines add up to the catalog's photos. Before, it gave
+  only the photos added, so an import of a large catalog seemed to lose photos, and re-importing one already in
+  the library seemed to do nothing. Photos on another computer or a device are no longer reported as missing
+  originals for Find Missing Photos, which had no record to relink them to.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -111,7 +120,6 @@
 ### Find the grid shortcut in View
 - Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
   shortcut changes; clicking a menu row still selects that grid (issue #2500).
-
 
 ## 2026-10-21
 

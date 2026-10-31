@@ -356,6 +356,8 @@ mod tests {
             collection_content: Vec::new(),
             warnings: Vec::new(),
             skipped: Vec::new(),
+            images: 0,
+            not_supported: Default::default(),
         }
     }
 
@@ -401,6 +403,8 @@ mod tests {
                 collection_content: Vec::new(),
                 warnings: Vec::new(),
                 skipped: Vec::new(),
+                images: 1,
+                not_supported: Default::default(),
             },
             normal: Prepared::default(),
             index: ImportIndex::default(),

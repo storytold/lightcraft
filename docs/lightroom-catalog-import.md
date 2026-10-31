@@ -51,8 +51,26 @@ lightcraft-cli run --library "LightCraft Library" library.importLightroom path="
 
 The import itself (`library.importLightroom`, `lightcraft-cli run`) adds records to the currently open LightCraft
 library; only the desktop window above can make a new library for it first. The desktop result stays open until dismissed and
-shows the destination library, the number of records added, missing originals and warnings.
-**Show in Library** opens All Photos, clears filters and selects an imported record. Errors stay
+shows the destination library, where each of the catalog's photos went, missing originals and warnings.
+
+**Where the photos went** (issues #2589, #1584). The report accounts for every image of the catalog, once:
+`inCatalog` is the catalog's image count (its `Adobe_images` rows: masters and virtual copies, as Lightroom's All
+Photographs counts them), and these add up to it:
+
+| Report key | Catalog photos that… |
+|---|---|
+| `added` | became new library records (offline originals and virtual copies included), or whose record this import's file import made, or browsed Local photos that joined the library |
+| `alreadyInLibrary` | matched a library photo (by path, or by the import index on reimport); the record is updated in place |
+| `inRecentlyDeleted` | matched a library photo in Recently Deleted; it stays there |
+| `notSupported` | aren't a file type LightCraft reads (videos, for one), with their virtual copies; `notSupportedTypes` counts them by extension |
+| `pathRefused` | have an original the import doesn't look at (below), with their virtual copies; no record is made |
+| `incomplete` | have incomplete catalog records (`skipped`) |
+
+Should the counts not add up, a warning says by how much. `imported` (records added, as before) stays in the report
+and normally equals `added`. The toast says, for example, "45091 photos in the catalog: 16521 added, 812 already in
+the library" (only the outcomes some photo had, then failures); the result window has one line per outcome.
+**Show in Library** opens All Photos, clears filters and selects an imported record (not one left in Recently
+Deleted; the button is left out when every record is there). Errors stay
 readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result
 is also available through `library.importLightroom {"status":true}` during that session.
 
@@ -146,8 +164,10 @@ Original and root folder paths are resolved with the catalog as the document and
 only when they are on this computer or on the network share the catalog itself is on
 (`crates/engine/src/doc_path.rs`). An original on another computer (`\\server\share\…`,
 `//server/…`, `file://server/…`), a device path, or one whose folder or file name in the catalog is
-an absolute path is not looked at: the import lists it as missing with a warning and leaves the
-photo and its virtual copies out of the library. To import originals on a share, open the catalog
+an absolute path is not looked at: the import leaves the photo and its virtual copies out of the library, with a
+warning naming it, and counts them as `pathRefused`. They get no record because a record would have the app look at
+that path later (previews, Find Missing Photos), which is what the refusal prevents; so they are not listed as missing
+either. To import originals on a share, open the catalog
 from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
 

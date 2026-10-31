@@ -36,6 +36,8 @@ fn sample() -> CatalogImport {
         collection_content: Vec::new(),
         warnings: Vec::new(),
         skipped: Vec::new(),
+        images: 2,
+        not_supported: BTreeMap::new(),
     }
 }
 /// A crafted `.lrcat` that names a program as a photo's original gets no record for it, so
@@ -157,6 +159,385 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert!(s.catalog.albums().next().is_none());
     assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
 }
+/// A library photo at `path`, already committed.
+fn library_photo(s: &mut crate::Session, path: &str, edit: impl FnOnce(&mut Photo)) -> PhotoId {
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: path.into() }, "a.ARW", "ARW", 20, 10, "before");
+    p.content_hash = Some("same-bytes".into());
+    edit(&mut p);
+    s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    id
+}
+/// A catalog photo whose file has the same bytes as a library photo in Recently Deleted (or a
+/// virtual copy) is a new record of its own: it was counted as imported but landed in Recently
+/// Deleted (or became a "copy" of nothing it was copied from), so a large import into a library
+/// with a trash went missing photo by photo (#2589).
+#[test]
+fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() {
+    let trashed: fn(&mut Photo) = |p| p.deleted = true;
+    let virtual_copy: fn(&mut Photo) = |p| {
+        p.copy_of = Some(PhotoId(999));
+        p.copy_name = Some("Copy 1".into());
+    };
+    for (case, edit) in [("trashed", trashed), ("virtual copy", virtual_copy)] {
+        let mut s = crate::Session::new();
+        let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| {
+            edit(p);
+            // the other photo's own state, which the new record must not inherit
+            let mut d = (*p.develop).clone();
+            d.light.shadows = 77.0;
+            p.develop = std::sync::Arc::new(d);
+            p.edited = Some("earlier".into());
+            p.history.push(lightcraft_catalog::HistoryStep { label: "Other photo's edit".into(), settings: p.develop.clone() });
+            p.versions.push(lightcraft_catalog::Version {
+                name: "Other photo's version".into(),
+                created: "before".into(),
+                settings: p.develop.clone(),
+                auto: false,
+            });
+            p.meta.title = "Other photo's title".into();
+            p.meta.keywords = vec!["other-photo".into()];
+            p.local_baseline = Some(7);
+            // what the bytes determine is shared
+            p.meta.camera = "Same Camera".into();
+            p.file_size = 4096;
+        });
+        let mut data = sample();
+        data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+        let files = crate::import::ImportReport {
+            duplicates: vec![crate::import::Duplicate {
+                path: "/missing/test.ARW".into(),
+                existing: Some(other.0),
+                reason: "content",
+                existing_deleted: case == "trashed",
+                // what the file itself carries
+                file: Some(Box::new(crate::import::FileFacts {
+                    meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
+                    captured: None,
+                    sidecar: None,
+                })),
+            }],
+            ..Default::default()
+        };
+        let undo0 = s.undo.len();
+        let r = apply_prepared(
+            &mut s,
+            data,
+            ApplyPrepared {
+                update_existing: false,
+                files,
+                index: &mut ImportIndex::default(),
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report;
+        assert_eq!(r["imported"], 1, "{case}: {r}");
+        assert_eq!(r["inRecentlyDeleted"], 0, "{case}: {r}");
+        let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+        assert_ne!(new.id, other, "{case}");
+        assert!(!new.deleted, "{case}: the new record must not be in Recently Deleted");
+        assert_eq!((new.copy_of, new.copy_name.as_deref()), (None, None), "{case}: the new record is no virtual copy");
+        assert_ne!(new.imported, "before", "{case}: imported now, not when the other photo was");
+        assert_eq!(new.rating, 5, "{case}: the catalog's own metadata applies");
+        assert_ne!(new.develop.light.shadows, 77.0, "{case}: no edits from the other photo");
+        assert!(new.history.iter().all(|h| h.label != "Other photo's edit"), "{case}: no history from the other photo");
+        assert!(new.versions.is_empty(), "{case}: no versions from the other photo");
+        assert_ne!(new.meta.title, "Other photo's title", "{case}");
+        assert!(!new.meta.keywords.iter().any(|k| k == "other-photo"), "{case}");
+        assert_eq!(new.local_baseline, None, "{case}");
+        assert_eq!((new.meta.camera.as_str(), new.file_size), ("Same Camera", 4096), "{case}: what the bytes determine is kept");
+        assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{case}");
+        assert_eq!(s.catalog.photo(other).unwrap().deleted, case == "trashed", "{case}: the other photo is left as it was");
+    }
+}
+/// A content duplicate starts from the settings a file import gives a raw (its as-shot white
+/// balance and embedded lens corrections), as its file would on its own, before the catalog's
+/// settings go on top; not from the generic defaults (#2589).
+#[test]
+fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.DNG", |p| {
+        p.deleted = true;
+        p.format = "DNG".into();
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        p.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+    });
+    let mut data = sample();
+    data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+    // a catalog row with no develop settings of its own
+    data.photos[0].settings.clear();
+    let files = crate::import::ImportReport {
+        duplicates: vec![crate::import::Duplicate {
+            path: "/missing/test.ARW".into(),
+            existing: Some(other.0),
+            reason: "content",
+            existing_deleted: true,
+            file: None,
+        }],
+        ..Default::default()
+    };
+    let undo0 = s.undo.len();
+    let r = apply_prepared(
+        &mut s,
+        data,
+        ApplyPrepared {
+            update_existing: false,
+            files,
+            index: &mut ImportIndex::default(),
+            archive_path: None,
+            missing_sources: &HashSet::new(),
+            undo0,
+        },
+    )
+    .unwrap()
+    .report;
+    let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+    assert_eq!(*new.develop, new.camera_defaults(), "{r}");
+    assert_eq!((new.develop.wb.temp, new.develop.wb.tint), (5200.0, 4.0), "the file's as-shot white balance");
+    assert!(new.develop.optics.lens_profile, "the file's embedded lens corrections are on");
+}
+/// A content duplicate keeps the metadata its file carries (copyright, rights, creator) and the
+/// capture time its file gives it, as a file import of it would, when the catalog doesn't restate
+/// them; it reads the file's, not the other photo's, which a person may have edited (#2589).
+#[test]
+fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-rights-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| {
+        p.deleted = true;
+        // edited on the other record after its import
+        p.meta.copyright = "Other photo's notice".into();
+        p.meta.creator = "Other photo's creator".into();
+        p.meta.gps = Some((1.0, 2.0));
+        p.captured = Some("1999-12-31T23:00:00".into());
+    });
+    let file_meta = lightcraft_catalog::Meta {
+        camera: "Same Camera".into(),
+        copyright: "© Jo Example".into(),
+        copyright_status: lightcraft_catalog::CopyrightStatus::Copyrighted,
+        usage_terms: "No reuse".into(),
+        creator: "Jo Example".into(),
+        ..Default::default()
+    };
+    let probed = file_meta.clone();
+    s.media.file_probe = Some(Arc::new(move |_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            meta: probed.clone(),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{r}");
+    assert_eq!(new.rating, 5, "the catalog's own metadata applies: {r}");
+    let m = &new.meta;
+    assert_eq!(
+        (m.copyright.as_str(), m.copyright_status, m.usage_terms.as_str(), m.creator.as_str(), m.camera.as_str()),
+        ("© Jo Example", file_meta.copyright_status, "No reuse", "Jo Example", "Same Camera"),
+        "the file's own metadata: {r}"
+    );
+    assert_eq!(m.gps, None, "nothing from the other photo's record");
+    // the catalog row has no capture time: the file's, not the other photo's edited one
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A content duplicate's XMP sidecar goes into its new record as it does for a file import of it
+/// (caption, copyright…) when the catalog doesn't restate them, also when its file has a capture
+/// time of its own (#2589).
+#[test]
+fn a_content_duplicate_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
+/// the import was set up to do (a Lightroom import doesn't restore, see `OnDeleted`), and the report
+/// counts it so the photos don't go missing unexplained (#2589). A new virtual copy of it is
+/// imported, not trashed with its master.
+#[test]
+fn a_catalog_photo_matching_a_trashed_record_stays_there_and_is_counted() {
+    let mut s = crate::Session::new();
+    let trashed = library_photo(&mut s, "/missing/test.ARW", |p| p.deleted = true);
+    let r = apply(&mut s, sample(), false).unwrap();
+    assert_eq!(r["mapping"]["1"], trashed.0, "{r}");
+    assert!(s.catalog.photo(trashed).unwrap().deleted, "the photo stays in Recently Deleted");
+    assert_eq!(r["inRecentlyDeleted"], 1, "{r}");
+    let copy = s.catalog.photos().find(|p| p.copy_of == Some(trashed)).unwrap();
+    assert!(!copy.deleted, "the new virtual copy is imported, not trashed");
+    assert_eq!(r["imported"], 1, "only the copy was added: {r}");
+}
+/// Importing the catalog again after its master and virtual copy were both moved to Recently
+/// Deleted matches each through the import index: each is counted once, and neither is restored.
+#[test]
+fn a_reimport_counts_each_trashed_match_once() {
+    let mut s = crate::Session::new();
+    // one import index across both imports, as a library on disk keeps in Interop/
+    let mut index = ImportIndex::default();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        apply_prepared(
+            s,
+            sample(),
+            ApplyPrepared {
+                update_existing: false,
+                files: Default::default(),
+                index: &mut index,
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report
+    };
+    let first = import(&mut s);
+    let ids: Vec<PhotoId> = ["1", "2"].iter().map(|k| PhotoId(first["mapping"][k].as_u64().unwrap())).collect();
+    for id in &ids {
+        s.commit("Delete", Op::SetDeleted { id: *id, deleted: true }).unwrap();
+    }
+    let r = import(&mut s);
+    assert_eq!(r["mapping"], first["mapping"], "{r}");
+    assert_eq!(r["inRecentlyDeleted"], 2, "{r}");
+    assert_eq!(r["imported"], 0, "{r}");
+    assert!(ids.iter().all(|id| s.catalog.photo(*id).unwrap().deleted));
+}
+
+/// The report says where each of the catalog's images went, one count per outcome, and the counts
+/// add up to the catalog's images (virtual copies included), so a large import that adds fewer
+/// photos than the catalog has explains the rest (#2589, #1584).
+#[test]
+fn the_report_accounts_for_every_catalog_image_once() {
+    let mut s = crate::Session::new();
+    library_photo(&mut s, "/library/kept.ARW", |_| {});
+    library_photo(&mut s, "/library/trashed.ARW", |p| p.deleted = true);
+    let mut data = sample();
+    let master = data.photos[1].clone();
+    let photo = |id: i64, path: &str, master_image: i64| {
+        let mut p = master.clone();
+        p.source_id = id;
+        p.uuid = format!("image-{id}");
+        p.path = path.into();
+        p.image = row(json!({"id_local": id, "masterImage": master_image, "fileFormat": "ARW"}));
+        p
+    };
+    let mut far = photo(7, "//server/share/far.ARW", 0);
+    far.original = Original::Refused("it is on another computer".into());
+    data.photos.extend([
+        photo(3, "/library/kept.ARW", 0),
+        photo(4, "/library/trashed.ARW", 0),
+        // a video and its virtual copy
+        photo(5, "/Videos/clip.MP4", 0),
+        photo(6, "/Videos/clip.MP4", 5),
+        far,
+    ]);
+    data.skipped.push(SkippedImage { image: 8, reason: SkipReason::MissingFile });
+    data.images = 8;
+    // one index across both imports, as a library on disk keeps it
+    let mut index = ImportIndex::default();
+    let missing_sources: HashSet<_> = data.photos.iter().filter(|p| !p.original_is_file()).map(|p| key(&p.path)).collect();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        let context = ApplyPrepared {
+            update_existing: false,
+            files: Default::default(),
+            index: &mut index,
+            archive_path: None,
+            missing_sources: &missing_sources,
+            undo0,
+        };
+        apply_prepared(s, data.clone(), context).unwrap().report
+    };
+    let r = import(&mut s);
+    let counts = ["added", "alreadyInLibrary", "inRecentlyDeleted", "notSupported", "pathRefused", "incomplete"].map(|k| r[k].as_u64().unwrap());
+    assert_eq!(counts, [2, 1, 1, 2, 1, 1], "the offline master and its copy are added: {r}");
+    assert_eq!(r["inCatalog"], 8, "{r}");
+    assert_eq!(counts.iter().sum::<u64>(), 8, "{r}");
+    assert_eq!(r["notSupportedTypes"], json!({"mp4": 2}), "{r}");
+    assert_eq!(r["imported"], r["added"], "{r}");
+    let missing = r["missing"].to_string();
+    assert!(!missing.contains("far.ARW"), "a refused path has no record to relink, so it isn't missing: {missing}");
+    assert!(!r["warnings"].to_string().contains("accounts for"), "{r}");
+    // Imported again, the photos it added are already in the library.
+    let again = import(&mut s);
+    let counts = ["added", "alreadyInLibrary", "inRecentlyDeleted"].map(|k| again[k].as_u64().unwrap());
+    assert_eq!(counts, [0, 3, 1], "{again}");
+}
+/// A refused photo whose id reads as 0 (a malformed catalog) refuses only itself and its own
+/// copies: `masterImage` is 0 for every master, so every master was counted as refused (#2589).
+#[test]
+fn a_refused_photo_with_id_zero_refuses_only_itself() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    let mut far = data.photos[1].clone();
+    far.source_id = 0;
+    far.uuid = "image-0".into();
+    far.path = "//server/share/far.ARW".into();
+    far.image = row(json!({"id_local": 0, "fileFormat": "ARW"}));
+    far.original = Original::Refused("it is on another computer".into());
+    data.photos.push(far);
+    data.images = 3;
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!((r["added"].as_u64(), r["pathRefused"].as_u64()), (Some(2), Some(1)), "the master and its copy are added: {r}");
+    assert_eq!(s.catalog.len(), 2, "{r}");
+}
+
+/// Counts that don't add up to the catalog's images say so instead of passing silently.
+#[test]
+fn a_report_that_does_not_add_up_says_by_how_much() {
+    let mut data = sample();
+    data.images = 5;
+    let r = apply(&mut crate::Session::new(), data, false).unwrap();
+    let warnings = r["warnings"].to_string();
+    assert!(warnings.contains("the catalog has 5 images, but this report accounts for 2 (a difference of 3)"), "{warnings}");
+}
+
 #[test]
 fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     let mut s = crate::Session::new();
@@ -705,6 +1086,9 @@ fn probed_original_is_counted_once_and_reimport_adds_nothing() {
         let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
         let completion = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap();
         assert_eq!(completion.report["imported"], expected);
+        // the record the file import made is added; the second time it is already in the library
+        let outcome = (completion.report["added"].as_u64(), completion.report["alreadyInLibrary"].as_u64());
+        assert_eq!(outcome, (Some(expected), Some(1 - expected)), "{}", completion.report);
         assert_eq!(completion.report["missing"], json!([]));
         assert_eq!(completion.report["failed"], json!([]));
         assert_eq!(s.catalog.len(), 1);
@@ -748,7 +1132,13 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
         std::fs::write(&source, native_catalog(&photo_tables((root, "")))).unwrap();
         let catalog = read(&source).unwrap();
         assert!(matches!(catalog.photos[0].original, Original::Refused(_)), "{root}: {:?}", catalog.photos[0]);
-        assert!(catalog.warnings.iter().any(|w| w.contains("not opened")), "{root}: {:?}", catalog.warnings);
+        // counted as `pathRefused`, not as missing (#2589)
+        assert!(
+            catalog.warnings.iter().any(|w| w.contains("not opened") && w.ends_with("its photos are not imported")),
+            "{root}: {:?}",
+            catalog.warnings
+        );
+        assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{root}: {:?}", catalog.warnings);
         let mut s = crate::Session::new();
         let probes = Arc::new(AtomicUsize::new(0));
         let calls = probes.clone();
@@ -758,14 +1148,19 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
         }));
         let report = import(&mut s, &source, false).unwrap();
         assert_eq!(probes.load(Ordering::Relaxed), 0, "{root}");
-        assert_eq!(report["missing"].as_array().map(Vec::len), Some(1), "{root}: {report}");
+        // no record, so nothing for Find Missing Photos: counted on its own
+        assert_eq!(report["missing"], json!([]), "{root}: {report}");
+        assert_eq!((report["pathRefused"].as_u64(), report["inCatalog"].as_u64()), (Some(1), Some(1)), "{root}: {report}");
         assert!(s.catalog.is_empty(), "{root}");
     }
     // An absolute folder path would replace the root.
     let mut tables = photo_tables((dir.to_str().unwrap(), ""));
     tables[1].2[2] = SqlValue::Text(format!("{}/Photos/", dir.display()));
     std::fs::write(&source, native_catalog(&tables)).unwrap();
-    assert!(matches!(read(&source).unwrap().photos[0].original, Original::Refused(_)));
+    let catalog = read(&source).unwrap();
+    assert!(matches!(catalog.photos[0].original, Original::Refused(_)));
+    assert!(catalog.warnings.iter().any(|w| w.ends_with("it and its virtual copies are not imported")), "{:?}", catalog.warnings);
+    assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{:?}", catalog.warnings);
     // A root beside the catalog is followed.
     std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
     let catalog = read(&source).unwrap();
