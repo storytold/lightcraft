@@ -24,10 +24,23 @@ pub fn thumb_bucket(long_edge: usize) -> usize {
 /// Memory budgets.
 pub(super) const THUMB_SOURCE_BYTES: usize = 384 << 20;
 
+/// The least memory kept for rendered previews (when the budget allows it).
 pub(super) const RENDERED_MEM_BYTES: usize = 128 << 20;
 
-/// Disk budget for the thumbnail cache.
+/// The smallest disk budget for the thumbnail and preview cache.
 pub const DISK_CACHE_BYTES: u64 = 2 << 30;
+/// What one photo's previews take on disk, about: its standard preview (a 2048 px JPEG, ~1 MB)
+/// and its grid thumbnails. The default disk budget grows by this per photo of the library, so
+/// built previews of a whole wedding are not pruned while they are being made (PERF-PREVIEW-REUSE).
+pub const DISK_CACHE_PER_PHOTO: u64 = 3 << 19;
+/// The default disk budget for a library of `photos`: [`DISK_CACHE_BYTES`], or room for every
+/// photo's previews ([`DISK_CACHE_PER_PHOTO`]) when that is more.
+pub fn default_disk_cache_bytes(photos: usize) -> u64 {
+    DISK_CACHE_BYTES.max((photos as u64).saturating_mul(DISK_CACHE_PER_PHOTO))
+}
+/// A cached view render this much smaller than asked for still serves the loupe (rounding: a
+/// fit of the same frame into a box one pixel different).
+pub(super) const VIEW_REUSE_SLACK: f64 = 0.01;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

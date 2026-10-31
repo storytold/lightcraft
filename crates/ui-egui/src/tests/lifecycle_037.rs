@@ -2332,3 +2332,18 @@ fn synthetic_modifier_ownership_follows_host_changes_across_frames() {
     assert_eq!(app.synthetic_mods, egui::Modifiers::NONE);
     assert!(!app.synthetic_mods_release);
 }
+
+/// Background preparation is advanced on every logic pass, the hidden ones too (CodeRabbit on
+/// #3077): a minimised window keeps preparing the view's previews, and a shown frame ticks it once.
+#[test]
+fn background_preparation_advances_while_the_window_is_hidden() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 2, "each hidden pass advances it");
+    let visible = viewport_raw(egui::vec2(800.0, 600.0), true);
+    let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
+}
