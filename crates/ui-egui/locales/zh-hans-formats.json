@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "已包含 {total} 张照片中的 {used} 张",
   " · {skipped} skipped (file exists)": " · 已跳过 {skipped} 个（文件已存在）",
   " · {} duplicate{} skipped": " · 已跳过 {0} 个重复项{1:.0}",
   " · {} failed: {}": " · {0} 个失败：{1}",

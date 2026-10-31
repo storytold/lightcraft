@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "{used} de {total} fotos incluídas",
   " ({} in Recently Deleted)": " ({} em Excluídos recentemente)",
   " · {skipped} skipped (file exists)": " · {skipped} ignorada(s) (arquivo existente)",
   " · {} duplicate{} skipped": " · {} duplicada(s) ignorada(s){:.0}",

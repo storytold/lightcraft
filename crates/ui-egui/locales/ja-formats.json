@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "{total} 枚中 {used} 枚を使用",
   " · {skipped} skipped (file exists)": "・{skipped}件は同名ファイルのためスキップ",
   " · {} duplicate{} skipped": "・重複{}枚をスキップ{:.0}",
   " · {} failed: {}": "・{}件失敗：{}",
