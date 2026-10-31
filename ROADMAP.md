@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; the lens profile database priority links its tracking issue #329; Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (Greek interface: every interface string and formats message, reviewed by a native speaker; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; the lens profile database priority links its tracking issue #329; Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -96,7 +96,7 @@ while lower-layer errors stay English. Detail: [localization-parity.md](docs/loc
 | Korean | ko | 0% | none (no Hangul face) |
 | Vietnamese | vi | 0% | none |
 
-Also shipped: Traditional Chinese (87%), Russian (74%), Ukrainian (99%), Italian (92%), Georgian (100%), Finnish (79%).
+Also shipped: Traditional Chinese (87%), Russian (74%), Ukrainian (99%), Italian (92%), Georgian (100%), Finnish (79%), Greek (100%, What's New in English).
 
 ## Upcoming
 
@@ -190,6 +190,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Greek interface (`el`): every interface string and formats message, locale, menu command and tests, reviewed by a native speaker; What's New left in English; headline numbers unchanged |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |
