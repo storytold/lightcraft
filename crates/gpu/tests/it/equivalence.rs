@@ -634,6 +634,10 @@ fn highlights_shadows_base_matches_on_every_process() {
             check(&format!("{p:?} highlights/shadows {w}"), &src, &raw, &s, &req);
             typical(&mut s);
             check(&format!("{p:?} typical {w}"), &src, &raw, &s, &req);
+            // A lifted toe (`blacks > 0`) fades towards grey from V3 (V1/V2 keep the old scaling):
+            // the new `TOE` finish parameter must match the CPU's.
+            s.light.blacks = 40.0;
+            check(&format!("{p:?} lifted toe {w}"), &src, &raw, &s, &req);
             s.masks = vec![Mask {
                 components: vec![MaskComponent {
                     name: None,

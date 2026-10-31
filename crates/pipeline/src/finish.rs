@@ -29,6 +29,12 @@ pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
     if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
 }
 
+/// Fade a tone-mapped pixel towards neutral grey by the lifted-toe amount.
+fn fade_lifted_toe(display: [f32; 3], output_luma: f32, toe: f32) -> [f32; 3] {
+    let fade = ((output_luma - toe) / output_luma).clamp(0.0, 1.0);
+    if fade < 1.0 { display.map(|v| output_luma + (v - output_luma) * fade) } else { display }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -291,11 +297,17 @@ impl FinishParams {
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
-        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        // V3 fades a lifted toe towards grey (`ToneMap::toe`); V1/V2 scale chromaticity up as before.
+        Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        },
+        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
+        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+            Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak).without_toe(),
+            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak).without_toe(),
+            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak).without_toe(),
         },
     }
 }
@@ -418,6 +430,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let yl = luminance_2020(c);
             let o = fp.tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+
+            // Lifted toe adds neutral light: fade towards grey so shadows stay neutral.
+            let toe = fp.tone.toe();
+            if toe > 0.0 && o > 0.0 {
+                d = fade_lifted_toe(d, o, toe);
+            }
+
             let k = fp.tone.chroma_scale(o);
             if k != 1.0 {
                 d = d.map(|v| o + (v - o) * k);

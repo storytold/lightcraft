@@ -8,7 +8,8 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | Process | What it changes |
 |---|---|
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
-| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+| **V2** | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+| **V3** (the latest) | Like V2, but a lifted toe (`Blacks > 0` on the generic raw curve) adds neutral light: the per-pixel stage fades deep shadows towards grey by the lifted amount (`ToneMap::toe`, `finish::fade_lifted_toe`) instead of scaling their chromaticity up, so lifted blacks stay neutral rather than turning purple. V1/V2 renders are unchanged. |
 
 ## The rule
 
