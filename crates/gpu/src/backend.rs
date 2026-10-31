@@ -12,6 +12,9 @@
 //!   (the platform default), or `off` (no GPU compute; the window still needs one backend and
 //!   keeps the platform default);
 //! - else `WGPU_BACKEND` (wgpu's own variable, same names) for both the window and compute.
+//! - `LIGHTCRAFT_GPU_ADAPTER` = (part of) a graphics card's name, any case (`4070`): the card for
+//!   the compute devices — the render device, the denoise network's, the face detector's
+//!   ([`pick_adapter`]). The window stays on the card that drives the screen.
 //!
 //! Backends this build doesn't contain (e.g. `gl`: the GL backend isn't compiled in) are ignored
 //! with a warning and the platform default is used.
@@ -164,6 +167,69 @@ pub fn instance_flags(flags: wgpu::InstanceFlags, env: Option<&str>) -> wgpu::In
 /// [`instance_flags`] with `WGPU_VALIDATION_INDIRECT_CALL` read from the environment.
 pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlags {
     instance_flags(flags, std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
+}
+
+/// The graphics card `LIGHTCRAFT_GPU_ADAPTER` asks for: (part of) its name, trimmed and in lower
+/// case; `None` when it is unset or blank.
+pub fn wanted_adapter() -> Option<String> {
+    wanted_adapter_from(std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().as_deref())
+}
+
+/// [`wanted_adapter`] from the variable's value `env`.
+pub fn wanted_adapter_from(env: Option<&str>) -> Option<String> {
+    env.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty())
+}
+
+/// Whether the adapter called `name` is the one `wanted` asks for: `wanted` is part of its name,
+/// ignoring case (`4070` matches "NVIDIA GeForce RTX 4070 SUPER").
+pub fn adapter_name_matches(wanted: &str, name: &str) -> bool {
+    let wanted = wanted.trim().to_lowercase();
+    !wanted.is_empty() && name.to_lowercase().contains(&wanted)
+}
+
+/// Which of `adapters` (name and kind, in wgpu's order) `wanted` picks: the first hardware one whose
+/// name matches. Software adapters (WARP, llvmpipe) are never picked: the CPU pipeline is faster.
+pub fn find_named_adapter<'a>(wanted: &str, adapters: impl IntoIterator<Item = (&'a str, wgpu::DeviceType)>) -> Option<usize> {
+    adapters.into_iter().position(|(name, kind)| kind != wgpu::DeviceType::Cpu && adapter_name_matches(wanted, name))
+}
+
+/// The adapter for a compute device (the render device, the denoise network's, the face detector's)
+/// on `instance` with `backends`: the card `LIGHTCRAFT_GPU_ADAPTER` names, else the
+/// high-performance one. A name that matches no card is logged and the high-performance one is
+/// used; never a panic.
+pub fn pick_adapter(instance: &wgpu::Instance, backends: Backends) -> Result<wgpu::Adapter, String> {
+    pick_adapter_named(instance, backends, wanted_adapter().as_deref())
+}
+
+/// [`pick_adapter`] for an explicit `wanted` name (part of it, any case) instead of the variable's.
+pub fn pick_adapter_named(instance: &wgpu::Instance, backends: Backends, wanted: Option<&str>) -> Result<wgpu::Adapter, String> {
+    if let Some(w) = wanted {
+        let all = pollster::block_on(instance.enumerate_adapters(backends));
+        let infos: Vec<wgpu::AdapterInfo> = all.iter().map(|a| a.get_info()).collect();
+        let found = find_named_adapter(w, infos.iter().map(|i| (i.name.as_str(), i.device_type)));
+        if let Some(adapter) = found.and_then(|i| all.into_iter().nth(i)) {
+            log::info!("gpu: LIGHTCRAFT_GPU_ADAPTER={w}: using {}", adapter.get_info().name);
+            return Ok(adapter);
+        }
+        let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
+        log::warn!("gpu: LIGHTCRAFT_GPU_ADAPTER={w} names none of the graphics cards ({}); using the default choice", names.join(", "));
+    }
+    pollster::block_on(
+        instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
+    )
+    .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))
+}
+
+/// Whether the render device may share the window's device (adapter `window_adapter`): yes unless
+/// `LIGHTCRAFT_GPU_ADAPTER` names another card, which then renders on a device of its own (the
+/// window stays on the card that drives the screen; renders come back as pixels).
+pub fn may_adopt_window_device(window_adapter: &str) -> bool {
+    may_adopt_window_device_for(wanted_adapter().as_deref(), window_adapter)
+}
+
+/// [`may_adopt_window_device`] for an explicit `wanted` name.
+pub fn may_adopt_window_device_for(wanted: Option<&str>, window_adapter: &str) -> bool {
+    wanted.is_none_or(|w| adapter_name_matches(w, window_adapter))
 }
 
 /// `LIGHTCRAFT_GPU_BACKEND=off`.
@@ -408,6 +474,39 @@ mod tests {
         if std::env::var_os("WGPU_DX12_COMPILER").is_none() {
             assert!(matches!(backend_options().dx12.shader_compiler, wgpu::Dx12Compiler::Fxc));
         }
+    }
+
+    /// `LIGHTCRAFT_GPU_ADAPTER` picks a card by part of its name, any case; software adapters never.
+    #[test]
+    fn gpu_adapter_variable_matches_part_of_the_card_name() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu};
+        assert_eq!(wanted_adapter_from(None), None);
+        assert_eq!(wanted_adapter_from(Some("  ")), None);
+        assert_eq!(wanted_adapter_from(Some(" RTX 4070 ")).as_deref(), Some("rtx 4070"));
+        assert!(adapter_name_matches("4070", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(adapter_name_matches("geforce rtx 4070 super", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(adapter_name_matches(" Super ", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(!adapter_name_matches("4070", "NVIDIA GeForce RTX 5070"));
+        assert!(!adapter_name_matches("", "NVIDIA GeForce RTX 5070"), "a blank name matches nothing");
+        // two cards: the screen's card first in wgpu's order, as here
+        let two = [("NVIDIA GeForce RTX 5070", DiscreteGpu), ("NVIDIA GeForce RTX 4070 SUPER", DiscreteGpu), ("Microsoft Basic Render Driver", Cpu)];
+        assert_eq!(find_named_adapter("4070", two), Some(1));
+        assert_eq!(find_named_adapter("5070", two), Some(0));
+        // "070" is in both: the first one in wgpu's order
+        assert_eq!(find_named_adapter("070", two), Some(0));
+        assert_eq!(find_named_adapter("radeon", two), None, "no match: the caller falls back to the default choice");
+        assert_eq!(find_named_adapter("basic render", two), None, "a software adapter is never picked");
+        assert_eq!(find_named_adapter("intel", [("Intel(R) UHD Graphics 770", IntegratedGpu)]), Some(0));
+        assert_eq!(find_named_adapter("4070", [] as [(&str, wgpu::DeviceType); 0]), None);
+    }
+
+    /// The render device shares the window's device only when the variable names the window's card.
+    #[test]
+    fn window_device_is_adopted_only_for_the_wanted_card() {
+        assert!(may_adopt_window_device_for(None, "NVIDIA GeForce RTX 5070"));
+        assert!(may_adopt_window_device_for(Some("5070"), "NVIDIA GeForce RTX 5070"));
+        assert!(!may_adopt_window_device_for(Some("4070"), "NVIDIA GeForce RTX 5070"));
+        assert!(may_adopt_window_device_for(Some("4070"), "NVIDIA GeForce RTX 4070 SUPER"));
     }
 
     #[test]
