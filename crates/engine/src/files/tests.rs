@@ -1050,6 +1050,56 @@ fn clipped_highlights_stay_neutral_when_darkened() {
     }
 }
 
+/// Offsets must not undo reconstruction, even below the final band node or when only a binned mask tells
+/// that a channel clipped. Unclipped neutrals still get the camera's fitted cast.
+#[test]
+fn reconstructed_highlights_bypass_chroma_offsets() {
+    use crate::camera_preview::{BAND_NODES, ChromaBands, HUE_NODES};
+    let bands = ChromaBands {
+        matrices: [[0.8, 0.1, -0.1, 0.9]; BAND_NODES],
+        hue: Some([[1.1, 0.05]; HUE_NODES]),
+        offsets: Some([[0.12, -0.10]; BAND_NODES]),
+        ..ChromaBands::identity([0.01, 0.1, 0.5, 1.0, 2.0, 4.0, 8.0])
+    };
+    let no_offsets = ChromaBands { offsets: None, ..bands.clone() };
+    let colour = CameraColourModel { wb: [2.4, 1.0, 1.6], matrix: yellowing_look(), gain: 0.25, tables: None, hue_sat: None, bands: Some(&bands) };
+    let plain = CameraColourModel { bands: Some(&no_offsets), ..colour };
+    // Cross a mask-word and a row boundary; cover valid, malformed and unrelated mask bits.
+    for (sensor, mask, rebuilt) in [
+        ([1.0; 3], None, true),
+        ([0.2; 3], Some(vec![7; 130]), true),
+        ([0.2, 0.5, 0.3], Some(vec![2; 130]), true),
+        ([0.2; 3], Some(vec![7; 129]), false),
+        ([0.2; 3], Some(vec![8; 130]), false),
+        ([1.0; 3], Some(vec![0; 130]), true),
+    ] {
+        let mut image = Rgb32f::filled(65, 2, sensor);
+        let clipped = match mask.as_deref() {
+            Some(mask) => colour.rebuild_highlights_masked(&mut image, mask),
+            None => colour.rebuild_highlights(&mut image),
+        };
+        let mut expected = image.clone();
+        if rebuilt {
+            plain.apply(&mut expected)
+        } else {
+            colour.apply(&mut expected)
+        }
+        colour.apply_reconstructed(&mut image, &clipped);
+        assert_eq!(image.data, expected.data, "sensor {sensor:?}, mask {mask:?}");
+        if sensor[0] == sensor[1] && rebuilt {
+            for p in &image.data {
+                assert!(p.iter().all(|v| (v - p[1]).abs() < 1e-5), "rebuilt neutral: {p:?}");
+            }
+        }
+    }
+    // At an ordinary, unclipped matrix-neutral tone the offset remains visible.
+    let white = clipped_white(&colour.matrix);
+    let mut image = Rgb32f::filled(2, 2, std::array::from_fn(|i| 0.1 * white[i] / colour.wb[i]));
+    let clipped = colour.rebuild_highlights(&mut image);
+    colour.apply_reconstructed(&mut image, &clipped);
+    assert!((image.data[0][0] - image.data[0][2]).abs() > 0.001);
+}
+
 /// A smooth pink gradient (`[0.9k, k, 0.8k]` in the sensor, k from 0.8 to 1.35, white balance `[2.5, 1, 1.6]`)
 /// through the point where green clips, 1600 px long, in `rows` of a 1600 × `height` picture that is otherwise
 /// near black, rebuilt and rendered at Exposure -2. Returns the rendered colour of the middle row's last

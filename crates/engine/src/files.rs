@@ -56,15 +56,54 @@ pub(crate) struct CameraColourModel<'a> {
 
 impl CameraColourModel<'_> {
     /// Rebuild sensor-clipped channels; fully clipped highlights become [`clipped_white`] of the matrix, so they
-    /// come out of [`Self::apply`] neutral.
-    pub fn rebuild_highlights(&self, img: &mut Rgb32f) {
+    /// come out of [`Self::apply_reconstructed`] neutral. Returns clipping bits to keep them out of chroma offsets.
+    pub fn rebuild_highlights(&self, img: &mut Rgb32f) -> Vec<u64> {
+        let clipped = self.offset_clip_mask(img, None);
         lightcraft_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
+        clipped
     }
 
     /// [`Self::rebuild_highlights`] for a binned image whose clipped channels `mask` tells
     /// ([`lightcraft_raw::RawImage::develop_binned_masked`]).
-    pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) {
+    pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) -> Vec<u64> {
+        let clipped = self.offset_clip_mask(img, Some(mask));
         lightcraft_raw::highlight::reconstruct_masked(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mask);
+        clipped
+    }
+
+    /// Keep the reconstruction's clipping evidence before it changes the sensor values. Only offset looks need
+    /// this temporary bit per pixel; binned masks and wrong-length masks follow reconstruction's own rules.
+    fn offset_clip_mask(&self, img: &Rgb32f, mask: Option<&[u8]>) -> Vec<u64> {
+        if self.bands.and_then(|b| b.offsets.as_ref()).is_none() {
+            return Vec::new();
+        }
+        let mask = mask.filter(|m| m.len() == img.data.len());
+        img.data
+            .chunks(64)
+            .enumerate()
+            .map(|(chunk, pixels)| {
+                pixels.iter().enumerate().fold(0, |bits, (i, p)| {
+                    let clipped = p.iter().any(|v| *v >= HIGHLIGHT_CLIP) || mask.and_then(|m| m.get(chunk * 64 + i)).is_some_and(|m| m & 7 != 0);
+                    bits | (u64::from(clipped) << i)
+                })
+            })
+            .collect()
+    }
+
+    /// Apply the colour model after reconstruction, without adding a fitted cast to rebuilt highlights.
+    /// Ordinary neutral tones still receive offsets, and rebuilt pixels retain the matrix and hue terms.
+    pub fn apply_reconstructed(&self, img: &mut Rgb32f, clipped: &[u64]) {
+        let Some(bands) = self.bands.filter(|_| !clipped.is_empty()) else { return self.apply(img) };
+        let bands = crate::camera_preview::ChromaBands { offsets: None, ..bands.clone() };
+        let without_offsets = CameraColourModel { bands: Some(&bands), ..*self };
+        let m = self.matrix.to_f32();
+        lightcraft_raster::par_rows(&mut img.data, img.width, |y, row| {
+            for (x, p) in row.iter_mut().enumerate() {
+                let i = y * img.width + x;
+                let rebuilt = clipped.get(i / 64).is_some_and(|bits| bits & (1 << (i % 64)) != 0);
+                *p = if rebuilt { without_offsets.pixel(&m, *p) } else { self.pixel(&m, *p) };
+            }
+        });
     }
 
     /// White balance, matrix, tables and baseline exposure, in place.

@@ -203,12 +203,13 @@ fn load_bytes_now(
         let finish = |mut img: Rgb32f| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
-            match &clip_mask {
+            let clipped = match &clip_mask {
                 Some(mask) => colour.rebuild_highlights_masked(&mut img, mask),
                 None => colour.rebuild_highlights(&mut img),
-            }
+            };
             stages.push(("highlights", t0.elapsed()));
-            colour.apply(&mut img);
+            colour.apply_reconstructed(&mut img, &clipped);
+            drop(clipped);
             stages.push(("colour", t0.elapsed()));
             // a full-size render keeps the picture (fitting it to its own size would copy it, ~390 MB at 33 MP)
             let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Box) } else { img };

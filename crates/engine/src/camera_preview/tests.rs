@@ -2375,6 +2375,38 @@ fn chroma_bands_hue_and_offset_terms() {
     assert!((luminance_2020(tinted) - 0.2).abs() < 1e-5);
 }
 
+/// Clamping a negative channel changes luminance, so its residual cannot be divided by the pre-clamp
+/// tone scale. Reject it only from the offset fit, including negatives introduced by existing bands.
+#[test]
+fn chroma_offsets_ignore_pre_clamp_negative_samples() {
+    let tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.2f32.powi(i as i32);
+        [x, x.powf(0.8).min(0.99)]
+    }))
+    .unwrap();
+    for bands in
+        [None, Some(ChromaBands { matrices: [[2.5, 0.0, 0.0, 1.0]; BAND_NODES], ..ChromaBands::identity([0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0]) })]
+    {
+        let look = CameraLook { matrix: Mat3::IDENTITY, tone, hue_sat: None, bands };
+        let map = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let clean = vec![([0.2; 3], [0.3, 0.28, 0.26]); 256];
+        let expected = fit_chroma_offsets(&clean, &look).unwrap();
+        assert!(expected.offsets.unwrap().iter().flatten().any(|v| v.abs() > 0.001), "valid samples teach a nonzero offset");
+        let negative = if look.bands.is_some() { [0.01, 0.2, 0.2] } else { [-0.1, 0.2, 0.2] };
+        let scene = look.bands.as_ref().map_or(negative, |b| b.apply(negative.map(|v| v as f32)).map(f64::from));
+        assert!(scene[0] < 0.0);
+        let shown = displayed(scene, &map);
+        let target = shown.map(|v| 0.9 * v + 0.1 * luma(shown));
+        let bad = vec![(negative, target); 1024];
+        let mut mixed = clean;
+        mixed.extend_from_slice(&bad);
+        assert_eq!(fit_chroma_offsets(&mixed, &look).unwrap(), expected, "negative samples must not bias offsets");
+        assert!(fit_chroma_offsets(&bad, &look).unwrap().offsets.unwrap().iter().flatten().all(|v| *v == 0.0));
+        let hue = fit_hue_chroma(&bad, &look).unwrap().hue.unwrap();
+        assert!(hue.iter().any(|v| (v[0] - 1.0).abs() > 0.01), "the hue fit still uses these samples");
+    }
+}
+
 #[test]
 fn hue_chroma_fit_follows_a_hue_gain_and_refuses_an_implausible_one() {
     let look = CameraLook {
