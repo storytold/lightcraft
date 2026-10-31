@@ -193,7 +193,9 @@ pub fn reset_failures() {
 /// Allow or forbid GPU rendering at runtime (a preference). `LIGHTCRAFT_GPU=0` forbids it for the
 /// whole process regardless.
 pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
+    // (SeqCst, as `warm_up`'s thread reads it after releasing its start: a switch back on is
+    // never missed there)
+    ENABLED.store(on, Ordering::SeqCst);
 }
 
 /// Whether GPU rendering is allowed (environment, preference, no earlier failure — real, or
@@ -308,13 +310,33 @@ pub(crate) fn existing_device() -> Option<&'static ctx::Gpu> {
 
 /// Create the device and compile the kernels on a background thread now (once the window is up),
 /// so the first render doesn't wait ~0.3–0.4 s for it and the UI thread never does. Does nothing
-/// while GPU rendering is turned off.
+/// while GPU rendering is turned off. Repeated calls start one thread at most.
 pub fn warm_up() {
     #[cfg(not(target_arch = "wasm32"))]
-    if !env_disabled() && ENABLED.load(Ordering::Relaxed) && GPU.get().is_none() {
-        let _ = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
-            let _ = device();
+    if !env_disabled() && ENABLED.load(Ordering::SeqCst) && GPU.get().is_none() {
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        if STARTED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
+            loop {
+                let _ = device();
+                if GPU.get().is_some() || shutting_down() || env_disabled() {
+                    break;
+                }
+                // turned off before the thread ran (nothing created): a later call may start
+                // again. Released first, then the preference read again: a call made while this
+                // thread still held the flag (turned back on meanwhile) returned without starting
+                // one, so this thread tries again itself rather than leave "starting" for good.
+                STARTED.store(false, Ordering::SeqCst);
+                if !ENABLED.load(Ordering::SeqCst) || STARTED.swap(true, Ordering::SeqCst) {
+                    break;
+                }
+            }
         });
+        if spawned.is_err() {
+            STARTED.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -520,6 +542,9 @@ pub fn try_render(
                         format!("{what}: {}; the GPU is not used again", f.reason)
                     }
                     ctx::FailKind::OutOfMemory => {
+                        // an upload that ran out of memory left a zeroed buffer; the shared source
+                        // may be one, and the next render of the photo would reuse it
+                        render::release_shared_source();
                         gpu.trim(0);
                         format!("{what}: {}", f.reason)
                     }
@@ -550,9 +575,32 @@ pub fn try_render(
     }
 }
 
+/// Tests: parse and validate a WGSL module with naga, as wgpu does before it hands a shader to the driver. Needs no
+/// GPU, so kernels that don't build (a duplicate definition after a merge, a type error) fail every test run, not only
+/// the GPU ones.
+#[cfg(test)]
+pub(crate) fn validate_wgsl(name: &str, src: &str) -> Result<(), String> {
+    use wgpu::naga;
+    let module = naga::front::wgsl::parse_str(src).map_err(|e| format!("{name}: {}", e.emit_to_string(src)))?;
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&module)
+        .map(|_| ())
+        .map_err(|e| format!("{name}: {}", e.emit_to_string(src)))
+}
+
 #[cfg(test)]
 mod tests {
     use lightcraft_pipeline::{OutputDepth, Overlay};
+
+    /// The helper refuses what a driver would: a function defined twice (what an automatic merge of two branches
+    /// touching the same kernel can leave).
+    #[test]
+    fn wgsl_validation_catches_a_duplicate_definition() {
+        let ok = "fn f() -> f32 { return 1.0; }\n@compute @workgroup_size(1) fn main() { _ = f(); }\n";
+        assert_eq!(super::validate_wgsl("ok", ok), Ok(()));
+        let twice = format!("fn f() -> f32 {{ return 2.0; }}\n{ok}");
+        assert!(super::validate_wgsl("twice", &twice).is_err());
+    }
 
     // Given a request the 8-bit kernel can't draw (high bit depth, a soft proof, Visualize HDR),
     // the GPU doesn't take it; the loupe and diagnostic overlays it can draw stay on the GPU
