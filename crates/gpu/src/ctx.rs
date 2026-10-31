@@ -983,7 +983,7 @@ pub(crate) fn read_texture(
         },
         wgpu::Extent3d { width: w32, height: h32, depth_or_array_layers: 1 },
     );
-    queue.submit([enc.finish()]);
+    let index = queue.submit([enc.finish()]);
     if let Some(e) = pollster::block_on(scope.pop()) {
         return Err(format!("texture copy failed: {e}"));
     }
@@ -993,7 +993,9 @@ pub(crate) fn read_texture(
         let _ = tx.send(r);
     });
     let wait = std::time::Duration::from_secs(10);
-    poll_device(device, generation, wgpu::PollType::Wait { submission_index: None, timeout: Some(wait) })?;
+    // (its own copy only: the window's device is the editing card's, and an export's queued
+    // renders on it must not make a screenshot time out)
+    poll_device(device, generation, wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(wait) })?;
     match rx.recv_timeout(wait) {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(format!("{e}")),
