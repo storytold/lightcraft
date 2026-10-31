@@ -712,7 +712,7 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
 }
 
 /// Long-edge units → normalized units for x and y.
-fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
+pub(super) fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
     // derive from the mapping: 1 normalized unit in x and y in screen points
     let o = map.screen(Point::new(0.0, 0.0));
     let x = map.screen(Point::new(1.0, 0.0)).distance(o) as f64;

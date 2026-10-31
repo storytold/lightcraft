@@ -79,6 +79,10 @@ pub const MASK_SIDE: usize = 288;
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(MASK_SIDE == tracker::LOW_RES && INPUT == vit::IMAGE);
 
+/// What a photo's subject usually is, as concept prompts ([`Sam3::segment_subject`]); anything else
+/// (an object, a landscape's feature) is selected at the focus point instead.
+pub const SUBJECT_CONCEPTS: &[&str] = &["person", "animal"];
+
 /// The files of a model directory.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
 
@@ -239,6 +243,15 @@ impl Sam3 {
         let (ids, valid) = tok.encode(text);
         let out = det.predict(f, &ids, &valid)?;
         Ok(detector::merge(&out, threshold))
+    }
+
+    /// The photo's subject among its people and animals ([`detector::subject`]): the ones the
+    /// camera's focus (`focus`, normalized; `None` when the file doesn't record it) falls on, or
+    /// without it the most prominent, with whoever is about as large. `None` when the subject is
+    /// neither (a focus on something else, or nobody in the photo): select what is at the point.
+    pub fn segment_subject(&mut self, enc: &mut Encoded, focus: Option<(f32, f32)>, threshold: f32) -> Result<Option<Prediction>> {
+        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect(enc, c)).collect::<Result<Vec<_>>>()?;
+        Ok(detector::subject(&outs, threshold, focus))
     }
 
     /// Raw detector outputs for `text` (tests and tools).

@@ -177,6 +177,14 @@ impl DevelopSettings {
         }
     }
 
+    /// The middle of the crop, in normalized photo coordinates (the photo's middle when the crop
+    /// isn't a usable rectangle).
+    pub fn crop_center(&self) -> lightcraft_geom::Point {
+        let r = self.crop.geometry.rect;
+        let (x, y) = ((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0);
+        if x.is_finite() && y.is_finite() { lightcraft_geom::Point::new(x, y) } else { lightcraft_geom::Point::new(0.5, 0.5) }
+    }
+
     /// Next free mask id: one past the highest, or, when that is `u32::MAX` (ids come from files,
     /// pastes and agents), the lowest one no mask uses.
     pub fn next_mask_id(&self) -> u32 {

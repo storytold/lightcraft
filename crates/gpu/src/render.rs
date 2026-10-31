@@ -840,7 +840,14 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
             eyed
         }
     };
-    denoise(cx, img, plan)
+    let img = denoise(cx, img, plan);
+    if !lightcraft_pipeline::lens_blur::renders(s) {
+        return img;
+    }
+    // Lens Blur (global or a mask's): on the CPU, like the CPU renderer's (`lens_blur::apply`)
+    let mut host_img = cx.read_rgb(&img, w, h);
+    lightcraft_pipeline::lens_blur::apply_with(&mut host_img, s, &plan.frame, plan.px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
+    cx.gpu.upload(rgb_words(&host_img))
 }
 
 /// Noise reduction (`local::denoise`).

@@ -74,7 +74,9 @@ ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:8793:127.0.0.1:8793 user@your
 LIGHTCRAFT_SAM3_REMOTE=127.0.0.1:8793 lightcraft
 ```
 
-Object clicks, Describe prompts, and detail refinement use the remote worker. Only the
+Object clicks, Describe prompts, detail refinement and Lens Blur's Find Subject (people and animals,
+from the camera's focus point when the file records it) use the remote worker; a worker older than the
+app rejects a request it doesn't know with an error, so update both together. Only the
 rendered model input (long edge at most 1008 pixels) and prompts cross the tunnel. The
 worker caches the current photo; detail crops do not replace that cache. Returned masks
 stay in the local library, so later adjustments and exports work without the connection.
