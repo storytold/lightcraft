@@ -357,7 +357,7 @@ fn transpose(p: &Plane) -> Plane {
 }
 
 /// Detail scale of the highlights/shadows base from process V2, as a fraction of the long edge:
-/// the base is the edge-aware filter of the [`median_hv`] of log luminance at this radius, so
+/// the base is the edge-aware filter of the [`detail_free`] log luminance at this radius, so
 /// twigs, lines and fine texture brighter or darker than their surroundings take their
 /// surroundings' shift (and keep their contrast, as with Exposure) while region boundaries stay
 /// sharp (no halos). V1's base is the edge-aware filter of log luminance itself (issue #632).
@@ -380,12 +380,54 @@ pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
 }
 
 /// The highlights/shadows base layer of log luminance `l`: the fast guided filter ([`BASE_EPS`])
-/// of its [`median_hv`] at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1).
+/// of its [`detail_free`] plane at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1).
 pub fn tone_base(l: &Plane, sigma: f32, detail: usize) -> Plane {
     if detail == 0 {
         return guided_fast(l, sigma, BASE_EPS);
     }
-    guided_fast(&median_hv(l, detail), sigma, BASE_EPS)
+    guided_fast(&detail_free(l, detail), sigma, BASE_EPS)
+}
+
+/// Downscale factor of the coarse median in [`detail_free`]: its radius at full size is this many
+/// times the fine one's.
+pub const BASE_COARSE_STEP: usize = 3;
+
+/// Log luminance `l` without detail finer than `r` px (process V2's highlights/shadows base takes
+/// its edge-aware filter): each value moves toward its [`median_hv`] at `r` only as far as the
+/// median of a [`BASE_COARSE_STEP`]× wider neighbourhood agrees (`l` clamped between the two).
+/// A twig, line or speck in an even surround has both medians on the surround's side and takes
+/// its tone, as #632 wants. The gap between two letter strokes, which a median at `r` fills with the
+/// strokes' tone, sits in a wider neighbourhood mostly of the panel's tone: the two medians
+/// disagree and the gap keeps its own. The coarse median is taken at `r` of a box-downscaled copy and
+/// enlarged bilinearly, like [`guided_fast`]'s coefficients.
+pub fn detail_free(l: &Plane, r: usize) -> Plane {
+    use lightcraft_raster::resample::{Filter, resize};
+    if r == 0 || l.data.is_empty() {
+        return l.clone();
+    }
+    let (w, h) = (l.width, l.height);
+    let fine = median_hv(l, r);
+    let (lw, lh) = (w.div_ceil(BASE_COARSE_STEP).max(1), h.div_ceil(BASE_COARSE_STEP).max(1));
+    let coarse = resize(&median_hv(&resize(l, lw, lh, Filter::Box), r), w, h, Filter::Bilinear);
+    let mut out = Plane::new(w, h);
+    for_rows(&mut out.data, w, |y, row| {
+        for (((o, &v), &a), &b) in row.iter_mut().zip(l.row(y)).zip(fine.row(y)).zip(coarse.row(y)) {
+            *o = clamp_between(v, a, b);
+        }
+    });
+    out
+}
+
+/// `v` clamped between `a` and `b` (in either order); a NaN bound is ignored, not a panic.
+fn clamp_between(v: f32, a: f32, b: f32) -> f32 {
+    let (lo, hi) = (a.min(b), a.max(b));
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
 
 /// Subsampling step of [`guided_fast`] for `sigma` (1 = no subsampling: the plain guided filter).
@@ -576,7 +618,7 @@ pub const CHROMA_SIGMA: f32 = 0.004;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaneSigmas {
     /// Edge-aware base for highlights/shadows ([`tone_base`]: fast guided filter, [`BASE_EPS`]; from
-    /// process V2 of the [`BASE_DETAIL`] median).
+    /// process V2 of its [`detail_free`] plane at [`BASE_DETAIL`]).
     pub base: Option<f32>,
     /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1).
     pub base_detail: usize,
@@ -949,12 +991,12 @@ mod fast_tests {
     }
 
     #[test]
-    fn sampled_tone_base_keeps_the_median_before_the_guided_filter() {
+    fn sampled_tone_base_keeps_the_detail_free_plane_before_the_guided_filter() {
         let p = Plane::from_fn(73, 51, |x, y| if x % 9 == 0 { 3.0 } else { -4.0 + ((x + y) % 7) as f32 * 0.03 });
         for sigma in [6.0, 24.0, 120.0] {
             for detail in [0, 1, 3, BASE_DETAIL_MAX] {
-                let median = median_hv(&p, detail);
-                assert_eq!(tone_base(&p, sigma, detail).data, resized_reference(&median, sigma, BASE_EPS).data, "{sigma}, {detail}");
+                let free = detail_free(&p, detail);
+                assert_eq!(tone_base(&p, sigma, detail).data, resized_reference(&free, sigma, BASE_EPS).data, "{sigma}, {detail}");
             }
         }
     }
