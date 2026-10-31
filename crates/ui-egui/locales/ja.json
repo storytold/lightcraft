@@ -1572,6 +1572,7 @@
   "keep names — or e.g. {date}_{seq:3}": "名前を変更しない（例：{date}_{seq:3}）",
   "latitude, longitude": "緯度, 経度",
   "memory only": "メモリ上のみ",
+  "counting…": "計算中…",
   "minute": "分",
   "month 01–12": "月 01–12",
   "months": "か月",
