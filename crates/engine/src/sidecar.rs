@@ -876,22 +876,49 @@ impl Session {
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
+        // Older catalogs kept only a combined camera label. Recover the original tags without
+        // inferring a manufacturer from that label or replacing the user's descriptive metadata.
+        let identity = if p.meta.camera_identity.is_none() {
+            self.media
+                .file_probe
+                .as_ref()
+                .and_then(|probe| probe(orig).ok())
+                .and_then(|info| info.meta.camera_identity)
+                .filter(|identity| !identity.label().is_empty())
+        } else {
+            None
+        };
+        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else {
+            return Ok(identity.map(|identity| {
+                let mut meta = p.meta.clone();
+                meta.camera = identity.label();
+                meta.camera_identity = Some(identity);
+                (Op::SetMeta { id, meta: Box::new(meta) }, PathBuf::from(orig), Vec::new())
+            }));
+        };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
         }
-        let op = self.sidecar_op(id, sc)?;
+        let op = self.sidecar_op_with_camera(id, sc, identity)?;
         Ok(Some((op, from, warnings)))
     }
 
     /// The op that applies what a sidecar says (already read and parsed, e.g. on a worker
     /// thread) to photo `id`: the sidecar wins. No file is read.
     pub fn sidecar_op(&self, id: PhotoId, sc: SidecarData) -> Result<Op> {
+        self.sidecar_op_with_camera(id, sc, None)
+    }
+
+    fn sidecar_op_with_camera(&self, id: PhotoId, sc: SidecarData, identity: Option<lightcraft_catalog::CameraIdentity>) -> Result<Op> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let sc = sc.resolve_label(&self.catalog);
         let mut q = (**p).clone();
+        if let Some(identity) = identity {
+            q.meta.camera = identity.label();
+            q.meta.camera_identity = Some(identity);
+        }
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
         let mut ops = vec![
             Op::SetRating { id, rating: q.rating },

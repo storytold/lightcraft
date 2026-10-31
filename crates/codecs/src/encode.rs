@@ -65,6 +65,9 @@ pub struct EncodeMeta<'a> {
     pub xmp: Option<&'a str>,
     /// Print resolution in pixels per inch (JPEG JFIF density, PNG `pHYs`, TIFF X/YResolution).
     pub ppi: Option<u16>,
+    /// Separate source identity for TIFF's top-level Make and Model tags.
+    pub make: Option<&'a str>,
+    pub model: Option<&'a str>,
 }
 
 /// JPEG chroma subsampling.
@@ -225,7 +228,8 @@ pub enum TiffCompression {
 }
 
 /// Encode TIFF: 8/16-bit integer or 32-bit float, gray/RGB with optional (unassociated) alpha.
-/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lightcraft-tiff`).
+/// ICC, XMP, and the original camera Make/Model tags are embedded. Other EXIF fields are not
+/// embedded (write them through the TIFF writer in `lightcraft-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder};
     use tiff::tags::Predictor;
@@ -263,6 +267,12 @@ macro_rules! write_tiff_image {
         }
         if let Some(xmp) = $meta.xmp {
             image.encoder().write_tag(tiff::tags::Tag::from_u16_exhaustive(700), xmp.as_bytes()).map_err(|e| Error::Encode(e.to_string()))?;
+        }
+        if let Some(make) = $meta.make {
+            image.encoder().write_tag(tiff::tags::Tag::Make, make).map_err(|e| Error::Encode(e.to_string()))?;
+        }
+        if let Some(model) = $meta.model {
+            image.encoder().write_tag(tiff::tags::Tag::Model, model).map_err(|e| Error::Encode(e.to_string()))?;
         }
         if $alpha {
             image.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[2u16][..]).map_err(|e| Error::Encode(e.to_string()))?;

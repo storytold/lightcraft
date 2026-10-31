@@ -105,6 +105,24 @@ fn prepare_guarded(
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
+    // Old catalogs cannot safely split their combined display label. Recover only from
+    // the original file when available; never invent Make/Model from that label.
+    let recovered = if p.meta.camera_identity.is_none() {
+        match (&p.source, &session.media.file_probe) {
+            (lightcraft_catalog::Source::File { path }, Some(probe)) => probe(path).ok().and_then(|info| {
+                info.meta.camera_identity.filter(|identity| !identity.label().is_empty()).map(|identity| {
+                    let mut photo = (**p).clone();
+                    photo.meta.camera = identity.label();
+                    photo.meta.camera_identity = Some(identity);
+                    photo
+                })
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let p = recovered.as_ref().unwrap_or(p);
     let file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
