@@ -72,6 +72,25 @@ pub fn as_batch<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// Run `f`, several batch renders of one photo (an export's SDR and HDR renditions, `src_px`
+/// source and `out_px` output pixels), in one turn at the GPU: the stages the first leaves on the
+/// device for the second stay its own. Outside batch work, or without a device, it is just `f`.
+pub fn in_one_turn<R>(src_px: usize, out_px: usize, f: impl FnOnce() -> R) -> R {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(g) = existing_device().filter(|_| enabled()) else { return f() };
+        let vram = g.vram.unwrap_or_else(|| vram::assumed(&g.info));
+        // (the HDR rendition's float output on top of the renders' own memory)
+        let bytes = gate::job_bytes(src_px, out_px).saturating_add((out_px as u64).saturating_mul(16));
+        gate::in_one_turn(bytes, vram, &shutting_down, f)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src_px, out_px);
+        f()
+    }
+}
+
 /// Batch renders don't start for `d` from now: the window needs the GPU (it resizes, a frame was
 /// slow). Renders already running finish.
 pub fn hold_batch(d: std::time::Duration) {
@@ -642,12 +661,15 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
 }
 
 /// Whether the GPU renders requests of this kind at all (a given render can still fall back to
-/// the CPU): the kernel writes 8-bit output, so high-bit-depth exports render on the CPU, and so do
-/// soft proofs against an output-device profile (`device_proof`: its 3D table is CPU-side) and
-/// Visualize HDR, which needs the float HDR render. [`try_render`] follows it, and the loupe sizes
-/// its slider-drag drafts by it (issue #330), so the two can't drift apart.
+/// the CPU): the kernel writes 8-bit output and float HDR (a gain map's HDR rendition, without
+/// an overlay), so 16-bit and linear float exports render on the CPU, and so do soft proofs
+/// against an output-device profile (`device_proof`: its 3D table is CPU-side) and Visualize HDR.
+/// [`try_render`] follows it, and the loupe sizes its slider-drag drafts by it (issue #330), so the
+/// two can't drift apart.
 pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
-    depth == lightcraft_pipeline::OutputDepth::U8 && !device_proof && overlay != lightcraft_pipeline::Overlay::HdrRange
+    use lightcraft_pipeline::{OutputDepth, Overlay};
+    let depth_ok = depth == OutputDepth::U8 || (depth == OutputDepth::F32Hdr && overlay == Overlay::None);
+    depth_ok && !device_proof && overlay != Overlay::HdrRange
 }
 
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
@@ -910,5 +932,9 @@ mod tests {
         assert!(!super::handles(OutputDepth::U16, false, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, true, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, false, Overlay::HdrRange));
+        // the float HDR rendition of a gain map (no overlay); 16-bit and linear float stay on the CPU
+        assert!(super::handles(OutputDepth::F32Hdr, false, Overlay::None));
+        assert!(!super::handles(OutputDepth::F32Hdr, false, Overlay::Spots(50)));
+        assert!(!super::handles(OutputDepth::F32Linear, false, Overlay::None));
     }
 }

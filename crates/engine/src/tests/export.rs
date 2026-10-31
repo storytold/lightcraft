@@ -604,6 +604,37 @@ fn the_hdr_rendition_from_the_sdr_renders_stages_is_the_same() {
     assert!(a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()), "the shared render differs");
 }
 
+/// A gain map export renders its HDR rendition on the GPU too (from the stages the SDR render
+/// left on the device, in one turn at the GPU when it is batch work) and matches the CPU's export:
+/// the same base, the same gain map within a code or two.
+#[test]
+fn a_gain_map_export_on_the_gpu_matches_the_cpus() {
+    use lightcraft_codecs::gainmap;
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        return;
+    }
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+    s.execute("develop.set", &json!({"control": "effects.clarity", "value": 15})).unwrap();
+    let o = ExportOptions::from_json(&json!({"longEdge": 480, "hdr": true}));
+    // (as batch work: the two renditions take one turn at the GPU)
+    let gpu = lightcraft_gpu::as_batch(|| export_photo(&mut s, id, &o, 1)).unwrap();
+    assert_eq!(gpu.gpu_fallback, None);
+    let cpu = lightcraft_gpu::on_cpu(|| export_photo(&mut s, id, &o, 1)).unwrap();
+    let (a, b) = (gainmap::read_jpeg(&gpu.bytes).unwrap(), gainmap::read_jpeg(&cpu.bytes).unwrap());
+    assert!((a.meta.alternate_headroom - b.meta.alternate_headroom).abs() < 0.05, "{} vs {}", a.meta.alternate_headroom, b.meta.alternate_headroom);
+    assert_eq!((a.gain.width, a.gain.height, a.gain.channels), (b.gain.width, b.gain.height, b.gain.channels));
+    let n = a.gain.data.len().max(1) as f64;
+    let mean = a.gain.data.iter().zip(&b.gain.data).map(|(x, y)| x.abs_diff(*y) as f64).sum::<f64>() / n;
+    assert!(mean < 1.0, "gain maps differ by {mean} codes on average");
+    let (da, db) =
+        (lightcraft_codecs::decode(&gpu.bytes, Default::default()).unwrap(), lightcraft_codecs::decode(&cpu.bytes, Default::default()).unwrap());
+    let diff = da.image.data.iter().zip(&db.image.data).map(|(p, q)| (p[1] - q[1]).abs()).fold(0.0f32, f32::max);
+    assert!(diff < 0.03, "bases differ by {diff}");
+}
+
 #[test]
 fn hdr_float_tiff_keeps_highlights_above_white() {
     let mut s = Session::with_demo();

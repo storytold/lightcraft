@@ -58,6 +58,8 @@ struct RenderWork {
     hdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
+    /// Source pixels the render reads (its GPU memory, for a gain map's turn at the device).
+    src_px: usize,
 }
 
 enum Work {
@@ -132,7 +134,8 @@ fn prepare_guarded(
         // a gain map also holds the HDR rendition (float), the SDR one in linear light and the
         // stages the two renders share
         let weight = if gain_map { weight.saturating_add(w.saturating_mul(h).saturating_mul(GAIN_MAP_BYTES_PER_PX)) } else { weight };
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
+        let src_px = source_px(full_px, long, job.level);
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), src_px })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -199,10 +202,15 @@ const GAIN_MAP_BYTES_PER_PX: usize = 48;
 /// pipeline's planes and the encoded output (~36 B per output pixel). Measured: a 24 MP export
 /// peaks at ~1.2 GB, one at 2048 px from the 2560 px preview at ~150 MB.
 pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, out_px: usize) -> usize {
+    source_px(full_px, long, level).saturating_mul(12).saturating_add(out_px.saturating_mul(36))
+}
+
+/// Pixels of the source a render of a photo of `full_px` pixels (long edge `long`) reads from
+/// source level `level`.
+fn source_px(full_px: usize, long: usize, level: crate::media::SourceLevel) -> usize {
     let edge = level.max_edge().min(long.max(1));
     let scale = edge as f64 / long.max(1) as f64;
-    let src_px = (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize;
-    src_px.saturating_mul(12).saturating_add(out_px.saturating_mul(36))
+    (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize
 }
 
 impl PreparedExport {
@@ -210,45 +218,59 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { mut job, hdr_job, meta, opts } = *w;
-                let mut t = lap_clock();
-                // A gain map's HDR rendition is the same photo rendered a second time: it starts
-                // from the SDR render's decoded original and (when that rendered on the CPU) its
-                // white-balanced, denoised, retouched image and spatial planes, instead of
-                // decoding and redoing them (half of such an export's work).
-                let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lightcraft_pipeline::StageCache::default()));
-                if let Some(st) = &stages {
-                    // (a GPU render leaves host copies of what the CPU's HDR render starts from)
-                    st.keep_host_stages(true);
-                    job.stages = Some(st.clone());
-                }
-                let mut result = job.run();
-                lap("render", &mut t);
-                let loaded = result.loaded.take();
-                let r = result.rendered?;
-                let gpu_fallback = result.gpu_fallback;
-                let bytes = match hdr_job {
-                    Some(mut hj) => {
-                        if let Some(src) = loaded {
-                            hj.source = crate::media::SourceRef::Loaded(Box::new(src));
-                        }
-                        if let Some(st) = stages {
-                            // (the GPU's device copies are no use to the CPU's HDR render)
-                            st.clear_extension();
-                            hj.stages = Some(st);
-                        }
-                        let hr = hj.run().rendered?;
-                        lap("HDR render", &mut t);
-                        let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
-                        encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
+                let RenderWork { mut job, hdr_job, meta, opts, src_px } = *w;
+                // A gain map's HDR rendition renders on the GPU too when the SDR one can: from the
+                // stages the SDR render left on the device, in one turn at the GPU (the memory
+                // those stages hold is never another export's to take meanwhile).
+                let hdr_on_gpu = self.gpu
+                    && hdr_job.is_some()
+                    && lightcraft_gpu::enabled()
+                    && lightcraft_gpu::handles(OutputDepth::F32Hdr, false, lightcraft_pipeline::Overlay::None);
+                let out_px = job.request.max_w.saturating_mul(job.request.max_h);
+                let render = || -> Result<Exported, String> {
+                    let mut t = lap_clock();
+                    // A gain map's HDR rendition is the same photo rendered a second time: it starts
+                    // from the SDR render's decoded original and its stages (on the device, or when
+                    // it renders on the CPU, the white-balanced, denoised, retouched image and
+                    // spatial planes), instead of decoding and redoing them (half of such an
+                    // export's work).
+                    let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lightcraft_pipeline::StageCache::default()));
+                    if let Some(st) = &stages {
+                        // (a GPU render leaves host copies of what the CPU's HDR render starts from)
+                        st.keep_host_stages(!hdr_on_gpu);
+                        job.stages = Some(st.clone());
                     }
-                    None => {
-                        let b = encode_rendered(&r, &opts, meta.as_ref())?;
-                        lap("encode", &mut t);
-                        b
-                    }
+                    let mut result = job.run();
+                    lap("render", &mut t);
+                    let loaded = result.loaded.take();
+                    let r = result.rendered?;
+                    let gpu_fallback = result.gpu_fallback;
+                    let bytes = match hdr_job {
+                        Some(mut hj) => {
+                            if let Some(src) = loaded {
+                                hj.source = crate::media::SourceRef::Loaded(Box::new(src));
+                            }
+                            if let Some(st) = stages {
+                                if !hdr_on_gpu {
+                                    // (the GPU's device copies are no use to the CPU's HDR render)
+                                    st.clear_extension();
+                                }
+                                hj.stages = Some(st);
+                            }
+                            let hr = hj.run().rendered?;
+                            lap("HDR render", &mut t);
+                            let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
+                            encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
+                        }
+                        None => {
+                            let b = encode_rendered(&r, &opts, meta.as_ref())?;
+                            lap("encode", &mut t);
+                            b
+                        }
+                    };
+                    Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
                 };
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                if hdr_on_gpu { lightcraft_gpu::in_one_turn(src_px, out_px, render) } else { render() }
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {

@@ -89,6 +89,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("PROOF_DISP_WARN", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
+    // an HDR render: its peak over SDR white (1: SDR), and float output (`out` holds 4 words a
+    // pixel: linear RGB in the output primaries, then 1.0, which marks the pixel written)
+    ("PEAK", 1),
+    ("HDR_OUT", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -184,6 +188,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
     p.f("REFINE_SAT", fp.refine_sat);
+    p.f("PEAK", fp.peak.max(1.0));
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
     p.f("AIR", fp.air);

@@ -269,9 +269,14 @@ while they render; `lightcraft_gpu::hold_batch` (window resizes) pauses new batc
 render keeps one submission queued at a time, so the window's frames slot in between. Before this,
 14–16 export lanes queued so much work that the window drew no frame for 5 s and its resize failed
 ("Failed to wait for GPU to come idle"), and readbacks that waited for the whole queue timed out
-and turned the GPU off. A gain map export's GPU render also leaves host copies of its framed and
-linear images in the shared stage cache (`StageCache::keep_host_stages`), so its HDR rendition on
-the CPU starts from them.
+and turned the GPU off. A gain map export renders its float HDR rendition on the GPU too
+(`OutputDepth::F32Hdr`: `finish.wgsl` keeps colour up to the peak, continues curves above SDR
+white with slope 1 and writes 4 floats a pixel; `crates/gpu/tests/hdr_gpu.rs`: linear max 0.02 %,
+8-bit max 1 LSB from `finish_deep`), from the stages the SDR render left on the device, with both
+renditions in one turn at the GPU (`lightcraft_gpu::in_one_turn`), so another export can't take
+the memory those stages hold in between. When the export renders on the CPU, the SDR render
+leaves host copies of its framed and linear images in the shared stage cache
+(`StageCache::keep_host_stages`) and the CPU's HDR rendition starts from them.
 
 **Diagnosing.** `ui.inspect` → `perf.gpu` (adapter in use), `perf.gpuReason` (why renders don't use
 the GPU, e.g. `"disabled by LIGHTCRAFT_GPU=0"`, `"software adapter (llvmpipe (LLVM 21.1.8, 256 bits))
