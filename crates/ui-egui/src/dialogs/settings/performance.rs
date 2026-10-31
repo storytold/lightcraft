@@ -10,12 +10,15 @@ use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Token
 fn exports_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Exports"));
     row(ui, t, crate::i18n::tr("Photos at once"), |ui| {
-        // (what Automatic is here: half the processor's threads, up to 12)
-        let auto_lanes = {
-            let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
-            (cores / 2).clamp(1, 12)
+        // (what Automatic is here: what Test my machine found, else half the processor's threads, up to 12)
+        let tested = app.ui.settings.machine_test.as_ref().map(|m| m.lanes).filter(|n| *n > 0);
+        let auto = match tested {
+            Some(n) => format!("{} ({n}, {})", crate::i18n::tr("Automatic"), crate::i18n::tr("tested")),
+            None => {
+                let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+                format!("{} ({})", crate::i18n::tr("Automatic"), (cores / 2).clamp(1, 12))
+            }
         };
-        let auto = format!("{} ({auto_lanes})", crate::i18n::tr("Automatic"));
         let mut opts: Vec<(u32, String)> = vec![(0, auto)];
         let cur = app.ui.settings.export_lanes;
         for n in [2u32, 4, 6, 8, 12, 16, 24] {

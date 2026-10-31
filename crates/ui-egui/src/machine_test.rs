@@ -22,19 +22,31 @@ pub struct MachineTask {
 
 /// Make the export settings take effect (lanes, the GPU for exports, the GPU's share).
 pub fn apply(st: &AppSettings) {
-    lightcraft_engine::export::set_export_lanes(Some(st.export_lanes as usize).filter(|n| *n > 0));
+    lightcraft_engine::export::set_export_lanes(lanes(st));
     lightcraft_engine::export::set_export_gpu(!st.export_cpu_only);
-    lightcraft_engine::gpu::set_batch_limits(
-        Some(u64::from(st.gpu_export_mb) << 20).filter(|b| *b > 0),
-        Some(st.gpu_export_jobs as usize).filter(|j| *j > 0),
-    );
+    lightcraft_engine::gpu::set_batch_limits(Some(u64::from(st.gpu_export_mb) << 20).filter(|b| *b > 0), gpu_jobs(st));
 }
 
-/// Store what a finished test chose in `st` (the user's own choices are replaced by it).
+/// Photos side by side in exports: the number chosen, else (Automatic) what the last test found
+/// (note 28: Automatic showed and used half the threads, 12, though the test had found 4 fastest);
+/// `None`: the engine's automatic number (no test yet).
+pub fn lanes(st: &AppSettings) -> Option<usize> {
+    let tested = st.machine_test.as_ref().map(|m| m.lanes).filter(|n| *n > 0);
+    Some(st.export_lanes as usize).filter(|n| *n > 0).or(tested)
+}
+
+/// Exports sharing the GPU: the number set, else what the last test found.
+fn gpu_jobs(st: &AppSettings) -> Option<usize> {
+    let tested = st.machine_test.as_ref().map(|m| m.gpu_jobs).filter(|n| *n > 0);
+    Some(st.gpu_export_jobs as usize).filter(|j| *j > 0).or(tested)
+}
+
+/// Store what a finished test chose in `st`: the export settings go back to Automatic, which from
+/// now on is the test's choice (the user's own numbers are replaced by it).
 pub fn adopt(st: &mut AppSettings, r: &MachineReport) {
-    st.export_lanes = r.lanes.min(u32::MAX as usize) as u32;
+    st.export_lanes = 0;
     st.export_cpu_only = !r.use_gpu && r.gpu.is_some();
-    st.gpu_export_jobs = r.gpu_jobs.min(u32::MAX as usize) as u32;
+    st.gpu_export_jobs = 0;
     st.gpu_export_mb = 0;
     st.machine_test = Some(r.clone());
 }
@@ -136,8 +148,15 @@ mod tests {
             summary: "Exports about 9 photos a minute".into(),
             ..Default::default()
         };
+        st.export_lanes = 16;
         adopt(&mut st, &r);
-        assert_eq!((st.export_lanes, st.export_cpu_only, st.gpu_export_jobs, st.gpu_export_mb), (8, true, 2, 0));
+        // Automatic again, and Automatic is now what the test found
+        assert_eq!((st.export_lanes, st.export_cpu_only, st.gpu_export_jobs, st.gpu_export_mb), (0, true, 0, 0));
+        assert_eq!((lanes(&st), gpu_jobs(&st)), (Some(8), Some(2)));
+        // a number the user picks afterwards wins
+        st.export_lanes = 6;
+        assert_eq!(lanes(&st), Some(6));
+        st.export_lanes = 0;
         assert_eq!(st.machine_test.as_ref().map(|m| m.summary.as_str()), Some("Exports about 9 photos a minute"));
         // no GPU at all: not "processor only", which would read as a choice
         adopt(&mut st, &MachineReport { lanes: 4, use_gpu: false, gpu: None, ..Default::default() });
@@ -145,7 +164,7 @@ mod tests {
         // kept across restarts with the other app settings, and older files without them read
         let json = serde_json::to_value(&st).unwrap();
         let back: AppSettings = serde_json::from_value(json).unwrap();
-        assert_eq!(back.export_lanes, 4);
+        assert_eq!(lanes(&back), Some(4));
         let old: AppSettings = serde_json::from_value(serde_json::json!({"gpu": true, "machineTest": "garbage", "exportLanes": "x"})).unwrap();
         assert_eq!((old.export_lanes, old.machine_test.is_none()), (0, true));
     }
