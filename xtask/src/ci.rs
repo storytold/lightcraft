@@ -161,7 +161,8 @@ fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, ski
     if failed.is_empty() { Ok(()) } else { Err(format!("tests failed in {}", failed.join(", "))) }
 }
 
-/// The test that prints the messages each language lacks (shown in English); it always passes.
+/// The test that prints the messages each language lacks (shown in English) and the places that show
+/// English without `tr`; it always passes.
 const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
 
 /// Print the translation gaps report into the log: [`TRANSLATION_GAPS_TEST`] of lightcraft-ui-egui,

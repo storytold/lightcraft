@@ -572,6 +572,10 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
 #[cfg(test)]
 mod gaps;
 
+// English text handed to a widget as a literal, which never goes through `tr` (a section of the gaps report).
+#[cfg(test)]
+mod untranslated;
+
 #[cfg(test)]
 mod tests;
 
