@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Remote denoise bounds the first unauthenticated header
+- A remote denoise client could keep a connection slot by sending its first request header in slow fragments: the read
+  timeout restarted after every fragment. Each connection now has one monotonic first-header budget of at most 10
+  seconds, capped by its configured timeout. After the protocol and token are accepted, the ordinary idle/transfer
+  timeout resumes; the token is still checked on every request and the protocol is unchanged (Refs #2574).
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
