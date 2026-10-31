@@ -180,6 +180,7 @@ pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     preview_covering(bytes, None)
 }
 
+/// Width and height from the frame header of [`embedded_preview`], when that is a DCT JPEG.
 pub(crate) fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
     embedded_preview(bytes).and_then(|j| jpeg_frame(&j)).map(|(w, h, _)| (w, h))
 }
@@ -207,6 +208,7 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
         .map(|(s, _)| s)
 }
 
+/// What [`embedded_preview`] (`min_edge` `None`) and [`embedded_preview_covering`] return.
 fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         let j = crate::vendor::raf::header(bytes).ok()?.jpeg?;

@@ -233,6 +233,8 @@ pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, bits: u32) -> usize {
     aw & !1
 }
 
+/// A NEF or NRW as a [`RawImage`]: all its samples in [`Mode::Full`]; in [`Mode::Header`], its geometry and levels
+/// from the first [`MASK_ROWS`] rows, with no samples kept.
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
@@ -688,6 +690,7 @@ mod tests {
         TiffWriter::new(order, false).write(&[ifd0]).unwrap()
     }
 
+    /// The raw CFA SubIFD that [`nef_model_in`] writes.
     fn cfa_ifd(compression: u16, bits: u16, strips: Vec<Vec<u8>>, w: u32, h: u32, rps: u32) -> IfdBuilder {
         let mut raw = IfdBuilder::new();
         raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
@@ -702,6 +705,7 @@ mod tests {
         raw
     }
 
+    /// A D1X NEF with a `w` x `h` raw at `resolution` (X, Y per inch) and, when given, a JPEG preview of that size.
     fn d1x((w, h): (usize, usize), resolution: (u32, u32), preview: Option<(u16, u16)>) -> Vec<u8> {
         let mut raw = cfa_ifd(1, 14, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
         raw.set(t::X_RESOLUTION, Value::Rational(vec![(resolution.0, 1)]));
@@ -728,6 +732,7 @@ mod tests {
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
+    /// Issue #1274: a D1X on firmware Ver.1.01 writes 600 / 600 for its 2:1 pixels.
     #[test]
     fn d1x_square_resolution_tags_take_the_pixel_shape_from_the_preview() {
         let aspect = |frame, res, preview| decode(&d1x(frame, res, preview), Mode::Header).unwrap().pixel_aspect;
@@ -741,6 +746,7 @@ mod tests {
         assert_eq!(full.info().developed_size(), (96, 64));
     }
 
+    /// A Nikon PreviewIFD offset that overflows the note's base counts as no preview.
     #[test]
     fn wide_frame_with_an_overflowing_preview_ifd_pointer_does_not_panic() {
         let mut mn = IfdBuilder::new();
