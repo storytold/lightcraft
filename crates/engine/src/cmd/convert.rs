@@ -207,7 +207,9 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
-    let same = info.content_hash == ph.content_hash
+    // (a Duplicate's hash is its original's plus a suffix: the same content)
+    let base = |h: &Option<String>| h.as_deref().map(crate::sync::base_hash).map(str::to_string);
+    let same = base(&info.content_hash) == base(&ph.content_hash)
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only

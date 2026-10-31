@@ -18,6 +18,8 @@ pub struct ImportTask {
     pub done: usize,
     params: Value,
     pub imported: usize,
+    /// Of `imported`, the files ticked by hand although another photo has their content.
+    pub imported_anyway: usize,
     /// Brought back from Recently Deleted (`onDeleted: restore`).
     pub restored: usize,
     pub duplicates: usize,
@@ -225,6 +227,10 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         (true, true) => "move",
     };
     let mut params = json!({"mode": mode, "keywords": d.keywords()});
+    let anyway = d.import_anyway_paths();
+    if !anyway.is_empty() {
+        params["importAnyway"] = json!(anyway);
+    }
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }
@@ -352,6 +358,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             let len = |k: &str| v[k].as_array().map_or(0, Vec::len);
             task.imported += len("imported");
             task.restored += len("restored");
+            task.imported_anyway += v["importedAnyway"].as_u64().unwrap_or(0) as usize;
             task.duplicates += len("duplicates");
             task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
             task.failed += len("failed");
@@ -498,6 +505,9 @@ fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
     };
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
+    }
+    if task.imported_anyway > 0 {
+        msg.push_str(&crate::i18n::tr_format!(" · {n} imported although another photo has the same content", n = task.imported_anyway));
     }
     if task.params["mode"] == "move" {
         msg.push_str(&crate::i18n::tr_format!(" · {} moved", task.moved));

@@ -82,16 +82,20 @@ pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
     let n = d.candidates.len();
-    let (dups, in_source, trashed) = dup_counts(d);
+    let (_, _, trashed) = dup_counts(d);
+    // files of photos in Recently Deleted are not "already in the library": they are counted apart
+    let dups = lightcraft_engine::import::DuplicateCounts::of(d.candidates.iter().enumerate().filter(|(i, _)| !d.is_trashed(*i)).map(|(_, c)| c));
     let sel = d.selected_paths().len();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} found · {sel} selected", n = n, sel = sel)).color(t.text));
-        if dups > 0 {
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups)).color(t.text_dim));
+        if dups.in_library > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups.in_library)).color(t.text_dim));
         }
-        if in_source > 0 {
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {in_source} identical copies", in_source = in_source)).color(t.text_dim))
-                .on_hover_text(crate::i18n::tr("Files with the same content as another file in this import: only the first is imported."));
+        if dups.copies > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {n} copies of library photos", n = dups.copies)).color(t.text_dim));
+        }
+        if dups.repeated > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {n} repeated in this import", n = dups.repeated)).color(t.text_dim));
         }
         if trashed > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
@@ -497,6 +501,19 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         c.file_size as f64 / 1e6,
         c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
     );
+    // a duplicate by content says what it matches
+    let matches = match (c.duplicate.as_deref(), &c.earlier, c.existing) {
+        (Some("content"), Some(earlier), _) => Some(crate::i18n::tr_format!("Same file as {path} earlier in this import", path = earlier)),
+        (Some("content"), None, Some(id)) => match app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).map(|p| &p.source) {
+            Some(lightcraft_catalog::Source::File { path }) => Some(crate::i18n::tr_format!("Same content as {path} in the library", path = path)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let tip = match matches {
+        Some(m) => format!("{m}\n{tip}"),
+        None => tip,
+    };
     let resp = resp.on_hover_text(tip);
     if resp.clicked() && ok {
         let shift = ui.input(|input| input.modifiers.shift);

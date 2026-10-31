@@ -48,16 +48,16 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
 /// Which photo of the library has each of the contents `hashes` (the later one where several
 /// have it). One pass over the library, and an entry only for a content that was asked about.
 pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
-    let wanted: std::collections::HashSet<&str> = hashes.collect();
+    let wanted: std::collections::HashSet<&str> = hashes.map(crate::sync::base_hash).collect();
     let mut by_hash = HashMap::new();
     if wanted.is_empty() {
         return by_hash;
     }
     for p in library.photos() {
         if let Some(h) = &p.content_hash
-            && wanted.contains(h.as_str())
+            && wanted.contains(crate::sync::base_hash(h))
         {
-            by_hash.insert(h.clone(), p.id);
+            index_hash(&mut by_hash, h, p.id);
         }
     }
     by_hash
@@ -77,6 +77,17 @@ pub struct ScanProgress {
 pub struct ScanOutput {
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
+}
+
+/// Remember `hash` (a Duplicate's carries a `:dup<id>` suffix) under its content, the original
+/// winning.
+pub(super) fn index_hash<V>(map: &mut HashMap<String, V>, hash: &str, v: V) {
+    let base = crate::sync::base_hash(hash);
+    if base.len() == hash.len() {
+        map.insert(base.to_string(), v);
+    } else {
+        map.entry(base.to_string()).or_insert(v);
+    }
 }
 
 impl ScanInput {
@@ -138,10 +149,10 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
-    // (who in the library has a content that was probed: asked once the probes are in)
+    // content -> the library photo, or the first matching file in this scan
     let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
-    let mut seen_hash: HashMap<String, Option<u64>> =
-        library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
+    let mut seen_hash: HashMap<String, (Option<u64>, Option<String>)> =
+        library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, (Some(id.0), None))).collect();
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
@@ -162,12 +173,13 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                 c.preview_only = info.preview_only.clone();
                 if let Some(h) = &info.content_hash {
                     match seen_hash.get(h) {
-                        Some(existing) => {
+                        Some((existing, earlier)) => {
                             c.duplicate = Some("content".into());
                             c.existing = *existing;
+                            c.earlier = earlier.clone();
                         }
                         None => {
-                            seen_hash.insert(h.clone(), None);
+                            seen_hash.insert(h.clone(), (None, Some(f.clone())));
                         }
                     }
                 }

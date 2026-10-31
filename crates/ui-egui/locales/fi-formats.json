@@ -317,5 +317,10 @@
   "Panel layout could not be restored: {error}": "Paneelien asettelua ei voitu palauttaa: {error}",
   "Panel move was not applied: {error}": "Paneelin siirtoa ei otettu käyttöön: {error}",
   "{name} is installed": "{name} on asennettu",
-  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä"
+  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä",
+  "· {n} copies of library photos": "· {n} kopiota kirjaston valokuvista",
+  "· {n} repeated in this import": "· {n} toistuu tässä tuonnissa",
+  "Same content as {path} in the library": "Sama sisältö kuin tiedostossa {path} kirjastossa",
+  "Same file as {path} earlier in this import": "Sama tiedosto kuin {path} aiemmin tässä tuonnissa",
+  " · {n} imported although another photo has the same content": " · {n} tuotu, vaikka toisella valokuvalla on sama sisältö"
 }
