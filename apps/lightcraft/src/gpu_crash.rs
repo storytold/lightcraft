@@ -48,6 +48,14 @@ pub(crate) fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: 
     left.map(|what| gpu_crash_notice(&what))
 }
 
+/// The app quits in an orderly way (`App::on_exit`): remove the GPU crash sentinel, even when the
+/// GPU device is still being created. Only a launch killed inside the driver leaves it behind;
+/// one that the user closed a few seconds in, before the driver returned, is not a crash. A
+/// `--memory` or `LIGHTCRAFT_NO_PREFS` session armed none, so this removes nothing there.
+pub(crate) fn gpu_quit_cleanly() {
+    lightcraft_engine::gpu::backend::release_init_marker_on_quit();
+}
+
 pub(crate) fn gpu_crash_notice(what: &str) -> String {
     format!(
         "LightCraft closed unexpectedly while starting the GPU last time ({what}), so GPU rendering is now off and photos render on the CPU. \
