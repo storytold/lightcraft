@@ -231,7 +231,7 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
     let opts = *opts;
     // The reason a format can't be decoded lives in one place, `Format::not_decodable`.
     let unsupported = || Err(Error::Unsupported(format, format.not_decodable().unwrap_or("not decodable in this build")));
-    match format {
+    let d = match format {
         Format::Jpeg => jpeg::decode(bytes, &opts),
         Format::Png => png_codec::decode(bytes, &opts),
         Format::Tiff => tiff_codec::decode(bytes, &opts),
@@ -244,7 +244,20 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
         Format::Jxl => unsupported(),
         Format::Heif => heif::decode(bytes, &opts),
         Format::Avif | Format::RawTiffLike | Format::RawOther => unsupported(),
+    }?;
+    check_has_pixels(format, &d.image)?;
+    Ok(d)
+}
+
+/// An image with no pixels (a malformed header claiming zero width or height, a `w × h` that
+/// overflows, or a buffer shorter than its size) is refused, so nothing downstream sees an empty
+/// image.
+fn check_has_pixels(format: Format, image: &Rgb32f) -> Result<()> {
+    let (w, h) = (image.width, image.height);
+    if w == 0 || h == 0 || w.checked_mul(h).is_none_or(|n| image.data.len() < n) {
+        return Err(Error::Malformed(format, "image has no pixels".into()));
     }
+    Ok(())
 }
 
 /// Convert a decode result to linear Rec.2020 D65 (Bradford-adapted), the develop working space.
@@ -363,5 +376,30 @@ mod checked_arithmetic_tests {
         assert_eq!(checked_sample_buf_len(1, 1, 1), Some(1));
         // 300 Mpx RGBA is within the default pixel limit, so it must not be refused by sample count.
         assert_eq!(checked_sample_buf_len(20_000, 15_000, 4), Some(1_200_000_000));
+    }
+
+    #[test]
+    fn checked_sample_buf_len_does_not_wrap_like_32_bit_usize() {
+        // 65535 × 21846 × 3 = 4_295_032_830, which a 32-bit `usize` product wraps to 65_534
+        assert_eq!(checked_sample_buf_len(65_535, 21_846, 3), Some(4_295_032_830));
+        assert!(checked_sample_buf_len(65_535, 21_846, 3).is_some_and(|n| n > 65_534));
+    }
+
+    fn image(width: usize, height: usize, len: usize) -> Rgb32f {
+        Rgb32f { width, height, data: vec![[0.0; 3]; len] }
+    }
+
+    #[test]
+    fn decoded_image_without_pixels_is_refused() {
+        for (w, h, len) in [(0, 4, 0), (4, 0, 0), (usize::MAX, 2, 1), (4, 4, 15)] {
+            let r = check_has_pixels(Format::Png, &image(w, h, len));
+            assert!(matches!(r, Err(Error::Malformed(Format::Png, _))), "{w}x{h} with {len} pixels");
+        }
+    }
+
+    #[test]
+    fn decoded_image_with_all_pixels_is_accepted() {
+        assert!(check_has_pixels(Format::Png, &image(4, 4, 16)).is_ok());
+        assert!(check_has_pixels(Format::Png, &image(1, 1, 1)).is_ok());
     }
 }

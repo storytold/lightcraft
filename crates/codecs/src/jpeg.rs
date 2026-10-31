@@ -332,7 +332,7 @@ fn decode_zune(bytes: &[u8], m: &Markers, budget: &DecodeOptions) -> Result<Raw>
     let info = d.info().ok_or_else(|| Error::Malformed(F, "no info".into()))?;
     let (w, h) = (info.width as usize, info.height as usize);
     let model = if gray { Model::Gray } else { Model::Rgb };
-    if px.len() < w * h * model.channels() {
+    if crate::checked_sample_buf_len(w, h, model.channels()).is_none_or(|n| (px.len() as u64) < n) {
         return Err(Error::Malformed(F, "short output".into()));
     }
     Ok(Raw { width: w, height: h, model, alpha: false, premultiplied: false, buf: Buf::U8(px), bit_depth: 8 })
@@ -509,7 +509,9 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
     };
     let ch = raw.model.channels();
     match raw.buf {
-        Buf::U8(v) if v.len() >= raw.width * raw.height * ch => Ok((raw.width, raw.height, ch, v)),
+        Buf::U8(v) if crate::checked_sample_buf_len(raw.width, raw.height, ch).is_some_and(|n| v.len() as u64 >= n) => {
+            Ok((raw.width, raw.height, ch, v))
+        }
         _ => Err(Error::Malformed(F, "unexpected sample format".into())),
     }
 }
