@@ -546,6 +546,10 @@
 
 ## 2026-10-21
 
+### Planar TIFFs open
+- TIFFs that store each colour in its own plane (PlanarConfiguration 2) now show their thumbnail, preview and photo
+  (issue #2462). Only the first plane was read, so they failed with "sample buffer too short".
+
 ### Settings window
 - Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
   size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls (in a very short
