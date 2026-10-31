@@ -26,6 +26,8 @@
   "630 drivers): on Windows the window and GPU rendering use DirectX 12 only and never load the Vulkan driver unless": "630-drivrutiner): i Windows använder fönstret och GPU-renderingen endast DirectX 12 och läser aldrig in Vulkan-drivrutinen om inte",
   "=  exactly": "=  exakt",
   "Import photos with File → Import Photos…, or drop them here": "Importera foton med Arkiv → Importera foton… eller släpp dem här",
+  "No containing albums": "Inget album innehåller det här fotot",
+  "Show in Album": "Visa i album",
   "`img_1-1.JPG`; on case-insensitive volumes the case change still goes through.": "`img_1-1.JPG`; på skiftlägesokänsliga volymer går ändringen av skiftläge ändå igenom.",
   "`Photos/2026/20260114/20260114_001.jpg`) together with their XMP sidecars; each original leaves the card only after its": "`Photos/2026/20260114/20260114_001.jpg`) tillsammans med sina XMP-sidofiler; varje original lämnar kortet först efter att dess",
   "A 16:9 frame with black bars above and below, the title in the corner, fades through black and a closing card.": "En 16:9-bild med svarta fält ovanför och nedanför, titeln i hörnet, toningar via svart och ett avslutande kort.",

@@ -270,6 +270,9 @@ pub struct LightcraftApp {
     /// drawn last (`ui.inspect` → `scroll`).
     pub grid_scroll: Option<f32>,
     pub film_scroll: Option<f32>,
+    /// A UI command can ask both photo strips to follow the active photo again, even when the
+    /// command's egui context is not the context that last drew those strips.
+    pub(crate) follow_active_generation: u64,
     /// Widget registry from the last completed, nondiscarded frame (automation ids → rects).
     pub widgets: Vec<(String, egui::Rect)>,
     /// Egui hit owners for [`Self::widgets`] from the same completed pass. A press is delivered

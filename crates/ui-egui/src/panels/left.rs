@@ -119,6 +119,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if reveal.is_some() {
                 // …and Albums itself is shown and opened, so the new album can be seen
                 app.ui.sidebar.reveal(SidebarSection::Albums);
+                if let Some(id) = reveal {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique(SCROLL_TO_ROW), format!("album:{id}")));
+                }
             }
             // the keyword just made from Keywords' header: the section and the keywords above it open
             if let Some(path) = app.ui.reveal_keyword.take() {

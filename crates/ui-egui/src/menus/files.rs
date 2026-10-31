@@ -1,5 +1,52 @@
 use super::{Dialog, LightcraftApp, Value, json};
 
+pub(crate) fn albums_for_photo(app: &LightcraftApp, id: lightcraft_catalog::PhotoId) -> Vec<(lightcraft_catalog::AlbumId, String)> {
+    let catalog = &app.session.catalog;
+    if !catalog.photo(id).is_some_and(|photo| photo.in_library()) {
+        return Vec::new();
+    }
+    let mut albums: Vec<_> = catalog
+        .albums_of(id)
+        .into_iter()
+        .filter_map(|id| {
+            let album = catalog.album(id).filter(|album| !album.folder)?;
+            Some((id, album.name.clone()))
+        })
+        .collect();
+    albums.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then_with(|| a.0.cmp(&b.0)));
+    let mut name_counts = std::collections::HashMap::new();
+    for (_, name) in &albums {
+        *name_counts.entry(name.clone()).or_insert(0usize) += 1;
+    }
+    let mut labels: Vec<_> = albums
+        .into_iter()
+        .map(|(id, name)| {
+            let label = if name_counts.get(&name).is_some_and(|count| *count > 1) { album_path(catalog, id) } else { name };
+            (id, label)
+        })
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for (id, label) in &mut labels {
+        if !seen.insert(label.clone()) {
+            label.push_str(&format!(" (#{})", id.0));
+        }
+    }
+    labels
+}
+
+fn album_path(catalog: &lightcraft_catalog::Catalog, id: lightcraft_catalog::AlbumId) -> String {
+    let mut names = Vec::new();
+    let mut current = Some(id);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = current.filter(|id| seen.len() < 64 && seen.insert(*id)) {
+        let Some(album) = catalog.album(id) else { break };
+        names.push(album.name.as_str());
+        current = album.parent;
+    }
+    names.reverse();
+    names.join(" / ")
+}
+
 /// The Delete key in an album: a normal album loses the selected photos (`album.removePhotos`),
 /// which stay in the library and their folder; a smart album keeps them (its rules decide) and
 /// says so. True when the key was handled here, false outside albums (then it deletes the photos
@@ -88,6 +135,39 @@ fn photo_folder(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) ->
 pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> bool {
     let Some(dir) = photo_folder(app, id) else { return false };
     app.caches.folder_tree_if_fresh(&app.session.catalog).is_none_or(|tree| crate::panels::left::folder_row_of(&tree, &dir).is_some())
+}
+
+pub fn show_in_album_enabled(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> bool {
+    id.or_else(|| app.session.active()).is_some_and(|id| !albums_for_photo(app, id).is_empty())
+}
+
+pub(super) fn show_in_album(app: &mut LightcraftApp, ctx: &egui::Context, params: &Value) -> Result<Value, String> {
+    let photo = match params.get("id") {
+        Some(id) => lightcraft_catalog::PhotoId(id.as_u64().ok_or("`id` must be a photo id")?),
+        None => app.session.active().ok_or("no photo selected")?,
+    };
+    let album = params.get("album").and_then(Value::as_u64).map(lightcraft_catalog::AlbumId).ok_or("`album` is needed")?;
+    let target = app.session.catalog.album(album).filter(|album| !album.folder).ok_or("no such album")?;
+    let photo_data = app.session.catalog.photo(photo).filter(|photo| photo.in_library()).ok_or("this photo is not in the library")?;
+    if !app.session.catalog.album_contains(album, photo_data) {
+        return Err("this album does not contain the photo".into());
+    }
+    let filter = lightcraft_engine::LibrarySource::Album(album).to_filter(&app.session.filter, &app.session.catalog);
+    if !app.session.catalog.query(&filter, &app.session.sort).contains(&photo) {
+        return Err("the current filter hides this photo".into());
+    }
+    let name = target.name.clone();
+    let hidden_in_stack = app.session.catalog.stack_of(photo).is_some_and(|stack| stack.collapsed && stack.top() != photo);
+    app.run("library.source", json!({"kind": "album", "id": album.0}))?;
+    if hidden_in_stack {
+        app.run("stack.toggle", json!({"ids": [photo.0], "collapsed": false}))?;
+    }
+    app.run("library.select", json!({"ids": [photo.0], "active": photo.0}))?;
+    app.ui.left_panel = true;
+    app.ui.reveal_album = Some(album.0);
+    crate::panels::grid::follow_active_again(&mut app.follow_active_generation);
+    ctx.request_repaint();
+    Ok(json!({"album": album.0, "name": name, "photo": photo.0}))
 }
 
 /// Photo ▸ Show in Folders (Lightroom's Go to Folder in Library): show the folder of photo `id`

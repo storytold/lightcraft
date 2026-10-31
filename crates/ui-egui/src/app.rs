@@ -86,6 +86,7 @@ impl LightcraftApp {
             image_rect: None,
             grid_scroll: None,
             film_scroll: None,
+            follow_active_generation: 0,
             widgets: vec![],
             widget_hits: vec![],
             next_widgets: vec![],

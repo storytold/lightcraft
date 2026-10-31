@@ -43,6 +43,8 @@
   "Add to My Photos": "Añadir a Mis fotos",
   "Can't be moved here": "No se pueden mover aquí",
   "Import photos with File → Import Photos…, or drop them here": "Importar fotos con Archivo → Importar fotos… o soltarlas aquí",
+  "No containing albums": "Ningún álbum contiene esta foto",
+  "Show in Album": "Mostrar en el álbum",
   "This row covers more than one disk: drop on a folder inside it": "Esta fila abarca más de un disco: suéltalas en una carpeta dentro de ella",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Las fotos locales aún no están en la biblioteca: primero Añadir a Mis fotos y luego muévelas",
   "Add to Selected Photos": "Añadir a las fotos seleccionadas",
