@@ -213,6 +213,90 @@ fn a_manual_slideshow_moves_only_with_the_arrows() {
 }
 
 #[test]
+fn pan_and_zoom_moves_each_photo_over_its_slide_on_its_own_path() {
+    // off: every slide shows its whole picture
+    let p = Playback::new(ids(3), None, settings(4.0, 1.0), 1, 0.0).unwrap();
+    assert_eq!(p.pan_zoom(2.0), PanZoom { current: None, from: None });
+
+    let s = PlaybackSettings { pan_and_zoom: true, repeat: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(3), None, s.clone(), 9, 0.0).unwrap().with_titles(Some(2.0), None);
+    assert_eq!(p.pan_zoom(1.0).current, None, "a title screen doesn't move");
+    assert_eq!(p.tick(2.0, all_ready), Tick::Advanced(ph(1)));
+    let m1 = Motion::new(p.motion_key(ph(1)).unwrap(), 0.5);
+    assert_eq!(p.pan_zoom(2.0).current, Some(m1.start), "a photo comes up at its start view");
+    assert_eq!(p.pan_zoom(2.5).from, None, "the intro fading out doesn't move either");
+    assert_eq!(p.pan_zoom(4.0).current, Some(m1.at(0.5)), "half way through its 4 s, fade in included");
+    // paused: frozen
+    p.toggle_pause(4.0);
+    assert_eq!(p.pan_zoom(100.0).current, Some(m1.at(0.5)));
+    p.toggle_pause(100.0);
+    assert_eq!(p.pan_zoom(101.0).current, Some(m1.at(0.75)), "and carries on from there");
+    // the next photo: its own path from its start; the one fading out stays at its end view
+    assert_eq!(p.tick(102.0, all_ready), Tick::Advanced(ph(2)));
+    let z = p.pan_zoom(102.5);
+    let m2 = Motion::new(p.motion_key(ph(2)).unwrap(), 0.5);
+    assert_ne!(m1, m2, "every photo has its own path");
+    assert_eq!(z.current, Some(m2.at(0.125)));
+    assert_eq!(z.from, Some(m1.end));
+    assert_eq!(p.pan_zoom(103.5).from, None, "after the fade");
+    // a slide that is due but not ready holds its end view
+    assert_eq!(p.tick(106.0, |i| i != ph(3)), Tick::Waiting(ph(3)));
+    assert_eq!(p.pan_zoom(110.0).current, Some(m2.end));
+    // the same seed plays the same paths; another seed other ones
+    let q = Playback::new(ids(3), None, s.clone(), 9, 0.0).unwrap();
+    assert_eq!(q.motion_key(ph(1)).map(|k| Motion::new(k, 0.5)), Some(m1));
+    let r = Playback::new(ids(3), None, s, 10, 0.0).unwrap();
+    assert_ne!(r.motion_key(ph(1)), q.motion_key(ph(1)));
+}
+
+#[test]
+fn pan_and_zoom_paths_change_each_pass_and_hold_in_a_manual_slideshow() {
+    let s = PlaybackSettings { pan_and_zoom: true, repeat: true, ..settings(4.0, 1.0) };
+    // a new pass: a new path for the same photo
+    let mut p = Playback::new(ids(2), None, PlaybackSettings { fade_duration: 0.0, ..s.clone() }, 9, 0.0).unwrap();
+    let first = p.pan_zoom(0.0).current;
+    p.tick(4.0, all_ready);
+    assert_eq!(p.tick(8.0, all_ready), Tick::Advanced(ph(1)));
+    assert_ne!(p.pan_zoom(8.0).current, first, "a fresh path in the next pass");
+    // a single photo repeating starts again on a new path
+    let mut p = Playback::new(ids(1), None, s.clone(), 9, 0.0).unwrap();
+    let first = p.pan_zoom(0.0).current;
+    assert_eq!(p.tick(4.0, all_ready), Tick::Idle);
+    assert_ne!(p.pan_zoom(4.0).current, first);
+    // the amount sets the zoom
+    let close = |amount: f64| {
+        let p = Playback::new(ids(1), None, PlaybackSettings { pan_and_zoom_amount: amount, ..s.clone() }, 9, 0.0).unwrap();
+        let m = Motion::new(p.motion_key(ph(1)).unwrap(), amount);
+        m.start.zoom.max(m.end.zoom)
+    };
+    assert!(close(1.0) > close(0.0));
+    // a manual slideshow holds each photo at its start view; ← / → start the next one there
+    let mut p = Playback::new(ids(3), None, PlaybackSettings { manual: true, ..s }, 9, 0.0).unwrap();
+    let start = Motion::new(p.motion_key(ph(1)).unwrap(), 0.5).start;
+    assert_eq!(p.pan_zoom(500.0).current, Some(start));
+    p.step(1, 500.0);
+    assert_eq!(p.pan_zoom(900.0).current, Some(Motion::new(p.motion_key(ph(2)).unwrap(), 0.5).start));
+}
+
+#[test]
+fn pan_and_zoom_settings_round_trip_and_are_checked() {
+    let d = PlaybackSettings::default();
+    assert!(!d.pan_and_zoom, "off by default");
+    assert_eq!(d.pan_and_zoom_amount, 0.5);
+    let m = d.merged(&json!({"panAndZoom": true, "panAndZoomAmount": 0.8})).unwrap();
+    assert!(m.pan_and_zoom);
+    assert_eq!((m.to_json()["panAndZoom"].clone(), m.to_json()["panAndZoomAmount"].clone()), (json!(true), json!(0.8)));
+    assert_eq!(d.merged(&json!({"panAndZoomAmount": 3})).unwrap().pan_and_zoom_amount, 1.0, "clamped");
+    assert_eq!(d.merged(&json!({"panAndZoomAmount": -1})).unwrap().pan_and_zoom_amount, 0.0);
+    assert!(d.merged(&json!({"panAndZoom": "on"})).is_err());
+    assert!(d.merged(&json!({"panAndZoomAmount": "high"})).is_err());
+    let s = PlaybackSettings { pan_and_zoom_amount: f64::NAN, ..d.clone() }.sanitized();
+    assert_eq!(s.pan_and_zoom_amount, 0.5, "not finite: the default");
+    let off = d.merged(&json!({"panAndZoomAmount": 0.2, "panAndZoom": false})).unwrap();
+    assert_eq!(off.pan_and_zoom_amount, 0.2, "the amount is kept with the effect off");
+}
+
+#[test]
 fn a_single_photo_repeats_without_changing() {
     let mut p = Playback::new(ids(1), None, settings(1.0, 0.5), 1, 0.0).unwrap();
     assert_eq!(p.upcoming(2), vec![]);

@@ -1,6 +1,7 @@
 //! Slideshow slides for LightCraft: the settings of Lightroom Classic's Slideshow Layout, Options
 //! and Backdrop panels ([`SlideSettings`]) and the CPU composer that draws one slide from a
-//! rendered photo ([`compose`]).
+//! rendered photo ([`compose`]), and the pan and zoom path a slide's photo follows during
+//! playback ([`Motion`]).
 //!
 //! No UI and no catalog here: playback, the settings preview, the `slideshow.preview` command and
 //! (later) slideshow export all call [`compose`], so every one of them draws the same pixels.
@@ -17,7 +18,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod compose;
+mod motion;
 mod settings;
 
 pub use compose::{Layout, Rect, compose, compose_with, layout, photo_size};
+pub use motion::{Motion, View, ZOOM_HIGH, ZOOM_LOW};
 pub use settings::{Aspect, MARGIN_MAX, MAX_SIDE, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STROKE_MAX, SlideSettings, hex, parse_color};

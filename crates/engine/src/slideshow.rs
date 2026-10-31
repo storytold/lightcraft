@@ -1,6 +1,6 @@
 //! Slideshow playback: the settings of Lightroom Classic's Playback panel and the timeline that
 //! plays the photos in view (durations, fades, random order, repeat, pause, stepping, manual
-//! advance), between an optional intro and ending screen (the Titles panel,
+//! advance, pan and zoom), between an optional intro and ending screen (the Titles panel,
 //! [`crate::slide_title`]).
 //!
 //! No UI here: [`Playback`] is a pure state machine driven with injected times (seconds on any
@@ -14,6 +14,7 @@
 //! with the `slideshow.playback` command.
 
 use lightcraft_catalog::PhotoId;
+use lightcraft_slideshow::{Motion, View};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -23,7 +24,7 @@ pub const SLIDE_MAX: f64 = 120.0;
 /// Longest fade (seconds); a fade is never longer than the slide duration.
 pub const FADE_MAX: f64 = 10.0;
 
-/// How playback runs (Lightroom Classic's Playback panel, without music and pan & zoom).
+/// How playback runs (Lightroom Classic's Playback panel, without music).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PlaybackSettings {
@@ -43,6 +44,10 @@ pub struct PlaybackSettings {
     /// Manual slideshow: a slide stays up until ← / → (or the controls) change it; the slide
     /// duration is not used for playback then.
     pub manual: bool,
+    /// Pan and zoom: each photo moves and zooms slowly over its slide's time, on its own path.
+    pub pan_and_zoom: bool,
+    /// How much it moves: 0 (Low) to 1 (High).
+    pub pan_and_zoom_amount: f64,
 }
 
 impl Default for PlaybackSettings {
@@ -55,18 +60,22 @@ impl Default for PlaybackSettings {
             repeat: true,
             prepare_previews: true,
             manual: false,
+            pan_and_zoom: false,
+            pan_and_zoom_amount: 0.5,
         }
     }
 }
 
 impl PlaybackSettings {
-    /// The settings with every value in range (a non-finite duration takes the default; the fade
-    /// is never longer than the slide).
+    /// The settings with every value in range (a non-finite duration or amount takes the default;
+    /// the fade is never longer than the slide).
     pub fn sanitized(mut self) -> Self {
         let d = PlaybackSettings::default();
         self.slide_duration = if self.slide_duration.is_finite() { self.slide_duration.clamp(SLIDE_MIN, SLIDE_MAX) } else { d.slide_duration };
         let fade = if self.fade_duration.is_finite() { self.fade_duration } else { d.fade_duration };
         self.fade_duration = fade.clamp(0.0, FADE_MAX).min(self.slide_duration);
+        self.pan_and_zoom_amount =
+            if self.pan_and_zoom_amount.is_finite() { self.pan_and_zoom_amount.clamp(0.0, 1.0) } else { d.pan_and_zoom_amount };
         self
     }
 
@@ -79,6 +88,8 @@ impl PlaybackSettings {
             "repeat": self.repeat,
             "preparePreviews": self.prepare_previews,
             "manual": self.manual,
+            "panAndZoom": self.pan_and_zoom,
+            "panAndZoomAmount": self.pan_and_zoom_amount,
         })
     }
 
@@ -96,9 +107,14 @@ impl PlaybackSettings {
                 "repeat" => s.repeat = boolean(k, v)?,
                 "preparePreviews" => s.prepare_previews = boolean(k, v)?,
                 "manual" => s.manual = boolean(k, v)?,
+                "panAndZoom" => s.pan_and_zoom = boolean(k, v)?,
+                "panAndZoomAmount" => match v.as_f64() {
+                    Some(x) if x.is_finite() => s.pan_and_zoom_amount = x,
+                    _ => return Err(format!("`{k}` must be a finite number from 0 (low) to 1 (high), not {v}")),
+                },
                 other => {
                     return Err(format!(
-                        "unknown setting `{other}` (slideDuration, fadeDuration, fadeColor, randomOrder, repeat, preparePreviews, manual)"
+                        "unknown setting `{other}` (slideDuration, fadeDuration, fadeColor, randomOrder, repeat, preparePreviews, manual, panAndZoom, panAndZoomAmount)"
                     ));
                 }
             }
@@ -229,6 +245,16 @@ pub struct Frame {
     pub fade_color: Option<[u8; 3]>,
 }
 
+/// The pan and zoom views at a moment of playback (`None`: the slide shows its whole picture, as
+/// a title screen always does, and every slide when pan and zoom is off).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanZoom {
+    /// The current slide's view.
+    pub current: Option<View>,
+    /// The view of the slide being faded out: where its motion ended.
+    pub from: Option<View>,
+}
+
 /// Where the timeline is: the intro, the photos, or the ending.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
@@ -261,6 +287,10 @@ pub struct Playback {
     started: f64,
     /// The slide fading out (until the transition ends).
     from: Option<Item>,
+    /// The pan and zoom key of the slide fading out.
+    from_key: Option<u64>,
+    /// Times a single photo repeating has started over (each time on a new path).
+    reps: u64,
     /// Paused at this time.
     paused_at: Option<f64>,
     ended: bool,
@@ -319,6 +349,8 @@ impl Playback {
             ending: None,
             started: now,
             from: None,
+            from_key: None,
+            reps: 0,
             paused_at: None,
             ended: false,
             held: None,
@@ -516,8 +548,10 @@ impl Playback {
         }
         let Some(next) = self.upcoming(1).first().copied() else {
             if self.settings.repeat {
-                // a single photo repeating: nothing to change to
+                // a single photo repeating: nothing to change to (its pan and zoom starts again,
+                // on a new path)
                 self.started = now;
+                self.reps = self.reps.wrapping_add(1);
                 return Tick::Idle;
             }
             self.ended = true;
@@ -529,12 +563,46 @@ impl Playback {
         }
         self.held = None;
         let old = self.current();
+        let old_key = self.motion_key(old);
         let t = self.advance();
         if let Tick::Advanced(new) = t {
             self.started = now;
             self.from = (self.fade_to(new) > 0.0).then_some(old);
+            self.from_key = self.from.and(old_key);
         }
         t
+    }
+
+    /// The pan and zoom key of `item` up in the current pass (`None` for a title screen): the
+    /// seed, the pass, the photo and the repeats of a single photo, so every photo has its own
+    /// path, a new one in each pass, and the same seed plays the same paths.
+    fn motion_key(&self, item: Item) -> Option<u64> {
+        let photo = item.photo()?;
+        let mut st = self.seed ^ 0x7061_6e7a_6f6f_6d00;
+        for v in [self.pass, photo.0, self.reps] {
+            st = splitmix(&mut st) ^ v;
+        }
+        Some(splitmix(&mut st))
+    }
+
+    /// Where each slide's picture is at `now` with pan and zoom on: the current photo moves from
+    /// its start view (as it comes up, its fade in included) to its end view over its duration,
+    /// frozen while paused and held at the start in a manual slideshow (no slide is ever due
+    /// there); a photo fading out stays at its end view. Both are `None` with pan and zoom off.
+    pub fn pan_zoom(&self, now: f64) -> PanZoom {
+        if !self.settings.pan_and_zoom {
+            return PanZoom { current: None, from: None };
+        }
+        let amount = self.settings.pan_and_zoom_amount;
+        let current = self.current();
+        let t = if self.settings.manual {
+            0.0
+        } else {
+            let d = self.duration(current);
+            if d > 0.0 { (self.clock(now) - self.started) / d } else { 1.0 }
+        };
+        let from = self.frame(now).from.and(self.from_key).map(|k| Motion::new(k, amount).at(1.0));
+        PanZoom { current: self.motion_key(current).map(|k| Motion::new(k, amount).at(t)), from }
     }
 
     /// What to draw at `now`.
@@ -597,6 +665,7 @@ impl Playback {
             t = Tick::Advanced(self.current());
         }
         self.from = None;
+        self.from_key = None;
         self.held = None;
         self.started = now;
         if self.paused_at.is_some() {

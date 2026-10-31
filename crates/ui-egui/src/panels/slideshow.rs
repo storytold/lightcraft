@@ -1,6 +1,6 @@
 //! The slideshow (View ▸ Slideshow, ⌥⌘↩): the photos in view, full screen, played with the
 //! library's Playback settings (`slideshow.playback`: slide and fade durations, fade colour,
-//! random order, repeat, preparing previews in advance, manual slideshow).
+//! random order, repeat, preparing previews in advance, manual slideshow, pan and zoom).
 //!
 //! The timeline is [`lightcraft_engine::slideshow::Playback`] (no egui, tested on its own); this
 //! module renders the slides, draws the frame it asks for and the playback controls.
@@ -22,11 +22,17 @@
 //! render worker ([`crate::render::Renderer::request_title`]), prepared ahead, waited for and
 //! faded like photo slides. They never move the selection, and the controls show "Intro" / "End"
 //! in place of "n / N" while one is up (titles aren't photos, so N stays the number of photos).
+//!
+//! Pan and zoom ([`Playback::pan_zoom`]) moves the photo's part of each slide's texture: the photo
+//! inside its image cell for a composed slide, while the backdrop, margins, stroke and shadow stay
+//! where they are. A photo drawn on its own, and a slide with overlays (drawn into its texture,
+//! where they can cross the cell's edge), move as a whole. A title screen does not move.
 
 use egui::{Align2, Color32, Pos2, Rect, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::slideshow::{Item, Playback, Tick, Title};
 use lightcraft_pipeline::geometry::Frame;
+use lightcraft_slideshow::View;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -53,9 +59,10 @@ pub struct Run {
 }
 
 /// `view.slideshow {interval?, seed?, slideDuration?, fadeDuration?, fadeColor?, randomOrder?,
-/// repeat?, preparePreviews?, manual?}`: play the photos in view from the selected one with the library's
-/// playback settings; the keys given change them for this run only (`interval` = slideDuration,
-/// `seed` fixes the random order). The intro and ending screens that are on (`slideshow.titles`)
+/// repeat?, preparePreviews?, manual?, panAndZoom?, panAndZoomAmount?}`: play the photos in view
+/// from the selected one with the library's playback settings; the keys given change them for
+/// this run only (`interval` = slideDuration, `seed` fixes the random order and the pan and zoom
+/// paths). The intro and ending screens that are on (`slideshow.titles`)
 /// play before the first photo and after the last one. With no photos in view there is nothing
 /// to show (titles alone don't make a slideshow).
 pub fn start(app: &mut LightcraftApp, p: &Value, now: f64) -> Result<Value, String> {
@@ -130,6 +137,12 @@ pub fn state(play: &Playback, now: f64) -> Value {
         // (null in a manual slideshow: no slide is ever due)
         "remaining": play.remaining(now),
         "manual": play.settings().manual,
+        "panAndZoom": play.settings().pan_and_zoom,
+        // (the current photo's window, 0–1 across and down; null when it shows whole)
+        "view": play.pan_zoom(now).current.map(|v| {
+            let (x0, y0, x1, y1) = v.window();
+            json!([x0, y0, x1, y1])
+        }),
     })
 }
 
@@ -173,8 +186,9 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     after(app, t);
     let Some(run) = app.ui.slideshow.as_ref() else { return };
     let f = run.play.frame(now);
-    if f.from.is_some() {
-        ctx.request_repaint(); // a fade draws every frame
+    let moving = run.play.pan_zoom(now).current.is_some() && !run.play.is_paused() && !run.play.settings().manual;
+    if f.from.is_some() || moving {
+        ctx.request_repaint(); // a fade, and pan and zoom, draw every frame
     } else if !run.play.is_paused() && !run.play.settings().manual {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(run.play.remaining(now).clamp(0.016, 120.0)));
     }
@@ -253,12 +267,49 @@ fn wanted(play: &Playback, now: f64) -> Vec<(Item, u32)> {
 /// screen has nothing to stand in for it: the black canvas shows until it lands.
 fn texture(app: &LightcraftApp, item: Item) -> Option<&crate::render::Tex> {
     let Item::Photo(id) = item else { return app.renderer.textures.get(&Slot::Slide(item)) };
-    app.renderer
-        .textures
-        .get(&Slot::Slide(item))
-        .filter(|t| t.photo == id)
-        .or_else(|| app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id))
-        .or_else(|| app.renderer.thumb(id))
+    slide_texture(app, id).or_else(|| app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id)).or_else(|| app.renderer.thumb(id))
+}
+
+/// Photo `id`'s own slide render.
+fn slide_texture(app: &LightcraftApp, id: PhotoId) -> Option<&crate::render::Tex> {
+    app.renderer.textures.get(&Slot::Slide(Item::Photo(id))).filter(|t| t.photo == id)
+}
+
+/// The part of `item`'s texture `t` that pan and zoom moves, in texture coordinates (0–1): the
+/// photo's visible part of a composed slide without overlays (its image cell), else all of it (a
+/// photo drawn on its own, a plain slide or a stand-in, and a slide with overlays, which are
+/// drawn into its texture and can cross the cell's edge: they move with the slide). The cell
+/// comes from the current settings, so a texture rendered with older ones (its new render still
+/// on the way) also moves whole.
+pub(crate) fn moving_part(app: &LightcraftApp, item: Item, t: &crate::render::Tex) -> Rect {
+    let Item::Photo(id) = item else { return full_uv() };
+    let composed = !app.session.slides_plain()
+        && !app.session.slide_overlays.any()
+        && slide_texture(app, id).is_some_and(|s| std::ptr::eq(s, t))
+        && app.renderer.is_current(Slot::Slide(item), t.key);
+    let [w, h] = t.size;
+    let Some(aspect) = app.session.slide_photo_aspect(id).filter(|_| composed && w > 0 && h > 0) else { return full_uv() };
+    let v = lightcraft_slideshow::layout(&app.session.slide_layout, aspect, w, h).visible;
+    let (w, h) = (w as f64, h as f64);
+    let uv = Rect::from_min_max(pos2((v.x0 / w) as f32, (v.y0 / h) as f32), pos2((v.x1 / w) as f32, (v.y1 / h) as f32));
+    if uv.is_positive() { uv.intersect(full_uv()) } else { full_uv() }
+}
+
+/// Draw texture `t` into `r` with `tint`. With a pan and zoom `view`, the `part` of it (texture
+/// coordinates) shows that view's window of itself in the same place; the rest is drawn as is.
+fn paint(p: &egui::Painter, t: &crate::render::Tex, r: Rect, part: Rect, view: Option<View>, tint: Color32) {
+    let Some(v) = view else {
+        p.image(t.tex.id(), r, full_uv(), tint);
+        return;
+    };
+    let at = |u: Pos2| pos2(r.min.x + u.x * r.width(), r.min.y + u.y * r.height());
+    let place = Rect::from_min_max(at(part.min), at(part.max));
+    for band in outside(r, place) {
+        p.with_clip_rect(band).image(t.tex.id(), r, full_uv(), tint);
+    }
+    let (x0, y0, x1, y1) = v.window();
+    let sub = |x: f64, y: f64| pos2(part.min.x + x as f32 * part.width(), part.min.y + y as f32 * part.height());
+    p.image(t.tex.id(), place, Rect::from_min_max(sub(x0, y0), sub(x1, y1)), tint);
 }
 
 fn full_uv() -> Rect {
@@ -299,6 +350,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let side = super::detail::texture_side(ui.ctx());
     let want = wanted(&run.play, now);
     let frame = run.play.frame(now);
+    let pz = run.play.pan_zoom(now);
     let mut unrenderable = Vec::new();
     for (item, priority) in &want {
         match *item {
@@ -325,12 +377,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let p = ui.painter_at(canvas);
     p.rect_filled(canvas, 0.0, Color32::BLACK);
     let rect_of = |t: &crate::render::Tex| super::detail::fit_texture_rect(canvas, t.size);
-    let draw = |id: Item, alpha: f32| -> Option<Rect> {
+    let view_of = |id: Item| {
+        if id == frame.current {
+            pz.current
+        } else if Some(id) == frame.from {
+            pz.from
+        } else {
+            None
+        }
+    };
+    let draw_on = |p: &egui::Painter, id: Item, alpha: f32| -> Option<Rect> {
         let t = texture(app, id)?;
         let r = rect_of(t);
-        p.image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(alpha.clamp(0.0, 1.0)));
+        paint(p, t, r, moving_part(app, id, t), view_of(id), Color32::WHITE.gamma_multiply(alpha.clamp(0.0, 1.0)));
         Some(r)
     };
+    let draw = |id: Item, alpha: f32| draw_on(&p, id, alpha);
     let k = frame.progress.clamp(0.0, 1.0);
     match (frame.from, frame.fade_color) {
         // fade through a colour: out to it, then in from it
@@ -348,17 +410,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // the old one is, it fades to the backdrop
         (Some(from), None) => {
             let new_rect = texture(app, frame.current).map(rect_of);
-            if let Some(t) = texture(app, from) {
-                let r = rect_of(t);
+            if let Some(r) = texture(app, from).map(rect_of) {
                 match new_rect {
                     Some(n) => {
-                        p.with_clip_rect(n.intersect(canvas)).image(t.tex.id(), r, full_uv(), Color32::WHITE);
+                        draw_on(&p.with_clip_rect(n.intersect(canvas)), from, 1.0);
                         for band in outside(r, n) {
-                            p.with_clip_rect(band).image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(1.0 - k));
+                            draw_on(&p.with_clip_rect(band), from, 1.0 - k);
                         }
                     }
                     None => {
-                        p.image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(1.0 - k));
+                        draw(from, 1.0 - k);
                     }
                 }
             }
