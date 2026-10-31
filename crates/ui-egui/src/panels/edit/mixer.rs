@@ -2,7 +2,7 @@ use super::curve::set_tat;
 use super::sliders::{control, sub_title};
 use super::{
     BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, apply_slider_out, controls, hex, json, paint, register,
-    slider, text_button, vec2,
+    text_button, vec2,
 };
 use egui::{Align2, pos2};
 
@@ -48,8 +48,9 @@ pub(crate) fn drop_hidden_mixer_tool(app: &mut LightcraftApp) {
 /// with its targeted adjustment) or by Color (one colour at a time). The same develop controls
 /// (`mixer.<band>.<hue|sat|lum>`) either way; a B&W photo shows its B&W mix.
 pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
-    // (the B&W mix keeps its own Luminance targeted adjustment)
+    // (the B&W mix keeps its own Luminance targeted adjustment; a picker it doesn't show is put down first)
     if crate::is_bw(d) {
+        drop_hidden_mixer_tool(app);
         mixer_by_color(app, ui, d);
         return;
     }
@@ -107,7 +108,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let tool = format!("tat:{key}");
                 let active = app.ui.tool == tool;
-                if crate::widgets::icon_button(
+                let button = crate::widgets::icon_button(
                     ui,
                     &format!("tatMixer-{key}"),
                     Icon::Target,
@@ -115,9 +116,14 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
                     active,
                     true,
                     "Targeted adjustment: drag up/down on the photo to adjust the colours there",
-                )
-                .clicked()
-                {
+                );
+                // (named by its group for a screen reader: All shows three of them)
+                crate::widgets::announce_selected(
+                    &button,
+                    crate::i18n::tr_format!("Targeted adjustment ({group})", group = crate::i18n::tr(label)),
+                    active,
+                );
+                if button.clicked() {
                     set_tat(app, ui.ctx(), &tool, active);
                 }
                 if all {
@@ -129,9 +135,10 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
         for (band, name) in lightcraft_develop::MIXER_BANDS.iter().zip(BAND_NAMES) {
             let id = format!("mixer.{band}.{key}");
             let Some(spec) = controls::find(&id) else { continue };
-            // labelled by the colour alone: the group says what it adjusts
+            // labelled by the colour alone: the group says what it adjusts (a screen reader hears both)
             let v = controls::get(d, &id).unwrap_or(spec.default);
-            let out = slider(ui, spec, v, true, Some(name));
+            let spoken = crate::i18n::tr_format!("{color} ({group})", color = crate::i18n::tr(name), group = crate::i18n::tr(label));
+            let out = crate::widgets::slider_named(ui, spec, v, true, Some(name), Some(&spoken));
             apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
         }
     }

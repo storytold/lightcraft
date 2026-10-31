@@ -138,6 +138,18 @@ fn targeted_adjustment_on_curve_and_mixer() {
     assert!(!o.is_empty() && o.keys().all(|k| k.starts_with("bw.")), "{r}");
     // ... the band of the sky's own colour, not of the grey the profile renders
     assert_eq!(top_band(o), sky_band, "{r}");
+    // the B&W mix comes after the colour mixer: a mixer hue shift moves the colour the B&W mix sees there, so the
+    // same drag shares itself out over the bands differently
+    let neutral = o.clone();
+    let zero: serde_json::Map<String, serde_json::Value> = neutral.keys().map(|k| (k.clone(), json!(0))).collect();
+    s.execute("develop.set", &json!({ "values": zero })).unwrap();
+    let shift: serde_json::Map<String, serde_json::Value> =
+        lightcraft_develop::MIXER_BANDS.iter().map(|b| (format!("mixer.{b}.hue"), json!(100))).collect();
+    s.execute("develop.set", &json!({ "values": shift })).unwrap();
+    let r = s.execute("develop.targeted", &json!({"target": "lum", "x": 0.5, "y": 0.1, "delta": 10})).unwrap();
+    let shifted = r.as_object().unwrap();
+    assert!(shifted.keys().all(|k| k.starts_with("bw.")), "{r}");
+    assert_ne!(shifted, &neutral, "the mixer's hue shift is part of what the B&W mix sees");
 }
 
 /// Issue #730: on a raw whose camera has measured colour matrices the white-balance commands write Kelvin, mark

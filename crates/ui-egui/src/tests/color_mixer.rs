@@ -187,3 +187,33 @@ fn a_bw_photo_reports_the_mixer_it_shows() {
     assert_eq!(r["tab"], "mixer", "{r}");
     assert_eq!(h.app.ui.mixer_tab, "point", "kept for colour photos");
 }
+
+/// Opening the Color Mixer from Masking puts the Masking colour picker down, so a click on the photo is the Edit
+/// panel's again, not a colour sample for a mask.
+#[test]
+fn the_color_mixer_command_puts_down_the_masking_picker() {
+    let mut h = mixer();
+    let r = h.request("ui.set", json!({"right": "masking"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.tool = "colorRange".into();
+    run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(h.app.ui.tool, "", "the Masking picker is put down");
+    // the White Balance picker is the Edit panel's own, and stays
+    let r = h.request("ui.set", json!({"right": "masking"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.tool = "wbPicker".into();
+    run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(h.app.ui.tool, "wbPicker");
+}
+
+/// A photo turned B&W while Point Color's picker is out puts the picker down when the panel next shows its B&W
+/// mix, so a click on the photo picks no colour.
+#[test]
+fn point_colors_picker_is_put_down_when_the_photo_turns_bw() {
+    let mut h = mixer();
+    run(&mut h, "view.colorMixer", json!({"tab": "point"}));
+    h.app.ui.tool = "pointColor".into();
+    run(&mut h, "develop.treatment", json!({"bw": true}));
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.tool, "", "no Point Color on a B&W photo");
+}

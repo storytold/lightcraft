@@ -419,6 +419,12 @@ const THUMB_RING: f32 = 7.0;
 /// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
 /// as far).
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
+    slider_named(ui, spec, value, enabled, label_override, None)
+}
+
+/// [`slider`] that a screen reader calls `spoken` (already translated) rather than by its short drawn label: the
+/// Color Mixer's All view draws "Red" three times, once per group, and says "Red (Hue)", "Red (Saturation)"…
+pub fn slider_named(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>, spoken: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
@@ -432,7 +438,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     let (wheel_armed, pointer_in_row) = update_wheel_arming(ui, id, &resp, row, enabled);
     // screen readers: a slider named after its control, with its value
-    let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
+    let label_text = spoken.map_or_else(|| crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string(), str::to_string);
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
     describe_slider(ui, &g, &resp);
     // the name: double-click it to reset, as the thumb (a disabled slider's name is only text)

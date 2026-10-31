@@ -48,6 +48,12 @@ fn color_mixer_layout(app: &mut LightcraftApp, p: &Value) -> Result<Value, Strin
     if let Some(v) = band {
         app.ui.mixer_mode = v;
     }
+    // coming from another panel puts its tool down (Masking's colour picker would keep taking the photo's clicks),
+    // as the panel switch does; the White Balance picker and the mixer's own tools stay
+    let mixer_tool = app.ui.tool == "pointColor" || app.ui.tool.starts_with("tat:");
+    if app.ui.right != RightPanel::Edit && app.ui.tool != "wbPicker" && !mixer_tool {
+        app.ui.tool.clear();
+    }
     crate::panels::edit::drop_hidden_mixer_tool(app);
     // (a drag in Remove or Masking is finished first, so later edits aren't previews of it)
     let _ = app.session.end_interaction();
