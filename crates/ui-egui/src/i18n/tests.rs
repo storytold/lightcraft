@@ -862,6 +862,7 @@ fn date_headings_in_every_language() {
     assert_eq!(date_group_label("2026-09-20", true), "Sunday, 20");
     assert_eq!(date_group_label("2026-09", true), "September");
     assert_eq!(display_time("2026-09-20T16:04:05"), lightcraft_catalog::dates::display_time("2026-09-20T16:04:05"));
+    assert_eq!((display_time("1983-04"), display_time("1983")), ("April 1983".to_string(), "1983".to_string()));
     for language in Locale::ALL {
         set_language(*language);
         if *language != Locale::En {
@@ -872,6 +873,9 @@ fn date_headings_in_every_language() {
             assert!(date_group_label("2026", false).contains("2026"), "{language:?}");
             assert_eq!(display_time("2026-09-20T16:04:05"), format!("{day} 16:04:05"), "{language:?}");
         }
+        // a capture time stated to the year or the month alone shows as such
+        assert_eq!(display_time("1983-04"), date_group_label("1983-04", false), "{language:?}");
+        assert_eq!(display_time("1983"), date_group_label("1983", false), "{language:?}");
         for key in ["", "abcd", "2026-xx", "2026-13", "2026-09-xx", "２０２６-09"] {
             assert!(!date_group_label(key, false).contains('{'), "{language:?}: {key:?}");
             assert!(!date_group_label(key, true).contains('{'), "{language:?}: {key:?}");

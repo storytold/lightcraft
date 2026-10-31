@@ -1336,6 +1336,45 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// A year or a month alone (`1983-04`, a scanned print's date) is saved to the sidecar in
+/// `photoshop:DateCreated` as stated, with no `exif:DateTimeOriginal` (an earlier full time's is
+/// removed, or it would win on the next read), and reads back as the same text; a full time
+/// writes both again.
+#[test]
+fn a_partial_capture_time_is_saved_to_the_sidecar_as_stated() {
+    let src = temp_dir("partial-date");
+    let lib = temp_dir("partial-date-lib");
+    write_png(&src.join("scan.png"), 1);
+    std::fs::write(src.join("scan.xmp"), DATED_SIDECAR).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("scan.png").to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2026-01-14T05:58:48"));
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    let saved = |s: &mut Session| {
+        s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+        let out = std::fs::read_to_string(src.join("scan.xmp")).unwrap();
+        let props = lightcraft_meta::parse_xmp(&out).unwrap().properties;
+        (props.get("photoshop:DateCreated").cloned(), props.get("exif:DateTimeOriginal").cloned(), out)
+    };
+    for partial in ["1983-04", "1983"] {
+        s.execute("photo.setCaptureTime", &json!({"time": partial})).unwrap();
+        let (created, original, out) = saved(&mut s);
+        assert_eq!(created, Some(vec![partial.to_string()]), "{out}");
+        assert_eq!(original, None, "the earlier full time is gone: {out}");
+        // reading it back gives the same text
+        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None }).unwrap();
+        s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some(partial));
+    }
+    s.execute("photo.setCaptureTime", &json!({"time": "1983-04-12 10:00"})).unwrap();
+    let (created, original, out) = saved(&mut s);
+    assert_eq!((created, original), (Some(vec!["1983-04-12T10:00:00".to_string()]), Some(vec!["1983-04-12T10:00:00".to_string()])), "{out}");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Copyright status, rights usage terms and copyright info URL: edited with `photo.setMeta` (one
 /// undo step), copied / pasted, kept in metadata presets, written to the sidecar as XMP Rights
 /// Management fields and read back on a fresh import.

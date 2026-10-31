@@ -1205,16 +1205,18 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         };
         p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
         // A capture time the catalog can't hold would fail the whole batch at `SetCaptured`, and an
-        // impossible date (2026-02-30) would roll over to another day in date grouping.
+        // impossible date (2026-02-30) would roll over to another day in date grouping. A year or a
+        // month alone (`1983`, `1983-04`: a scanned print's date, from its XMP) is kept as stated.
         let captured = text(&src.image, "captureTime");
-        if lightcraft_catalog::dates::normalize_iso(captured).is_some() {
+        let is_date = |c: &str| lightcraft_catalog::dates::normalize_iso(&lightcraft_catalog::dates::capture_start(c)).is_some();
+        if is_date(captured) {
             p.captured = Some(captured.into());
         } else if !captured.is_empty() {
             warnings.push(format!("image {}: capture time “{captured}” is not a date; imported without it", src.source_id));
         }
         // a new record (a virtual copy, a duplicate) doesn't inherit a time an earlier import stored unchecked
         if s.catalog.photo(p.id).is_none()
-            && let Some(inherited) = p.captured.take_if(|c| lightcraft_catalog::dates::normalize_iso(c).is_none())
+            && let Some(inherited) = p.captured.take_if(|c| !is_date(c))
         {
             warnings.push(format!("image {}: inherited capture time “{inherited}” is not a date; imported without it", src.source_id));
         }
@@ -1268,7 +1270,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // A record an earlier import gave a time that isn't a date keeps it: `SetCaptured` refuses
             // such a time, so setting it would fail the batch, and replacing it would leave an undo
             // that can't put it back.
-            let settable = |c: Option<&str>| c.is_none_or(|c| lightcraft_catalog::stacks::iso_seconds(c).is_some());
+            let settable = |c: Option<&str>| c.is_none_or(lightcraft_catalog::dates::is_capture_time);
             let stored = s.catalog.photo(p.id).and_then(|old| old.captured.clone());
             if settable(stored.as_deref()) && settable(p.captured.as_deref()) {
                 ops.push(Op::SetCaptured { id: p.id, captured: p.captured.clone() });

@@ -191,6 +191,80 @@ fn captured(s: &Session, id: u64) -> Option<String> {
     s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().captured.clone()
 }
 
+/// A year or a month alone has no time to place on a track log: such a photo counts as having no
+/// time, not as taken at midnight on the 1st.
+#[test]
+fn tracklog_skips_a_year_or_month_alone() {
+    const GPX: &str = r#"<?xml version="1.0"?>
+<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+  <trkpt lat="46.0000" lon="7.0000"><time>2026-05-01T00:00:00Z</time></trkpt>
+  <trkpt lat="46.0010" lon="7.0020"><time>2026-05-01T00:01:00Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: lightcraft_catalog::PhotoId(ids[0]), captured: Some("2026-05".into()) }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: lightcraft_catalog::PhotoId(ids[1]), captured: Some("2026-05-01T00:00:30Z".into()) })
+        .unwrap();
+    let r = s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": ids, "replace": true, "dryRun": true})).unwrap();
+    assert_eq!((r["tagged"].as_u64(), r["skipped"]["noTime"].as_u64()), (Some(1), Some(1)), "{r}");
+}
+
+/// A shift or a time-zone change leaves a photo dated to a year or a month alone as it is and counts
+/// it as having no time (`noTime`), not as unreadable; such a date can't anchor a set that moves
+/// other photos either, and the error says why.
+#[test]
+fn shifting_leaves_a_year_or_month_alone_and_says_why() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: lightcraft_catalog::PhotoId(ids[0]), captured: Some("1983-04".into()) }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: lightcraft_catalog::PhotoId(ids[1]), captured: Some("2026-01-01T10:00:00".into()) })
+        .unwrap();
+    s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    for params in [json!({"shift": 3600}), json!({"hours": 1})] {
+        let r = s.execute("photo.setCaptureTime", &params).unwrap();
+        assert_eq!((r["changed"].as_u64(), r["noTime"].as_u64(), r["unreadable"].as_u64()), (Some(1), Some(1), Some(0)), "{params}: {r}");
+        assert_eq!(captured(&s, ids[0]).as_deref(), Some("1983-04"), "{params}");
+    }
+    assert_eq!(captured(&s, ids[1]).as_deref(), Some("2026-01-01T12:00:00"));
+    let e = s.execute("photo.setCaptureTime", &json!({"time": "1983-04-12 10:00"})).unwrap_err();
+    assert!(e.to_string().contains("year or month alone"), "{e}");
+    assert_eq!(captured(&s, ids[1]).as_deref(), Some("2026-01-01T12:00:00"), "nothing moved");
+}
+
+/// Edit Capture Time takes a year or a month alone (`1983`, `1983-04`: a scanned print's date) and
+/// keeps it as stated: for the photo alone, or for every photo with `each`. It has no time to move
+/// other photos by, nor one to shift, and what isn't a date is still refused.
+#[test]
+fn capture_time_set_keeps_a_year_or_month_as_stated() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    let r = s.execute("photo.setCaptureTime", &json!({"time": "1983"})).unwrap();
+    assert_eq!(r["captured"], json!(["1983"]), "{r}");
+    assert_eq!(captured(&s, ids[0]).as_deref(), Some("1983"));
+    s.execute("photo.setCaptureTime", &json!({"time": " 1983-04 "})).unwrap();
+    assert_eq!(captured(&s, ids[0]).as_deref(), Some("1983-04"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(captured(&s, ids[0]).as_deref(), Some("1983"), "one undo step");
+    for bad in ["1983-13", "0000-00", "0000", "1983-4", "a long time ago", "１９８３"] {
+        assert!(s.execute("photo.setCaptureTime", &json!({"time": bad})).is_err(), "{bad}");
+        assert_eq!(captured(&s, ids[0]).as_deref(), Some("1983"), "{bad} changes nothing");
+    }
+    assert!(s.execute("photo.setCaptureTime", &json!({"time": "1983", "shift": 60})).is_err(), "a year can't be shifted");
+    // several photos: only with `each`
+    s.execute("library.select", &json!({"ids": ids, "active": ids[1]})).unwrap();
+    let before: Vec<_> = ids.iter().map(|i| captured(&s, *i)).collect();
+    let e = s.execute("photo.setCaptureTime", &json!({"time": "1983-04"})).unwrap_err();
+    assert!(e.to_string().contains("each"), "{e}");
+    assert_eq!(ids.iter().map(|i| captured(&s, *i)).collect::<Vec<_>>(), before);
+    let r = s.execute("photo.setCaptureTime", &json!({"time": "1983-04", "each": true})).unwrap();
+    assert_eq!(r["changed"], 3, "{r}");
+    assert!(ids.iter().all(|i| captured(&s, *i).as_deref() == Some("1983-04")));
+    // a full time replaces it
+    s.execute("photo.setCaptureTime", &json!({"time": "1983-04-12 10:00", "each": true})).unwrap();
+    assert!(ids.iter().all(|i| captured(&s, *i).as_deref() == Some("1983-04-12T10:00:00")));
+}
+
 /// Edit Capture Time: set (others shift along), set each, shift by an offset, time-zone shift;
 /// one undo step each; replayed from the op log; the grid order follows.
 #[test]

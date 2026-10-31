@@ -107,7 +107,8 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
             has_gps += 1;
             continue;
         }
-        let Some(dt) = ph.captured.as_deref().and_then(DateTime::parse_iso) else {
+        // a year or a month alone has no time to place on the track
+        let Some(dt) = ph.captured.as_deref().and_then(DateTime::parse_iso).filter(DateTime::is_full) else {
             no_time += 1;
             continue;
         };
@@ -183,10 +184,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Capture Time",
             [],
             None,
-            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..], unreadable: photos skipped because their capture time can't be read}",
+            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), or a year or month alone (`1983`, `1983-04`; kept as stated, for one photo or with `each`), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..], unreadable: photos skipped because their capture time can't be read, noTime: photos skipped because their capture time is a year or month alone, with no time to shift}",
             has_selection,
             |s, p| {
-                use lightcraft_catalog::dates::{iso_seconds, normalize_iso, shift_iso};
+                use lightcraft_catalog::dates::{iso_seconds, normalize_iso, partial_capture, shift_iso};
                 let c = "photo.setCaptureTime";
                 let targets: Vec<_> = s.targets(p)?.into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
                 if targets.is_empty() {
@@ -202,16 +203,30 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let mut delta = shift.round() as i64;
                 let mut each: Option<String> = None;
-                if let Some(t) = str_param(p, "time") {
-                    let t = normalize_iso(t).ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS)")))?;
+                // a year or a month alone (`1983`, `1983-04`: a scanned print's date) is kept as
+                // stated; it has no time to move other photos by, nor one to shift
+                let partial = str_param(p, "time").map(str::trim).filter(|t| partial_capture(t).is_some());
+                if let Some(t) = partial {
+                    if targets.len() > 1 && !bool_or(p, "each", false) {
+                        return Err(bad(c, "a year or month alone can't move other photos by the same amount; give every photo it with `each`"));
+                    }
+                    if delta != 0 {
+                        return Err(bad(c, "a year or month alone can't be shifted"));
+                    }
+                    each = Some(t.to_string());
+                } else if let Some(t) = str_param(p, "time") {
+                    let t = normalize_iso(t).ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS, or YYYY / YYYY-MM)")))?;
                     if bool_or(p, "each", false) {
                         each = Some(t);
                     } else {
                         let anchor = s.active().filter(|a| targets.contains(a)).unwrap_or(targets[0]);
                         let anchor_date = base(s, anchor);
-                        // An impossible calendar date cannot anchor changes to the other photos.
-                        let from = normalize_iso(anchor_date.trim().get(..10).unwrap_or(""))
-                            .and_then(|_| iso_seconds(&anchor_date))
+                        // An impossible calendar date cannot anchor changes to the other photos. A
+                        // year or a month alone reads (as the start of its period) but has no
+                        // time to move the others by: alone, it gets the time below.
+                        let start = lightcraft_catalog::dates::capture_start(&anchor_date);
+                        let from = normalize_iso(start.trim().get(..10).unwrap_or(""))
+                            .and_then(|_| iso_seconds(&start))
                             .ok_or_else(|| bad(c, "the photo's date doesn't parse"))?;
                         // the others move by the anchor's change, so it must read in full, not just
                         // its leading digits (a Lightroom catalog's capture time is copied verbatim);
@@ -220,6 +235,11 @@ pub fn specs() -> Vec<CommandSpec> {
                             delta += iso_seconds(&t).unwrap_or(from) - from;
                         } else if targets.len() == 1 {
                             each = Some(t);
+                        } else if partial_capture(anchor_date.trim()).is_some() {
+                            return Err(bad(
+                                c,
+                                "the active photo's capture time is a year or month alone, with no time to move the other photos by; set its time with it selected alone",
+                            ));
                         } else {
                             return Err(bad(
                                 c,
@@ -232,16 +252,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut out = Vec::new();
                 let mut out_of_range = 0usize;
                 let mut unreadable = 0usize;
+                let mut no_time = 0usize;
                 for id in &targets {
                     let from = match &each {
                         Some(t) => t.clone(),
                         None => base(s, *id),
                     };
-                    let Some(new) = shift_iso(&from, delta) else {
+                    let new = if partial.is_some() { Some(from.clone()) } else { shift_iso(&from, delta) };
+                    let Some(new) = new else {
                         // a date that reads but would leave years 0000–9999 is refused below; one
                         // that doesn't read is skipped and counted
                         if shift_iso(&from, 0).is_some() {
                             out_of_range += 1;
+                        } else if partial_capture(from.trim()).is_some() {
+                            // a year or a month alone reads, but has no time to shift
+                            no_time += 1;
                         } else {
                             unreadable += 1;
                         }
@@ -259,7 +284,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if n > 0 {
                     s.commit("Edit Capture Time", Op::Batch { ops })?;
                 }
-                Ok(json!({"changed": n, "captured": out, "unreadable": unreadable}))
+                Ok(json!({"changed": n, "captured": out, "unreadable": unreadable, "noTime": no_time}))
             }
         ),
         cmd!(

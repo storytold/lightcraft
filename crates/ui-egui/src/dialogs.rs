@@ -487,6 +487,16 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             app.toast(ctx, e);
             closed = true;
         }
+        // photos dated to a year or a month alone have no time to shift: say so (and, in the same
+        // toast, about any whose time can't be read)
+        Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["noTime"].as_u64().is_some_and(|n| n > 0) => {
+            let mut text = crate::i18n::tr("Photos dated to a year or month alone have no time to shift and were left as they were").to_string();
+            if r["unreadable"].as_u64().is_some_and(|n| n > 0) {
+                text = format!("{text}. {}", crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
+            }
+            app.toast(ctx, text);
+            closed = true;
+        }
         // photos whose capture time doesn't read are left as they were: say so
         Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["unreadable"].as_u64().is_some_and(|n| n > 0) => {
             app.toast(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
@@ -786,7 +796,7 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
     let params = match mode.as_str() {
         "set" => {
             field(ui, "New time", |ui| {
-                let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00").desired_width(f32::INFINITY));
+                let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00 · 1983-04 · 1983").desired_width(f32::INFINITY));
                 crate::widgets::register(ui, "field:captureTime", r.rect);
             });
             json!({"time": time})
@@ -816,21 +826,31 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
         // the photo's own time is the problem (a Lightroom catalog's capture time
         // is copied verbatim), not what was typed
         let unreadable = lightcraft_catalog::dates::shift_iso(&cur, 0).is_none();
+        // a year or a month alone (`1983`, `1983-04`) is kept as typed, by every selected photo
+        let partial = |d: &str| lightcraft_catalog::dates::partial_capture(d.trim()).is_some();
         let after = match (mode.as_str(), unreadable && n == 1) {
+            ("set", _) if partial(time) => Some(time.trim().to_string()),
             // alone, it simply gets the time typed (photo.setCaptureTime repairs it)
             ("set", true) => lightcraft_catalog::dates::normalize_iso(time),
             _ => delta.and_then(|d| lightcraft_catalog::dates::shift_iso(&cur, d)),
         };
+        let show = |d: &str| if partial(d) { crate::i18n::display_time(d.trim()) } else { d.replace('T', " ") };
         ui.label(
             egui::RichText::new(match after {
-                Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
+                Some(a) => format!("{name}: {} → {}", show(&cur), show(&a)),
+                // it reads, but has no time of day to shift or to move the others by
+                None if partial(&cur) && !(mode == "set" && n == 1) => {
+                    crate::i18n::tr("The active photo's capture time is a year or month alone, with no time to shift").to_string()
+                }
                 None if unreadable && !(mode == "set" && n == 1) => crate::i18n::tr("The active photo's capture time can't be read").to_string(),
-                None => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
+                None => "Enter a date as YYYY-MM-DD HH:MM:SS, YYYY-MM or YYYY".into(),
             })
             .color(t.text_label),
         );
     }
-    if n > 1 {
+    if n > 1 && mode == "set" && lightcraft_catalog::dates::partial_capture(time.trim()).is_some() {
+        ui.label(egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos get this date.", n = n)).color(t.text_dim));
+    } else if n > 1 {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos move by the same amount.", n = n)).color(t.text_dim));
     }
 }

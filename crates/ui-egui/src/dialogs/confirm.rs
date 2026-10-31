@@ -62,6 +62,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
             "photo.setCaptureTime",
             match mode.as_str() {
+                // a year or a month alone has no time to move the others by: every photo gets it
+                "set" if lightcraft_catalog::dates::partial_capture(time.trim()).is_some() => json!({"time": time, "each": true}),
                 "set" => json!({"time": time}),
                 "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
                 _ => json!({"hours": zone}),

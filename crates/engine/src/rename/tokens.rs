@@ -246,7 +246,8 @@ pub fn expand_tokens_with(
                     let w: usize = arg.and_then(|a| a.parse().ok()).unwrap_or(seq_width).min(9);
                     format!("{seq:0w$}")
                 }
-                "date" => format_date(p.date(), arg.unwrap_or("%Y%m%d")),
+                // a year or a month alone (`1983`) names the start of its period
+                "date" => format_date(&lightcraft_catalog::dates::capture_start(p.date()), arg.unwrap_or("%Y%m%d")),
                 "folder" => match &p.source {
                     Source::File { path } => {
                         Path::new(path).parent().and_then(Path::file_name).map(|f| f.to_string_lossy().to_string()).unwrap_or_default()

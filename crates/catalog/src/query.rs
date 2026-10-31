@@ -102,7 +102,11 @@ impl Sort {
     /// Which of two photos comes first in this order (never `Equal` for two photos: the id decides last).
     pub fn order(&self, a: &Photo, b: &Photo) -> std::cmp::Ordering {
         let o = match self.key {
-            SortKey::CaptureDate => a.captured.cmp(&b.captured).then_with(|| a.imported.cmp(&b.imported)),
+            // a partial capture time (`1983-04`) sorts at the start of its period
+            SortKey::CaptureDate => {
+                let (at_a, at_b) = (a.captured.as_deref().map(crate::dates::capture_start), b.captured.as_deref().map(crate::dates::capture_start));
+                at_a.cmp(&at_b).then_with(|| a.imported.cmp(&b.imported))
+            }
             SortKey::ImportDate => a.imported.cmp(&b.imported),
             SortKey::EditDate => a.edited.cmp(&b.edited),
             SortKey::FileName => cmp_name(&a.file_name, &b.file_name),
@@ -214,7 +218,7 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
             "edited" => (val == "true" || val == "yes") == p.is_edited(),
-            "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
+            "date" => p.captured.as_deref().is_some_and(|c| crate::dates::capture_start(c).starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
             // Not a known field: the colon is part of a plain word ("10:30", "Re:"), its value unquoted
@@ -408,17 +412,18 @@ impl Filter {
         {
             return false;
         }
+        // a partial capture time (`1983-04`) stands for the start of its period
         if let Some(from) = &self.date_from
-            && match p.captured.as_deref() {
-                Some(c) => c < from.as_str(),
+            && match p.captured.as_deref().map(crate::dates::capture_start) {
+                Some(c) => *c < *from.as_str(),
                 None => true,
             }
         {
             return false;
         }
         if let Some(to) = &self.date_to
-            && match p.captured.as_deref() {
-                Some(c) => c.get(..to.len()).unwrap_or(c) > to.as_str(),
+            && match p.captured.as_deref().map(crate::dates::capture_start) {
+                Some(c) => c.get(..to.len()).unwrap_or(&c) > to.as_str(),
                 None => true,
             }
         {
@@ -430,7 +435,7 @@ impl Filter {
             return false;
         }
         if let Some(d) = &self.date
-            && !p.captured.as_deref().is_some_and(|c| c.starts_with(d.as_str()))
+            && !p.captured.as_deref().is_some_and(|c| crate::dates::capture_start(c).starts_with(d.as_str()))
         {
             return false;
         }
@@ -525,20 +530,26 @@ impl Catalog {
 
     /// Year → month → day counts for the "By Date" section (newest first).
     pub fn date_groups(&self) -> Vec<DateGroup> {
+        use std::borrow::Cow;
         use std::collections::BTreeMap;
-        let mut years: BTreeMap<&str, (BTreeMap<&str, usize>, BTreeMap<&str, usize>)> = BTreeMap::new();
+        let mut years: BTreeMap<Cow<str>, (BTreeMap<Cow<str>, usize>, BTreeMap<Cow<str>, usize>)> = BTreeMap::new();
         for p in self.photos().filter(|p| p.in_library()) {
-            let Some(d) = p.captured.as_deref() else { continue };
+            let Some(d) = p.captured.as_deref().map(crate::dates::capture_start) else { continue };
             // `get`, not `[..]`: a corrupt or foreign `captured` (a Lightroom catalog's
             // captureTime is copied verbatim) may not be ASCII, and slicing it on a byte index
-            // would panic — the same rule as `dates::group_label`.
-            if let (Some(year), Some(month), Some(day)) = (d.get(..4), d.get(..7), d.get(..10)) {
+            // would panic — the same rule as `dates::group_label`. A partial time (`1983-04`) counts
+            // at the start of its period, so only it owns its keys.
+            let part = |n: usize| match &d {
+                Cow::Borrowed(d) => d.get(..n).map(Cow::Borrowed),
+                Cow::Owned(d) => d.get(..n).map(|k| Cow::Owned(k.to_string())),
+            };
+            if let (Some(year), Some(month), Some(day)) = (part(4), part(7), part(10)) {
                 let (months, days) = years.entry(year).or_default();
                 *months.entry(month).or_default() += 1;
                 *days.entry(day).or_default() += 1;
             }
         }
-        let newest_first = |m: BTreeMap<&str, usize>| m.into_iter().rev().map(|(k, n)| (k.to_string(), n)).collect::<Vec<_>>();
+        let newest_first = |m: BTreeMap<Cow<str>, usize>| m.into_iter().rev().map(|(k, n)| (k.to_string(), n)).collect::<Vec<_>>();
         years
             .into_iter()
             .rev()

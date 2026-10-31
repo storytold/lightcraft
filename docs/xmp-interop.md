@@ -81,6 +81,9 @@ the only copy of those edits outside that application's catalog. Saving never dr
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.
+- A **capture time of a year or a month alone** (`1983`, `1983-04`) is written to `photoshop:DateCreated` only, as
+  Lightroom does, since `exif:DateTimeOriginal` can't say it; an `exif:DateTimeOriginal` already in the sidecar is
+  then removed, or it would outrank the date on the next read.
 - Ownership follows the namespace URI, not the prefix spelling. A foreign namespace bound to `lc:` or `xmp:`
   stays foreign: its properties are preserved and do not become LightCraft settings or ratings. Genuine namespace
   aliases remain interchangeable, including namespace declarations containing XML character references.

@@ -1020,7 +1020,8 @@ impl Rule {
                 let want = crate::CopyrightStatus::parse(&want);
                 (want == Some(m.copyright_status)) == (op == "is")
             }
-            "captureDate" => date_op(op, p.captured.as_deref(), value),
+            // a partial capture time (`1983-04`) stands for the start of its period
+            "captureDate" => date_op(op, p.captured.as_deref().map(crate::dates::capture_start).as_deref(), value),
             "importDate" => date_op(op, Some(&p.imported), value),
             "editDate" => date_op(op, p.edited.as_deref(), value),
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),

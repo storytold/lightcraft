@@ -818,6 +818,10 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
                 body.extend(s.as_bytes());
                 13 + 2 * s.len() as u64
             }
+            SqlValue::Blob(b) => {
+                body.extend(b);
+                12 + 2 * b.len() as u64
+            }
             _ => unreachable!(),
         };
         header.extend(varint(serial));
@@ -1233,4 +1237,102 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings);
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// Lightroom's `Adobe_AdditionalMetadata.xmp` blob for a photo whose file states only
+/// `photoshop:DateCreated` (a scanned print): a big-endian length, then the zlib-compressed packet.
+fn lightroom_xmp_blob(date_created: &str) -> Vec<u8> {
+    let packet = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+         <rdf:Description rdf:about=\"\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" \
+         photoshop:DateCreated=\"{date_created}\"/></rdf:RDF></x:xmpmeta>"
+    );
+    let mut blob = (packet.len() as u32).to_be_bytes().to_vec();
+    blob.extend(miniz_oxide::deflate::compress_to_vec_zlib(packet.as_bytes(), 6));
+    blob
+}
+
+/// Every shape of `Adobe_images.captureTime`, read from a catalog file and imported: a year or a
+/// month alone (a scanned print's date; Lightroom also has it in the photo's XMP as
+/// `photoshop:DateCreated`) is kept as stated, as is every full time; what isn't a date is left
+/// out with one warning, and nothing panics.
+#[test]
+fn every_capture_time_shape_imports_as_stated_or_is_left_out() {
+    use SqlValue::{Blob as B, Integer as I, Null as N, Text as T};
+    // (captureTime, what the library keeps; None = left out with a warning, or nothing to keep)
+    let shapes: &[(&str, Option<&str>)] = &[
+        ("1983", Some("1983")),
+        ("1983-04", Some("1983-04")),
+        ("1983-04-12", Some("1983-04-12")),
+        ("2024-01-16T12:34:56", Some("2024-01-16T12:34:56")),
+        ("2024-01-16T12:34:56.12", Some("2024-01-16T12:34:56.12")),
+        ("2024-01-16T12:34:56.123", Some("2024-01-16T12:34:56.123")),
+        ("2024-01-16T12:34:56.123456", Some("2024-01-16T12:34:56.123456")),
+        ("2024-01-16T12:34", Some("2024-01-16T12:34")),
+        ("2024-01-16T12:34:56-07:00", Some("2024-01-16T12:34:56-07:00")),
+        ("2024-01-16T12:34:56Z", Some("2024-01-16T12:34:56Z")),
+        ("", None),
+        ("1983-13", None),
+        ("0000", None),
+        ("garbage", None),
+        ("１９８３", None),
+        ("1983-０4", None),
+    ];
+    let partial = |c: &str| c == "1983" || c == "1983-04";
+    let tables = vec![
+        (
+            "AgLibraryRootFolder",
+            "id_local INTEGER PRIMARY KEY, absolutePath, name, relativePathFromCatalog",
+            vec![vec![N, T("/catalog/".into()), T("Photos".into()), T("".into())]],
+        ),
+        ("AgLibraryFolder", "id_local INTEGER PRIMARY KEY, rootFolder, pathFromRoot", vec![vec![N, I(1), T("Photos/".into())]]),
+        (
+            "AgLibraryFile",
+            "id_local INTEGER PRIMARY KEY, folder, idx_filename",
+            (0..shapes.len()).map(|i| vec![N, I(1), T(format!("scan{i}.jpg"))]).collect(),
+        ),
+        (
+            "Adobe_images",
+            "id_local INTEGER PRIMARY KEY, id_global, rootFile, fileFormat, fileWidth, fileHeight, captureTime",
+            shapes
+                .iter()
+                .enumerate()
+                .map(|(i, (c, _))| {
+                    vec![N, T(format!("scan-{i}")), I(i as i64 + 1), T("JPG".into()), I(20), I(10), if c.is_empty() { N } else { T((*c).into()) }]
+                })
+                .collect(),
+        ),
+        (
+            "Adobe_AdditionalMetadata",
+            "id_local INTEGER PRIMARY KEY, image, xmp",
+            shapes
+                .iter()
+                .enumerate()
+                .filter(|(_, (c, _))| partial(c))
+                .map(|(i, (c, _))| vec![N, I(i as i64 + 1), B(lightroom_xmp_blob(c))])
+                .collect(),
+        ),
+    ];
+    let catalog = read_tables(&tables, "capture-time-shapes");
+    assert_eq!(catalog.photos.len(), shapes.len(), "{:?}", catalog.skipped);
+    assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, catalog, false).unwrap();
+    let mut warnings = Vec::new();
+    for (i, (c, kept)) in shapes.iter().enumerate() {
+        let id = PhotoId(r["mapping"][(i + 1).to_string()].as_u64().unwrap());
+        assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), *kept, "captureTime “{c}”: {r}");
+        if kept.is_none() && !c.is_empty() {
+            warnings.push(format!("image {}: capture time “{c}” is not a date; imported without it", i + 1));
+        }
+    }
+    assert_eq!(r["warnings"], json!(warnings), "one warning for each time that isn't a date, none for a partial one");
+    // a reimport over the same records sets the same times again, partial ones included
+    let again = apply(&mut s, read_tables(&tables, "capture-time-shapes-again"), false).unwrap();
+    assert_eq!(again["mapping"], r["mapping"]);
+    assert_eq!(again["imported"], 0, "{again}");
+    for (i, (c, kept)) in shapes.iter().enumerate() {
+        let id = PhotoId(r["mapping"][(i + 1).to_string()].as_u64().unwrap());
+        assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), *kept, "reimported captureTime “{c}”");
+    }
 }

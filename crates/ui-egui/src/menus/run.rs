@@ -1090,13 +1090,14 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
 fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
         "dialog.captureTime" => {
-            // a time that doesn't fully read isn't offered as the starting point (`10:0` would read as midnight)
+            // a time that doesn't fully read isn't offered as the starting point (`10:0` would read as
+            // midnight); a year or a month alone (`1983-04`) is, as stated
             let time = app
                 .session
                 .active()
                 .and_then(|id| app.session.catalog.photo(id))
                 .map(|p| p.date())
-                .filter(|d| lightcraft_catalog::dates::shift_iso(d, 0).is_some())
+                .filter(|d| lightcraft_catalog::dates::shift_iso(d, 0).is_some() || lightcraft_catalog::dates::partial_capture(d).is_some())
                 .map(|d| d.replace('T', " "))
                 .unwrap_or_default();
             let mode = p.get("mode").and_then(Value::as_str).unwrap_or("set").to_string();

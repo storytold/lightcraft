@@ -487,6 +487,21 @@ fn case_only_rename_on_disk() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A year or a month alone (`1983`, a scanned print's date) names and files a photo by the start
+/// of its period, as before the library kept such a date as stated (it read as 1 January).
+#[test]
+fn a_year_or_month_alone_names_and_files_by_the_start_of_its_period() {
+    let mut p = sample_photo();
+    for (captured, day) in [("1983", "1983-01-01"), ("1983-04", "1983-04-01")] {
+        p.captured = Some(captured.into());
+        let compact = day.replace('-', "");
+        assert_eq!(expand_folder("{date:%Y}/{date:%Y%m%d}", &p, 1), vec!["1983".to_string(), compact.clone()], "{captured}");
+        assert_eq!(expand("{date}-{name}", &p, 1), format!("{compact}-{}", expand("{name}", &p, 1)), "{captured}");
+        assert_eq!(crate::import::Organize::ByDay.folders(&p), vec!["1983".to_string(), day.to_string()], "{captured}");
+        assert_eq!(crate::import::Organize::ByMonth.folders(&p), vec!["1983".to_string(), day[..7].to_string()], "{captured}");
+    }
+}
+
 #[test]
 fn folder_templates_stay_inside_the_destination() {
     let mut p = sample_photo();

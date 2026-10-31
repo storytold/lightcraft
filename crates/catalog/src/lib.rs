@@ -901,7 +901,7 @@ impl Catalog {
             }
             Op::SetCaptured { id, captured } => {
                 if let Some(c) = &captured
-                    && stacks::iso_seconds(c).is_none()
+                    && !dates::is_capture_time(c)
                 {
                     return Err(CatalogError::Invalid(format!("not a date: {c}")));
                 }

@@ -443,6 +443,10 @@ pub fn date_group_label(key: &str, short: bool) -> String {
 /// A capture time for display in the UI language (English: "March 30, 2022 at 10:11:11 PM");
 /// the metadata itself is never rewritten, and a value that doesn't parse is shown as it is.
 pub fn display_time(iso: &str) -> String {
+    // a year or a month alone ("1983", "April 1983"), as the grid's date headers show it
+    if lightcraft_catalog::dates::partial_capture(iso).is_some() {
+        return date_group_label(iso, false);
+    }
     if language() == Locale::En || lightcraft_catalog::dates::normalize_iso(iso).is_none() {
         return lightcraft_catalog::dates::display_time(iso);
     }

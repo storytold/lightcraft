@@ -14,6 +14,30 @@ pub struct DateTime {
     /// Sub-second part in milliseconds.
     pub millis: u16,
     pub offset_minutes: Option<i16>,
+    /// How much of the date was stated. XMP dates may stop at the year (`1983`) or the month
+    /// (`1983-04`), as for a scanned print whose day isn't known; the missing parts read as 1 and
+    /// the time as midnight, and the date writes back as stated.
+    #[serde(default, skip_serializing_if = "DatePrecision::is_full")]
+    pub precision: DatePrecision,
+}
+
+/// How much of a [`DateTime`] was stated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DatePrecision {
+    /// The day at least (a time of day may be midnight because none was given).
+    #[default]
+    Full,
+    /// The year and month only (`1983-04`).
+    Month,
+    /// The year only (`1983`).
+    Year,
+}
+
+impl DatePrecision {
+    pub fn is_full(&self) -> bool {
+        *self == DatePrecision::Full
+    }
 }
 
 fn num(s: &str) -> Option<u32> {
@@ -54,6 +78,7 @@ impl DateTime {
             second: g(&tp, 2)?.try_into().ok()?,
             millis: 0,
             offset_minutes: None,
+            precision: DatePrecision::Full,
         }
         .valid()
     }
@@ -90,7 +115,8 @@ impl DateTime {
         self
     }
 
-    /// ISO 8601 (XMP date): `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, `YYYY-MM-DDThh:mm[:ss[.s+]][TZD]`.
+    /// ISO 8601 (XMP date): `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, `YYYY-MM-DDThh:mm[:ss[.s+]][TZD]`. A
+    /// year or a month alone keeps its [`DatePrecision`].
     pub fn parse_iso(s: &str) -> Option<DateTime> {
         let s = s.trim();
         let (d, t) = s.split_once('T').unwrap_or((s, ""));
@@ -101,8 +127,17 @@ impl DateTime {
         if dp.len() > 3 {
             return None;
         }
-        let mut dt = DateTime { year, month, day, ..Default::default() };
+        let precision = match dp.len() {
+            1 => DatePrecision::Year,
+            2 => DatePrecision::Month,
+            _ => DatePrecision::Full,
+        };
+        let mut dt = DateTime { year, month, day, precision, ..Default::default() };
         if !t.is_empty() {
+            // a time of day needs the day it is on
+            if !dt.precision.is_full() {
+                return None;
+            }
             let (clock, off) = match t.find(['Z', '+', '-']) {
                 Some(i) => (&t[..i], Some(&t[i..])),
                 None => (t, None),
@@ -122,13 +157,25 @@ impl DateTime {
         dt.valid()
     }
 
+    /// Whether the day was stated: Exif's date form can't say a year or a month alone, so only a
+    /// full date is written there.
+    pub fn is_full(&self) -> bool {
+        self.precision.is_full()
+    }
+
     /// Exif form `YYYY:MM:DD HH:MM:SS`.
     pub fn to_exif(&self) -> String {
         format!("{:04}:{:02}:{:02} {:02}:{:02}:{:02}", self.year, self.month, self.day, self.hour, self.minute, self.second)
     }
 
-    /// ISO 8601 with milliseconds when non-zero and the offset when known.
+    /// ISO 8601 with milliseconds when non-zero and the offset when known; a year or a month
+    /// alone as stated (`1983`, `1983-04`).
     pub fn to_iso(&self) -> String {
+        match self.precision {
+            DatePrecision::Year => return format!("{:04}", self.year),
+            DatePrecision::Month => return format!("{:04}-{:02}", self.year, self.month),
+            DatePrecision::Full => {}
+        }
         let mut s = format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", self.year, self.month, self.day, self.hour, self.minute, self.second);
         if self.millis != 0 {
             s += &format!(".{:03}", self.millis);
@@ -177,6 +224,29 @@ mod tests {
         assert_eq!(DateTime::parse_exif("2024-06-01").unwrap().hour, 0);
         assert_eq!(DateTime::parse_exif("2024:06:01 13:45:59").unwrap().with_subsec("5").millis, 500);
         assert_eq!(DateTime::parse_exif("2024:06:01 13:45:59").unwrap().with_subsec("0123").millis, 12);
+    }
+
+    /// XMP dates may stop at the year or the month (a scanned print's `photoshop:DateCreated`):
+    /// read with that precision, written back as stated, and never as an Exif date.
+    #[test]
+    fn a_year_or_month_alone_reads_and_writes_as_stated() {
+        for (iso, precision) in [("1983", DatePrecision::Year), ("1983-04", DatePrecision::Month)] {
+            let d = DateTime::parse_iso(iso).unwrap();
+            assert_eq!((d.year, d.month, d.day, d.precision), (1983, if iso.len() == 7 { 4 } else { 1 }, 1, precision), "{iso}");
+            assert!(!d.is_full());
+            assert_eq!(d.to_iso(), iso);
+            let meta = crate::Metadata { capture_time: Some(d), ..Default::default() };
+            let xmp = crate::write_xmp(&meta, None);
+            assert!(!xmp.contains("DateTimeOriginal"), "{xmp}");
+            assert_eq!(crate::parse_xmp(&xmp).unwrap().metadata.capture_time, Some(d), "{xmp}");
+            assert_eq!(crate::read_exif(&crate::write_exif(&meta)).capture_time, None, "Exif can't say {iso}");
+        }
+        for not in ["0000", "1983-00", "1983-13", "1983-04T10:00:00", "1983T10:00"] {
+            assert_eq!(DateTime::parse_iso(not), None, "{not}");
+        }
+        let full = DateTime::parse_iso("1983-04-12").unwrap();
+        assert!(full.is_full());
+        assert_eq!(full.to_iso(), "1983-04-12T00:00:00");
     }
 
     #[test]

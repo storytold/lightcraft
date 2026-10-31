@@ -100,7 +100,8 @@ impl Organize {
 
     /// The folders (inside the destination) a copy of `p` goes to.
     pub fn folders(&self, p: &Photo) -> Vec<String> {
-        let date = p.date();
+        // a year or a month alone (`1983`) files under the start of its period
+        let date = lightcraft_catalog::dates::capture_start(p.date());
         let day = date.get(..10).filter(|d| d.len() == 10).unwrap_or("undated");
         let year = day.get(..4).unwrap_or("undated");
         match self {

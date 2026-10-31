@@ -75,8 +75,9 @@ in the UI language (one line for incomplete records, one for contradictory ones)
 hierarchy that loops, or is nested more than 64 levels deep, is cut with a warning instead of failing the import:
 a keyword keeps its path up to where the loop comes back, and a collection loop is cut at its oldest collection
 (the lowest id), which is imported at the top level. A second collection with the id of an earlier one is left out
-with a warning naming both; the photos the catalog lists under that id go to the first. A capture time that isn't a
-date (including an impossible one such as 2026-02-30) is left out with a warning naming the image, which imports
+with a warning naming both; the photos the catalog lists under that id go to the first. A capture time of a year or a
+month alone (`1983`, `1983-04`: Lightroom keeps a scanned print's date that way) is imported as stated. A capture
+time that isn't a date (including an impossible one such as 2026-02-30) is left out with a warning naming the image, which imports
 without it. A record an earlier version stored with such a time keeps it, with a warning, rather than take
 Lightroom's (undoing the import could not restore it), and a new virtual copy of it doesn't inherit it.
 

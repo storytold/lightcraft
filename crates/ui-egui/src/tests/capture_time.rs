@@ -174,3 +174,94 @@ fn set_mode_does_not_start_from_an_unreadable_time() {
     );
     assert!(painted(&h, "Enter a date"), "alone, the photo will get the time typed, so the preview asks for one: {:?}", h.painted_text());
 }
+
+/// A year or a month alone (`1983-04`, a scanned print's date) shows at its own precision in Edit
+/// Capture Time, whose preview takes a year alone as typed, and OK keeps it as typed. (The grid's
+/// date line and the Info panel show it through `i18n::display_time`, tested with the languages.)
+#[test]
+fn edit_capture_time_shows_and_keeps_a_year_or_month_alone() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let id = h.app.session.visible_cloned()[0];
+    set_captured(&mut h, id, "1983-04");
+    open(&mut h, &[id], id);
+    match &mut h.app.ui.dialog {
+        Some(Dialog::CaptureTime { mode, time, .. }) => {
+            *mode = "set".into();
+            *time = "1983".into();
+        }
+        other => panic!("Edit Capture Time is not open: {other:?}"),
+    }
+    h.settle(SETTLE);
+    assert!(painted(&h, "April 1983 → 1983"), "the preview shows both at their precision: {:?}", h.painted_text());
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().captured.as_deref(), Some("1983"));
+}
+
+/// Edit Capture Time opened on a photo dated to a year or a month alone starts from that date, as
+/// stated; typed with several photos selected, a year or a month goes to each of them.
+#[test]
+fn edit_capture_time_starts_from_a_partial_date_and_gives_one_to_every_photo() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let ids = h.app.session.visible_cloned();
+    let (a, b) = (ids[0], ids[1]);
+    set_captured(&mut h, a, "1983-04");
+    set_captured(&mut h, b, "2026-01-01T10:00:00");
+    open(&mut h, &[a], a);
+    match &h.app.ui.dialog {
+        Some(Dialog::CaptureTime { time, .. }) => assert_eq!(time, "1983-04", "starts from the date as stated"),
+        other => panic!("Edit Capture Time is not open: {other:?}"),
+    }
+    h.app.ui.dialog = None;
+    open(&mut h, &[a, b], a);
+    match &mut h.app.ui.dialog {
+        Some(Dialog::CaptureTime { mode, time, .. }) => {
+            *mode = "set".into();
+            *time = "1983".into();
+        }
+        other => panic!("Edit Capture Time is not open: {other:?}"),
+    }
+    h.settle(SETTLE);
+    assert!(painted(&h, "All 2 selected photos get this date."), "{:?}", h.painted_text());
+    assert!(painted(&h, "April 1983 → 1983"), "{:?}", h.painted_text());
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for id in [a, b] {
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().captured.as_deref(), Some("1983"));
+    }
+}
+
+/// A shift with a photo dated to a year or a month alone: the preview and the result say it has no
+/// time to shift (not that it can't be read), and it is left as it was; a photo whose time can't be
+/// read is named in the same result.
+#[test]
+fn shifting_a_partial_date_says_it_has_no_time() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let ids = h.app.session.visible_cloned();
+    let (a, b) = (ids[0], ids[1]);
+    set_captured(&mut h, a, "1983-04");
+    set_captured(&mut h, b, "2026-01-01T10:00:00");
+    let broken = "2026-01-01T10:00:00 and more";
+    set_captured(&mut h, ids[2], broken);
+    open(&mut h, &[a, b, ids[2]], a);
+    match &mut h.app.ui.dialog {
+        Some(Dialog::CaptureTime { mode, hours, .. }) => {
+            *mode = "shift".into();
+            *hours = 1;
+        }
+        other => panic!("Edit Capture Time is not open: {other:?}"),
+    }
+    h.settle(SETTLE);
+    assert!(painted(&h, "year or month alone, with no time to shift"), "{:?}", h.painted_text());
+    assert!(!painted(&h, "can't be read"), "{:?}", h.painted_text());
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let toast = toast(&h);
+    assert!(toast.contains("no time to shift") && toast.contains("can't be read"), "both are named: {toast:?}");
+    assert_eq!(h.app.session.catalog.photo(ids[2]).unwrap().captured.as_deref(), Some(broken));
+    assert_eq!(h.app.session.catalog.photo(a).unwrap().captured.as_deref(), Some("1983-04"));
+    assert_eq!(h.app.session.catalog.photo(b).unwrap().captured.as_deref(), Some("2026-01-01T11:00:00"));
+}

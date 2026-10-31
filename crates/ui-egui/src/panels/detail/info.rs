@@ -252,6 +252,10 @@ fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_catalog::Ph
 
 /// `2026-09-30T12:00:00` → `2026-09-30 12:00`.
 fn pretty_date(iso: &str) -> String {
+    // a year or a month alone shows as such ("1983", "April 1983")
+    if lightcraft_catalog::dates::partial_capture(iso).is_some() {
+        return crate::i18n::display_time(iso);
+    }
     let d = iso.replacen('T', " ", 1);
     d.get(..16).map(str::to_string).unwrap_or(d)
 }
@@ -444,6 +448,24 @@ mod info_overlay_tests {
             }
         }
         lines
+    }
+
+    /// The info overlay's capture date shows a year or a month alone at its own precision.
+    #[test]
+    fn the_info_overlay_shows_a_year_or_month_alone_as_such() {
+        let mut photo = lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            lightcraft_catalog::Source::Demo { scene: 0 },
+            "scan.jpg",
+            "JPEG",
+            3,
+            2,
+            "2026-10-01T00:00:00",
+        );
+        for (captured, shown) in [("1983-04", "April 1983"), ("1983", "1983"), ("2024-01-16T12:34:56", "2024-01-16 12:34")] {
+            photo.captured = Some(captured.into());
+            assert_eq!(info_line(crate::state::LoupeInfoField::CaptureDate, &photo).as_deref(), Some(shown));
+        }
     }
 
     /// View ▸ View Options: Info 1 and Info 2 each show the three lines chosen for them, in that
