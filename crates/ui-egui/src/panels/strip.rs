@@ -121,6 +121,8 @@ pub fn row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     let ui = &mut child;
+    // the same toolbar as the strip at the window's edge, standing in the panel now
+    crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
     ui.spacing_mut().item_spacing.x = gap;
     let sz = vec2(bw, ROW_H - 4.0);
     for (id, icon, panel, tip, without_photo) in ROW_TOOLS {
