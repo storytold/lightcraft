@@ -284,6 +284,7 @@
   "Exported to {path}": "Exportiert nach {path}",
   "Saved template {name}": "Vorlage {name} gespeichert",
   "Imported {name}": "{name} importiert",
+  "Moved {name} to {folder}": "{name} nach {folder} verschoben",
   "Skipped {problem}": "Übersprungen: {problem}",
   "…and {more} more": "…und {more} weitere",
   "Template preview: {name}": "Vorlagenvorschau: {name}",

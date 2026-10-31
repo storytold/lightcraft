@@ -285,6 +285,7 @@
   "Exported to {path}": "Експортовано до {path}",
   "Saved template {name}": "Шаблон {name} збережено",
   "Imported {name}": "Імпортовано: {name}",
+  "Moved {name} to {folder}": "{name} переміщено до {folder}",
   "Skipped {problem}": "Пропущено: {problem}",
   "…and {more} more": "…і ще {more}",
   "Template preview: {name}": "Перегляд шаблону: {name}",

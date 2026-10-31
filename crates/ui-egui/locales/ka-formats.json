@@ -271,6 +271,7 @@
   "Exported {} effect preset{}": "ექსპორტირებულია ეფექტის პრესეტი: {}{:.0}",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "იმპორტირებულია ნიღბის ეფექტი: {e}{:.0} (ნიღბვა → ეფექტი)",
   "Imported {name}": "იმპორტირებულია: {name}",
+  "Moved {name} to {folder}": "{name} გადატანილია: {folder}",
   "Keywords of {n} selected photos": "მონიშნული ფოტოების ({n}) საკვანძო სიტყვები",
   "LightCraft stopped unexpectedly: {e}": "LightCraft მოულოდნელად შეწყდა: {e}",
   "LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}": "LightCraft მოულოდნელად შეწყდა: {e}\n\nდეტალები ჟურნალის ფაილშია: {path}",

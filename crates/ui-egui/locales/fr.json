@@ -3573,5 +3573,9 @@
   "Top bar": "Barre supérieure",
   "Tool strip": "Barre d’outils",
   "Bottom bar": "Barre inférieure",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)",
+  "User Templates": "Modèles utilisateur",
+  "Delete Folder": "Supprimer le dossier",
+  "Folder name": "Nom du dossier",
+  "Its templates move to User Templates.": "Ses modèles sont déplacés vers Modèles utilisateur."
 }

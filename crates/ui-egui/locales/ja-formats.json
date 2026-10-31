@@ -289,6 +289,7 @@
   "Exported to {path}": "{path} に書き出しました",
   "Saved template {name}": "テンプレート {name} を保存しました",
   "Imported {name}": "{name} を読み込みました",
+  "Moved {name} to {folder}": "{name} を {folder} に移動しました",
   "Skipped {problem}": "スキップ: {problem}",
   "…and {more} more": "…ほか {more} 件",
   "Template preview: {name}": "テンプレートのプレビュー: {name}",

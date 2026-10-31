@@ -277,6 +277,7 @@
   "Exported to {path}": "Wyeksportowano do {path}",
   "Saved template {name}": "Zapisano szablon {name}",
   "Imported {name}": "Zaimportowano {name}",
+  "Moved {name} to {folder}": "Przeniesiono {name} do {folder}",
   "Skipped {problem}": "Pominięto: {problem}",
   "…and {more} more": "…i jeszcze {more}",
   "Template preview: {name}": "Podgląd szablonu: {name}",

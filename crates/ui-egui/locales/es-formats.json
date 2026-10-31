@@ -285,6 +285,7 @@
   "Exported to {path}": "Exportado a {path}",
   "Saved template {name}": "Plantilla {name} guardada",
   "Imported {name}": "Se importó {name}",
+  "Moved {name} to {folder}": "{name} se movió a {folder}",
   "Skipped {problem}": "Omitido: {problem}",
   "…and {more} more": "…y {more} más",
   "Template preview: {name}": "Vista previa de la plantilla: {name}",

@@ -410,6 +410,173 @@ fn templates_export_to_a_file_and_import_from_one() {
     assert!(fails(&mut s, "print.template.import", json!({"path": file.to_string_lossy()})).contains("at most"));
 }
 
+/// The names of the folders `print.template.list` gives, User Templates first.
+fn folder_names(r: &Value) -> Vec<String> {
+    r["folders"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect()
+}
+
+/// Each template's name and folder, in the order `print.template.list` gives them.
+fn template_folders(r: &Value) -> Vec<(String, String)> {
+    r["templates"].as_array().unwrap().iter().map(|t| (t["name"].as_str().unwrap().into(), t["folder"].as_str().unwrap().into())).collect()
+}
+
+fn pair(name: &str, folder: &str) -> (String, String) {
+    (name.into(), folder.into())
+}
+
+#[test]
+fn template_folders_hold_templates_and_survive_reopening() {
+    let files = MemStore::new();
+    let open = |files: &MemStore| {
+        let mut s = Session::with_demo();
+        let stores = LibraryStores { dir: "print".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+        s.open_library_in(stores, false).unwrap();
+        s
+    };
+    let mut s = open(&files);
+    let r = run(&mut s, "print.template.list", json!({}));
+    assert_eq!(r["folders"], json!([{"name": "User Templates", "default": true, "templates": 0}]));
+
+    // a folder is kept while it is empty, and the folders are listed by name after User Templates
+    let r = run(&mut s, "print.template.folder.create", json!({"name": " Weddings "}));
+    assert_eq!(r["name"], "Weddings");
+    run(&mut s, "print.template.folder.create", json!({"name": "Proofs"}));
+    let r = run(&mut open(&files), "print.template.list", json!({}));
+    assert_eq!(folder_names(&r), ["User Templates", "Proofs", "Weddings"], "{r}");
+
+    // a template is saved into a folder, or into User Templates when none is named
+    run(&mut s, "print.set", json!({"layout": {"style": "contactSheet", "grid": {"columns": 4, "rows": 5}}}));
+    run(&mut s, "print.template.save", json!({"name": "Sheet", "folder": "weddings"}));
+    let r = run(&mut s, "print.template.save", json!({"name": "Plain"}));
+    assert_eq!(template_folders(&r), [pair("Sheet", "Weddings"), pair("Plain", "User Templates")]);
+    assert_eq!(r["folders"][2], json!({"name": "Weddings", "default": false, "templates": 1}));
+    // saving over a name keeps its folder unless the call names another
+    run(&mut s, "print.set", json!({"layout": {"grid": {"columns": 6}}}));
+    let r = run(&mut s, "print.template.save", json!({"name": "sheet"}));
+    assert_eq!(template_folders(&r), [pair("sheet", "Weddings"), pair("Plain", "User Templates")]);
+    let r = run(&mut s, "print.template.save", json!({"name": "Plain", "folder": "Proofs"}));
+    assert_eq!(template_folders(&r)[1], pair("Plain", "Proofs"));
+
+    // a move changes only the folder; a move to where it is already does nothing
+    let settings = r["templates"][0]["settings"].clone();
+    let r = run(&mut s, "print.template.move", json!({"name": "SHEET", "folder": "Proofs"}));
+    assert_eq!((r["moved"].as_bool(), template_folders(&r)[0].clone()), (Some(true), pair("sheet", "Proofs")));
+    assert_eq!(r["templates"][0]["settings"], settings);
+    let r = run(&mut s, "print.template.move", json!({"name": "Sheet", "folder": "proofs"}));
+    assert_eq!(r["moved"], false);
+    let r = run(&mut s, "print.template.move", json!({"name": "Plain", "folder": "user templates"}));
+    assert_eq!(template_folders(&r)[1], pair("Plain", "User Templates"));
+    run(&mut s, "print.template.move", json!({"name": "Plain", "folder": "Weddings"}));
+
+    // a rename takes the folder's templates along; a change of case is a rename too
+    let r = run(&mut s, "print.template.folder.rename", json!({"name": "proofs", "to": "Contact Sheets"}));
+    assert_eq!(folder_names(&r), ["User Templates", "Contact Sheets", "Weddings"]);
+    assert_eq!(template_folders(&r)[0], pair("sheet", "Contact Sheets"));
+    let r = run(&mut s, "print.template.folder.rename", json!({"name": "contact sheets", "to": "contact sheets"}));
+    assert_eq!(template_folders(&r)[0], pair("sheet", "contact sheets"));
+
+    // the folders and where each template is survive reopening the library
+    let mut again = open(&files);
+    let r = run(&mut again, "print.template.list", json!({}));
+    assert_eq!(folder_names(&r), ["User Templates", "contact sheets", "Weddings"]);
+    assert_eq!(template_folders(&r), [pair("sheet", "contact sheets"), pair("Plain", "Weddings")]);
+    run(&mut again, "print.template.apply", json!({"name": "Sheet"}));
+    assert_eq!(again.print.layout.grid.columns, 6);
+
+    // deleting a folder keeps its templates: they go to User Templates
+    let r = run(&mut s, "print.template.folder.delete", json!({"name": "WEDDINGS"}));
+    assert_eq!((r["deleted"].as_str(), r["moved"].as_u64()), (Some("Weddings"), Some(1)));
+    assert_eq!(folder_names(&r), ["User Templates", "contact sheets"]);
+    assert_eq!(template_folders(&r), [pair("sheet", "contact sheets"), pair("Plain", "User Templates")]);
+    let r = run(&mut open(&files), "print.template.list", json!({}));
+    assert_eq!(template_folders(&r)[1], pair("Plain", "User Templates"));
+
+    // refusals change nothing
+    let before = run(&mut s, "print.template.list", json!({}));
+    for (id, p, why) in [
+        ("print.template.folder.create", json!({}), "missing `name`"),
+        ("print.template.folder.create", json!({"name": "  "}), "folder name"),
+        ("print.template.folder.create", json!({"name": "a\tb"}), "folder name"),
+        ("print.template.folder.create", json!({"name": "x".repeat(81)}), "folder name"),
+        ("print.template.folder.create", json!({"name": "user templates"}), "always there"),
+        ("print.template.folder.create", json!({"name": "Contact Sheets"}), "already a folder"),
+        ("print.template.folder.rename", json!({"name": "User Templates", "to": "Mine"}), "can't be renamed"),
+        ("print.template.folder.rename", json!({"name": "Nope", "to": "Mine"}), "no print template folder"),
+        ("print.template.folder.rename", json!({"name": "contact sheets"}), "missing `to`"),
+        ("print.template.folder.rename", json!({"name": "contact sheets", "to": "User Templates"}), "always there"),
+        ("print.template.folder.delete", json!({"name": "User Templates"}), "can't be renamed or deleted"),
+        ("print.template.folder.delete", json!({"name": "Nope"}), "no print template folder"),
+        ("print.template.move", json!({"name": "Sheet"}), "missing `folder`"),
+        ("print.template.move", json!({"name": "Sheet", "folder": "Nope"}), "no print template folder"),
+        ("print.template.move", json!({"name": "Sheet", "folder": 3}), "`folder` must be"),
+        ("print.template.move", json!({"name": "Nope", "folder": "User Templates"}), "no print template `Nope`"),
+        ("print.template.save", json!({"name": "New", "folder": "Nope"}), "no print template folder"),
+        ("print.template.import", json!({"path": "x.lcprint", "folder": "Nope"}), "no print template folder"),
+    ] {
+        let e = fails(&mut s, id, p.clone());
+        assert!(e.contains(why), "{id} {p}: {e}");
+    }
+    run(&mut s, "print.template.folder.create", json!({"name": "Second"}));
+    assert!(fails(&mut s, "print.template.folder.rename", json!({"name": "second", "to": "CONTACT SHEETS"})).contains("already a folder"));
+    run(&mut s, "print.template.folder.delete", json!({"name": "Second"}));
+    assert_eq!(run(&mut s, "print.template.list", json!({})), before);
+
+    // a full list of folders takes no more
+    while s.print_template_folders.len() < crate::print::template::MAX_FOLDERS {
+        let n = s.print_template_folders.len();
+        run(&mut s, "print.template.folder.create", json!({"name": format!("F{n}")}));
+    }
+    assert!(fails(&mut s, "print.template.folder.create", json!({"name": "One more"})).contains("at most"));
+}
+
+#[test]
+fn templates_import_into_a_folder_and_export_without_it() {
+    let mut s = Session::with_demo();
+    let scratch = Scratch::new("folders");
+    let file = scratch.0.join("proofs.lcprint");
+    run(&mut s, "print.template.folder.create", json!({"name": "Proofs"}));
+    run(&mut s, "print.template.save", json!({"name": "Sheet", "folder": "Proofs"}));
+    run(&mut s, "print.template.export", json!({"name": "Sheet", "path": file.to_string_lossy()}));
+    let doc: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let mut keys: Vec<&String> = doc.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["format", "name", "settings", "version"], "a .lcprint file stays version 1, without the folder");
+    let r = run(&mut s, "print.template.import", json!({"path": file.to_string_lossy()}));
+    assert_eq!(template_folders(&r)[1], pair("Sheet (2)", "User Templates"));
+    let r = run(&mut s, "print.template.import", json!({"path": file.to_string_lossy(), "folder": "proofs"}));
+    assert_eq!(template_folders(&r)[2], pair("Sheet (3)", "Proofs"));
+}
+
+#[test]
+fn templates_from_before_folders_are_in_user_templates() {
+    let files = MemStore::new();
+    let old = json!({"printTemplates": [
+        {"name": "Old", "settings": {"layout": {"style": "contactSheet"}}},
+        {"name": "Kept", "folder": "Family", "settings": {}},
+        {"name": "Spelled", "folder": " family ", "settings": {}},
+        {"name": "Bad", "folder": "a\nb", "settings": {}},
+        {"name": "Reserved", "folder": "USER TEMPLATES", "settings": {}}
+    ], "printTemplateFolders": ["Empty", "", "empty", "User Templates", "Family"]});
+    files.set("prefs.json", serde_json::to_vec(&old).unwrap());
+    let mut s = Session::with_demo();
+    let stores = LibraryStores { dir: "print".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    assert!(s.take_library_warnings().is_empty());
+    let r = run(&mut s, "print.template.list", json!({}));
+    assert_eq!(folder_names(&r), ["User Templates", "Empty", "Family"]);
+    assert_eq!(
+        template_folders(&r),
+        [
+            pair("Old", "User Templates"),
+            pair("Kept", "Family"),
+            pair("Spelled", "Family"),
+            pair("Bad", "User Templates"),
+            pair("Reserved", "User Templates")
+        ]
+    );
+    run(&mut s, "print.template.apply", json!({"name": "Old"}));
+}
+
 /// A library whose `prefs.json` can't be read, so saving the preferences fails.
 #[derive(Clone, Default)]
 struct PrefsUnreadable(MemStore);
@@ -442,7 +609,13 @@ fn template_changes_that_cant_be_saved_are_undone() {
         LibraryStores { dir: "print".into(), catalog: Box::new(MemStore::new()), files: Box::new(PrefsUnreadable::default()), on_disk: false };
     s.open_library_in(stores, false).unwrap();
     s.print_templates.push(crate::print::template::PrintTemplate::new("Proofs", &s.print).unwrap());
-    let names = |s: &Session| s.print_templates.iter().map(|t| (t.name.clone(), t.settings.clone())).collect::<Vec<_>>();
+    s.print_template_folders.push("Family".into());
+    let names = |s: &Session| {
+        (
+            s.print_templates.iter().map(|t| (t.name.clone(), t.folder.clone(), t.settings.clone())).collect::<Vec<_>>(),
+            s.print_template_folders.clone(),
+        )
+    };
     let kept = names(&s);
     let scratch = Scratch::new("unsaved");
     let file = scratch.0.join("proofs.lcprint");
@@ -454,6 +627,10 @@ fn template_changes_that_cant_be_saved_are_undone() {
         ("print.template.save", json!({"name": "proofs"})),
         ("print.template.delete", json!({"name": "Proofs"})),
         ("print.template.import", json!({"path": file.to_string_lossy()})),
+        ("print.template.move", json!({"name": "Proofs", "folder": "Family"})),
+        ("print.template.folder.create", json!({"name": "Work"})),
+        ("print.template.folder.rename", json!({"name": "Family", "to": "Home"})),
+        ("print.template.folder.delete", json!({"name": "Family"})),
     ] {
         assert!(fails(&mut s, id, p.clone()).contains("prefs.json"), "{id} {p}");
         assert_eq!(names(&s), kept, "{id} {p}");
@@ -503,6 +680,10 @@ fn every_print_command_is_registered_with_a_description() {
         "print.template.delete",
         "print.template.export",
         "print.template.import",
+        "print.template.move",
+        "print.template.folder.create",
+        "print.template.folder.rename",
+        "print.template.folder.delete",
     ] {
         let c = crate::find_command(id).unwrap_or_else(|| panic!("{id} missing"));
         assert!(c.params.len() > 3, "{id}");

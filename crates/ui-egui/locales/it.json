@@ -2556,5 +2556,9 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "User Templates": "Modelli utente",
+  "Delete Folder": "Elimina cartella",
+  "Folder name": "Nome della cartella",
+  "Its templates move to User Templates.": "I suoi modelli vengono spostati in Modelli utente."
 }

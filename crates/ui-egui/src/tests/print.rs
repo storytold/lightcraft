@@ -90,6 +90,11 @@ fn style_buttons_and_checkboxes_run_print_set() {
     click(&mut h, "check:printZoomFill");
     click(&mut h, "check:printStroke");
     assert!(h.app.session.print.image.zoom_to_fill && h.app.session.print.image.stroke_enabled);
+    // (the page settings are below the Template Browser: the settings column is scrolled to them)
+    let column = rect(&h, "check:printStroke").center();
+    h.request("ui.move", json!({"x": column.x, "y": column.y}), T);
+    h.request("ui.scroll", json!({"dy": -200.0}), T);
+    h.settle(T);
     click(&mut h, "button:printOrientation-1");
     assert_eq!(h.app.session.print.layout.page.orientation, lightcraft_engine::print::layout::Orientation::Landscape);
     let p = rect(&h, "print:page");
@@ -246,6 +251,122 @@ fn templates_export_and_import_from_the_dialog() {
     assert_eq!(h.app.session.print_templates[1].settings, h.app.session.print_templates[0].settings);
     assert!(has(&h, "button:printTemplateExport-1"), "the imported template is listed");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Each template's name and folder (`None`: User Templates).
+fn template_folders(h: &Headless) -> Vec<(String, Option<String>)> {
+    h.app.session.print_templates.iter().map(|t| (t.name.clone(), t.folder.clone())).collect()
+}
+
+/// Drags the widget `from` onto the center of the widget `to`.
+fn drag_onto(h: &mut Headless, from: &str, to: &str) {
+    let (a, b) = (rect(h, from).center(), rect(h, to).center());
+    drag(h, from, b.x - a.x, b.y - a.y);
+}
+
+#[test]
+fn the_template_browser_makes_folders_and_saves_into_one() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    assert!(has(&h, "printTemplateFolder-0"), "User Templates is listed");
+    assert!(!has(&h, "printTemplateFolder-1"));
+    click(&mut h, "button:printTemplateNewFolder");
+    assert!(has(&h, "field:printFolderName"));
+    h.app.ui.print.folder_edit.as_mut().unwrap().name = "Weddings".into();
+    click(&mut h, "button:printFolderOk");
+    assert_eq!(h.app.session.print_template_folders, ["Weddings"]);
+    assert!(h.app.ui.print.folder_edit.is_none());
+    assert!(has(&h, "printTemplateFolder-1"));
+    assert_eq!(h.app.ui.print.save_folder.as_deref(), Some("Weddings"), "a new folder is where Save goes");
+    // a name taken is refused, and the field stays open
+    click(&mut h, "button:printTemplateNewFolder");
+    h.app.ui.print.folder_edit.as_mut().unwrap().name = "weddings".into();
+    click(&mut h, "button:printFolderOk");
+    assert!(h.app.ui.print.folder_edit.is_some());
+    click(&mut h, "button:printFolderCancel");
+    assert!(h.app.ui.print.folder_edit.is_none());
+    assert_eq!(h.app.session.print_template_folders.len(), 1);
+
+    h.app.ui.print.template_name = "Sheet".into();
+    click(&mut h, "button:printSaveTemplate");
+    h.app.ui.print.save_folder = None;
+    h.app.ui.print.template_name = "Plain".into();
+    click(&mut h, "button:printSaveTemplate");
+    assert_eq!(template_folders(&h), [("Sheet".into(), Some("Weddings".into())), ("Plain".into(), None)]);
+    // a folder's row opens and closes its list
+    assert!(has(&h, "printTemplate-0"));
+    click(&mut h, "printTemplateFolder-1");
+    assert!(!has(&h, "printTemplate-0"), "a closed folder hides its templates");
+    assert!(has(&h, "printTemplate-1"));
+    click(&mut h, "printTemplateFolder-1");
+    assert!(has(&h, "printTemplate-0"));
+}
+
+#[test]
+fn a_template_dragged_onto_a_folder_moves_there() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    cmd(&mut h, "print.template.folder.create", json!({"name": "Weddings"}));
+    cmd(&mut h, "print.template.save", json!({"name": "Plain"}));
+    let settings = h.app.session.print_templates[0].settings.clone();
+    drag_onto(&mut h, "printTemplate-0", "printTemplateFolder-1");
+    assert_eq!(template_folders(&h), [("Plain".into(), Some("Weddings".into()))]);
+    assert_eq!(h.app.session.print_templates[0].settings, settings, "only the folder changes");
+    assert!(h.app.ui.print.dragging_template.is_none());
+    // and back onto User Templates
+    drag_onto(&mut h, "printTemplate-0", "printTemplateFolder-0");
+    assert_eq!(template_folders(&h), [("Plain".into(), None)]);
+    // a drop anywhere else leaves it where it is
+    drag(&mut h, "printTemplate-0", 0.0, 300.0);
+    assert_eq!(template_folders(&h), [("Plain".into(), None)]);
+    assert!(h.app.ui.print.dragging_template.is_none());
+}
+
+#[test]
+fn a_templates_menu_moves_it_and_a_folders_menu_renames_and_deletes() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    cmd(&mut h, "print.template.folder.create", json!({"name": "Weddings"}));
+    cmd(&mut h, "print.template.save", json!({"name": "Plain"}));
+    let r = h.request("ui.clickWidget", json!({"id": "printTemplate-0", "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "item:printTemplateMoveMenu-0"}), T)["ok"], true);
+    h.settle(T);
+    click(&mut h, "item:printTemplateMove-0-1");
+    assert_eq!(template_folders(&h), [("Plain".into(), Some("Weddings".into()))]);
+
+    let r = h.request("ui.clickWidget", json!({"id": "printTemplateFolder-1", "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    click(&mut h, "item:printFolderRename-1");
+    assert_eq!(h.app.ui.print.folder_edit.as_ref().and_then(|e| e.from.as_deref()), Some("Weddings"));
+    h.app.ui.print.folder_edit.as_mut().unwrap().name = "Family".into();
+    click(&mut h, "button:printFolderOk");
+    assert_eq!(h.app.session.print_template_folders, ["Family"]);
+    assert_eq!(template_folders(&h), [("Plain".into(), Some("Family".into()))]);
+
+    // Delete Folder asks first; its templates then go to User Templates
+    let r = h.request("ui.clickWidget", json!({"id": "printTemplateFolder-1", "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    click(&mut h, "item:printFolderDelete-1");
+    assert_eq!(h.app.session.print_template_folders, ["Family"], "nothing is deleted before the confirmation");
+    click(&mut h, "button:printFolderDeleteCancel");
+    assert_eq!(h.app.session.print_template_folders, ["Family"]);
+    h.app.ui.print.delete_folder = Some("Family".into());
+    h.settle(T);
+    click(&mut h, "button:printFolderDeleteConfirm");
+    assert!(h.app.session.print_template_folders.is_empty());
+    assert_eq!(template_folders(&h), [("Plain".into(), None)]);
+    assert!(h.app.ui.print.delete_folder.is_none());
+
+    // User Templates has New Folder… but no Rename or Delete
+    let r = h.request("ui.clickWidget", json!({"id": "printTemplateFolder-0", "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    assert!(has(&h, "item:printFolderNew-0"));
+    assert!(!has(&h, "item:printFolderRename-0") && !has(&h, "item:printFolderDelete-0"));
 }
 
 #[test]
