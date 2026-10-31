@@ -189,6 +189,73 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Issue #2510: a user preset is renamed in place, keeping its settings. Built-in names stay
+/// reserved and another preset's name is refused (a change of letter case is not); a user preset
+/// saved before a built-in of its name existed can be renamed away from it.
+#[test]
+fn a_user_export_preset_is_renamed_keeping_its_settings() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    let user = |s: &Session| s.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png", "width": 64}})).unwrap();
+    let list = s.execute("export.renamePreset", &json!({"name": " web ", "to": " Web Small "})).unwrap();
+    assert!(list.as_array().unwrap().iter().any(|p| p["name"] == "Web Small" && p["builtin"] == false), "{list}");
+    assert_eq!(user(&s), ["Web Small"]);
+    assert_eq!(s.export_params(&json!({"preset": "Web Small"})).unwrap(), json!({"format": "png", "width": 64}));
+    for (p, why) in [
+        (json!({"name": "Web Small", "to": "JPEG (Large)"}), "built-in"),
+        (json!({"name": "DNG", "to": "Mine"}), "no user export preset `DNG`"),
+        (json!({"name": "Nope", "to": "Mine"}), "no user export preset `Nope`"),
+        (json!({"name": "Web Small"}), "missing `to`"),
+        (json!({"name": "Web Small", "to": "  "}), "missing `to`"),
+        (json!({"to": "Mine"}), "missing `name`"),
+    ] {
+        let e = s.execute("export.renamePreset", &p).unwrap_err().to_string();
+        assert!(e.contains(why), "{p}: {e}");
+    }
+    s.execute("export.savePreset", &json!({"name": "Other", "params": {"format": "webp"}})).unwrap();
+    let e = s.execute("export.renamePreset", &json!({"name": "Web Small", "to": "other"})).unwrap_err().to_string();
+    assert!(e.contains("an export preset named `other` exists already"), "{e}");
+    assert_eq!(user(&s), ["Web Small", "Other"]);
+    assert_eq!(s.export_params(&json!({"preset": "Other"})).unwrap(), json!({"format": "webp"}));
+    s.execute("export.renamePreset", &json!({"name": "Web Small", "to": "web small"})).unwrap();
+    assert_eq!(user(&s), ["web small", "Other"], "a change of case is a rename");
+    s.export_presets.push(ExportPreset { name: "DNG".into(), params: json!({"format": "png"}) });
+    s.execute("export.renamePreset", &json!({"name": "dng", "to": "Old DNG"})).unwrap();
+    assert_eq!(user(&s), ["web small", "Other", "Old DNG"]);
+    assert_eq!(s.export_params(&json!({"preset": "Old DNG"})).unwrap(), json!({"format": "png"}));
+}
+
+/// Issue #2510: Duplicate copies a user preset's saved settings to the first free "<name> copy"
+/// name, or to the name given, which can't be a built-in's or another preset's.
+#[test]
+fn a_user_export_preset_is_duplicated_with_its_saved_settings() {
+    let mut s = Session::with_demo();
+    let user = |s: &Session| s.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let web = json!({"format": "png", "width": 64});
+    s.execute("export.savePreset", &json!({"name": "Web", "params": web})).unwrap();
+    let r = s.execute("export.duplicatePreset", &json!({"name": " web "})).unwrap();
+    assert_eq!(r["name"], "Web copy", "{r}");
+    assert!(r["presets"].as_array().unwrap().iter().any(|p| p["name"] == "Web copy" && p["builtin"] == false), "{r}");
+    assert_eq!(s.execute("export.duplicatePreset", &json!({"name": "Web"})).unwrap()["name"], "Web copy 2");
+    assert_eq!(s.execute("export.duplicatePreset", &json!({"name": "Web", "to": " Print "})).unwrap()["name"], "Print");
+    assert_eq!(user(&s), ["Web", "Web copy", "Web copy 2", "Print"]);
+    for name in ["Web copy", "Web copy 2", "Print"] {
+        assert_eq!(s.export_params(&json!({"preset": name})).unwrap(), web, "{name}");
+    }
+    for (p, why) in [
+        (json!({"name": "Web", "to": "dng"}), "built-in"),
+        (json!({"name": "Web", "to": "print"}), "an export preset named `print` exists already"),
+        (json!({"name": "JPEG (Small)"}), "no user export preset `JPEG (Small)`"),
+        (json!({"name": "Nope"}), "no user export preset `Nope`"),
+        (json!({"to": "Mine"}), "missing `name`"),
+    ] {
+        let e = s.execute("export.duplicatePreset", &p).unwrap_err().to_string();
+        assert!(e.contains(why), "{p}: {e}");
+    }
+    assert_eq!(user(&s).len(), 4, "a refused copy adds nothing");
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
