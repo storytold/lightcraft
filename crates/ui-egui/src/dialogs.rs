@@ -26,7 +26,7 @@ use export::{
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
     DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
-    only_shows, return_confirms, trailing_button_row,
+    only_shows, return_confirms, trailing_button_row, translated_field,
 };
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
@@ -1032,7 +1032,7 @@ fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut
         crate::import::tag_help(ui, "renameTemplate", template, template_id);
     }
     crate::import::unknown_tags_warning(ui, template);
-    field(ui, "Presets", |ui| {
+    translated_field(ui, crate::i18n::tr_ctx(crate::i18n::RENAME_DIALOG_CONTEXT, "Presets"), |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for (i, (label, tpl)) in
             [("Name", "{name}"), ("Date–Name", "{date}_{name}"), ("Title–Seq", "{title}-{seq:3}"), ("Custom–Seq", "Photo-{seq:3}")].iter().enumerate()
@@ -1945,8 +1945,12 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         }
         Dialog::CreatePreset { name, group, groups } => {
             crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Preset name")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Preset name"),
+                ui.add(
+                    egui::TextEdit::singleline(name)
+                        .hint_text(crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Preset name"))
+                        .desired_width(f32::INFINITY),
+                ),
+                crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Preset name"),
             );
             crate::widgets::named(
                 ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY)),
