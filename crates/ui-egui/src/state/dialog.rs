@@ -165,6 +165,13 @@ pub enum Dialog {
     },
     /// Help ▸ What's New.
     WhatsNew,
+    /// File ▸ Restore Library from Backup…: the backups in `dir` to choose from (as
+    /// `library.backups` lists them, without their file lists), and the one chosen.
+    RestoreBackup {
+        dir: String,
+        backups: Vec<serde_json::Value>,
+        selected: Option<usize>,
+    },
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
     /// of each burst; shots at most `burst_gap` seconds apart and at least `similarity` alike are
     /// a burst.

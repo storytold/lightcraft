@@ -165,6 +165,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
+        Dialog::RestoreBackup { backups, selected, .. } => match selected.and_then(|i| backups.get(i)).and_then(|b| b["dir"].as_str()) {
+            Some(dir) => app.run("library.restore", json!({"dir": dir})),
+            None => Err(crate::i18n::tr("Choose a backup first").to_string()),
+        },
         Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));
             app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))

@@ -23,6 +23,7 @@ use crop::{crop, red_eye, remove};
 #[cfg(test)]
 use history::{HistoryRow, history_row, short_time};
 use history::{activity, versions};
+pub(crate) use info::human_size;
 use info::info;
 #[cfg(test)]
 pub(crate) use info::mixed_meta;

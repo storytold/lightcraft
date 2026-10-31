@@ -305,5 +305,12 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Backed up the library to {}": "Kirjasto varmuuskopioitu kohteeseen {}",
+  "The library was not backed up: {}": "Kirjastoa ei varmuuskopioitu: {}",
+  "Restored the library. What it held before is in {}": "Kirjasto palautettu. Sen aiempi sisältö on kohteessa {}",
+  "The library was not restored: {}": "Kirjastoa ei palautettu: {}",
+  "Older backups removed: {}": "Vanhoja varmuuskopioita poistettu: {}",
+  "Older backups that could not be removed: {}": "Vanhoja varmuuskopioita, joita ei voitu poistaa: {}",
+  "Backups in {}": "Varmuuskopiot kansiossa {}"
 }

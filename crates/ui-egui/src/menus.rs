@@ -13,7 +13,8 @@ mod run;
 mod ui_commands;
 
 pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_enabled};
-pub use run::{parse_rgb, run_ui_command};
+pub(crate) use run::backups_to_choose_from;
+pub use run::{library_replaced, parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
 
 pub mod menu_level;
@@ -117,5 +118,9 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
             });
         }
     }
+    // Two Restore Library from Backup… commands, for hosts that exclude each other: the web build's zip
+    // (`file.restoreLibrary`, only where the host brings it) and a folder library's own backups
+    // (`library.restore`, only for a library that is a folder on disk). The one this host has is listed.
+    v.retain(|e| !matches!(e.id.as_str(), "file.restoreLibrary" | "library.restore") || menubar::host_supports(app, &e.id));
     v
 }

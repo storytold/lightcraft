@@ -283,7 +283,7 @@ pub(crate) fn focus_text(f: Option<&lightcraft_meta::FocusPoint>) -> Option<Stri
     Some(if words.is_empty() { crate::i18n::tr("Focus point").to_string() } else { words.join(" · ") })
 }
 
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     match bytes {
         b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
         b if b >= 1 << 10 => format!("{} KB", b >> 10),
