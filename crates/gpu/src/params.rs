@@ -73,6 +73,13 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // a LUT profile: its table in `aux` at LUT_OFF (size³ rgb, red fastest), amount and domain
+    ("LUT", 1),
+    ("LUT_OFF", 1),
+    ("LUT_N", 1),
+    ("LUT_AMT", 1),
+    ("LUT_MIN", 3),
+    ("LUT_MAX", 3),
     // soft proofing (matrix proofs; `ProofParams`): working → proof RGB, its luma, proof → output, warnings
     ("PROOF", 1),
     ("PROOF_M", 9),
@@ -163,6 +170,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for m in masks {
         aux.extend_from_slice(m);
     }
+    let lut_off = aux.len();
+    if let Some((l, _)) = &fp.lut {
+        aux.extend(l.data.iter().flatten());
+    }
 
     let mut p = Block::new();
     p.u("W", fp.w as u32);
@@ -240,6 +251,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);
+    if let Some((l, amount)) = &fp.lut {
+        p.b("LUT", true);
+        p.u("LUT_OFF", lut_off as u32);
+        p.u("LUT_N", l.size as u32);
+        p.f("LUT_AMT", *amount);
+        p.fs("LUT_MIN", &l.domain_min);
+        p.fs("LUT_MAX", &l.domain_max);
+    }
     if let Some(pp) = fp.proof.as_ref().filter(|pp| pp.table.is_none()) {
         p.b("PROOF", true);
         p.fs("PROOF_M", pp.to_proof.as_flattened());

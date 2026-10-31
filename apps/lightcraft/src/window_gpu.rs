@@ -154,6 +154,15 @@ pub fn base_options() -> WgpuConfiguration {
         n.instance_descriptor.backend_options = backend::backend_options();
         // no indirect-call validation pipeline: Intel Metal fails to compile it and the window never opens (#250)
         n.instance_descriptor.flags = backend::instance_flags_from_env(n.instance_descriptor.flags);
+        // the GPU renderer may run on this device (`adopt_window_device`): it needs the adapter's
+        // buffer limits (a 24 MP photo is a 275 MiB buffer), not wgpu's defaults
+        let default = n.device_descriptor.clone();
+        n.device_descriptor = std::sync::Arc::new(move |adapter| {
+            if adapter.get_info().backend == wgpu::Backend::Gl {
+                return default(adapter);
+            }
+            wgpu::DeviceDescriptor { label: Some("lightcraft window"), required_limits: adapter.limits(), ..Default::default() }
+        });
     }
     c
 }
@@ -192,7 +201,8 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
         ..Default::default()
     }))
     .map_err(|e| format!("no adapter: {e}"))?;
-    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
+    // (not GL: the adapter's own limits, which the GPU renderer needs when it adopts this device)
+    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { adapter.limits() };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("egui wgpu device"),
         required_limits: wgpu::Limits { max_texture_dimension_2d: 8192, ..base },
