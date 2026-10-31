@@ -323,6 +323,9 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// The file's own orientation (EXIF, or a raw's own record such as a CRW's ImageInfo), already
+    /// applied to `width` × `height`; `None` when it isn't known (a raw shown from its preview).
+    pub orientation: Option<lightcraft_geom::Orientation>,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

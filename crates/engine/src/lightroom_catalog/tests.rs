@@ -212,6 +212,7 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
                 file: Some(Box::new(crate::import::FileFacts {
                     meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
                     captured: None,
+                    orientation: None,
                 })),
             }],
             ..Default::default()
@@ -1290,4 +1291,84 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// Lightroom keeps one orientation per photo: the file's own, turned by any Rotate Left / Right
+/// made there. A file with no rotation of its own (an EOS D60 CRW: the camera has no orientation
+/// sensor) turned clockwise in Lightroom (`BC`) came in upright, because the import took the
+/// catalog's orientation for the file's. The photo now gets the turn as its own rotation; a file
+/// that is upright only through its own EXIF orientation is left alone; a virtual copy turns
+/// from its master's file; and the crop stays where Lightroom had it.
+#[test]
+fn a_rotation_made_in_lightroom_becomes_the_photos_own() {
+    let cases = [
+        // (the file's own orientation, the catalog's, the rotation the photo gets)
+        (Orientation::Normal, "BC", Orientation::Rotate90),
+        (Orientation::Normal, "DA", Orientation::Rotate270),
+        (Orientation::Rotate90, "BC", Orientation::Normal),
+        (Orientation::Rotate90, "AB", Orientation::Rotate270),
+        (Orientation::Rotate270, "CD", Orientation::Rotate270),
+    ];
+    for (file, code, want) in cases {
+        let mut data = sample();
+        data.photos[1].image.insert("orientation".into(), json!(code));
+        data.photos[1].settings = "s = { CropLeft = 0.1, CropRight = 0.6, CropTop = 0.2, CropBottom = 0.9 }".into();
+        data.photos[1].xmp = String::new();
+        // the copy is upright in Lightroom
+        data.photos[0].image.insert("orientation".into(), json!("AB"));
+        let mut s = crate::Session::new();
+        // as the file import before it adds the photo (at its size as the file shows it)
+        let (w, h) = if file.swaps_axes() { (10, 20) } else { (20, 10) };
+        let id = s.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::File { path: "/missing/test.ARW".into() }, "test.ARW", "ARW", w, h, "before");
+        s.commit("Import", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let files =
+            crate::import::ImportReport { imported: vec![id.0], file_orientations: [(id.0, file)].into_iter().collect(), ..Default::default() };
+        let undo0 = s.undo.len();
+        let r = apply_prepared(
+            &mut s,
+            data,
+            ApplyPrepared {
+                update_existing: false,
+                files,
+                index: &mut ImportIndex::default(),
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report;
+        let case = format!("file {file:?}, catalog {code}");
+        let master = s.catalog.photo(id).unwrap();
+        assert_eq!(master.develop.orientation, want, "{case}: {r}");
+        let g = master.develop.crop.geometry;
+        let crop = [g.rect.x0, g.rect.y0, g.rect.x1, g.rect.y1].map(|v| (v * 1e9).round() / 1e9);
+        let shown = lightroom_orientation(code).unwrap();
+        let (partial, _) = mapped_settings(
+            "s = { CropLeft = 0.1, CropRight = 0.6, CropTop = 0.2, CropBottom = 0.9 }",
+            crate::crs::Target::RawAbsolute,
+            1.5,
+            shown,
+            2.0,
+            Orientation::Normal,
+        )
+        .unwrap();
+        let rect = &partial["crop"]["geometry"]["rect"];
+        let want_crop = [&rect["x0"], &rect["y0"], &rect["x1"], &rect["y1"]].map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+        assert_eq!(crop, want_crop, "{case}: the crop is in the frame Lightroom shows");
+        let copy = s.catalog.photos().find(|p| p.copy_of == Some(id)).unwrap();
+        assert_eq!(in_photo_frame(file, copy.develop.orientation), Orientation::Normal, "{case}: the copy is upright, as in Lightroom");
+    }
+}
+
+/// Without the file's own orientation (an offline original, or a photo the library already had)
+/// nothing is turned: the catalog's orientation is taken for the file's, as before.
+#[test]
+fn without_the_files_orientation_nothing_is_turned() {
+    let mut data = sample();
+    data.photos[1].image.insert("orientation".into(), json!("BC"));
+    let mut s = crate::Session::new();
+    apply(&mut s, data, false).unwrap();
+    assert!(s.catalog.photos().all(|p| p.develop.orientation == Orientation::Normal));
 }

@@ -161,6 +161,8 @@ pub struct FileFacts {
     /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
     /// file's modification time.
     pub captured: Option<String>,
+    /// The file's own orientation, when known ([`crate::media::ProbeInfo::orientation`]).
+    pub orientation: Option<lightcraft_geom::Orientation>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -186,6 +188,10 @@ pub struct ImportReport {
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
+    /// The own orientation of each file this import added (by photo id), where it is known: a
+    /// Lightroom catalog import turns the photo from it to the orientation the catalog shows.
+    #[serde(skip)]
+    pub file_orientations: std::collections::HashMap<u64, lightcraft_geom::Orientation>,
 }
 
 /// A structured diagnostic from foreign XMP develop settings.

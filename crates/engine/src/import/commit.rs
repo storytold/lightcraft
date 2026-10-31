@@ -243,6 +243,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
                 placed.extend(pl);
                 let id = s.catalog.alloc_photo_id();
+                if let Some(o) = info.orientation {
+                    report.file_orientations.insert(id.0, o);
+                }
                 if let Some(h) = &info.content_hash {
                     new_hash.insert(h.clone(), id);
                 }

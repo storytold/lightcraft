@@ -729,23 +729,59 @@ fn mapped_settings(
 /// land in the displayed photo, naming the displayed corners A, B, C, D clockwise from the top left
 /// (`AB` upright, `BC` a quarter turn clockwise, `DA` a quarter turn counter-clockwise, `BA` mirrored).
 fn lightroom_orientation(code: &str) -> Option<Orientation> {
-    const ALL: [Orientation; 8] = [
-        Orientation::Normal,
-        Orientation::FlipH,
-        Orientation::Rotate180,
-        Orientation::FlipV,
-        Orientation::Transpose,
-        Orientation::Rotate90,
-        Orientation::Transverse,
-        Orientation::Rotate270,
-    ];
     let corner = |o: Orientation, x: f64, y: f64| match o.map(x, y, 1.0, 1.0) {
         (u, v) if u < 0.5 && v < 0.5 => 'A',
         (_, v) if v < 0.5 => 'B',
         (u, _) if u >= 0.5 => 'C',
         _ => 'D',
     };
-    ALL.into_iter().find(|&o| code.chars().eq([corner(o, 0.0, 0.0), corner(o, 1.0, 0.0)]))
+    ALL_ORIENTATIONS.into_iter().find(|&o| code.chars().eq([corner(o, 0.0, 0.0), corner(o, 1.0, 0.0)]))
+}
+
+const ALL_ORIENTATIONS: [Orientation; 8] = [
+    Orientation::Normal,
+    Orientation::FlipH,
+    Orientation::Rotate180,
+    Orientation::FlipV,
+    Orientation::Transpose,
+    Orientation::Rotate90,
+    Orientation::Transverse,
+    Orientation::Rotate270,
+];
+
+/// A master's file's own orientation, when this import read the file: a photo it added (`added`,
+/// the record the file import made), else a new record for a file with the same bytes as a library
+/// photo. `None` for a photo the library already had and an offline original.
+fn read_file_orientation(
+    files: &crate::import::ImportReport,
+    duplicates: &HashMap<String, (PhotoId, Option<&crate::import::FileFacts>)>,
+    added: Option<PhotoId>,
+    path: &str,
+) -> Option<Orientation> {
+    match added {
+        Some(id) => files.file_orientations.get(&id.0).copied(),
+        None => duplicates.get(&key(path)).and_then(|(_, file)| file.and_then(|f| f.orientation)),
+    }
+}
+
+/// A turn made in Lightroom (`code`, the catalog's orientation, against `file`, the file's own)
+/// becomes the photo's own rotation, so it shows as it did there. Returns the catalog's orientation
+/// and the rotation to put the catalog's masks through after it: none for a photo turned here (its
+/// frame is then the catalog's), else the rotation it already has in LightCraft.
+fn take_lightroom_turn(p: &mut Photo, file: Option<Orientation>, code: &str) -> (Orientation, Orientation) {
+    let shown = lightroom_orientation(code);
+    if let (Some(file), Some(shown)) = (file, shown) {
+        Arc::make_mut(&mut p.develop).orientation = user_turn(file, shown);
+        return (shown, Orientation::Normal);
+    }
+    (shown.unwrap_or_default(), p.develop.orientation)
+}
+
+/// The photo's own rotation in LightCraft (Rotate Left / Right, Flip) that shows a file whose own
+/// orientation is `file` as Lightroom shows it (`shown`, the catalog's orientation). Lightroom keeps
+/// a single orientation: the file's, turned by any Rotate Left / Right made there.
+fn user_turn(file: Orientation, shown: Orientation) -> Orientation {
+    ALL_ORIENTATIONS.into_iter().find(|&u| in_photo_frame(file, u) == shown).unwrap_or_default()
 }
 
 /// Lightroom's crop in LightCraft's frame. `crs` gives the crop's top-left (`CropLeft`, `CropTop`)
@@ -1045,6 +1081,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let refused: HashSet<_> = data.photos.iter().filter(|p| matches!(p.original, Original::Refused(_))).map(|p| p.source_id).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
+    // the own orientation of each master's file this import read, by catalog image id
+    let mut file_orientations: HashMap<i64, Orientation> = HashMap::new();
     for src in photos {
         let master = number(&src.image, "masterImage");
         if master == 0 && missing_sources.contains(&key(&src.path)) {
@@ -1148,6 +1186,15 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lightcraft_catalog::MediaKind::Video;
         }
+        // the file's own orientation when this import read the file (a virtual copy: its master's)
+        let file_orientation = match master {
+            0 => read_file_orientation(&files, &duplicates, existing_id.map(|_| p.id), &src.path),
+            _ => file_orientations.get(&master).copied(),
+        };
+        if let (0, Some(o)) = (master, file_orientation) {
+            file_orientations.insert(src.source_id, o);
+        }
+        let (orientation, mask_user) = take_lightroom_turn(&mut p, file_orientation, text(&src.image, "orientation"));
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
         let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
@@ -1155,14 +1202,13 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if keep_develop {
             preserved += 1;
         }
-        let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
         if !src.xmp.is_empty() {
             match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
                 Ok(mut sc) => {
                     if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
                         strip_xmp_sentinels(partial);
-                        catalog_xmp_masks(partial, in_photo_frame(orientation, p.develop.orientation), stored_aspect, &p);
+                        catalog_xmp_masks(partial, in_photo_frame(orientation, mask_user), stored_aspect, &p);
                     }
                     crate::sidecar::merge_into(&mut p, &sc, &now);
                 }
@@ -1189,7 +1235,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 p.width.max(1) as f64 / p.height.max(1) as f64,
                 orientation,
                 stored_aspect,
-                p.develop.orientation,
+                mask_user,
             ) {
                 Ok((partial, unknown)) => {
                     p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
