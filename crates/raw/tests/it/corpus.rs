@@ -1443,7 +1443,7 @@ fn corpus_kodak_dcs520c() {
 
 /// Fujifilm RAF lens tables (`0xf00b` distortion, `0xf010` vignetting) become a warp and a vignette gain for the
 /// cameras whose geometry was checked against the camera JPEG (docs/fuji-lens-corrections.md). Reads `LIGHTCRAFT_FUJI` (a folder
-/// of RAFs or of per-model folders, e.g. the CC0 pixls set) or the corpus' `raf-fuji-*` files; skips when absent.
+/// of RAFs or of per-model folders, e.g. the CC0 pixls set) or the corpus' `raf-fuji*` files; skips when absent.
 #[test]
 fn fuji_embedded_lens_tables_follow_the_validated_models() {
     fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -1462,7 +1462,7 @@ fn fuji_embedded_lens_tables_follow_the_validated_models() {
         Some(dir) => collect(Path::new(&dir), 0, &mut files),
         None => {
             collect(&corpus_root().join("raw"), 1, &mut files);
-            files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("raf-fuji-")));
+            files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("raf-fuji")));
         }
     }
     files.sort();

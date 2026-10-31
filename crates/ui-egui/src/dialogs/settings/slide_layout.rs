@@ -247,9 +247,14 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
     } else {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((DEBOUNCE - still).clamp(0.01, DEBOUNCE)));
     }
+    let say =
+        |ui: &mut egui::Ui| hint(ui, t, "The selected photo as a slide. Playback fills the screen; the aspect preview only changes this preview.");
     let Some(tex) = app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == id) else {
         p.rect_filled(rect, 0.0, Color32::from_rgb(s.backdrop_color[0], s.backdrop_color[1], s.backdrop_color[2]));
         p.text(rect.center(), Align2::CENTER_CENTER, crate::i18n::tr("Rendering…"), t.font(11.5), Color32::from_gray(200));
+        // (the hint too: the render lands on a frame nobody can name, and a line that came with it would push
+        // the pinned preview's block, and the page under it, down while a control is being clicked)
+        say(ui);
         return;
     };
     let drawn = crate::panels::detail::fit_texture_rect(rect, tex.size);
@@ -269,7 +274,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
             p.line_segment([pos2(drawn.left(), gy), pos2(drawn.right(), gy)], stroke);
         }
     }
-    hint(ui, t, "The selected photo as a slide. Playback fills the screen; the aspect preview only changes this preview.");
+    say(ui);
 }
 
 /// The preview showing title screen `title` (composed off the UI thread like the photo's slide,

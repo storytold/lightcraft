@@ -264,6 +264,13 @@ impl GridCache {
     }
 }
 
+/// The empty view's way in: the sentence, and Import Photos' shortcut as this platform writes it
+/// and as it is bound (the menu bar's own text), `None` when it is unbound.
+pub(crate) fn import_way_in(keymap: &crate::shortcuts::Keymap, mac: bool) -> (&'static str, Option<String>) {
+    let way = crate::i18n::tr("Import photos with File → Import Photos…, or drop them here");
+    (way, crate::shortcuts::shortcut_of(keymap, "file.addPhotos").map(|sc| crate::menubar::shortcut_text(sc, mac)))
+}
+
 /// Width / height of a photo's cell: its cropped, oriented shape.
 pub(crate) fn shape_of(cat: &Catalog, id: PhotoId) -> f32 {
     let p = cat.photo(id);
@@ -341,7 +348,10 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else if super::empty_library::shown(&app.session) {
             super::empty_library::show(app, ui, ui.max_rect());
         } else {
-            super::empty_message(ui, ui.max_rect(), "No photos", "Import photos with File → Import Photos… (Cmd+Shift+I), or drop them here");
+            let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+            // wrapped to the grid's width, the shortcut on its own line under it
+            let (way, key) = import_way_in(&app.ui.settings.keymap, mac);
+            super::empty_state(ui, ui.max_rect(), "No photos", way, &[], key.as_deref());
         }
         return;
     }
@@ -651,12 +661,35 @@ pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: 
     out
 }
 
+/// The ring round a selected photo, drawn outside `photo`. The active one is 3 pt in
+/// [`Tokens::ring_active`] with a 1 pt line in [`Tokens::ring_inner`] over its inner edge, against
+/// the photo (so the ring reads on a white photo and on a black one). The others are a single 1.5 pt line in
+/// [`Tokens::ring_selected`]; the two are told apart by weight, not by lightness alone.
+pub(crate) fn selection_ring(p: &egui::Painter, t: &Tokens, photo: Rect, state: lightcraft_engine::SelectionState) {
+    use lightcraft_engine::SelectionState;
+    match state {
+        SelectionState::Active => {
+            // both on the same rect, so no seam opens between them at a fractional scale
+            p.rect_stroke(photo, 0.0, Stroke::new(3.0, t.ring_active), StrokeKind::Outside);
+            p.rect_stroke(photo, 0.0, Stroke::new(1.0, t.ring_inner), StrokeKind::Outside);
+        }
+        SelectionState::Selected => {
+            p.rect_stroke(photo, 0.0, Stroke::new(1.5, t.ring_selected), StrokeKind::Outside);
+        }
+        SelectionState::NotSelected => {}
+    }
+}
+
 /// A date header: "Wednesday, 30 September 2026 · 12 photos". Clicking it selects the group
 /// (Cmd/Shift: adds to the selection).
 fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: &[PhotoId], r: Rect, pinned: bool) {
     let t = Tokens::get(ui.ctx());
     let resp = ui.interact(r, egui::Id::unique(("group-header", run.start, pinned)), Sense::click());
-    crate::widgets::announce(&resp, if run.key.is_empty() { crate::i18n::tr("Unknown date").to_string() } else { run.key.clone() });
+    // the header's name is the text it shows (date, then count), so Voice Control's "click Sunday" finds it
+    let label = crate::i18n::date_group_label(&run.key, false);
+    let n = run.count;
+    let count = crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n);
+    crate::widgets::announce(&resp, format!("{label} {count}"));
     if !pinned {
         register(ui, format!("group:{}", if run.key.is_empty() { "unknown" } else { &run.key }), r);
     }
@@ -665,18 +698,11 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
         p.rect_filled(r, 0.0, t.canvas);
         p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, t.divider));
     }
-    let g = p.layout_no_wrap(crate::i18n::date_group_label(&run.key, false), t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
+    let g = p.layout_no_wrap(label, t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
     let x = r.left() + 8.0;
     let gw = g.size().x;
     p.galley(pos2(x, r.center().y - g.size().y / 2.0), g, t.text);
-    let n = run.count;
-    p.text(
-        pos2(x + gw + 10.0, r.center().y),
-        Align2::LEFT_CENTER,
-        crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n),
-        t.font(12.5),
-        t.text_dim,
-    );
+    p.text(pos2(x + gw + 10.0, r.center().y), Align2::LEFT_CENTER, count, t.font(12.5), t.text_dim);
     if resp.clicked() {
         let group: Vec<u64> = ids[run.start..(run.start + run.count).min(ids.len())].iter().map(|p| p.0).collect();
         let m = ui.input(|i| i.modifiers);
@@ -772,7 +798,6 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let selected = state != lightcraft_engine::SelectionState::NotSelected;
     let spoken = cell_description(app, &photo);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &spoken));
-    let active = state == lightcraft_engine::SelectionState::Active;
     let p = ui.painter();
     let img_rect = if square {
         let base = if selected { t.cell_selected } else { t.cell };
@@ -781,7 +806,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     } else {
         r
     };
-    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, selected, active, onscreen, ppp });
+    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
     paint_cell_badges(app, p, &t, &photo, img_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
@@ -797,7 +822,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     cell_interaction(app, ui, &resp, id, &photo);
 }
 
-fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
+pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
     let mut spoken = photo.file_name.clone();
     if photo.rating > 0 {
         spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
@@ -814,7 +839,7 @@ fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> S
 }
 
 fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) {
-    let ThumbFlags { square, selected, active, onscreen, ppp } = flags;
+    let ThumbFlags { square, state, onscreen, ppp } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
     if let Some(tex) = app.renderer.thumb(id) {
@@ -822,22 +847,12 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         // Preserve the decoded preview's ratio when it differs from the catalog dimensions.
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
         p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        if active {
-            p.rect_stroke(fit.expand(if square { 2.0 } else { 0.0 }), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
-        } else if selected {
-            p.rect_stroke(fit, 0.0, Stroke::new(2.0, Color32::from_gray(170)), StrokeKind::Outside);
-        }
+        selection_ring(p, t, fit, state);
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, t.skeleton);
         // not drawn yet (or unreadable): the selection is still visible
-        if active {
-            p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
-        } else if selected {
-            // a light theme's skeleton is itself mid-grey: the ring takes the dim text colour
-            let ring = if t.skeleton.r() > 0x80 { t.text_dim } else { Color32::from_gray(170) };
-            p.rect_stroke(ph, 0.0, Stroke::new(2.0, ring), StrokeKind::Outside);
-        }
+        selection_ring(p, t, ph, state);
         if app.renderer.failure(Slot::Thumb(id)).is_some() {
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
@@ -971,20 +986,16 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         let _ = app.run("library.select", json!({"ids": [id.0]}));
         let _ = app.run("view.detail", json!({}));
     }
-    // drag the selection (this photo joins it, or replaces it when it wasn't selected)
-    if resp.drag_started() {
-        if !app.session.selection.contains(id) {
-            let _ = app.run("library.select", json!({"ids": [id.0]}));
-        }
-        app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
+    // only the primary button drags, so a right-button drag leaves the selection alone
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        begin_photo_drag(app, id);
     }
     crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
 }
 
 struct ThumbFlags {
     square: bool,
-    selected: bool,
-    active: bool,
+    state: lightcraft_engine::SelectionState,
     onscreen: bool,
     ppp: f32,
 }
@@ -1108,6 +1119,15 @@ fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
     }
 }
 
+/// A drag of photo `id` began (grid cell or filmstrip cell): the photos it carries are the selection,
+/// which this photo joins, or replaces when it wasn't part of it.
+pub(crate) fn begin_photo_drag(app: &mut LightcraftApp, id: PhotoId) {
+    if !app.session.selection.contains(id) {
+        let _ = app.run("library.select", json!({"ids": [id.0]}));
+    }
+    app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
+}
+
 /// While photos are dragged: a badge at the pointer; the drag ends when the button is up
 /// (drop targets act on the release frame, before this runs).
 /// What the label following dragged photos says this frame instead of how many there are: where a
@@ -1119,7 +1139,7 @@ pub fn drag_hint(ctx: &egui::Context, text: String) {
 
 pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(ids) = &app.ui.dragging_photos else { return };
-    let (released, down, pos) = ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos()));
+    let (released, down, pos) = ctx.input(|i| (i.pointer.primary_released(), i.pointer.primary_down(), i.pointer.latest_pos()));
     if released || !down {
         app.ui.dragging_photos = None;
         return;
@@ -1336,6 +1356,16 @@ fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     });
     crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    // the keyword shortcut (Set Keyword Shortcut…), given to the selected photos
+    let keywords = app.session.catalog.keyword_shortcut();
+    if !keywords.is_empty() {
+        let names = keywords.iter().map(|k| k.replace('|', " › ")).collect::<Vec<_>>().join(", ");
+        let add = ui.button(crate::i18n::tr_format!("Add Keyword “{keywords}”", keywords = names));
+        register(ui, "button:contextAddKeywordShortcut", add.rect);
+        if add.clicked() {
+            let _ = app.run("photo.setMeta", json!({"addKeywords": keywords}));
+        }
+    }
 }
 
 fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -1491,7 +1521,12 @@ fn context_menu_locate_and_export(app: &mut LightcraftApp, ui: &mut egui::Ui, id
     }
     crate::widgets::menu_button(ui, crate::i18n::tr("Export with Preset"), |ui| {
         for (p, _) in app.session.all_export_presets() {
-            if ui.button(&p.name).clicked() {
+            let r = ui.button(&p.name);
+            let r = match crate::dialogs::preset_lzw_note(&p.params) {
+                Some(note) => r.on_hover_text(crate::i18n::tr(note)),
+                None => r,
+            };
+            if r.clicked() {
                 match app.run("app.export", json!({"preset": p.name, "background": true})) {
                     Ok(r) if r.get("background").is_some() => {}
                     Ok(r) => {
