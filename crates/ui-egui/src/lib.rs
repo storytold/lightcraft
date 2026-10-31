@@ -126,13 +126,37 @@ pub enum QuitPrompt {
     Unsaved(String),
     /// Tasks that quitting would cut short are running: an import, an export… (issue #345).
     Tasks(String),
+    /// The library asks for a backup when LightCraft quits (`library.backupPreferences`,
+    /// `onClose: ask`): back it up first, skip it, or don't quit.
+    BackUp(String),
+    /// The library is being backed up before LightCraft quits, which it does when the backup is
+    /// made.
+    BackingUp(String),
+    /// The backup before quitting could not be made: quit anyway, or don't.
+    BackupFailed(String),
+}
+
+/// The backup a library has when LightCraft quits, in the quit that is under way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuitBackup {
+    /// Not decided yet (or the quit was called off: the next one starts here again).
+    #[default]
+    Undecided,
+    /// It is being made; LightCraft quits when it is.
+    Running,
+    /// Made, or skipped: nothing more is asked about it in this quit.
+    Settled,
 }
 
 impl QuitPrompt {
     /// The prompt's message.
     pub fn text(&self) -> &str {
         match self {
-            QuitPrompt::Unsaved(text) | QuitPrompt::Tasks(text) => text,
+            QuitPrompt::Unsaved(text)
+            | QuitPrompt::Tasks(text)
+            | QuitPrompt::BackUp(text)
+            | QuitPrompt::BackingUp(text)
+            | QuitPrompt::BackupFailed(text) => text,
         }
     }
 }
@@ -164,6 +188,11 @@ pub struct LightcraftApp {
     pub text_focus: bool,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
+    /// The library is backed up by itself when its schedule says a backup is due
+    /// (`library.backupPreferences`, `every`). Only in the app a person has open: a headless
+    /// session (a snapshot, an agent's) may end moments later and cut the backup off, so
+    /// [`headless::Headless`] turns this off.
+    pub backs_up_by_itself: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
     pub(crate) updates_rt: updates_ui::Runtime,
@@ -173,6 +202,9 @@ pub struct LightcraftApp {
     pub(crate) notice_input: panels::notices::PromptInput,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// How far the backup the library has when LightCraft quits has got in this quit (see
+    /// `panels::notices`).
+    pub quit_backup: QuitBackup,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).
