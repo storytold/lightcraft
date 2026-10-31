@@ -9,14 +9,17 @@ use crate::LightcraftApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
-/// The Keywording box's view: the keywords (chips), them with the keywords containing them, or
-/// what exported files will carry.
+/// The Keywording box's view: the keywords as text (Enter Keywords), the keywords (chips), them
+/// with the keywords containing them, or what exported files will carry.
 pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::KeywordingView as V;
     ui.horizontal_wrapped(|ui| {
-        for (view, id, label) in
-            [(V::Keywords, "keywords", "Keywords"), (V::Containing, "containing", "& Containing"), (V::WillExport, "willExport", "Will Export")]
-        {
+        for (view, id, label) in [
+            (V::Enter, "enter", "Enter Keywords"),
+            (V::Keywords, "keywords", "Keywords"),
+            (V::Containing, "containing", "& Containing"),
+            (V::WillExport, "willExport", "Will Export"),
+        ] {
             let r = ui.selectable_label(app.ui.keywording_view == view, crate::i18n::tr(label));
             register(ui, format!("keywordView:{id}"), r.rect);
             if r.clicked() {
@@ -708,6 +711,197 @@ pub(crate) fn chips(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
     have.into_values().map(|(k, n)| Chip { path: catalog.listed_path(&k).map(str::to_string).unwrap_or(k), have: n, of: photos.len() }).collect()
 }
 
+/// The Enter Keywords text of the selection's keywords `chips`: each keyword's path, with commas
+/// between them and an asterisk after a keyword only some of the selected photos have. A keyword
+/// whose name holds a comma, a new line or a double quote is written in double quotes (before its
+/// asterisk), each double quote inside written twice, so that it reads as one name. A keyword every
+/// photo has whose name ends in an asterisk is also written in double quotes, so that it reads
+/// differently from a partial keyword marked with the asterisk.
+pub(crate) fn entered_text(chips: &[Chip]) -> String {
+    chips
+        .iter()
+        .map(|c| {
+            let in_quotes = || format!("\"{}\"", c.path.replace('"', "\"\""));
+            let held = c.path.contains([',', '\n', '"']);
+            if !c.on_all() && held {
+                format!("{}*", in_quotes())
+            } else if !c.on_all() {
+                format!("{}*", c.path)
+            } else if held || c.path.ends_with('*') {
+                in_quotes()
+            } else {
+                c.path.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The name inside `token` when it is in double quotes, each double quote inside it written twice
+/// (a single one inside means it is not).
+fn quoted(token: &str) -> Option<String> {
+    let inside = token.strip_prefix('"')?.strip_suffix('"')?;
+    let mut name = String::with_capacity(inside.len());
+    let mut chars = inside.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '"' && chars.next() != Some('"') {
+            return None;
+        }
+        name.push(ch);
+    }
+    Some(name)
+}
+
+/// What an edit of the Enter Keywords text gives to and takes off the selected photos.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Entered {
+    /// Keywords for every selected photo.
+    pub add: Vec<String>,
+    /// Keywords taken off every selected photo.
+    pub remove: Vec<String>,
+}
+
+impl Entered {
+    /// The edit changes no photo.
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+/// The names in the Enter Keywords `text`, trimmed: the text split at commas and new lines, except
+/// where a name opened with a double quote closes with one (the next piece holding a double quote
+/// not written twice ends with it, or with it and an asterisk), only commas lie between or the
+/// name spells a keyword of `start` the text has not named yet, and each double quote inside is
+/// written twice; or where pieces joined by their separators spell a keyword of `start` whose name
+/// holds a comma or a new line (with or without its asterisk or its quotes) that the text has not
+/// named yet, unless each of those pieces is a keyword of `start` by itself. Either stays one name.
+fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
+    use lightcraft_catalog::keywords::{clean, same};
+    let is_separator = |ch: char| ch == ',' || ch == '\n';
+    let spells = |s: &str, c: &Chip| {
+        let marked = s.strip_suffix('*');
+        let inside = [quoted(s), marked.and_then(quoted)];
+        [Some(s), marked].into_iter().flatten().chain(inside.iter().flatten().map(String::as_str)).any(|n| same(&clean(n), &c.path))
+    };
+    // a piece holding a double quote that is not one written twice
+    let unpaired = |s: &str| s.split(|ch| ch != '"').any(|run| run.len() % 2 == 1);
+    // a piece that closes a name in double quotes: it ends with one (before an asterisk or not)
+    // that is not one written twice
+    let closes = |s: &str| s.strip_suffix('*').unwrap_or(s).chars().rev().take_while(|&ch| ch == '"').count() % 2 == 1;
+    // the keywords of `start` the text has named so far
+    let mut named = vec![false; start.len()];
+    let unnamed = |s: &str, named: &[bool]| start.iter().zip(named).position(|(c, n)| !n && spells(s, c));
+    // each piece's byte range in the text
+    let mut pieces: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut from = 0;
+    for piece in text.split(is_separator) {
+        pieces.push(from..from + piece.len());
+        from += piece.len() + 1;
+    }
+    let piece = |p: &std::ops::Range<usize>| text.get(p.clone()).unwrap_or_default().trim();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while let Some(first) = pieces.get(i) {
+        // a name in double quotes, up to the piece that closes it (an unclosed one is plain pieces)
+        let opened = piece(first).strip_prefix('"').is_some_and(|rest| !closes(rest));
+        let quoted_run = opened
+            .then(|| {
+                pieces
+                    .iter()
+                    .enumerate()
+                    .skip(i + 1)
+                    .find(|(_, p)| unpaired(piece(p)))
+                    .filter(|(_, p)| closes(piece(p)))
+                    .and_then(|(j, p)| Some((j - i, text.get(first.start..p.end)?.trim())))
+                    .filter(|&(_, s)| quoted(s.strip_suffix('*').unwrap_or(s)).is_some())
+                    .filter(|&(_, s)| !s.contains('\n') || unnamed(s, &named).is_some())
+            })
+            .flatten();
+        // else the most pieces that spell a keyword with separators not named yet, unless each
+        // piece is a keyword by itself
+        let one_each =
+            |from: usize, to: usize| pieces.get(from..=to).is_some_and(|run| run.iter().all(|p| start.iter().any(|c| spells(piece(p), c))));
+        let joined = quoted_run.or_else(|| {
+            start
+                .iter()
+                .map(|c| c.path.matches(is_separator).count())
+                .filter(|&separators| separators > 0)
+                .filter_map(|separators| {
+                    let last = pieces.get(i + separators)?;
+                    let s = text.get(first.start..last.end)?.trim();
+                    unnamed(s, &named).filter(|_| !one_each(i, i + separators)).map(|_| (separators, s))
+                })
+                .max_by_key(|&(separators, _)| separators)
+        });
+        let (separators, name) = joined.unwrap_or((0, text.get(first.clone()).unwrap_or_default().trim()));
+        if let Some(n) = unnamed(name, &named) {
+            named[n] = true;
+        }
+        if !name.is_empty() {
+            names.push(name);
+        }
+        i += separators + 1;
+    }
+    names
+}
+
+/// Reads the Enter Keywords `text` against `start`, the selection's keywords when the edit began.
+/// Keywords are separated by commas or new lines; a name in double quotes holding commas (or new
+/// lines, when it is a keyword of `start`), and a keyword of `start` whose name holds a comma
+/// written without its quotes, are each read as one name (see `entered_names`). A keyword of
+/// `start` left out of the text is taken off every selected photo. A name without an asterisk goes
+/// to every selected photo (a keyword of `start` keeps its spelling, and a new name goes where
+/// `Catalog::typed_keyword` puts it). A keyword only some photos have, still marked with its
+/// asterisk, stays on those photos only, the name in double quotes before the asterisk included. A
+/// name in double quotes is read as written, an asterisk at its end included, and a double quote
+/// written twice inside it is one double quote. A keyword every photo has whose own name ends in an
+/// asterisk is also kept when written without its quotes, unless a keyword only some photos have
+/// reads the same. An asterisk after any other name is refused: the error is the name as typed.
+pub(crate) fn entered(catalog: &Catalog, start: &[Chip], text: &str) -> Result<Entered, String> {
+    use lightcraft_catalog::keywords::{clean, same};
+    let mut kept: Vec<String> = Vec::new();
+    let mut add: Vec<String> = Vec::new();
+    for token in entered_names(start, text) {
+        let literal = quoted(token);
+        if let Some(marked) = token.strip_suffix('*').filter(|_| literal.is_none()) {
+            let (whole, name) = (clean(token), clean(marked));
+            // the name inside the quotes of a marked name in double quotes
+            let inner = quoted(marked).map(|n| clean(&n));
+            // a partial keyword marked (as written, else inside its quotes), or else a keyword on
+            // every photo named with the asterisk; one not named yet first
+            let on_all = |c: &Chip| c.on_all() && same(&c.path, &whole);
+            let partial = |c: &Chip, name: &str| !c.on_all() && same(&c.path, name);
+            let either = |c: &Chip| partial(c, &name) || inner.as_deref().is_some_and(|n| partial(c, n));
+            let fresh = |c: &Chip| !kept.iter().any(|k| same(k, &c.path));
+            let found = start
+                .iter()
+                .find(|c| fresh(c) && partial(c, &name))
+                .or_else(|| inner.as_deref().and_then(|n| start.iter().find(|c| fresh(c) && partial(c, n))))
+                .or_else(|| start.iter().find(|c| fresh(c) && on_all(c)))
+                .or_else(|| start.iter().find(|c| either(c) || on_all(c)))
+                .ok_or_else(|| token.to_string())?;
+            kept.push(found.path.clone());
+            continue;
+        }
+        let written = literal.as_deref().unwrap_or(token);
+        let typed = clean(written);
+        let (name, on_all) = match start.iter().find(|c| same(&c.path, &typed)) {
+            Some(c) => (c.path.clone(), c.on_all()),
+            None if typed.ends_with('*') => return Err(token.to_string()),
+            None => (catalog.typed_keyword(written), false),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        if !on_all && !add.iter().any(|a| same(a, &name)) {
+            add.push(name.clone());
+        }
+        kept.push(name);
+    }
+    let remove = start.iter().filter(|c| !kept.iter().any(|k| same(k, &c.path))).map(|c| c.path.clone()).collect();
+    Ok(Entered { add, remove })
+}
+
 #[cfg(test)]
 mod tests {
     use lightcraft_catalog::{Op, Photo, Source};
@@ -1006,5 +1200,191 @@ mod tests {
     fn containing_keywords_are_every_level() {
         let (c, ids) = library(&[&["travel|Italy|Rome", "travel|Spain"], &["travel|Italy"]]);
         assert_eq!(shown(&with_containing(&c, &ids)), [("Italy", 2, 2), ("Rome", 1, 2), ("Spain", 1, 2), ("travel", 2, 2)]);
+    }
+
+    fn edit(add: &[&str], remove: &[&str]) -> Entered {
+        Entered { add: add.iter().map(|s| s.to_string()).collect(), remove: remove.iter().map(|s| s.to_string()).collect() }
+    }
+
+    /// The Enter Keywords text is the selection's keywords with their paths, commas between them, and
+    /// an asterisk after one only some of the selected photos have; left as it is, it changes nothing.
+    #[test]
+    fn the_entered_text_is_the_selections_keywords() {
+        let (c, ids) = library(&[&["Places|Lisbon", "beach"], &["beach"]]);
+        let start = chips(&c, &ids);
+        let text = entered_text(&start);
+        assert_eq!(text, "beach, Places|Lisbon*");
+        assert_eq!(entered(&c, &start, &text), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, " beach ,\nPlaces | Lisbon * "), Ok(Entered::default()), "spaces and new lines");
+        assert_eq!(entered(&c, &start, "BEACH, places|lisbon*"), Ok(Entered::default()), "another case is the same keyword");
+        assert_eq!(entered_text(&[]), "");
+    }
+
+    /// A keyword left out of the text is taken off every selected photo; a name typed goes to every
+    /// one of them; a partial keyword without its asterisk goes to all of them.
+    #[test]
+    fn an_edit_adds_and_removes_for_every_selected_photo() {
+        let (c, ids) = library(&[&["Places|Lisbon", "beach"], &["beach", "sea"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, "Places|Lisbon*, sea*"), Ok(edit(&[], &["beach"])));
+        assert_eq!(entered(&c, &start, "beach, Places|Lisbon*, sea*, harbour, Places|Porto"), Ok(edit(&["harbour", "Places|Porto"], &[])));
+        assert_eq!(entered(&c, &start, "beach, Places|Lisbon, sea*"), Ok(edit(&["Places|Lisbon"], &[])), "made common");
+        assert_eq!(entered(&c, &start, "beach, harbour, HARBOUR"), Ok(edit(&["harbour"], &["Places|Lisbon", "sea"])), "named once");
+        assert_eq!(entered(&c, &start, ""), Ok(edit(&[], &["beach", "Places|Lisbon", "sea"])), "an empty box clears them");
+        assert_eq!(entered(&c, &start, " , | ,"), Ok(edit(&[], &["beach", "Places|Lisbon", "sea"])), "nothing but separators");
+    }
+
+    /// Containing keywords and synonyms are not part of the text: they stay derived, and an edit
+    /// never assigns them.
+    #[test]
+    fn containing_keywords_and_synonyms_stay_out_of_the_text() {
+        use lightcraft_catalog::keywords::KeywordInfo;
+        let (mut c, ids) = library(&[&["Places|Lisbon"]]);
+        c.apply(Op::SetKeyword {
+            path: "Places|Lisbon".into(),
+            info: Some(KeywordInfo { synonyms: vec!["Lisboa".into()], ..KeywordInfo::default() }),
+        })
+        .unwrap();
+        let start = chips(&c, &ids);
+        assert_eq!(entered_text(&start), "Places|Lisbon");
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()));
+    }
+
+    /// An asterisk marks a keyword only some photos have; after any other name it is refused, and the
+    /// error names what was typed.
+    #[test]
+    fn an_asterisk_after_another_name_is_refused() {
+        let (c, ids) = library(&[&["beach", "sea"], &["beach"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, "beach*, sea*"), Err("beach*".to_string()), "every photo has beach");
+        assert_eq!(entered(&c, &start, "beach, sea*, harbour*"), Err("harbour*".to_string()), "a new name");
+        assert_eq!(entered(&c, &start, "beach, *"), Err("*".to_string()));
+    }
+
+    /// A keyword whose name holds a comma is one name in the text: left as it is, it changes
+    /// nothing, and it can be marked, made common or taken off like any other.
+    #[test]
+    fn a_keyword_with_a_comma_is_one_name() {
+        let (c, ids) = library(&[&["Places|Paris, France", "beach", "Lyon, Rhône, France"], &["beach"]]);
+        let start = chips(&c, &ids);
+        let text = entered_text(&start);
+        assert_eq!(text, "beach, \"Lyon, Rhône, France\"*, \"Places|Paris, France\"*");
+        assert_eq!(entered(&c, &start, &text), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "beach, \"Places|Paris, France\""), Ok(edit(&["Places|Paris, France"], &["Lyon, Rhône, France"])));
+        assert_eq!(entered(&c, &start, "beach,\nPlaces | Paris, France * , Lyon, Rhône, France*"), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "beach, Places|Paris, France"), Ok(edit(&["Places|Paris, France"], &["Lyon, Rhône, France"])));
+        assert_eq!(entered(&c, &start, "Paris, France"), Ok(edit(&["Paris", "France"], &["beach", "Lyon, Rhône, France", "Places|Paris, France"])));
+        let (c, ids) = library(&[&["Paris, France"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()), "on every photo");
+        // beside keywords named by its pieces, a name with a comma is the quoted one only
+        let (c, ids) = library(&[&["a", "b", "a, b"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered_text(&start), "a, \"a, b\", b");
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "b, \"a, b\", a"), Ok(Entered::default()), "reordered");
+        assert_eq!(entered(&c, &start, "a, b"), Ok(edit(&[], &["a, b"])), "its entry deleted");
+        assert_eq!(entered(&c, &start, "a, b, a, b"), Ok(edit(&[], &["a, b"])));
+        assert_eq!(entered(&c, &start, "\"a, b\", a"), Ok(edit(&[], &["b"])));
+        // the same when it is a partial keyword
+        let (c, ids) = library(&[&["a", "b", "a, b"], &["a", "b"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered_text(&start), "a, \"a, b\"*, b");
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "a, b"), Ok(edit(&[], &["a, b"])), "its entry deleted");
+        assert_eq!(entered(&c, &start, "a, b, \"a, b\""), Ok(edit(&["a, b"], &[])), "made common");
+    }
+
+    /// A name in double quotes holding a comma is read as one name, whether the selection, the
+    /// library or neither has it; an unclosed quote leaves the pieces apart.
+    #[test]
+    fn a_quoted_name_with_a_comma_is_one_name() {
+        let (c, ids) = library(&[&["beach"], &["beach"], &["Places|Rome, Italy"]]);
+        let start = chips(&c, &ids[..2]);
+        assert_eq!(entered(&c, &start, "beach, \"Paris, France\""), Ok(edit(&["Paris, France"], &[])), "a new name");
+        assert_eq!(entered(&c, &start, " \"Places|Rome, Italy\" ,beach"), Ok(edit(&["Places|Rome, Italy"], &[])), "in the library");
+        assert_eq!(entered(&c, &start, "\"a, b, c\""), Ok(edit(&["a, b, c"], &["beach"])));
+        assert_eq!(entered(&c, &start, "beach, \"Paris, France"), Ok(edit(&["\"Paris", "France"], &[])), "unclosed");
+        assert_eq!(entered(&c, &start, "\"Paris\nFrance\", beach"), Ok(edit(&["\"Paris", "France\""], &[])), "not across a new line");
+    }
+
+    /// A keyword whose name holds a new line is read as one name, as one holding a comma is.
+    #[test]
+    fn a_keyword_with_a_line_break_is_one_name() {
+        let (c, ids) = library(&[&["a\nb", "beach", "x,\ny"], &["beach"]]);
+        let start = chips(&c, &ids);
+        let text = entered_text(&start);
+        assert_eq!(text, "\"a\nb\"*, beach, \"x,\ny\"*");
+        assert_eq!(entered(&c, &start, &text), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "beach, a\nb"), Ok(edit(&["a\nb"], &["x,\ny"])));
+        assert_eq!(entered(&c, &start, "beach\na"), Ok(edit(&["a"], &["a\nb", "x,\ny"])));
+        let (c, ids) = library(&[&["a\nb"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()), "on every photo");
+    }
+
+    /// A keyword on every photo whose own name ends in an asterisk is written in quotes and kept when
+    /// the text is left as it is; one only some photos have is marked with a second asterisk.
+    #[test]
+    fn a_keyword_ending_in_an_asterisk_is_kept() {
+        let (c, ids) = library(&[&["star*", "beach", "sea*"], &["star*", "beach"]]);
+        let start = chips(&c, &ids);
+        let text = entered_text(&start);
+        assert_eq!(text, "beach, sea**, \"star*\"");
+        assert_eq!(entered(&c, &start, &text), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "beach, star*"), Ok(edit(&[], &["sea*"])), "without its quotes");
+        assert_eq!(entered(&c, &start, "beach, \"sea*\", \"star*\""), Ok(edit(&["sea*"], &[])), "a quoted partial goes to all");
+        assert_eq!(entered(&c, &start, "beach, \"harbour*\""), Err("\"harbour*\"".to_string()), "a new name with an asterisk");
+        // a partial `star` beside a common `star*`: each reads differently, and either can go
+        let (c, ids) = library(&[&["star*", "star"], &["star*"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered_text(&start), "star*, \"star*\"");
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "\"star*\""), Ok(edit(&[], &["star"])));
+        assert_eq!(entered(&c, &start, "star*"), Ok(edit(&[], &["star*"])));
+        // a keyword every photo has that is itself in quotes keeps them
+        let (c, ids) = library(&[&["\"quoted\""]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered_text(&start), "\"\"\"quoted\"\"\"");
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()));
+    }
+
+    /// A keyword whose name holds a double quote is written in double quotes with that one written
+    /// twice, so that the text left as it is changes nothing, beside keywords spelled like its pieces
+    /// too.
+    #[test]
+    fn a_keyword_with_a_double_quote_reads_back() {
+        let sets: [&[&str]; 6] = [
+            &["a", "b\"", "a\", b"],
+            &["a", "b\"", "a\"", "b"],
+            &["a\", b"],
+            &["\"b", "c\""],
+            &["\"quoted\"", "say \"hi\", there", "\"a, b"],
+            &["x", "a\"\"b"],
+        ];
+        for set in sets {
+            let (c, ids) = library(&[set]);
+            let start = chips(&c, &ids);
+            assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()), "{set:?} on every photo: {}", entered_text(&start));
+            // each one only some photos have
+            let (c, ids) = library(&[set, &["x"]]);
+            let start = chips(&c, &ids);
+            assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()), "{set:?} partial: {}", entered_text(&start));
+        }
+        let (c, ids) = library(&[&["a", "b\"", "a\", b"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered_text(&start), "a, \"a\"\", b\", \"b\"\"\"");
+        assert_eq!(entered(&c, &start, "a, \"b\"\"\""), Ok(edit(&[], &["a\", b"])), "its entry deleted");
+        assert_eq!(entered(&c, &start, "a, b\""), Ok(edit(&[], &["a\", b"])), "written without its quotes");
+    }
+
+    /// A new name goes inside the default parent, as one typed in the Add keyword box does.
+    #[test]
+    fn a_new_name_goes_inside_the_default_parent() {
+        use lightcraft_catalog::keywords::KeywordInfo;
+        let (mut c, ids) = library(&[&["beach"]]);
+        c.apply(Op::SetKeyword { path: "Inbox".into(), info: Some(KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() }) }).unwrap();
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, "beach, harbour"), Ok(edit(&["Inbox|harbour"], &[])));
     }
 }

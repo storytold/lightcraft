@@ -233,6 +233,7 @@
   "Added “{keyword}” to {n} photo{}": "«{keyword}» добавлено к фото ({n}){:.0}",
   "Add Keyword “{keywords}”": "Добавить ключевое слово «{keywords}»",
   "On {have} of {of} selected photos": "На {have} из {of} выбранных фото",
+  "A keyword name can't end with an asterisk: “{name}”": "Имя ключевого слова не может заканчиваться звёздочкой: «{name}»",
   "Remove “{name}”": "Убрать «{name}»",
   "There is a keyword set “{name}” already": "Набор ключевых слов «{name}» уже есть",
   "Added {n} keyword{}": "Добавлено ключевых слов: {n}{:.0}",
