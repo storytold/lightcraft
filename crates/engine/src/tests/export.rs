@@ -1203,3 +1203,36 @@ fn same_folder_as_original_refuses_photos_without_a_folder() {
     assert!(e.contains("folder is missing") && e.contains(&gone), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #2571: a subfolder may nest (`a/b`) but never leads out of the export folder. The
+/// params are refused up front, and a saved preset (read without those checks) is refused per
+/// photo before anything is written.
+#[test]
+fn a_subfolder_can_not_lead_out_of_the_export_folder() {
+    use crate::export::Destination;
+    let err = |sub: &str| ExportOptions::from_params(&json!({"subfolder": sub})).err().map(|e| e.to_string()).unwrap_or_default();
+    for sub in ["..", "../out", "a/../../b", "a\\..\\b", " .. /x"] {
+        assert!(err(sub).contains("`subfolder` can't contain `..`"), "{sub}: {}", err(sub));
+    }
+    for sub in ["/etc", "\\\\server\\share", "C:\\Users", "c:/x"] {
+        assert!(err(sub).contains("`subfolder` is an absolute path"), "{sub}: {}", err(sub));
+    }
+    for sub in ["", "Exports", "a/b", "..x", "x..", "Trip: day 1"] {
+        assert_eq!(err(sub), "", "{sub}");
+    }
+
+    let o = ExportOptions { subfolder: "../escaped".into(), ..Default::default() };
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().take(1).map(|p| p.id).collect();
+    let mut written = Vec::new();
+    let err = {
+        let mut write = |p: &str, _: &[u8]| -> Result<(), String> {
+            written.push(p.to_string());
+            Ok(())
+        };
+        crate::export::export_batch(&mut s, &ids, &o, &to, &mut write, &|_| false).unwrap_err()
+    };
+    assert!(err.contains("the subfolder `../escaped` can't contain `..`"), "{err}");
+    assert!(written.is_empty(), "{written:?}");
+}
