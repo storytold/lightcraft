@@ -128,7 +128,9 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     std::thread::Builder::new().name("contact-sheet".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
+    // a batch row like the image exports: the time left, and a summary when it ends; the export says how it went itself
+    let row = app.session.activity.start_batch("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
+    row.reports_itself();
     row.progress(0, total as u64);
     app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
@@ -181,7 +183,9 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     std::thread::Builder::new().name("print".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
+    // a batch row like the image exports: the time left, and a summary when it ends; the export says how it went itself
+    let row = app.session.activity.start_batch("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
+    row.reports_itself();
     row.progress(0, total as u64);
     app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
