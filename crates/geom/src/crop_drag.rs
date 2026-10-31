@@ -114,7 +114,10 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
             };
             // straightened, go to the nearest place that fits, so the frame slides along tilted edges (#2299)
             let nearest = if base.angle != 0.0 {
-                let from = |r: Rect| nearest_move(r, base.angle, w, h, Vec2::new(dx, dy)).map(|v| r.translate(v)).filter(|r| feasible(*r));
+                let from = |r: Rect| {
+                    let corners = r.corners().map(|c| (c, Vec2::new(1.0, 1.0)));
+                    nearest_offset(&corners, &[], base.angle, w, h, Vec2::new(dx, dy)).map(|v| r.translate(v)).filter(|r| feasible(*r))
+                };
                 // a frame at the tolerance's edge on opposite sides moves only once it is inside it
                 from(sr).or_else(|| shrunk_inside(sr, base.angle, w, h).and_then(from))
             } else {
@@ -138,8 +141,14 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                 let at = |t: f64| lerp_rect(cur, target, t);
                 at(bisect(0.0, 1.0, |t| feasible(at(t))))
             };
-            let cur = grow(sr, dx, 0.0);
-            grow(cur, 0.0, dy)
+            // straightened, a free corner goes to the nearest place that fits, growing both sides (#2308)
+            let corner = (mx0 || mx1) && (my0 || my1);
+            let nearest =
+                if base.angle != 0.0 && corner { nearest_corner(sr, mx0, my0, base.angle, (w, h), min_side, Vec2::new(dx, dy)) } else { None };
+            match nearest.filter(|r| feasible(*r)) {
+                Some(r) => r,
+                None => grow(grow(sr, dx, 0.0), 0.0, dy),
+            }
         }
         (hd, Some(a)) => {
             let (mx0, _, my0, _) = sides(hd);
@@ -212,20 +221,22 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
     if [rect.x0, rect.y0, rect.x1, rect.y1].iter().all(|v| v.is_finite()) { CropGeometry { rect, angle: base.angle } } else { start }
 }
 
-/// The translation (pixels) nearest `want` that keeps the frame `r` inside a `w × h` image turned by `angle` degrees.
-fn nearest_move(r: Rect, angle: f64, w: f64, h: f64, want: Vec2) -> Option<Vec2> {
+/// The offset `v` (pixels) nearest `want` that keeps each `p + m ⊙ v` inside a `w × h` image turned by `angle`
+/// degrees and meets the `extra` half-planes `n · v <= b`.
+fn nearest_offset(points: &[(Point, Vec2)], extra: &[(Vec2, f64)], angle: f64, w: f64, h: f64, want: Vec2) -> Option<Vec2> {
     let back = Affine::rotate_about(-angle.to_radians(), Point::new(w / 2.0, h / 2.0));
     let (ex, ey) = (back.apply_vec(Vec2::new(1.0, 0.0)), back.apply_vec(Vec2::new(0.0, 1.0)));
-    let (nx, ny) = (Vec2::new(ex.x, ey.x), Vec2::new(ex.y, ey.y));
     // never tighter than where the frame is, plus a slack so a zero-width strip survives rounding
     let (sx, sy) = (1e-9 * w, 1e-9 * h);
-    let mut planes = Vec::with_capacity(16);
-    for c in r.corners() {
-        let q = back.apply(c);
+    let mut planes = Vec::with_capacity(4 * points.len() + extra.len());
+    for (p, m) in points {
+        let q = back.apply(*p);
+        let (nx, ny) = (Vec2::new(ex.x * m.x, ey.x * m.y), Vec2::new(ex.y * m.x, ey.y * m.y));
         for (n, b, s) in [(nx, w - q.x, sx), (-nx, q.x, sx), (ny, h - q.y, sy), (-ny, q.y, sy)] {
             planes.push((n, b.max(0.0) + s));
         }
     }
+    planes.extend_from_slice(extra);
     if planes.iter().all(|(n, b)| n.dot(want) <= *b) {
         return Some(want);
     }
@@ -259,6 +270,26 @@ fn shrunk_inside(r: Rect, angle: f64, w: f64, h: f64) -> Option<Rect> {
     };
     let lo = 1.0 - 1e-5;
     inside(lo).then(|| scaled(bisect_range(lo, 1.0, inside)))
+}
+
+/// The frame `r` (pixels) with a corner dragged by `want`, the opposite one held, at the nearest place that fits.
+fn nearest_corner(r: Rect, left: bool, top: bool, angle: f64, (w, h): (f64, f64), min_side: f64, want: Vec2) -> Option<Rect> {
+    let anchor = Point::new(if left { r.x1 } else { r.x0 }, if top { r.y1 } else { r.y0 });
+    let corner = Point::new(if left { r.x0 } else { r.x1 }, if top { r.y0 } else { r.y1 });
+    let points =
+        [(corner, Vec2::new(1.0, 1.0)), (Point::new(corner.x, anchor.y), Vec2::new(1.0, 0.0)), (Point::new(anchor.x, corner.y), Vec2::new(0.0, 1.0))];
+    let (sx, sy) = (if left { -1.0 } else { 1.0 }, if top { -1.0 } else { 1.0 });
+    // at least `min_side`, and per axis only between where it is and where the pointer asks
+    let extra = [
+        (Vec2::new(-sx, 0.0), sx * (corner.x - anchor.x) - min_side),
+        (Vec2::new(0.0, -sy), sy * (corner.y - anchor.y) - min_side),
+        (Vec2::new(1.0, 0.0), want.x.max(0.0)),
+        (Vec2::new(-1.0, 0.0), (-want.x).max(0.0)),
+        (Vec2::new(0.0, 1.0), want.y.max(0.0)),
+        (Vec2::new(0.0, -1.0), (-want.y).max(0.0)),
+    ];
+    let v = nearest_offset(&points, &extra, angle, w, h, want)?;
+    Some(Rect::from_points(anchor, corner + v))
 }
 
 /// The part of the convex polygon `poly` where `n · v <= b`.

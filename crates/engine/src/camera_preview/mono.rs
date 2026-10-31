@@ -1,11 +1,11 @@
-use super::colour::{PROXY, file_local_look};
+use super::colour::file_local_look;
 use super::hue_sat::HueSat;
-use super::look_fit::{with_dro_off_tone, without_clipped};
+use super::look_fit::{look_proxies, with_dro_off_tone, without_clipped};
 use super::pairs::{
     EDGE_CONTRAST, MIN_IMPROVEMENT, PARTIAL_MIN_RANK_CORRELATION, Pairs, collect_pairs, displayed, fit_tone_with_shadows, local_contrast, luma,
     rank_correlation_ties,
 };
-use super::proxy::{LensGeometry, proxies};
+use super::proxy::LensGeometry;
 use super::tone::{HighlightCheck, ToneFit, fit_tone, highlights, highlights_hold};
 use super::{CameraLook, CameraTransform, D50, D65, HsvTable, Mat3, PROPHOTO, REC2020, RawImage, Rgb32f, ToneMap, bradford, luminance_2020};
 
@@ -33,12 +33,18 @@ pub(super) fn monochrome(reference: &Rgb32f) -> bool {
 /// and flatter than the same body's photos shot in colour. But the JPEG still shows the camera's tone curve.
 /// `transform` is the colour the photo gets otherwise (the spectral matrices or the fallback's); the look keeps it and
 /// adds the tone curve alone ([`fit_tone_only_with`]), as [`fit_look_with`] tries the photo's own colour after a profile's. The
-/// chroma curve stays neutral: the JPEG has no colourfulness to learn.
-pub(super) fn monochrome_look(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, lens: Option<&LensGeometry>) -> Option<CameraLook> {
+/// chroma curve stays neutral: the JPEG has no colourfulness to learn. `embedded` as for [`fit_preview`].
+pub(super) fn monochrome_look(
+    raw: &RawImage,
+    bytes: &[u8],
+    transform: &CameraTransform,
+    lens: Option<&LensGeometry>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<CameraLook> {
     if !file_local_look(raw.format) {
         return None;
     }
-    let (sensor, reference, clipped) = proxies(raw, bytes, transform, PROXY, 0.0, lens)?;
+    let (sensor, reference, clipped) = look_proxies(raw, bytes, transform, lens, embedded)?;
     if !monochrome(&reference) {
         return None;
     }
