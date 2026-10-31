@@ -75,10 +75,20 @@ In the Masking panel (M):
   the people out of a sky mask; − ▸ Object then clicks remove one object.
 - **Edge** (Object and Describe, −100…100): below 0 a crisper border, above 0 a feathered one (up to 2 %
   of the long edge, so previews and exports match). **Refine Edges** (every mask) snaps the edge to the photo's.
+- **Edges follow the photo** (issue #3272): the model's grid (256² for SAM 2.1, 288² for SAM 3, over the whole photo) has
+  ~20 px cells on a 24 MP export, so a plain enlargement put the mask's edge up to a cell off the
+  subject's and a raised Exposure drew a bright outline around it. Where the grid is coarser than
+  the output, the mask's logits are guided-filtered by the photo's log luminance (the fast guided
+  filter, a window of 1.5 grid cells, so a preview and an export put the edge in the same place):
+  near the edge the selection follows the photo's tones, ≈ 0 a pixel or two outside a subject that
+  stands out from its background and ≈ 1 inside. Pixels whose surroundings are all in or all out,
+  and edges the photo has no contrast across, keep the plain enlargement. Refine Edges then works
+  on the combined mask and finds these edges in place. Cost on an M2 Pro, per AI selection: +22 ms
+  and +12 MB at 24 MP, +46 ms and +17 MB at 60 MP, +7.5 ms on a 2.7 MP preview.
 - **Detail** (Object and Describe): about a second after the last click (or right after a description), the photo
-  around the selection is analyzed again, zoomed in, from a sharper source; the result is kept as a
-  high-resolution patch (at most 4 per selection), so small objects get 5–10× finer edges than one
-  pass over the whole photo gives.
+  around the selection is analyzed again, zoomed in, from a sharper source (~5 s on an M4 Pro,
+  in the background); the result is kept as a high-resolution patch (at most 4 per selection),
+  so small objects get 5–10× finer edges than one pass over the whole photo gives.
 
 Everything a model does runs on one worker thread: the window stays responsive. Models are loaded
 when first needed and unloaded after 10 minutes without use.
@@ -273,7 +283,9 @@ the Mozilla root certificates; no OpenSSL, `ring` or `aws-lc`, nothing compiled 
 #### By hand
 
 Put `model.safetensors`, `vocab.json` and `merges.txt` from `facebook/sam3` in the model folder:
-`models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. Developers
+`models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. It must be
+the Hugging Face format (3,439,938,512 bytes): `sam3.safetensors` from community mirrors, renamed, is
+Meta's original checkpoint, and LightCraft says so instead of loading it. Developers
 can use the installer scripts, which download from Hugging Face with your token and verify the
 weights:
 
