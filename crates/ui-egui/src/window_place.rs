@@ -327,6 +327,21 @@ const MAXIMIZE_CHECK_SECONDS: f64 = 0.6;
 /// borders Windows keeps off screen, take the rest).
 const MAXIMIZED_ACROSS: f32 = 0.9;
 const MAXIMIZED_DOWN: f32 = 0.75;
+/// `zoom` when it is a usable interface zoom, else 1.
+fn interface_zoom(zoom: f32) -> f32 {
+    if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 }
+}
+
+/// On a `screen` (system points) smaller than [`MIN_SIZE`]: the command that lowers the window's minimum to the
+/// screen, in the interface's points (`zoom`). Nothing on a screen the minimum fits on.
+fn min_within(screen: [f32; 2], zoom: f32) -> Vec<egui::ViewportCommand> {
+    if screen[0] < MIN_SIZE[0] || screen[1] < MIN_SIZE[1] {
+        let min = [MIN_SIZE[0].min(screen[0]), MIN_SIZE[1].min(screen[1])];
+        return vec![egui::ViewportCommand::MinInnerSize(egui::vec2(min[0] / zoom, min[1] / zoom))];
+    }
+    Vec::new()
+}
+
 /// A window opened larger than its screen is fitted to this much of it.
 const FIT_TO_SCREEN: f32 = 0.9;
 /// How long after its first frame the window is placed at most: one that stays unseen, full
@@ -399,12 +414,8 @@ impl StartPlace {
                 let side = |i: usize| (screen[i] * FIT_TO_SCREEN).max(MIN_SIZE[i]).min(screen[i]);
                 let fit = [side(0), side(1)];
                 // (`seen` is in the system's points, the commands in the interface's)
-                let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
-                let mut told = Vec::new();
-                if screen[0] < MIN_SIZE[0] || screen[1] < MIN_SIZE[1] {
-                    let min = [MIN_SIZE[0].min(screen[0]), MIN_SIZE[1].min(screen[1])];
-                    told.push(egui::ViewportCommand::MinInnerSize(egui::vec2(min[0] / zoom, min[1] / zoom)));
-                }
+                let zoom = interface_zoom(zoom);
+                let mut told = min_within(screen, zoom);
                 told.push(egui::ViewportCommand::InnerSize(egui::vec2(fit[0] / zoom, fit[1] / zoom)));
                 return told;
             }
@@ -414,7 +425,10 @@ impl StartPlace {
         match self.asked {
             None if now - shown >= MAXIMIZE_AFTER_SECONDS => {
                 self.asked = Some(now);
-                vec![egui::ViewportCommand::Maximized(true)]
+                // a screen smaller than the window's minimum lowers it first, or the maximized window would stay wider
+                let mut told = min_within(screen, interface_zoom(zoom));
+                told.push(egui::ViewportCommand::Maximized(true));
+                told
             }
             None => Vec::new(),
             Some(at) if now - at < MAXIMIZE_CHECK_SECONDS => Vec::new(),

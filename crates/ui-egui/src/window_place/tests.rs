@@ -652,7 +652,14 @@ fn a_window_on_a_screen_smaller_than_its_minimum_fits_within_the_screen() {
     let mut s = StartPlace::new(false);
     let small = Seen { size: Some([900.0, 560.0]), screen: Some([800.0, 600.0]), ..Default::default() };
     assert_eq!(s.step(&small, 0.0, 1.0), vec![C::MinInnerSize(egui::vec2(800.0, 560.0)), C::InnerSize(egui::vec2(800.0, 560.0))]);
+    // remembered maximized on that screen: the minimum is lowered before it is maximized, or it would stay wider
+    let mut s = StartPlace::new(true);
+    s.step(&small, 0.0, 1.0);
+    assert_eq!(s.step(&small, 0.2, 2.0), vec![C::MinInnerSize(egui::vec2(400.0, 280.0)), C::Maximized(true)]);
     // a screen the minimum fits on keeps the minimum
+    let mut s = StartPlace::new(true);
+    s.step(&window([1300.0, 800.0]), 0.0, 1.0);
+    assert_eq!(s.step(&window([1300.0, 800.0]), 0.2, 1.0), vec![C::Maximized(true)]);
     let mut s = StartPlace::new(false);
     let big = Seen { size: Some([3000.0, 2000.0]), screen: Some([1920.0, 1080.0]), ..Default::default() };
     assert_eq!(s.step(&big, 0.0, 1.0), vec![C::InnerSize(egui::vec2(1728.0, 972.0))]);
