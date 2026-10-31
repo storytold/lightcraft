@@ -215,21 +215,12 @@ impl LightcraftApp {
         // an edit of the crop on an untouched photo keeps the lock the tool shows
         let commits = self.session.commits();
         let stored_lock = touches_crop(id, &params, self.session.active()) && self.store_shown_crop_lock();
+        // the photo's settings with the lock stored: an edit that leaves them so changed nothing
+        let develop_of_active = |s: &lightcraft_engine::Session| s.active().and_then(|p| s.develop_of(p));
+        let locked = stored_lock.then(|| develop_of_active(&self.session)).flatten();
         let r = self.session.execute(id, &params).map_err(CommandError::from);
-        if stored_lock && self.session.interaction.is_none() {
-            let steps = usize::try_from(self.session.commits().wrapping_sub(commits)).unwrap_or(0);
-            match &r {
-                // the lock and the edit are one undo step, named after the edit
-                Ok(_) if steps >= 2 => {
-                    let label = self.session.undo.last().map(|e| e.label.clone()).unwrap_or_default();
-                    self.session.merge_undo(steps, &label);
-                }
-                // the edit was refused or changed nothing: take the lock back off as well
-                _ if steps == 1 && self.session.undo_step().is_ok() => {
-                    self.session.redo.pop();
-                }
-                _ => {}
-            }
+        if stored_lock {
+            self.settle_stored_crop_lock(commits, r.is_ok() && develop_of_active(&self.session) != locked);
         }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
@@ -374,6 +365,29 @@ impl LightcraftApp {
             self.store_shown_crop_lock();
         }
         Ok(())
+    }
+
+    /// After an edit that stored the shown crop lock first ([`Self::store_shown_crop_lock`]),
+    /// `commits` undo steps ago: an edit that changed the photo becomes one undo step with the
+    /// lock, named after the edit; one that was refused or changed nothing (a merge can commit a
+    /// no-op) takes the lock back off as well, with no Redo step left behind. Inside an
+    /// interaction the steps are merged when it ends.
+    fn settle_stored_crop_lock(&mut self, commits: u64, changed: bool) {
+        if self.session.interaction.is_some() {
+            return;
+        }
+        let steps = usize::try_from(self.session.commits().wrapping_sub(commits)).unwrap_or(0);
+        if changed && steps >= 2 {
+            let label = self.session.undo.last().map(|e| e.label.clone()).unwrap_or_default();
+            self.session.merge_undo(steps, &label);
+        } else if !changed {
+            for _ in 0..steps {
+                if self.session.undo_step().is_err() {
+                    break;
+                }
+                self.session.redo.pop();
+            }
+        }
     }
 
     /// Before an edit of an untouched photo's crop (a drag, the angle, Straighten, Auto, a flip):

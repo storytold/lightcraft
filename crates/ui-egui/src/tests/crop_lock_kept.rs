@@ -259,3 +259,20 @@ fn a_merged_angle_keeps_the_lock_and_a_merged_rect_is_taken_as_given() {
     ask(&mut h, "engine.execute", json!({"command": "develop.merge", "params": {"settings": {"crop": {"geometry": {"rect": rect, "angle": 2.0}}}}}));
     assert_eq!(crop_state(&h).0, None, "a rect given outright stores no lock");
 }
+
+/// A merged crop partial that changes nothing (an empty crop, a zero angle on a level photo, a null rect)
+/// (or that is refused) leaves the photo untouched: the lock stored first goes again, with no Undo or Redo step left behind.
+#[test]
+fn a_merged_crop_that_changes_nothing_leaves_the_photo_untouched() {
+    for partial in [json!({}), json!({"geometry": {"angle": 0.0}}), json!({"geometry": {"rect": null}})] {
+        let mut h = crop_tool();
+        let id = h.app.session.active().expect("a photo");
+        let undo = h.app.session.undo.len();
+        // (a null rect is refused outright; the lock stored first must go all the same)
+        let _ = h.request("engine.execute", json!({"command": "develop.merge", "params": {"settings": {"crop": partial}}}), T);
+        h.settle(SETTLE);
+        assert!(untouched(&h, id), "{partial}: the crop is as it was");
+        assert!(h.app.session.undo.len() <= undo + 1, "{partial}: no stray lock step");
+        assert!(h.app.session.redo.is_empty(), "{partial}: and no stray Redo step");
+    }
+}
