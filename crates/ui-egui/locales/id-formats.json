@@ -230,6 +230,7 @@
   "“{parent}” has a “{name}” already. Merge the two?": "“{parent}” sudah berisi “{name}”. Gabungkan keduanya?",
   "There is a “{name}” at the top level already. Merge the two?": "Sudah ada “{name}” di tingkat teratas. Gabungkan keduanya?",
   "Added “{keyword}” to {n} photo{}": "“{keyword}” ditambahkan ke {n} foto{:.0}",
+  "Add Keyword “{keywords}”": "Tambahkan kata kunci “{keywords}”",
   "On {have} of {of} selected photos": "Pada {have} dari {of} foto yang dipilih",
   "Remove “{name}”": "Hapus “{name}”",
   "There is a keyword set “{name}” already": "Set kata kunci “{name}” sudah ada",

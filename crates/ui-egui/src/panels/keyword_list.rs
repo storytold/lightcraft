@@ -270,17 +270,29 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         super::left::browse_all_photos(app, true);
         let _ = app.run("library.filter", json!({"keyword": r.path}));
     }
-    // the name, cut short before the arrow
-    let room = (arrow.left() - 4.0 - (x + 34.0)).max(0.0);
+    // the name, cut short before the arrow, leaving room for the dot and the + that follow it
+    let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path));
+    let in_shortcut = app.session.catalog.keyword_info(&r.path).is_some_and(|i| i.keyword_shortcut);
     let font = t.font(13.0);
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
+    let marks = if is_default { 10.0 } else { 0.0 } + if in_shortcut { 5.0 + measure("+") } else { 0.0 };
+    let room = (arrow.left() - 4.0 - (x + 34.0) - marks).max(0.0);
     let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
     let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
     // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
-    if app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path)) {
+    let mut after = label.right();
+    if is_default {
         let dot = Rect::from_center_size(pos2(label.right() + 7.0, cy), vec2(6.0, 6.0));
         ui.painter().circle_filled(dot.center(), 3.0, t.accent);
         register(ui, format!("keywordDefault:{}", r.path), dot);
+        after = dot.right();
+    }
+    // part of the keyword shortcut (⇧K adds it): a + after the name
+    if in_shortcut {
+        let plus = ui.painter().text(pos2(after + 5.0, cy), Align2::LEFT_CENTER, "+", font.clone(), t.accent);
+        register(ui, format!("keywordShortcut:{}", r.path), plus);
+        ui.interact(plus, egui::Id::unique(("keyword-list-shortcut", r.path.to_lowercase())), Sense::hover())
+            .on_hover_text(crate::i18n::tr("Part of the keyword shortcut"));
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {
@@ -372,6 +384,10 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
     if item(ui, "defaultParent", &label, true) {
         let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
+    }
+    // the keyword shortcut becomes this keyword alone
+    if item(ui, "useAsShortcut", crate::i18n::tr("Use This as Keyword Shortcut"), true) {
+        let _ = app.run("keyword.setShortcut", json!({"keywords": [path]}));
     }
     ui.separator();
     let some = !selection.is_empty();

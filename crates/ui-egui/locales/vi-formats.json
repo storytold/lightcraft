@@ -37,6 +37,7 @@
   "Added {n} photo{} to “{}”": "Đã thêm {n} ảnh{0:.0} vào «{1}»",
   "Added {what} to {name}": "Đã thêm {what} vào {name}",
   "Added “{keyword}” to {n} photo{}": "Đã thêm «{keyword}» vào {n} ảnh{:.0}",
+  "Add Keyword “{keywords}”": "Thêm từ khóa «{keywords}»",
   "Adding photos… {} of {}": "Đang thêm ảnh… {} / {}",
   "All {n} selected photos move by the same amount.": "Tất cả {n} ảnh đã chọn dịch chuyển cùng một lượng.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Đã có trong thư viện, trong Đã xóa gần đây: đã chọn {} ảnh{:.0} · nhấp chuột phải → Khôi phục, hoặc Xóa vĩnh viễn để nhập lại",

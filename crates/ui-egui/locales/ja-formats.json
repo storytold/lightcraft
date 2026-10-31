@@ -231,6 +231,7 @@
   "“{parent}” has a “{name}” already. Merge the two?": "「{parent}」にはすでに「{name}」があります。統合しますか？",
   "There is a “{name}” at the top level already. Merge the two?": "最上位にはすでに「{name}」があります。統合しますか？",
   "Added “{keyword}” to {n} photo{}": "写真{n}枚に「{keyword}」を追加しました{:.0}",
+  "Add Keyword “{keywords}”": "キーワード「{keywords}」を追加",
   "On {have} of {of} selected photos": "選択した写真{of}枚のうち{have}枚",
   "Remove “{name}”": "「{name}」を削除",
   "There is a keyword set “{name}” already": "キーワードセット「{name}」はすでにあります",

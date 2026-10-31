@@ -424,6 +424,36 @@ fn one_keyword_is_where_new_keywords_go() {
     assert_eq!(c.default_keyword_parent(), None, "undo of the first: none was");
 }
 
+/// The keyword shortcut is a mark on its keywords: setting it is one undo step (a new name is
+/// listed), and the mark moves with its keyword (also into a merge), goes with it, and comes
+/// back with undo.
+#[test]
+fn the_keyword_shortcut_moves_with_its_keywords() {
+    let (mut c, _) = lib(&[&["Events|Weddings"], &["Travel"]]);
+    let op = c.set_keyword_shortcut_ops(&["travel".into(), "Lisbon".into()]);
+    let undo = c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Lisbon", "Travel"], "spelled as the library spells it; a new name listed");
+    let op = c.set_keyword_shortcut_ops(&["events|weddings".into(), "Travel".into()]);
+    c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings", "Travel"], "the old marks are cleared");
+    let op = c.rename_keyword_ops("travel", "Trips").unwrap();
+    let undo_rename = c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings", "Trips"]);
+    c.apply(undo_rename).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings", "Travel"], "undo moves it back");
+    let op = c.set_keyword_shortcut_ops(&["Travel".into()]);
+    c.apply(op).unwrap();
+    let op = c.merge_keywords_ops(&["travel".into()], "Events|Weddings").unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings"], "into the merge");
+    let op = c.delete_keyword_ops("events").unwrap();
+    c.apply(op).unwrap();
+    assert!(c.keyword_shortcut().is_empty());
+    assert_eq!(c.set_keyword_shortcut_ops(&[]), Op::Batch { ops: vec![] }, "none to clear");
+    c.apply(undo).unwrap();
+    assert!(c.keyword_shortcut().is_empty(), "undo of the first: there was none");
+}
+
 /// A file's keywords as a photo carries them: the paths of `lr:hierarchicalSubject`, and the
 /// names of `dc:subject` that aren't levels of those paths (an exported `travel|Italy` comes
 /// back as one keyword, not three). Without paths, the names as they are.

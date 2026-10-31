@@ -16,6 +16,8 @@ Select photos in Photo Grid or Square Grid, then use:
 | `` ` `` (backtick) | Cycle the flag: unflagged → pick → reject → unflagged |
 | `Cmd`/`Ctrl` + `↑` / `↓` | Raise / lower flag status (reject < unflagged < pick; stops at either end) |
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
+| ⌘⌥⇧K / Ctrl+Alt+Shift+K | Set Keyword Shortcut: type the keywords, with commas between them, that `Shift+K` adds |
+| `Shift+K` | Add the keyword shortcut's keywords to the selected photos, or remove them when every selected photo has them all |
 | `\` (backslash) | Show / hide the Filter Bar |
 | ⌘K / Ctrl+K | Add Keywords: show the Keywords panel with the cursor in its Add keyword box |
 | ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |

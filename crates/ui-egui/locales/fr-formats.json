@@ -227,6 +227,7 @@
   "“{parent}” has a “{name}” already. Merge the two?": "« {parent} » contient déjà « {name} ». Fusionner les deux ?",
   "There is a “{name}” at the top level already. Merge the two?": "Il existe déjà « {name} » au premier niveau. Fusionner les deux ?",
   "Added “{keyword}” to {n} photo{}": "« {keyword} » ajouté à {n} photo{}",
+  "Add Keyword “{keywords}”": "Ajouter le mot-clé « {keywords} »",
   "On {have} of {of} selected photos": "Sur {have} des {of} photos sélectionnées",
   "Remove “{name}”": "Retirer « {name} »",
   "There is a keyword set “{name}” already": "Un jeu de mots-clés « {name} » existe déjà",

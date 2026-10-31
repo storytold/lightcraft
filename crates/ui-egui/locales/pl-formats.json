@@ -214,6 +214,7 @@
   "“{parent}” has a “{name}” already. Merge the two?": "„{parent}” zawiera już „{name}”. Scalić oba?",
   "There is a “{name}” at the top level already. Merge the two?": "Słowo kluczowe „{name}” istnieje już na najwyższym poziomie. Scalić oba?",
   "Added “{keyword}” to {n} photo{}": "Dodano „{keyword}” do zdjęć: {n}{:.0}",
+  "Add Keyword “{keywords}”": "Dodaj słowo kluczowe „{keywords}”",
   "On {have} of {of} selected photos": "Na {have} z {of} zaznaczonych zdjęć",
   "Remove “{name}”": "Usuń „{name}”",
   "There is a keyword set “{name}” already": "Istnieje już zestaw słów kluczowych „{name}”",

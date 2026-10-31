@@ -33,6 +33,7 @@
   "Added {n} photo{} to “{}”": "„{1}“-ს დაემატა ფოტო: {n}{0:.0}",
   "Added {what} to {name}": "{what}: დაემატა {name}-ს",
   "Added “{keyword}” to {n} photo{}": "„{keyword}“ დაემატა ფოტოს: {n}{:.0}",
+  "Add Keyword “{keywords}”": "საკვანძო სიტყვის „{keywords}“ დამატება",
   "Adding photos… {} of {}": "ფოტოების დამატება… {} / {}",
   "All {n} selected photos move by the same amount.": "მონიშნული ფოტოები ({n}) ერთი და იმავე სიდიდით გადაინაცვლებს.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "უკვე ბიბლიოთეკაშია, ახლახან წაშლილებში: მონიშნულია ფოტო: {}{:.0} · მარჯვენა დაწკაპუნება → აღდგენა, ან სამუდამოდ წაშლა თავიდან იმპორტისთვის",

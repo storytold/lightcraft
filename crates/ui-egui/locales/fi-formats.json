@@ -37,6 +37,7 @@
   "Added {n} photo{} to “{}”": "Lisättyjä kuvia kohteeseen ”{1}”: {n}{0:.0}",
   "Added {what} to {name}": "{what} lisätty kohteeseen {name}",
   "Added “{keyword}” to {n} photo{}": "Avainsana ”{keyword}” lisätty kuviin: {n}{:.0}",
+  "Add Keyword “{keywords}”": "Lisää avainsana ”{keywords}”",
   "Adding photos… {} of {}": "Lisätään kuvia… {} / {}",
   "All {n} selected photos move by the same amount.": "Kaikkia valittuja kuvia ({n}) siirretään saman verran.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Jo kirjastossa, Äskettäin poistetuissa: valittuja kuvia {}{:.0} · napsauta hiiren kakkospainikkeella → Palauta tai Poista pysyvästi tuodaksesi uudelleen",

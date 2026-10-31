@@ -227,6 +227,7 @@
   "“{parent}” has a “{name}” already. Merge the two?": "«{parent}» уже містить «{name}». Об’єднати їх?",
   "There is a “{name}” at the top level already. Merge the two?": "На верхньому рівні вже є «{name}». Об’єднати їх?",
   "Added “{keyword}” to {n} photo{}": "«{keyword}» додано до фото: {n}{:.0}",
+  "Add Keyword “{keywords}”": "Додати ключове слово «{keywords}»",
   "On {have} of {of} selected photos": "На {have} з {of} вибраних фото",
   "Remove “{name}”": "Вилучити «{name}»",
   "There is a keyword set “{name}” already": "Набір ключових слів «{name}» уже існує",

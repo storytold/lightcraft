@@ -1336,6 +1336,16 @@ fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     });
     crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    // the keyword shortcut (Set Keyword Shortcut…), given to the selected photos
+    let keywords = app.session.catalog.keyword_shortcut();
+    if !keywords.is_empty() {
+        let names = keywords.iter().map(|k| k.replace('|', " › ")).collect::<Vec<_>>().join(", ");
+        let add = ui.button(crate::i18n::tr_format!("Add Keyword “{keywords}”", keywords = names));
+        register(ui, "button:contextAddKeywordShortcut", add.rect);
+        if add.clicked() {
+            let _ = app.run("photo.setMeta", json!({"addKeywords": keywords}));
+        }
+    }
 }
 
 fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {

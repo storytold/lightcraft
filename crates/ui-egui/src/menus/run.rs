@@ -1322,6 +1322,11 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             crate::panels::dialogs::prompt(app, "Save Metadata Preset", "Preset name", "", "metadata.savePreset", json!({}), "name");
             Ok(Value::Null)
         }
+        "dialog.keywordShortcut" => {
+            let now = app.session.catalog.keyword_shortcut().join(", ");
+            crate::panels::dialogs::prompt(app, "Set Keyword Shortcut", "Separated by commas", &now, "keyword.setShortcut", json!({}), "keywords");
+            Ok(Value::Null)
+        }
         "file.findMissing" => file_find_missing_command(app, id, p),
         "photo.tagFromTracklog" => photo_tag_from_tracklog_command(app, ctx, id, p),
         "photo.locate" => photo_locate_command(app, p),

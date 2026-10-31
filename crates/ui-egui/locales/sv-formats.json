@@ -37,6 +37,7 @@
   "Added {n} photo{} to “{}”": "Lade till {n} foto{} i ”{}”",
   "Added {what} to {name}": "Lade till {what} i {name}",
   "Added “{keyword}” to {n} photo{}": "Lade till ”{keyword}” på {n} foto{}",
+  "Add Keyword “{keywords}”": "Lägg till nyckelordet ”{keywords}”",
   "Adding photos… {} of {}": "Lägger till foton… {} av {}",
   "All {n} selected photos move by the same amount.": "Alla {n} markerade foton flyttas lika mycket.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Finns redan i biblioteket, i Nyligen raderade: {} foto{} markerade · högerklicka → Återställ, eller Radera permanent för att importera på nytt",
