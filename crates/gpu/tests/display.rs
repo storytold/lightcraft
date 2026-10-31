@@ -42,8 +42,6 @@ fn display_renders_match_readback_renders() {
         lightcraft_testkit::skip!(Gpu, "software adapter");
         return;
     }
-    lightcraft_gpu::adopt_window_device(device.clone(), queue.clone(), info).expect("adopted");
-    assert!(lightcraft_gpu::on_window_device());
     let raw = SourceInfo { raw: true, ..Default::default() };
     let mut s = DevelopSettings::default();
     s.light.exposure = 0.5;
@@ -51,6 +49,22 @@ fn display_renders_match_readback_renders() {
     s.effects.clarity = 20.0;
     s.detail.nr_luminance = 20.0;
     s.grain.amount = 20.0;
+    if let Err(e) = lightcraft_gpu::adopt_window_device(device.clone(), queue.clone(), info) {
+        // another card edits (`LIGHTCRAFT_GPU_ADAPTER` names one the screen isn't on, on a machine with
+        // two): the window's device is declined by design, and display renders come back as pixels
+        assert!(e.contains("isn't the screen's"), "adopted: {e}");
+        assert!(!lightcraft_gpu::on_window_device());
+        let src = Arc::new(lightcraft_scenes::demo_library()[0].render(640, 427));
+        let req = RenderRequest::fit(640, 427);
+        let pixels = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render");
+        match lightcraft_gpu::render_display(&src, &raw, &s, &req, None) {
+            Some(Output::Image(r)) => assert!(r.image.data == pixels.image.data, "the pixels are the readback's"),
+            _ => panic!("the editing card isn't the screen's: expected pixels"),
+        }
+        lightcraft_testkit::skip!(Gpu, "the editing card isn't the screen's ({e}): texture path not tested");
+        return;
+    }
+    assert!(lightcraft_gpu::on_window_device());
     // widths that are and aren't a multiple of 64 texels (row padding), draft and full quality
     for (w, h, quality) in [(640, 427, Quality::Full), (1000, 667, Quality::Draft), (1024, 683, Quality::Full)] {
         let src = Arc::new(lightcraft_scenes::demo_library()[0].render(w, h));

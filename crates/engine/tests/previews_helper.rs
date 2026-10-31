@@ -51,7 +51,12 @@ fn previews_build_on_the_second_card_and_match_the_loupe() {
     assert_eq!(after.interactive_helper, 0, "the loupe never renders on the second card");
     assert!(after.interactive_editing > built.interactive_editing, "the loupe rendered on the editing card");
 
-    // ---- second card off: everything on the editing card, as before
+    // ---- second card off: everything on the editing card, as before (LIGHTCRAFT_GPU_HELPER, when
+    // set, overrides the setting and keeps its card on, so that part needs it unset)
+    if std::env::var_os("LIGHTCRAFT_GPU_HELPER").is_some() {
+        eprintln!("LIGHTCRAFT_GPU_HELPER is set: the second card stays on, so turning it off isn't tested");
+        return;
+    }
     lightcraft_engine::gpu::set_helper("off").expect("off");
     assert!(lightcraft_engine::gpu::wait_helper(std::time::Duration::from_secs(60)));
     let r = s.execute("library.buildPreviews", &json!({"ids": [ids[0].0], "edge": 512, "wait": true, "force": true})).expect("build");
