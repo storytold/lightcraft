@@ -284,6 +284,13 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
+    /// Segmentation grids shared by this snapshot's masks: each distinct grid's data once, in
+    /// first-appearance order, referenced by index from the masks ([`lightcraft_develop::\
+    /// SegMask::grid`] is a position here). A serialization detail of snapshots
+    /// ([`journal`]): never held in the live catalog — [`Catalog::repair`] resolves the
+    /// references and clears the table when a snapshot is read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    grids: Vec<String>,
     /// Increments on every applied op, and when a batch fails and its rollback cannot undo it whole (the catalog
     /// changed, so what is keyed by the revision is out of date).
     #[serde(skip)]
@@ -331,6 +338,25 @@ impl Aspects {
 
 /// The most photos remembered as touched; older changes are then answered with "anything may have changed".
 const MAX_TOUCHED: usize = 8192;
+
+/// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
+/// against a snapshot's grid table: each referenced mask takes its
+/// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
+/// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
+/// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
+fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
+    let mut dangling = dangling;
+    Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
+        if let Some(i) = m.grid.take() {
+            match (m.data.is_empty(), grids.get(i as usize)) {
+                (true, Some(data)) => m.data = data.clone(),
+                (true, None) => dangling += 1,
+                (false, _) => {}
+            }
+        }
+    });
+    dangling
+}
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
 /// follow a small edit without being worked out again from every photo.
@@ -1058,6 +1084,23 @@ impl Catalog {
     /// (nothing, for a catalog this build wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
+        // Segmentation grids shared by the snapshot this was read from (issue #2154): each
+        // reference takes its grid's data, and the table is not kept — a live catalog always
+        // stores the data inline, so masks render and serialize without the snapshot's table.
+        // Resolving is the normal way a snapshot in this format reads (not reported); a
+        // reference past the table is damage and is reported — that includes a reference into
+        // an empty table, which is always dangling, so the table being empty does not skip it.
+        let grids = std::mem::take(&mut self.grids);
+        let mut dangling = 0usize;
+        for p in self.photos.values_mut() {
+            let photo = Arc::make_mut(p);
+            for settings in photo.settings_holders_mut() {
+                dangling = resolve_grids(settings, &grids, dangling);
+            }
+        }
+        if dangling > 0 {
+            changed.push(format!("{dangling} segmentation grid reference(s) pointed past the shared table: cleared"));
+        }
         for (id, p) in self.photos.iter_mut() {
             if p.id != *id {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
@@ -1198,6 +1241,8 @@ mod tests_folder_records;
 mod tests_folders;
 #[cfg(test)]
 mod tests_format_version;
+#[cfg(test)]
+mod tests_grids;
 #[cfg(test)]
 mod tests_index;
 #[cfg(test)]

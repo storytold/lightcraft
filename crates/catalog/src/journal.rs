@@ -22,6 +22,12 @@
 //! - a bad record **followed by good ones** is real damage: replay stops there, the log is kept
 //!   as `catalog.log.damaged-<seq>`, and a fresh snapshot is written so the library stays usable.
 //!
+//! Segmentation grids are shared within a snapshot (issue #2154): each distinct grid is written
+//! once into `Catalog.grids` and the masks of the photo's develop settings, versions, history
+//! steps and import look refer to it by index, so an unchanged mask no longer repeats with every
+//! history step. The table lives only in the snapshot file; log records keep the full grids
+//! inline.
+//!
 //! **Background compaction** ([`Journal::snapshot_in_background`], when the store offers a
 //! [`Store::background_writer`]): a worker thread writes the snapshot of a copy of the catalog at
 //! op `N` while appends go on (durably, as always) to the same log. Once the snapshot is durable,
@@ -52,6 +58,7 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
+//! | 10 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -76,7 +83,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -300,8 +307,19 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
 /// whole-file string). The bytes are exactly
 /// `{"format":"lightcraft-catalog","version":1,"seq":N,"catalog":<serde_json of the catalog>}\n`,
-/// as before streaming. Fills in the serialise / write+sync times and the size.
+/// as before streaming. Each distinct segmentation grid of the photos' settings holders (see
+/// `Photo::settings_holders`) is written once (`Catalog.grids`), with the masks referring to it
+/// by index, so an unchanged mask does not repeat with every history step (issue #2154). Fills
+/// in the serialise / write+sync times and the size.
 fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io::Result<SnapshotTiming> {
+    write_snapshot_owned(store, seq, catalog.clone())
+}
+
+/// The same write, taking the catalog by value: the background path hands over the copy it
+/// already made, so a snapshot in flight holds one catalog, not two ([`Catalog::clone`] copies
+/// the photo pointers and the small tables, and the derived indexes start empty — real work on a
+/// large library).
+fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) -> std::io::Result<SnapshotTiming> {
     let t0 = web_time::Instant::now();
     let mut serialize_ms = 0.0;
     let bytes = store.write_atomic_with(SNAPSHOT, &mut |w| {
@@ -311,7 +329,35 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
         // 1 MiB chunks go through the store's `dyn Write`
         let mut b = std::io::BufWriter::with_capacity(1 << 20, w);
         write!(b, "{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":{seq},\"catalog\":")?;
-        serde_json::to_writer(&mut b, catalog).map_err(std::io::Error::other)?;
+        // The shared grids, in first-appearance order. The pool is a serialization detail:
+        // `snapshot` itself is never modified (log records, presets and XMP stay inline).
+        let mut pool: Vec<String> = Vec::new();
+        let mut index: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        {
+            let mut see = |s: &lightcraft_develop::DevelopSettings| {
+                s.visit_seg_masks(&mut |m| {
+                    // borrowed lookup: a grid every history step shares is not cloned just to
+                    // find it already indexed (only a new grid is copied, into pool and table)
+                    if !m.data.is_empty() && !index.contains_key(m.data.as_str()) {
+                        index.insert(m.data.clone(), pool.len() as u32);
+                        pool.push(m.data.clone());
+                    }
+                });
+            };
+            for p in snapshot.photos.values() {
+                for settings in p.settings_holders() {
+                    see(settings);
+                }
+            }
+        }
+        snapshot.grids = pool;
+        match lightcraft_develop::with_grid_interner(index, || serde_json::to_writer(&mut b, &snapshot)) {
+            // no interner can be active here (snapshot writes don't nest), so `None` is a bug:
+            // fail the write rather than store a truncated or reference-less snapshot
+            Some(Ok(())) => {}
+            Some(Err(e)) => return Err(std::io::Error::other(e)),
+            None => return Err(std::io::Error::other("nested grid interner while writing a snapshot")),
+        }
         b.write_all(b"}\n")?;
         b.flush()?;
         serialize_ms = ms_since(t);
@@ -596,7 +642,7 @@ impl Journal {
         let Some(mut writer) = self.store.background_writer() else { return self.snapshot(catalog) };
         let copy = catalog.clone();
         let seq = self.seq;
-        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot(writer.as_mut(), seq, &copy));
+        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot_owned(writer.as_mut(), seq, copy));
         let worker = match spawned {
             Ok(w) => w,
             Err(e) => {

@@ -96,7 +96,12 @@ fn ai_shapes_without_a_segmentation_select_nothing() {
     for shape in [
         MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
         MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
-        MaskShape::Prompt { text: "sky".into(), seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None }), detail: vec![], edge: 0.0 },
+        MaskShape::Prompt {
+            text: "sky".into(),
+            seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, grid: None }),
+            detail: vec![],
+            edge: 0.0,
+        },
     ] {
         assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
     }
