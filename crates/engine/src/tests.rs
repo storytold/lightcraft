@@ -7,6 +7,7 @@ mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
+mod bursts;
 mod color;
 mod constrain_crop;
 mod crop_angle;

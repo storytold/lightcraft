@@ -574,6 +574,11 @@ pub fn split_presets(dropped: Vec<String>) -> (Vec<String>, Vec<String>) {
 #[derive(Default)]
 pub struct Caches {
     keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    /// The Bursts panel's bursts, by the view's generation.
+    bursts: Option<(u64, panels::bursts::Shown)>,
+    /// Every burst of the library (pick first), by the view's generation: what a drag in the
+    /// Bursts panel compares with, so a frame of the drag builds no index of its own.
+    burst_index: Option<(u64, panels::bursts::All)>,
     /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
     /// revision, selection and view.
     keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
