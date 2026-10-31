@@ -10,6 +10,7 @@ use lightcraft_engine::export::{ExportOptions, Resize};
 
 mod confirm;
 mod cull;
+pub mod duplicates;
 mod export;
 mod frame;
 mod rename;
@@ -155,6 +156,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::LightroomCatalog { .. } => 440.0,
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
+            Dialog::Duplicates { .. } => 760.0,
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -256,6 +258,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
         Dialog::Cull { .. } => "Assisted Culling",
+        Dialog::Duplicates { .. } => "Find Duplicates",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
         Dialog::SmartRules { .. } => "Edit Smart Album",
         Dialog::AutoStack { .. } => "Auto-Stack by Capture Time",
@@ -1766,6 +1769,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
     match dlg {
         Dialog::AutoStack { .. } => auto_stack_body(app, ui, t, dlg),
         Dialog::Cull { .. } => cull_body(app, ui, t, dlg),
+        Dialog::Duplicates { near, result, keep } => duplicates::body(app, ui, t, near, result, keep),
         Dialog::WhatsNew => whats_new_body(ui, t, dlg),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, t, info, accepted),
         Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, t, info, accepted),

@@ -318,6 +318,8 @@ pub struct LightcraftApp {
     pub export: Option<export_task::ExportTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
+    /// The Find Duplicates scan that is reading signatures, a few milliseconds a frame (`dialogs::duplicates`).
+    pub duplicates_run: Option<dialogs::duplicates::DuplicateRun>,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).

@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Suggested: {why}": "Suggérée : {why}",
+  "{pct}% alike": "{pct} % de ressemblance",
+  "Comparing {done} of {total} pictures…": "{done} images comparées sur {total}…",
+  "Showing the first {shown} of {total} groups. Decide some of these to see the rest.": "Affichage des {shown} premiers groupes sur {total}. Décidez de certains pour voir les suivants."
 }

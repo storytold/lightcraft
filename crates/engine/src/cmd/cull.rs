@@ -105,6 +105,18 @@ fn burst_params(p: &Value) -> Result<(f64, f32)> {
     Ok((num("burstGap", BURST_GAP, MAX_GAP)?, num("similarity", SAME, 1.0)? as f32))
 }
 
+/// A photo's look-alike signature (from its thumbnail-level source), cached by content.
+pub(super) fn signature_of(s: &mut Session, id: PhotoId) -> Option<[f32; 64]> {
+    let key = s.catalog.photo(id).map(|p| crate::media::content_key(p))?;
+    if let Some(v) = s.signatures.get(&key) {
+        return Some(*v);
+    }
+    let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
+    let v = lightcraft_pipeline::cull::signature(&src);
+    s.signatures.insert(key, v);
+    Some(v)
+}
+
 /// Find Similar: photos that look like `id` (signatures from thumbnail-level sources, cached by
 /// content), most similar first; the view is filtered to them.
 fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
@@ -112,16 +124,7 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
     let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| super::bad(C, "no photo"))?;
     let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
     let all: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library()).map(|q| q.id).collect();
-    let sig = |s: &mut Session, id: PhotoId| -> Option<[f32; 64]> {
-        let key = s.catalog.photo(id).map(|p| crate::media::content_key(p))?;
-        if let Some(v) = s.signatures.get(&key) {
-            return Some(*v);
-        }
-        let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
-        let v = lightcraft_pipeline::cull::signature(&src);
-        s.signatures.insert(key, v);
-        Some(v)
-    };
+    let sig = signature_of;
     let me = sig(s, id).ok_or_else(|| super::bad(C, "can't read the photo"))?;
     let mut hits: Vec<(PhotoId, f32)> = Vec::new();
     for q in all {

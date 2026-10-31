@@ -305,5 +305,9 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Suggested: {why}": "Đề xuất: {why}",
+  "{pct}% alike": "giống {pct}%",
+  "Comparing {done} of {total} pictures…": "Đã so sánh {done}/{total} ảnh…",
+  "Showing the first {shown} of {total} groups. Decide some of these to see the rest.": "Đang hiện {shown} nhóm đầu trong {total} nhóm. Hãy quyết định một số nhóm để xem phần còn lại."
 }

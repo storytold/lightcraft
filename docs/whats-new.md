@@ -5,6 +5,9 @@
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
 
+### Find Duplicates
+- Photo ▸ Find Duplicates… lists the duplicate photos of your library in groups, with no AI model to download. “Exact copies” are the very same file found twice; “Same picture saved again” also catches copies that were resized or saved again, for example as a smaller JPEG. Each group suggests the copy to keep (your pick, more stars, a raw file, edits, more pixels, sharper) and says why. Tick the photos to keep and choose Mark Others Rejected: the others are flagged Rejected in one undo step, and nothing is deleted.
+
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box

@@ -112,6 +112,7 @@ impl LightcraftApp {
             shown_library: None,
             export: None,
             tasks: Default::default(),
+            duplicates_run: None,
             last_export_result: None,
             slideshow_export_reported: true,
             hover_preview: None,

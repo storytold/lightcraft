@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Suggested: {why}": "建议：{why}",
+  "{pct}% alike": "相似度 {pct}%",
+  "Comparing {done} of {total} pictures…": "已比较 {done}/{total} 张图片…",
+  "Showing the first {shown} of {total} groups. Decide some of these to see the rest.": "正在显示前 {shown} 组，共 {total} 组。处理其中一些后即可看到其余的。"
 }

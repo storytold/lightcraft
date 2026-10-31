@@ -79,6 +79,7 @@ impl LightcraftApp {
         panels::faces::pump_background(self, ctx, now);
         model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
+        crate::dialogs::duplicates::drop_if_closed(self);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
         #[cfg(not(target_arch = "wasm32"))]

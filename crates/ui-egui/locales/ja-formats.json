@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Suggested: {why}": "おすすめ：{why}",
+  "{pct}% alike": "{pct}% 類似",
+  "Comparing {done} of {total} pictures…": "{total} 枚中 {done} 枚を比較済み…",
+  "Showing the first {shown} of {total} groups. Decide some of these to see the rest.": "最初の {shown} グループを表示中（全 {total} グループ）。いくつか決めると残りが表示されます。"
 }

@@ -305,5 +305,9 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Suggested: {why}": "Sugerowane: {why}",
+  "{pct}% alike": "podobieństwo {pct}%",
+  "Comparing {done} of {total} pictures…": "Porównano {done} z {total} obrazów…",
+  "Showing the first {shown} of {total} groups. Decide some of these to see the rest.": "Pokazano pierwsze {shown} z {total} grup. Zdecyduj o niektórych, aby zobaczyć resztę."
 }
