@@ -822,6 +822,7 @@ fn a_black_and_white_jpeg_adds_its_tone_on_top_of_the_colour_it_gets_otherwise()
         matrix: Mat3::IDENTITY,
         tone: dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt()).tone,
         hue_sat: None,
+        bands: None,
     };
     let camera = lightcraft_raw::spectral::find(Some("Canon"), "Canon EOS 600D").unwrap();
     let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
@@ -1261,6 +1262,7 @@ fn dro_test_look(xs: &[f32; 32], f: &dyn Fn(f32) -> f32) -> CameraLook {
         matrix: Mat3([[1.6, -0.4, -0.2], [-0.2, 1.4, -0.2], [0.0, -0.3, 1.3]]),
         tone: CameraTone::new(xs.map(|x| [x, f(x)])).unwrap().with_chroma([1.3, 1.2, 1.1, 1.0, 1.0, 0.9, 0.6, 0.3]).unwrap(),
         hue_sat: Some(HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.1, 1.0]; 8], srgb_value: false }),
+        bands: None,
     }
 }
 
@@ -2295,6 +2297,328 @@ fn dng_structure_gate_refuses_shifted_broken_and_unrelated_previews() {
     flat.data.fill([0.2; 3]);
     assert!(!structure_agrees(&sensor, &flat));
     assert!(!structure_agrees(&sensor, &scene_pair(95, 64, 0).1));
+}
+
+#[test]
+fn chroma_bands_keep_neutrals_and_luminance() {
+    let identity = [1.0, 0.0, 0.0, 1.0];
+    let mut bands = ChromaBands::identity([0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0]);
+    let colour = [0.5, 0.3, 0.1];
+    for (a, b) in bands.apply(colour).iter().zip(colour) {
+        assert!((a - b).abs() < 1e-5);
+    }
+    bands.matrices[3] = [0.5, 0.0, 0.0, 0.5];
+    let grey = [0.2; 3];
+    assert_eq!(bands.apply(grey).map(|v| (v * 1e4).round()), grey.map(|v| (v * 1e4).round()), "neutral stays neutral");
+    // at the node of luminance 0.2 the chroma is halved and the luminance kept
+    let node = [0.3, 0.17, 0.1];
+    let y = luminance_2020(node);
+    let scale = 0.2 / y;
+    let before = node.map(|v| v * scale);
+    let after = bands.apply(before);
+    assert!((luminance_2020(after) - luminance_2020(before)).abs() < 1e-5);
+    let (rb, ra) = (before[0] / 0.2 - 1.0, after[0] / 0.2 - 1.0);
+    assert!((ra - 0.5 * rb).abs() < 1e-4, "{ra} vs {rb}");
+    // halfway (in log luminance) between that node and the next the matrix is the mean of the two
+    let m = bands.at((0.2f32 * 0.4).sqrt());
+    assert!((m[0] - 0.75).abs() < 1e-5 && (m[3] - 0.75).abs() < 1e-5, "{m:?}");
+    // outside the nodes it is constant
+    assert_eq!(bands.at(1e-4), identity);
+    assert_eq!(bands.at(50.0), identity);
+}
+
+#[test]
+fn chroma_bands_hue_and_offset_terms() {
+    let mut bands = ChromaBands::identity([0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0]);
+    bands.hue = Some([[0.5, 0.0]; HUE_NODES]);
+    let node = [0.3, 0.17, 0.1];
+    let before = node.map(|v| v * 0.2 / luminance_2020(node));
+    let after = bands.apply(before);
+    assert!((luminance_2020(after) - 0.2).abs() < 1e-5);
+    assert!(((after[0] / 0.2 - 1.0) - 0.5 * (before[0] / 0.2 - 1.0)).abs() < 1e-4, "halved chroma");
+    // a quarter turn per node: (r, b) -> (-b, r)
+    bands.hue = Some([[0.0, 1.0]; HUE_NODES]);
+    let turned = bands.apply(before);
+    let (r, b) = (before[0] / 0.2 - 1.0, before[2] / 0.2 - 1.0);
+    assert!(((turned[0] / 0.2 - 1.0) + b).abs() < 1e-4 && ((turned[2] / 0.2 - 1.0) - r).abs() < 1e-4, "{turned:?}");
+    bands.hue = None;
+    bands.offsets = Some([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.02, -0.01], [0.04, -0.02], [0.0, 0.0], [0.0, 0.0]]);
+    let grey = [0.2; 3];
+    let tinted = bands.apply(grey);
+    assert!((tinted[0] / 0.2 - 1.0 - 0.02).abs() < 1e-4 && (tinted[2] / 0.2 - 1.0 + 0.01).abs() < 1e-4, "{tinted:?}");
+    assert!((luminance_2020(tinted) - 0.2).abs() < 1e-5);
+}
+
+/// Clamping a negative channel changes luminance, so its residual cannot be divided by the pre-clamp
+/// tone scale. Reject it only from the offset fit, including negatives introduced by existing bands.
+#[test]
+fn chroma_offsets_ignore_pre_clamp_negative_samples() {
+    let tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.2f32.powi(i as i32);
+        [x, x.powf(0.8).min(0.99)]
+    }))
+    .unwrap();
+    for bands in
+        [None, Some(ChromaBands { matrices: [[2.5, 0.0, 0.0, 1.0]; BAND_NODES], ..ChromaBands::identity([0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0]) })]
+    {
+        let look = CameraLook { matrix: Mat3::IDENTITY, tone, hue_sat: None, bands };
+        let map = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let clean = vec![([0.2; 3], [0.3, 0.28, 0.26]); 256];
+        let expected = fit_chroma_offsets(&clean, &look).unwrap();
+        assert!(expected.offsets.unwrap().iter().flatten().any(|v| v.abs() > 0.001), "valid samples teach a nonzero offset");
+        let negative = if look.bands.is_some() { [0.01, 0.2, 0.2] } else { [-0.1, 0.2, 0.2] };
+        let scene = look.bands.as_ref().map_or(negative, |b| b.apply(negative.map(|v| v as f32)).map(f64::from));
+        assert!(scene[0] < 0.0);
+        let shown = displayed(scene, &map);
+        let target = shown.map(|v| 0.9 * v + 0.1 * luma(shown));
+        let bad = vec![(negative, target); 1024];
+        let mut mixed = clean;
+        mixed.extend_from_slice(&bad);
+        assert_eq!(fit_chroma_offsets(&mixed, &look).unwrap(), expected, "negative samples must not bias offsets");
+        assert!(fit_chroma_offsets(&bad, &look).unwrap().offsets.unwrap().iter().flatten().all(|v| *v == 0.0));
+        let hue = fit_hue_chroma(&bad, &look).unwrap().hue.unwrap();
+        assert!(hue.iter().any(|v| (v[0] - 1.0).abs() > 0.01), "the hue fit still uses these samples");
+    }
+}
+
+#[test]
+fn hue_chroma_fit_follows_a_hue_gain_and_refuses_an_implausible_one() {
+    let look = CameraLook {
+        matrix: Mat3::IDENTITY,
+        tone: CameraTone::new(std::array::from_fn(|i| {
+            let x = 0.004 * 1.2f32.powi(i as i32);
+            [x, x.powf(0.8).min(0.99)]
+        }))
+        .unwrap(),
+        hue_sat: None,
+        bands: None,
+    };
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let mut pairs = Vec::new();
+    for i in 0..2000 {
+        let (y, h, c) = (
+            0.05 + 0.3 * ((i * 7) % 100) as f64 / 100.0,
+            std::f64::consts::TAU * ((i * 13) % 360) as f64 / 360.0,
+            0.1 + 0.2 * ((i * 3) % 10) as f64 / 10.0,
+        );
+        let x = [y * (1.0 + c * h.cos()), 0.0, y * (1.0 + c * h.sin())];
+        let x = [x[0], (y - 0.2627 * x[0] - 0.0593 * x[2]) / 0.6780, x[2]];
+        // the target has the displayed colour with its chroma ×1.3 (a camera that saturates)
+        let shown = displayed(x, &tone);
+        let ys = luma(shown);
+        let target = [ys * (1.0 + 1.3 * (shown[0] / ys - 1.0)), 0.0, ys * (1.0 + 1.3 * (shown[2] / ys - 1.0))];
+        let target = [target[0], (ys - 0.2627 * target[0] - 0.0593 * target[2]) / 0.6780, target[2]];
+        pairs.push((x, target));
+    }
+    let fitted = fit_hue_chroma(&pairs, &look).expect("a plausible term");
+    for node in fitted.hue.unwrap() {
+        assert!((node[0] - 1.3).abs() < 0.08 && node[1].abs() < 0.06, "{node:?}");
+    }
+    let wild: Vec<_> = pairs.iter().map(|(x, t)| (*x, [t[2], t[1], t[0]])).collect();
+    assert!(fit_hue_chroma(&wild, &look).is_none(), "swapped red and blue is not a camera's hue rendering");
+}
+
+#[test]
+fn dng_hue_refinement_requires_agreement_on_the_fine_pair() {
+    let (sensor, mut reference) = scene_pair(96, 64, 0);
+    let colour = Some((Mat3::IDENTITY, None));
+    let look = fit_attempt(
+        &sensor,
+        &reference,
+        &colour,
+        Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false, dark: true },
+        &HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false },
+    )
+    .unwrap();
+    // Apply a known hue-dependent camera rendering, equally present in both spatial folds.
+    let table = HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.0, 1.0], [18.0, 1.25, 1.0]], srgb_value: false };
+    let correction = HueSat::new(&table).unwrap();
+    for p in &mut reference.data {
+        *p = correction.apply(*p);
+    }
+    let fine = |r: &Rgb32f| Some((resize(&sensor, 768, 512, Filter::Box), resize(r, 768, 512, Filter::Box)));
+    let accepted = with_hue_term(look.clone(), &sensor, &reference, &[], || fine(&reference), DngColourProxy::Faithful);
+    assert!(accepted.hue_sat.is_some(), "a consistent hue error should be corrected");
+    assert_eq!(accepted.matrix, Mat3::IDENTITY);
+    let (_, pairs) = collect_pairs(&sensor, &reference, 0.005, None, true).unwrap();
+    assert!(display_error(&pairs, &accepted) < display_error(&pairs, &look) * 0.97);
+    let plain = scene_pair(96, 64, 0).1;
+    let rejected = with_hue_term(look.clone(), &sensor, &reference, &[], || fine(&plain), DngColourProxy::Faithful);
+    assert!(rejected.hue_sat.is_none(), "a coarse-only improvement must not pass");
+    let rejected = with_hue_term(look, &sensor, &reference, &[], || None, DngColourProxy::Faithful);
+    assert!(rejected.hue_sat.is_none(), "a missing fine pair must not pass");
+}
+
+#[test]
+fn dng_colour_eligibility_tracks_deferred_stages_not_retained_maps() {
+    use lightcraft_raw::opcodes::{Area, Opcode};
+    let mut raw = raw_of(RawFormat::Dng, "test", "test", Default::default());
+    assert_eq!(dng_colour_proxy(&raw, None), DngColourProxy::Faithful);
+    let map = Opcode::GainMap {
+        area: Area { bottom: 4, right: 4, planes: 3, row_pitch: 1, col_pitch: 1, ..Default::default() },
+        points_v: 1,
+        points_h: 1,
+        spacing: [1.0; 2],
+        origin: [0.0; 2],
+        map_planes: 3,
+        gains: vec![1.0, 1.2, 1.4],
+    };
+    assert!(!map.is_lens_correction(), "the loader retains per-channel gain maps before both colour paths");
+    raw.opcodes.list3.push(map);
+    assert_eq!(dng_colour_proxy(&raw, None), DngColourProxy::Faithful);
+    raw.opcodes.list3.push(Opcode::FixVignetteRadial { k: [0.2, 0.0, 0.0, 0.0, 0.0], center: [0.5; 2] });
+    assert_eq!(dng_colour_proxy(&raw, None), DngColourProxy::ScalarVignette);
+    assert!(DngColourProxy::ScalarVignette.homogeneous_terms());
+    assert!(!DngColourProxy::ScalarVignette.scene_luminance_terms());
+    raw.color.profile.hue_sat_map[0] =
+        Some(HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.0, 1.0]; 2], srgb_value: false });
+    assert_eq!(dng_colour_proxy(&raw, None), DngColourProxy::VignetteWithProfileTables);
+    raw.color.profile.hue_sat_map[0] = None;
+    raw.opcodes.list3.push(Opcode::WarpRectilinear { planes: vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5; 2] });
+    assert_eq!(dng_colour_proxy(&raw, None), DngColourProxy::DeferredGeometry);
+    raw.opcodes.list3.clear();
+    raw.opcodes.list3.push(Opcode::FixVignetteRadial { k: [-0.2, 0.0, 0.0, 0.0, 0.0], center: [0.5; 2] });
+    assert_eq!(dng_colour_proxy(&raw, None), DngColourProxy::VignetteNotProvenPositive);
+}
+
+#[test]
+fn actual_colour_order_distinguishes_scalar_and_channel_gains() {
+    let base = CameraLook {
+        matrix: Mat3::IDENTITY,
+        tone: CameraTone::new(std::array::from_fn(|i| [(i + 1) as f32 / 100.0, (i + 1) as f32 / 100.0])).unwrap(),
+        hue_sat: None,
+        bands: None,
+    };
+    let nodes = [0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0];
+    let smooth = HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[-18.0, 1.25, 1.0]; 2], srgb_value: false };
+    let value = HsvTable {
+        hue_divisions: 1,
+        sat_divisions: 2,
+        val_divisions: 2,
+        data: vec![[0.0, 1.0, 1.0], [-15.0, 0.6, 1.0], [0.0, 1.0, 1.0], [15.0, 1.4, 1.0]],
+        srgb_value: false,
+    };
+    let hue = ChromaBands { hue: Some([[1.2, 0.1]; HUE_NODES]), ..ChromaBands::identity(nodes) };
+    let matrices = ChromaBands {
+        matrices: std::array::from_fn(|i| {
+            let k = if i < 4 { 0.6 } else { 1.6 };
+            [k, 0.0, 0.0, k]
+        }),
+        ..ChromaBands::identity(nodes)
+    };
+    let offsets = ChromaBands { offsets: Some(std::array::from_fn(|i| if i < 4 { [0.0; 2] } else { [0.1, -0.1] })), ..ChromaBands::identity(nodes) };
+    let apply = |look: &CameraLook, input| {
+        let table = look.hue_sat.as_ref().and_then(HueSat::new);
+        let colour = crate::files::CameraColourModel {
+            wb: [1.0; 3],
+            matrix: Mat3::IDENTITY,
+            gain: 1.0,
+            tables: None,
+            hue_sat: table.as_ref(),
+            bands: look.bands.as_ref(),
+        };
+        let mut image = Rgb32f::new(1, 1);
+        image.data[0] = input;
+        colour.apply(&mut image);
+        image.data[0]
+    };
+    let difference = |a: [f32; 3], b: [f32; 3]| (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0f32, f32::max);
+    let input = [0.3, 0.2, 0.1];
+    let smooth_look = CameraLook { hue_sat: Some(smooth), ..base.clone() };
+    for look in [smooth_look.clone(), CameraLook { bands: Some(hue), ..base.clone() }] {
+        let before_gain = apply(&look, input.map(|v| v * 2.0));
+        let after_gain = apply(&look, input).map(|v| v * 2.0);
+        assert!(difference(before_gain, after_gain) < 1e-5, "homogeneous colour commutes with a positive scalar gain");
+    }
+    for (name, look) in [
+        ("value axis", CameraLook { hue_sat: Some(value), ..base.clone() }),
+        ("band", CameraLook { bands: Some(matrices), ..base.clone() }),
+        ("offset", CameraLook { bands: Some(offsets), ..base }),
+    ] {
+        let before_gain = apply(&look, input.map(|v| v * 2.0));
+        let after_gain = apply(&look, input).map(|v| v * 2.0);
+        assert!(difference(before_gain, after_gain) > 0.001, "{name} cannot be moved across deferred vignetting");
+    }
+    let channel_gain = [1.0, 1.4, 2.0];
+    let before = apply(&smooth_look, std::array::from_fn(|i| input[i] * channel_gain[i]));
+    let after = apply(&smooth_look, input);
+    let after = std::array::from_fn(|i| after[i] * channel_gain[i]);
+    assert!(difference(before, after) > 0.001, "a per-channel map is not a scalar gain");
+}
+
+#[test]
+fn dng_chroma_stages_require_spatial_and_finer_agreement() {
+    let (sensor, reference) = scene_pair(96, 64, 0);
+    let colour = Some((Mat3::IDENTITY, None));
+    let look = fit_attempt(
+        &sensor,
+        &reference,
+        &colour,
+        Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false, dark: true },
+        &HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false },
+    )
+    .unwrap();
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let nodes = band_luminance(&tone).unwrap();
+    let matrix = ChromaBands { matrices: [[1.35, 0.15, -0.1, 0.75]; BAND_NODES], ..ChromaBands::identity(nodes) };
+    let hue = ChromaBands { hue: Some([[1.3, 0.1]; HUE_NODES]), ..ChromaBands::identity(nodes) };
+    let offset = ChromaBands { offsets: Some([[0.08, -0.06]; BAND_NODES]), ..ChromaBands::identity(nodes) };
+    for (name, known, fit) in [
+        ("band", matrix, fit_bands as fn(&[([f64; 3], [f64; 3])], &CameraLook) -> Option<ChromaBands>),
+        ("hue-chroma", hue, fit_hue_chroma),
+        ("offset", offset, fit_chroma_offsets),
+    ] {
+        let mut target = sensor.clone();
+        target.map_in_place(|p| displayed(known.apply(p).map(f64::from), &tone).map(|v| v as f32));
+        let training = spatial_pair_sets(&sensor, &target, &[], None).unwrap();
+        let fine = || Some((resize(&sensor, 768, 512, Filter::Box), resize(&target, 768, 512, Filter::Box)));
+        let fitted = with_chroma_stage(look.clone(), &training, &fine, None, name, 0.03, fit);
+        assert!(fitted.bands.is_some(), "consistent {name} rendering should be learned");
+        assert!(display_error(&training.all.1, &fitted) < display_error(&training.all.1, &look) * 0.97, "{name}");
+        let absent = with_chroma_stage(look.clone(), &training, &|| None, None, name, 0.03, fit);
+        assert!(absent.bands.is_none(), "{name} needs a finer pair");
+        let mut wrong = sensor.clone();
+        wrong.map_in_place(|p| displayed(p.map(f64::from), &tone).map(|v| v as f32));
+        let disagrees = || Some((resize(&sensor, 768, 512, Filter::Box), resize(&wrong, 768, 512, Filter::Box)));
+        let refused = with_chroma_stage(look.clone(), &training, &disagrees, None, name, 0.03, fit);
+        assert!(refused.bands.is_none(), "{name} cannot pass on a coarse-only improvement");
+    }
+}
+
+#[test]
+fn dng_final_colour_guard_catches_a_clipped_minority_highlight() {
+    let mut sensor = Rgb32f::new(100, 10);
+    sensor.data.fill([0.02; 3]);
+    sensor.data[..10].fill([0.02, 0.02, 1.0]);
+    let mut reference = sensor.clone();
+    reference.data.fill([0.2; 3]);
+    reference.data[..10].fill([0.8; 3]);
+    let tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = (i + 1) as f32 / 320.0;
+        [x, (10.4 * x).min(0.9995)]
+    }))
+    .unwrap();
+    let base = CameraLook { matrix: Mat3::IDENTITY, tone, hue_sat: None, bands: None };
+    let plain = ToneMap::camera(&base.tone, 0.0, 0.0, 0.0);
+    assert!(!clips_more(&sensor, &reference, &plain, &plain));
+    let hue = HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[-18.0, 1.25, 1.0]; 2], srgb_value: false };
+    let bands = ChromaBands { matrices: [[1.0, 0.0, -1.0, 2.5]; BAND_NODES], ..ChromaBands::identity([0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0]) };
+    for (name, next) in [("hue", CameraLook { hue_sat: Some(hue), ..base.clone() }), ("band", CameraLook { bands: Some(bands), ..base.clone() })] {
+        let table = next.hue_sat.as_ref().and_then(HueSat::new);
+        let colour = crate::files::CameraColourModel {
+            wb: [1.0; 3],
+            matrix: Mat3::IDENTITY,
+            gain: 1.0,
+            tables: None,
+            hue_sat: table.as_ref(),
+            bands: next.bands.as_ref(),
+        };
+        let mut applied = sensor.clone();
+        colour.apply(&mut applied);
+        assert!(near_white(&applied, &plain) > near_white(&sensor, &plain) + CLIP_TOLERANCE, "actual applied {name} colour must expose the clamp");
+        let kept = validate_dng_colour_terms(base.clone(), next, &sensor, &reference, &plain);
+        assert!(kept.hue_sat.is_none() && kept.bands.is_none(), "{name}: median colour improvement cannot override lost highlights");
+    }
 }
 
 /// With the file's colour given as the identity, only the tone is fitted: the colour stays and a camera that
