@@ -238,6 +238,8 @@ pub struct UiState {
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
+    /// Selected channel of a mask's Curve (no parametric one): "master" | "red" | "green" | "blue".
+    pub mask_curve_channel: String,
     /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
     pub mixer_mode: String,
     /// Selected colour grading tab: "3way" | "shadows" | "midtones" | "highlights".
@@ -457,6 +459,7 @@ impl Default for UiState {
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
+            mask_curve_channel: "master".into(),
             mixer_mode: "hue".into(),
             grading_mode: "3way".into(),
             grading_hidden: None,

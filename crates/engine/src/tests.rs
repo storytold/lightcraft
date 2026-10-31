@@ -1483,6 +1483,55 @@ fn curve_reset_by_channel_and_whole() {
 }
 
 #[test]
+fn a_masks_local_curve_through_the_curve_commands() {
+    let mut s = demo();
+    let s_curve = json!([[0.0, 0.0], [0.25, 0.15], [0.75, 0.85], [1.0, 1.0]]);
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+    let ids: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    let curve_of = |s: &crate::Session, k: usize| active_dev(s).masks[k].curve.clone();
+    // a channel of one mask's curve: the other mask and the photo's Tone Curve stay linear
+    s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": ids[0]})).unwrap();
+    s.execute("develop.curve", &json!({"channel": "master", "points": [[0.0, 0.1], [1.0, 1.0]], "mask": ids[0]})).unwrap();
+    assert_eq!(curve_of(&s, 0).red.len(), 4);
+    assert_eq!(curve_of(&s, 0).master.len(), 2);
+    assert!(curve_of(&s, 1).is_empty());
+    assert_eq!(active_dev(&s).curve, lightcraft_develop::ToneCurve::default());
+    // one undo step per change
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(curve_of(&s, 0).master.is_empty() && curve_of(&s, 0).red.len() == 4);
+    // a malformed point refuses the request: the mask's curve and the Tone Curve stay as they were
+    let before = active_dev(&s);
+    for bad in [json!([[0.5, "x"]]), json!([[0.0, 0.0], [0.5]]), json!([[0.0, 0.0], {"x": 1}]), json!([[0.0, 0.0, 1.0]])] {
+        assert!(s.execute("develop.curve", &json!({"channel": "red", "points": bad, "mask": ids[0]})).is_err(), "{bad}");
+        assert!(s.execute("develop.curve", &json!({"channel": "red", "points": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(active_dev(&s), before, "nothing changed");
+    // what isn't a mask's curve is refused, nothing changed
+    assert!(s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": 99})).is_err());
+    assert!(s.execute("develop.curve", &json!({"channel": "parametric", "points": s_curve, "mask": ids[0]})).is_err());
+    assert!(s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": "first"})).is_err());
+    assert!(s.execute("curve.reset", &json!({"channel": "parametric", "mask": ids[0]})).is_err());
+    assert_eq!(active_dev(&s), before);
+    // presets: applied to, matched on and saved from a mask's curve
+    s.execute("curve.applyPreset", &json!({"name": "Strong Contrast", "mask": ids[1]})).unwrap();
+    assert_eq!(s.execute("curve.presets", &json!({"mask": ids[1]})).unwrap()["current"], "Strong Contrast");
+    assert_eq!(s.execute("curve.presets", &json!({})).unwrap()["current"], "Linear", "the photo's curve is untouched");
+    assert!(active_dev(&s).curve.master.is_empty());
+    s.execute("curve.savePreset", &json!({"name": "Red Lift", "mask": ids[0]})).unwrap();
+    let saved = s.curve_presets.iter().find(|p| p.name == "Red Lift").unwrap().clone();
+    assert_eq!((saved.red.len(), saved.master.len()), (4, 0));
+    s.execute("curve.applyPreset", &json!({"name": "Red Lift"})).unwrap();
+    assert_eq!(active_dev(&s).curve.red.len(), 4, "a mask's curve as a preset for the Tone Curve");
+    // reset: one channel, then all of it
+    s.execute("curve.reset", &json!({"channel": "red", "mask": ids[0]})).unwrap();
+    assert!(curve_of(&s, 0).is_empty());
+    s.execute("curve.reset", &json!({"mask": ids[1]})).unwrap();
+    assert!(curve_of(&s, 1).is_empty());
+    assert_eq!(active_dev(&s).curve.red.len(), 4, "the Tone Curve stays");
+}
+
+#[test]
 fn ai_masks_without_the_model_explain_themselves() {
     let mut s = demo();
     let id = s.active().unwrap();

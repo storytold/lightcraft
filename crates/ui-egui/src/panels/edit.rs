@@ -23,7 +23,7 @@ mod histogram;
 mod mixer;
 mod sliders;
 
-use curve::curve_editor;
+pub(crate) use curve::{CurveTarget, curve_editor};
 use grading::grading;
 pub(crate) use grading::wheel_pointer_frame_end;
 #[cfg(test)]
@@ -174,7 +174,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.toggle_flyout("curve");
         }
         if open {
-            curve_editor(app, ui, id, d);
+            curve_editor(app, ui, id, d, CurveTarget::Photo);
         }
         ui.add_space(8.0);
     });
