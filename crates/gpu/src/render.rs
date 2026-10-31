@@ -318,26 +318,43 @@ fn guided_coeffs(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: 
     gaussian(cx, &ab, w, h, 2, sigma)
 }
 
-/// Separable interquartile clamp of a plane (`local::quartile_clamp_hv`).
-fn quartile_clamp_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
+/// Separable median of a plane (`local::median_hv`).
+fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     if r == 0 || w * h == 0 {
         return cx.copy(p);
     }
     let pr = [w as u32, h as u32, 1, r.min(local::BASE_DETAIL_MAX) as u32];
     let tmp = cx.gpu.buffer(w * h);
-    cx.run("quartile_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
+    cx.run("median_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
     let out = cx.gpu.buffer(w * h);
-    cx.run("quartile_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
+    cx.run("median_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
     out
 }
 
-/// The highlights/shadows base (`local::tone_base`; `detail` 0: V1, no interquartile clamp).
+/// The highlights/shadows base (`local::tone_base`; `detail` 0: V1, no detail removal).
 fn tone_base(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, sigma: f32, detail: usize) -> Buf {
     if detail == 0 {
         return guided_fast(cx, l, w, h, sigma, local::BASE_EPS);
     }
-    let m = quartile_clamp_hv(cx, l, w, h, detail);
+    let m = detail_free(cx, l, w, h, detail);
     guided_fast(cx, &m, w, h, sigma, local::BASE_EPS)
+}
+
+/// Log luminance without detail finer than `r` px (`local::detail_free`): clamped between its
+/// median at `r` and the median of a `local::BASE_COARSE_STEP`× downscaled copy, enlarged.
+fn detail_free(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, r: usize) -> Buf {
+    if r == 0 || w * h == 0 {
+        return cx.copy(l);
+    }
+    let fine = median_hv(cx, l, w, h, r);
+    let s = local::BASE_COARSE_STEP;
+    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
+    let lo = resize(cx, l, (w, h), (lw, lh), 1, Filter::Box);
+    let lo_median = median_hv(cx, &lo, lw, lh, r);
+    let coarse = resize(cx, &lo_median, (lw, lh), (w, h), 1, Filter::Bilinear);
+    let out = cx.gpu.buffer(w * h);
+    map(cx, "clamp_between_k", w * h, &[], [Some(l), Some(&fine), Some(&coarse)], &out);
+    out
 }
 
 /// Fast guided filter (`local::guided_fast`): coefficients on a subsampled grid.

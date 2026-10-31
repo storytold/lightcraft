@@ -75,60 +75,28 @@ fn box_v(@builtin(global_invocation_id) g: vec3<u32>) {
     }
 }
 
-// Separable interquartile clamp of a single-channel plane
-// (`lightcraft_pipeline::local::quartile_clamp_hv`): 2r+1 taps (r ≤ 24, clamped edges) along a row
-// (quartile_h) or a column (quartile_v), one thread per pixel; the centre value is clamped to the
-// window's ranks r - r/2 and r + r/2 (`local::quartile_ranks`). Ranks are selections, so the
-// result matches the CPU's bit for bit (signed zeros and NaNs aside: the CPU orders them by
-// `f32::total_cmp`).
+// Separable median of a single-channel plane (`lightcraft_pipeline::local::median_hv`): 2r+1
+// taps (r ≤ 24, clamped edges) along a row (median_h) or a column (median_v), one thread per
+// pixel. The median is a selection, so the result matches the CPU's bit for bit.
 // P: w, h, nc (unused), r.
-fn quartile_clamp_of(n: u32, r: u32, v: ptr<function, array<f32, 49>>) -> f32 {
-    let c = (*v)[r];
-    let lo = r - r / 2u;
-    let hi = r + r / 2u;
-    // where the centre ranks among its window: most pixels lie inside the band and need no sort
-    var lt = 0u;
-    var le = 0u;
-    for (var j = 0u; j < n; j++) {
-        lt += select(0u, 1u, (*v)[j] < c);
-        le += select(0u, 1u, (*v)[j] <= c);
-    }
-    if (le <= lo) {
-        // below the lower rank: select it from the bottom (partial selection sort, ascending)
-        for (var i = 0u; i <= lo; i++) {
-            var m = i;
-            for (var j = i + 1u; j < n; j++) {
-                if ((*v)[j] < (*v)[m]) {
-                    m = j;
-                }
+fn median_of(n: u32, r: u32, v: ptr<function, array<f32, 49>>) -> f32 {
+    // partial selection sort up to the middle
+    for (var i = 0u; i <= r; i++) {
+        var m = i;
+        for (var j = i + 1u; j < n; j++) {
+            if ((*v)[j] < (*v)[m]) {
+                m = j;
             }
-            let t = (*v)[i];
-            (*v)[i] = (*v)[m];
-            (*v)[m] = t;
         }
-        return (*v)[lo];
+        let t = (*v)[i];
+        (*v)[i] = (*v)[m];
+        (*v)[m] = t;
     }
-    if (lt > hi) {
-        // above the upper rank: select it from the top (partial selection sort, descending)
-        let top = n - 1u - hi;
-        for (var i = 0u; i <= top; i++) {
-            var m = i;
-            for (var j = i + 1u; j < n; j++) {
-                if ((*v)[j] > (*v)[m]) {
-                    m = j;
-                }
-            }
-            let t = (*v)[i];
-            (*v)[i] = (*v)[m];
-            (*v)[m] = t;
-        }
-        return (*v)[top];
-    }
-    return c;
+    return (*v)[r];
 }
 
 @compute @workgroup_size(16, 16)
-fn quartile_h(@builtin(global_invocation_id) g: vec3<u32>) {
+fn median_h(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(0u);
     let h = pu(1u);
     let r = min(pu(3u), 24u);
@@ -142,11 +110,11 @@ fn quartile_h(@builtin(global_invocation_id) g: vec3<u32>) {
         let x = clamp(i32(g.x + k) - i32(r), 0, i32(w) - 1);
         v[k] = src[row + u32(x)];
     }
-    dst[row + g.x] = quartile_clamp_of(n, r, &v);
+    dst[row + g.x] = median_of(n, r, &v);
 }
 
 @compute @workgroup_size(16, 16)
-fn quartile_v(@builtin(global_invocation_id) g: vec3<u32>) {
+fn median_v(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(0u);
     let h = pu(1u);
     let r = min(pu(3u), 24u);
@@ -159,5 +127,5 @@ fn quartile_v(@builtin(global_invocation_id) g: vec3<u32>) {
         let y = clamp(i32(g.y + k) - i32(r), 0, i32(h) - 1);
         v[k] = src[u32(y) * w + g.x];
     }
-    dst[g.y * w + g.x] = quartile_clamp_of(n, r, &v);
+    dst[g.y * w + g.x] = median_of(n, r, &v);
 }

@@ -283,35 +283,23 @@ pub fn guided_fast(p: &Plane, sigma: f32, eps: f32) -> Plane {
     guided_apply(p, &ma, &mb)
 }
 
-/// Separable interquartile clamp (`2r+1` px along each row, then each column; clamped edges):
-/// each value is clamped to the ranks [`quartile_ranks`] of its window. A line or speck thinner
-/// than about `r/2` px in an even surround is a minority of every window it is in, so it takes
-/// the surround's value, as under a median; steps between regions stay where they are. Unlike a
-/// median, a window that is a mix of two tones (text, grilles: strokes and gaps about `r` px wide)
-/// leaves its pixels as they are instead of deciding for one tone or the other per row and
-/// column, which turned the gaps between letters into blocks of the letters' tone (and the
-/// strokes into blocks of the background's). At `r = 1` the two ranks meet: a 3-tap median.
-pub fn quartile_clamp_hv(p: &Plane, r: usize) -> Plane {
+/// Separable median (`2r+1` px along each row, then each column; clamped edges). It keeps the
+/// steps between regions where they are and removes features thinner than about `r` px.
+pub fn median_hv(p: &Plane, r: usize) -> Plane {
     if r == 0 || p.data.is_empty() {
         return p.clone();
     }
     let rows = |src: &Plane| {
         let mut out = Plane::new(src.width, src.height);
-        for_rows(&mut out.data, src.width, |y, row| quartile_clamp_row(src.row(y), row, r));
+        for_rows(&mut out.data, src.width, |y, row| median_row(src.row(y), row, r));
         out
     };
     transpose(&rows(&transpose(&rows(p))))
 }
 
-/// The ranks (0-based, in a sorted window of `2r+1`) a value is clamped to by [`quartile_clamp_hv`]:
-/// `r - r/2` and `r + r/2`, about the window's quartiles.
-pub fn quartile_ranks(r: usize) -> (usize, usize) {
-    (r - r / 2, r + r / 2)
-}
-
-/// Running interquartile clamp of `src` over `2r+1` taps (clamped edges) into `out`: a sorted
-/// window that drops the leaving value and inserts the entering one.
-fn quartile_clamp_row(src: &[f32], out: &mut [f32], r: usize) {
+/// Running median of `src` over `2r+1` taps (clamped edges) into `out`: a sorted window that
+/// drops the leaving value and inserts the entering one.
+fn median_row(src: &[f32], out: &mut [f32], r: usize) {
     let n = src.len();
     if n == 0 {
         return;
@@ -320,9 +308,8 @@ fn quartile_clamp_row(src: &[f32], out: &mut [f32], r: usize) {
     let r_ = r as isize;
     let mut win: Vec<i32> = (-r_..=r_).map(at).collect();
     win.sort_unstable();
-    let (lo, hi) = quartile_ranks(r);
     for (x, o) in out.iter_mut().enumerate() {
-        *o = f32::from_bits(total_key_inv(at(x as isize).clamp(win[lo], win[hi])));
+        *o = f32::from_bits(total_key_inv(win[r]));
         let (old, new) = (at(x as isize - r_), at(x as isize + r_ + 1));
         if old != new {
             // Ranks by counting the smaller keys in one branch-free pass the compiler vectorizes.
@@ -370,21 +357,21 @@ fn transpose(p: &Plane) -> Plane {
 }
 
 /// Detail scale of the highlights/shadows base from process V2, as a fraction of the long edge:
-/// the base is the edge-aware filter of the [`quartile_clamp_hv`] of log luminance at this radius,
-/// so twigs, lines and fine texture brighter or darker than their surroundings take their
+/// the base is the edge-aware filter of the [`detail_free`] log luminance at this radius, so
+/// twigs, lines and fine texture brighter or darker than their surroundings take their
 /// surroundings' shift (and keep their contrast, as with Exposure) while region boundaries stay
 /// sharp (no halos). V1's base is the edge-aware filter of log luminance itself (issue #632).
 pub const BASE_DETAIL: f64 = 0.0015;
 /// Largest [`base_detail_radius`] (px).
 pub const BASE_DETAIL_MAX: usize = 24;
 
-/// Detail radius (px) of the highlights/shadows base at `px_per_long` (see [`BASE_DETAIL`]).
+/// Median radius (px) of the highlights/shadows base at `px_per_long` (see [`BASE_DETAIL`]).
 pub fn base_detail_radius(px_per_long: f64) -> usize {
     ((BASE_DETAIL * px_per_long).round().max(0.0) as usize).min(BASE_DETAIL_MAX)
 }
 
-/// Detail radius (px) of the highlights/shadows base of `s`'s rendering process at `px_per_long`:
-/// 0 (no clamp) under V1, [`base_detail_radius`] from V2.
+/// Median radius (px) of the highlights/shadows base of `s`'s rendering process at `px_per_long`:
+/// 0 (no median) under V1, [`base_detail_radius`] from V2.
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
@@ -393,12 +380,54 @@ pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
 }
 
 /// The highlights/shadows base layer of log luminance `l`: the fast guided filter ([`BASE_EPS`])
-/// of its [`quartile_clamp_hv`] at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1).
+/// of its [`detail_free`] plane at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1).
 pub fn tone_base(l: &Plane, sigma: f32, detail: usize) -> Plane {
     if detail == 0 {
         return guided_fast(l, sigma, BASE_EPS);
     }
-    guided_fast(&quartile_clamp_hv(l, detail), sigma, BASE_EPS)
+    guided_fast(&detail_free(l, detail), sigma, BASE_EPS)
+}
+
+/// Downscale factor of the coarse median in [`detail_free`]: its radius at full size is this many
+/// times the fine one's.
+pub const BASE_COARSE_STEP: usize = 3;
+
+/// Log luminance `l` without detail finer than `r` px (process V2's highlights/shadows base takes
+/// its edge-aware filter): each value moves toward its [`median_hv`] at `r` only as far as the
+/// median of a [`BASE_COARSE_STEP`]× wider neighbourhood agrees (`l` clamped between the two).
+/// A twig, line or speck in an even surround has both medians on the surround's side and takes
+/// its tone, as #632 wants. The gap between two letter strokes, which a median at `r` fills with the
+/// strokes' tone, sits in a wider neighbourhood mostly of the panel's tone: the two medians
+/// disagree and the gap keeps its own. The coarse median is taken at `r` of a box-downscaled copy and
+/// enlarged bilinearly, like [`guided_fast`]'s coefficients.
+pub fn detail_free(l: &Plane, r: usize) -> Plane {
+    use lightcraft_raster::resample::{Filter, resize};
+    if r == 0 || l.data.is_empty() {
+        return l.clone();
+    }
+    let (w, h) = (l.width, l.height);
+    let fine = median_hv(l, r);
+    let (lw, lh) = (w.div_ceil(BASE_COARSE_STEP).max(1), h.div_ceil(BASE_COARSE_STEP).max(1));
+    let coarse = resize(&median_hv(&resize(l, lw, lh, Filter::Box), r), w, h, Filter::Bilinear);
+    let mut out = Plane::new(w, h);
+    for_rows(&mut out.data, w, |y, row| {
+        for (((o, &v), &a), &b) in row.iter_mut().zip(l.row(y)).zip(fine.row(y)).zip(coarse.row(y)) {
+            *o = clamp_between(v, a, b);
+        }
+    });
+    out
+}
+
+/// `v` clamped between `a` and `b` (in either order); a NaN bound is ignored, not a panic.
+fn clamp_between(v: f32, a: f32, b: f32) -> f32 {
+    let (lo, hi) = (a.min(b), a.max(b));
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
 
 /// Subsampling step of [`guided_fast`] for `sigma` (1 = no subsampling: the plain guided filter).
@@ -530,7 +559,7 @@ pub(crate) struct Planes {
     /// The image's key without its noise reduction (`Plan::pre_nr_key`).
     pub pre_nr: u64,
     pub log_l: Option<Arc<Plane>>,
-    /// Keyed by its radius, process and detail radius ([`BaseKey`]).
+    /// Keyed by its radius, process and median radius ([`BaseKey`]).
     pub base: Option<(BaseKey, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
@@ -550,7 +579,7 @@ impl Planes {
 }
 
 /// What the highlights/shadows base plane was computed with: its radius (`f32` bits), the
-/// rendering process and the detail radius ([`tone_base_detail`]). The base differs between
+/// rendering process and the median radius ([`tone_base_detail`]). The base differs between
 /// processes, so a photo moved to another one (Update to Current Process, undo) recomputes it.
 pub type BaseKey = (u32, Process, usize);
 
@@ -589,7 +618,7 @@ pub const CHROMA_SIGMA: f32 = 0.004;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaneSigmas {
     /// Edge-aware base for highlights/shadows ([`tone_base`]: fast guided filter, [`BASE_EPS`]; from
-    /// process V2 of the [`BASE_DETAIL`] interquartile clamp).
+    /// process V2 of its [`detail_free`] plane at [`BASE_DETAIL`]).
     pub base: Option<f32>,
     /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1).
     pub base_detail: usize,
@@ -618,8 +647,8 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         || s.light.shadows != 0.0
         || s.masks.iter().filter(live).any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
-    // From V2 it is taken of the interquartile clamp at 0.15%: lines and texture finer than about
-    // half that are detail, not tone (#632).
+    // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
+    // not tone (#632).
     let base = tone_active.then(|| {
         let sigma = (0.015 * ppl).max(1.0);
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
@@ -962,12 +991,12 @@ mod fast_tests {
     }
 
     #[test]
-    fn sampled_tone_base_keeps_the_quartile_clamp_before_the_guided_filter() {
+    fn sampled_tone_base_keeps_the_detail_free_plane_before_the_guided_filter() {
         let p = Plane::from_fn(73, 51, |x, y| if x % 9 == 0 { 3.0 } else { -4.0 + ((x + y) % 7) as f32 * 0.03 });
         for sigma in [6.0, 24.0, 120.0] {
             for detail in [0, 1, 3, BASE_DETAIL_MAX] {
-                let clamped = quartile_clamp_hv(&p, detail);
-                assert_eq!(tone_base(&p, sigma, detail).data, resized_reference(&clamped, sigma, BASE_EPS).data, "{sigma}, {detail}");
+                let free = detail_free(&p, detail);
+                assert_eq!(tone_base(&p, sigma, detail).data, resized_reference(&free, sigma, BASE_EPS).data, "{sigma}, {detail}");
             }
         }
     }
