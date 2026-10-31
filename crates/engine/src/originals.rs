@@ -35,9 +35,11 @@ enum WriteTargetState {
     Existing(FileIdentity),
 }
 
-/// Stable identity of a directory entry, from `symlink_metadata` (so replacing a symlink or a
-/// hard link is a different entry). Unix uses device + inode; Windows uses the canonical path,
-/// length and creation time; other platforms use a canonical/len/mtime fallback.
+/// Best-effort identity of a directory entry, from `symlink_metadata`: replacing the entry with a
+/// different file or a symlink changes it, but a hard link to the same file (another name for the
+/// pinned file) does not. Unix uses device + inode; Windows uses the canonical path, length and
+/// creation time plus the volume serial number and file index; other platforms use a
+/// canonical/len/mtime fallback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FileIdentity {
     #[cfg(unix)]
@@ -50,6 +52,13 @@ struct FileIdentity {
     len: u64,
     #[cfg(windows)]
     created: u64,
+    /// Volume serial number and file index of the file the entry names (through a symlink), or
+    /// `None` when the file system reports none. NTFS tunneling gives a file created under a name
+    /// deleted or renamed away seconds earlier the old creation time, but not the old index. It
+    /// only adds to the fields above: FAT can reuse an index and ReFS's 64-bit one is not unique.
+    /// An index readable at admission and not at write time (or the reverse) is a change.
+    #[cfg(windows)]
+    file_id: Option<(u64, u64)>,
     #[cfg(not(any(unix, windows)))]
     canonical: PathBuf,
     #[cfg(not(any(unix, windows)))]
@@ -68,11 +77,15 @@ impl FileIdentity {
         }
         #[cfg(windows)]
         {
-            // The volume serial/file index metadata is still unstable; use stable metadata that
-            // changes when a different file replaces the entry, and keep the same in-place
-            // content edits (which do not change the creation time or length) overwritable.
+            // Stable metadata that changes when a different file replaces the entry, which keeps
+            // same-length in-place content edits (same creation time and length) overwritable.
             use std::os::windows::fs::MetadataExt;
-            Self { canonical: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()), len: meta.len(), created: meta.creation_time() }
+            Self {
+                canonical: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+                len: meta.len(),
+                created: meta.creation_time(),
+                file_id: lightcraft_catalog::safe_file::file_id(path).ok(),
+            }
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -446,6 +459,46 @@ mod tests {
         let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
         assert!(refused.contains("original"), "{refused}");
         assert!(!refused.contains("cannot tell whether"), "{refused}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_tunnelled_replacement_of_a_pinned_target_is_refused() {
+        use std::os::windows::fs::MetadataExt;
+        let d = std::env::temp_dir().join(format!("lc-tunnelled-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let s = crate::Session::new();
+        let shot = d.join("shot.png");
+        std::fs::write(&shot, b"old").unwrap();
+        let Ok(old_id) = lightcraft_catalog::safe_file::file_id(&shot) else {
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "the temp volume reports no file index");
+            return;
+        };
+
+        // A different file of the same length created under the deleted name within NTFS's
+        // tunneling window inherits the old creation time, but not the old file index.
+        let pinned = s.pin_write_target(&shot.to_string_lossy()).expect("ordinary file");
+        let before = std::fs::metadata(&shot).unwrap().creation_time();
+        std::fs::remove_file(&shot).unwrap();
+        std::fs::write(&shot, b"new").unwrap();
+        let after = std::fs::metadata(&shot).unwrap().creation_time();
+        eprintln!("creation time before {before}, after {after}");
+        if before != after {
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "the temp volume did not tunnel the creation time ({before} -> {after})");
+            return;
+        }
+        // FAT can give the new file the old one's index; that case is not caught, by design.
+        if lightcraft_catalog::safe_file::file_id(&shot).ok() == Some(old_id) {
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "the temp volume reused the file index for the new file");
+            return;
+        }
+        let refused = s.revalidate_write_target(&pinned).unwrap_err();
+        assert!(refused.contains("changed while the screenshot was being captured"), "{refused}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
