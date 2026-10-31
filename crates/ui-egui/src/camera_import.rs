@@ -302,17 +302,20 @@ mod tests {
     #[test]
     fn a_camera_that_cant_be_read_is_a_message_not_a_crash() {
         let mut h = demo();
+        // a second camera while one is read is refused. Both start with no frame in between, so the
+        // first is still the running task even where it fails at once (no camera support: FreeBSD)
+        assert!(start(&mut h.app, "\\\\?\\usb#no-such-camera", "Ghost", None).is_ok());
+        assert_eq!(start(&mut h.app, "x", "Ghost", None).err().as_deref(), Some("a camera is already being read"));
+        assert!(h.step_until(T, |h| h.app.camera.is_none()));
+        assert!(toast(&h).starts_with("Couldn't read Ghost: "), "{}", toast(&h));
+        assert!(h.app.ui.dialog.is_none());
+        // the same through the command File ▸ Import from Device runs
         let r = h.request(
             "engine.execute",
             json!({"command": "file.addFromDevice", "params": {"camera": "\\\\?\\usb#no-such-camera", "name": "Ghost"}}),
             T,
         );
         assert_eq!(r["ok"], true, "{r}");
-        // a second camera while one is read is refused
-        let again = h.request("engine.execute", json!({"command": "file.addFromDevice", "params": {"camera": "x", "name": "Ghost"}}), T);
-        if h.app.camera.is_some() {
-            assert_eq!(again["ok"], false, "{again}");
-        }
         assert!(h.step_until(T, |h| h.app.camera.is_none()));
         assert!(toast(&h).starts_with("Couldn't read Ghost: "), "{}", toast(&h));
         assert!(h.app.ui.dialog.is_none());
