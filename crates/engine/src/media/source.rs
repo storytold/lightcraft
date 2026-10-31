@@ -320,6 +320,9 @@ pub struct ProbeInfo {
     pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
     /// The file's embedded XMP packet (raw/DNG files), for develop settings stored inside the file.
     pub xmp: Option<String>,
+    /// The file's Exif orientation, when it states one: how its stored pixels turn upright (`width` and `height` are
+    /// the upright size).
+    pub orientation: Option<lightcraft_geom::Orientation>,
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
