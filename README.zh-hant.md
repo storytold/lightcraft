@@ -435,7 +435,8 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 用該層級，其餘只記警告與錯誤；其他值：只記警告與錯誤），並且優先於 `RUST_LOG`；未設定 `LIGHTCRAFT_LOG` 時，`RUST_LOG` 會把預設值換成
 env_logger 風格的指令，例如 `RUST_LOG=debug` 或 `RUST_LOG=warn,lightcraft_pipeline=trace`（以
 `*` 結尾的指令會涵蓋所有以它開頭的目標，如 `lightcraft*=debug`）。panic 一樣會記錄在那裡，
-並且仍然會寫在暫存資料夾裡的 `lightcraft-panics.log`。記錄器程式碼位於 `apps/lightcraft/src/logging.rs`。
+並且會寫在設定資料夾裡的 `lightcraft-panics.log`；帶 `--memory` 或
+`LIGHTCRAFT_NO_PREFS` 執行時只會寫到標準錯誤輸出。記錄器程式碼位於 `apps/lightcraft/src/logging.rs`。
 
 網頁版需要 `wasm32-unknown-unknown` target 以及對應版本的 `wasm-bindgen` CLI
 （`cargo xtask web` 會印出確切的安裝指令）；詳見 [docs/web.md](docs/web.md)。

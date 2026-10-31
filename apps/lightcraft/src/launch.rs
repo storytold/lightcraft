@@ -73,10 +73,33 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
     port
 }
 
-/// An isolated profile keeps the emergency crash log with its other app data. With no
-/// override (or an empty override), retain the historical system-temp location.
-pub(crate) fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: std::path::PathBuf) -> std::path::PathBuf {
-    env("LIGHTCRAFT_CONFIG_DIR").filter(|value| !value.is_empty()).map(std::path::PathBuf::from).unwrap_or(temp).join("lightcraft-panics.log")
+/// The emergency crash log: `lightcraft-panics.log` in the settings folder, next to `ui.json` (an
+/// isolated profile's with `LIGHTCRAFT_CONFIG_DIR`). Never the system temp folder: on Linux and
+/// FreeBSD every user shares it, so another could create the file first or put a link there (issue
+/// #2572). None (panics then go to standard error, and to the log file when there is one) for a
+/// `--memory` session, which writes nothing (issue #164), with `LIGHTCRAFT_NO_PREFS` or with no
+/// settings folder.
+fn panic_log_path(in_memory: bool) -> Option<std::path::PathBuf> {
+    panic_log_path_with(in_memory, std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some(), config_dir)
+}
+
+/// `config` (the settings folder) is looked up only when the crash log is kept.
+fn panic_log_path_with(in_memory: bool, no_prefs: bool, config: impl FnOnce() -> Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    if in_memory || no_prefs {
+        return None;
+    }
+    config().map(|d| d.join("lightcraft-panics.log"))
+}
+
+/// The panic hooks: the engine guard's (standard error, and the crash log when there is one), then
+/// the log file's.
+pub(crate) fn install_panic_hooks(logger: Option<&'static super::logging::AppLogger>, in_memory: bool) {
+    if let Some(path) = panic_log_path(in_memory) {
+        lightcraft_engine::guard::install_hook(path);
+    }
+    if let Some(logger) = logger {
+        super::logging::record_panics(logger);
+    }
 }
 
 /// What to tell the user when LightCraft stopped while running (`error`), and why when the GPU
@@ -128,11 +151,61 @@ pub(crate) fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
 mod config_path_tests {
     use super::*;
 
+    /// #2572: the crash log is in the settings folder (an isolated profile's too: `config_dir` honours
+    /// `LIGHTCRAFT_CONFIG_DIR`); without one (an empty override, no home folder), with
+    /// `LIGHTCRAFT_NO_PREFS` or in a `--memory` session there is none, and the last two never look the
+    /// folder up.
     #[test]
-    fn config_override_keeps_panic_log_in_isolated_profile() {
-        let temp = std::path::PathBuf::from("temp");
-        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone()), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone()), temp.join("lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone()), temp.join("lightcraft-panics.log"));
+    fn panic_log_lives_in_the_settings_folder() {
+        let settings = || Some(std::path::PathBuf::from("settings"));
+        assert_eq!(panic_log_path_with(false, false, settings), Some(std::path::Path::new("settings").join("lightcraft-panics.log")));
+        assert_eq!(panic_log_path_with(false, false, || None), None);
+        let unasked = || -> Option<std::path::PathBuf> { panic!("the settings folder was looked up") };
+        assert_eq!(panic_log_path_with(false, true, unasked), None);
+        assert_eq!(panic_log_path_with(true, false, unasked), None);
+    }
+
+    /// #2572: a panic is kept in `lightcraft-panics.log` in the settings folder, never in the system
+    /// temp folder (shared by every user on Linux and FreeBSD), and a `--memory` session keeps it
+    /// nowhere. The hook is process-wide, so the panic happens in a child (this test binary again)
+    /// with its own temp and home folders and no `LIGHTCRAFT_CONFIG_DIR`.
+    #[test]
+    fn a_panic_is_kept_in_the_settings_folder_not_the_temp_folder() {
+        if let Some(mode) = std::env::var_os("LIGHTCRAFT_TEST_PANIC_LOG") {
+            let settings = config_dir().unwrap();
+            std::fs::create_dir_all(&settings).unwrap();
+            println!("settings folder {}", settings.display());
+            install_panic_hooks(None, mode == "memory");
+            assert!(std::thread::spawn(|| panic!("lc-2572 probe")).join().is_err());
+            return;
+        }
+        let scratch = std::env::temp_dir().join(format!("lightcraft-panic-log-{}", std::process::id()));
+        for memory in [false, true] {
+            let _ = std::fs::remove_dir_all(&scratch);
+            let (temp, home) = (scratch.join("temp"), scratch.join("home"));
+            std::fs::create_dir_all(&temp).unwrap();
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "launch::config_path_tests::a_panic_is_kept_in_the_settings_folder_not_the_temp_folder", "--nocapture"])
+                .env("LIGHTCRAFT_TEST_PANIC_LOG", if memory { "memory" } else { "1" })
+                .env_remove("LIGHTCRAFT_CONFIG_DIR")
+                .env_remove("LIGHTCRAFT_NO_PREFS")
+                .env("TMPDIR", &temp)
+                .env("TMP", &temp)
+                .env("TEMP", &temp)
+                .env("HOME", &home)
+                .env("XDG_CONFIG_HOME", home.join(".config"))
+                .env("APPDATA", home.join("AppData"))
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success(), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+            // Anywhere in a line: with one test thread (`RUST_TEST_THREADS=1`, as `xtask ci` sets on a
+            // small machine) libtest prints the test's name first, on the same line.
+            let settings = stdout.lines().find_map(|l| l.split_once("settings folder ").map(|(_, p)| p)).expect("the child didn't run the test");
+            let kept = std::fs::read_to_string(std::path::Path::new(settings).join("lightcraft-panics.log")).unwrap_or_default();
+            assert_eq!(kept.contains("lc-2572 probe"), !memory, "--memory {memory}: {kept:?} in {settings}");
+            assert!(!temp.join("lightcraft-panics.log").exists(), "--memory {memory}: the panic was kept in the temp folder");
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }
