@@ -875,7 +875,8 @@ impl RawImage {
                 return Ok(self.stretched(rgb));
             }
         }
-        let rgb = demosaic(&n, method);
+        // (X-Trans interpolates the white-balanced mosaic; Bayer methods ignore the gains)
+        let rgb = demosaic::demosaic_with(&n, method, demosaic::Options { balance: self.wb_multipliers });
         drop(n);
         Ok(self.finish_demosaiced(rgb))
     }
