@@ -764,8 +764,8 @@ fn parse_limits(v: &str) -> Option<(u64, u64)> {
         }
         n => {
             let mb: u64 = n.trim_end_matches("mib").trim_end_matches("mb").trim().parse().ok()?;
-            let b = mb.max(1) << 20;
-            Some((b, 2 * b))
+            let b = mb.max(1).checked_mul(1 << 20)?;
+            Some((b, b.checked_mul(2)?))
         }
     }
 }
@@ -906,6 +906,8 @@ mod tests {
         assert_eq!(super::parse_limits("512MiB"), Some((512 << 20, 1024 << 20)));
         assert_eq!(super::parse_limits(""), None);
         assert_eq!(super::parse_limits("lots"), None);
+        assert_eq!(super::parse_limits("9223372036854775807"), None);
+        assert_eq!(super::parse_limits("17592186044416"), None);
     }
 
     /// Issue #2936: the kernels are built on several threads; every entry point of every module has one.
