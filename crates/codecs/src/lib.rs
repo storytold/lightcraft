@@ -27,6 +27,7 @@ mod heif;
 pub mod icc;
 mod jpeg;
 pub mod jpeg_par;
+mod jpeg_quant;
 #[cfg(feature = "jxl")]
 mod jxl;
 mod jxl_encode;
