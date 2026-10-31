@@ -109,3 +109,41 @@ fn a_drive_that_runs_low_without_a_preview_build_is_told() {
     let _ = h.app.session.close_library();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An idle window still takes the drive's answer and makes the next check (CodeRabbit on #3077):
+/// while a read runs the notice logic asks for a pass soon, and otherwise for one when the next
+/// check is due; once the alert was raised it asks for nothing.
+#[test]
+fn an_idle_window_wakes_for_the_disk_check() {
+    use std::sync::{Arc, Mutex, mpsc};
+    let dir = std::env::temp_dir().join(format!("lc-disk-notice-idle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (release, wait) = mpsc::channel::<()>();
+    let wait = Mutex::new(wait);
+    let mut session = lightcraft_engine::Session::with_demo().with_fs();
+    session.set_disk_space_reader(Some(Arc::new(move |_: &std::path::Path| {
+        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        Some(DiskSpace { available: GB, total: 500 * GB })
+    })));
+    let mut app = LightcraftApp::new(session, Services::default());
+    app.disk_space_notice = true;
+    app.session.open_library(&dir, false).unwrap();
+    assert!(app.session.disk_space_reading());
+    let ctx = egui::Context::default();
+    let pass = |app: &mut LightcraftApp| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| crate::panels::notices::logic(app, &ctx));
+        out.textures_delta.clear();
+        out.viewport_output.values().map(|v| v.repaint_delay).min().unwrap_or(Duration::MAX)
+    };
+    assert!(pass(&mut app) <= Duration::from_millis(250), "a pass soon while the read runs");
+    release.send(()).unwrap();
+    let until = std::time::Instant::now() + T;
+    while app.notices.is_empty() {
+        assert!(std::time::Instant::now() < until, "the answer was never taken");
+        pass(&mut app);
+    }
+    assert!(pass(&mut app) > Duration::from_secs(60), "raised: nothing more to wake for");
+    let _ = app.session.close_library();
+    let _ = std::fs::remove_dir_all(&dir);
+}

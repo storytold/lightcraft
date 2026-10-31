@@ -11,7 +11,7 @@ use crate::{LightcraftApp, QuitPrompt};
 
 /// Collect the library's settings-file warnings (each is shown once), the no-GPU notice once the GPU device has
 /// been tried, and the low-disk notice (once per session).
-pub fn logic(app: &mut LightcraftApp) {
+pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
     // a low-disk notice still queued from the library that was open before is not this one's
@@ -26,6 +26,13 @@ pub fn logic(app: &mut LightcraftApp) {
         // the cache grows with every thumbnail and preview, not only while previews are built: the
         // engine reads the free space at most every few minutes (a clock check otherwise)
         app.session.check_disk_space(false);
+        // an idle window still takes the read's answer and makes the next check: a pass soon while
+        // the read runs, and one when the next check is due
+        if !app.session.disk_space_alert_raised() {
+            let wait =
+                if app.session.disk_space_reading() { std::time::Duration::from_millis(250) } else { lightcraft_engine::disk_space::CHECK_EVERY };
+            ctx.request_repaint_after(wait);
+        }
         if let Some(alert) = app.session.take_disk_space_alert() {
             let text = disk_space_notice(&alert);
             app.disk_notice = Some((app.session.library_generation(), text.clone()));
