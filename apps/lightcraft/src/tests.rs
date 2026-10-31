@@ -22,6 +22,14 @@ fn dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
+#[test]
+fn native_window_persistence_respects_no_write_modes() {
+    assert!(remember_native_window(false, false, true));
+    assert!(!remember_native_window(true, false, true));
+    assert!(!remember_native_window(false, true, true));
+    assert!(!remember_native_window(false, false, false));
+}
+
 /// Issue #374: launch arguments that would walk a whole drive or home folder are reported,
 /// not imported; empty ones are ignored; the rest are imported as absolute paths.
 #[test]
