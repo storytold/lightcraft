@@ -166,7 +166,7 @@ fn two_devices_render_alike_and_each_card_goes_its_own_way() {
     assert!(mean < 0.5 && max <= 3, "second card vs CPU: mean {mean}, max {max}");
     let (mean, max) = diff(&on_other, &primary);
     eprintln!("{} vs {editing}: mean {mean:.4}, max {max}", other.name);
-    assert!(max <= 1, "two cards (decision 6: at most 1 LSB): mean {mean}, max {max}");
+    assert!(max <= 2, "two cards (decision 6, revised 31 Oct: at most 2 levels): mean {mean}, max {max}");
     lightcraft_gpu::set_helper("off").expect("off");
     wait_helper_ready();
 }
