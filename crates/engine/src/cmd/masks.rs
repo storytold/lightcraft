@@ -833,8 +833,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let rgb: Vec<u8> = img.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
-                let faces =
-                    detector.detect(&rgb, img.width, img.height, &lightcraft_faces::yunet::Options::default()).map_err(|e| bad(c, e.to_string()))?;
+                let faces = detector.detect(&rgb, img.width, img.height, &blemish_detector_options()).map_err(|e| bad(c, e.to_string()))?;
                 let boxes: Vec<lightcraft_pipeline::blemish::FaceBox> = faces
                     .iter()
                     .map(|f| lightcraft_pipeline::blemish::FaceBox {
@@ -1140,6 +1139,30 @@ fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>> {
         .map(|q| q.as_f64().filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0) as f32))
         .collect::<Option<Vec<f32>>>()
         .ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))
+}
+
+/// Long edge the face detector looks at for `spot.findBlemishes`: the photo is 1600 px and a face narrower than 160 px
+/// gets no spots, so the faces that matter are at least 64 px at this size, far above YuNet's 10 px floor. The scan's
+/// 1024 px would cost more for nothing here, so this keeps the size the command always used.
+const BLEMISH_LOOK_EDGE: usize = 640;
+
+fn blemish_detector_options() -> lightcraft_faces::yunet::Options {
+    lightcraft_faces::yunet::Options { long_edge: BLEMISH_LOOK_EDGE, ..lightcraft_faces::yunet::Options::default() }
+}
+
+#[cfg(test)]
+mod tests_blemish_detector {
+    use super::*;
+
+    #[test]
+    fn blemish_search_keeps_its_own_detector_size() {
+        let o = blemish_detector_options();
+        assert_eq!(o.long_edge, 640);
+        assert_ne!(o.long_edge, lightcraft_faces::yunet::Options::default().long_edge, "the default is the scan's size");
+        // the rest is the detector's defaults
+        let d = lightcraft_faces::yunet::Options::default();
+        assert_eq!((o.score, o.nms_iou, o.max_faces), (d.score, d.nms_iou, d.max_faces));
+    }
 }
 
 #[cfg(test)]

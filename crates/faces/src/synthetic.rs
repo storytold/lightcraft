@@ -108,6 +108,17 @@ fn node_bytes(op: &str, inputs: &[&str], output: &str, attrs: &[(&str, Attribute
     n
 }
 
+/// A one-dimensional INT64 initializer (a Reshape's target shape).
+fn int_tensor_bytes(name: &str, values: &[i64]) -> Vec<u8> {
+    let mut t = Vec::new();
+    varint_field(1, values.len() as u64, &mut t);
+    varint_field(2, 7, &mut t); // INT64
+    len_field(8, name.as_bytes(), &mut t);
+    let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    len_field(9, &raw, &mut t);
+    t
+}
+
 fn float_tensor_bytes(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
     let mut t = Vec::new();
     for d in dims {
@@ -213,18 +224,56 @@ pub(crate) fn norm_overflow_model() -> Vec<u8> {
     model
 }
 
-/// A small YuNet-shaped stand-in that reports no faces, independent of the real downloaded model.
+/// A small YuNet-shaped stand-in that reports no faces, independent of the real downloaded model. Like YuNet it is
+/// fully convolutional (a zero 1 x 1 convolution per stride, then `[1, cells, components]`), so it runs at any input
+/// size that is a multiple of 32.
 pub fn tiny_detector_model() -> Vec<u8> {
+    detector_model(false, false)
+}
+
+/// Like [`tiny_detector_model`], but its Reshape targets are literal (the cells of a 64 x 64 input), as in a
+/// shape-fixed export: it runs at 64 x 64 and at nothing else.
+pub fn fixed_shape_detector_model() -> Vec<u8> {
+    detector_model(true, false)
+}
+
+/// A stand-in that finds a bright patch: at stride 8 the cell sampled at (8 row, 8 column) of the input scores the mean
+/// of its three colour values over 255 (so 1 on white, 0 on black) and boxes a 16 x 16 input-pixel square around the
+/// middle of its cell; the other strides find nothing. A white patch in a black photo is thus found where it is.
+pub fn bright_patch_detector_model() -> Vec<u8> {
+    detector_model(false, true)
+}
+
+/// `fixed`: literal Reshape targets for a 64 x 64 input (else `-1` for the cell count). `patch`: the stride 8
+/// outputs respond to bright pixels as described at [`bright_patch_detector_model`] (else every weight and bias is zero).
+fn detector_model(fixed: bool, patch: bool) -> Vec<u8> {
     let mut graph = Vec::new();
     len_field(11, &value_info_bytes("input", 1, &[Ok(1), Ok(3), Ok(64), Ok(64)]), &mut graph);
     for stride in [8u64, 16, 32] {
         let cells = (64 / stride) * (64 / stride);
         for (kind, components) in [("cls", 1u64), ("obj", 1), ("bbox", 4), ("kps", 10)] {
             let name = format!("{kind}_{stride}");
-            let weight = format!("weight_{name}");
-            let values = vec![0.0; (cells * components) as usize];
-            len_field(5, &float_tensor_bytes(&weight, &[1, cells, components], &values), &mut graph);
-            len_field(1, &node_bytes("Identity", &[&weight], &name, &[]), &mut graph);
+            let (weight, bias) = (format!("weight_{name}"), format!("bias_{name}"));
+            let (shape, conv, nhwc) = (format!("shape_{name}"), format!("conv_{name}"), format!("nhwc_{name}"));
+            let responds = patch && stride == 8;
+            // cls and obj: the mean of the three colour planes over 255; bbox: centre of the cell, 16 px wide and high
+            let mut weights = vec![0.0; (components * 3) as usize];
+            let mut biases = vec![0.0; components as usize];
+            if responds && (kind == "cls" || kind == "obj") {
+                weights = vec![1.0 / (3.0 * 255.0); 3];
+            }
+            if responds && kind == "bbox" {
+                biases = vec![0.5, 0.5, 2.0f32.ln(), 2.0f32.ln()];
+            }
+            len_field(5, &float_tensor_bytes(&weight, &[components, 3, 1, 1], &weights), &mut graph);
+            len_field(5, &float_tensor_bytes(&bias, &[components], &biases), &mut graph);
+            let target = if fixed { vec![1, cells as i64, components as i64] } else { vec![1, -1, components as i64] };
+            len_field(5, &int_tensor_bytes(&shape, &target), &mut graph);
+            let s = stride as i64;
+            let attrs = [("kernel_shape", Attribute::Ints(&[1, 1])), ("strides", Attribute::Ints(&[s, s]))];
+            len_field(1, &node_bytes("Conv", &["input", &weight, &bias], &conv, &attrs), &mut graph);
+            len_field(1, &node_bytes("Transpose", &[&conv], &nhwc, &[("perm", Attribute::Ints(&[0, 2, 3, 1]))]), &mut graph);
+            len_field(1, &node_bytes("Reshape", &[&nhwc, &shape], &name, &[]), &mut graph);
             len_field(12, &value_info_bytes(&name, 1, &[Ok(1), Ok(cells), Ok(components)]), &mut graph);
         }
     }

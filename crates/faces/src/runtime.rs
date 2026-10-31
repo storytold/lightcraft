@@ -123,7 +123,9 @@ impl Embedder {
             .collect();
         let probe = Tensor::new(vec![1, 3, self.height, self.width], data).map_err(|e| RuntimeError::Input(e.to_string()))?;
         guarded("checking the device", || {
-            self.plan.attach_checked(accelerator, &probe, crate::yunet::ACCELERATOR_TOLERANCE, require_faster).map_err(RuntimeError::Run)
+            self.plan
+                .attach_checked(accelerator, std::slice::from_ref(&probe), crate::yunet::ACCELERATOR_TOLERANCE, require_faster)
+                .map_err(RuntimeError::Run)
         })
     }
 

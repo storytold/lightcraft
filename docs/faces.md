@@ -156,11 +156,16 @@ needs something the program cannot express runs its convolutions one by one on t
 photo go together (`Embedder::embed_batch`, up to 16 per submission).
 
 The CPU interpreter remains the reference. After a model loads, a background check (a row in the activity stack, "Checking
-the GPU for faces") runs it once on the CPU and twice through the GPU on a fixed test input: the GPU is used only when
-every output is within 1e-3 of the CPU's (relative to the output's largest value) **and** it was faster; until then,
+the GPU for faces") runs it on the CPU and then through the GPU on fixed test inputs (sizes are width x height here; for the detector, three representative shapes, not every shape a
+scan runs, since a scan's shape comes from each photo: 1024 x 704 landscape, 704 x 1024 portrait, and 1024 x 32, a one-row
+grid like a panorama gives; for a recogniser, its one face size): the GPU is used only when every output is within 1e-3 of the CPU's at **every** input (relative to the output's
+largest value) **and** it was faster; the check uses the GPU on its own, so scans keep running on the CPU until the
+last input has agreed and only then switch to it, and choosing **Run face models on the CPU only** while the check runs
+wins over a passing check (the GPU is not used). Until then,
 and whenever the GPU is switched off (`LIGHTCRAFT_GPU=0`, `LIGHTCRAFT_GPU_BACKEND=off`, the GPU preference, or **Settings ▸
 Faces ▸ Run face models on the CPU only**), missing, wrong or slower, the model runs on the CPU. The first GPU error,
-or a result of the wrong size or with values that are not finite, drops it for that model. Settings ▸ Faces shows
+or a result of the wrong size or with values that are not finite, drops it for that model, and nothing in that run
+calls it again (the rest of the run, the other photos or faces in the same batch, and the CPU fallback all use the CPU). Settings ▸ Faces shows
 which device each model runs on (`faces.gpu`). The weights stay on a device of the scan's own (separate from the
 editor's) while the model is loaded, at most 768 MB per model.
 
@@ -230,7 +235,23 @@ a ResNet-100 (so it is not the accuracy choice its size suggests). InsightFace's
 unnamed face boxes, in one undo step. A new run replaces earlier detections; boxes that came from XMP, or that you drew or
 named, are never touched (and a face that already has one is not boxed a second time), and no sidecar is written. It looks at the photo upright and uncropped with default settings,
 so your edits and crops do not matter. `apply: false` only reports. It finds faces of about 10 pixels and up in a
-640-pixel version of the photo (so very small faces in a large group photo can be missed; looking at tiles is planned).
+1024-pixel version of the photo, kept in its own shape (YuNet is fully convolutional, so it needn't squeeze the photo
+into its file's 640 x 640 square; a photo smaller than 1024 px is looked at as it is). That is how OpenCV runs it for
+its published WIDER FACE figures, whose photos are 1024 px wide. On the 3,226 photos of WIDER FACE's validation set,
+scored with the official protocol, the average precision (AP) easy / medium / hard is 88.9 / 87.2 / 76.6 against the
+published 88.4 / 86.6 / 75.0; the former 640 x 640 square gave 87.8 / 83.7 / 59.8 and missed the back rows of group
+photos. Faces still smaller than about 10 pixels at that size can be missed.
+It costs time and memory. Measured on an Intel Core i9-13950HX (32 threads, CPU only, release build, other jobs
+running), over 200 WIDER FACE validation photos chosen with seed 3092 (0.91 megapixels on average), at score 0.5: the
+detector takes 46 to 57 ms a photo at 640 x 640 and 108 to 109 ms at 1024 px (two runs each), so 2 to 2.5 times as
+long, and it finds 31% more faces (1,571 against 1,201). Its peak working memory beyond the photo grows from 9 MB to
+22 MB for a 1024 x 683 photo and from 14 MB to 24 MB for a 2048 x 1365 one (peak working set, 100 runs of one
+synthetic photo; the 232 KB model's weights included). The background scan looks at the 1024 px size; `spot.findBlemishes`
+(faces under 160 px of a 1600 px photo get no spots) and the model self-test keep what they always used, 640 px and the
+model's declared square. When the model is loaded it is also run at non-square inputs (shape inference at 1024 x 704 and
+704 x 1024 and at the extremes 1024 x 32, 32 x 1024 and 32 x 32, runs at 160 x 96, 96 x 160, 32 x 32 and 192 x 32); a model that fails that is run in its declared square with the photo fitted
+into it, and `faces.detect` and the model self-test say so (`input`). The real YuNet's outputs at 640 x 640, at
+704 x 1024 and at the extremes a scan can feed it (a 1024 x 32 strip, a 32 x 1024 column, the smallest input 32 x 32) match ONNX Runtime's to within 7e-6 (`tools/yunet_reference.py`, test `the_network_matches_onnx_runtime`).
 The detector's output matches OpenCV's own YuNet on a 45-photo public-domain test set (97 of 99 faces found by both,
 mean box overlap 0.97), including marble busts and paintings, with no false boxes on the landscape and architecture
 photos in the set.

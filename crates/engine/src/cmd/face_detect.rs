@@ -24,7 +24,7 @@ const C: &str = "faces.detect";
 /// Regions made by this command say so in their description; only those are replaced on a new run.
 pub(crate) const MARK: &str = "Detected by ";
 pub(crate) const LABEL: &str = "YuNet 2023mar";
-/// Long edge of the picture the detector looks at (it shrinks it to its own 640 anyway).
+/// Long edge of the picture the detector is given (it shrinks it to its own scan size, 1024 px, anyway).
 const LOOK_EDGE: usize = 1280;
 /// YuNet is 232 KB; a file this much larger in its folder is not it.
 const MAX_MODEL_BYTES: u64 = 8 << 20;
@@ -253,6 +253,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
         score: p.get("score").and_then(Value::as_f64).map_or(defaults.score, |v| v as f32),
         nms_iou: p.get("nmsIou").and_then(Value::as_f64).map_or(defaults.nms_iou, |v| v as f32),
         max_faces: p.get("maxFaces").and_then(Value::as_u64).map_or(defaults.max_faces, |v| usize::try_from(v).unwrap_or(defaults.max_faces)),
+        long_edge: defaults.long_edge,
     };
     let detector = detector(s).map_err(|e| e.into_error(C))?;
     let started = Instant::now();
@@ -294,7 +295,9 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
         // regions are not written to XMP, so a sidecar must not be rewritten for this
         s.skip_auto_write = true;
     }
-    Ok(json!({"detector": LABEL, "applied": applied, "photos": results, "ms": started.elapsed().as_secs_f64() * 1000.0}))
+    Ok(
+        json!({"detector": LABEL, "applied": applied, "photos": results, "input": detector.input_mode(), "ms": started.elapsed().as_secs_f64() * 1000.0}),
+    )
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -304,7 +307,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Detect Faces",
             ["Photo"],
             None,
-            "{ids?, apply?: bool (default true), score?: 0.6, nmsIou?: 0.3, maxFaces?} → {photos: [{id, faces: [{rect, score, landmarks}]}]}. Finds faces with the YuNet detector (download it first: `faces.models.download {id: \"yunet-2023mar\"}`) and, unless `apply` is false, adds them as unnamed face regions (one undo step), replacing earlier detections but never regions from XMP or ones you named; the sidecar is not touched",
+            "{ids?, apply?: bool (default true), score?: 0.6, nmsIou?: 0.3, maxFaces?} → {photos: [{id, faces: [{rect, score, landmarks}]}], input}. `input` says how photos reach the detector (in their own shape, up to 1024 px, or fitted into the model's declared square when it cannot take other shapes). Finds faces with the YuNet detector (download it first: `faces.models.download {id: \"yunet-2023mar\"}`) and, unless `apply` is false, adds them as unnamed face regions (one undo step), replacing earlier detections but never regions from XMP or ones you named; the sidecar is not touched",
             has_selection,
             detect
         ),

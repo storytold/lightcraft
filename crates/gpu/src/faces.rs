@@ -1,7 +1,7 @@
 //! Face networks on the GPU: an [`lightcraft_faces::net::Accelerator`] that runs the interpreter's convolutions (most of
 //! YuNet's, SFace's and AuraFace's time) with a WGSL kernel (`wgsl/faces_conv.wgsl`). Everything else in the graph
-//! stays on the CPU interpreter, which is the reference: a net attaches this only after it agreed with the CPU on a
-//! test input (`Net::attach_checked`), and drops it on the first error.
+//! stays on the CPU interpreter, which is the reference: a net attaches this only after it agreed with the CPU on every
+//! test input (`Net::attach_checked`; nothing else runs on it until then), and drops it on the first error.
 //!
 //! The device is a separate one (like denoise's), so a face scan and the interactive renders never share a queue, and
 //! it respects the same switches as GPU rendering (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference)
@@ -935,16 +935,27 @@ mod tests {
             return;
         }
         let det = lightcraft_faces::yunet::Detector::new(&std::fs::read(dir.join("face_detection_yunet_2023mar.onnx")).unwrap()).unwrap();
-        let (w, h) = (900, 700);
-        let rgb: Vec<u8> = (0..w * h * 3).map(|i| ((i / 3 % w) as f32 * 0.25 + (i / 3 / w) as f32 * 0.3 + (i * 7919 % 41) as f32) as u8).collect();
         let opts = lightcraft_faces::yunet::Options { score: 0.0, ..Default::default() };
-        let cpu = det.detect(&rgb, w, h, &opts).unwrap();
+        // a landscape, a portrait and a thin photo: scans feed the network in the photo's own shape, so a height/width
+        // mix-up on the device shows as shifted boxes and landmarks even when the scores agree
+        let photos: Vec<(usize, usize, Vec<u8>)> = [(900, 700), (700, 900), (1000, 40)]
+            .into_iter()
+            .map(|(w, h)| {
+                (w, h, (0..w * h * 3).map(|i| ((i / 3 % w) as f32 * 0.25 + (i / 3 / w) as f32 * 0.3 + (i * 7919 % 41) as f32) as u8).collect())
+            })
+            .collect();
+        let cpu: Vec<_> = photos.iter().map(|(w, h, rgb)| det.detect(rgb, *w, *h, &opts).unwrap()).collect();
         det.accelerate(accelerator().unwrap(), false).unwrap();
-        let fast = det.detect(&rgb, w, h, &opts).unwrap();
         assert!(det.net().accelerator().is_some());
-        assert_eq!(cpu.len(), fast.len());
-        for (a, b) in cpu.iter().zip(&fast) {
-            assert!((a.score - b.score).abs() < 1e-3, "{} vs {}", a.score, b.score);
+        for ((w, h, rgb), cpu) in photos.iter().zip(&cpu) {
+            let fast = det.detect(rgb, *w, *h, &opts).unwrap();
+            assert_eq!(cpu.len(), fast.len(), "{w} x {h}");
+            for (a, b) in cpu.iter().zip(&fast) {
+                assert!((a.score - b.score).abs() < 1e-3, "{w} x {h}: {} vs {}", a.score, b.score);
+                let near = |p: f32, q: f32| (p - q).abs() < 2e-3;
+                assert!(near(a.x0, b.x0) && near(a.y0, b.y0) && near(a.x1, b.x1) && near(a.y1, b.y1), "{w} x {h}: {a:?} vs {b:?}");
+                assert!(a.landmarks.iter().zip(&b.landmarks).all(|(p, q)| near(p.0, q.0) && near(p.1, q.1)), "{w} x {h}: {a:?} vs {b:?}");
+            }
         }
         for (file, sha) in [
             ("face_recognition_sface_2021dec.onnx", lightcraft_faces::known::SFACE_SHA256),

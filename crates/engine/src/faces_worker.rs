@@ -15,7 +15,7 @@ use std::time::Duration;
 use lightcraft_catalog::PhotoId;
 use lightcraft_faces::align::{FaceCrop, Rgb, align_to_template, crop_box};
 use lightcraft_faces::runtime::Embedder;
-use lightcraft_faces::yunet::{Detector, Face, Options};
+use lightcraft_faces::yunet::{Detector, Face, Options, SCAN_LONG_EDGE};
 use lightcraft_geom::Rect;
 
 use crate::media::{PreviewLoader, RenderJob};
@@ -28,6 +28,12 @@ pub(crate) const BOX_PAD: f32 = 1.5;
 pub(crate) const MATCH_IOU: f32 = 0.3;
 /// A detection must be this sure to become a face region (the bar `faces.detect` uses).
 pub(crate) const REGION_SCORE: f32 = 0.6;
+/// What the background scan asks the detector for: a lower bar than `faces.detect` (a face the user can then name is
+/// better than none), looked at in the detector's scan size (1024 px) so the back rows of a group photo are found.
+fn scan_options() -> Options {
+    Options { score: 0.5, long_edge: SCAN_LONG_EDGE, ..Options::default() }
+}
+
 /// A raw's embedded preview is used for the scan only when its long edge is at least this (a thumbnail is too small to
 /// find faces in; the raw itself is decoded then).
 const MIN_PREVIEW_EDGE: usize = 1000;
@@ -207,7 +213,7 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
         let (w, h) = (image.width, image.height);
         let rgb: Vec<u8> = image.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
         // the detector's landmarks, where it finds the same face: faces are aligned by them, not cut by a box
-        let detected = detector.as_deref().and_then(|d| d.detect(&rgb, w, h, &Options { score: 0.5, ..Options::default() }).ok());
+        let detected = detector.as_deref().and_then(|d| d.detect(&rgb, w, h, &scan_options()).ok());
         let found = detected.clone().unwrap_or_default();
         let img = Rgb { data: &rgb, width: w, height: h };
         let (iw, ih) = embedder.input_size();
@@ -394,6 +400,13 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scan_asks_the_detector_for_its_scan_size_and_a_lower_bar() {
+        let o = scan_options();
+        assert_eq!((o.score, o.long_edge), (0.5, 1024));
+        assert!(o.score < REGION_SCORE);
+    }
 
     #[test]
     fn the_pace_sets_how_much_of_the_machine_the_scan_may_use() {

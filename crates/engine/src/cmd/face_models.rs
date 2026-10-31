@@ -403,6 +403,12 @@ fn download_cancel(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"discarded": s.face_downloads.discard(id)}))
 }
 
+/// What the detector's self-test looks at with: the model's declared square, not the scan's default size.
+#[cfg(not(target_arch = "wasm32"))]
+fn detector_test_options(side: usize) -> lightcraft_faces::yunet::Options {
+    lightcraft_faces::yunet::Options { long_edge: side, ..lightcraft_faces::yunet::Options::default() }
+}
+
 /// Load the model and run its self-test: `Ok(null)` in a build without the recognition runtime (nothing can
 /// be checked), `Ok(result)` when it passes, `Err(reason)` when it does not load or fails a check.
 #[cfg(not(target_arch = "wasm32"))]
@@ -416,8 +422,11 @@ fn self_test(path: &Path, m: &ModelManifest) -> std::result::Result<Value, Strin
         {
             return Err("unsupported detector input or output decoder".into());
         }
-        detector.detect(&[0u8; 12], 2, 2, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
-        return Ok(json!({"ok": true}));
+        // a blank photo of the declared side, looked at at that side: the network runs at the shape the file declares
+        // (the self-test does not take the scan's 1024 px default, so it stays as cheap as it was)
+        let side = detector.input_side();
+        detector.detect(&vec![128u8; side * side * 3], side, side, &detector_test_options(side)).map_err(|e| e.to_string())?;
+        return Ok(json!({"ok": true, "input": detector.input_mode()}));
     }
     let embedder = lightcraft_faces::runtime::Embedder::load(path, m).map_err(|e| e.to_string())?;
     let t = embedder.self_test();
@@ -536,4 +545,36 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),
     ]
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_detector_self_test {
+    use super::*;
+
+    fn run(bytes: &[u8]) -> Value {
+        let dir = std::env::temp_dir().join(format!("lc-selftest-{}-{}", std::process::id(), bytes.len()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.onnx");
+        std::fs::write(&path, bytes).unwrap();
+        let mut m = lightcraft_faces::synthetic::tiny_detector_manifest();
+        m.input.width = 64;
+        m.input.height = 64;
+        let result = self_test(&path, &m).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn the_self_test_looks_at_the_declared_square_and_reports_how_photos_reach_the_model() {
+        // not the scan's 1024 px default
+        assert_eq!(detector_test_options(640).long_edge, 640);
+        assert_ne!(detector_test_options(640).long_edge, lightcraft_faces::yunet::Options::default().long_edge);
+        let flexible = run(&lightcraft_faces::synthetic::tiny_detector_model());
+        assert_eq!(flexible["ok"], true);
+        assert!(flexible["input"].as_str().unwrap().contains("own shape"), "{flexible}");
+        // a shape-fixed model still passes (it is usable in its square) and says so
+        let fixed = run(&lightcraft_faces::synthetic::fixed_shape_detector_model());
+        assert_eq!(fixed["ok"], true);
+        assert!(fixed["input"].as_str().unwrap().contains("fitted into the model's 64 × 64 square"), "{fixed}");
+    }
 }

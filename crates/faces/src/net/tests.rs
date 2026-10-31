@@ -140,6 +140,97 @@ impl Accelerator for Fake {
     }
 }
 
+/// Wraps [`Fake`]: reports whether the net had published an accelerator at each convolution (what a scan running at
+/// that moment would find), and can make the user choose the CPU (`Net::detach`) at the first one.
+struct Spy {
+    inner: Fake,
+    net: std::sync::OnceLock<std::sync::Weak<Net>>,
+    published_during: std::sync::Mutex<Vec<bool>>,
+    detach_at_first: bool,
+}
+impl Accelerator for Spy {
+    fn device(&self) -> String {
+        "spy".into()
+    }
+    fn conv(&self, j: &ConvJob) -> std::result::Result<Option<Vec<f32>>, String> {
+        let net = self.net.get().and_then(std::sync::Weak::upgrade).unwrap();
+        let mut seen = self.published_during.lock().unwrap();
+        if self.detach_at_first && seen.is_empty() {
+            net.detach();
+        }
+        seen.push(net.accelerator().is_some());
+        drop(seen);
+        self.inner.conv(j)
+    }
+}
+
+fn new_spy(net: &Arc<Net>, detach_at_first: bool) -> Arc<Spy> {
+    let spy = Arc::new(Spy {
+        inner: Fake { skew: 0.0, fail_after: usize::MAX.into() },
+        net: std::sync::OnceLock::new(),
+        published_during: std::sync::Mutex::new(Vec::new()),
+        detach_at_first,
+    });
+    spy.net.set(Arc::downgrade(net)).unwrap();
+    spy
+}
+
+/// A graph that takes any input size, and a portrait and a landscape input for it.
+fn dynamic_two_convs() -> (Graph, Tensor, Tensor) {
+    let (mut g, _) = two_convs();
+    g.inputs = vec![("x".into(), vec![1, 3, 0, 0])];
+    let make = |h: usize, w: usize| input(3, h, w, |i| ((i * 13 % 17) as f32 - 8.0) * 0.1);
+    (g, make(8, 9), make(9, 8))
+}
+
+#[test]
+fn the_accelerator_is_not_published_until_every_probe_agreed() {
+    let (g, landscape, portrait) = dynamic_two_convs();
+    let net = Arc::new(Net::new(g).unwrap());
+    let spy = new_spy(&net, false);
+    net.attach_checked(spy.clone(), &[landscape, portrait], 1e-4, false).unwrap();
+    let seen = spy.published_during.lock().unwrap().clone();
+    assert!(seen.len() >= 4, "the device ran both probes: {seen:?}");
+    assert!(seen.iter().all(|published| !published), "a scan could use the device while it was still being checked: {seen:?}");
+    assert!(net.accelerator().is_some(), "published once every probe agreed");
+}
+
+#[test]
+fn a_device_wrong_at_a_later_probe_is_never_published() {
+    let (g, landscape, portrait) = dynamic_two_convs();
+    let net = Net::new(g).unwrap();
+    // right on the first probe, wrong where the input is taller than wide
+    struct PortraitWrong(Fake);
+    impl Accelerator for PortraitWrong {
+        fn device(&self) -> String {
+            "portrait-wrong".into()
+        }
+        fn conv(&self, j: &ConvJob) -> std::result::Result<Option<Vec<f32>>, String> {
+            self.0.conv(j).map(|o| o.map(|v| if j.h > j.w { v.iter().map(|x| x + 0.5).collect() } else { v }))
+        }
+    }
+    let device = Arc::new(PortraitWrong(Fake { skew: 0.0, fail_after: usize::MAX.into() }));
+    assert!(net.attach_checked(device.clone(), &[landscape.clone(), portrait.clone()], 1e-4, false).is_err());
+    assert!(net.accelerator().is_none());
+    assert!(net.attach_checked(device, &[landscape], 1e-4, false).is_ok(), "the first probe alone cannot see it");
+}
+
+#[test]
+fn choosing_the_cpu_while_the_device_is_checked_wins_over_a_passing_check() {
+    let (g, landscape, portrait) = dynamic_two_convs();
+    let net = Arc::new(Net::new(g).unwrap());
+    let cpu = net.run(portrait.clone()).unwrap();
+    // the user switches to the CPU only during the first convolution of the check; the device agrees everywhere
+    let spy = new_spy(&net, true);
+    let why = net.attach_checked(spy.clone(), &[landscape, portrait.clone()], 1e-4, false).unwrap_err();
+    assert!(why.contains("CPU was chosen"), "{why}");
+    assert!(net.accelerator().is_none(), "the passing check re-attached the device");
+    assert_eq!(net.run(portrait).unwrap(), cpu);
+    // a later check, started after the switch, is a new decision
+    net.attach_checked(new_spy(&net, false), &[input(3, 8, 9, |i| i as f32 * 0.01)], 1e-4, false).unwrap();
+    assert!(net.accelerator().is_some());
+}
+
 fn two_convs() -> (Graph, Tensor) {
     let attrs = [("strides", Attr::Ints(vec![2, 2])), ("pads", Attr::Ints(vec![1; 4]))];
     let mut a = node("Conv", &["x", "w1", "b1"], &attrs);
@@ -163,11 +254,11 @@ fn an_accelerator_is_used_only_when_it_agrees_with_the_cpu() {
     let net = Net::new(g).unwrap();
     let cpu = net.run(x.clone()).unwrap();
     let good = Arc::new(Fake { skew: 0.0, fail_after: usize::MAX.into() });
-    net.attach_checked(good, &x, 1e-4, false).unwrap();
+    net.attach_checked(good, std::slice::from_ref(&x), 1e-4, false).unwrap();
     assert!(net.accelerator().is_some());
     assert_eq!(net.run(x.clone()).unwrap()[0].1.shape, cpu[0].1.shape);
     let wrong = Arc::new(Fake { skew: 0.5, fail_after: usize::MAX.into() });
-    assert!(net.attach_checked(wrong, &x, 1e-4, false).is_err());
+    assert!(net.attach_checked(wrong, std::slice::from_ref(&x), 1e-4, false).is_err());
     assert!(net.accelerator().is_none(), "a device that disagrees is not used");
     assert_eq!(net.run(x).unwrap(), cpu);
 }
@@ -177,13 +268,203 @@ fn a_failing_accelerator_falls_back_to_the_cpu_mid_run() {
     let (g, x) = two_convs();
     let net = Net::new(g).unwrap();
     let cpu = net.run(x.clone()).unwrap();
-    // agrees on the probe (two convs), then fails on the second conv of the next run
-    net.attach_checked(Arc::new(Fake { skew: 0.0, fail_after: 3.into() }), &x, 1e-4, false).unwrap();
+    // agrees on the probe (two convs), then fails on the first conv of the next run, so the second is left to the CPU
+    // (`a_device_that_failed_is_not_asked_again_in_the_run` counts the calls it must not get)
+    net.attach_checked(Arc::new(Fake { skew: 0.0, fail_after: 2.into() }), std::slice::from_ref(&x), 1e-4, false).unwrap();
     let out = net.run(x).unwrap();
     assert!(net.accelerator().is_none());
     for (a, b) in out[0].1.data.iter().zip(&cpu[0].1.data) {
         assert!((a - b).abs() < 1e-4);
     }
+}
+
+/// A device that works until told to misbehave (`fail_from_now`), then fails every convolution it is given (or, with
+/// `nan`, answers with values that are not finite), counting the calls made after the first bad one.
+struct Counting {
+    calls: std::sync::atomic::AtomicUsize,
+    bad_from: std::sync::atomic::AtomicUsize,
+    after_failure: std::sync::atomic::AtomicUsize,
+    nan: bool,
+}
+impl Counting {
+    fn new(nan: bool) -> Arc<Counting> {
+        Arc::new(Counting { calls: 0.into(), bad_from: usize::MAX.into(), after_failure: 0.into(), nan })
+    }
+    fn fail_from_now(&self) {
+        self.bad_from.store(self.calls.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst);
+    }
+    fn calls_after_the_first_bad_one(&self) -> usize {
+        self.after_failure.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+impl Accelerator for Counting {
+    fn device(&self) -> String {
+        "counting".into()
+    }
+    fn conv(&self, j: &ConvJob) -> std::result::Result<Option<Vec<f32>>, String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let n = self.calls.fetch_add(1, SeqCst);
+        let bad_from = self.bad_from.load(SeqCst);
+        if n > bad_from {
+            self.after_failure.fetch_add(1, SeqCst);
+        }
+        if n >= bad_from {
+            return if self.nan { Ok(Some(vec![f32::NAN; j.cout * j.oh * j.ow])) } else { Err("device lost".into()) };
+        }
+        let x = Tensor::new(vec![1, j.cin, j.h, j.w], j.input.to_vec()).unwrap();
+        let zero = vec![0.0; j.cout];
+        let dims = [j.cout, j.cin / j.groups, j.kh, j.kw];
+        Ok(Some(reference_conv(&x, j.weights, dims, j.bias.unwrap_or(&zero), j.sh, j.pt, j.groups).data))
+    }
+}
+
+fn two_convs_inputs(n: usize) -> Vec<Tensor> {
+    (0..n).map(|s| input(3, 9, 8, |i| (((i * 13 + s * 5) % 17) as f32 - 8.0) * 0.1)).collect()
+}
+
+#[test]
+fn a_device_that_failed_is_not_asked_again_in_the_run() {
+    let (g, x) = two_convs();
+    let net = Net::new(g).unwrap();
+    let cpu = net.run(x.clone()).unwrap();
+    let device = Counting::new(false);
+    net.attach_checked(device.clone(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    // it fails on the first of the two convolutions: the second must not go to it
+    device.fail_from_now();
+    let out = net.run(x).unwrap();
+    assert_eq!(device.calls_after_the_first_bad_one(), 0);
+    assert!(net.accelerator().is_none());
+    agree(&cpu, &out, 1e-4).unwrap();
+}
+
+#[test]
+fn a_device_that_failed_on_the_first_input_is_not_asked_for_the_rest_of_the_batch() {
+    let (g, x) = two_convs();
+    let net = Net::new(g).unwrap();
+    let inputs = two_convs_inputs(3);
+    let cpu: Vec<_> = inputs.iter().map(|t| net.run(t.clone()).unwrap()).collect();
+    let device = Counting::new(false);
+    net.attach_checked(device.clone(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    device.fail_from_now();
+    let out = net.run_batch(inputs).unwrap();
+    assert_eq!(device.calls_after_the_first_bad_one(), 0);
+    for (want, got) in cpu.iter().zip(&out) {
+        agree(want, got, 1e-4).unwrap();
+    }
+}
+
+#[test]
+fn a_failing_device_is_taken_off_the_net_without_counting_as_a_cpu_choice() {
+    let (g, x) = two_convs();
+    let net = Net::new(g).unwrap();
+    let device = Counting::new(false);
+    net.attach_checked(device.clone(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    device.fail_from_now();
+    net.run_batch(two_convs_inputs(2)).unwrap();
+    assert!(net.accelerator().is_none(), "the failed device stays published");
+    assert_eq!(net.detaches.load(std::sync::atomic::Ordering::SeqCst), 0, "a device failure is not the user choosing the CPU");
+}
+
+fn good_fake() -> Arc<Fake> {
+    Arc::new(Fake { skew: 0.0, fail_after: usize::MAX.into() })
+}
+
+/// A scan keeps the device it started with. When that device fails after a re-check has published another one, only
+/// the scan's own device goes: the new one stays.
+#[test]
+fn an_old_scans_failing_device_leaves_a_newer_device_published() {
+    let (g, x) = two_convs();
+    let net = Net::new(g).unwrap();
+    net.attach_checked(good_fake(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    let old_scan = Lane::new(net.accelerator(), true);
+    let newer: Arc<dyn Accelerator> = good_fake();
+    net.attach_checked(newer.clone(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    old_scan.fail(&net);
+    assert!(net.accelerator().is_some_and(|now| Arc::ptr_eq(&now, &newer)), "the old scan's failure dropped the newer device");
+}
+
+/// The same scan failing while the re-check runs does not refuse the device being checked, as the user choosing the
+/// CPU would.
+#[test]
+fn an_old_scans_failing_device_during_a_check_does_not_refuse_the_checked_device() {
+    let (g, x) = two_convs();
+    let net = Arc::new(Net::new(g).unwrap());
+    net.attach_checked(good_fake(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    let old_scan = Arc::new(Lane::new(net.accelerator(), true));
+    // a device that agrees everywhere; at its first convolution the old scan's device fails
+    struct FailsOldScanFirst {
+        inner: Fake,
+        old: std::sync::Mutex<Option<(Arc<Net>, Arc<Lane>)>>,
+    }
+    impl Accelerator for FailsOldScanFirst {
+        fn device(&self) -> String {
+            "fails-old-scan".into()
+        }
+        fn conv(&self, j: &ConvJob) -> std::result::Result<Option<Vec<f32>>, String> {
+            if let Some((net, lane)) = self.old.lock().unwrap().take() {
+                lane.fail(&net);
+            }
+            self.inner.conv(j)
+        }
+    }
+    let checked: Arc<dyn Accelerator> = Arc::new(FailsOldScanFirst {
+        inner: Fake { skew: 0.0, fail_after: usize::MAX.into() },
+        old: std::sync::Mutex::new(Some((net.clone(), old_scan.clone()))),
+    });
+    net.attach_checked(checked.clone(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    assert!(old_scan.has_failed());
+    assert!(net.accelerator().is_some_and(|now| Arc::ptr_eq(&now, &checked)), "the checked device was refused");
+}
+
+#[test]
+fn a_device_that_answers_with_values_that_are_not_finite_mid_run_gives_the_cpu_result() {
+    let (g, x) = two_convs();
+    let net = Net::new(g).unwrap();
+    let cpu = net.run(x.clone()).unwrap();
+    let device = Counting::new(true);
+    net.attach_checked(device.clone(), std::slice::from_ref(&x), 1e-4, false).unwrap();
+    device.fail_from_now();
+    let out = net.run(x).unwrap();
+    assert_eq!(device.calls_after_the_first_bad_one(), 0);
+    assert!(net.accelerator().is_none());
+    agree(&cpu, &out, 1e-4).unwrap();
+}
+
+/// Runs whole programs correctly until `poison` is set, then answers with a value that is not finite; any single
+/// convolution it is given is answered with values that are not finite too, and counted.
+struct LateNaN {
+    poison: std::sync::atomic::AtomicBool,
+    conv_calls: std::sync::atomic::AtomicUsize,
+}
+impl Accelerator for LateNaN {
+    fn device(&self) -> String {
+        "late nan".into()
+    }
+    fn conv(&self, j: &ConvJob) -> std::result::Result<Option<Vec<f32>>, String> {
+        self.conv_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(vec![f32::NAN; j.cout * j.oh * j.ow]))
+    }
+    fn run_program(&self, p: &program::Program, inputs: &[&[f32]]) -> std::result::Result<Option<Vec<Vec<Vec<f32>>>>, String> {
+        let mut out: Vec<Vec<Vec<f32>>> = inputs.iter().map(|x| run_steps(p, x)).collect();
+        if self.poison.load(std::sync::atomic::Ordering::SeqCst) {
+            out[0][0][0] = f32::NAN;
+        }
+        Ok(Some(out))
+    }
+}
+
+#[test]
+fn a_program_answer_that_is_not_finite_falls_back_to_the_cpu_without_asking_the_device_again() {
+    let net = Net::new(crate::synthetic::every_operator_graph()).unwrap();
+    let x = every_operator_input(2);
+    let cpu = net.run(x.clone()).unwrap();
+    let device = Arc::new(LateNaN { poison: false.into(), conv_calls: 0.into() });
+    net.attach_checked(device.clone(), std::slice::from_ref(&x), 1e-5, false).unwrap();
+    device.poison.store(true, std::sync::atomic::Ordering::SeqCst);
+    let out = net.run(x).unwrap();
+    assert_eq!(device.conv_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "the convolutions of the CPU fallback went to the device");
+    assert!(net.accelerator().is_none());
+    assert_eq!(out, cpu);
 }
 
 /// An accelerator that runs whole programs with plain loops (the definition of each step), counting its calls;
@@ -331,7 +612,7 @@ fn a_program_of_every_operator_gives_what_the_interpreter_gives() {
     let x = every_operator_input(0);
     let cpu = net.run(x.clone()).unwrap();
     let fake = Arc::new(ProgramFake { calls: 0.into(), poison: false });
-    net.attach_checked(fake.clone(), &x, 1e-5, false).unwrap();
+    net.attach_checked(fake.clone(), std::slice::from_ref(&x), 1e-5, false).unwrap();
     let calls = fake.calls.load(std::sync::atomic::Ordering::Relaxed);
     assert!(calls > 0, "the whole network ran as one program");
     // several inputs go to the device together, and each gets its own outputs
@@ -351,7 +632,7 @@ fn a_device_that_gives_values_that_are_not_finite_is_dropped() {
     let net = Net::new(crate::synthetic::every_operator_graph()).unwrap();
     let x = every_operator_input(1);
     let cpu = net.run(x.clone()).unwrap();
-    assert!(net.attach_checked(Arc::new(ProgramFake { calls: 0.into(), poison: true }), &x, 1e-5, false).is_err());
+    assert!(net.attach_checked(Arc::new(ProgramFake { calls: 0.into(), poison: true }), std::slice::from_ref(&x), 1e-5, false).is_err());
     assert!(net.accelerator().is_none());
     assert_eq!(net.run(x).unwrap(), cpu);
 }

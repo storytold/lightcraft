@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 mod kernels;
@@ -106,7 +107,8 @@ impl ConvJob<'_> {
 /// Something that can run a network's convolutions faster than the CPU kernels (the GPU, in `lightcraft-gpu`).
 ///
 /// The CPU interpreter stays the reference: a net only uses an accelerator that agreed with it on a test input
-/// ([`Net::attach_checked`]), and the first error makes the net drop it and run on the CPU again.
+/// at every input shape a scan feeds it ([`Net::attach_checked`]; nothing else sees it until then), and the first
+/// error makes the net drop it and run on the CPU again.
 pub trait Accelerator: Send + Sync {
     /// What it runs on, for the user ("AMD Radeon RX 7900 (Vulkan)").
     fn device(&self) -> String;
@@ -124,6 +126,44 @@ pub trait Accelerator: Send + Sync {
 pub struct Net {
     graph: Graph,
     accelerator: RwLock<Option<Arc<dyn Accelerator>>>,
+    /// Counts [`Net::detach`] calls, so a check that was running when one happened does not publish its device.
+    detaches: AtomicU64,
+}
+
+/// The device one run uses: the published accelerator (or none), or a candidate being checked that no other run can
+/// see yet.
+struct Lane {
+    device: Option<Arc<dyn Accelerator>>,
+    /// The device is the net's own, so its failing drops it from the net.
+    published: bool,
+    /// The device failed or misbehaved during this lane's runs.
+    failed: AtomicBool,
+}
+
+impl Lane {
+    fn new(device: Option<Arc<dyn Accelerator>>, published: bool) -> Lane {
+        Lane { device, published, failed: AtomicBool::new(false) }
+    }
+
+    /// The device this lane may call: none once it has failed, so nothing on the lane (the rest of the run, the other
+    /// inputs of a batch, the CPU fallback) asks it again. Every reader of the device goes through here.
+    fn device(&self) -> Option<&Arc<dyn Accelerator>> {
+        self.device.as_ref().filter(|_| !self.has_failed())
+    }
+
+    /// The device failed: stop using it, and take it off the net while the net still uses this very device (once,
+    /// however many calls report the failure). A failure is not the user choosing the CPU, so a check that is running
+    /// meanwhile, or a device published since this lane started, is left alone.
+    fn fail(&self, net: &Net) {
+        let first = !self.failed.swap(true, Ordering::SeqCst);
+        if let (true, true, Some(device)) = (first, self.published, &self.device) {
+            net.drop_failed(device);
+        }
+    }
+
+    fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
+    }
 }
 
 /// Validate semantics rather than silently ignoring unknown or mistyped attributes.
@@ -137,7 +177,7 @@ impl Net {
         for n in &graph.nodes {
             check(n, &graph)?;
         }
-        Ok(Net { graph, accelerator: RwLock::new(None) })
+        Ok(Net { graph, accelerator: RwLock::new(None), detaches: AtomicU64::new(0) })
     }
 
     /// The accelerator in use, if any.
@@ -145,64 +185,123 @@ impl Net {
         self.accelerator.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
-    /// Use `accelerator` for this net's convolutions, but only after it gave the CPU's outputs on `probe` (every
-    /// output value within `tolerance` of the CPU's, relative to that output's largest magnitude) and, with
-    /// `require_faster`, ran it faster than the CPU did (a GPU's per-layer round trip can cost more than a small
-    /// model's layers). Returns why it was not used, so the caller can say so; the net then stays on the CPU.
+    /// Use `accelerator` for this net's convolutions, but only after it gave the CPU's outputs on every one of `probes`
+    /// (every output value within `tolerance` of the CPU's, relative to that output's largest magnitude) and, with
+    /// `require_faster`, ran the first one faster than the CPU did (a GPU's per-layer round trip can cost more than a
+    /// small model's layers). Returns why it was not used, so the caller can say so; the net then stays on the CPU.
+    ///
+    /// The CPU's outputs for all the probes come first; the candidate then runs on its own, where no other run of the
+    /// net can see it, and is published (made the net's accelerator) in one step once every probe agreed. Until then
+    /// the net runs on the CPU, so a scan never meets a shape the device was not checked at. A [`Net::detach`] while
+    /// the check runs (the user chose the CPU only) wins: the device is not published.
     pub fn attach_checked(
         &self,
         accelerator: Arc<dyn Accelerator>,
-        probe: &Tensor,
+        probes: &[Tensor],
         tolerance: f32,
         require_faster: bool,
     ) -> std::result::Result<(), String> {
-        self.detach();
-        let started = web_time::Instant::now();
-        let cpu = self.run(probe.clone()).map_err(|e| e.to_string())?;
-        let cpu_time = started.elapsed();
-        *self.accelerator.write().unwrap_or_else(PoisonError::into_inner) = Some(accelerator);
-        // the first run also uploads the weights and builds the kernels: time a second one
-        let fast = self.run(probe.clone()).map_err(|e| e.to_string());
-        let mut verdict = match fast {
-            Err(e) => Err(e),
-            Ok(_) if self.accelerator().is_none() => Err("the device failed on the test input".into()),
-            Ok(fast) => agree(&cpu, &fast, tolerance),
-        };
-        if verdict.is_ok() && require_faster {
-            let started = web_time::Instant::now();
-            let again = self.run(probe.clone()).map_err(|e| e.to_string());
-            let fast_time = started.elapsed();
-            verdict = match again {
-                Err(e) => Err(e),
-                Ok(_) if self.accelerator().is_none() => Err("the device failed on the test input".into()),
-                Ok(_) if fast_time >= cpu_time => Err(format!(
-                    "the device is not faster for this model ({:.0} ms against {:.0} ms on the CPU)",
-                    fast_time.as_secs_f64() * 1000.0,
-                    cpu_time.as_secs_f64() * 1000.0
-                )),
-                Ok(_) => Ok(()),
-            };
-        }
+        let detaches = self.detaches.load(Ordering::SeqCst);
+        self.clear();
+        let verdict = self.check_and_publish(accelerator, probes, tolerance, require_faster, detaches);
         if verdict.is_err() {
-            self.detach();
+            self.clear();
         }
         verdict
     }
 
-    /// Run on the CPU only from now on.
+    fn check_and_publish(
+        &self,
+        accelerator: Arc<dyn Accelerator>,
+        probes: &[Tensor],
+        tolerance: f32,
+        require_faster: bool,
+        detaches: u64,
+    ) -> std::result::Result<(), String> {
+        if probes.is_empty() {
+            return Err("there is no test input to check the device with".into());
+        }
+        let cpu_lane = Lane::new(None, false);
+        let mut cpu = Vec::with_capacity(probes.len());
+        let mut cpu_time = web_time::Duration::ZERO;
+        for (n, probe) in probes.iter().enumerate() {
+            let started = web_time::Instant::now();
+            cpu.push(self.run_in(&cpu_lane, probe.clone()).map_err(|e| e.to_string())?);
+            if n == 0 {
+                cpu_time = started.elapsed();
+            }
+        }
+        let candidate = Lane::new(Some(accelerator.clone()), false);
+        let failed = || "the device failed on the test input".to_string();
+        for (n, (probe, want)) in probes.iter().zip(&cpu).enumerate() {
+            // the first run also uploads the weights and builds the kernels: time a second one
+            let got = self.run_in(&candidate, probe.clone()).map_err(|e| e.to_string())?;
+            if candidate.has_failed() {
+                return Err(failed());
+            }
+            agree(want, &got, tolerance)?;
+            if n == 0 && require_faster {
+                let started = web_time::Instant::now();
+                self.run_in(&candidate, probe.clone()).map_err(|e| e.to_string())?;
+                let fast_time = started.elapsed();
+                if candidate.has_failed() {
+                    return Err(failed());
+                }
+                if fast_time >= cpu_time {
+                    return Err(format!(
+                        "the device is not faster for this model ({:.0} ms against {:.0} ms on the CPU)",
+                        fast_time.as_secs_f64() * 1000.0,
+                        cpu_time.as_secs_f64() * 1000.0
+                    ));
+                }
+            }
+        }
+        let mut slot = self.accelerator.write().unwrap_or_else(PoisonError::into_inner);
+        if self.detaches.load(Ordering::SeqCst) != detaches {
+            *slot = None;
+            return Err("the CPU was chosen while the device was being checked".into());
+        }
+        *slot = Some(accelerator);
+        Ok(())
+    }
+
+    /// Run on the CPU only from now on, and refuse any device whose check is still running.
     pub fn detach(&self) {
+        let mut slot = self.accelerator.write().unwrap_or_else(PoisonError::into_inner);
+        self.detaches.fetch_add(1, Ordering::SeqCst);
+        *slot = None;
+    }
+
+    /// Take `device` off the net after it failed, unless another device has been published since.
+    fn drop_failed(&self, device: &Arc<dyn Accelerator>) {
+        let mut slot = self.accelerator.write().unwrap_or_else(PoisonError::into_inner);
+        if slot.as_ref().is_some_and(|now| Arc::ptr_eq(now, device)) {
+            *slot = None;
+        }
+    }
+
+    /// Drop the published accelerator without refusing a check that is running.
+    fn clear(&self) {
         *self.accelerator.write().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
-    /// A convolution on the accelerator, if one is attached and takes it. A failing accelerator is dropped.
-    fn accelerated_conv(&self, layer: usize, node: &Node, x: &Tensor) -> Result<Option<Tensor>> {
-        let Some(accelerator) = self.accelerator() else { return Ok(None) };
+    /// One input through the net on `lane`.
+    fn run_in(&self, lane: &Lane, input: Tensor) -> Result<Vec<(String, Tensor)>> {
+        self.run_batch_in(lane, vec![input])?.pop().ok_or_else(|| NetError::Shape("the run gave nothing".into()))
+    }
+
+    /// A convolution on the accelerator, if one is attached and takes it. A failing accelerator (an error, or an answer of
+    /// the wrong size or with values that are not finite) is dropped, and the lane runs on the CPU from then on.
+    fn accelerated_conv(&self, lane: &Lane, layer: usize, node: &Node, x: &Tensor) -> Result<Option<Tensor>> {
+        let Some(accelerator) = lane.device() else { return Ok(None) };
         let job = kernels::conv_job(layer, node, &x.shape, &x.data, &self.graph)?;
         match accelerator.conv(&job) {
-            Ok(Some(out)) if out.len() == job.cout * job.oh * job.ow => Ok(Some(Tensor::new(vec![1, job.cout, job.oh, job.ow], out)?)),
+            Ok(Some(out)) if out.len() == job.cout * job.oh * job.ow && out.iter().all(|v| v.is_finite()) => {
+                Ok(Some(Tensor::new(vec![1, job.cout, job.oh, job.ow], out)?))
+            }
             Ok(None) => Ok(None),
             Ok(Some(_)) | Err(_) => {
-                self.detach();
+                lane.fail(self);
                 Ok(None)
             }
         }
@@ -227,19 +326,23 @@ impl Net {
     /// Run the network on each of `inputs`; an accelerator that keeps the values on its device runs inputs of one shape
     /// together (one upload and one read-back for all of them).
     pub fn run_batch(&self, inputs: Vec<Tensor>) -> Result<Vec<Vec<(String, Tensor)>>> {
+        self.run_batch_in(&Lane::new(self.accelerator(), true), inputs)
+    }
+
+    fn run_batch_in(&self, lane: &Lane, inputs: Vec<Tensor>) -> Result<Vec<Vec<(String, Tensor)>>> {
         for input in &inputs {
             shape::tensor(&input.shape, input.data.len(), &input.data)?;
         }
-        if let Some(out) = self.run_on_device(&inputs)? {
+        if let Some(out) = self.run_on_device(lane, &inputs)? {
             return Ok(out);
         }
-        inputs.into_iter().map(|input| self.run_one(input)).collect()
+        inputs.into_iter().map(|input| self.run_one(lane, input)).collect()
     }
 
     /// The whole batch on the attached accelerator, or `None` to run it on the CPU path. A failing or misbehaving
     /// accelerator is dropped.
-    fn run_on_device(&self, inputs: &[Tensor]) -> Result<Option<Vec<Vec<(String, Tensor)>>>> {
-        let (Some(accelerator), Some(first)) = (self.accelerator(), inputs.first()) else { return Ok(None) };
+    fn run_on_device(&self, lane: &Lane, inputs: &[Tensor]) -> Result<Option<Vec<Vec<(String, Tensor)>>>> {
+        let (Some(accelerator), Some(first)) = (lane.device(), inputs.first()) else { return Ok(None) };
         if inputs.iter().any(|t| t.shape != first.shape) {
             return Ok(None);
         }
@@ -250,7 +353,7 @@ impl Net {
             Ok(Some(outs)) => outs,
             Ok(None) => return Ok(None),
             Err(_) => {
-                self.detach();
+                lane.fail(self);
                 return Ok(None);
             }
         };
@@ -276,12 +379,12 @@ impl Net {
         }
         if gathered.is_none() {
             // wrong sizes or values that are not finite: the device is not trusted any more
-            self.detach();
+            lane.fail(self);
         }
         Ok(gathered)
     }
 
-    fn run_one(&self, input: Tensor) -> Result<Vec<(String, Tensor)>> {
+    fn run_one(&self, lane: &Lane, input: Tensor) -> Result<Vec<(String, Tensor)>> {
         self.validate_input(&input.shape)?;
         let mut scratch = kernels::Scratch::default();
         let profile = std::env::var_os("LIGHTCRAFT_PROFILE").is_some();
@@ -314,7 +417,7 @@ impl Net {
             let out = match node.op.as_str() {
                 "Conv" => {
                     let x = get(0)?;
-                    match self.accelerated_conv(i, node, &x)? {
+                    match self.accelerated_conv(lane, i, node, &x)? {
                         Some(out) => out,
                         None => kernels::conv(node, &x, g, &mut scratch)?,
                     }
