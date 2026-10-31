@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Korean and Vietnamese text in exports draws whole
+- macOS often stores Korean file names decomposed (NFD), each syllable as its jamo. Contact-sheet captions, export
+  watermarks, slideshow overlays and print page text drew those as loose jamo (`ㅈㅔㅈㅜㄷㅗ` for `제주도`), and
+  decomposed Vietnamese letters lost their stacked marks. Text is now composed before it is laid out, so both draw as
+  they do in the app (issue #3480, #3277).
+
 ## 2026-10-30
 
 ### A keyboard shortcut for Clear Color Label
