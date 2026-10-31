@@ -3942,6 +3942,7 @@ dependencies = [
  "lightcraft-fetch",
  "lightcraft-testkit",
  "log",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

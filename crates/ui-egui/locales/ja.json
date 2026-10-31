@@ -2388,5 +2388,13 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "AI masks": "AIマスク",
+  "Device": "デバイス",
+  "Last photo": "直前の写真",
+  "Remote worker": "リモートワーカー",
+  "Run on": "実行先",
+  "Automatic (GPU when available)": "自動（GPUがあれば使用）",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "オブジェクトと説明で選択のマスクは、写真ごとに一度だけ解析します。CPUを選んだ場合や「描画にGPUを使用」がオフの場合を除き、グラフィックカードで行います。処理装置ではかなり時間がかかります。",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "自動ではMacのグラフィックカードでモデルを実行します。そこでAIマスクが失敗する場合はCPUを選んでください。処理装置ではかなり時間がかかります。"
 }
