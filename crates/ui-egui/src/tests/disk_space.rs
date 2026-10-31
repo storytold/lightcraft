@@ -75,3 +75,37 @@ fn a_queued_notice_goes_when_another_library_opens() {
     let _ = h.app.session.close_library();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The drive is read again every few minutes whatever is filling the cache, not only while
+/// previews are built (CodeRabbit on #3080): thumbnails and the loupe's previews alone can take a
+/// drive under the line after the library opened.
+#[test]
+fn a_drive_that_runs_low_without_a_preview_build_is_told() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = std::env::temp_dir().join(format!("lc-disk-notice-later-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let low = std::sync::Arc::new(AtomicBool::new(false));
+    let mut session = lightcraft_engine::Session::with_demo().with_fs();
+    let l = low.clone();
+    session.set_disk_space_reader(Some(std::sync::Arc::new(move |_: &std::path::Path| {
+        Some(DiskSpace { available: if l.load(Ordering::Relaxed) { GB } else { 400 * GB }, total: 500 * GB })
+    })));
+    let mut app = LightcraftApp::new(session, Services::default());
+    app.disk_space_notice = true;
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    h.app.session.open_library(&dir, false).unwrap();
+    assert!(h.step_until(T, |h| !h.app.session.disk_space_alert_raised() && h.app.session.preview_build.is_none()));
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(h.app.notices.is_empty(), "plenty of space at open: {:?}", h.app.notices);
+    // later, the drive fills up while nothing builds previews
+    low.store(true, Ordering::Relaxed);
+    h.app.session.forget_disk_space_check();
+    assert!(h.app.session.preview_build.as_ref().is_none_or(|b| !b.running()));
+    assert!(h.step_until(T, |h| !h.app.notices.is_empty()), "the low drive is told");
+    assert!(h.app.notices[0].contains("1.0 GB free of 500 GB"), "{:?}", h.app.notices);
+    let _ = h.app.session.close_library();
+    let _ = std::fs::remove_dir_all(&dir);
+}
