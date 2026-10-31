@@ -236,6 +236,10 @@ pub struct Photo {
     /// ISO 8601 local capture time.
     #[serde(default)]
     pub captured: Option<String>,
+    /// Whether capture time was intentionally edited by the user (e.g. via `photo.setCaptureTime`),
+    /// rather than read or derived from the file header/sidecar at import.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub captured_manual: bool,
     pub imported: String,
     #[serde(default)]
     pub meta: Meta,
@@ -382,6 +386,7 @@ impl Photo {
             height,
             file_size: 0,
             captured: None,
+            captured_manual: false,
             imported: imported.to_string(),
             meta: Meta::default(),
             rating: 0,

@@ -1226,12 +1226,13 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 imported += 1;
                 ops.push(Op::SetLocal { id: p.id, local: false });
             }
+            let manual = old.captured == p.captured && old.captured_manual;
             ops.extend([
                 Op::SetRating { id: p.id, rating: p.rating },
                 Op::SetFlag { id: p.id, flag: p.flag },
                 Op::SetLabel { id: p.id, label: p.label },
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
-                Op::SetCaptured { id: p.id, captured: p.captured.clone() },
+                Op::SetCaptured { id: p.id, captured: p.captured.clone(), manual },
             ]);
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {

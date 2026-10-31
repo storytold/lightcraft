@@ -98,6 +98,152 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
 }
 
 #[test]
+fn v9_library_marks_capture_times_manual_on_upgrade() {
+    let mut c = Catalog::new();
+    let id1 = c.alloc_photo_id();
+    let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
+    p1.captured = Some("2026-01-01T12:00:00".into());
+    p1.captured_manual = false;
+    c.apply(Op::AddPhoto { photo: Box::new(p1) }).unwrap();
+
+    let id2 = c.alloc_photo_id();
+    let p2 = Photo::new(id2, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 100, 100, "2026-01-01");
+    c.apply(Op::AddPhoto { photo: Box::new(p2) }).unwrap();
+
+    let id3 = c.alloc_photo_id();
+    let mut p3 = Photo::new(id3, Source::File { path: "/p/3.jpg".into() }, "3.jpg", "JPEG", 100, 100, "2026-01-01");
+    p3.captured = Some("2026-01-01T12:00:00".into());
+    p3.local = true;
+    p3.captured_manual = false;
+    c.apply(Op::AddPhoto { photo: Box::new(p3) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":3,\"catalog\":{snap}}}\n").into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert!(loaded.photo(id1).unwrap().captured_manual);
+    assert!(!loaded.photo(id2).unwrap().captured_manual);
+    assert!(!loaded.photo(id3).unwrap().captured_manual, "local browsed photo must not be marked manual on upgrade");
+
+    // Reopening the upgraded v10 catalog leaves values unchanged
+    let (_, reopened, r2) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r2.upgraded_from, None);
+    assert!(reopened.photo(id1).unwrap().captured_manual);
+    assert!(!reopened.photo(id2).unwrap().captured_manual);
+    assert!(!reopened.photo(id3).unwrap().captured_manual);
+}
+
+#[test]
+fn v10_catalog_repair_clears_spurious_captured_manual_on_local_photos() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/p/local.jpg".into() }, "local.jpg", "JPEG", 100, 100, "2026-01-01");
+    p.captured = Some("2026-01-01T12:00:00".into());
+    p.local = true;
+    p.captured_manual = true;
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
+    assert!(!loaded.photo(id).unwrap().captured_manual);
+    assert!(r.repaired.iter().any(|msg| msg.contains("cleared spurious captured_manual")));
+}
+
+#[test]
+fn v10_library_preserves_captured_manual_values() {
+    let mut c = Catalog::new();
+    let id1 = c.alloc_photo_id();
+    let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
+    p1.captured = Some("2026-01-01T12:00:00".into());
+    p1.captured_manual = false;
+    c.apply(Op::AddPhoto { photo: Box::new(p1) }).unwrap();
+
+    let id2 = c.alloc_photo_id();
+    let mut p2 = Photo::new(id2, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 100, 100, "2026-01-01");
+    p2.captured = Some("2026-01-01T13:00:00".into());
+    p2.captured_manual = true;
+    c.apply(Op::AddPhoto { photo: Box::new(p2) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert!(!loaded.photo(id1).unwrap().captured_manual);
+    assert!(loaded.photo(id2).unwrap().captured_manual);
+}
+
+#[test]
+fn v9_library_replaying_v10_records_after_failed_snapshot_preserves_explicit_manual_values() {
+    let mut c = Catalog::new();
+    let id1 = c.alloc_photo_id();
+    let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
+    p1.captured = Some("2026-01-01T12:00:00".into());
+    c.apply(Op::AddPhoto { photo: Box::new(p1) }).unwrap();
+
+    let id2 = c.alloc_photo_id();
+    let mut p2 = Photo::new(id2, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 100, 100, "2026-01-01");
+    p2.captured = Some("2026-01-01T12:00:00".into());
+    c.apply(Op::AddPhoto { photo: Box::new(p2) }).unwrap();
+
+    let id3 = c.alloc_photo_id();
+    let mut p3 = Photo::new(id3, Source::File { path: "/p/3.jpg".into() }, "3.jpg", "JPEG", 100, 100, "2026-01-01");
+    p3.captured = Some("2026-01-01T12:00:00".into());
+    c.apply(Op::AddPhoto { photo: Box::new(p3) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":3,\"catalog\":{snap}}}\n").into_bytes());
+
+    let op4 = Op::SetCaptured { id: id1, captured: Some("2026-01-01T14:00:00".into()), manual: false };
+    let op5 = Op::SetCaptured { id: id2, captured: Some("2026-01-01T15:00:00".into()), manual: true };
+    let log = format!("{}\n{}\n", encode_record(4, &op4), encode_record(5, &op5));
+    m.set(LOG, log.into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+
+    assert!(!loaded.photo(id1).unwrap().captured_manual);
+    assert_eq!(loaded.photo(id1).unwrap().captured.as_deref(), Some("2026-01-01T14:00:00"));
+
+    assert!(loaded.photo(id2).unwrap().captured_manual);
+    assert_eq!(loaded.photo(id2).unwrap().captured.as_deref(), Some("2026-01-01T15:00:00"));
+
+    assert!(loaded.photo(id3).unwrap().captured_manual);
+    assert_eq!(loaded.photo(id3).unwrap().captured.as_deref(), Some("2026-01-01T12:00:00"));
+}
+
+#[test]
+fn pre_v10_set_captured_record_in_log_deserializes_as_manual_true() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+
+    // Pre-v10 SetCaptured log record (without the "manual" field):
+    let body = format!(r#"{{"op":"setCaptured","id":{},"captured":"2026-01-01T16:00:00"}}"#, id.0);
+    let line = format!("{{\"seq\":2,\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes()));
+    m.set(LOG, line.into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(loaded.photo(id).unwrap().captured.as_deref(), Some("2026-01-01T16:00:00"));
+    assert!(loaded.photo(id).unwrap().captured_manual, "pre-v10 SetCaptured record without manual field must deserialize as manual: true");
+}
+
+#[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
     let op = photo(&mut c);
@@ -238,8 +384,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `Photo.captured_manual` and `Op::SetCaptured.manual`.
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

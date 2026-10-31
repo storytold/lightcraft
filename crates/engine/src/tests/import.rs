@@ -1330,10 +1330,10 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
     for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png"].iter().enumerate() {
         let id = by_name(&s, n);
-        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")), manual: false }).unwrap();
     }
     let other = by_name(&s, "d_other.png");
-    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: other, captured: Some("2026-05-01T10:00:04".into()) }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: other, captured: Some("2026-05-01T10:00:04".into()), manual: false }).unwrap();
     let r = s.execute("photo.analyze", &json!({"ids": ids, "rejectBelow": 0.0, "pickBest": true})).unwrap();
     assert_eq!(r["groups"], 1, "{r}");
     let a = |s: &Session, n: &str| s.catalog.photo(by_name(s, n)).unwrap().analysis.unwrap();
@@ -1401,8 +1401,8 @@ fn assisted_culling_groups_bursts_across_month_end() {
         ("2026-11-30T23:59:59", "2026-12-01T00:00:00"),
         ("2026-12-31T23:59:59", "2027-01-01T00:00:00"),
     ] {
-        s.commit("t", lightcraft_catalog::Op::SetCaptured { id: a, captured: Some(before.into()) }).unwrap();
-        s.commit("t", lightcraft_catalog::Op::SetCaptured { id: b, captured: Some(after.into()) }).unwrap();
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id: a, captured: Some(before.into()), manual: false }).unwrap();
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id: b, captured: Some(after.into()), manual: false }).unwrap();
         let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
         assert_eq!(r["groups"], 1, "shots 1 s apart ({before} / {after}) must form a burst: {r}");
     }
@@ -1436,8 +1436,8 @@ fn assisted_culling_burst_limits_are_adjustable() {
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
     let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
     let (a, b) = (by_name(&s, "a.png"), by_name(&s, "b.png"));
-    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: a, captured: Some("2026-05-01T10:00:00".into()) }).unwrap();
-    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: b, captured: Some("2026-05-01T10:00:15".into()) }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: a, captured: Some("2026-05-01T10:00:00".into()), manual: false }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: b, captured: Some("2026-05-01T10:00:15".into()), manual: false }).unwrap();
     // 15 s apart: past the default 10 s, inside a 20 s gap
     assert_eq!(s.execute("photo.analyze", &json!({"ids": ids})).unwrap()["groups"], 0);
     assert_eq!(s.execute("photo.analyze", &json!({"ids": ids, "burstGap": 20})).unwrap()["groups"], 1);

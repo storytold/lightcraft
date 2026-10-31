@@ -183,6 +183,26 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let listed: Vec<String> = out.candidates.iter().map(|c| c.path.clone()).collect();
             app.session.forget_gone_from(&b.path, b.subfolders, &listed);
         }
+        // Reload local photos in this folder whose file on disk has changed size:
+        let mut stale: std::collections::BTreeSet<lightcraft_catalog::PhotoId> = std::collections::BTreeSet::new();
+        for c in out.candidates.iter().filter(|c| c.duplicate == Some("path".into())) {
+            let Some(existing_id) = c.existing else { continue };
+            let Some(mut ph) = app.session.catalog.photo(lightcraft_catalog::PhotoId(existing_id)) else { continue };
+            if let Some(master_id) = ph.copy_of {
+                let Some(master) = app.session.catalog.photo(master_id) else { continue };
+                ph = master;
+            }
+            if !ph.local || ph.deleted {
+                continue;
+            }
+            if c.file_size != ph.file_size {
+                stale.insert(ph.id);
+            }
+        }
+        if !stale.is_empty() {
+            let ids: Vec<serde_json::Value> = stale.iter().map(|id| serde_json::json!(id.0)).collect();
+            let _ = app.run("photo.reload", serde_json::json!({"ids": ids}));
+        }
         // what the library doesn't know yet joins the Local view
         let queue: Vec<String> =
             out.candidates.iter().filter(|c| c.duplicate != Some("path".into()) && c.error.is_none()).map(|c| c.path.clone()).collect();
