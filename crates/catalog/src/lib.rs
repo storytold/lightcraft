@@ -7,9 +7,9 @@
 //! - **determinism**: replaying the log reproduces the state exactly (property-tested).
 //!
 //! **Catalog format version** ([`journal::VERSION`], see [`journal`] → *Format versions*): adding
-//! an [`Op`] variant or a serialized field means bumping it. Newer builds read every older format
-//! (and upgrade it on open); older builds refuse a newer library with [`CatalogError::Newer`]
-//! instead of reading part of it.
+//! an [`Op`] variant or a serialized field means adding a row to [`journal::FORMATS`]. Newer
+//! builds read every older format (and upgrade it on open); older builds refuse a newer library
+//! with [`CatalogError::Newer`] instead of reading part of it.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -26,6 +26,7 @@ pub mod rules;
 pub mod safe_file;
 pub mod stacks;
 pub mod store;
+mod stored;
 pub mod tally;
 
 use std::collections::BTreeMap;
@@ -77,6 +78,7 @@ pub const HISTORY_LIMIT: usize = 200;
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Op {
     AddPhoto {
+        #[serde(serialize_with = "stored::photo")]
         photo: Box<Photo>,
     },
     RemovePhoto {
@@ -96,12 +98,14 @@ pub enum Op {
     },
     SetDevelop {
         id: PhotoId,
+        #[serde(serialize_with = "stored::settings", deserialize_with = "stored::read_settings")]
         settings: Arc<DevelopSettings>,
         label: String,
         edited: Option<String>,
     },
     SetMeta {
         id: PhotoId,
+        #[serde(serialize_with = "stored::meta")]
         meta: Box<Meta>,
     },
     SetDeleted {
@@ -115,16 +119,19 @@ pub enum Op {
     },
     SetVersions {
         id: PhotoId,
+        #[serde(serialize_with = "stored::versions")]
         versions: Vec<Version>,
     },
     SetHistory {
         id: PhotoId,
+        #[serde(serialize_with = "stored::history")]
         history: Vec<HistoryStep>,
     },
     /// Append one History entry (dropping the oldest beyond [`HISTORY_LIMIT`]). Logged instead of
     /// a full `SetHistory` so each edit costs one step in the op log.
     PushHistory {
         id: PhotoId,
+        #[serde(serialize_with = "stored::step")]
         step: HistoryStep,
     },
     /// Move the History cursor (see [`Photo::history_cursor`]) without changing the steps.
@@ -264,6 +271,7 @@ pub enum Op {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Catalog {
+    #[serde(serialize_with = "stored::photos")]
     photos: BTreeMap<PhotoId, Arc<Photo>>,
     albums: BTreeMap<AlbumId, Album>,
     next_photo: u64,
@@ -1210,6 +1218,10 @@ mod tests_lock;
 mod tests_repair;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_stored;
+#[cfg(test)]
+mod tests_stored_settings;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]
