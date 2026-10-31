@@ -242,7 +242,7 @@ fn redeye_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
             if (pf(o + 4u) != 0.0) {
                 let k = min(lum2020(c), 0.04) * (1.0 - 0.85 * darken);
                 c = c + (vec3<f32>(k) - c) * m;
-            } else {
+            } else if (c.x > 0.0) {
                 let red = (c.x - max(c.y, c.z)) / max(c.x, 1e-6);
                 let a = m * sstep(0.25, 0.5, red);
                 let n = 0.5 * (c.y + c.z) * (1.0 - 0.9 * darken);

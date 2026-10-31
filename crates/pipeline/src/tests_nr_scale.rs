@@ -10,6 +10,30 @@ use lightcraft_raster::{Rgb32f, Rgba8};
 const W: usize = 1536;
 const H: usize = 1024;
 
+/// Manual slider benchmark; procedural pixels only, no decoding or file I/O in the timings.
+#[test]
+#[ignore = "manual performance measurement"]
+fn bench_nr_slider() {
+    use std::sync::Arc;
+    use std::time::Instant;
+    let src = Arc::new(Rgb32f::from_fn(6000, 4000, |x, y| {
+        let n = ((x * 73 + y * 151) % 257) as f32 / 256.0 - 0.5;
+        [0.02 + n * 0.04, 0.03 - n * 0.03, 0.01 + n * 0.02]
+    }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 40.0;
+    let req = RenderRequest { quality: crate::Quality::Draft, ..RenderRequest::fit(1920, 1280) };
+    let cache = crate::StageCache::default();
+    std::hint::black_box(crate::render_cached(&src, &info, &s, &req, &cache));
+    for i in 0..3 {
+        s.detail.nr_luminance = 41.0 + i as f64;
+        let start = Instant::now();
+        std::hint::black_box(crate::render_cached(&src, &info, &s, &req, &cache));
+        eprintln!("nr_slider_ms {:.3}", start.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
 /// Deterministic standard normal samples (xorshift + Box-Muller).
 struct Rng(u64);
 
@@ -208,4 +232,83 @@ fn crop_does_not_change_the_noise_reduction_scale() {
     let p = plan(&src, &info, &cropped, &RenderRequest::fit(200, 100));
     assert_eq!((p.w, p.h), (200, 100));
     assert!((p.detail_scale - 1.0).abs() < 1e-6, "{}", p.detail_scale);
+}
+
+#[test]
+fn nr_floor_samples_match_the_materialized_frame() {
+    use lightcraft_geom::{Orientation, Rect};
+    let src = noisy_scene(0.8);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    for orientation in [Orientation::Normal, Orientation::Rotate90, Orientation::Transverse] {
+        for warped in [false, true] {
+            let mut s = DevelopSettings { orientation, ..Default::default() };
+            s.detail.nr_luminance = 80.0;
+            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.temp = 8100.0;
+            s.wb.tint = 17.0;
+            s.crop.geometry.rect = Rect::new(0.1, 0.15, 0.9, 0.85);
+            s.crop.geometry.angle = 4.0;
+            s.crop.flip_h = true;
+            if warped {
+                s.geometry.vertical = 15.0;
+            }
+            for edge in [48, 256, 1600] {
+                let req = RenderRequest::fit(edge, edge);
+                let p = plan(&src, &info, &s, &req);
+                let mut sampled = p.frame.sample(&src, p.w, p.h);
+                crate::local::white_balance(&mut sampled, &info, &p.settings);
+                let want = crate::local::nr_floor_of(&sampled);
+                let got = p.nr_floor.unwrap();
+                assert!((got - want).abs() < 2e-6, "{orientation:?}, warp {warped}, edge {edge}: {got} vs {want}");
+                let win = crate::PixelWindow { x: p.w / 4, y: p.h / 4, w: p.w / 2, h: p.h / 2 };
+                assert_eq!(got, plan(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).nr_floor.unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn nr_floor_cache_reuses_only_matching_measurements() {
+    use crate::{NrFloorCache, plan_cached};
+    use std::sync::Arc;
+    let src = Arc::new(noisy_scene(0.8));
+    let cache = NrFloorCache::default();
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 40.0;
+    let mut req = RenderRequest::fit(256, 256);
+    let key = || cache.entry.lock().unwrap().as_ref().unwrap().1;
+    let first = plan_cached(&src, &info, &s, &req, &cache).nr_floor;
+    let first_key = key();
+    // A hit must not execute the expensive measurement again.
+    assert_eq!(cache.get_or_measure(&src, first_key, || panic!("cache miss")), first.unwrap());
+    s.detail.nr_luminance = 80.0;
+    s.light.exposure = 2.0;
+    req.window = Some(crate::PixelWindow { x: 10, y: 20, w: 64, h: 64 });
+    assert_eq!(first, plan_cached(&src, &info, &s, &req, &cache).nr_floor);
+    assert_eq!(first_key, key());
+    req.window = None;
+    for change in 0..5 {
+        let previous_key = key();
+        match change {
+            0 => {
+                s.wb.mode = lightcraft_develop::WbMode::Custom;
+                s.wb.temp = 8200.0;
+            }
+            1 => s.orientation = lightcraft_geom::Orientation::Rotate90,
+            2 => s.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.2, 0.8, 0.9),
+            3 => {
+                req.max_w = 200;
+                req.max_h = 200;
+            }
+            _ => s.geometry.vertical = 12.0,
+        }
+        let got = plan_cached(&src, &info, &s, &req, &cache).nr_floor;
+        assert_eq!(got, plan(&src, &info, &s, &req).nr_floor);
+        assert_ne!(previous_key, key(), "change {change} invalidates the floor");
+    }
+    let other = Arc::new(src.map(|p| p.map(|v| v * 0.2)));
+    assert_eq!(plan_cached(&other, &info, &s, &req, &cache).nr_floor, plan(&other, &info, &s, &req).nr_floor);
+    cache.clear();
+    assert!(cache.entry.lock().unwrap().is_none());
 }

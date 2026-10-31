@@ -250,13 +250,26 @@ impl Frame {
     /// Sample the source into a `w × h` output buffer: orientation, crop, rotation, flips — one
     /// bilinear resample from a pre-filtered (area-downscaled) copy, so minification never aliases.
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
-        let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
-        let o = oriented.as_ref().unwrap_or(src);
         let plan = self.sample_plan(src.width, src.height, w, h);
-        let base = match plan.prefilter {
-            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
-            None => std::borrow::Cow::Borrowed(o),
-        };
+        let base = self.prepare_source(src, &plan);
+        if matches!(plan.mode, SampleMode::Copy) {
+            return base.into_owned();
+        }
+        self.sample_prepared(&base, &plan, w, h)
+    }
+
+    /// Orient and prefilter once for several samples at the same output scale.
+    pub(crate) fn prepare_source<'a>(&self, src: &'a Rgb32f, plan: &SamplePlan) -> std::borrow::Cow<'a, Rgb32f> {
+        use std::borrow::Cow;
+        let oriented = if self.orient == Orientation::Normal { Cow::Borrowed(src) } else { Cow::Owned(src.oriented(self.orient)) };
+        match plan.prefilter {
+            Some((nw, nh)) => Cow::Owned(resize(&oriented, nw, nh, Filter::Mitchell)),
+            None => oriented,
+        }
+    }
+
+    /// Sample a source prepared with this plan's orientation and prefilter size.
+    pub(crate) fn sample_prepared(&self, base: &Rgb32f, plan: &SamplePlan, w: usize, h: usize) -> Rgb32f {
         let affine = |xf: Affine| {
             let mut out = Rgb32f::new(w, h);
             par_rows(&mut out.data, w, |y, row| {
@@ -267,12 +280,12 @@ impl Frame {
             });
             out
         };
-        match (plan.mode, self.warp.as_ref()) {
-            (SampleMode::Copy, _) => base.into_owned(),
-            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h),
+        match (&plan.mode, self.warp.as_ref()) {
+            (SampleMode::Copy, _) => base.clone(),
+            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(base, plan.sx, plan.sy, warp, *o2t, w, h),
             // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
-            (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * o2t),
-            (SampleMode::Affine(xf), _) => affine(xf),
+            (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * *o2t),
+            (SampleMode::Affine(xf), _) => affine(*xf),
         }
     }
 

@@ -552,10 +552,14 @@ pub fn nr_floor_of(img: &Rgb32f) -> f32 {
 /// sampled and white balanced as the image noise reduction sees: a windowed render must floor its guide at the
 /// frame's noise, not at that of the pixels it holds (the camera's local tone gain, if any, is left out).
 pub(crate) fn frame_nr_floor(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, full_w: usize, full_h: usize) -> f32 {
+    let plan = frame.sample_plan(src.width, src.height, full_w, full_h);
+    let base = frame.prepare_source(src, &plan);
     let diffs = nr_floor_rows(full_h)
         .into_iter()
         .flat_map(|y| {
-            let mut row = frame.window(full_w, full_h, crate::PixelWindow { x: 0, y, w: full_w, h: 1 }).sample(src, full_w, 1);
+            let row_frame = frame.window(full_w, full_h, crate::PixelWindow { x: 0, y, w: full_w, h: 1 });
+            let row_plan = row_frame.sample_plan(src.width, src.height, full_w, 1);
+            let mut row = row_frame.sample_prepared(&base, &row_plan, full_w, 1);
             white_balance(&mut row, info, s);
             row_diffs(&row.data).collect::<Vec<_>>()
         })
