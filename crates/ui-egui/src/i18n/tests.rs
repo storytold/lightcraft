@@ -941,7 +941,8 @@ fn vietnamese_panels_dialogs_and_diacritics_paint_with_bundled_fonts() {
     });
     set_language(Locale::En);
 }
-/// The messages each language lacks, which it shows in English. Never fails: `cargo xtask ci`
+/// The messages each language lacks, which it shows in English, then the places that show
+/// English without `tr` at all (`untranslated.rs`). Never fails: `cargo xtask ci`
 /// runs it with `--nocapture`, so the list lands in the gate log. Plain messages are every key
 /// some catalog has, every `tr("…")` literal in the app's source (`gaps.rs`, wrapped calls and
 /// `if`/`match` branches included, so a string no language has yet is listed too) and the
@@ -952,7 +953,18 @@ fn vietnamese_panels_dialogs_and_diacritics_paint_with_bundled_fonts() {
 fn translation_gaps_report() {
     let notes = whats_new_lines();
     let messages: std::collections::BTreeSet<String> = plain_messages().into_iter().filter(|m| !notes.contains(&m.as_str())).collect();
-    println!("{}", gaps_text(&messages, &format_messages(), &notes));
+    let mut out = gaps_text(&messages, &format_messages(), &notes);
+    out.push_str(&untranslated_text(&untranslated::untranslated_places()));
+    println!("{out}");
+}
+
+/// The report's last section: the places that show English without `tr`, one per line.
+fn untranslated_text(places: &[(String, String, String)]) -> String {
+    let mut out = format!("English shown without tr: {} places\n", places.len());
+    for (place, call, text) in places {
+        out.push_str(&format!("  {place}: {call} shows {text:?}\n"));
+    }
+    out
 }
 
 /// A string only the source parsing finds (a call rustfmt wrapped, the branches of an `if` or a
