@@ -218,6 +218,8 @@ impl PreparedExport {
                 // decoding and redoing them (half of such an export's work).
                 let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lightcraft_pipeline::StageCache::default()));
                 if let Some(st) = &stages {
+                    // (a GPU render leaves host copies of what the CPU's HDR render starts from)
+                    st.keep_host_stages(true);
                     job.stages = Some(st.clone());
                 }
                 let mut result = job.run();

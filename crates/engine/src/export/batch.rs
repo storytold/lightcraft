@@ -124,7 +124,8 @@ impl Drop for StopOnDrop<'_> {
 fn run_gated(item: PreparedExport) -> Result<Exported, String> {
     let _held = crate::memory::export_gate().acquire(item.weight);
     let what = format!("exporting {}", item.file_name);
-    crate::guard::catch(&what, || item.run()).and_then(|r| r)
+    // (its GPU renders take turns with the other photos' and stay behind the window's: `lightcraft_gpu::as_batch`)
+    crate::guard::catch(&what, || lightcraft_gpu::as_batch(|| item.run())).and_then(|r| r)
 }
 
 /// The photos of a batch shared by its lanes: each lane takes the next one, at most

@@ -269,15 +269,36 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    /// Another renderer leaves host copies of its sampled and linear images here as well
+    /// ([`Self::keep_host_stages`]).
+    keep_host: std::sync::atomic::AtomicBool,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), keep_host: Default::default() }
     }
 }
 
 impl StageCache {
+    /// Ask another renderer (the GPU) to leave host copies of the framed and the white-balanced,
+    /// denoised, retouched image here ([`Self::seed_linear`]): a CPU render of the same photo at
+    /// the same size then starts from them (an export's HDR rendition after its SDR one).
+    pub fn keep_host_stages(&self, on: bool) {
+        self.keep_host.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether [`Self::keep_host_stages`] was asked for.
+    pub fn keeps_host_stages(&self) -> bool {
+        self.keep_host.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Another renderer's framed (`sampled`) and linear (`lin`, keyed `lin_key`) image of `src` at
+    /// the frame `geo` ([`Plan::geo`], [`Plan::lin_key`]): the next CPU render of the same plan
+    /// starts from them (its spatial planes are made afresh).
+    pub fn seed_linear(&self, src: &Arc<Rgb32f>, geo: u64, sampled: Arc<Rgb32f>, lin_key: u64, lin: Arc<Rgb32f>) {
+        self.put(CacheEntry { src: src.clone(), geo, sampled, lin: Some((lin_key, lin)), planes: local::Planes::default() });
+    }
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();

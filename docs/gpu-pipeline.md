@@ -247,7 +247,31 @@ cannot vouch for:
 | buffer over the device limit | CPU | GPU |
 | out of device memory | CPU (buffer pool emptied) | GPU |
 | entirely black result | CPU | GPU |
-| validation / internal error, device lost, readback failure or timeout, incomplete image, panic | CPU | CPU (whole process) |
+| the GPU busy past the readback timeout (60 s for this render's own work) | CPU | GPU |
+| validation / internal error, device lost, readback failure, incomplete image, panic | CPU | CPU while a new device is made (on its own thread, after 3 s, 6 s, 12 s … ; at most 5 times a session), then GPU |
+
+**Getting the GPU back** (`crates/gpu/src/slot.rs`). A failure no longer
+turns the GPU off for the session: the render is redone on the CPU, the device is marked lost, and
+after a short pause a new device (with its kernels: ~30 s with DX12's FXC) is made on a thread of
+its own while renders go to the CPU. Buffers and cached stages of the old device are never used on
+the new one (each device has a generation number). Each step is told in plain words
+(`lightcraft_gpu::events_after`: "The graphics card stopped responding …", "LightCraft restarted the
+graphics card and uses it again."), shown by the app as a notice. Errors outside a render's error
+scopes on the window's device are the window's (a surface reconfigured while the GPU was busy):
+logged, not a reason to stop rendering.
+
+**Exports share the GPU** (`crates/gpu/src/gate.rs`). An export's photos render with
+`lightcraft_gpu::as_batch`: each takes a turn sized by the device memory it needs (~12 B per source
+pixel + 72 B per output pixel) against a budget of 55 % of the card's memory (read from the registry
+on Windows, sysfs / `nvidia-smi` on Linux, else assumed; `LIGHTCRAFT_GPU_MEMORY_MB` overrides) and at
+most 4 at once (`lightcraft_gpu::set_batch_limits`). Views never wait and hold batch work back
+while they render; `lightcraft_gpu::hold_batch` (window resizes) pauses new batch work; and a batch
+render keeps one submission queued at a time, so the window's frames slot in between. Before this,
+14–16 export lanes queued so much work that the window drew no frame for 5 s and its resize failed
+("Failed to wait for GPU to come idle"), and readbacks that waited for the whole queue timed out
+and turned the GPU off. A gain map export's GPU render also leaves host copies of its framed and
+linear images in the shared stage cache (`StageCache::keep_host_stages`), so its HDR rendition on
+the CPU starts from them.
 
 **Diagnosing.** `ui.inspect` → `perf.gpu` (adapter in use), `perf.gpuReason` (why renders don't use
 the GPU, e.g. `"disabled by LIGHTCRAFT_GPU=0"`, `"software adapter (llvmpipe (LLVM 21.1.8, 256 bits))
@@ -268,7 +292,7 @@ Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
-real failure still stops the whole process. Such a test asserts on its own render's reason, not on
+real failure stops the GPU for the whole process until a new device replaces it (`crates/gpu/tests/recovery.rs`). Such a test asserts on its own render's reason, not on
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
 
 ## Correctness: CPU oracle and equivalence tests
