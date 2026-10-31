@@ -1604,6 +1604,14 @@ fn a_thumbnail_replacing_its_stand_in_is_not_counted_again() {
     finish(&mut app, &work, &ctx, slot, job.run());
     assert!(app.renderer.textures.contains_key(&Slot::Thumb(id)), "the render replaced the stand-in");
     assert_eq!(app.renderer.thumbs_made, 1, "still one photo");
+    // evicted and made again (scrolled away and back): the same photo (CodeRabbit on #3055)
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    assert!(!app.renderer.textures.contains_key(&Slot::Thumb(id)), "evicted");
+    crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+    let (slot, job) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, job.run());
+    assert!(app.renderer.textures.contains_key(&slot), "made again");
+    assert_eq!(app.renderer.thumbs_made, 1, "an evicted photo made again is not counted again");
 }
 
 /// The loupe's look-ahead asks again when only the crop changes (its stand-ins' keys include the
@@ -1636,4 +1644,22 @@ fn the_look_ahead_follows_a_new_order_around_the_same_photo() {
     app.session.sort.ascending = false;
     crate::panels::detail::look_ahead(&mut app, PhotoId(3), 64, true);
     assert!(ahead_keys(&app.renderer).contains(&one), "the new neighbours are prepared");
+}
+
+/// Stepping fast (an arrow held down), the raw renders still queued for the photo left behind are
+/// dropped, the Before view's too (CodeRabbit on #3055); the whole-frame render on screen stays.
+#[test]
+fn stepping_fast_drops_the_queued_before_render() {
+    let (mut app, _work, ctx) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
+        let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+        app.renderer.request(slot, job, 100);
+    }
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.is_pending(Slot::Before), "queued behind the blocked worker");
+    crate::panels::detail::drop_unsettled(&mut app.renderer, PhotoId(2));
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
+        assert!(!app.renderer.is_pending(slot), "{slot:?} still queued");
+    }
 }

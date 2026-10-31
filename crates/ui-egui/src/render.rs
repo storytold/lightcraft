@@ -258,6 +258,10 @@ pub struct Renderer {
     /// unlike [`Renderer::thumb_textures`] it never goes down when old thumbnails are evicted (for
     /// benchmarks).
     pub thumbs_made: u64,
+    /// The photos [`Self::thumbs_made`] counted, by library (a hash of its folder) and id: a
+    /// thumbnail made again after eviction, or after going to another library and back, is the
+    /// same photo (photo ids are a library's own). Never cleared.
+    thumbs_counted: std::collections::HashSet<(u64, PhotoId)>,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
@@ -368,6 +372,7 @@ impl Renderer {
             completed: 0,
             discarded: 0,
             thumbs_made: 0,
+            thumbs_counted: Default::default(),
             keep_pixels: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
@@ -1229,11 +1234,9 @@ impl Renderer {
                     slot = Slot::Thumb(id);
                 }
             }
-            // (a photo's first thumbnail: not a render replacing its stand-in)
+            // (a photo's first thumbnail: not a render replacing its stand-in, nor one made again)
             let first_thumb = match slot {
-                Slot::Thumb(id) | Slot::ThumbQuick(id) => {
-                    !self.textures.contains_key(&Slot::Thumb(id)) && !self.textures.contains_key(&Slot::ThumbQuick(id))
-                }
+                Slot::Thumb(id) | Slot::ThumbQuick(id) => self.thumbs_counted.insert((library_key(session), id)),
                 _ => false,
             };
             if let Slot::Thumb(id) = slot {
@@ -1593,4 +1596,14 @@ mod color_image_tests {
         let img = lightcraft_raster::Rgba8::new(0, 0);
         assert!(color_image(&img).pixels.is_empty());
     }
+}
+
+/// Which library `session` has open, for [`Renderer::thumbs_made`]: a hash of its folder (the same
+/// library opened again is the same), 0 with none.
+fn library_key(session: &Session) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(lib) = session.library.as_ref() else { return 0 };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lib.dir.hash(&mut h);
+    h.finish()
 }

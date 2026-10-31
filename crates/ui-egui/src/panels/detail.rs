@@ -250,7 +250,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         look_ahead(app, id, want.max(8), !crop_tool);
     }
     let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
-    if split || show_before || split_view {
+    // (the Before render waits for a settled photo like the loupe's own)
+    if !settling && (split || show_before || split_view) {
         request_before(app, &ask, [sw, sh]);
     }
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more
@@ -757,14 +758,22 @@ fn request_main_or_settle(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, 
         request_main(app, ui, a, size, whole_draft);
         return false;
     }
-    if app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != a.id) {
-        app.renderer.drop_queued(Slot::Main);
-    }
-    // the zoomed-in windows wait too (a region render decodes the raw as much as the frame)
-    app.renderer.drop_queued(Slot::Region);
-    app.renderer.drop_queued(Slot::RegionBefore);
+    drop_unsettled(&mut app.renderer, a.id);
     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::loupe_timing::SETTLE_SECS / 2.0));
     true
+}
+
+/// While the photo settles: drop the raw renders still queued for a photo the user is stepping
+/// past (one already running finishes). Its whole-frame render unless that is on screen already,
+/// the zoomed-in windows (a region render decodes the raw as much as the frame) and the Before
+/// view, which is a raw render too.
+pub(crate) fn drop_unsettled(renderer: &mut crate::render::Renderer, photo: PhotoId) {
+    if renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != photo) {
+        renderer.drop_queued(Slot::Main);
+    }
+    for slot in [Slot::Region, Slot::RegionBefore, Slot::Before] {
+        renderer.drop_queued(slot);
+    }
 }
 
 /// Zoomed in on an unedited raw (`zoomed`: one view, window renders up): its camera JPEG at full
