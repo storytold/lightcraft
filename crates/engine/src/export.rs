@@ -22,9 +22,10 @@ mod place;
 mod prepare;
 mod watermark;
 
+pub(crate) use batch::export_batch_tuned;
 #[cfg(test)]
 use batch::run_batch_with;
-pub use batch::{MAX_EXPORT_LANES, export_lanes_override, export_parallelism, run_batch, set_export_lanes};
+pub use batch::{MAX_EXPORT_LANES, export_gpu, export_lanes_override, export_parallelism, run_batch, set_export_gpu, set_export_lanes};
 #[cfg(test)]
 use encoding::linear_of_8bit;
 pub use encoding::{

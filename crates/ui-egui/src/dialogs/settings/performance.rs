@@ -5,6 +5,57 @@ use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Token
 
 // --------------------------------------------------------------------------------- Performance
 
+/// Exports: photos side by side, the GPU for exports, and "Test my machine", which measures both and
+/// sets them (its last report below the button).
+fn exports_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Exports"));
+    row(ui, t, crate::i18n::tr("Photos at once"), |ui| {
+        // (what Automatic is here: half the processor's threads, up to 12)
+        let auto_lanes = {
+            let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+            (cores / 2).clamp(1, 12)
+        };
+        let auto = format!("{} ({auto_lanes})", crate::i18n::tr("Automatic"));
+        let mut opts: Vec<(u32, String)> = vec![(0, auto)];
+        let cur = app.ui.settings.export_lanes;
+        for n in [2u32, 4, 6, 8, 12, 16, 24] {
+            opts.push((n, n.to_string()));
+        }
+        if cur > 0 && !opts.iter().any(|(v, _)| *v == cur) {
+            opts.push((cur, cur.to_string()));
+            opts.sort_by_key(|(v, _)| *v);
+        }
+        let opts: Vec<(u32, &str)> = opts.iter().map(|(v, l)| (*v, l.as_str())).collect();
+        choices(ui, "settingsExportLanes", &opts, &mut app.ui.settings.export_lanes);
+    });
+    let mut gpu_exports = !app.ui.settings.export_cpu_only;
+    if check(ui, "settings.exportGpu", &mut gpu_exports, "Use the GPU for exports") {
+        app.ui.settings.export_cpu_only = !gpu_exports;
+    }
+    row(ui, t, crate::i18n::tr("Test my machine"), |ui| {
+        let running = crate::machine_test::running(app);
+        let label = if running { crate::i18n::tr("Testing…") } else { crate::i18n::tr("Test my machine") };
+        let r = ui.add_enabled(!running, egui::Button::new(label));
+        register(ui, "button:settingsTestMachine", r.rect);
+        if r.clicked()
+            && let Err(e) = crate::machine_test::start(app)
+        {
+            app.toast_error(ui.ctx(), e);
+        }
+    });
+    let text = match &app.ui.settings.machine_test {
+        Some(m) => {
+            let when = m.tested.get(..10).unwrap_or(&m.tested);
+            format!("{} {when}: {}", crate::i18n::tr("Tested"), crate::i18n::tr(&m.summary))
+        }
+        None => crate::i18n::tr(
+            "Exports a few of your photos (or the demo photos) for a few minutes at several settings, then uses the fastest. Run it again after changing the computer or its graphics driver.",
+        )
+        .to_string(),
+    };
+    hint(ui, t, &text);
+}
+
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
@@ -49,6 +100,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         let opts = [(0u32, auto.as_str()), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB")];
         choices(ui, "settingsMemory", &opts, &mut app.ui.settings.memory_mb);
     });
+    exports_section(app, ui, t);
     heading(ui, t, crate::i18n::tr("Thumbnail cache"));
     let cur = (app.session.cache_bytes() >> 20) as u32;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {

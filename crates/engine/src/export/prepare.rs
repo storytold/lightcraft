@@ -1,4 +1,4 @@
-use super::batch::run_batch;
+use super::batch::{export_gpu, run_batch};
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
@@ -50,6 +50,8 @@ pub struct PreparedExport {
     /// Estimated working memory of [`Self::run`] (bytes), held from [`crate::memory::export_gate`]
     /// while it runs beside other photos of a batch.
     pub(super) weight: usize,
+    /// Its renders may use the GPU ([`export_gpu`] when it was prepared).
+    pub(super) gpu: bool,
 }
 
 struct RenderWork {
@@ -156,7 +158,7 @@ fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight })
+    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, gpu: export_gpu() })
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo

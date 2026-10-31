@@ -142,6 +142,19 @@ pub fn events_after(after: u64) -> Vec<GpuEvent> {
     slot::events_after(after)
 }
 
+/// Why the GPU last failed in this session (a lost device, a device error), even when a new device
+/// has replaced it since; `None` when it never did.
+pub fn last_loss() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        slot::last_loss()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
 /// Lost devices replaced so far in this session.
 pub fn recoveries() -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
@@ -340,7 +353,21 @@ pub fn enabled() -> bool {
 /// GPU rendering allowed (environment, preference, no simulated failure on this thread), whatever
 /// the device's state.
 fn allowed() -> bool {
-    ENABLED.load(Ordering::Relaxed) && !env_disabled() && broken_here().is_none()
+    ENABLED.load(Ordering::Relaxed) && !env_disabled() && broken_here().is_none() && !ON_CPU.try_with(|c| c.get()).unwrap_or(false)
+}
+
+thread_local! {
+    /// This thread's renders stay on the CPU ([`on_cpu`]).
+    static ON_CPU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with this thread's renders on the CPU (an export set to the processor, a benchmark's
+/// CPU run); the rest of the process keeps the GPU.
+pub fn on_cpu<R>(f: impl FnOnce() -> R) -> R {
+    let was = ON_CPU.with(|c| c.replace(true));
+    let r = f();
+    ON_CPU.with(|c| c.set(was));
+    r
 }
 
 /// Why the device in use failed, while it waits to be replaced (`None`: it works, or there is none).

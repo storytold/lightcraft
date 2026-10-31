@@ -120,6 +120,10 @@ pub struct WorkGate {
     /// releasing one in any order leaves the others counted (issue #2576).
     state: Mutex<(u128, usize)>,
     cv: Condvar,
+    /// Acquires that had to wait, and their total wait (ms): what a benchmark reports as memory
+    /// holding work back.
+    waits: std::sync::atomic::AtomicU64,
+    waited_ms: std::sync::atomic::AtomicU64,
 }
 
 /// Bytes held from a [`WorkGate`] until dropped.
@@ -130,7 +134,7 @@ pub struct Permit<'a> {
 
 impl WorkGate {
     pub fn new(limit: usize) -> WorkGate {
-        WorkGate { state: Mutex::new((0, limit)), cv: Condvar::new() }
+        WorkGate { state: Mutex::new((0, limit)), cv: Condvar::new(), waits: Default::default(), waited_ms: Default::default() }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, (u128, usize)> {
@@ -140,6 +144,11 @@ impl WorkGate {
     pub fn set_limit(&self, limit: usize) {
         self.lock().1 = limit;
         self.cv.notify_all();
+    }
+
+    /// Acquires that waited so far, and their total wait (ms).
+    pub fn waits(&self) -> (u64, u64) {
+        (self.waits.load(Ordering::Relaxed), self.waited_ms.load(Ordering::Relaxed))
     }
 
     /// Bytes held now (at most `usize::MAX`) and the limit.
@@ -152,8 +161,14 @@ impl WorkGate {
     /// a gate whose limit is `usize::MAX` make the next holder wait.
     pub fn acquire(&self, bytes: usize) -> Permit<'_> {
         let mut g = self.lock();
-        while g.0 > 0 && g.0.saturating_add(bytes as u128) > g.1 as u128 {
+        let fits = |g: &(u128, usize)| g.0 == 0 || g.0.saturating_add(bytes as u128) <= g.1 as u128;
+        let start = (!fits(&g)).then(web_time::Instant::now);
+        while !fits(&g) {
             g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+        if let Some(t) = start {
+            self.waits.fetch_add(1, Ordering::Relaxed);
+            self.waited_ms.fetch_add(t.elapsed().as_millis() as u64, Ordering::Relaxed);
         }
         g.0 = g.0.saturating_add(bytes as u128);
         Permit { gate: self, bytes }

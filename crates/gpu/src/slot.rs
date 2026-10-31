@@ -245,6 +245,7 @@ pub(crate) fn lose(generation: u64, reason: &str) {
         return;
     }
     s.lost = Some(Lost { reason: reason.to_string(), at: Instant::now(), attempts: 0 });
+    *LAST_LOSS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.to_string());
     let left = MAX_RECOVERIES.saturating_sub(s.recoveries);
     drop(s);
     log::error!("gpu: device failure, rendering on the CPU until it is replaced: {reason}");
@@ -268,6 +269,13 @@ fn short(reason: &str) -> String {
         Some((i, _)) => format!("{}…", line.get(..i).unwrap_or(line)),
         None => line.to_string(),
     }
+}
+
+/// The latest device failure in this session, even one a new device has replaced since.
+static LAST_LOSS: Mutex<Option<String>> = Mutex::new(None);
+
+pub(crate) fn last_loss() -> Option<String> {
+    LAST_LOSS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
 /// Devices created after a loss so far in this session.
