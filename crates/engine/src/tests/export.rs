@@ -622,6 +622,23 @@ fn hdr_avif_export_hlg() {
     assert!(!hdr.bytes.windows(4).any(|w| w == b"clli"));
 }
 
+/// An exported AVIF's metadata reads back (issue #693: HEIF-family files had no metadata reader).
+/// avif-serialize writes the EXIF as an `Exif` item in two extents, its offset field and the TIFF.
+#[test]
+fn exported_avif_metadata_reads_back() {
+    use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
+    let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
+    p.meta.camera = "Synthetic X2".into();
+    p.captured = Some("2026-10-12T12:34:56".into());
+    let m = crate::export::export_metadata(&p, &Catalog::new(), &ExportOptions::default()).unwrap();
+    let img = lightcraft_raster::Rgba8::new(48, 32);
+    let avif = crate::export::encode_with_metadata(&img, &ExportOptions::from_json(&json!({"format": "avif", "quality": 60})), Some(&m)).unwrap();
+    assert_eq!(lightcraft_codecs::sniff(&avif), Some(lightcraft_codecs::Format::Avif));
+    let back = lightcraft_meta::extract(&avif);
+    assert_eq!(back.model.as_deref(), Some("Synthetic X2"));
+    assert_eq!(back.capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-12T12:34:56"));
+}
+
 /// "Remove location info" holds for the file-copying formats too: the sidecar and the DNG's
 /// packet carry no location, and an original that embeds GPS is refused rather than copied.
 #[test]
@@ -665,6 +682,7 @@ fn remove_location_holds_for_original_and_dng_exports() {
     assert!(lightcraft_meta::extract(&e.bytes).gps.is_some());
     let err = export_photo(&mut s, jid, &opts("original", true), 1).err().unwrap();
     assert!(err.contains("can't remove the location") && err.contains("export as JPEG"), "{err}");
+    assert!(!err.contains("DNG"), "a JPEG can't be exported as DNG: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -867,7 +885,147 @@ fn remove_location_refuses_a_raw_that_embeds_gps() {
     s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
     let id = s.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
-    assert!(err.contains("can't remove the location"), "{err}");
+    assert!(err.contains("can't remove the location") && err.contains("DNG"), "a raw can go out as DNG: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A HEIC whose only GPS is in its thumbnail's EXIF (the pictures have no data: an original's
+/// export never decodes it). Item 1 is the photo, 2 its thumbnail, 3 the thumbnail's EXIF, kept in
+/// the `meta` box's `idat`.
+fn heic_with_gps_in_its_thumbnail() -> Vec<u8> {
+    let gps = lightcraft_meta::Gps { latitude: 48.85, longitude: 2.35, altitude: None };
+    let exif = [&[0u8, 0, 0, 0][..], &lightcraft_meta::write_exif(&lightcraft_meta::Metadata { gps: Some(gps), ..Default::default() })].concat();
+    heic_with_metadata_in_its_thumbnail(b"Exif", &exif)
+}
+
+fn heic_with_metadata_in_its_thumbnail(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let bx = |kind: &[u8], body: &[u8]| [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat();
+    let full = |kind: &[u8], body: &[u8]| bx(kind, &[&[0u8, 0, 0, 0][..], body].concat());
+    let infe = |id: u8, kind: &[u8]| {
+        let fields = if kind == b"mime" { b"\0application/rdf+xml\0".as_slice() } else { b"\0" };
+        bx(b"infe", &[&[2, 0, 0, 0, 0, id, 0, 0][..], kind, fields].concat())
+    };
+    let iinf = full(b"iinf", &[&[0, 3][..], &infe(1, b"hvc1"), &infe(2, b"hvc1"), &infe(3, kind)].concat());
+    let iref = full(b"iref", &[bx(b"thmb", &[0, 2, 0, 1, 0, 1]), bx(b"cdsc", &[0, 3, 0, 1, 0, 2])].concat());
+    // `iloc` version 1, 4-byte offsets and lengths: item 3 from `idat` (construction method 1)
+    let mut iloc = vec![1, 0, 0, 0, 0x44, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0];
+    iloc.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    let meta = full(b"meta", &[full(b"pitm", &[0, 1]), iinf, iref, bx(b"iloc", &iloc), bx(b"idat", payload)].concat());
+    [bx(b"ftyp", b"heic\0\0\0\0mif1heic"), meta].concat()
+}
+
+/// "Remove location info" refuses an original that embeds GPS anywhere it can be read, here only
+/// in a HEIC's thumbnail (#693 review), and doesn't offer DNG for a photo that isn't a raw.
+#[test]
+fn remove_location_refuses_a_heic_whose_thumbnail_has_gps() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("export-noloc-heic");
+    let path = dir.join("IMG_0003.HEIC");
+    std::fs::write(&path, heic_with_gps_in_its_thumbnail()).unwrap();
+    let mut s = Session::new().with_fs();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, "IMG_0003.HEIC", "HEIC", 32, 32, "2026-10-12T00:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let opts = |remove: bool| ExportOptions::from_json(&json!({"format": "original", "removeLocation": remove}));
+    assert!(export_photo(&mut s, id, &opts(false), 1).is_ok(), "copied as is when the location may stay");
+    let err = export_photo(&mut s, id, &opts(true), 1).err().expect("refused: the thumbnail's EXIF has GPS");
+    assert!(err.contains("can't remove the location") && err.contains("export as JPEG or TIFF"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A listed metadata item with an unreadable placement is not proof that an original has no GPS.
+/// Exercise the real file-copy path; these damaged containers do not need a working decoder.
+#[test]
+fn remove_location_refuses_heic_with_unresolved_iloc() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("export-noloc-heic-iloc");
+    let path = dir.join("Placement.HEIC");
+    let mut s = Session::new().with_fs();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, "Placement.HEIC", "HEIC", 32, 32, "2026-10-12T00:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let opts = |remove: bool| ExportOptions::from_json(&json!({"format": "original", "removeLocation": remove}));
+
+    let original = heic_with_gps_in_its_thumbnail();
+    assert!(lightcraft_meta::embeds_location(&original), "the intact fixture has GPS");
+    let kind_at = original.windows(4).position(|w| w == b"iloc").unwrap();
+    let body = kind_at + 4;
+    for damage in ["none", "missing", "version", "field size", "truncated entry"] {
+        let mut bytes = original.clone();
+        match damage {
+            "missing" => bytes[kind_at..body].copy_from_slice(b"free"),
+            "version" => bytes[body] = 3,
+            "field size" => bytes[body + 4] = 0x24,
+            "truncated entry" => bytes[body + 15] = 2, // two extents declared, only one present
+            _ => {}
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(export_photo(&mut s, id, &opts(false), 1).unwrap().bytes, bytes, "location may stay: {damage}");
+        let err = export_photo(&mut s, id, &opts(true), 1).err().expect("unresolved GPS must not be copied");
+        assert!(err.contains("can't remove the location") && err.contains("export as JPEG or TIFF"), "{damage}: {err}");
+    }
+
+    // Ordinary files without GPS still export, with and without an EXIF item.
+    for exif in [None, Some(lightcraft_meta::write_exif(&lightcraft_meta::Metadata { model: Some("Synthetic".into()), ..Default::default() }))] {
+        let mut spec = lightcraft_heif::testdata::Spec::new(32, 32, &|_, _| [0, 0, 0]);
+        spec.exif = exif;
+        let bytes = lightcraft_heif::testdata::build(&spec);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(export_photo(&mut s, id, &opts(true), 1).unwrap().bytes, bytes);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A damaged item catalog cannot authorize copying the GPS bytes that `iloc` still references.
+#[test]
+fn remove_location_refuses_heic_with_incomplete_exif_catalog() {
+    let original = heic_with_gps_in_its_thumbnail();
+    let idat = original.windows(4).position(|w| w == b"idat").unwrap();
+    assert!(lightcraft_meta::try_read_exif(&original[idat + 8..]).unwrap().gps.is_some(), "real EXIF payload");
+    assert_incomplete_catalog_refused(&original, "exif");
+}
+
+#[test]
+fn remove_location_refuses_heic_with_incomplete_xmp_catalog() {
+    let gps =
+        lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 48.85, longitude: 2.35, altitude: None }), ..Default::default() };
+    let xmp = lightcraft_meta::write_xmp(&gps, None);
+    assert!(lightcraft_meta::parse_xmp(&xmp).unwrap().metadata.gps.is_some(), "real XMP payload");
+    assert_incomplete_catalog_refused(&heic_with_metadata_in_its_thumbnail(b"mime", xmp.as_bytes()), "xmp");
+}
+
+fn assert_incomplete_catalog_refused(original: &[u8], label: &str) {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir(&format!("export-noloc-heic-catalog-{label}"));
+    let path = dir.join("Catalog.HEIC");
+    let mut s = Session::new().with_fs();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, "Catalog.HEIC", "HEIC", 32, 32, "2026-10-12T00:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let opts = |remove: bool| ExportOptions::from_json(&json!({"format": "original", "removeLocation": remove}));
+    let iinf = original.windows(4).position(|w| w == b"iinf").unwrap();
+    let infe = original.windows(4).rposition(|w| w == b"infe").unwrap();
+    let idat = original.windows(4).position(|w| w == b"idat").unwrap();
+    assert!(lightcraft_meta::embeds_location(original), "intact GPS container");
+    for damage in ["truncated type", "missing catalog", "unsupported table", "unsupported entry", "unknown entry", "truncated catalog"] {
+        let mut bytes = original.to_vec();
+        match damage {
+            "truncated type" => bytes[infe - 4..infe].copy_from_slice(&18u32.to_be_bytes()),
+            "missing catalog" => bytes[iinf..iinf + 4].copy_from_slice(b"free"),
+            "unsupported table" => bytes[iinf + 4] = 2,
+            "unsupported entry" => bytes[infe + 4] = 4,
+            "unknown entry" => bytes[infe..infe + 4].copy_from_slice(b"free"),
+            "truncated catalog" => bytes[iinf - 4..iinf].copy_from_slice(&u32::MAX.to_be_bytes()),
+            _ => unreachable!(),
+        }
+        assert_eq!(&bytes[idat..], &original[idat..], "GPS bytes retained");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(export_photo(&mut s, id, &opts(false), 1).unwrap().bytes, bytes, "location may stay: {damage}");
+        let result = export_photo(&mut s, id, &opts(true), 1);
+        assert!(result.is_err(), "Remove location copied the original with {damage}");
+        let err = result.err().unwrap();
+        assert!(err.contains("can't remove the location") && err.contains("export as JPEG or TIFF"), "{damage}: {err}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
