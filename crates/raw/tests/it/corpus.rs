@@ -44,7 +44,7 @@ fn corpus_raw_decodes() {
         let preview = embedded_preview(&bytes);
         let tp = t0.elapsed().as_secs_f64() * 1e3;
         // DNG and generic CFA TIFF previews can be absent or uncompressed RGB; other vendor raws embed a JPEG,
-        // except the Panasonic `.RAW` files of 2005–2007, Canon's explicit HEVC preview tracks and Mamiya MEF.
+        // except the Panasonic `.RAW` files of 2005–2007, Canon's explicit HEVC preview tracks, Mamiya MEF and Light LRI.
         // A Hasselblad 3FR / FFF without a JPEG hands its 8-bit RGB image on as a baseline TIFF (`rgb_preview`).
         if let Some(p) = &preview {
             let jpeg = p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]);
@@ -55,9 +55,11 @@ fn corpus_raw_decodes() {
             let hevc_preview = fmt == RawFormat::Cr3
                 && lightcraft_meta::cr3::parse_cr3(&bytes)
                     .is_some_and(|c| c.tracks.iter().any(|t| t.kind == lightcraft_meta::cr3::Cr3TrackKind::Other(*b"HEVC") && t.data.is_some()));
-            // the Mamiya ZD's previews are uncompressed RGB sub-IFDs, not JPEGs
+            // the Mamiya ZD's previews are uncompressed RGB sub-IFDs, not JPEGs; a Light L16 LRI has no preview
             assert!(
-                matches!(fmt, RawFormat::Dng | RawFormat::CfaTiff | RawFormat::Mef) || name.starts_with("raw-panasonic-") || hevc_preview,
+                matches!(fmt, RawFormat::Dng | RawFormat::CfaTiff | RawFormat::Mef | RawFormat::Lri)
+                    || name.starts_with("raw-panasonic-")
+                    || hevc_preview,
                 "{name}: no embedded preview"
             );
         }
@@ -1566,6 +1568,45 @@ fn corpus_mamiya_mef() {
     let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
     let step: f64 = d.chunks(4016).take(400).flat_map(|r| r.windows(3).map(|w| f64::from(w[0].abs_diff(w[2])))).sum::<f64>() / (400.0 * 4014.0);
     assert!(step < 40.0, "rough {step}");
+}
+
+/// Light LRI (`crates/raw/src/vendor/lri.rs`): of the L16 sample's ten modules, A1 (28 mm, colour) decodes to a smooth
+/// 4160 x 3120 GRBG mosaic with the file's black and white levels, A / D65 colour matrices, as-shot white balance
+/// and vignetting gain map. Skips when absent.
+#[test]
+fn corpus_light_lri() {
+    let Ok(bytes) = std::fs::read(corpus_root().join("raw").join("lri-light-l16.lri")) else {
+        lightcraft_testkit::skip!(Corpus, "lri-light-l16.lri absent");
+        return;
+    };
+    assert_eq!(probe(&bytes), Some(RawFormat::Lri));
+    let img = decode(&bytes).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((img.width, img.height, img.bits), (4160, 3120, 10));
+    assert_eq!(img.cfa.as_ref().map(|c| c.name()).as_deref(), Some("GRBG"));
+    assert_eq!((img.black.mean(), img.white_at(0)), (42.0, 1023.0));
+    assert_eq!(img.color.illuminant, [17, 21]);
+    assert!(img.color.color_matrix.iter().chain(&img.color.forward_matrix).all(Option::is_some));
+    let n = img.color.as_shot_neutral.expect("as-shot white");
+    assert!((n[0] - 0.495).abs() < 0.01 && (n[2] - 0.675).abs() < 0.01, "{n:?}");
+    let [lightcraft_raw::Opcode::GainMap { points_v, points_h, map_planes, gains, .. }] = img.opcodes.list2.as_slice() else {
+        panic!("expected one DNG GainMap opcode");
+    };
+    assert_eq!((*points_v, *points_h, *map_planes), (13, 17, 1));
+    assert_eq!(gains.len(), 13 * 17);
+    // A1's 17x13 vignetting grid as read from the file by a separate protobuf reader: unity at the centre, and four
+    // distinct corners, so a flipped or transposed grid fails
+    assert!((gains[6 * 17 + 8] - 1.0).abs() < 1e-6, "centre gain {}", gains[6 * 17 + 8]);
+    for (i, want) in [(0, 3.2910), (16, 3.3807), (12 * 17, 3.3047), (13 * 17 - 1, 3.3087)] {
+        assert!((gains[i] - want).abs() < 1e-3, "corner gain[{i}] = {}, want {want}", gains[i]);
+    }
+    assert_eq!(img.metadata.model.as_deref(), Some("L16"));
+    assert_eq!(img.metadata.capture_time.map(|t| (t.year, t.month, t.day)), Some((2017, 9, 28)));
+    let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+    // the darkest samples sit just under black; same-colour neighbours differ little: the bit order is right
+    assert!(d.iter().all(|&v| (30..=1023).contains(&v)));
+    let step: f64 = d.chunks(4160).take(400).flat_map(|r| r.windows(3).map(|w| f64::from(w[0].abs_diff(w[2])))).sum::<f64>() / (400.0 * 4158.0);
+    assert!(step < 10.0, "rough {step}");
+    assert_eq!(probe_info(&bytes).unwrap(), img.info());
 }
 
 /// Minolta MRW (`crates/raw/src/vendor/mrw.rs`): packed and 16-bit-word storage, RGGB and GBRG cells, the image
