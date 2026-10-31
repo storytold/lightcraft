@@ -350,7 +350,8 @@ pub struct LightcraftApp {
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,
     /// The last GPU event told (`lightcraft_gpu::events_after`: the graphics card stopped
-    /// responding, was restarted …).
+    /// responding, was restarted …). (The web build has no GPU events.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     gpu_event_seen: u64,
     /// The window's size last frame: a resize asks the GPU's batch work (exports) to make room.
     last_screen: egui::Vec2,
