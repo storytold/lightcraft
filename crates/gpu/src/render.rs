@@ -236,10 +236,42 @@ const CHUNK: usize = 16;
 /// One box pass of radius `r` (clamped edges) over a `w × h` image of `nc` interleaved channels,
 /// `src → dst`: horizontal or vertical.
 fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, r: usize) {
-    let chunk = (2 * r + 1).clamp(CHUNK, 128);
-    let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32];
-    let (k, groups) = if horizontal { ("box_h", groups2(w, h, [64, 4])) } else { ("box_v", groups2(w, h.div_ceil(chunk), [64, 4])) };
-    cx.run(k, &p, &[Some(src), Some(dst)], groups);
+    let plan = box_plan(horizontal, r);
+    let p = [w as u32, h as u32, nc as u32, r as u32, plan.chunk as u32];
+    let groups = match plan.kernel {
+        "box_h" => groups2(w, h, [64, 4]),
+        "box_h_slide" => groups2(w.div_ceil(plan.chunk), h, [64, 4]),
+        _ => groups2(w, h.div_ceil(plan.chunk), [64, 4]),
+    };
+    cx.run(plan.kernel, &p, &[Some(src), Some(dst)], groups);
+}
+
+/// Radius from which the horizontal box pass slides a running sum ([`box_plan`]).
+const BOX_H_SLIDE_FROM: usize = 32;
+
+/// How one box pass runs: its kernel, the run of pixels each sliding thread covers, and the source
+/// reads it costs per output pixel.
+#[derive(Clone, Copy, Debug)]
+struct BoxPlan {
+    kernel: &'static str,
+    chunk: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    reads_per_px: f32,
+}
+
+/// The box pass for radius `r`. Work per pixel stays bounded whatever the radius (a few reads), so a
+/// large blur can't make one dispatch run long enough for a driver watchdog (Windows TDR, ~2 s) to reset
+/// the GPU: small horizontal radii read their window per pixel (cache friendly), larger ones and every
+/// vertical pass slide a running sum over a run at least as long as the window.
+fn box_plan(horizontal: bool, r: usize) -> BoxPlan {
+    let window = r.saturating_mul(2).saturating_add(1);
+    if horizontal && r < BOX_H_SLIDE_FROM {
+        return BoxPlan { kernel: "box_h", chunk: 1, reads_per_px: window as f32 };
+    }
+    let chunk = window.max(CHUNK);
+    // priming (window reads) plus two reads per pixel of the run
+    let reads_per_px = (window as f32 + 2.0 * chunk as f32) / chunk as f32;
+    BoxPlan { kernel: if horizontal { "box_h_slide" } else { "box_v" }, chunk, reads_per_px }
 }
 
 /// Gaussian blur of a `w × h` image of `nc` interleaved channels: three box passes each way
@@ -1196,6 +1228,19 @@ mod tests {
             }
         }
         assert!(covered > 0 && covered < w * h, "{covered} px covered");
+    }
+
+    /// A box pass costs a bounded number of reads per pixel at any radius (large blurs once made a
+    /// single dispatch long enough to trip a driver watchdog).
+    #[test]
+    fn box_pass_work_per_pixel_is_bounded_for_any_radius() {
+        for horizontal in [true, false] {
+            for r in [0usize, 1, 5, 31, 32, 64, 120, 1000, 100_000] {
+                let p = box_plan(horizontal, r);
+                assert!(p.reads_per_px <= 2.0 * BOX_H_SLIDE_FROM as f32 + 1.0, "{horizontal} r={r}: {p:?}");
+                assert!(p.chunk >= 1);
+            }
+        }
     }
 
     /// The blur against `lightcraft_raster::blur::gaussian`: widths that do and don't fill the last
