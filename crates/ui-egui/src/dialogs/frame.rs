@@ -115,11 +115,16 @@ pub(super) fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
 }
 
 pub(super) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    translated_field(ui, crate::i18n::tr(label), add)
+}
+
+/// [`field`] with a label already translated (a [`crate::i18n::tr_ctx`] message).
+pub(super) fn translated_field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);
-            ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text_label));
+            ui.label(egui::RichText::new(label).color(t.text_label));
         });
         add(ui)
     })
@@ -157,7 +162,12 @@ pub(super) fn return_confirms(dlg: &Dialog) -> bool {
 /// it back every frame would keep Tab from ever reaching the dialog's buttons and check boxes.
 /// True when Return confirms the dialog; Esc cancels the dialog (`show`).
 pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
-    let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
+    translated_dialog_field(ui, widget, text, crate::i18n::tr(hint))
+}
+
+/// [`dialog_field`] with a hint already translated (a [`crate::i18n::tr_ctx`] message).
+pub(super) fn translated_dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
+    let r = crate::text_field::TextField::singleline(widget, text).hint(hint).width(f32::INFINITY).select_on_focus(true).show(ui);
     // (and takes it back when nothing has it: after a click on the dialog's background or a check box,
     // or when Return gave it up on a refusal; a control Tab reached keeps it). A disabled dialog (a
     // prompt or the blocking library window owns input) must not request the focus at all: egui's
