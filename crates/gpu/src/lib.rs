@@ -1572,8 +1572,9 @@ pub fn helper_ready() -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HelperStatus {
     /// `off` (turned off, or GPU rendering is), `none` (no other card to use), `notStarted` (made
-    /// after the editing card's device: the app's warm-up), `starting`, `ready`, `lost` (stopped
-    /// responding: restarted after a pause), `failed` (its device couldn't be made).
+    /// once it is known which card edits: the app's warm-up), `starting` (being set up, or a new
+    /// choice being applied), `ready`, `lost` (stopped responding: restarted after a pause),
+    /// `failed` (its device couldn't be made).
     pub state: &'static str,
     /// The card's name (ready, lost).
     pub name: Option<String>,
@@ -1593,6 +1594,11 @@ pub fn helper_status() -> HelperStatus {
             return st("off", None, Some("GPU rendering is turned off".into()));
         }
         let name = slot::existing(Role::Helper).map(|g| g.info.name.clone());
+        // (a new choice being applied: not the old one's state, which a script polling for
+        // `ready` would take for the answer)
+        if helper_syncing() {
+            return st("starting", name, None);
+        }
         if let Some(r) = slot::lost_reason(Role::Helper) {
             return st("lost", name, Some(r));
         }
@@ -1605,9 +1611,6 @@ pub fn helper_status() -> HelperStatus {
         }
         if let Some(r) = slot::creation_error(Role::Helper) {
             return st("failed", None, Some(r));
-        }
-        if helper_syncing() {
-            return st("starting", None, None);
         }
         st("notStarted", None, None)
     }
