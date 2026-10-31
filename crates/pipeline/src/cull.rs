@@ -1,6 +1,7 @@
 //! Assisted culling measurements on a decoded source (any size; measured on a fixed-size copy so
-//! scores compare across photos): focus, clipping, and a tiny signature for finding similar
-//! shots (bursts). Classical image statistics — no learned models.
+//! scores compare across photos): focus (whole-frame or, given a face region, just around it —
+//! see [`face_sharpness`]), clipping, and a tiny signature for finding similar shots (bursts).
+//! Classical image statistics — no learned models.
 
 use lightcraft_raster::Rgb32f;
 
@@ -31,10 +32,10 @@ fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
     (out, ow, oh)
 }
 
-/// Focus 0..100: detail energy (Laplacian) of the sharpest areas — the 90th percentile of
-/// 16 × 16-pixel blocks, so a sharp subject on a soft background still reads as sharp.
-pub fn sharpness(img: &Rgb32f) -> f32 {
-    let (l, w, h) = luma(img);
+/// Focus 0..100 of a luma grid `l` (`w × h`): detail energy (Laplacian) of the sharpest areas —
+/// the 90th percentile of 16 × 16-pixel blocks, so a sharp subject on a soft background still
+/// reads as sharp.
+fn sharpness_of(l: &[f32], w: usize, h: usize) -> f32 {
     let b = 16;
     let mut blocks = Vec::new();
     for by in (1..h.saturating_sub(1)).step_by(b) {
@@ -63,6 +64,49 @@ pub fn sharpness(img: &Rgb32f) -> f32 {
     // map energy to 0..100: a crisp, ordinary photo at 512 px reads ≈ 50–80 (calibrated on the
     // CC0 corpus), soft ones well below
     100.0 * (1.0 - (-*v / 0.012).exp())
+}
+
+/// Focus 0..100 of the whole photo (see [`sharpness_of`]).
+pub fn sharpness(img: &Rgb32f) -> f32 {
+    let (l, w, h) = luma(img);
+    sharpness_of(&l, w, h)
+}
+
+/// A crop of `img` around the normalized rect `[x0, y0, x1, y1]`, padded by `margin` on every
+/// side (a face box itself is mostly flat skin: the surrounding hair, eyes and background give
+/// the Laplacian measure something to read). Degenerate or out-of-range rects fall back to the
+/// whole photo.
+fn crop_around(img: &Rgb32f, rect: [f32; 4], margin: f32) -> Rgb32f {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 {
+        return img.clone();
+    }
+    let [x0, y0, x1, y1] = rect;
+    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) || x1 <= x0 || y1 <= y0 {
+        return img.clone();
+    }
+    let (mx, my) = ((x1 - x0) * margin, (y1 - y0) * margin);
+    let px = |v: f32, n: usize| ((v * n as f32).round() as isize).clamp(0, n as isize) as usize;
+    let (cx0, cx1) = (px(x0 - mx, w), px(x1 + mx, w));
+    let (cy0, cy1) = (px(y0 - my, h), px(y1 + my, h));
+    let (cw, ch) = (cx1.saturating_sub(cx0).max(1), cy1.saturating_sub(cy0).max(1));
+    let mut out = Rgb32f::new(cw, ch);
+    for y in 0..ch {
+        for x in 0..cw {
+            out.data[y * cw + x] = img.data[(cy0 + y).min(h - 1) * w + (cx0 + x).min(w - 1)];
+        }
+    }
+    out
+}
+
+/// Focus 0..100 of the photo at and around a normalized face rect `[x0, y0, x1, y1]` (see
+/// [`crate::cull`] module docs): lets Assisted Culling reject a photo whose detected face is
+/// blurred even when the rest of the frame (background, other subjects) reads sharp, and pick a
+/// burst's sharpest face rather than its sharpest frame.
+pub fn face_sharpness(img: &Rgb32f, rect: [f32; 4]) -> f32 {
+    let crop = crop_around(img, rect, 0.4);
+    let (l, w, h) = luma(&crop);
+    sharpness_of(&l, w, h)
 }
 
 /// Share of clipped pixels (crushed blacks + blown highlights), 0..1.
@@ -134,5 +178,32 @@ mod tests {
         let other = lightcraft_scenes::demo_library()[5].render(480, 320);
         assert!(similarity(&signature(&img), &signature(&other)) < 0.9);
         assert!(clipped(&img) < 0.5);
+    }
+
+    #[test]
+    fn face_sharpness_catches_a_blurred_face_the_whole_frame_score_misses() {
+        // a fine checkerboard everywhere, blurred (to flat) on the left half only: a whole-frame
+        // score is pulled up by the still-sharp right half even when the "face" (left half) is
+        // the blurred part.
+        let checker = Rgb32f::from_fn(256, 160, |x, _| if (x / 2) % 2 == 0 { [0.75; 3] } else { [0.25; 3] });
+        let soft = blur(&checker, 6);
+        let mut half = checker.clone();
+        for y in 0..half.height {
+            for x in 0..half.width / 2 {
+                half.data[y * half.width + x] = soft.data[y * half.width + x];
+            }
+        }
+        let whole = sharpness(&half);
+        let blurred_face = face_sharpness(&half, [0.1, 0.3, 0.4, 0.7]);
+        let sharp_face = face_sharpness(&half, [0.6, 0.3, 0.9, 0.7]);
+        assert!(blurred_face < sharp_face - 10.0, "blurred-half face {blurred_face} vs sharp-half face {sharp_face}");
+        assert!(blurred_face < whole - 5.0, "a face-targeted score should catch a blurred face that the whole-frame score ({whole}) smooths over");
+    }
+
+    #[test]
+    fn face_sharpness_falls_back_to_the_whole_photo_for_a_bad_rect() {
+        let img = lightcraft_scenes::demo_library()[0].render(240, 160);
+        assert_eq!(face_sharpness(&img, [f32::NAN; 4]), sharpness(&img));
+        assert_eq!(face_sharpness(&img, [0.5, 0.5, 0.5, 0.5]), sharpness(&img), "empty rect");
     }
 }

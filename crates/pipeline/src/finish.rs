@@ -20,6 +20,12 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Lens Blur: `a` at `t` = 0, `b` at `t` = 1.
+#[inline]
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    if t <= 0.0 { a } else { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -165,6 +171,9 @@ pub struct FinishParams {
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// Lens Blur's focal plane and in-focus half-width (both 0..1; CPU only, see [`crate::Prepared`]
+    /// and [`crate::lensblur`]).
+    pub lens_blur: Option<(f32, f32)>,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -235,6 +244,8 @@ impl FinishParams {
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            lens_blur: (effects && s.lens_blur.enabled && s.lens_blur.amount > 0.0)
+                .then(|| ((s.lens_blur.focal_distance / 100.0) as f32, (s.lens_blur.focal_range / 100.0) as f32)),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -356,7 +367,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams { curves, vig, to_out, out_luma, grain, .. } = fp;
+    let FinishParams { curves, vig, to_out, out_luma, grain, lens_blur, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
@@ -371,7 +382,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     for_rows(&mut out, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
-            let raw = p.img.data[i];
+            let raw = match (lens_blur, &p.lens_blur_depth, &p.lens_blur_img) {
+                (Some((focal, range)), Some(depth), Some(blurred)) => {
+                    let t = crate::lensblur::blend_weight(depth.data[i], *focal, *range);
+                    lerp3(p.img.data[i], blurred.data[i], t)
+                }
+                _ => p.img.data[i],
+            };
             let local = pixel_local_terms(p, &terms, i);
             let l_sat = local.values[11];
             let l_hue = local.values[12];

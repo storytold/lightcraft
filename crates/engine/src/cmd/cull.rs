@@ -2,6 +2,11 @@
 //! together (bursts) and mark the sharpest of each group; optionally reject blurry ones and pick
 //! each group's best. Scores are kept on the photos (rules / smart albums: `sharpness`,
 //! `bestOfGroup`).
+//!
+//! A photo with a face region (detected by `faces.detect` or read from XMP) is scored on its
+//! sharpest face, not the whole frame: a soft background no longer hides a blurred subject, and a
+//! sharp bystander no longer rejects a soft-background portrait. Still classical measures: no
+//! eyes-closed or expression detection.
 
 use lightcraft_catalog::{Analysis, Flag, Op, PhotoId};
 use serde_json::{Value, json};
@@ -35,9 +40,19 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     for id in ids {
         match s.source_now(id, crate::media::SourceLevel::Thumb) {
             Ok(src) => {
-                let t = s.catalog.photo(id).and_then(|p| p.captured.as_deref().and_then(secs));
+                let photo = s.catalog.photo(id);
+                let t = photo.and_then(|p| p.captured.as_deref().and_then(secs));
                 use lightcraft_pipeline::cull;
-                rows.push((id, t, cull::sharpness(&src), cull::clipped(&src), cull::signature(&src)));
+                // a photo with a detected or named face is scored on its sharpest face (a soft
+                // background must not hide a blurred subject, and a sharp bystander must not
+                // reject a soft-background portrait): the whole-frame score stands in for photos
+                // with no face regions.
+                let faces = photo.map(|p| &p.meta.regions).into_iter().flatten().filter(|r| r.kind == lightcraft_meta::RegionKind::Face);
+                let sharp = faces
+                    .map(|r| cull::face_sharpness(&src, [r.rect.x0 as f32, r.rect.y0 as f32, r.rect.x1 as f32, r.rect.y1 as f32]))
+                    .reduce(f32::max)
+                    .unwrap_or_else(|| cull::sharpness(&src));
+                rows.push((id, t, sharp, cull::clipped(&src), cull::signature(&src)));
             }
             Err(e) => failed.push(json!([id.0, e])),
         }
@@ -158,7 +173,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100, read from the sharpest face region when the photo has one, else the whole frame) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
             always,
             analyze
         ),

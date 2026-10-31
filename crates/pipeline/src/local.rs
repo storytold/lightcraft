@@ -492,6 +492,10 @@ pub(crate) struct Planes {
     pub dark: Option<(u32, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
     pub chroma: Option<(u32, Arc<Rgb32f>)>,
+    /// Lens Blur's depth estimate (no radius of its own: derived straight from `log_l`).
+    pub lens_blur_depth: Option<Arc<Plane>>,
+    /// Lens Blur's fully-blurred layer, keyed by its sigma.
+    pub lens_blur_img: Option<(u32, Arc<Rgb32f>)>,
 }
 
 impl Planes {
@@ -499,7 +503,7 @@ impl Planes {
     /// enough for a draft: the wide blurs (base, clarity, dehaze, chromaticity). Its `key` matches
     /// no image, so only another draft takes them.
     pub fn for_other_nr(self) -> Planes {
-        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, ..self }
+        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, lens_blur_depth: None, ..self }
     }
 }
 
@@ -605,7 +609,7 @@ pub(crate) fn prepare(
     let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
         plane_sigmas(s, px_per_long, q);
 
-    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
+    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, lens_blur_depth: slbd, lens_blur_img: slbi, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
@@ -644,9 +648,19 @@ pub(crate) fn prepare(
         Some((d, air)) => (Some(d), air),
         None => (None, 1.0),
     };
+    let (lens_blur_depth, lens_blur_img) = if s.lens_blur.enabled && s.lens_blur.amount > 0.0 {
+        let depth = slbd.get_or_insert_with(|| Arc::new(timed("lensBlurDepth", || crate::lensblur::depth_map(&log_l, px_per_long)))).clone();
+        let sigma = crate::lensblur::blur_sigma(s.lens_blur.amount, px_per_long);
+        let blurred = plane_at(slbi, sigma.to_bits(), || timed("lensBlurImg", || gaussian(&img, sigma)));
+        (Some(depth), Some(blurred))
+    } else {
+        *slbd = None;
+        *slbi = None;
+        (None, None)
+    };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, lens_blur_depth, lens_blur_img, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):

@@ -752,6 +752,26 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"enabled": enabled, "maxEv": s.develop_of(id).map(|d| d.hdr.max_ev)}))
             }
         ),
+        // ---- Lens Blur
+        cmd!(
+            "develop.lensBlur",
+            "Lens Blur",
+            [],
+            None,
+            "{enabled?: bool (default: toggle)} — a synthetic defocus (lensBlur.amount / .focalDistance / .focalRange, in the control table) that blurs the photo with distance from a chosen focal plane",
+            has_active,
+            |s, p| {
+                let id = active(s, "develop.lensBlur")?;
+                let cur = s.develop_of(id).unwrap_or_default().lens_blur;
+                let enabled = bool_or(p, "enabled", !cur.enabled);
+                let label = if enabled { "Lens Blur On" } else { "Lens Blur Off" };
+                edit(s, "develop.lensBlur", label, |d| {
+                    d.lens_blur.enabled = enabled;
+                    Ok(())
+                })?;
+                Ok(json!({"enabled": enabled}))
+            }
+        ),
         // ---- geometry: Upright
         cmd!(
             "geometry.upright",
