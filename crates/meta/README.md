@@ -31,7 +31,8 @@ Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchical
 `lc` = `http://ns.lightcraft.app/lc/1.0/` (`lc:settings`, an opaque JSON string). Reading canonicalises
 prefixes by namespace URI, handles attribute and element forms, `rdf:Seq`/`Bag`/`Alt` (x-default first),
 `rdf:parseType="Resource"` and nested-description structs, predefined and numeric entities. Nesting depth
-and node count are limited.
+and node count are limited. `tiff:Orientation` is projected only for integral codes 1–8; fractional or
+out-of-range values remain raw XMP properties without becoming typed metadata.
 
 An explicitly foreign namespace using a recognized prefix (for example `lc` or `xmp`) cannot supply
 recognized properties. Its keys use `Q{hex-encoded namespace URI}local` in `properties` and `values`;
