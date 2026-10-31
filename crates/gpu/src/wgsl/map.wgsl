@@ -22,6 +22,16 @@ fn log_lum_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroup
     dst[i] = log_lum(rgb_a(i));
 }
 
+// `local::nr_guide`: log-luminance floored at P[1] (the luminance NR guide, #840).
+@compute @workgroup_size(256)
+fn log_lum_floor_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    dst[i] = log2(max(lum2020(rgb_a(i)), pf(1u)) / GREY);
+}
+
 // `dark_of`: the dark channel (dehaze).
 @compute @workgroup_size(256)
 fn dark_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
@@ -115,7 +125,7 @@ fn xguided_apply(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workg
     dst[i] = max(c[i], clamp(b[2u * i] * a[i] + b[2u * i + 1u], 0.0, 1.0));
 }
 
-// White balance: 3×3 matrix (P[1] = has matrix, P[2..11] row-major), clamped at 0.
+// White balance: 3×3 matrix (P[1] = has matrix, P[2..11] row-major), signed (`local::white_balance`).
 @compute @workgroup_size(256)
 fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
@@ -130,7 +140,7 @@ fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw
             pf(8u) * c.x + pf(9u) * c.y + pf(10u) * c.z,
         );
     }
-    put_rgb(i, max(c * 1.0, vec3<f32>(0.0)));
+    put_rgb(i, c);
 }
 
 // Luminance NR: scale by 2^((f − l)·k) (a: image, b: log luminance l, c: filtered f). P[1] = k.
@@ -156,19 +166,44 @@ fn chroma_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
     put_rgb(i, vec3<f32>(c0.x / y, c0.y / y, c0.z / y));
 }
 
-// Colour NR: blend chromaticity towards its blur and re-apply luminance (a: image, b: chroma,
-// c: blurred chroma). P[1] = t.
+// An RGB image with negative values set to 0 (after noise reduction, `local::denoise`).
+@compute @workgroup_size(256)
+fn clamp0_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    put_rgb(i, max(rgb_a(i), vec3<f32>(0.0)));
+}
+
+// |luminance| of an RGB image (colour NR's blur(|Y|), `local::apply_nr`).
+@compute @workgroup_size(256)
+fn abs_lum_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    dst[i] = abs(lum2020(rgb_a(i)));
+}
+
+// Colour NR, `local::nr_colour_pixel` (a: image, b: blurred rgb, c: blurred |luminance|). P[1] = t,
+// P[2], P[3] = `local::NR_RATIO_FROM`, `NR_RATIO_FULL`.
 @compute @workgroup_size(256)
 fn nr_col(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    let yl = lum2020(rgb_a(i));
+    let p = rgb_a(i);
     let t = pf(1u);
-    let c0 = vec3<f32>(b[3u * i], b[3u * i + 1u], b[3u * i + 2u]);
-    let cb = vec3<f32>(c[3u * i], c[3u * i + 1u], c[3u * i + 2u]);
-    put_rgb(i, max((c0 + (cb - c0) * t) * yl, vec3<f32>(0.0)));
+    let q = vec3<f32>(b[3u * i], b[3u * i + 1u], b[3u * i + 2u]);
+    let yp = lum2020(p);
+    let bl = lum2020(q);
+    let ba = c[i];
+    let a = select(0.0, clamp((bl / ba - pf(2u)) / (pf(3u) - pf(2u)), 0.0, 1.0), ba > 0.0);
+    let k = select(0.0, yp / bl, bl > 0.0);
+    let tgt = a * q * k + (1.0 - a) * (q - vec3<f32>(bl - yp));
+    put_rgb(i, p + (tgt - p) * t);
 }
 
 // Every P[1]-th value of `a` (airlight sampling). P[0] = output count.
@@ -207,7 +242,7 @@ fn redeye_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
             if (pf(o + 4u) != 0.0) {
                 let k = min(lum2020(c), 0.04) * (1.0 - 0.85 * darken);
                 c = c + (vec3<f32>(k) - c) * m;
-            } else {
+            } else if (c.x > 0.0) {
                 let red = (c.x - max(c.y, c.z)) / max(c.x, 1e-6);
                 let a = m * sstep(0.25, 0.5, red);
                 let n = 0.5 * (c.y + c.z) * (1.0 - 0.9 * darken);

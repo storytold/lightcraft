@@ -269,11 +269,12 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    nr_floor: NrFloorCache,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), nr_floor: NrFloorCache::default() }
     }
 }
 
@@ -282,6 +283,7 @@ impl StageCache {
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.nr_floor.clear();
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -372,6 +374,32 @@ fn hash_of(parts: impl std::hash::Hash) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
 
+/// A view's last whole-frame noise measurement, shared by all its windows and slider edits.
+/// The weak source identity avoids retaining a photo just for this scalar cache.
+#[derive(Default)]
+pub struct NrFloorCache {
+    entry: Mutex<Option<(std::sync::Weak<Rgb32f>, u64, f32)>>,
+}
+
+impl NrFloorCache {
+    pub fn clear(&self) {
+        *self.entry.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    fn get_or_measure(&self, src: &Arc<Rgb32f>, key: u64, measure: impl FnOnce() -> f32) -> f32 {
+        let mut entry = self.entry.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((source, k, floor)) = &*entry
+            && *k == key
+            && std::sync::Weak::ptr_eq(source, &Arc::downgrade(src))
+        {
+            return *floor;
+        }
+        let floor = measure();
+        *entry = Some((Arc::downgrade(src), key, floor));
+        floor
+    }
+}
+
 /// What a render resolves to before any pixel work: the effective settings (profile and Upright
 /// applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
 /// renderer and the GPU renderer (`lightcraft-gpu`), so both key their caches identically.
@@ -398,6 +426,8 @@ pub struct Plan<'a> {
     pub eyes: Vec<redeye::EyeK>,
     /// The whole frame's dehaze airlight, for a windowed render (which can't see the whole frame).
     pub fixed_air: Option<f32>,
+    /// The luminance NR guide's floor, measured on the whole frame ([`local::frame_nr_floor`]) when luminance NR is on.
+    pub nr_floor: Option<f32>,
     /// A windowed render works on a larger window when spots reach into it (see
     /// [`spots::window_for_reads`]); this is the requested window inside the rendered one, which
     /// the result is cut to.
@@ -411,6 +441,21 @@ const AIRLIGHT_PROXY_EDGE: usize = 384;
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
+    plan_impl(src, info, s, req, None)
+}
+
+/// [`plan`], reusing the whole-frame NR floor while its source, geometry and white balance agree.
+pub fn plan_cached<'a>(src: &Arc<Rgb32f>, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest, cache: &NrFloorCache) -> Plan<'a> {
+    plan_impl(src, info, s, req, Some((src, cache)))
+}
+
+fn plan_impl<'a>(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &'a DevelopSettings,
+    req: &RenderRequest,
+    floor_cache: Option<(&Arc<Rgb32f>, &NrFloorCache)>,
+) -> Plan<'a> {
     let mut settings: Cow<'a, DevelopSettings> = match profiles::effective(s) {
         Cow::Borrowed(b) => upright::resolve(src, info, b),
         Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
@@ -432,6 +477,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let px_per_long = frame.px_per_long(full_w);
     let mut fixed_air = None;
     let mut keep = None;
+    let full_frame = frame.clone();
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
@@ -453,6 +499,18 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // (an original reported smaller than the source is the source)
     let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
+    // the same for the whole frame and any window into it
+    let nr_floor = local::nr_params(s, detail_scale).0.map(|_| {
+        let measure = || local::frame_nr_floor(src, info, s, &full_frame, full_w, full_h);
+        match floor_cache {
+            Some((source, cache)) => {
+                let wb = local::wb_matrix_for(info, s).map(|m| m.map(|row| row.map(f32::to_bits)));
+                let key = hash_of((format!("{full_frame:?}"), full_w, full_h, wb));
+                cache.get_or_measure(source, key, measure)
+            }
+            None => measure(),
+        }
+    });
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
@@ -473,7 +531,23 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        detail_scale,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        nr_floor,
+        keep,
+        mattes: info.mattes.clone(),
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -571,7 +645,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Src::Borrowed(r) => r,
         Src::Shared(a) => a,
     };
-    let plan = plan(src_img, info, s, req);
+    let plan = match (&src, cache) {
+        (Src::Shared(a), Some(c)) => plan_cached(a, info, s, req, &c.nr_floor),
+        _ => plan(src_img, info, s, req),
+    };
     let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
@@ -592,7 +669,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             lin_cpu(&mut img, info, &plan);
-            local::denoise(&mut img, s, detail_scale);
+            local::denoise(&mut img, s, detail_scale, plan.nr_floor);
             Arc::new(img)
         }
     };
