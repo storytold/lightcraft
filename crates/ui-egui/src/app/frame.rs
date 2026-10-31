@@ -53,7 +53,7 @@ impl LightcraftApp {
         self.drain_control(ctx);
         // (once a frame: a second layout pass has no input of its own)
         if ctx.current_pass_index() == 0 {
-            surface::tick(self, ctx);
+            crate::surface::tick(self, ctx);
         }
         self.apply_settings(ctx);
         if self.queued_input_needs_repaint() {

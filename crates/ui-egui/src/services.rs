@@ -133,7 +133,7 @@ pub struct Services {
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
     /// Where control-surface settings are kept (`control-surfaces.json`; none: in memory).
-    pub surface_store: Option<Box<dyn surface::SurfaceStore>>,
+    pub surface_store: Option<Box<dyn crate::surface::SurfaceStore>>,
     /// Open dialog for control-surface files (TactileBridge `settings.json`, `.lp5`, `.lcsurface`).
     pub pick_surface_file: Option<PickFiles>,
     /// Save dialog for an exported `.lcsurface` layout file.
@@ -143,5 +143,5 @@ pub struct Services {
     pub surface_listener: Option<SurfaceListenerFn>,
     /// Installs a surface's plugin into its maker's app (the LightCraft plugin for Logi
     /// Options+; desktop only): Settings ▸ Controls, `surface.installPlugin`.
-    pub surface_plugin: Option<std::sync::Arc<dyn surface_plugin::PluginInstaller>>,
+    pub surface_plugin: Option<std::sync::Arc<dyn crate::surface_plugin::PluginInstaller>>,
 }
