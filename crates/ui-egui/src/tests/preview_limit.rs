@@ -1413,3 +1413,16 @@ mod in_the_loupe {
         assert_ne!(after.settings, before.settings);
     }
 }
+
+// Build Standard-Sized Previews on Automatic: the loupe's size once one was drawn (the engine's standard), the
+// standard 2560 px in a fresh session, not the engine's 2048 px minimum a fit view would render again over
+// (CodeRabbit on #3077); a chosen limit as is
+#[test]
+fn standard_build_keeps_the_standard_size_before_a_loupe_was_drawn() {
+    use crate::menubar::standard_build_params;
+    use serde_json::json;
+    assert_eq!(standard_build_params(&with_limit(0), 0), json!({"size": "standard", "edge": STANDARD_PREVIEW_EDGE}));
+    assert_eq!(standard_build_params(&with_limit(0), 2400), json!({"size": "standard"}));
+    assert_eq!(standard_build_params(&with_limit(3840), 0), json!({"size": "standard", "edge": 3840}));
+    assert_eq!(standard_build_params(&with_limit(3840), 2400), json!({"size": "standard", "edge": 3840}));
+}

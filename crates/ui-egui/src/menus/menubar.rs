@@ -463,6 +463,17 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
 }
 
 /// The parameterized submenus.
+/// The params of Build Standard-Sized Previews: automatic builds as big as the loupe on this screen shows photos
+/// (the engine's standard size, once a loupe has been drawn); before that, in a fresh session, the standard
+/// 2560 px, not the engine's 2048 px minimum, so a typical fit view needn't render again; a chosen limit is used as is.
+pub(crate) fn standard_build_params(settings: &crate::state::AppSettings, loupe_edge: usize) -> Value {
+    match settings.preview_limit {
+        0 if loupe_edge == 0 => json!({"size": "standard", "edge": settings.standard_preview_edge()}),
+        0 => json!({"size": "standard"}),
+        edge => json!({"size": "standard", "edge": edge}),
+    }
+}
+
 pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
@@ -471,11 +482,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             // (the background preparation's build gives way to one asked for here)
             let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
             let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running());
-            // automatic: as big as the loupe on this screen shows photos (the engine's standard size)
-            let standard = match app.ui.settings.preview_limit {
-                0 => json!({"size": "standard"}),
-                edge => json!({"size": "standard", "edge": edge}),
-            };
+            let standard = standard_build_params(&app.ui.settings, app.session.loupe_edge);
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
             vec![
                 item(
