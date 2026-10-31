@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Preset and profile files that aren't files are refused
+- Importing a local adjustment or develop preset, loading a camera profile or reading a printer profile checked the
+  size the file reported and then read it whole. A pipe or a device reports 0 bytes, so naming one hung the import or
+  read until memory ran out. These reads now take regular files only and stop at their size limit (part of issue
+  #2570).
+
 ## 2026-10-30
 
 ### A keyboard shortcut for Clear Color Label
