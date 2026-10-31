@@ -1,5 +1,14 @@
 //! Detachable mask list and component selection. Layout is a UI preference, never a photo edit.
-use super::*;
+use egui::{Rect, Sense, Stroke, pos2, vec2};
+use lightcraft_catalog::PhotoId;
+use lightcraft_develop::MaskShape;
+use serde_json::json;
+
+use super::{component_menu, component_row_menu, create_menu, creation_status, describe_field, kind_label, mask_menu, overlay_options};
+use crate::LightcraftApp;
+use crate::icons::{Icon, paint};
+use crate::theme::Tokens;
+use crate::widgets::{icon_button, one_line, register};
 use serde_json::Value;
 
 struct RowDrag {
@@ -13,8 +22,8 @@ struct RowDrag {
 fn drag_handle(app: &LightcraftApp, ui: &mut egui::Ui, row: Rect, mask: u32, index: usize, component: bool, enabled: bool) {
     let t = Tokens::get(ui.ctx());
     let rect = Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(24.0, 24.0));
-    let response = ui.interact(rect, ui.id().with(("maskDrag", mask, component, index)), if enabled { Sense::drag() } else { Sense::hover() });
-    register(ui.ctx(), if component { format!("componentDrag:{index}") } else { format!("maskDrag:{mask}") }, rect);
+    let response = ui.interact(rect, ui.scope_id().with(("maskDrag", mask, component, index)), if enabled { Sense::drag() } else { Sense::hover() });
+    register(ui, if component { format!("componentDrag:{index}") } else { format!("maskDrag:{mask}") }, rect);
     paint(ui.painter(), rect.shrink(4.0), Icon::Grip, if enabled { t.text_dim } else { t.text_disabled });
     if enabled {
         if response.drag_started()
@@ -46,7 +55,7 @@ fn drop_row(app: &mut LightcraftApp, ui: &mut egui::Ui, response: &egui::Respons
     let y = if after { response.rect.bottom() } else { response.rect.top() };
     let indicator = Rect::from_min_max(pos2(response.rect.left(), y - 1.0), pos2(response.rect.right(), y + 1.0));
     ui.painter().rect_filled(indicator, 1.0, Tokens::get(ui.ctx()).accent);
-    register(ui.ctx(), "maskReorderTarget", indicator);
+    register(ui, "maskReorderTarget", indicator);
     if response.dnd_release_payload::<RowDrag>().is_some() {
         let result = if component {
             app.run("mask.component", json!({"id": drag.mask, "component": drag.index, "action": "move", "to": to}))
@@ -349,7 +358,7 @@ pub fn floating(app: &mut LightcraftApp, ctx: &egui::Context) {
     );
     let mut open = true;
     let result = egui::Window::new(crate::i18n::tr("Masks"))
-        .id(egui::Id::new("mask-list-window"))
+        .id(egui::Id::unique("mask-list-window"))
         .current_pos(pos)
         .default_size(size)
         .min_size(vec2(240.0, 180.0))
@@ -361,8 +370,8 @@ pub fn floating(app: &mut LightcraftApp, ctx: &egui::Context) {
         });
     if let Some(result) = result {
         let r = result.response.rect;
-        register(ctx, "panel:maskFloating", r);
-        register(ctx, "maskPanelTitle", Rect::from_min_size(r.min, vec2((r.width() - 32.0).max(1.0), 26.0)));
+        crate::widgets::register_response("panel:maskFloating", r, &result.response);
+        crate::widgets::register_response("maskPanelTitle", Rect::from_min_size(r.min, vec2((r.width() - 32.0).max(1.0), 26.0)), &result.response);
         app.ui.mask_panel_rect = Some([r.left(), r.top(), r.width(), r.height()]);
     }
     if !open {
@@ -405,7 +414,7 @@ pub(super) fn list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcraft_de
         let footer = 24.0 + 6.0 + 2.0 * ui.spacing().item_spacing.y;
         let height = if floating { (ui.available_height() - footer).max(100.0) } else { 240.0 };
         egui::ScrollArea::vertical().id_salt(("mask-list", floating)).max_height(height).auto_shrink([false, !floating]).show(ui, |ui| {
-            register(ui.ctx(), "maskReorderViewport", ui.clip_rect());
+            register(ui, "maskReorderViewport", ui.clip_rect());
             for (index, mask) in d.masks.iter().enumerate() {
                 ui.push_id(mask.id, |ui| mask_row(app, ui, mask, index, d.masks.len()));
             }
@@ -430,7 +439,7 @@ pub(super) fn list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcraft_de
         ui.separator();
         overlay_footer(app, ui);
     });
-    register(ui.ctx(), if floating { "maskList:floating" } else { "maskList:embedded" }, response.response.rect);
+    register(ui, if floating { "maskList:floating" } else { "maskList:embedded" }, response.response.rect);
 }
 
 fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::Mask, index: usize, count: usize) {
@@ -441,13 +450,13 @@ fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::
         let sense = if renaming { Sense::hover() } else { Sense::click() };
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), sense);
         crate::widgets::announce_selected(&resp, m.name.clone(), selected);
-        register(ui.ctx(), format!("mask:{}", m.id), r);
+        register(ui, format!("mask:{}", m.id), r);
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.5));
         }
         let thumb = Rect::from_min_size(r.min + vec2(4.0, 5.0), vec2(38.0, 38.0));
         ui.painter().rect_filled(thumb, 3.0, egui::Color32::BLACK);
-        register(ui.ctx(), format!("maskThumbnail:{}", m.id), thumb);
+        register(ui, format!("maskThumbnail:{}", m.id), thumb);
         if ui.is_rect_visible(thumb)
             && let Some(photo) = app.session.active()
             && let Some(job) = app.session.mask_thumbnail_job(photo, m.id, 96)
@@ -455,7 +464,7 @@ fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::
         {
             let image = super::super::detail::fit_texture_rect(thumb.shrink(3.0), tex.size);
             ui.painter().image(tex.tex.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
-            register(ui.ctx(), format!("maskThumbnailImage:{}", m.id), image);
+            register(ui, format!("maskThumbnailImage:{}", m.id), image);
         }
         ui.painter().rect_stroke(
             thumb,
@@ -476,7 +485,7 @@ fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::
                     .min_size(name_rect.size())
                     .id_salt(("maskRename", rid)),
             );
-            register(ui.ctx(), format!("maskRename:{rid}"), r.rect);
+            register(ui, format!("maskRename:{rid}"), r.rect);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -495,22 +504,22 @@ fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::
             let g = one_line(ui.painter(), &m.name, t.font(13.0), color, (r.width() - 126.0).max(0.0));
             let elided = g.elided;
             let at = pos2(r.left() + 50.0, r.center().y - g.size().y / 2.0);
-            register(ui.ctx(), format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
+            register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
             ui.painter().galley(at, g, color);
             elided
         };
         let resp = if elided { resp.on_hover_text(&m.name) } else { resp };
         let eye_rect = Rect::from_center_size(pos2(r.right() - 62.0, r.center().y), vec2(22.0, 24.0));
-        let eye = ui.interact(eye_rect, ui.id().with("visible"), Sense::click());
+        let eye = ui.interact(eye_rect, ui.scope_id().with("visible"), Sense::click());
         crate::widgets::announce_selected(&eye, crate::i18n::tr("Show mask"), m.visible);
-        register(ui.ctx(), format!("maskVisible:{}", m.id), eye_rect);
+        register(ui, format!("maskVisible:{}", m.id), eye_rect);
         paint(ui.painter(), eye_rect.shrink(4.0), if m.visible { Icon::Eye } else { Icon::EyeOff }, t.text_dim);
         if eye.clicked() {
             let _ = app.run("mask.visible", json!({"id": m.id}));
         }
         let more_rect = eye_rect.translate(vec2(24.0, 0.0));
-        let more = ui.interact(more_rect, ui.id().with("options"), Sense::click());
-        register(ui.ctx(), format!("maskMenu:{}", m.id), more_rect);
+        let more = ui.interact(more_rect, ui.scope_id().with("options"), Sense::click());
+        register(ui, format!("maskMenu:{}", m.id), more_rect);
         paint(ui.painter(), more_rect.shrink(4.0), Icon::More, t.text_dim);
         egui::Popup::menu(&more).show(|ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
         drag_handle(app, ui, r, m.id, index, false, !renaming && count > 1);
@@ -538,8 +547,8 @@ fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::
                         let button = ui
                             .add_sized(size, egui::Button::new(text).stroke(Stroke::new(1.0, t.button_border)).corner_radius(4.0))
                             .on_hover_text(label);
-                        register(ui.ctx(), format!("button:{key}:{}", m.id), button.rect);
-                        register(ui.ctx(), format!("button:{alias}"), button.rect);
+                        register(ui, format!("button:{key}:{}", m.id), button.rect);
+                        register(ui, format!("button:{alias}"), button.rect);
                         egui::Popup::menu(&button).show(|ui| component_menu(app, ui, m.id, op));
                     }
                 });
@@ -547,7 +556,7 @@ fn mask_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::
             });
         }
     });
-    register(ui.ctx(), format!("maskGroup:{}", m.id), group.response.rect);
+    register(ui, format!("maskGroup:{}", m.id), group.response.rect);
     drop_row(app, ui, &group.response, m.id, index, false);
 }
 
@@ -566,7 +575,7 @@ fn component_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_deve
     let sense = if renaming { Sense::hover() } else { Sense::click() };
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), sense);
     crate::widgets::announce_selected(&resp, label.clone(), selected);
-    register(ui.ctx(), format!("component:{i}"), r);
+    register(ui, format!("component:{i}"), r);
     ui.painter().rect_filled(
         r,
         3.0,
@@ -580,7 +589,7 @@ fn component_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_deve
     );
     let icon_rect = Rect::from_min_size(r.min + vec2(5.0, 6.0), vec2(20.0, 20.0));
     paint(ui.painter(), icon_rect, icon, t.text_label);
-    register(ui.ctx(), format!("maskComponentIcon:{i}"), icon_rect);
+    register(ui, format!("maskComponentIcon:{i}"), icon_rect);
     let operation = match c.op {
         lightcraft_develop::MaskOp::Add => None,
         lightcraft_develop::MaskOp::Subtract => Some(("−", "Subtract")),
@@ -591,7 +600,7 @@ fn component_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_deve
         let badge = Rect::from_min_size(pos2(text_left, r.center().y - 8.0), vec2(16.0, 16.0));
         ui.painter().rect_stroke(badge, 3.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
         ui.painter().text(badge.center(), egui::Align2::CENTER_CENTER, symbol, t.font(12.5), t.text_label);
-        register(ui.ctx(), format!("maskComponentOp:{i}"), badge);
+        register(ui, format!("maskComponentOp:{i}"), badge);
         text_left = badge.right() + 6.0;
     }
     let text = format!("{label}{}", if c.invert { crate::i18n::tr(" (inverted)") } else { "" });
@@ -607,7 +616,7 @@ fn component_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_deve
                 .min_size(name_rect.size())
                 .id_salt(("compRename", m.id, i)),
         );
-        register(ui.ctx(), format!("componentRename:{i}"), r.rect);
+        register(ui, format!("componentRename:{i}"), r.rect);
         if !r.has_focus() && !r.lost_focus() {
             r.request_focus();
         }
@@ -625,8 +634,8 @@ fn component_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_deve
         ui.painter().galley(pos2(text_left, r.center().y - g.size().y / 2.0), g, t.text_label);
     }
     let more_rect = Rect::from_center_size(pos2(r.right() - 38.0, r.center().y), vec2(24.0, 24.0));
-    let more = ui.interact(more_rect, ui.id().with(("componentMenu", i)), Sense::click());
-    register(ui.ctx(), format!("button:componentMenu{i}"), more_rect);
+    let more = ui.interact(more_rect, ui.scope_id().with(("componentMenu", i)), Sense::click());
+    register(ui, format!("button:componentMenu{i}"), more_rect);
     paint(ui.painter(), more_rect.shrink(4.0), Icon::More, t.text_dim);
     egui::Popup::menu(&more).show(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
     drag_handle(app, ui, r, m.id, i, true, !renaming && m.components.len() > 1);
@@ -650,7 +659,7 @@ fn overlay_footer(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let label = crate::i18n::tr("Show overlay (O)");
         let galley = one_line(ui.painter(), label, t.font(12.5), t.text_label, (ui.available_width() - 84.0).max(0.0));
         let check = ui.checkbox(&mut overlay, galley).on_hover_text(label);
-        register(ui.ctx(), "icon:maskOverlay", check.rect);
+        register(ui, "icon:maskOverlay", check.rect);
         if check.changed() {
             let _ = app.run("view.maskOverlay", json!({"show": overlay}));
         }
@@ -661,7 +670,7 @@ fn overlay_footer(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 overlay_options(app, ui);
             });
             let (r, swatch) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-            register(ui.ctx(), "maskOverlaySwatch", r);
+            register(ui, "maskOverlaySwatch", r);
             let [red, green, blue] = app.ui.mask_overlay_color;
             ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(red, green, blue));
             ui.painter().circle_stroke(r.center(), 8.0, Stroke::new(1.0, Tokens::get(ui.ctx()).text_dim));

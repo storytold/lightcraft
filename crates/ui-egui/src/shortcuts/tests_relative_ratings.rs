@@ -44,7 +44,7 @@ fn frame(app: &mut LightcraftApp, ctx: &egui::Context, key: Option<Key>, text: O
         egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() },
         |ui| {
             if let Some(text) = text.as_deref_mut() {
-                ui.add(egui::TextEdit::singleline(text).id(egui::Id::new("relative-rating-search"))).request_focus();
+                ui.add(egui::TextEdit::singleline(text).id(egui::Id::unique("relative-rating-search"))).request_focus();
             }
             super::handle(app, ui.ctx());
         },

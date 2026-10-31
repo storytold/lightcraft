@@ -72,11 +72,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     for (title, tag, imported, list) in sections {
         // an imported folder named like a built-in group still opens and closes on its own
-        let open_id = egui::Id::new(("profile-group", imported, title));
+        let open_id = egui::Id::unique(("profile-group", imported, title));
         let open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(true);
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
         crate::widgets::announce(&resp, title.to_string());
-        register(ui.ctx(), if imported { format!("profileGroup:lut:{title}") } else { format!("profileGroup:{title}") }, r);
+        register(ui, if imported { format!("profileGroup:lut:{title}") } else { format!("profileGroup:{title}") }, r);
         paint(
             ui.painter(),
             Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(16.0, 16.0)),
@@ -110,7 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(6.0);
     }
     ui.add_space(30.0);
-    let last_hover_id = egui::Id::new("last-profile-hover");
+    let last_hover_id = egui::Id::unique("last-profile-hover");
     let pointer_in_profiles = ui.ctx().input(|i| i.pointer.hover_pos()).is_some_and(|pos| ui.max_rect().contains(pos));
     if pointer_in_profiles {
         if app.hover_preview.is_none()
@@ -153,9 +153,9 @@ fn cell_ui(
     let (p_id, p_name, p_group) = (p.0.as_str(), p.1.as_str(), p.2.as_str());
     let t = Tokens::get(ui.ctx());
     let key = if tag.is_empty() { format!("profileCell:{p_id}") } else { format!("profileCell:{tag}:{p_id}") };
-    let resp = ui.interact(cell, egui::Id::new(&key), Sense::click());
+    let resp = ui.interact(cell, egui::Id::unique(&key), Sense::click());
     crate::widgets::announce(&resp, p_name.to_string());
-    register(ui.ctx(), key, cell);
+    register(ui, key, cell);
     let thumb = Rect::from_min_size(cell.min, vec2(cell.width(), th));
     let s = with_profile_id(d, p_id);
     let painter = ui.painter();
@@ -178,19 +178,19 @@ fn cell_ui(
     // favourite star (always shown when set, on hover otherwise)
     let fav = app.session.profile_favorites.iter().any(|f| f == p_id);
     let star = Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0));
-    register(ui.ctx(), format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
+    register(ui, format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
     if fav || resp.hovered() {
         painter.circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
-        paint(painter, star.shrink(4.0), if fav { Icon::StarFilled } else { Icon::Star }, if fav || over_star { t.star } else { Color32::WHITE });
+        crate::rating::paint_star(painter, star.shrink(4.0), fav, if fav || over_star { t.star } else { Color32::WHITE });
     }
     if resp.hovered() && !applied && !over_star {
         app.hover_preview =
             Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(p_id, p_name)), settings: s.clone() });
-        ui.data_mut(|m| m.insert_temp(egui::Id::new("last-profile-hover"), (id, p_id.to_string())));
+        ui.data_mut(|m| m.insert_temp(egui::Id::unique("last-profile-hover"), (id, p_id.to_string())));
     } else if resp.hovered() && applied {
         // resting on the applied profile shows it (no preview), not the last other profile hovered
-        ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::new("last-profile-hover")));
+        ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::unique("last-profile-hover")));
     }
     let resp = resp.on_hover_text(format!(
         "{} ({})",
@@ -202,7 +202,7 @@ fn cell_ui(
             let _ = app.run("profile.favorite", json!({"id": p_id}));
         } else if !applied {
             let _ = app.run("develop.profile", json!({"id": p_id, "amount": 100}));
-            ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::new("last-profile-hover")));
+            ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::unique("last-profile-hover")));
         }
     }
 }

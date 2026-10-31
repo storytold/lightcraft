@@ -2,7 +2,7 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
@@ -164,11 +164,13 @@ pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
 }
 
 /// After rating/flagging with Auto Advance: next candidate (Compare), next photo in the survey,
-/// else the next photo in the view.
-pub fn advance(app: &mut LightcraftApp) {
+/// else the next photo in the view. `was` is the active photo before the rating: a rating that took
+/// it out of the view made the photo after it active already, and that is the next one (#2312).
+pub fn advance(app: &mut LightcraftApp, was: Option<PhotoId>) {
     let _ = match app.ui.view {
         ViewMode::Compare => compare_step(app, 1),
         ViewMode::Survey => survey_step(app, 1),
+        _ if app.session.active() != was => Ok(Value::Null),
         _ => app.session.execute("library.next", &json!({})).map_err(|e| e.to_string()),
     };
 }
@@ -195,12 +197,23 @@ fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
     canvas
 }
 
+/// Ask for the render of a tile (about `want` pixels on its long edge) and for the thumbnail shown meanwhile.
+fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: usize, aspect: f32) {
+    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
+    if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
+        app.renderer.request(slot, job, 60);
+    }
+    if let Some(job) = app.session.thumb_job(id, 256) {
+        app.renderer.request(Slot::Thumb(id), job, 30);
+    }
+}
+
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
 fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
-    let resp = ui.interact(area, egui::Id::new(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
+    let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
     crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, resp) };
     let caption_h = 26.0;
@@ -228,13 +241,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
-    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
-    if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
-        app.renderer.request(slot, job, 60);
-    }
-    if let Some(job) = app.session.thumb_job(id, 256) {
-        app.renderer.request(Slot::Thumb(id), job, 30);
-    }
+    request_tile_renders(app, id, slot, want, aspect);
     // zoomed past what that render holds (1:1 to check focus): the part on screen as a window, as
     // in the loupe. Compare and Reference only; Survey tiles are fit views.
     let pane = match slot {
@@ -279,7 +286,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
-        p.rect_filled(img.intersect(img_area), 0.0, Color32::from_gray(38));
+        p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
@@ -289,7 +296,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     }
     let active = app.session.selection.active == Some(id);
     if active {
-        p.rect_stroke(display.intersect(img_area.shrink(1.0)), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        super::grid::selection_ring(&p, &t, display.intersect(img_area.shrink(3.0)), lightcraft_engine::SelectionState::Active);
     }
     // Compare and Reference are where sharpness is judged: as in the loupe, say when what is on
     // screen isn't the render on its way (a thumbnail, the last render after an edit, a magnified
@@ -306,7 +313,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         let now = ui.input(|i| i.time);
         // (the wait belongs to the photo in the pane: one moved in starts its own)
         let rendering = ui.ctx().data_mut(|d| {
-            let (photo, wait) = d.get_temp_mut_or(egui::Id::new(("compare-rendering", i)), (id, None));
+            let (photo, wait) = d.get_temp_mut_or(egui::Id::unique(("compare-rendering", i)), (id, None));
             if *photo != id {
                 (*photo, *wait) = (id, None);
             }
@@ -343,7 +350,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         let filled = i < photo.rating;
         let r = Rect::from_min_size(pos2(x + i as f32 * 13.0, cap.center().y - 6.0), vec2(12.0, 12.0));
         if r.right() < cap.right() {
-            paint(pt, r, if filled { Icon::StarFilled } else { Icon::Star }, if filled { t.star } else { t.icon.gamma_multiply(0.6) });
+            crate::rating::paint_star(pt, r, filled, if filled { t.star } else { t.icon.gamma_multiply(0.6) });
         }
     }
     x += 5.0 * 13.0 + 4.0;
@@ -359,9 +366,9 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         && lr.right() < cap.right()
     {
         pt.circle_filled(lr.center(), 5.0, super::grid::label_color(l));
-        register(ui.ctx(), format!("cull:{}:label", id.0), lr);
+        register(ui, format!("cull:{}:label", id.0), lr);
     }
-    register(ui.ctx(), format!("cull:{}", id.0), display);
+    register(ui, format!("cull:{}", id.0), display);
     (display, resp)
 }
 
@@ -572,7 +579,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // remove from the survey (deselect) on hover
         if resp.hovered() && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
-            let xresp = ui.interact(xr, egui::Id::new(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
             ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
             paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
