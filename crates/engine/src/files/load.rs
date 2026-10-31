@@ -140,6 +140,7 @@ fn load_bytes_now(
             gain: 2f32.powf(t.baseline_exposure as f32),
             tables: tables.as_ref(),
             hue_sat: hue_sat.as_ref(),
+            preserve_luminance: camera_look.as_ref().is_some_and(|look| look.preserve_luminance),
         };
         // camera RGB → what the pipeline takes: clipped highlights rebuilt, white balance and the colour model applied,
         // fitted to `max_edge` and upright (the same for the plain and the denoised picture)

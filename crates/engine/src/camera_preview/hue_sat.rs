@@ -1,6 +1,6 @@
 use super::mono::to_prophoto;
 use super::pairs::{displayed, luma};
-use super::{CameraLook, CameraTone, HsvTable, Mat3, ToneMap, luminance_2020};
+use super::{CameraLook, CameraTone, HsvTable, Mat3, ToneMap, clip_colour, luminance_2020};
 
 /// [`HueSat::apply`] restores the luminance in full only if the table kept at least this share of it. A colour
 /// the table darkens to [`NO_LUMINANCE_KEPT`] or less (only near-black noise, whose channels go negative) keeps
@@ -216,10 +216,17 @@ const CHROMA_SHRINK: f64 = 2.0;
 /// train, one third held out), when that lowers the held-out error. Colourfulness is compared as
 /// the distance from neutral of luminance-normalised RGB.
 pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<CameraTone> {
+    fit_chroma_excluding(pairs, look, &[])
+}
+
+/// Fit chroma without the retry's additional holdouts. Flags retain the original pair positions;
+/// the usual chroma holdouts also remain excluded from training and own its acceptance check.
+pub(super) fn fit_chroma_excluding(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, holdouts: &[bool]) -> Option<CameraTone> {
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let scene = |x: &[f64; 3]| {
         let p = look.matrix.apply(*x);
-        correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
+        let p = correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from));
+        if look.preserve_luminance && p.iter().any(|v| *v < 0.0) { clip_colour(p.map(|v| v as f32), true).map(f64::from) } else { p }
     };
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let predict = |x: &[f64; 3]| displayed(scene(x), &tone);
@@ -230,7 +237,7 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
     let samples: Vec<(f64, f64, f64)> = pairs
         .iter()
         .enumerate()
-        .filter(|(i, _)| i % 3 != 0)
+        .filter(|(i, _)| i % 3 != 0 && !holdouts.get(*i).copied().unwrap_or(false))
         .filter_map(|(_, (x, y))| {
             let p = predict(x);
             let (cp, cy) = (chroma(p)?, chroma(*y)?);

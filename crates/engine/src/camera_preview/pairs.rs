@@ -1,9 +1,10 @@
-use super::hue_sat::{HueSat, fit_chroma, fit_hue_sat};
+use super::hue_sat::{HueSat, fit_chroma, fit_chroma_excluding, fit_hue_sat};
 use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
-use super::tone::{HighlightCheck, ToneFit, highlights_hold};
-use super::{CameraLook, CameraTone, HsvTable, Mat3, Rgb32f, ToneMap, luminance_2020};
+use super::tone::{HighlightCheck, ToneFit, highlights_hold, keeps, keeps_highlights};
+use super::{CameraLook, CameraTone, HsvTable, Mat3, REC2020, Rgb32f, ToneMap, luminance_2020};
+use lightcraft_codecs::NamedSpace;
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
 pub(super) const MIN_IMPROVEMENT: f64 = 0.7;
@@ -16,6 +17,42 @@ const MAX_HOLDOUT_RMS: f64 = 0.10;
 
 pub(super) fn luma(p: [f64; 3]) -> f64 {
     p[0] * 0.2627 + p[1] * 0.6780 + p[2] * 0.0593
+}
+
+/// Clip negative colour channels without adding luminance when the scaled spread learnt the
+/// matrix. Averaged fitting proxies contain less noise than the render; simply clipping the
+/// matrix's negative noise leaves its positive noise brighter than the fitted toe predicts.
+pub(crate) fn clip_colour(rgb: [f32; 3], preserve_luminance: bool) -> [f32; 3] {
+    let out = rgb.map(|v| v.max(0.0));
+    if !preserve_luminance || !rgb.iter().any(|v| *v < 0.0) {
+        return out;
+    }
+    let (before, after) = (luminance_2020(rgb).max(0.0), luminance_2020(out));
+    if before.is_finite() && after.is_finite() && after > 0.0 {
+        let gain = before / after;
+        out.map(|v| v * gain)
+    } else {
+        out
+    }
+}
+
+/// The same minimum dark signal as the toe fit: sparse black pixels cannot establish a
+/// near-black problem for a look whose colour was learnt from the brighter part of the scene.
+pub(super) fn dark_colour_signal(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>) -> bool {
+    sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .enumerate()
+        .filter(|(i, _)| edge_limit.is_none_or(|limit| local_contrast(sensor, *i) <= limit && local_contrast(reference, *i) <= limit))
+        .filter(|(_, (input, output))| {
+            input.iter().all(|v| v.is_finite() && *v > 0.0001 && *v < 1.5)
+                && output.iter().all(|v| v.is_finite() && *v >= 0.0)
+                && (0.0003..0.015).contains(&luminance_2020(**output))
+        })
+        .take(96)
+        .count()
+        == 96
 }
 
 /// The finish stage's tone map and chroma curve (`lightcraft_pipeline::finish`).
@@ -63,6 +100,18 @@ pub(super) type Pair = ([f64; 3], [f64; 3]);
 pub(super) type Pairs = Vec<Pair>;
 
 pub(super) fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32, edge_limit: Option<f32>, dark: bool) -> Option<(Pairs, Pairs)> {
+    collect_pairs_by(sensor, reference, |_| min_chroma, edge_limit, dark)
+}
+
+/// [`collect_pairs`] with the channel spread a pair must exceed to count as coloured given by the camera JPEG
+/// pixel's luminance ([`matrix_spread`]).
+pub(super) fn collect_pairs_by(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    min_chroma: impl Fn(f32) -> f32,
+    edge_limit: Option<f32>,
+    dark: bool,
+) -> Option<(Pairs, Pairs)> {
     if (sensor.width, sensor.height) != (reference.width, reference.height) || sensor.data.len() != reference.data.len() {
         return None;
     }
@@ -87,7 +136,7 @@ pub(super) fn collect_pairs(sensor: &Rgb32f, reference: &Rgb32f, min_chroma: f32
         }
         let min = output.iter().copied().fold(f32::INFINITY, f32::min);
         let max = output.iter().copied().fold(0.0, f32::max);
-        colour += usize::from(max - min > min_chroma);
+        colour += usize::from(max - min > min_chroma(y));
         pairs.push((input.map(f64::from), output.map(f64::from)));
     }
     (pairs.len() >= 256 && colour >= pairs.len() / 20).then_some((pairs, bright))
@@ -110,16 +159,22 @@ fn colour_pair_above(input: [f32; 3], output: [f32; 3], (ylo, clo): (f32, f32)) 
 /// The original pairs and their split still own the colour fit and its acceptance gates.
 /// Luminance needs no channel ratios, so the binned proxy can use a lower sensor floor and
 /// keep JPEG pixels with a channel near black. Quantile medians limit the effect of noise.
+/// `tone_only` pairs train the tone curve and nothing else ([`fit_partial`]'s bright pairs, above
+/// the dark set's range): the two thirds that the caller doesn't hold out, by their own index,
+/// join the training of both curves.
 pub(super) fn fit_tone_with_shadows(
     fit: ToneFit,
     pairs: &[([f64; 3], [f64; 3])],
+    tone_only: &[Pair],
     sensor: &Rgb32f,
     reference: &Rgb32f,
     edge_limit: Option<f32>,
     colour: impl Fn([f64; 3]) -> [f64; 3],
 ) -> Option<CameraTone> {
     let luminances = |x: [f64; 3], y: [f64; 3]| (luma(colour(x).map(|v| v.max(0.0))), luma(y));
-    let original = fit.fit(pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| luminances(*x, *y)).collect());
+    let tone_only_training = || tone_only.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| luminances(*x, *y));
+    let original =
+        fit.fit(pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| luminances(*x, *y)).chain(tone_only_training()).collect());
     let mut eligible = Vec::new();
     let (mut colour_index, mut extra_index) = (0, 0);
     for (i, (input, output)) in sensor.data.iter().zip(&reference.data).enumerate() {
@@ -151,7 +206,7 @@ pub(super) fn fit_tone_with_shadows(
     if dark < 96 || held.len() < 32 || rank_correlation_ties(&held) < PARTIAL_MIN_RANK_CORRELATION {
         return original;
     }
-    let training = eligible.iter().filter(|(_, _, held)| !held).map(|(x, y, _)| (*x, *y)).collect();
+    let training = eligible.iter().filter(|(_, _, held)| !held).map(|(x, y, _)| (*x, *y)).chain(tone_only_training()).collect();
     let Some(candidate) = fit.fit(training) else { return original };
     let error = |tone: &CameraTone| -> f64 {
         held.iter().map(|(x, y)| (f64::from(tone.apply(x[0] as f32)).powf(1.0 / 2.2) - y[0].powf(1.0 / 2.2)).powi(2)).sum()
@@ -168,6 +223,35 @@ pub(super) fn fit_tone_with_shadows(
         }
     }
     Some(candidate)
+}
+
+/// Channel spread (linear) above which a camera JPEG pixel at or above middle grey counts as coloured, toward the
+/// 5% of coloured pairs a photo needs to learn its own colour matrix ([`matrix_spread`]).
+pub(super) const MATRIX_SPREAD: f32 = 0.05;
+
+/// Camera JPEG luminance (linear; middle grey, about sRGB 118) from which a pixel needs the fixed [`MATRIX_SPREAD`] to
+/// count as coloured ([`matrix_spread`]). Below it the spread scales with the luminance, continuous at it.
+pub(super) const MATRIX_SPREAD_FROM: f32 = 0.18;
+
+/// Smallest determinant of a colour matrix learnt through [`matrix_spread`]. In the dark, noise is a large share of
+/// each pixel's luminance and can count as colour: on a neutral dark scene whose camera JPEG has noise of its own
+/// (0.003 linear per channel) and doesn't show the sensor's, 15% of the pairs count, and the fit learns a matrix that
+/// sends every colour to the same grey (determinant about 0, its rows alike), which the gates can't tell from the
+/// camera's on a grey scene. Real ones are far above it, as the camera's colours are more saturated than the generic
+/// matrix's: 3.0 to 8.4 on the five public files that learn their colour through the scaled spread.
+pub(super) const MIN_MATRIX_DETERMINANT: f64 = 0.1;
+
+/// The channel spread a camera JPEG pixel of luminance `y` must exceed to count as coloured when the photo learns its
+/// own colour matrix and the fixed spread gave it no look ([`fit_look_with`]): [`MATRIX_SPREAD`] from
+/// [`MATRIX_SPREAD_FROM`] up, and below it the same share of the pixel's luminance (0.28). A colour spreads a pixel's channels
+/// in proportion to its luminance, so a fixed 0.05 asked darker pixels for more saturated colours: at linear 0.036,
+/// the median of a dark olive A7 II scene (issue #865), for a spread of 1.4 times the pixel's luminance. Only 2.7% of
+/// that scene's pairs qualified, short of the 5%, and it got the partial look without a colour matrix, although its
+/// full look passes every acceptance gate (held-out RMS from 0.027 to 0.010) and renders closer to the camera JPEG.
+/// The matrix is fitted to luminance-normalised colour ([`fit_matrix`]), which a dark pixel shows as well as a bright
+/// one.
+pub(super) fn matrix_spread(y: f32) -> f32 {
+    MATRIX_SPREAD * (y / MATRIX_SPREAD_FROM).min(1.0)
 }
 
 /// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
@@ -228,7 +312,9 @@ pub(super) fn fit_pairs_ordered(
     colour: Option<(Mat3, Option<HsvTable>)>,
     order: &[ToneFit],
 ) -> Option<CameraLook> {
-    search_ordered(sensor, reference, colour, order, &HighlightCheck { pairs: highlights(sensor, reference), dro: false, grey: false })
+    let check = HighlightCheck { jpeg_space: None, pairs: highlights(sensor, reference), clipped: Vec::new(), dro: false, grey: false };
+    search_ordered(sensor, reference, colour.clone(), order, &check, false)
+        .or_else(|| search_ordered(sensor, reference, colour, order, &check, true))
         .map(|(look, _)| look)
 }
 
@@ -258,20 +344,24 @@ pub(super) struct Attempt {
 /// fails the gates, once more on the pixels away from edges (same gates): there colour pairs stay
 /// valid when the camera JPEG's geometry differs slightly from the raw's (issue #232). The whole
 /// search runs with one tone fit before the next is tried, so the conditional-median fallback
-/// accepts exactly what the previous releases accepted.
+/// accepts exactly what the previous releases accepted. With `scaled`, the photo's own colour asks
+/// darker pixels for colour in proportion to their luminance ([`matrix_spread`]), else for the fixed
+/// [`MATRIX_SPREAD`] ([`fit_look_with`] says when).
 pub(super) fn search_ordered(
     sensor: &Rgb32f,
     reference: &Rgb32f,
     colour: Option<(Mat3, Option<HsvTable>)>,
     order: &[ToneFit],
     bright: &HighlightCheck,
+    scaled: bool,
 ) -> Option<(CameraLook, Attempt)> {
-    let profiles: &[bool] = if colour.is_some() { &[true, false] } else { &[false] };
+    // The scaled retry changes only learned colour; a given profile was already tried.
+    let profiles: &[bool] = if colour.is_some() && !scaled { &[true, false] } else { &[false] };
     order.iter().find_map(|&tone| {
         profiles.iter().find_map(|&profile| {
             [false, true].into_iter().find_map(|away_from_edges| {
                 let attempt = Attempt { tone, profile, away_from_edges, dark: false };
-                fit_attempt(sensor, reference, &colour, attempt, bright).map(|look| (look, attempt))
+                fit_attempt(sensor, reference, &colour, attempt, bright, scaled).map(|look| (look, attempt))
             })
         })
     })
@@ -283,27 +373,42 @@ pub(super) fn fit_attempt(
     colour: &Option<(Mat3, Option<HsvTable>)>,
     attempt: Attempt,
     bright: &HighlightCheck,
+    scaled: bool,
 ) -> Option<CameraLook> {
     let colour = if attempt.profile { colour.clone() } else { None };
-    fit_pairs_on(sensor, reference, colour, attempt.away_from_edges.then_some(EDGE_CONTRAST), attempt.tone, attempt.dark, bright)
+    fit_pairs_on(sensor, reference, colour, attempt, bright, scaled)
 }
 
 fn fit_pairs_on(
     sensor: &Rgb32f,
     reference: &Rgb32f,
     colour: Option<(Mat3, Option<HsvTable>)>,
-    edge_limit: Option<f32>,
-    tone_fit: ToneFit,
-    dark: bool,
+    attempt: Attempt,
     highlights: &HighlightCheck,
+    scaled: bool,
 ) -> Option<CameraLook> {
+    let edge_limit = attempt.away_from_edges.then_some(EDGE_CONTRAST);
+    let tone_fit = attempt.tone;
+    let dark = attempt.dark;
     // A known colour model needs enough signal for tone fitting, not a scene rich enough to
     // learn a new colour matrix. Still reject monochrome references.
-    let (pairs, bright) = collect_pairs(sensor, reference, if colour.is_some() { 0.005 } else { 0.05 }, edge_limit, dark)?;
+    let preserve_luminance = scaled && colour.is_none() && dark_colour_signal(sensor, reference, edge_limit);
+    let spread = |y| match (colour.is_some(), scaled) {
+        (true, _) => 0.005,
+        (false, true) => matrix_spread(y),
+        (false, false) => MATRIX_SPREAD,
+    };
+    let (pairs, bright) = collect_pairs_by(sensor, reference, spread, edge_limit, dark)?;
     let candidates = match colour {
         Some(given) => vec![given],
         None => {
             let matrix = fit_matrix(&pairs)?;
+            if scaled && matrix.determinant() <= MIN_MATRIX_DETERMINANT {
+                if lightcraft_pipeline::profiling() {
+                    eprintln!("[profile] camera look: matrix determinant {:.3}, a grey matrix learnt from noise", matrix.determinant());
+                }
+                return None;
+            }
             vec![(matrix, fit_hue_sat(&pairs, &matrix)), (matrix, None)]
         }
     };
@@ -315,10 +420,11 @@ fn fit_pairs_on(
         let correction = hue_sat.as_ref().and_then(HueSat::new);
         let colour = |x: [f64; 3]| {
             let p = matrix.apply(x);
-            correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
+            let p = correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from));
+            if preserve_luminance && p.iter().any(|v| *v < 0.0) { clip_colour(p.map(|v| v as f32), true).map(f64::from) } else { p }
         };
-        let Some(curve) = fit_tone_with_shadows(tone_fit, &pairs, sensor, reference, edge_limit, colour) else { continue };
-        let mut look = CameraLook { matrix, tone: curve, hue_sat: hue_sat.clone() };
+        let Some(curve) = fit_tone_with_shadows(tone_fit, &pairs, &[], sensor, reference, edge_limit, colour) else { continue };
+        let mut look = CameraLook { matrix, tone: curve, hue_sat: hue_sat.clone(), preserve_luminance };
         if let Some(tone) = fit_chroma(&bright, &look) {
             look.tone = tone;
         }
@@ -433,20 +539,84 @@ pub(super) fn rank_correlation_ties(pairs: &[([f64; 3], [f64; 3])]) -> f64 {
 /// compacts, dull or nearly colourless scenes): the tone curve by quantile matching, which needs
 /// no pixel-exact registration and was the largest part of the neutral fallback's error (rendered
 /// 9–22 L* too dark), the chroma curve (the fallback kept about a third of the camera's
-/// colourfulness), and, when the scene has enough colour to learn one (the full look's condition),
-/// the photo's own colour matrix at [`PARTIAL_MATRIX_WEIGHT`]. No hue/saturation table. Tried on
+/// colourfulness), and, when the scene has enough colour to learn one (5% of the pairs with a
+/// channel spread above [`MATRIX_SPREAD`] at any luminance: the half weight was measured with it,
+/// not with the full look's [`matrix_spread`]), the photo's own colour matrix at
+/// [`PARTIAL_MATRIX_WEIGHT`]. No hue/saturation table. Tried on
 /// all pixels and then, like the full look, on the pixels away from edges; used only when it cuts
 /// the held-out squared error to below [`MIN_IMPROVEMENT`] of the neutral fallback's, in linear
 /// and in gamma-encoded display values, and when the JPEG shows the same picture
 /// ([`PARTIAL_MIN_RANK_CORRELATION`]). There is no limit on its own error: it only has to be clearly
 /// closer to the camera JPEG than what the photo would get otherwise.
+///
+/// When that fails, it is tried once more with the frame's bright, unclipped pixels in the tone fit
+/// and in the held-out check ([`bright_tone_pairs`]). The fits leave out camera JPEG luminance 0.85
+/// and up, where the camera bleaches colour; for tone alone those pixels are good evidence, and a
+/// frame that is mostly bright overcast sky has too few midtones to fit a curve that matches its sky
+/// (issue #631: a bird against cloud, 92% of the frame above the cut, 473 midtone pairs). Only a
+/// photo that would otherwise get no look at all gets this one.
 pub(super) fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f, highlights: &HighlightCheck) -> Option<CameraLook> {
-    [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights))
+    let attempt = |bright_tone: bool| {
+        [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights, bright_tone))
+    };
+    attempt(false).or_else(|| attempt(true))
 }
 
-fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, highlights: &HighlightCheck) -> Option<CameraLook> {
+/// The bright pairs [`fit_partial`]'s second attempt adds to its tone fit: camera JPEG luminance 0.85
+/// and up, not clipped in the JPEG ([`jpeg_clipped`]: a clipped JPEG pixel only bounds the curve),
+/// from `bright`, which has no clipped sensor pixels when the clipped ones were left out of the
+/// proxy.
+pub(super) fn bright_tone_pairs(bright: &[Pair], jpeg_space: Option<lightcraft_codecs::NamedSpace>) -> (Pairs, Vec<bool>) {
+    let mut extra = Vec::new();
+    // Keep one flag per original bright pair, even when an earlier pair was filtered out.
+    let holdouts = bright
+        .iter()
+        .map(|pair| {
+            if luma(pair.1) >= 0.85 && !jpeg_clipped(pair.1, jpeg_space) {
+                let held = extra.len() % 3 == 0;
+                extra.push(*pair);
+                held
+            } else {
+                false
+            }
+        })
+        .collect();
+    (extra, holdouts)
+}
+
+/// Whether a camera JPEG pixel (linear Rec.2020) clips in its decoded source primaries.
+/// Known spaces use their own matrix, including white-point adaptation. Unknown encodings keep
+/// the conservative check of the usual camera sRGB and Adobe RGB spaces.
+pub(super) fn jpeg_clipped(y: [f64; 3], jpeg_space: Option<NamedSpace>) -> bool {
+    static SPACES: std::sync::OnceLock<[(NamedSpace, Mat3); NamedSpace::ALL.len()]> = std::sync::OnceLock::new();
+    let spaces = SPACES.get_or_init(|| {
+        NamedSpace::ALL.map(|name| {
+            let rgb = name.rgb_space();
+            let from_working = rgb.from_xyz().mul(&lightcraft_color::bradford(REC2020.white, rgb.white)).mul(&REC2020.to_xyz());
+            (name, from_working)
+        })
+    });
+    let clipped = |m: &Mat3| m.apply(y).iter().any(|v| *v >= 0.98);
+    if let Some((_, matrix)) = jpeg_space.and_then(|name| spaces.iter().find(|(known, _)| *known == name)) {
+        clipped(matrix)
+    } else {
+        spaces.iter().filter(|(name, _)| matches!(*name, NamedSpace::Srgb | NamedSpace::AdobeRgb)).any(|(_, matrix)| clipped(matrix))
+    }
+}
+
+pub(super) fn fit_partial_on(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    edge_limit: Option<f32>,
+    highlights: &HighlightCheck,
+    bright_tone: bool,
+) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
+    let (extra, chroma_holdouts) = if bright_tone { bright_tone_pairs(&bright, highlights.jpeg_space) } else { (Vec::new(), Vec::new()) };
+    if bright_tone && extra.is_empty() {
+        return None;
+    }
     let related = rank_correlation(&pairs);
     if related < PARTIAL_MIN_RANK_CORRELATION {
         if lightcraft_pipeline::profiling() {
@@ -455,37 +625,51 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, 
         return None;
     }
     let spread = |y: &[f64; 3]| y.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y.iter().copied().fold(f64::INFINITY, f64::min);
-    let colourful = pairs.iter().filter(|(_, y)| spread(y) > 0.05).count() >= pairs.len() / 20;
+    let colourful = pairs.iter().filter(|(_, y)| spread(y) > f64::from(MATRIX_SPREAD)).count() >= pairs.len() / 20;
     let matrix = match colourful.then(|| fit_matrix(&pairs)).flatten() {
         Some(own) => Mat3(std::array::from_fn(|r| {
             std::array::from_fn(|c| Mat3::IDENTITY.0[r][c] + PARTIAL_MATRIX_WEIGHT * (own.0[r][c] - Mat3::IDENTITY.0[r][c]))
         })),
         None => Mat3::IDENTITY,
     };
-    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, |x| matrix.apply(x))?;
-    let mut look = CameraLook { matrix, tone, hue_sat: None };
-    if let Some(tone) = fit_chroma(&bright, &look) {
+    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &extra, sensor, reference, edge_limit, |x| matrix.apply(x))?;
+    let mut look = CameraLook { matrix, tone, hue_sat: None, preserve_luminance: false };
+    if let Some(tone) = fit_chroma_excluding(&bright, &look, &chroma_holdouts) {
         look.tone = tone;
     }
     let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
-    if !highlights_hold(&look.tone, highlights, |x| matrix.apply(x)) {
+    let kept = if bright_tone {
+        let colour = |x: [f64; 3]| matrix.apply(x);
+        keeps_highlights(&look.tone, highlights, colour) && keeps(&look.tone, highlights, &highlights.clipped, colour)
+    } else {
+        highlights_hold(&look.tone, highlights, |x| matrix.apply(x))
+    };
+    if !kept {
         return None;
     }
     let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
     let (mut before, mut after, mut before_encoded, mut after_encoded, mut samples) = (0.0, 0.0, 0.0, 0.0, 0);
-    for (x, target) in pairs.iter().step_by(3) {
+    // the held-out midtones alone (gamma-encoded): the second attempt mustn't buy its sky with them
+    let (mut mid_before, mut mid_after, mut mid_samples) = (0.0, 0.0, 0usize);
+    let midtones = pairs.len().div_ceil(3);
+    for (n, (x, target)) in pairs.iter().step_by(3).chain(extra.iter().step_by(3)).enumerate() {
         let (fallback, partial) = (displayed(*x, &neutral), displayed(matrix.apply(*x), &tone));
         for c in 0..3 {
             before += (fallback[c] - target[c]).powi(2);
             after += (partial[c] - target[c]).powi(2);
-            before_encoded += (encoded(fallback[c]) - encoded(target[c])).powi(2);
-            after_encoded += (encoded(partial[c]) - encoded(target[c])).powi(2);
+            let (b, a) = ((encoded(fallback[c]) - encoded(target[c])).powi(2), (encoded(partial[c]) - encoded(target[c])).powi(2));
+            before_encoded += b;
+            after_encoded += a;
             samples += 1;
+            if n < midtones {
+                (mid_before, mid_after, mid_samples) = (mid_before + b, mid_after + a, mid_samples + 1);
+            }
         }
     }
     if lightcraft_pipeline::profiling() {
         eprintln!(
-            "[profile] camera look partial (tone{}{}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
+            "[profile] camera look partial (tone{}{}{}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
+            if bright_tone { " with bright pairs" } else { "" },
             if look.tone.chroma().iter().any(|k| *k != 1.0) { ", chroma" } else { "" },
             if matrix != Mat3::IDENTITY { ", damped matrix" } else { "" },
             (before / samples.max(1) as f64).sqrt(),
@@ -495,5 +679,17 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, 
     }
     let better =
         after.is_finite() && after_encoded.is_finite() && after < before * MIN_IMPROVEMENT && after_encoded < before_encoded * MIN_IMPROVEMENT;
-    (samples > 0 && better).then_some(look)
+    let rms = |e: f64| (e / mid_samples.max(1) as f64).sqrt();
+    let midtones_kept = !bright_tone || rms(mid_after) <= rms(mid_before) + MAX_MIDTONE_LOSS;
+    if bright_tone && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera look partial with bright pairs: midtones (encoded) RMS {:.5} -> {:.5}", rms(mid_before), rms(mid_after));
+    }
+    (samples > 0 && better && midtones_kept).then_some(look)
 }
+
+/// How much further from the camera JPEG than the neutral fallback (gamma-encoded RMS over the
+/// held-out midtones) [`fit_partial`]'s second attempt may leave them: its bright pairs can make the
+/// sky alone meet the gates, and the midtones must not pay for it. A small allowance, not none,
+/// because on a frame the fallback already renders right in the midtones a curve through the sky
+/// moves them a little.
+pub(super) const MAX_MIDTONE_LOSS: f64 = 0.02;
