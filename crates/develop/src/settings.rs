@@ -3,7 +3,7 @@
 //! exception is `process`: missing (or unreadable), it is V1, the rendering those older files were
 //! made with.
 
-use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
+use lightcraft_geom::{CropGeometry, Homography, Orientation, Point, RefitShape};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -814,10 +814,34 @@ impl Geometry {
 #[serde(default)]
 pub struct Crop {
     pub geometry: CropGeometry,
-    /// Locked aspect (w, h); None = free / original.
+    /// Locked aspect (w × 100, h × 100); None = free. "Original" is the photo's own size as
+    /// oriented ([`Crop::original_aspect`]).
     pub aspect: Option<(u32, u32)>,
     pub flip_h: bool,
     pub flip_v: bool,
+}
+
+impl Crop {
+    /// The "Original" aspect lock of a `w × h` photo (as oriented): its own size, in hundredths.
+    pub fn original_aspect(w: f64, h: f64) -> (u32, u32) {
+        ((w * 100.0) as u32, (h * 100.0) as u32)
+    }
+
+    /// This crop, made on a photo `from` (w, h, as oriented) in size, for a photo of size `to`
+    /// (pasting or syncing it, [`CropGeometry::refit`]): a locked aspect ratio is kept, also by a
+    /// crop of the whole photo, and an "Original" lock takes the new photo's shape (and becomes its
+    /// Original lock); unlocked, the whole photo stays the whole photo and any other crop keeps its
+    /// aspect ratio.
+    pub fn refit(&self, from: (f64, f64), to: (f64, f64)) -> Crop {
+        let valid = |(w, h): (f64, f64)| w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0;
+        let shape = match self.aspect {
+            None => RefitShape::Free,
+            Some(a) if valid(from) && a == Self::original_aspect(from.0, from.1) => RefitShape::Photo,
+            Some(_) => RefitShape::Locked,
+        };
+        let aspect = if shape == RefitShape::Photo && valid(to) { Some(Self::original_aspect(to.0, to.1)) } else { self.aspect };
+        Crop { geometry: self.geometry.refit(from, to, shape), aspect, ..*self }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

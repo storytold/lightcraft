@@ -46,7 +46,7 @@
   "Move {what} to Recently Deleted?": "Pindahkan {what} ke Baru dihapus?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto dipindahkan ke “{1}”{0:.0}. Pilih Edit → Urungkan untuk mengembalikannya.",
   "Named ({named_n})": "Bernama ({named_n})",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Tempel ke {n} foto{:.0} — hanya menempelkan pengaturan yang disalin",
+  "Paste into {n} photo{}": "Tempel ke {n} foto{:.0}",
   "Preset: {name}": "Preset: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Hanya pratinjau — yang diedit adalah JPEG bawaan kamera ({})",
   "Preview only — {}": "Hanya pratinjau — {}",

@@ -46,7 +46,7 @@
   "Move {what} to Recently Deleted?": "{what}を「最近削除した写真」に移動しますか？",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n}枚を「{1}」に移動しました。編集 → 取り消す で元に戻せます。{0:.0}",
   "Named ({named_n})": "名前付き（{named_n}）",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "{n}枚に貼り付け{:.0}（コピーされた設定だけを適用）",
+  "Paste into {n} photo{}": "{n}枚に貼り付け{:.0}",
   "Preset: {name}": "プリセット：{name}",
   "Preview only — editing the camera's embedded JPEG ({})": "プレビューのみ：カメラ内蔵のJPEGを編集中（{}）",
   "Preview only — {}": "プレビューのみ：{}",

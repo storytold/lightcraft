@@ -90,7 +90,7 @@
   "Move {what} to Recently Deleted?": "{what} nach „Zuletzt gelöscht“ verschieben?",
   "Named ({named_n})": "Benannt ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "„{k}“ auftragen: Fotos anklicken, um es hinzuzufügen oder zu entfernen · Esc beendet",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "In {n} Foto{} einfügen – nur kopierte Einstellungen werden eingefügt",
+  "Paste into {n} photo{}": "In {n} Foto{} einfügen",
   "Preset: {name}": "Vorgabe: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Nur Vorschau – das eingebettete Kamera-JPEG wird bearbeitet ({})",
   "Preview only — {}": "Nur Vorschau – {}",

@@ -60,7 +60,7 @@
   "Move {what} to Recently Deleted?": "要將{what}移至「最近刪除」嗎？",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "已將 {n} 張照片移到「{1}」{0:.0}。編輯 → 復原 可移回。",
   "Named ({named_n})": "已命名（{named_n}）",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "貼上至 {n} 張照片{:.0} — 只貼上已複製的設定",
+  "Paste into {n} photo{}": "貼上至 {n} 張照片{:.0}",
   "Preset: {name}": "預設集：{name}",
   "Preview only — editing the camera's embedded JPEG ({})": "僅供預覽 — 正在編輯相機內嵌的 JPEG（{}）",
   "Preview only — {}": "僅供預覽 — {}",

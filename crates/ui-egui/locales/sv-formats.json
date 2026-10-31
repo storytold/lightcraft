@@ -132,7 +132,7 @@
   "not added to Apple Photos: {e}": "inte tillagt i Apple Photos: {e}",
   "On {have} of {of} selected photos": "På {have} av {of} markerade foton",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Målar ”{k}”: klicka på foton för att lägga till eller ta bort det · Esc avslutar",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Klistra in i {n} foto{} – endast inställningar som kopierades klistras in",
+  "Paste into {n} photo{}": "Klistra in i {n} foto{}",
   "Preset: {name}": "Förinställning: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Endast förhandsgranskning – du redigerar kamerans inbäddade JPEG ({})",
   "Preview only — {}": "Endast förhandsgranskning – {}",
