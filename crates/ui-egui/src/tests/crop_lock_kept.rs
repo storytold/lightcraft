@@ -242,3 +242,20 @@ fn a_remembered_free_crop_stays_free() {
     assert_eq!(crop_state(&h).0, None);
     assert_eq!(h.app.crop_tool_aspect(), None);
 }
+
+/// A partial of settings that turns the crop (`develop.merge` with `crop.geometry.angle`) keeps the lock
+/// as the angle commands do; one that gives the crop's rect outright is the shape asked for and stores no lock.
+#[test]
+fn a_merged_angle_keeps_the_lock_and_a_merged_rect_is_taken_as_given() {
+    let mut h = crop_tool();
+    let want = photo_ratio(&h);
+    let undo = h.app.session.undo.len();
+    ask(&mut h, "engine.execute", json!({"command": "develop.merge", "params": {"settings": {"crop": {"geometry": {"angle": 3.0}}}}}));
+    assert_locked(&h, want, "develop.merge crop.geometry.angle");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step, lock included");
+
+    let mut h = crop_tool();
+    let rect = json!({"x0": 0.1, "y0": 0.1, "x1": 0.6, "y1": 0.9});
+    ask(&mut h, "engine.execute", json!({"command": "develop.merge", "params": {"settings": {"crop": {"geometry": {"rect": rect, "angle": 2.0}}}}}));
+    assert_eq!(crop_state(&h).0, None, "a rect given outright stores no lock");
+}

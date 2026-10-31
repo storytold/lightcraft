@@ -723,8 +723,16 @@ fn touches_crop(id: &str, params: &Value, active: Option<lightcraft_catalog::Pho
         },
         _ if id.starts_with("develop.") => {
             let crop_control = |c: &str| c.starts_with("crop.");
+            // a partial of settings (develop.merge) that turns or flips the crop; one that gives the rect or the
+            // ratio outright is the shape asked for, as for crop.set (Constrain Crop is Geometry, not the crop)
+            let settings_crop = params
+                .get("settings")
+                .and_then(|v| v.get("crop"))
+                .and_then(Value::as_object)
+                .is_some_and(|c| c.get("aspect").is_none() && c.get("geometry").and_then(|g| g.get("rect")).is_none_or(Value::is_null));
             params.get("control").and_then(Value::as_str).is_some_and(crop_control)
                 || params.get("values").and_then(Value::as_object).is_some_and(|o| o.keys().any(|k| crop_control(k)))
+                || settings_crop
         }
         _ => false,
     }
