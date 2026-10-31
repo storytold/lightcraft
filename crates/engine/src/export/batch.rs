@@ -92,9 +92,14 @@ pub fn export_gpu() -> bool {
     EXPORT_GPU.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Serializes the tests that change or read the process-wide export tuning (lanes, GPU, mix).
+#[cfg(test)]
+pub(crate) static TUNING_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// [`super::export_batch`] with `lanes` photos side by side, on the GPU or not (and with `mix`, on
 /// the processor too while the GPU is busy), the files thrown away (a benchmark:
-/// [`crate::machine_test`]). Changes nothing process-wide.
+/// [`crate::machine_test`]). Changes nothing process-wide. `cancel` set: stops within a second,
+/// `Err("cancelled")`.
 pub(crate) fn export_batch_tuned(
     session: &mut crate::Session,
     ids: &[lightcraft_catalog::PhotoId],
@@ -102,6 +107,7 @@ pub(crate) fn export_batch_tuned(
     lanes: usize,
     gpu: bool,
     mix: bool,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let mut items = prepare_batch(session, ids, o)?;
     for it in &mut items {
@@ -111,7 +117,13 @@ pub(crate) fn export_batch_tuned(
     let lanes = lanes.clamp(1, MAX_EXPORT_LANES).min(items.len().max(1));
     let to = Destination::default();
     let mut sink = |_: &str, _: &[u8]| Ok(());
-    run_batch_with(items, &mut Placer::new(o, &to, &mut sink, &|_| false, true), &mut |_, _| true, lanes, None)
+    let stop = cancel.clone();
+    let files = run_batch_with(items, &mut Placer::new(o, &to, &mut sink, &|_| false, true), &mut |_, _| true, lanes, cancel)?;
+    // stopped: what was exported is no measurement
+    if stop.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+        return Err("cancelled".into());
+    }
+    Ok(files)
 }
 
 /// Exports render on the processor too while the GPU is busy with other photos (note 28: "Why

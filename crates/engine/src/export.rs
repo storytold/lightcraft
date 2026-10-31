@@ -22,6 +22,8 @@ mod place;
 mod prepare;
 mod watermark;
 
+#[cfg(test)]
+pub(crate) use batch::TUNING_TEST_LOCK;
 pub(crate) use batch::export_batch_tuned;
 #[cfg(test)]
 use batch::run_batch_with;

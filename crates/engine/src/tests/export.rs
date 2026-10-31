@@ -1506,7 +1506,7 @@ fn an_export_encodes_outside_its_renders() {
     }
     let o = ExportOptions::from_json(&json!({"longEdge": 256, "hdr": true, "quality": 90}));
     let before = crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed);
-    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true, false).unwrap();
+    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true, false, None).unwrap();
     assert_eq!(files.len(), 3, "{files:?}");
     assert!(files.iter().all(|f| f.get("error").is_none()), "{files:?}");
     assert_eq!(crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed), before, "no encode inside a photo's renders");
@@ -1535,7 +1535,7 @@ fn photos_side_by_side_overlap_on_one_gpu_turn() {
             s.media.forget(id);
         }
         let t = std::time::Instant::now();
-        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes, true, false).unwrap();
+        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes, true, false, None).unwrap();
         assert!(files.iter().all(|f| f.get("error").is_none() && f.get("gpuFallback").is_none()), "{files:?}");
         t.elapsed().as_secs_f64()
     };
@@ -1616,7 +1616,7 @@ fn exports_render_on_the_gpu_and_the_processor_at_once() {
             s.media.forget(id);
         }
         let t = std::time::Instant::now();
-        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, 4, true, mix).unwrap();
+        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, 4, true, mix, None).unwrap();
         assert_eq!(files.len(), 8);
         assert!(files.iter().all(|f| f.get("error").is_none()), "{files:?}");
         t.elapsed().as_secs_f64()
