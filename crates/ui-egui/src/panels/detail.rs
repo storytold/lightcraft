@@ -582,7 +582,7 @@ fn status_pill(
 fn proof_surround(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, canvas: Rect) {
     p.rect_filled(canvas, 0.0, Color32::from_gray(238));
     let label = crate::i18n::tr_format!("Proof Preview · {}", app.ui.proof.space.label());
-    p.text(pos2(canvas.right() - 16.0, canvas.top() + 14.0), Align2::RIGHT_CENTER, label, t.font(12.5), Color32::from_gray(60));
+    p.text(pos2(canvas.right() - 16.0, canvas.top() + 14.0), Align2::RIGHT_CENTER, label, t.label(), Color32::from_gray(60));
 }
 
 /// Request the window renders, remember which sides have one, and release the slot of a side without.

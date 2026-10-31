@@ -196,7 +196,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
         if !tpl.description.is_empty() {
             said = format!("{said}\n{}", tpl.description);
         }
-        let galley = ui.painter().layout(said, t.font(11.0), Color32::WHITE, (room.width() - 8.0).max(1.0));
+        let galley = ui.painter().layout(said, t.caption(), Color32::WHITE, (room.width() - 8.0).max(1.0));
         let band = Rect::from_min_size(
             pos2(room.left(), (room.bottom() - galley.size().y - 6.0).max(room.top())),
             vec2(room.width(), galley.size().y + 6.0),

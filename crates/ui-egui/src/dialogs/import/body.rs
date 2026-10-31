@@ -166,7 +166,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
             _ => "Add in place: the library references the files where they are; nothing is copied or moved.",
         }))
-        .color(if d.copy && d.move_files { t.caution } else { t.text_dim })
+        .color(if d.copy && d.move_files { t.text_caution() } else { t.text_dim })
         .small(),
     );
     register(ui, "label:importModeHelp", r.rect);
@@ -224,7 +224,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let t = Tokens::get(ui.ctx());
             match lightcraft_engine::rename::folder_template_error(&d.folder_template) {
                 Some(e) => {
-                    ui.label(egui::RichText::new(e).color(t.caution));
+                    ui.label(egui::RichText::new(e).color(t.text_caution()));
                 }
                 None => unknown_tags_warning(ui, &d.folder_template),
             }
@@ -438,7 +438,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         p.galley(br.min + vec2(4.0, 2.0), g, Color32::WHITE);
     }
     let name = if c.name.chars().count() > 18 { format!("{}…", c.name.chars().take(17).collect::<String>()) } else { c.name.clone() };
-    p.text(pos2(rect.left() + 2.0, img.bottom() + 9.0), Align2::LEFT_CENTER, name, t.font(10.5), if ok { t.text_label } else { t.text_dim });
+    p.text(pos2(rect.left() + 2.0, img.bottom() + 9.0), Align2::LEFT_CENTER, name, t.caption(), if ok { t.text_label } else { t.text_dim });
     let tip = format!(
         "{}\n{} × {} · {} · {:.1} MB{}",
         c.path,

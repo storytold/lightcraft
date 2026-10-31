@@ -60,7 +60,7 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.0)).color(t.text));
                     if active {
-                        ui.label(RichText::new(crate::i18n::tr("In Use")).size(11.0).color(t.accent));
+                        ui.label(RichText::new(crate::i18n::tr("In Use")).font(t.caption()).color(t.text_link()));
                     }
                 });
                 let shown = options.iter().find(|(v, _)| v == value).or(options.first()).map(|(_, k)| *k).unwrap_or_default();

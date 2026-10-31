@@ -225,10 +225,10 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
             ui.horizontal(|ui| {
                 let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                 paint(ui.painter(), ir, Icon::Info, t.caution);
-                ui.label(egui::RichText::new(crate::i18n::tr("Preview only")).font(t.semibold(12.5)).color(t.text));
+                ui.label(egui::RichText::new(crate::i18n::tr("Preview only")).font(t.body_strong()).color(t.text));
             });
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(preview_only_explanation(reason)).size(11.5).color(t.text_label));
+            ui.label(egui::RichText::new(preview_only_explanation(reason)).font(t.caption()).color(t.text_label));
             ui.add_space(6.0);
             reload = text_button(ui, &format!("reloadPreviewOnly:{key}"), "Reload from Disk", false).clicked();
         })
@@ -456,9 +456,9 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let hovered = resp.hovered() || resp.dragged();
     let text_c = if enabled { t.text_label } else { t.text_disabled };
     let p = ui.painter();
-    p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
+    p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.body(), text_c);
     if typing.is_none() {
-        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
+        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.body(), text_c);
         // the scrub pointer, as over Lightroom's values: a drag here changes the value
         if enabled && (value_resp.hovered() || scrub.is_some()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -646,7 +646,7 @@ fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(g.value_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
     // the old value is selected when the field takes the focus, so typing replaces it
     let field = crate::text_field::TextField::singleline(&format!("sliderField:{}", g.spec.id), &mut text)
-        .font(t.font(12.5))
+        .font(t.body())
         .horizontal_align(egui::Align::RIGHT)
         .width(g.value_rect.width())
         .margin(egui::Margin::ZERO)
@@ -890,7 +890,7 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
     let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
+    let font = t.caption_strong();
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
     let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -936,7 +936,7 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 };
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                p.text(r.center(), Align2::CENTER_CENTER, label, t.caption_strong(), t.text);
                 if resp.clicked() {
                     clicked = Some(i);
                 }

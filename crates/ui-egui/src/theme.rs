@@ -10,6 +10,66 @@ use std::sync::Arc;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
 
 pub const FONT_SEMIBOLD: &str = "semibold";
+
+/// The sizes text is set in, one per job. The steps are a point or more, so two sizes on a screen
+/// are told apart; a panel names the size its text has (`t.caption()`, `t.body_strong()`, …)
+/// instead of writing a number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextSize {
+    /// A badge or a pill on a thumbnail or an icon.
+    Micro,
+    /// An explanation, the caption over a field, a line of status; in semibold, a small button or
+    /// a choice.
+    Caption,
+    /// What stands by something larger: a count, the title of a tab, a control of the filter bar.
+    Label,
+    /// Controls, rows, values and menus.
+    Body,
+    /// The header of a section in a panel.
+    Title,
+    /// The name of a panel or of a window.
+    PanelTitle,
+    /// The title over the photos, and what an empty screen says.
+    Display,
+}
+
+impl TextSize {
+    /// Smallest first.
+    pub const ALL: [TextSize; 7] =
+        [TextSize::Micro, TextSize::Caption, TextSize::Label, TextSize::Body, TextSize::Title, TextSize::PanelTitle, TextSize::Display];
+
+    /// The size in points.
+    pub const fn points(self) -> f32 {
+        match self {
+            TextSize::Micro => 10.0,
+            TextSize::Caption => 11.0,
+            TextSize::Label => 12.0,
+            TextSize::Body => 13.0,
+            TextSize::Title => 14.0,
+            TextSize::PanelTitle => 15.0,
+            TextSize::Display => 18.0,
+        }
+    }
+
+    /// The size nearest a number of points; of two equally near, the one nearer [`TextSize::Body`]
+    /// (12.5 is 13 and so is 13.5). Anything past the ends is the end: a huge number or infinity
+    /// the largest, a negative one the smallest. Not a number: the size of a control.
+    pub fn nearest(points: f32) -> TextSize {
+        // (far from the scale every size is as near as the next in an f32)
+        let points = points.clamp(0.0, 1000.0);
+        let body = TextSize::Body.points();
+        let mut best = TextSize::Body;
+        let mut least = f32::INFINITY;
+        for size in TextSize::ALL {
+            let off = (size.points() - points).abs();
+            if off < least || (off == least && (size.points() - body).abs() < (best.points() - body).abs()) {
+                (best, least) = (size, off);
+            }
+        }
+        best
+    }
+}
+
 const WEB_CHINESE_FONT: &str = "web Noto Sans CJK SC";
 
 /// Shared colour-label palette for badges, thumbnail surrounds and feedback.
@@ -168,7 +228,7 @@ impl Tokens {
     pub fn for_kind(kind: ThemeKind) -> Tokens {
         let rgb = |v: u32| Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
         let base = Tokens::default();
-        match kind {
+        let t = match kind {
             ThemeKind::Charcoal => base,
             ThemeKind::Midnight => Tokens {
                 chrome: rgb(0x1e1e1e),
@@ -250,17 +310,151 @@ impl Tokens {
                 caution: rgb(0xb0761a),
                 ..base
             },
+        };
+        // The dim text of captions, counts and explanations is read like any other: it stands
+        // 4.5:1 against every surface it is written on (as observed it was 4.20:1 on a panel in
+        // Charcoal, and 3.3 to 4.3:1 on the light themes' surfaces).
+        Tokens { text_dim: t.on_surfaces(t.text_dim), ..t }
+    }
+
+    /// The surfaces text is written on at rest: panels, the canvas, the grid and its cells,
+    /// insets, text boxes and buttons. (A hovered, pressed or selected surface is passing or
+    /// marked otherwise: text there is made legible against it where it is drawn.)
+    fn surfaces(&self) -> [Color32; 7] {
+        [self.chrome, self.canvas, self.grid_bg, self.cell, self.inset, self.field, self.button]
+    }
+
+    /// `color`, brought as far toward the text colour as it takes to stand 4.5:1 against every
+    /// surface of [`Self::surfaces`]: a colour that says something as text.
+    fn on_surfaces(&self, color: Color32) -> Color32 {
+        self.surfaces().into_iter().fold(color, |c, on| self.legible(c, on, 4.5))
+    }
+
+    /// The accent as text: a link, "in use", what Auto Sync is doing. (The accent itself is
+    /// for fills and outlines: as text it is 2.56:1 on a panel in Charcoal.)
+    pub fn text_link(&self) -> Color32 {
+        self.on_surfaces(self.accent)
+    }
+
+    /// The caution colour as text. (3.09:1 on a panel in Silver as it is.)
+    pub fn text_caution(&self) -> Color32 {
+        self.on_surfaces(self.caution)
+    }
+
+    /// The colour of a rejection or an error as text.
+    pub fn text_error(&self) -> Color32 {
+        self.on_surfaces(self.reject)
+    }
+
+    /// What is written on a filled mark (a count on the accent, "!" on the error colour): black
+    /// or white, whichever stands out more.
+    pub fn ink_on(&self, fill: Color32) -> Color32 {
+        let white = self.legible(Color32::WHITE, fill, 4.5) == Color32::WHITE;
+        let black = self.legible(Color32::BLACK, fill, 4.5) == Color32::BLACK;
+        match (white, black) {
+            (true, false) => Color32::WHITE,
+            (false, true) => Color32::BLACK,
+            // both stand 4.5:1 or neither does: the farther from the fill
+            _ if Self::lightness(fill) < 0.18 => Color32::WHITE,
+            _ => Color32::BLACK,
         }
+    }
+
+    /// Relative luminance (WCAG), 0 black to 1 white.
+    fn lightness(c: Color32) -> f32 {
+        let linear = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+    }
+
+    /// The fill behind what is chosen (a chosen chip): the accent mixed into the
+    /// panel as strongly as leaves the label colour 4.5:1 on it.
+    pub fn selection_fill(&self) -> Color32 {
+        const STEPS: u8 = 12;
+        (0..=STEPS)
+            .rev()
+            .map(|step| self.chrome.lerp_to_gamma(self.accent, 0.6 * f32::from(step) / f32::from(STEPS)))
+            .find(|fill| self.legible(self.text_label, *fill, 4.5) == self.text_label)
+            .unwrap_or(self.chrome)
     }
 
     pub fn get(ctx: &egui::Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::NULL)).unwrap_or_default()
     }
+    /// The regular face at the size of the scale nearest `size` ([`TextSize::nearest`]): text
+    /// asked for by a number is on the scale too. New code names the size (`t.body()`, …).
     pub fn font(&self, size: f32) -> FontId {
-        FontId::proportional(size)
+        self.regular(TextSize::nearest(size))
     }
+    /// The semibold face at the size of the scale nearest `size`.
     pub fn semibold(&self, size: f32) -> FontId {
-        FontId::new(size, FontFamily::Name(FONT_SEMIBOLD.into()))
+        self.strong(TextSize::nearest(size))
+    }
+    /// The regular face at a size of the scale.
+    pub fn regular(&self, size: TextSize) -> FontId {
+        FontId::proportional(size.points())
+    }
+    /// The semibold face at a size of the scale.
+    pub fn strong(&self, size: TextSize) -> FontId {
+        FontId::new(size.points(), FontFamily::Name(FONT_SEMIBOLD.into()))
+    }
+    /// Micro: a badge or a pill on a thumbnail or an icon.
+    pub fn micro(&self) -> FontId {
+        self.regular(TextSize::Micro)
+    }
+    /// [`Self::micro`] in semibold.
+    pub fn micro_strong(&self) -> FontId {
+        self.strong(TextSize::Micro)
+    }
+    /// Caption: an explanation, the caption over a field, a line of status; in semibold, a small button.
+    pub fn caption(&self) -> FontId {
+        self.regular(TextSize::Caption)
+    }
+    /// [`Self::caption`] in semibold.
+    pub fn caption_strong(&self) -> FontId {
+        self.strong(TextSize::Caption)
+    }
+    /// Label: what stands by something larger: a count, the title of a tab.
+    pub fn label(&self) -> FontId {
+        self.regular(TextSize::Label)
+    }
+    /// [`Self::label`] in semibold.
+    pub fn label_strong(&self) -> FontId {
+        self.strong(TextSize::Label)
+    }
+    /// Body: controls, rows, values and menus.
+    pub fn body(&self) -> FontId {
+        self.regular(TextSize::Body)
+    }
+    /// [`Self::body`] in semibold.
+    pub fn body_strong(&self) -> FontId {
+        self.strong(TextSize::Body)
+    }
+    /// Title: the header of a section in a panel (set strong; plain is for a value at its size).
+    pub fn title(&self) -> FontId {
+        self.regular(TextSize::Title)
+    }
+    /// [`Self::title`] in semibold.
+    pub fn title_strong(&self) -> FontId {
+        self.strong(TextSize::Title)
+    }
+    /// PanelTitle: the name of a panel or of a window (set strong).
+    pub fn panel_title(&self) -> FontId {
+        self.regular(TextSize::PanelTitle)
+    }
+    /// [`Self::panel_title`] in semibold.
+    pub fn panel_title_strong(&self) -> FontId {
+        self.strong(TextSize::PanelTitle)
+    }
+    /// Display: the title over the photos, and what an empty screen says (set strong).
+    pub fn display(&self) -> FontId {
+        self.regular(TextSize::Display)
+    }
+    /// [`Self::display`] in semibold.
+    pub fn display_strong(&self) -> FontId {
+        self.strong(TextSize::Display)
     }
 }
 
@@ -389,6 +583,32 @@ fn theme_id() -> egui::Id {
     egui::Id::unique("lightcraft-theme")
 }
 
+impl Tokens {
+    /// `color` as it is where it stands `ratio`:1 or more against `on`, as WCAG measures it (4.5
+    /// for text, 3 for a line or a mark that says where something is); else moved toward the text
+    /// colour, which stands furthest from every surface, in small steps until it does, and the
+    /// text colour itself when nothing on the way does (or `ratio` is no number).
+    ///
+    /// For text and marks drawn in a token chosen for its hue or its quietness (the dim text, the
+    /// accent, the caution and reject colours, a border) on a surface where a theme's value for it
+    /// is too close to read: the token keeps its value for everything else that uses it.
+    pub fn legible(&self, color: Color32, on: Color32, ratio: f32) -> Color32 {
+        fn luminance(c: Color32) -> f32 {
+            let linear = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+        }
+        let stands = |c: Color32| {
+            let (a, b) = (luminance(c), luminance(on));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05) >= ratio
+        };
+        const STEPS: u8 = 32;
+        (0..STEPS).map(|step| color.lerp_to_gamma(self.text, f32::from(step) / f32::from(STEPS))).find(|c| stands(*c)).unwrap_or(self.text)
+    }
+}
+
 /// The theme `ctx` is styled with (none before the first [`apply_kind`]).
 pub fn current(ctx: &egui::Context) -> Option<ThemeKind> {
     ctx.data(|d| d.get_temp::<ThemeKind>(theme_id()))
@@ -426,9 +646,12 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     v.window_stroke = Stroke::new(1.0, t.button_border);
     v.window_corner_radius = CornerRadius::same(6);
     v.menu_corner_radius = CornerRadius::same(6);
-    v.selection.bg_fill = t.accent.gamma_multiply(0.6);
+    v.selection.bg_fill = t.selection_fill();
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.override_text_color = Some(t.text_label);
+    // (egui's own: the label colour at 60 %, under 4.1:1 in every theme, and a bright blue)
+    v.weak_text_color = Some(t.text_dim);
+    v.hyperlink_color = t.text_link();
     let (popup, window) = if dark { (140, 160) } else { (50, 60) };
     v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(popup) };
     v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(window) };
@@ -447,10 +670,10 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
         s.spacing.interact_size.y = 22.0;
-        s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(13.0));
-        s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
-        s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
-        s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
+        s.text_styles.insert(egui::TextStyle::Body, t.body());
+        s.text_styles.insert(egui::TextStyle::Button, t.body());
+        s.text_styles.insert(egui::TextStyle::Small, t.caption());
+        s.text_styles.insert(egui::TextStyle::Heading, t.panel_title_strong());
         s.animation_time = 0.08;
     });
 }
