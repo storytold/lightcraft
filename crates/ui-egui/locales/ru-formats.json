@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Вы открыли файлы, которые ещё не импортированы: {n}. При выходе эти запросы будут отменены.",
+  "File {n} in the open request is not a file URL.": "Файл {n} в запросе на открытие не является URL файла."
 }

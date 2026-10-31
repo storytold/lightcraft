@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
-  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "您打开的 {n} 个文件尚未导入。退出将取消这些导入请求。",
+  "File {n} in the open request is not a file URL.": "打开请求中的文件 {n} 不是文件 URL。"
 }

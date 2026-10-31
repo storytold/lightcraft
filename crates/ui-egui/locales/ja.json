@@ -2388,5 +2388,15 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "開いたファイルのうち1個がまだ読み込まれていません。終了すると、この読み込み要求は破棄されます。",
+  "An import is already running. Wait for it to finish, then click Import again.": "読み込みはすでに実行中です。終わるまでお待ちになってから、もう一度「読み込み」をクリックしてください。",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "ライブラリを切り替える前に、読み込みを完了するかキャンセルして、「写真を読み込む」を閉じてください。待機中の写真はこのライブラリで開きます。",
+  "Quit LightCraft?": "LightCraftを終了しますか？",
+  "Waiting to import opened files": "開いたファイルの読み込み待ち",
+  "The open request contains a path that is not absolute.": "開く要求に絶対パスではないパスが含まれています。",
+  "This file's name cannot be represented as UTF-8.": "このファイル名はUTF-8で表現できません。",
+  "The open request contains no files.": "開く要求にファイルが含まれていません。",
+  "The open request contains an invalid number of files.": "開く要求に含まれるファイル数が無効です。",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "写真を読み込む前にライブラリが変更されました。目的のライブラリで写真をもう一度開いてください。"
 }

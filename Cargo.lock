@@ -3544,6 +3544,7 @@ dependencies = [
  "egui",
  "lightcraft-codecs",
  "lightcraft-engine",
+ "lightcraft-macos-open",
  "lightcraft-raster",
  "lightcraft-sysmem",
  "lightcraft-testkit",
@@ -3553,6 +3554,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "plist",
  "pollster 1.0.1",
  "rfd",
  "serde_json",
@@ -3812,6 +3814,16 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
  "quick-xml 0.41.0",
+]
+
+[[package]]
+name = "lightcraft-macos-open"
+version = "0.16.0"
+dependencies = [
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

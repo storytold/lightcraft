@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Počet otevřených souborů, které ještě nebyly importovány: {n}. Ukončením se tyto požadavky zahodí.",
+  "File {n} in the open request is not a file URL.": "Soubor {n} v požadavku na otevření není URL souboru."
 }

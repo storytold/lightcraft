@@ -2356,5 +2356,15 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Quit LightCraft?": "Lopetetaanko LightCraft?",
+  "Waiting to import opened files": "Odotetaan avattujen tiedostojen tuontia",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Yhtä avaamaasi tiedostoa ei ole vielä tuotu. Lopettaminen hylkää tämän pyynnön.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Tuonti on jo käynnissä. Odota sen valmistumista ja napsauta sitten Tuo uudelleen.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Viimeistele tai peruuta tuonti ja sulje Tuo kuvia ennen kirjaston vaihtamista. Jonossa olevat kuvat avataan tässä kirjastossa.",
+  "The open request contains a path that is not absolute.": "Avauspyyntö sisältää polun, joka ei ole absoluuttinen.",
+  "This file's name cannot be represented as UTF-8.": "Tämän tiedoston nimeä ei voi esittää UTF-8-muodossa.",
+  "The open request contains no files.": "Avauspyyntö ei sisällä tiedostoja.",
+  "The open request contains an invalid number of files.": "Avauspyyntö sisältää virheellisen määrän tiedostoja.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Kirjasto vaihtui ennen kuin nämä kuvat voitiin tuoda. Avaa kuvat uudelleen halutussa kirjastossa."
 }

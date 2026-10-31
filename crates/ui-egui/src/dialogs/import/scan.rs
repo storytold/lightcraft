@@ -145,6 +145,10 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     show_pending_review(app, ctx);
     let Some(task) = app.scan.as_ref() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    // Keep a completed Local scan until the active import finishes.
+    if task.browse && app.import.is_some() {
+        return;
+    }
     let out = match task.rx.try_recv() {
         Ok(o) => o,
         Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -190,7 +194,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let undo0 = app.session.undo.len();
             let total = queue.len();
             let _ = total;
-            app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true));
+            app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true, &app.session));
         }
         return;
     }

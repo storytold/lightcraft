@@ -2389,5 +2389,15 @@
   "Top bar": "頂部列",
   "Tool strip": "工具列",
   "Bottom bar": "底部列",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "您開啟的 1 個檔案尚未匯入。結束程式將取消此匯入要求。",
+  "An import is already running. Wait for it to finish, then click Import again.": "已有匯入正在進行。請等待其完成，然後再次按一下「匯入」。",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "切換照片庫前，請先完成或取消匯入，並關閉「匯入照片」。佇列中的照片將在此照片庫中開啟。",
+  "Quit LightCraft?": "結束 LightCraft？",
+  "Waiting to import opened files": "等待匯入已開啟的檔案",
+  "The open request contains a path that is not absolute.": "開啟請求包含非絕對路徑。",
+  "This file's name cannot be represented as UTF-8.": "此檔案名稱無法以 UTF-8 表示。",
+  "The open request contains no files.": "開啟請求中沒有檔案。",
+  "The open request contains an invalid number of files.": "開啟請求中的檔案數量無效。",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "匯入這些相片之前，圖庫已變更。請在目標圖庫中重新開啟相片。"
 }

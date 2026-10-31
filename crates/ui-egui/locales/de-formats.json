@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "Die Bereichsanordnung konnte nicht wiederhergestellt werden: {error}",
   "Panel move was not applied: {error}": "Das Verschieben des Bereichs wurde nicht ausgeführt: {error}",
   "{name} is installed": "{name} ist installiert",
-  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet"
+  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "{n} von dir geöffnete Dateien wurden noch nicht importiert. Beim Beenden werden diese Importaufträge verworfen.",
+  "File {n} in the open request is not a file URL.": "Datei {n} in der Anfrage zum Öffnen ist keine Datei-URL."
 }

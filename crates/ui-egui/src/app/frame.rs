@@ -139,7 +139,7 @@ impl LightcraftApp {
                         o.remove("paths");
                     }
                     let undo0 = app.session.undo.len();
-                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
+                    app.import = Some(import::ImportTask::new(paths, params, undo0, false, &app.session).auto());
                 };
                 // listed every few seconds: quiet, no row in the activity stack
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {

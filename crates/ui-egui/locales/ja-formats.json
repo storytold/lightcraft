@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "開いたファイルのうち{n}個がまだ読み込まれていません。終了すると、これらの読み込み要求は破棄されます。",
+  "File {n} in the open request is not a file URL.": "開く要求のファイル{n}はファイルURLではありません。"
 }

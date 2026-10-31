@@ -64,16 +64,27 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         return true;
     }
     // before the library is touched: a Cancel here keeps working with it
-    let running = app.session.activity.running_cancellable();
+    let mut running = app.session.activity.running_cancellable();
+    let queued = crate::import::pending_document_files(app);
+    running.retain(|task| task.kind != crate::import::DOCUMENT_OPEN_ACTIVITY);
+    let mut warnings = Vec::new();
+    if queued != 0 {
+        warnings.push(if queued == 1 {
+            crate::i18n::tr("1 file you opened hasn't been imported yet. Quitting discards this request.").to_string()
+        } else {
+            crate::i18n::tr_format!("{n} files you opened haven't been imported yet. Quitting discards these requests.", n = queued)
+        });
+    }
     let mut names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>();
-    // an import handed its files this tick (files that waited for a library, #2779) is listed only
-    // from its first tick on, and files still waiting will be imported too
     let unlisted = app.import.as_ref().is_some_and(|t| !t.listed()) || !app.waiting_import.files.is_empty();
     if unlisted && !running.iter().any(|t| t.kind == "import") {
         names.push(crate::i18n::tr("Importing"));
     }
     if !names.is_empty() {
-        app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(names.len(), &names.join(", "))));
+        warnings.push(tasks_message(names.len(), &names.join(", ")));
+    }
+    if !warnings.is_empty() {
+        app.quit_prompt = Some(QuitPrompt::Tasks(warnings.join("\n\n")));
         return false;
     }
     if app.session.unsaved().is_none() {
@@ -537,8 +548,8 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
 /// notice is removed when acknowledged. Returns without drawing when no prompt is up.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
-        let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
-        let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, &buttons, &mut app.notice_input) else {
+        let buttons = [("quitAnyway", "Quit", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
+        let Some(i) = window(ctx, "quit-tasks", "Quit LightCraft?", &text, &buttons, &mut app.notice_input) else {
             return;
         };
         app.quit_prompt = None;

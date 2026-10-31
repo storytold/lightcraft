@@ -2234,5 +2234,15 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 arquivo que você abriu ainda não foi importado. Ao sair, essa solicitação será descartada.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Uma importação já está em andamento. Aguarde a conclusão e clique em Importar novamente.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Conclua ou cancele a importação e feche Importar fotos antes de trocar de biblioteca. As fotos na fila serão abertas nesta biblioteca.",
+  "Quit LightCraft?": "Sair do LightCraft?",
+  "Waiting to import opened files": "Aguardando a importação dos arquivos abertos",
+  "The open request contains a path that is not absolute.": "A solicitação de abertura contém um caminho que não é absoluto.",
+  "This file's name cannot be represented as UTF-8.": "O nome deste arquivo não pode ser representado em UTF-8.",
+  "The open request contains no files.": "A solicitação de abertura não contém arquivos.",
+  "The open request contains an invalid number of files.": "A solicitação de abertura contém um número inválido de arquivos.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "A biblioteca mudou antes que estas fotos pudessem ser importadas. Abra as fotos novamente na biblioteca desejada."
 }
