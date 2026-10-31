@@ -31,7 +31,7 @@ impl DateTime {
         // chrono rejects impossible days (leap years and all); the time is checked
         // by hand so a leap second (`second == 60`) stays acceptable.
         let day_ok = self.year > 0 && chrono::NaiveDate::from_ymd_opt(i32::from(self.year), u32::from(self.month), u32::from(self.day)).is_some();
-        let ok = day_ok && self.hour < 24 && self.minute < 60 && self.second < 61 && self.offset_minutes.is_none_or(|o| o.abs() <= 18 * 60);
+        let ok = day_ok && self.hour < 24 && self.minute < 60 && self.second < 61 && self.offset_minutes.is_none_or(|o| o.unsigned_abs() <= 18 * 60);
         ok.then_some(self)
     }
 
@@ -135,7 +135,9 @@ impl DateTime {
         }
         if let Some(o) = self.offset_minutes {
             let sign = if o < 0 { '-' } else { '+' };
-            s += &format!("{sign}{:02}:{:02}", o.abs() / 60, o.abs() % 60);
+            // `unsigned_abs`: `i16::MIN`'s `.abs()` overflows the type (a debug panic, and a
+            // negative offset rendered as `--546:-8` in release).
+            s += &format!("{sign}{:02}:{:02}", o.unsigned_abs() / 60, o.unsigned_abs() % 60);
         }
         s
     }
@@ -187,6 +189,18 @@ mod tests {
         assert_eq!(DateTime::parse_offset("+0930"), Some(570));
         assert_eq!(DateTime::parse_offset("   :  "), None);
         assert_eq!(DateTime::parse_offset("+99:00"), None);
+    }
+
+    #[test]
+    fn an_i16_min_offset_never_overflows_abs() {
+        // `DateTime` deserializes from file data with public fields, so an offset of
+        // `i16::MIN` reaches `valid` and `to_iso`: `abs()` on it overflows the type.
+        let d = DateTime { year: 2024, month: 6, day: 1, hour: 13, minute: 45, second: 59, millis: 0, offset_minutes: Some(-32768) };
+        assert!(d.valid().is_none(), "an offset past ±18 h is not a real offset");
+        assert_eq!(d.to_iso(), "2024-06-01T13:45:59-546:08");
+        let inside = DateTime { year: 2024, month: 6, day: 1, hour: 0, minute: 0, second: 0, millis: 0, offset_minutes: Some(-330) };
+        assert!(inside.valid().is_some());
+        assert_eq!(inside.to_iso(), "2024-06-01T00:00:00-05:30");
     }
 
     #[test]
