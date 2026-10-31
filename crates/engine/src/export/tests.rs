@@ -1381,7 +1381,7 @@ fn lanes_batch(
         seen.push((i, name.to_string()));
         i < cancel_at
     };
-    let files = run_batch_with(items, &mut Placer::new(o, &to, &mut write, &|_| false, stop_on_error), &mut progress, lanes);
+    let files = run_batch_with(items, &mut Placer::new(o, &to, &mut write, &|_| false, stop_on_error), &mut progress, lanes, None);
     (files, written, seen)
 }
 
@@ -1476,8 +1476,9 @@ fn a_panic_in_progress_does_not_hang_the_lanes() {
             assert!(calls < 2, "progress panics on its second call");
             true
         };
-        let r =
-            crate::guard::catch("test batch", || run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2));
+        let r = crate::guard::catch("test batch", || {
+            run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2, None)
+        });
         tx.send(r.and_then(|r| r)).ok();
     });
     let r = rx.recv_timeout(std::time::Duration::from_secs(60));
