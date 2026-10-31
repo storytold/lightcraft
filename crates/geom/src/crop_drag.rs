@@ -32,6 +32,7 @@ pub enum CropHandle {
 impl CropHandle {
     /// The overlay's numbering: 0..3 corners (clockwise from top-left), 4..7 edges (top, right,
     /// bottom, left), 8 = move.
+    #[must_use]
     pub fn from_index(i: u8) -> Option<CropHandle> {
         Some(match i {
             0 => CropHandle::TopLeft,
@@ -48,6 +49,7 @@ impl CropHandle {
     }
 
     /// Parse a command-parameter name (`"topLeft"`, `"top"`, `"move"`, …).
+    #[must_use]
     pub fn from_name(n: &str) -> Option<CropHandle> {
         Some(match n {
             "topLeft" => CropHandle::TopLeft,
@@ -72,6 +74,12 @@ impl CropHandle {
 /// - the edges opposite the handle stay where they were (a move keeps the size);
 /// - with `aspect`, the frame keeps that shape on every handle (when `start` had it);
 /// - the drag stops at the image edge instead of pushing the frame around, and slides along it.
+#[must_use]
+#[expect(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    reason = "The crop-drag state machine keeps its shared geometric state together and uses conventional coordinate notation."
+)]
 pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: Point, w: f64, h: f64, aspect: Option<f64>) -> CropGeometry {
     let sane = |v: f64| v.is_finite();
     let r0 = start.rect;
@@ -113,15 +121,15 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                 cur.translate(Vec2::new(ax * t, ay * t))
             };
             // straightened, go to the nearest place that fits, so the frame slides along tilted edges (#2299)
-            let nearest = if base.angle != 0.0 {
+            let nearest = if base.angle == 0.0 {
+                None
+            } else {
                 let from = |r: Rect| {
                     let corners = r.corners().map(|c| (c, Vec2::new(1.0, 1.0)));
                     nearest_offset(&corners, &[], base.angle, w, h, Vec2::new(dx, dy)).map(|v| r.translate(v)).filter(|r| feasible(*r))
                 };
                 // a frame at the tolerance's edge on opposite sides moves only once it is inside it
                 from(sr).or_else(|| shrunk_inside(sr, base.angle, w, h).and_then(from))
-            } else {
-                None
             };
             match nearest {
                 Some(r) => r,
@@ -171,7 +179,7 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                     let (ax, sx, ex) = if mx0 { (sr.x1, -1.0, sr.x0) } else { (sr.x0, 1.0, sr.x1) };
                     let (ay, sy, ey) = if my0 { (sr.y1, -1.0, sr.y0) } else { (sr.y0, 1.0, sr.y1) };
                     let (wx, wy) = (sx * (ex + dx - ax), sy * (ey + dy - ay));
-                    let nw = ((wx + wy * a) / 2.0).max(min_w);
+                    let nw = f64::midpoint(wx, wy * a).max(min_w);
                     (nw, Box::new(move |nw, _| corner_rect(ax, sx, ay, sy, nw, a)))
                 }
             };
@@ -180,6 +188,8 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
             let extent = if matches!(hd, CropHandle::Top | CropHandle::Bottom) { w } else { h };
             // Frame of width `n`, centred on the anchored edge if it fits, else slid the least distance.
             let place = |n: f64| -> Option<Rect> {
+                const STEPS: u32 = 128;
+
                 let at = |o: f64| build(n, o);
                 if feasible(at(0.0)) {
                     return Some(at(0.0));
@@ -187,16 +197,15 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                 if !slides {
                     return None;
                 }
-                const STEPS: u32 = 128;
-                let step = extent / STEPS as f64;
+                let step = extent / f64::from(STEPS);
                 for k in 1..=STEPS {
                     for sign in [1.0, -1.0] {
-                        let hi = sign * k as f64 * step;
+                        let hi = sign * f64::from(k) * step;
                         if feasible(at(hi)) {
                             // closest feasible offset: bisect between the last infeasible and this one
-                            let (mut bad, mut good) = (sign * (k - 1) as f64 * step, hi);
+                            let (mut bad, mut good) = (sign * f64::from(k - 1) * step, hi);
                             for _ in 0..40 {
-                                let mid = (bad + good) / 2.0;
+                                let mid = f64::midpoint(bad, good);
                                 if feasible(at(mid)) {
                                     good = mid;
                                 } else {
@@ -309,7 +318,7 @@ fn clip_half_plane(poly: &[Vec2], n: Vec2, b: f64) -> Vec<Vec2> {
 
 /// Which sides a handle moves: (left, right, top, bottom).
 fn sides(h: CropHandle) -> (bool, bool, bool, bool) {
-    use CropHandle::*;
+    use CropHandle::{Bottom, BottomLeft, BottomRight, Left, Right, Top, TopLeft, TopRight};
     (
         matches!(h, TopLeft | BottomLeft | Left),
         matches!(h, TopRight | BottomRight | Right),
@@ -349,7 +358,7 @@ fn bisect_range(lo: f64, hi: f64, ok: impl Fn(f64) -> bool) -> f64 {
     }
     let (mut good, mut bad) = (lo, hi);
     for _ in 0..48 {
-        let mid = (good + bad) / 2.0;
+        let mid = f64::midpoint(good, bad);
         if ok(mid) {
             good = mid;
         } else {
