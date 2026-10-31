@@ -56,10 +56,16 @@ pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
 /// None with `LIGHTCRAFT_NO_PREFS` (tests, scripts), so those runs don't rotate away the user's logs.
 pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
-    if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
+    log_dir_with(|name| std::env::var_os(name), config_dir)
+}
+
+/// [`log_dir`] with the environment and the settings folder passed in (`config` is asked only
+/// when the logs are kept).
+fn log_dir_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, config: impl FnOnce() -> Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    if env("LIGHTCRAFT_NO_PREFS").is_some() {
         return None;
     }
-    config_dir().map(|d| d.join("logs"))
+    config().map(|d| d.join("logs"))
 }
 
 /// The control port `value` names; a value that isn't a port is logged and ignored (`what` is
@@ -73,10 +79,12 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
     port
 }
 
-/// An isolated profile keeps the emergency crash log with its other app data. With no
-/// override (or an empty override), retain the historical system-temp location.
-pub(crate) fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: std::path::PathBuf) -> std::path::PathBuf {
-    env("LIGHTCRAFT_CONFIG_DIR").filter(|value| !value.is_empty()).map(std::path::PathBuf::from).unwrap_or(temp).join("lightcraft-panics.log")
+/// The emergency crash log, `lightcraft-panics.log` beside the other logs in the user's own
+/// settings folder (an isolated profile's with `LIGHTCRAFT_CONFIG_DIR`). Never the shared temp
+/// folder, where another user on the machine could create the file first, read it, or point it
+/// at one of the user's files (issue #2572). `None` (standard error only) where no logs are kept.
+pub(crate) fn panic_log_path() -> Option<std::path::PathBuf> {
+    log_dir().map(|d| d.join("lightcraft-panics.log"))
 }
 
 /// What to tell the user when LightCraft stopped while running (`error`), and why when the GPU
@@ -128,11 +136,14 @@ pub(crate) fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
 mod config_path_tests {
     use super::*;
 
+    /// Issue #2572: the logs, the panic log among them, go to the settings folder (an isolated
+    /// profile's too), and nowhere when no logs are kept; no fallback to the shared temp folder.
     #[test]
-    fn config_override_keeps_panic_log_in_isolated_profile() {
-        let temp = std::path::PathBuf::from("temp");
-        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone()), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone()), temp.join("lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone()), temp.join("lightcraft-panics.log"));
+    fn logs_stay_in_the_settings_folder() {
+        let no_env = |_: &str| None;
+        assert_eq!(log_dir_with(no_env, || Some("isolated".into())), Some(std::path::PathBuf::from("isolated/logs")));
+        assert_eq!(log_dir_with(no_env, || None), None);
+        let no_prefs = |name: &str| (name == "LIGHTCRAFT_NO_PREFS").then(|| "1".into());
+        assert_eq!(log_dir_with(no_prefs, || panic!("the settings folder isn't asked for")), None);
     }
 }
