@@ -23,6 +23,9 @@ pub(super) const GPU_MAX_FALLBACKS: usize = 3;
 /// The file beside a model while the graphics card is set up for it (see [`set_up_card`]).
 pub(crate) const GPU_SETUP_MARKER: &str = "gpu-setup.marker";
 
+/// The file beside a model while the Neural Engine is set up for it (the same guard, see `ane.rs`).
+pub(crate) const ANE_SETUP_MARKER: &str = "ane-setup.marker";
+
 /// Why the card is not tried when a set-up marker is found.
 #[cfg(feature = "denoise")]
 pub(super) const GPU_CRASHED: &str = "LightCraft closed while it was setting up the graphics card for AI Denoise last time";
@@ -91,7 +94,10 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
         .name("denoise-gpu-setup".into())
         .stack_size(STACK)
         .spawn(move || {
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(card)).unwrap_or_else(|_| Err("the GPU runner gave up".into()));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(card)).unwrap_or_else(|p| {
+                log::error!("denoise: the set-up of an accelerator panicked: {}", panic_text(&*p));
+                Err("the GPU runner gave up".into())
+            });
             drop(ended);
             let _ = tx.send(r);
         })
@@ -104,10 +110,20 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
     }
 }
 
+/// What a caught panic said, for the log (a message that says only "gave up" would hide the cause).
+#[cfg(feature = "denoise")]
+pub(super) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".into())
+}
+
 /// The card's time for one tile once it is warm: the fastest of up to three runs, stopping after about two seconds (a
 /// slow card is slow enough to tell at once).
 #[cfg(feature = "denoise")]
-fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
+pub(super) fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
     if runner.run(input).is_err() {
         return f64::INFINITY;
     }

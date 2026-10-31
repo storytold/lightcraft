@@ -329,7 +329,13 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
     heading(ui, t, "Speed");
     let current = list["runOn"].as_str().unwrap_or("auto").to_string();
     let mut run_on = current.as_str();
-    let options = [("auto", "Automatic"), ("gpu", "Graphics card"), ("cpu", "Processor")];
+    let mut options = vec![("auto", "Automatic"), ("gpu", "Graphics card")];
+    // the Neural Engine is offered where there is one (Apple silicon)
+    let neural_engine = list["neuralEngine"] == true;
+    if neural_engine {
+        options.push(("ane", "Neural Engine"));
+    }
+    options.push(("cpu", "Processor"));
     if ui.horizontal(|ui| choices(ui, "denoiseRunOn", &options, &mut run_on)).inner {
         let _ = app.run("denoise.settings", json!({"runOn": run_on}));
         app.caches.denoise.epoch += 1;
@@ -337,12 +343,24 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
     hint(
         ui,
         t,
-        "Automatic uses the graphics card where it is faster than the processor: both are timed on this computer the first time a photo is made.",
+        if neural_engine {
+            "Automatic uses the Neural Engine or the graphics card, whichever is faster than the processor: they are timed on this computer the first time a photo is made."
+        } else {
+            "Automatic uses the graphics card where it is faster than the processor: both are timed on this computer the first time a photo is made."
+        },
     );
+    if neural_engine {
+        hint(ui, t, "The Neural Engine is the chip Apple made for this kind of work: much faster here, and it computes in 16-bit numbers.");
+    }
     hint(ui, t, &device_line(&status["device"], run_on));
     if run_on != "cpu" && status["device"]["retry"] == true {
-        let r = ui.small_button(crate::i18n::tr("Try the graphics card again"));
-        register(ui, "denoise:retryGpu", r.rect);
+        // the device whose failure a retry may cure is the one offered again: the Neural Engine when its own failure is
+        // retryable (the status says so), else the card
+        let neural = status["device"]["neuralEngineRetry"] == true;
+        let (label, id) =
+            if neural { ("Try the Neural Engine again", "denoise:retryNeuralEngine") } else { ("Try the graphics card again", "denoise:retryGpu") };
+        let r = ui.small_button(crate::i18n::tr(label));
+        register(ui, id, r.rect);
         if r.clicked() {
             // choosing where it runs, even the same again, forgets the failed set-up
             let _ = app.run("denoise.settings", json!({"runOn": run_on}));
@@ -446,6 +464,7 @@ fn device_line(d: &Value, run_on: &str) -> String {
     match d["kind"].as_str() {
         _ if run_on == "cpu" => tr("The processor does the work.").into(),
         Some("gpu") => tr_format!("Running on {}.", d["adapter"].as_str().unwrap_or(tr("the graphics card"))),
+        Some("ane") => tr_format!("Running on {}.", d["adapter"].as_str().unwrap_or("the Neural Engine")),
         Some("cpu") => {
             tr_format!("Running on the processor: {}.", tr(d["reason"].as_str().unwrap_or("the graphics card is not used")).trim_end_matches('.'))
         }

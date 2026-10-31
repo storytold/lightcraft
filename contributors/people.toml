@@ -82,3 +82,8 @@ sync_github_name = true
 [people.Peaperfish]
 real_name = "Yule Wang"
 display_name = "Brian Wang"
+
+[people.fvalle1]
+real_name = "Filippo Valle"
+display_name = "Filippo Valle"
+sync_github_name = false
