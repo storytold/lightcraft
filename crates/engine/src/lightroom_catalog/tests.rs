@@ -157,6 +157,254 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert!(s.catalog.albums().next().is_none());
     assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
 }
+/// A library photo at `path`, already committed.
+fn library_photo(s: &mut crate::Session, path: &str, edit: impl FnOnce(&mut Photo)) -> PhotoId {
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: path.into() }, "a.ARW", "ARW", 20, 10, "before");
+    p.content_hash = Some("same-bytes".into());
+    edit(&mut p);
+    s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    id
+}
+/// A catalog photo whose file has the same bytes as a library photo in Recently Deleted (or a
+/// virtual copy) is a new record of its own: it was counted as imported but landed in Recently
+/// Deleted (or became a "copy" of nothing it was copied from), so a large import into a library
+/// with a trash went missing photo by photo (#2589).
+#[test]
+fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() {
+    let trashed: fn(&mut Photo) = |p| p.deleted = true;
+    let virtual_copy: fn(&mut Photo) = |p| {
+        p.copy_of = Some(PhotoId(999));
+        p.copy_name = Some("Copy 1".into());
+    };
+    for (case, edit) in [("trashed", trashed), ("virtual copy", virtual_copy)] {
+        let mut s = crate::Session::new();
+        let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| {
+            edit(p);
+            // the other photo's own state, which the new record must not inherit
+            let mut d = (*p.develop).clone();
+            d.light.shadows = 77.0;
+            p.develop = std::sync::Arc::new(d);
+            p.edited = Some("earlier".into());
+            p.history.push(lightcraft_catalog::HistoryStep { label: "Other photo's edit".into(), settings: p.develop.clone() });
+            p.versions.push(lightcraft_catalog::Version {
+                name: "Other photo's version".into(),
+                created: "before".into(),
+                settings: p.develop.clone(),
+                auto: false,
+            });
+            p.meta.title = "Other photo's title".into();
+            p.meta.keywords = vec!["other-photo".into()];
+            p.local_baseline = Some(7);
+            // what the bytes determine is shared
+            p.meta.camera = "Same Camera".into();
+            p.file_size = 4096;
+        });
+        let mut data = sample();
+        data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+        let files = crate::import::ImportReport {
+            duplicates: vec![crate::import::Duplicate {
+                path: "/missing/test.ARW".into(),
+                existing: Some(other.0),
+                reason: "content",
+                existing_deleted: case == "trashed",
+                // what the file itself carries
+                file: Some(Box::new(crate::import::FileFacts {
+                    meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
+                    captured: None,
+                })),
+            }],
+            ..Default::default()
+        };
+        let undo0 = s.undo.len();
+        let r = apply_prepared(
+            &mut s,
+            data,
+            ApplyPrepared {
+                update_existing: false,
+                files,
+                index: &mut ImportIndex::default(),
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report;
+        assert_eq!(r["imported"], 1, "{case}: {r}");
+        assert_eq!(r["inRecentlyDeleted"], 0, "{case}: {r}");
+        let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+        assert_ne!(new.id, other, "{case}");
+        assert!(!new.deleted, "{case}: the new record must not be in Recently Deleted");
+        assert_eq!((new.copy_of, new.copy_name.as_deref()), (None, None), "{case}: the new record is no virtual copy");
+        assert_ne!(new.imported, "before", "{case}: imported now, not when the other photo was");
+        assert_eq!(new.rating, 5, "{case}: the catalog's own metadata applies");
+        assert_ne!(new.develop.light.shadows, 77.0, "{case}: no edits from the other photo");
+        assert!(new.history.iter().all(|h| h.label != "Other photo's edit"), "{case}: no history from the other photo");
+        assert!(new.versions.is_empty(), "{case}: no versions from the other photo");
+        assert_ne!(new.meta.title, "Other photo's title", "{case}");
+        assert!(!new.meta.keywords.iter().any(|k| k == "other-photo"), "{case}");
+        assert_eq!(new.local_baseline, None, "{case}");
+        assert_eq!((new.meta.camera.as_str(), new.file_size), ("Same Camera", 4096), "{case}: what the bytes determine is kept");
+        assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{case}");
+        assert_eq!(s.catalog.photo(other).unwrap().deleted, case == "trashed", "{case}: the other photo is left as it was");
+    }
+}
+/// A content duplicate starts from the settings a file import gives a raw (its as-shot white
+/// balance and embedded lens corrections), as its file would on its own, before the catalog's
+/// settings go on top; not from the generic defaults (#2589).
+#[test]
+fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.DNG", |p| {
+        p.deleted = true;
+        p.format = "DNG".into();
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        p.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+    });
+    let mut data = sample();
+    data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+    // a catalog row with no develop settings of its own
+    data.photos[0].settings.clear();
+    let files = crate::import::ImportReport {
+        duplicates: vec![crate::import::Duplicate {
+            path: "/missing/test.ARW".into(),
+            existing: Some(other.0),
+            reason: "content",
+            existing_deleted: true,
+            file: None,
+        }],
+        ..Default::default()
+    };
+    let undo0 = s.undo.len();
+    let r = apply_prepared(
+        &mut s,
+        data,
+        ApplyPrepared {
+            update_existing: false,
+            files,
+            index: &mut ImportIndex::default(),
+            archive_path: None,
+            missing_sources: &HashSet::new(),
+            undo0,
+        },
+    )
+    .unwrap()
+    .report;
+    let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+    assert_eq!(*new.develop, new.camera_defaults(), "{r}");
+    assert_eq!((new.develop.wb.temp, new.develop.wb.tint), (5200.0, 4.0), "the file's as-shot white balance");
+    assert!(new.develop.optics.lens_profile, "the file's embedded lens corrections are on");
+}
+/// A content duplicate keeps the metadata its file carries (copyright, rights, creator) and the
+/// capture time its file gives it, as a file import of it would, when the catalog doesn't restate
+/// them; it reads the file's, not the other photo's, which a person may have edited (#2589).
+#[test]
+fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-rights-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| {
+        p.deleted = true;
+        // edited on the other record after its import
+        p.meta.copyright = "Other photo's notice".into();
+        p.meta.creator = "Other photo's creator".into();
+        p.meta.gps = Some((1.0, 2.0));
+        p.captured = Some("1999-12-31T23:00:00".into());
+    });
+    let file_meta = lightcraft_catalog::Meta {
+        camera: "Same Camera".into(),
+        copyright: "© Jo Example".into(),
+        copyright_status: lightcraft_catalog::CopyrightStatus::Copyrighted,
+        usage_terms: "No reuse".into(),
+        creator: "Jo Example".into(),
+        ..Default::default()
+    };
+    let probed = file_meta.clone();
+    s.media.file_probe = Some(Arc::new(move |_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            meta: probed.clone(),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{r}");
+    assert_eq!(new.rating, 5, "the catalog's own metadata applies: {r}");
+    let m = &new.meta;
+    assert_eq!(
+        (m.copyright.as_str(), m.copyright_status, m.usage_terms.as_str(), m.creator.as_str(), m.camera.as_str()),
+        ("© Jo Example", file_meta.copyright_status, "No reuse", "Jo Example", "Same Camera"),
+        "the file's own metadata: {r}"
+    );
+    assert_eq!(m.gps, None, "nothing from the other photo's record");
+    // the catalog row has no capture time: the file's, not the other photo's edited one
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
+/// the import was set up to do (a Lightroom import doesn't restore, see `OnDeleted`), and the report
+/// counts it so the photos don't go missing unexplained (#2589). A new virtual copy of it is
+/// imported, not trashed with its master.
+#[test]
+fn a_catalog_photo_matching_a_trashed_record_stays_there_and_is_counted() {
+    let mut s = crate::Session::new();
+    let trashed = library_photo(&mut s, "/missing/test.ARW", |p| p.deleted = true);
+    let r = apply(&mut s, sample(), false).unwrap();
+    assert_eq!(r["mapping"]["1"], trashed.0, "{r}");
+    assert!(s.catalog.photo(trashed).unwrap().deleted, "the photo stays in Recently Deleted");
+    assert_eq!(r["inRecentlyDeleted"], 1, "{r}");
+    let copy = s.catalog.photos().find(|p| p.copy_of == Some(trashed)).unwrap();
+    assert!(!copy.deleted, "the new virtual copy is imported, not trashed");
+    assert_eq!(r["imported"], 1, "only the copy was added: {r}");
+}
+/// Importing the catalog again after its master and virtual copy were both moved to Recently
+/// Deleted matches each through the import index: each is counted once, and neither is restored.
+#[test]
+fn a_reimport_counts_each_trashed_match_once() {
+    let mut s = crate::Session::new();
+    // one import index across both imports, as a library on disk keeps in Interop/
+    let mut index = ImportIndex::default();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        apply_prepared(
+            s,
+            sample(),
+            ApplyPrepared {
+                update_existing: false,
+                files: Default::default(),
+                index: &mut index,
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report
+    };
+    let first = import(&mut s);
+    let ids: Vec<PhotoId> = ["1", "2"].iter().map(|k| PhotoId(first["mapping"][k].as_u64().unwrap())).collect();
+    for id in &ids {
+        s.commit("Delete", Op::SetDeleted { id: *id, deleted: true }).unwrap();
+    }
+    let r = import(&mut s);
+    assert_eq!(r["mapping"], first["mapping"], "{r}");
+    assert_eq!(r["inRecentlyDeleted"], 2, "{r}");
+    assert_eq!(r["imported"], 0, "{r}");
+    assert!(ids.iter().all(|id| s.catalog.photo(*id).unwrap().deleted));
+}
 #[test]
 fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     let mut s = crate::Session::new();
@@ -173,8 +421,15 @@ fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     assert!(apply(&mut s, cyclic, false).is_err());
     assert_eq!(s.catalog.to_snapshot(), before);
     assert!(
-        mapped_settings(&format!("{}0{}", "{".repeat(1000), "}".repeat(1000)), crate::crs::Target::RawAbsolute, 1.0, Orientation::Normal, 1.5)
-            .is_err()
+        mapped_settings(
+            &format!("{}0{}", "{".repeat(1000), "}".repeat(1000)),
+            crate::crs::Target::RawAbsolute,
+            1.0,
+            Orientation::Normal,
+            1.5,
+            Orientation::Normal
+        )
+        .is_err()
     );
 }
 #[test]
@@ -191,6 +446,7 @@ fn compressed_xmp_is_bounded_and_settings_are_data_only() {
         1.5,
         Orientation::Normal,
         1.5,
+        Orientation::Normal,
     )
     .unwrap();
     assert_eq!(partial["light"]["exposure"], 0.75);
@@ -202,11 +458,11 @@ fn custom_white_balance_on_relative_wb_raws_is_not_read_as_kelvin() {
     // relative to its as-shot look the edit stays As Shot and is reported; a DNG keeps the Kelvin
     let settings =
         "s = { WhiteBalance = \"Custom\", Temperature = 3578, Tint = -5, CustomTemperature = 3578.95, CustomTint = -5, Exposure2012 = 0.5 }";
-    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert_eq!(partial["wb"], json!({"mode": "asShot"}), "{partial}");
     assert_eq!(partial["light"]["exposure"], 0.5);
     assert!(unknown.iter().any(|k| k.starts_with("Temperature, Tint")), "{unknown:?}");
-    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert_eq!(
         (partial["wb"]["mode"].as_str(), partial["wb"]["temp"].as_f64(), partial["wb"]["tint"].as_f64()),
         (Some("custom"), Some(3578.0), Some(-5.0))
@@ -223,6 +479,7 @@ fn catalog_crops_without_has_crop_are_imported() {
         1.5,
         Orientation::Normal,
         1.5,
+        Orientation::Normal,
     )
     .unwrap();
     let crop = &partial["crop"]["geometry"];
@@ -233,11 +490,13 @@ fn catalog_crops_without_has_crop_are_imported() {
     assert_eq!(crop["angle"], 0.0);
     assert!(!unknown.iter().any(|k| k.starts_with("CropLeft")), "{unknown:?}");
     // an angle alone still means a crop (Lightroom's angle turns the other way to LightCraft's)
-    let (partial, unknown) = mapped_settings("s = { CropAngle = -1.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, unknown) =
+        mapped_settings("s = { CropAngle = -1.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert_eq!(partial["crop"]["geometry"]["angle"], 1.5);
     assert!(!unknown.iter().any(|k| k.starts_with("CropAngle")), "{unknown:?}");
     // no crop fields: the crop stays untouched
-    let (partial, _) = mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, _) =
+        mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert!(partial.get("crop").is_none());
 }
 
@@ -261,7 +520,7 @@ fn lightroom_orientation_codes() {
 fn catalog_crops_follow_the_photo_orientation() {
     let crop = |o: Orientation| {
         let settings = "s = { CropLeft = 0.1, CropRight = 0.6, CropTop = 0.2, CropBottom = 0.9 }";
-        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 1.5).unwrap();
+        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
         let g = &partial["crop"]["geometry"];
         let r = &g["rect"];
         [r["x0"].as_f64(), r["y0"].as_f64(), r["x1"].as_f64(), r["y1"].as_f64(), g["angle"].as_f64()].map(|v| (v.unwrap() * 1e9).round() / 1e9)
@@ -274,14 +533,72 @@ fn catalog_crops_follow_the_photo_orientation() {
     assert_eq!(crop(Orientation::FlipH), [0.4, 0.2, 0.9, 0.9, 0.0]);
     // a mirror turns the straighten the other way
     let angle = |o: Orientation| {
-        let (partial, _) = mapped_settings("s = { CropAngle = 2 }", crate::crs::Target::RawAbsolute, 1.5, o, 1.5).unwrap();
+        let (partial, _) = mapped_settings("s = { CropAngle = 2 }", crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
         partial["crop"]["geometry"]["angle"].as_f64().unwrap()
     };
     assert_eq!(angle(Orientation::Rotate90), -2.0);
     assert_eq!(angle(Orientation::FlipH), 2.0);
     // no crop: nothing to orient
-    let (partial, _) = mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate90, 1.5).unwrap();
+    let (partial, _) =
+        mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate90, 1.5, Orientation::Normal).unwrap();
     assert!(partial.get("crop").is_none());
+}
+
+#[test]
+fn catalog_masks_follow_the_photo_orientation() {
+    // #1806, EMY_9996 (EXIF 8, shown a quarter turn counter-clockwise): a horizon gradient along
+    // the stored image's x axis runs along the shown photo's y axis
+    let s = r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = -0.1, CorrectionMasks = {
+        { What = "Mask/Gradient", MaskValue = 1, ZeroX = 0.362544, ZeroY = 0.481093, FullX = 0.451639, FullY = 0.480645 } } } } }"#;
+    let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate270, 1.5, Orientation::Normal).unwrap();
+    let g = &partial["masks"][0]["components"][0]["shape"];
+    let close = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-9;
+    assert!(close(&g["start"]["x"], 0.480645) && close(&g["start"]["y"], 1.0 - 0.451639), "{g}");
+    assert!(close(&g["end"]["x"], 0.481093) && close(&g["end"]["y"], 1.0 - 0.362544), "{g}");
+
+    let masks = |o: Orientation| {
+        let s = r#"s = {
+            MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+                { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 },
+                { What = "Mask/CircularGradient", Left = 0, Right = 0.2, Top = 0.1, Bottom = 0.3, Angle = 10, Feather = 50, Version = 2, Flipped = true },
+                { What = "Mask/Paint", Radius = 0.05, MaskValue = 1, Dabs = { "d 0.1 0.2", "d 0.3 0.6" } } } } } }"#;
+        let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
+        let c = &partial["masks"][0]["components"];
+        let (linear, radial, brush) = (&c[0]["shape"], &c[1]["shape"], &c[2]["shape"]["strokes"][0]["points"]);
+        [
+            &linear["start"]["x"],
+            &linear["start"]["y"],
+            &linear["end"]["x"],
+            &linear["end"]["y"],
+            &radial["center"]["x"],
+            &radial["center"]["y"],
+            &radial["rx"],
+            &radial["ry"],
+            &radial["angle"],
+            &brush[0]["x"],
+            &brush[0]["y"],
+            &brush[1]["x"],
+            &brush[1]["y"],
+        ]
+        .map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9)
+    };
+    // (x, y) of the stored image → (1 − y, x) a quarter turn clockwise, (y, 1 − x) counter-clockwise;
+    // a radial's radii (in long-edge units) swap with the axes, and a mirror turns its angle the
+    // other way
+    let r = (0.1, (0.1_f64 / 1.5 * 1e9).round() / 1e9);
+    assert_eq!(masks(Orientation::Normal), [0.1, 0.2, 0.3, 0.6, 0.1, 0.2, r.0, r.1, 10.0, 0.1, 0.2, 0.3, 0.6]);
+    assert_eq!(masks(Orientation::Rotate90), [0.8, 0.1, 0.4, 0.3, 0.8, 0.1, r.1, r.0, 10.0, 0.8, 0.1, 0.4, 0.3]);
+    assert_eq!(masks(Orientation::Rotate270), [0.2, 0.9, 0.6, 0.7, 0.2, 0.9, r.1, r.0, 10.0, 0.2, 0.9, 0.6, 0.7]);
+    assert_eq!(masks(Orientation::Rotate180), [0.9, 0.8, 0.7, 0.4, 0.9, 0.8, r.0, r.1, 10.0, 0.9, 0.8, 0.7, 0.4]);
+    assert_eq!(masks(Orientation::FlipH), [0.9, 0.2, 0.7, 0.6, 0.9, 0.2, r.0, r.1, -10.0, 0.9, 0.2, 0.7, 0.6]);
+    assert_eq!(masks(Orientation::Transpose), [0.2, 0.1, 0.6, 0.3, 0.2, 0.1, r.1, r.0, -10.0, 0.2, 0.1, 0.6, 0.3]);
+    // a photo already in the library has its shown size (portrait here), but Lightroom's edges are
+    // fractions of the stored image: a circle on a 3:2 stored image stays a circle
+    let s = r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+        { What = "Mask/CircularGradient", Left = 0.3, Right = 0.5, Top = 0.3, Bottom = 0.6, Version = 2, Flipped = true } } } } }"#;
+    let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.0 / 1.5, Orientation::Rotate90, 1.5, Orientation::Normal).unwrap();
+    let radial = &partial["masks"][0]["components"][0]["shape"];
+    assert!(close(&radial["rx"], 0.1) && close(&radial["ry"], 0.1), "{radial}");
 }
 
 /// The `crs` corners and angle Lightroom would store for LightCraft crop `g` on a stored image
@@ -306,7 +623,8 @@ fn straightened_catalog_crops_round_trip() {
     for o in [Orientation::Normal, Orientation::Rotate90, Orientation::Rotate270, Orientation::Rotate180, Orientation::FlipH] {
         for angle in [6.5, -6.5] {
             let g = CropGeometry { angle, ..g };
-            let (partial, _) = mapped_settings(&lightroom_crop(g, o, 1.5), crate::crs::Target::RawAbsolute, 1.5, o, 1.5).unwrap();
+            let (partial, _) =
+                mapped_settings(&lightroom_crop(g, o, 1.5), crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
             let got: CropGeometry = serde_json::from_value(partial["crop"]["geometry"].clone()).unwrap();
             let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
             assert!(
@@ -336,7 +654,7 @@ fn straightened_catalog_crops_match_lightroom_exports() {
             (6100.0, 9150.0),
         ),
     ] {
-        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 9504.0 / 6336.0).unwrap();
+        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 9504.0 / 6336.0, Orientation::Normal).unwrap();
         let r: Rect = serde_json::from_value(partial["crop"]["geometry"]["rect"].clone()).unwrap();
         let (ow, oh) = if o.swaps_axes() { (6336.0, 9504.0) } else { (9504.0, 6336.0) };
         let (w, h) = (r.width() * ow, r.height() * oh);
@@ -359,6 +677,87 @@ fn imported_crops_use_the_catalog_orientation() {
     assert_eq!(r, [0.1, 0.1, 0.8, 0.6]);
 }
 
+/// Masks only the catalog's XMP has (the develop row has none to replace them) are on the stored
+/// image too: on a vertical shot (`DA`) they turn like the row's, and a radial keeps its shape on
+/// the 2:1 stored image, also for a photo already in the library at its shown 10 × 20.
+#[test]
+fn catalog_xmp_masks_follow_the_photo_orientation() {
+    let mut data = sample();
+    data.photos.truncate(1);
+    data.photos[0].image.remove("masterImage");
+    data.photos[0].image.insert("orientation".into(), json!("DA"));
+    data.photos[0].image.insert("fileWidth".into(), json!(20));
+    data.photos[0].image.insert("fileHeight".into(), json!(10));
+    data.photos[0].settings = "s = { Exposure2012 = 0.5 }".into();
+    data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+ <crs:MaskGroupBasedCorrections><rdf:Seq>
+  <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="-0.25">
+   <crs:CorrectionMasks><rdf:Seq>
+    <rdf:li crs:What="Mask/Gradient" crs:FullX="0.1" crs:FullY="0.2" crs:ZeroX="0.3" crs:ZeroY="0.6"/>
+    <rdf:li crs:What="Mask/CircularGradient" crs:Left="0.3" crs:Right="0.5" crs:Top="0.3" crs:Bottom="0.6" crs:Flipped="true" crs:Version="2"/>
+   </rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:MaskGroupBasedCorrections>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        .into();
+    let mut s = crate::Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let shown = Photo::new(id, Source::File { path: "/missing/test.ARW".into() }, "test.ARW", "ARW", 10, 20, "before");
+    s.commit("Browse folder", Op::AddPhoto { photo: Box::new(shown) }).unwrap();
+    apply(&mut s, data, true).unwrap();
+    assert_eq!(s.catalog.len(), 1, "the catalog's photo is the one already in the library");
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.develop.light.exposure, 0.5, "the develop row is applied too");
+    let c = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"];
+    let (linear, radial) = (&c[0]["shape"], &c[1]["shape"]);
+    let r = [&linear["start"]["x"], &linear["start"]["y"], &linear["end"]["x"], &linear["end"]["y"], &radial["center"]["x"], &radial["center"]["y"]]
+        .map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+    // (x, y) → (y, 1 − x), a quarter turn counter-clockwise
+    assert_eq!(r, [0.2, 0.9, 0.6, 0.7, 0.45, 0.6], "{c}");
+    // 4 × 3 px of a 20 × 10 stored image, in long-edge units, with the axes swapped
+    let radii = [&radial["rx"], &radial["ry"]].map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+    assert_eq!(radii, [0.075, 0.1], "{radial}");
+}
+
+/// A photo already in the library keeps its Rotate Left / Right on update, so the catalog's masks
+/// go through it too: an upright (`AB`) photo turned right in LightCraft gets its gradient turned.
+#[test]
+fn updated_masks_follow_the_rotation_kept_from_the_library() {
+    let mut data = sample();
+    data.photos.truncate(1);
+    data.photos[0].image.remove("masterImage");
+    data.photos[0].image.insert("orientation".into(), json!("AB"));
+    data.photos[0].settings =
+        r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+        { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 } } } } }"#
+            .into();
+    data.photos[0].xmp = String::new();
+    let mut s = crate::Session::new();
+    apply(&mut s, data.clone(), false).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let turned = lightcraft_develop::DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
+    s.set_develop(id, turned, "Rotate Right").unwrap();
+    apply(&mut s, data, true).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.develop.orientation, Orientation::Rotate90, "the update keeps the photo's rotation");
+    let g = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"][0]["shape"];
+    let r = [&g["start"]["x"], &g["start"]["y"], &g["end"]["x"], &g["end"]["y"]].map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+    // (x, y) → (1 − y, x), a quarter turn clockwise
+    assert_eq!(r, [0.8, 0.1, 0.4, 0.3], "{g}");
+    // the catalog's orientation first, then the photo's own, for every pair
+    for a in 1..=8 {
+        for b in 1..=8 {
+            let (a, b) = (Orientation::from_exif(a), Orientation::from_exif(b));
+            for (x, y) in [(0.1, 0.2), (0.7, 0.4)] {
+                let (u, v) = a.map(x, y, 1.0, 1.0);
+                let ((p, q), (want_p, want_q)) = (in_photo_frame(a, b).map(x, y, 1.0, 1.0), b.map(u, v, 1.0, 1.0));
+                assert!((p - want_p).abs() < 1e-9 && (q - want_q).abs() < 1e-9, "{a:?} then {b:?}: ({p}, {q}) for ({want_p}, {want_q})");
+            }
+        }
+    }
+}
+
 #[test]
 fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     let mut data = sample();
@@ -374,8 +773,15 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     assert_eq!(p.develop.light.shadows, 65.0);
     assert_eq!(p.develop.light.blacks, -22.0);
     assert!(report["unmapped"]["2"].as_array().unwrap().iter().any(|v| v.as_str().is_some_and(|v| v.contains("Deferred"))));
-    let (partial, _) =
-        mapped_settings("s = { Exposure2012 = -5, Contrast2012 = -100 }", crate::crs::Target::RawAbsolute, 1.0, Orientation::Normal, 1.5).unwrap();
+    let (partial, _) = mapped_settings(
+        "s = { Exposure2012 = -5, Contrast2012 = -100 }",
+        crate::crs::Target::RawAbsolute,
+        1.0,
+        Orientation::Normal,
+        1.5,
+        Orientation::Normal,
+    )
+    .unwrap();
     assert_eq!(partial["light"]["exposure"], -5.0);
     assert_eq!(partial["light"]["contrast"], -100.0);
 }
@@ -546,6 +952,83 @@ fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlV
             vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
         ),
     ]
+}
+
+#[test]
+fn native_video_import_is_visible_in_video_filter() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-filter-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("videos.lrcat");
+    let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+    tables[2].2[2] = SqlValue::Text("clip.MOV".into());
+    tables[3].2[3] = SqlValue::Text("VIDEO".into());
+    std::fs::write(&path, native_catalog(&tables)).unwrap();
+    let mut s = crate::Session::new();
+    let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(id).unwrap().kind, lightcraft_catalog::MediaKind::Video);
+    s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+    assert_eq!(s.visible(), &[id]);
+    s.execute("library.filter", &json!({"kind": "image"})).unwrap();
+    assert!(s.visible().is_empty());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.is_empty());
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+    assert_eq!(s.visible(), &[id]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-reimport-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("videos.lrcat");
+    let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+    tables[2].2[2] = SqlValue::Text("clip.MOV".into());
+    tables[3].2[3] = SqlValue::Text("VIDEO".into());
+    std::fs::write(&path, native_catalog(&tables)).unwrap();
+    let mut s = crate::Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut photo =
+        Photo::new(id, Source::File { path: dir.join("Photos/clip.MOV").to_string_lossy().into() }, "clip.MOV", "VIDEO", 1920, 1080, "before");
+    photo.rating = 5;
+    photo.flag = Flag::Pick;
+    photo.file_size = 1234;
+    photo.content_hash = Some("existing-content".into());
+    s.commit("Previous import", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    let mut settings = lightcraft_develop::DevelopSettings::default();
+    settings.light.exposure = 0.75;
+    s.set_develop(id, settings, "Personal edit").unwrap();
+    let peer_id = s.catalog.alloc_photo_id();
+    let peer = Photo::new(peer_id, Source::File { path: "/missing/peer.jpg".into() }, "peer.jpg", "JPEG", 20, 10, "before");
+    s.commit("Peer", Op::AddPhoto { photo: Box::new(peer) }).unwrap();
+    let mut album = Album::new(s.catalog.alloc_album_id(), "Personal album");
+    album.photos = vec![id, peer_id];
+    s.commit("Album", Op::AddAlbum { album: album.clone() }).unwrap();
+    let stack = lightcraft_catalog::Stack { id: s.catalog.alloc_stack_id(), photos: vec![id, peer_id], collapsed: false };
+    s.commit("Stack", Op::AddStack { stack: stack.clone() }).unwrap();
+    let before = s.catalog.to_snapshot();
+    let mut expected = (**s.catalog.photo(id).unwrap()).clone();
+    expected.kind = lightcraft_catalog::MediaKind::Video;
+    s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+    assert!(s.visible().is_empty());
+    let result = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    assert_eq!(result["mapping"]["1"], id.0);
+    assert_eq!(result["imported"], 0);
+    assert_eq!(result["preservedExistingEdits"], 1);
+    assert_eq!(s.catalog.photo(id).unwrap().as_ref(), &expected);
+    assert_eq!(s.visible(), &[id]);
+    let after = s.catalog.to_snapshot();
+    assert_eq!(s.catalog.album(album.id), Some(&album));
+    assert_eq!(s.catalog.stack(stack.id), Some(&stack));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), before);
+    assert!(s.visible().is_empty());
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), after);
+    assert_eq!(s.visible(), &[id]);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

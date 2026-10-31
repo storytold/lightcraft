@@ -603,6 +603,13 @@ fn german_switches_via_menu_and_control_and_persists() {
     app.run("label.setNames", serde_json::json!({"names": {"red": "Color"}})).unwrap();
     let label = filter_label(&filter, &app.session.catalog);
     assert!(label.contains("Color") && !label.contains(&red) && label.contains(&blue), "{label}");
+    let filter = lightcraft_catalog::Filter { flags: vec![lightcraft_catalog::Flag::Pick, lightcraft_catalog::Flag::None], ..Default::default() };
+    let (flag, pick, reject, none) = (tr("Flag"), tr("pick"), tr("reject"), tr("none"));
+    assert_eq!(filter_label(&filter, &app.session.catalog), format!("{flag}: {pick} {or} {none}"));
+    let filter = lightcraft_catalog::Filter { flag: Some(lightcraft_catalog::Flag::Pick), ..filter };
+    assert_eq!(filter_label(&filter, &app.session.catalog), format!("{flag}: {pick}"));
+    let filter = lightcraft_catalog::Filter { flags: vec![lightcraft_catalog::Flag::Reject, lightcraft_catalog::Flag::None], ..filter };
+    assert_eq!(filter_label(&filter, &app.session.catalog), format!("{flag}: {pick} {and} ({reject} {or} {none})"));
     set_language(Locale::En);
 }
 
@@ -936,14 +943,40 @@ fn vietnamese_panels_dialogs_and_diacritics_paint_with_bundled_fonts() {
 }
 /// The messages each language lacks, which it shows in English. Never fails: `cargo xtask ci`
 /// runs it with `--nocapture`, so the list lands in the gate log. Plain messages are every key
-/// some catalog has plus the labels the UI passes to `tr` from tables (commands, controls, rule
-/// fields…); formats are every key some `*-formats.json` has plus every `tr_format!` message in
-/// the app's source. An empty translation counts as missing.
+/// some catalog has, every `tr("…")` literal in the app's source (`gaps.rs`, wrapped calls and
+/// `if`/`match` branches included, so a string no language has yet is listed too) and the
+/// labels the UI passes to `tr` from tables (commands, controls, rule fields…); formats are
+/// every key some `*-formats.json` has plus every `tr_format!` message in the app's source. An
+/// empty translation counts as missing.
 #[test]
 fn translation_gaps_report() {
     let notes = whats_new_lines();
     let messages: std::collections::BTreeSet<String> = plain_messages().into_iter().filter(|m| !notes.contains(&m.as_str())).collect();
-    let formats = format_messages();
+    println!("{}", gaps_text(&messages, &format_messages(), &notes));
+}
+
+/// A string only the source parsing finds (a call rustfmt wrapped, the branches of an `if` or a
+/// `match`) is in no catalog, and the report still lists it for every language.
+#[test]
+fn translation_gaps_report_lists_strings_no_catalog_has() {
+    let found = gaps::messages_in(
+        "fn f(m: u8) {\n    ui.label(crate::i18n::tr(\n        \"Only wrapped here\",\n    ));\n    \
+             ui.label(tr(if m == 0 { \"Only in an if\" } else { \"Only in an else\" }));\n    \
+             ui.label(tr(match m { 1 => \"Only in a match\", _ => \"Only in a last arm\" }));\n}\n",
+    );
+    assert_eq!(found.len(), 5, "{found:?}");
+    let text = gaps_text(&found, &Default::default(), &[]);
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        let line = text.lines().find(|line| line.starts_with(&format!("{}: ", language.code()))).expect("a line per language");
+        assert!(line.contains("5 messages"), "{line}");
+    }
+    for key in &found {
+        assert!(text.contains(&format!("{key:?}")), "{key}");
+    }
+}
+
+/// The report: the totals, then per language its counts and the lists.
+fn gaps_text(messages: &std::collections::BTreeSet<String>, formats: &std::collections::BTreeSet<String>, notes: &[&str]) -> String {
     let quoted = |list: &[&str]| list.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(", ");
     let mut out =
         format!("Translation gaps, shown in English ({} messages, {} formats, {} What's New lines):\n", messages.len(), formats.len(), notes.len());
@@ -967,11 +1000,12 @@ fn translation_gaps_report() {
             out.push_str(&format!("  formats: {}\n", quoted(&missing_formats)));
         }
     }
-    println!("{out}");
+    out
 }
 
 /// Every plain message: the keys of every catalog (but contextual entries, which a language adds
-/// only where it needs one) and the labels the UI translates from tables.
+/// only where it needs one), the `tr("…")` literals in the source and the labels the UI
+/// translates from tables.
 fn plain_messages() -> std::collections::BTreeSet<String> {
     use lightcraft_catalog::rules;
     let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
@@ -1013,6 +1047,7 @@ fn plain_messages() -> std::collections::BTreeSet<String> {
         .flat_map(|language| language.catalog().keys())
         .filter(|key| !key.starts_with(&contextual))
         .cloned()
+        .chain(gaps::source_messages())
         .chain(labels.into_iter().map(str::to_string))
         .collect()
 }

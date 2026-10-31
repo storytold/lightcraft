@@ -508,7 +508,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         });
                     }
                     (Some("failed"), Some(d)) => {
-                        let why = sentence(d["error"].as_str().unwrap_or("The download failed"));
+                        let why = download_failure(d);
                         ui.add(egui::Label::new(RichText::new(why).font(t.font(11.5)).color(t.caution)).wrap());
                     }
                     _ => {}
@@ -664,10 +664,15 @@ pub(super) fn mb(bytes: Option<u64>) -> String {
     }
 }
 
+/// Why a model download failed, as a sentence: the engine's reason, or, when it gave none, a message in the UI language.
+pub(crate) fn download_failure(d: &Value) -> String {
+    sentence(d["error"].as_str().unwrap_or_else(|| tr("The download failed")))
+}
+
 pub(super) fn sentence(s: &str) -> String {
     let s = s.trim();
     let mut out = crate::i18n::upper_first(s);
-    if !out.is_empty() && !out.ends_with(['.', '!', '?']) {
+    if !out.is_empty() && !out.ends_with(['.', '!', '?', '。', '！', '？']) {
         out.push('.');
     }
     out
@@ -764,4 +769,20 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         "The model is kept on this computer only. LightCraft never uploads or shares it."
     };
     ui.label(RichText::new(tr(closing)).font(t.font(11.5)).color(t.text_dim));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_failure_without_a_reason_is_said_in_the_ui_language() {
+        let de = crate::i18n::Locale::De;
+        crate::i18n::set_language(de);
+        let said = download_failure(&json!({}));
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        assert_eq!(said, sentence(de.tr("The download failed")));
+        assert_eq!(download_failure(&json!({"error": "no space left"})), "No space left.", "the engine's own reason is shown as given");
+        assert_eq!(sentence("下载失败。"), "下载失败。", "a Chinese or Japanese full stop ends the sentence");
+    }
 }

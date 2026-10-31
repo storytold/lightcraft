@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (the lens profile database priority links its tracking issue #329; Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; the lens profile database priority links its tracking issue #329; Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -31,7 +31,7 @@ Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is
 estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), compressed ORF and HE NEF
 open as previews, rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
-tests run in CI on FreeBSD only. **Why alpha:** core workflows run end to end, but readiness is below
+tests run in CI on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly), not on macOS or Windows. **Why alpha:** core workflows run end to end, but readiness is below
 the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have blocking gaps (compressed ORF and HE NEF open as previews; Canon,
 ~30% of raw users, decodes CR3 on 26 verified bodies). It passes the alpha gate: all six core workflows
 (import, cull, develop, save and reopen, batch looks, export) work end to end on macOS
@@ -109,7 +109,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
 6. Compressed ORF and HE NEF (28–55 h)
 7. Lens profile database of our own (40–80 h, #329)
-8. Tests in CI on macOS, Windows and Linux (6–12 h)
+8. Tests in CI on macOS and Windows, and the GPU tests in CI (6–12 h)
 9. Per-model raw verification (20–35 h)
 
 ## Progress log
@@ -150,10 +150,9 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 - 2026-10-10 (RAW): RAW measured model by model against Adobe's 1,446-model list (234 verified, 943
   unverified, 233 preview-only, 36 unsupported; ~84% of photographers' cameras decode, ~40% on a
   verified body). Full ~61%, mainstream ~49%, essentials ~64%; beta ~14 points away.
-- 2026-10-10 (final): full ready is a weighted sum over the dimensions (~59%; method aligned with
-  the standard); mainstream practitioner ~51% (450–840 h), essentials user ~63% (160–300 h);
+- 2026-10-10 (final): full ready is a weighted sum over the dimensions (~59%; no new evidence); mainstream practitioner ~51% (450–840 h), essentials user ~63% (160–300 h);
   alpha gate passes.
-- 2026-10-10: full re-measure for the progress-docs standard: stage alpha, ready ~55%, checklist
+- 2026-10-10: full re-measure, progress docs restructured: stage alpha, ready ~55%, checklist
   81.1%; new docs (target-app-parity, gaps, roadmap, architecture, raw / file-format / hardware / UI
   / localization parity); `docs/parity.md` renamed `docs/parity-checklist.md`. Landed today: Nikon
   lossy-after-split NEF (#633), ORF 12.8 bpp (#651), HDR gain map JPEG / PQ AVIF / float TIFF export
@@ -192,6 +191,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
+| 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |
 | 2026-10-19 | minor | Indonesian interface (`id`): every plain and formats message, plus 69 command labels, locale, menu command and tests; What's New left in English; Localization ~55% → ~64% (mean of the 12 key languages), 8 of 12 present |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
@@ -213,10 +213,10 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (354 models, 24%); headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified: CR3 on four verified bodies, RAW decoding 76% → 77%; headline numbers unchanged |
 | 2026-10-10 | minor | RAW measured model by model; RAW decode and colour as explicit rows: full 59% → 61%, mainstream 51% → 49%, essentials 63% → 64%; beta ~14 points |
-| 2026-10-10 | minor | Full ready restored to the additive weighted sum (~59%; method aligned with the standard, no new evidence); hours per audience; beta ~16 points away |
+| 2026-10-10 | minor | Full ready restored to the additive weighted sum (~59%; no new evidence); hours per audience; beta ~16 points away |
 | 2026-10-10 | minor | Mainstream practitioner and essentials user numbers; full ready 55% → 46% (method written down); beta 340–600 h |
 | 2026-10-10 | minor | Alpha gate added (core-workflow check): passes, stays alpha |
-| 2026-10-10 | major | Restructured to the progress-docs standard; re-measured; *Where we stand*, *Parity estimate* and *Totals* moved to docs/target-app-parity.md, milestones and risks to docs/roadmap.md, raw coverage to docs/raw-parity.md, catalog migration to docs/file-format-parity.md, CJK notes to docs/localization-parity.md |
+| 2026-10-10 | major | Progress docs restructured; re-measured; *Where we stand*, *Parity estimate* and *Totals* moved to docs/target-app-parity.md, milestones and risks to docs/roadmap.md, raw coverage to docs/raw-parity.md, catalog migration to docs/file-format-parity.md, CJK notes to docs/localization-parity.md |
 | 2026-10-08 | minor | *Where we stand* by dimension and by kind of user |
 | 2026-10-02 | major | Parity estimate and effort table |
 | 2026-09-30 | major | Created |
