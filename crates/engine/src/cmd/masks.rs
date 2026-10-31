@@ -316,7 +316,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush Stroke",
             [],
             None,
-            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
+            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these, continue?: bool — the stroke being painted, sent again as it grows: it replaces the mask's last stroke, so its effect shows while painting} → {activeMask, connected}",
             has_active,
             |s, p| {
                 let pts: Vec<Point> = p
@@ -339,6 +339,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     pressure: pressure_list(p.get("pressure"), pts_len)?,
                 };
                 let connect = bool_or(p, "connect", false);
+                let again = bool_or(p, "continue", false);
                 let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 let want = optional_mask_id(p, "mask.brushStroke")?.or(s.active_mask);
@@ -376,7 +377,11 @@ pub fn specs() -> Vec<CommandSpec> {
                                 strokes.extend(connected_strokes(from, &last, stroke));
                                 connected = true;
                             }
-                            None => strokes.push(stroke),
+                            // the stroke being painted, sent again as it grew: it replaces itself
+                            None => match strokes.last_mut() {
+                                Some(last) if again => *last = stroke,
+                                _ => strokes.push(stroke),
+                            },
                         }
                     } else {
                         m.components.push(MaskComponent {

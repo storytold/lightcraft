@@ -413,6 +413,8 @@ impl LightcraftApp {
         self.library_changed(&ctx);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        // (and the mask pin or component row under the pointer: the overlay shows that mask)
+        self.ui.mask_hover_prev = self.ui.mask_hover.take();
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
@@ -436,6 +438,7 @@ impl LightcraftApp {
                 // host frames, and resetting it above must only hide it from this pass's dialogs.
                 panels::notices::restore_prompt_pointer(self, &ctx);
             }
+            self.repaint_on_mask_hover_change(&ctx);
             (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
             self.end_frame(&ctx, t0);
             return;
@@ -480,9 +483,19 @@ impl LightcraftApp {
             // frames, and resetting it above must only hide it from this pass's dialogs.
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
+        self.repaint_on_mask_hover_change(&ctx);
         (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);
+    }
+
+    /// The pointer moved onto another mask pin or component row, or off them, this frame: the overlay drawn earlier in the
+    /// frame still showed the last one (it falls back to it while panels set the new one), so one more frame shows
+    /// the new one at once rather than at the next input (CodeRabbit on #2920).
+    pub(crate) fn repaint_on_mask_hover_change(&self, ctx: &egui::Context) {
+        if self.ui.mask_hover != self.ui.mask_hover_prev {
+            ctx.request_repaint();
+        }
     }
 }
 
