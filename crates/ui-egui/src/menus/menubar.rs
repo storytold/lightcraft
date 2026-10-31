@@ -283,6 +283,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
+            "tool.enablePainting",
             "---",
             "album.removePhotos",
             "photo.delete",
@@ -343,6 +344,7 @@ const HIDDEN: &[&str] = &[
     "photo.reject",
     "photo.unflag",
     "photo.label",
+    "photo.clearLabel",
     "library.sort",
     "library.shuffle",
     "album.addPhotos",
@@ -548,7 +550,8 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 })
                 .collect();
             v.push(MenuNode::Separator);
-            v.push(item("photo.label", json!({"label": "none"}), "None", None, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
+            let clear_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.clearLabel");
+            v.push(item("photo.clearLabel", Value::Null, "None", clear_key, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
             v.push(MenuNode::Separator);
             // label sets: each a checkable item; Edit… names them
             let sets = lightcraft_engine::cmd::manage::label_sets_json(&app.session);
@@ -923,6 +926,7 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         "photo.rate"
             | "photo.flag"
             | "photo.label"
+            | "photo.clearLabel"
             | "photo.pick"
             | "photo.reject"
             | "photo.unflag"
@@ -992,20 +996,22 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
     policy
 }
 
-/// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
+/// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere.
+/// On macOS the modifiers come in AppKit's and Apple's HIG order, ⌃⌥⇧⌘, however the binding spells them.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
     if mac {
-        let mut mods = String::new();
+        let (mut ctrl, mut alt, mut shift, mut cmd) = (false, false, false, false);
         let mut key = "";
         for part in sc.split('+') {
             match part {
-                "Ctrl" => mods.push('⌃'),
-                "Alt" => mods.push('⌥'),
-                "Shift" => mods.push('⇧'),
-                "Cmd" => mods.push('⌘'),
+                "Ctrl" => ctrl = true,
+                "Alt" => alt = true,
+                "Shift" => shift = true,
+                "Cmd" => cmd = true,
                 k => key = k,
             }
         }
+        let mods: String = [(ctrl, '⌃'), (alt, '⌥'), (shift, '⇧'), (cmd, '⌘')].into_iter().filter_map(|(on, glyph)| on.then_some(glyph)).collect();
         let key = match key {
             "Delete" => "⌫",
             "Escape" => "⎋",

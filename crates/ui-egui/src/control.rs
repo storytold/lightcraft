@@ -71,6 +71,8 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
+    /// Answered later, by whoever holds the request's `reply` (a task that is still running).
+    Later,
     /// A capture was admitted: `target` pins the destination identity until the write.
     Screenshot {
         target: Option<lightcraft_engine::originals::WriteTarget>,
@@ -84,11 +86,19 @@ pub enum Outcome {
     },
 }
 
+/// A reply that says it worked: `result`.
+pub(crate) fn success(v: Value) -> Value {
+    json!({"ok": true, "result": v})
+}
+/// A reply that says it failed: `error`.
+pub(crate) fn failure(e: impl std::fmt::Display) -> Value {
+    json!({"ok": false, "error": e.to_string()})
+}
 fn ok(v: Value) -> Outcome {
-    Outcome::Done(json!({"ok": true, "result": v}))
+    Outcome::Done(success(v))
 }
 fn err(e: impl std::fmt::Display) -> Outcome {
-    Outcome::Done(json!({"ok": false, "error": e.to_string()}))
+    Outcome::Done(failure(e))
 }
 fn wrap(r: Result<Value, String>) -> Outcome {
     match r {
@@ -344,6 +354,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.execute" | "ui.menu.invoke" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            if id == "library.missing" {
+                // looks at every photo's file: on a worker thread, answered when it is done
+                let started = crate::missing_sweep::ask(app, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
             let r = app.run(id, params);
             ctx.request_repaint();
             wrap(r)
@@ -426,8 +442,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Err(e) => err(e),
             }
         }
-        "ui.dialog.confirm" => wrap(confirm_dialog(app)),
+        "ui.dialog.confirm" => wrap(confirm_dialog(app, Some(ctx))),
         "ui.dialog.cancel" => {
+            if matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. })) {
+                app.renderer.forget_imports();
+            }
             app.ui.dialog = None;
             ok(Value::Null)
         }
@@ -505,10 +524,18 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
 }
 
 /// OK on the open dialog (`ui.dialog.confirm`, a surface's OK key).
-pub(crate) fn confirm_dialog(app: &mut LightcraftApp) -> Result<Value, String> {
+pub(crate) fn confirm_dialog(app: &mut LightcraftApp, ctx: Option<&egui::Context>) -> Result<Value, String> {
     let Some(d) = app.ui.dialog.take() else { return Err("no dialog open".into()) };
     let r = crate::panels::dialogs::confirm_dialog(app, &d);
-    // the import review and the rule editor stay open on an error, as with their buttons
+    // a refused one-line prompt says why on screen, as with its button; a folder made says where
+    if let Some(ctx) = ctx {
+        match (&r, &d) {
+            (Err(e), crate::state::Dialog::TextPrompt { .. }) => app.toast_error(ctx, e.clone()),
+            (Ok(made), crate::state::Dialog::TextPrompt { .. }) => crate::dialogs::toast_created_folder(app, ctx, &d, made),
+            _ => {}
+        }
+    }
+    // the import review, the rule editor and the one-line prompts stay open on an error, as with their buttons
     if (r.is_err()
         && matches!(
             d,
@@ -517,6 +544,7 @@ pub(crate) fn confirm_dialog(app: &mut LightcraftApp) -> Result<Value, String> {
                 | crate::state::Dialog::SmartRules { .. }
                 | crate::state::Dialog::SaveEffect { .. }
                 | crate::state::Dialog::CaptureTime { .. }
+                | crate::state::Dialog::TextPrompt { .. }
         ))
         || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
         || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))
@@ -616,6 +644,30 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     Ok(out)
 }
 
+/// The largest coordinate or offset a gesture takes, in points (far past any screen).
+const MAX_GESTURE_NUMBER: f64 = 1e6;
+
+/// Every number of a gesture's parameters (and of `ui.pointer`'s events) is finite and within
+/// ±[`MAX_GESTURE_NUMBER`]. A larger one turns into an infinite or NaN `f32` position or scroll
+/// delta: egui asserts on NaN positions, and a release build would hand them to every widget.
+/// `count` and `steps` are clamped where they are read instead, and `ui.zoom`'s `factor` (a
+/// multiplier, not a position) is checked and clamped by its own branch. Checked when a request
+/// is admitted and again here, for callers that resolve a gesture directly.
+pub(crate) fn check_gesture_numbers(method: &str, p: &Value) -> Result<(), String> {
+    fn check(method: &str, key: &str, v: &Value) -> Result<(), String> {
+        match v {
+            Value::Number(n) if !matches!(key, "count" | "steps" | "factor") => match n.as_f64() {
+                Some(x) if x.abs() <= MAX_GESTURE_NUMBER => Ok(()),
+                _ => Err(format!("{method}: `{key}` must be a number between -1000000 and 1000000")),
+            },
+            Value::Array(a) => a.iter().try_for_each(|v| check(method, key, v)),
+            Value::Object(o) => o.iter().try_for_each(|(k, v)| check(method, k, v)),
+            _ => Ok(()),
+        }
+    }
+    check(method, "", p)
+}
+
 /// Resolve one queued synthetic-input control request against the **current** layout.
 ///
 /// Called by the app only after a completed UI pass newer than admission (plan §4.5). Widget rects
@@ -623,6 +675,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
 /// has pushed the events onto `app.synthetic`; the app answers the request once the UI consumed
 /// them.
 pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, method: &str, p: &Value) -> Result<GestureOutcome, String> {
+    check_gesture_numbers(method, p)?;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64);
     match method {
@@ -709,8 +762,17 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
         "ui.key" => {
             let Some(k) = s("key").and_then(key_from) else { return Err("unknown or missing `key`".into()) };
             let m = modifiers(p);
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
+            // {action?: "press" | "down" | "up"}: down … up holds the key across other input (Space
+            // held over a drag); a press is both in one frame
+            let (down, up) = match s("action").unwrap_or("press") {
+                "press" => (true, true),
+                "down" => (true, false),
+                "up" => (false, true),
+                other => return Err(format!("ui.key: action {other:?} (press, down or up)")),
+            };
+            for pressed in [down.then_some(true), up.then_some(false)].into_iter().flatten() {
+                app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: m });
+            }
             ctx.request_repaint();
             Ok(GestureOutcome::done(Value::Null))
         }

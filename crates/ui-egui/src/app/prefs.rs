@@ -34,7 +34,7 @@ impl LightcraftApp {
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);
-            let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu}));
+            let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu, "wait": false}));
             // GPU device + kernels off the UI thread, once the window is up and only when GPU
             // rendering is on: a broken driver must not keep the window from appearing (issue #136)
             if self.ui.settings.gpu {

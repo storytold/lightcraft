@@ -915,7 +915,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
     let now_ms = app.surface.now * 1000.0;
     let r = match id {
         "surface.maskPrevious" | "surface.maskNext" => step_mask(app, if id == "surface.maskNext" { 1 } else { -1 }),
-        "surface.dialogConfirm" => crate::control::confirm_dialog(app),
+        "surface.dialogConfirm" => crate::control::confirm_dialog(app, None),
         "surface.dialogCancel" => {
             app.ui.dialog = None;
             Ok(Value::Null)
