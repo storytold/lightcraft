@@ -1291,7 +1291,7 @@ pub fn toggle_stack(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
 
 pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     context_menu_open_and_edit(app, ui, id);
-    context_menu_show_in_album(app, ui, id);
+    let _ = context_menu_show_in_album(app, ui, id);
     context_menu_rate(app, ui);
     context_menu_albums(app, ui, id);
     context_menu_file_actions(app, ui);
@@ -1354,24 +1354,27 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
     ui.separator();
 }
 
-fn context_menu_show_in_album(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn context_menu_show_in_album(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) -> egui::Response {
     let albums = crate::menus::albums_for_photo(app, id);
-    let show_in_album = crate::widgets::menu_button(ui, crate::i18n::tr("Show in Album"), |ui| {
-        if albums.is_empty() {
-            ui.add_enabled(false, egui::Button::new(crate::i18n::tr("No containing albums")));
-        } else {
-            for (album, label) in albums {
-                let row = ui.button(&label);
-                register(ui, format!("contextShowInAlbum:{}", album.0), row.rect);
-                if row.clicked()
-                    && let Err(error) = app.run("app.showInAlbum", json!({"album": album.0, "id": id.0}))
-                {
-                    app.toast(ui.ctx(), error);
+    let parent = ui.add_enabled_ui(!albums.is_empty(), |ui| {
+        crate::widgets::menu_button(ui, crate::i18n::tr("Show in Album"), |ui| {
+            if albums.is_empty() {
+                ui.add_enabled(false, egui::Button::new(crate::i18n::tr("No containing albums")));
+            } else {
+                for (album, label) in albums {
+                    let row = ui.button(&label);
+                    register(ui, format!("contextShowInAlbum:{}", album.0), row.rect);
+                    if row.clicked()
+                        && let Err(error) = app.run("app.showInAlbum", json!({"album": album.0, "id": id.0}))
+                    {
+                        app.toast(ui.ctx(), error);
+                    }
                 }
             }
-        }
+        })
     });
-    register(ui, "button:contextShowInAlbum", show_in_album.response.rect);
+    register(ui, "button:contextShowInAlbum", parent.inner.response.rect);
+    parent.inner.response
 }
 
 fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -1626,20 +1629,43 @@ mod tests {
 
     #[test]
     fn show_in_album_scroll_reset_is_shared_across_ui_contexts() {
-        let ui_ctx = egui::Context::default();
-        let _command_context = egui::Context::default();
-        let photo = PhotoId(3);
-        let all = lightcraft_engine::LibrarySource::All;
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let photo = app.session.active().expect("demo has an active photo");
+        let album = app.session.execute("album.create", &serde_json::json!({"name": "Follow", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+        let command_ctx = egui::Context::default();
+        app.tasks.repaint = Some(command_ctx.clone());
+        app.run("app.showInAlbum", serde_json::json!({"album": album, "id": photo.0})).unwrap();
+
+        let grid_ctx = egui::Context::default();
+        let filmstrip_ctx = egui::Context::default();
         let grid = egui::Id::unique("grid-follow-active");
-        assert!(follow_active(&ui_ctx, grid, Some(photo), all, 0));
-        assert!(!follow_active(&ui_ctx, grid, Some(photo), all, 0));
+        let filmstrip = egui::Id::unique("film-follow-active");
+        let source = app.session.source;
+        let active = app.session.active();
+        let generation = app.follow_active_generation;
+        assert!(follow_active(&grid_ctx, grid, active, source, generation));
+        assert!(follow_active(&filmstrip_ctx, filmstrip, active, source, generation));
+        assert!(!follow_active(&grid_ctx, grid, active, source, generation));
+        assert!(!follow_active(&filmstrip_ctx, filmstrip, active, source, generation));
 
-        // Commands set this app-owned signal; the grid and filmstrip each remember its value in
-        // their own egui contexts and therefore both observe the reset.
-        let mut generation = 0;
-        follow_active_again(&mut generation);
+        // The command runs with its own context; both UI contexts observe the app-owned reset.
+        app.run("app.showInAlbum", serde_json::json!({"album": album, "id": photo.0})).unwrap();
+        let generation = app.follow_active_generation;
 
-        assert!(follow_active(&ui_ctx, grid, Some(photo), all, generation), "the UI must see a reset requested by the command context");
+        assert!(follow_active(&grid_ctx, grid, app.session.active(), app.session.source, generation), "the grid must see the reset");
+        assert!(follow_active(&filmstrip_ctx, filmstrip, app.session.active(), app.session.source, generation), "the filmstrip must see the reset");
+    }
+
+    #[test]
+    fn show_in_album_context_parent_is_disabled_without_containing_albums() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let mut response = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            response = Some(context_menu_show_in_album(&mut app, ui, PhotoId(1)));
+        });
+        out.textures_delta.clear();
+        assert!(response.is_some_and(|response| !response.enabled()));
     }
 
     #[test]
