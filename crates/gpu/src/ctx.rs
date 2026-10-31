@@ -463,10 +463,8 @@ impl Gpu {
         // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
         desc.flags = crate::backend::instance_flags_from_env(desc.flags);
         let instance = wgpu::Instance::new(desc);
-        let adapter = pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?;
+        // the card LIGHTCRAFT_GPU_ADAPTER names, else the high-performance one
+        let adapter = crate::backend::pick_adapter(&instance, backends)?;
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::Cpu {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
