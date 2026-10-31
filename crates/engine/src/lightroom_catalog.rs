@@ -858,6 +858,35 @@ pub(crate) struct ApplyPrepared<'a> {
     pub(crate) undo0: usize,
 }
 
+/// The catalog's collections with each id once, in catalog order. A row repeated as it is drops quietly; a different
+/// collection with an id an earlier one has is left out with a warning naming both, since two albums can't have one id
+/// (#1588: one bad Lightroom record costs that record, not the import). The photos listed under the id go to the first.
+fn first_of_each_collection<'a>(data: &'a CatalogImport, warnings: &mut Vec<String>) -> Vec<&'a Row> {
+    let mut first: HashMap<i64, &Row> = HashMap::new();
+    let mut rows = Vec::new();
+    for collection in &data.collections {
+        let id = number(collection, "id_local");
+        let Some(kept) = first.get(&id) else {
+            first.insert(id, collection);
+            rows.push(collection);
+            continue;
+        };
+        if *kept != collection {
+            let photos = if data.members.iter().any(|m| number(m, "collection") == id) {
+                format!("; the photos listed under that id go to “{}”", text(kept, "name"))
+            } else {
+                String::new()
+            };
+            warnings.push(format!(
+                "collection “{}”: not imported, it has the id of collection “{}”{photos}",
+                text(collection, "name"),
+                text(kept, "name")
+            ));
+        }
+    }
+    rows
+}
+
 fn stage_collections(
     s: &mut crate::Session,
     data: &CatalogImport,
@@ -865,24 +894,42 @@ fn stage_collections(
     ids: &HashMap<i64, PhotoId>,
     ops: &mut Vec<Op>,
     warnings: &mut Vec<String>,
-) -> usize {
+) -> crate::Result<usize> {
+    let rows = first_of_each_collection(data, warnings);
     let mut albums = HashMap::new();
-    for collection in &data.collections {
+    // Two collections never share an album. An index that names one album for two gives the second a new one; the
+    // counter saturates, so a damaged one hands out an id that's taken, and that stops the import instead.
+    let mut assigned = HashSet::new();
+    for &collection in &rows {
         if number(collection, "systemOnly") != 0 {
             continue;
         }
         let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
-        let id = index
+        let indexed = index
             .collections
             .get(&collection_key)
             .copied()
             .map(lightcraft_catalog::AlbumId)
-            .filter(|id| s.catalog.album(*id).is_some())
-            .unwrap_or_else(|| s.catalog.alloc_album_id());
+            .filter(|id| s.catalog.album(*id).is_some() && !assigned.contains(id));
+        let id = match indexed {
+            Some(id) => id,
+            None => {
+                let id = s.catalog.alloc_album_id();
+                if s.catalog.album(id).is_some() || assigned.contains(&id) {
+                    return Err(error(format!(
+                        "collection “{}”: the library has no unused album id left for it (its album numbering is exhausted or damaged)",
+                        text(collection, "name")
+                    )));
+                }
+                id
+            }
+        };
+        assigned.insert(id);
         index.collections.insert(collection_key, id.0);
         albums.insert(number(collection, "id_local"), id);
     }
-    let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let parents: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let collections: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), *r)).collect();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
     for member in &data.members {
         grouped_members.entry(number(member, "collection")).or_default().push(member);
@@ -890,7 +937,7 @@ fn stage_collections(
     for members in grouped_members.values_mut() {
         members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
     }
-    let mut ordered: Vec<_> = data.collections.iter().collect();
+    let mut ordered = rows.clone();
     ordered.sort_by_key(|r| {
         let mut depth = 0;
         let mut at = number(r, "parent");
@@ -900,10 +947,19 @@ fn stage_collections(
         }
         depth
     });
+    // Collections whose albums are folders: a collection set, or an earlier import's album when it is a folder.
+    let sets: HashSet<i64> = albums
+        .iter()
+        .filter(|(lr, id)| match s.catalog.album(**id) {
+            Some(album) => album.folder,
+            None => collections.get(*lr).is_some_and(|r| text(r, "creationId").contains("group")),
+        })
+        .map(|(lr, _)| *lr)
+        .collect();
+    let mut added_folders = HashSet::new();
     for collection in ordered {
         let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
         let mut album = Album::new(id, text(collection, "name"));
-        album.parent = albums.get(&number(collection, "parent")).copied();
         album.folder = text(collection, "creationId").contains("group");
         if text(collection, "creationId").contains("smart") {
             warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
@@ -929,10 +985,49 @@ fn stage_collections(
                 ops.push(Op::SetAlbumPhotos { id, photos });
             }
         } else {
+            let (set, moved) = collection_parent(collection, &collections, &sets);
+            album.parent = set.and_then(|set| albums.get(&set).copied());
+            // `AddAlbum` rejects a parent that isn't a folder yet, and that would roll back the whole batch: every
+            // album and every catalog-only photo. `collection_parent` already prevents it; this keeps a bug there
+            // (or a cycle `validate` missed) from doing so.
+            if let Some(parent) = album.parent
+                && !added_folders.contains(&parent)
+                && !s.catalog.album(parent).is_some_and(|a| a.folder)
+            {
+                album.parent = None;
+                warnings.push(format!(
+                    "{}: its collection set could not be created first; imported at the top level (Lightroom collection {})",
+                    album.name,
+                    number(collection, "id_local")
+                ));
+            } else if moved {
+                let lr_parent = number(collection, "parent");
+                let why = match collections.get(&lr_parent) {
+                    None => "its parent collection isn't in the catalog".to_string(),
+                    Some(r) => match albums.get(&lr_parent).and_then(|id| s.catalog.album(*id)) {
+                        // a set imported earlier whose album is no longer a folder
+                        Some(a) if text(r, "creationId").contains("group") => {
+                            format!("its collection set “{}” is the album “{}” in this library, which isn't a folder", text(r, "name"), a.name)
+                        }
+                        _ => format!("Lightroom keeps it inside “{}”, which isn't a collection set", text(r, "name")),
+                    },
+                };
+                // the set's name in this library: the user may have renamed it since an earlier import
+                let to = match (album.parent.and_then(|id| s.catalog.album(id)), set.and_then(|set| collections.get(&set))) {
+                    (Some(a), _) => format!("into “{}”", a.name),
+                    (None, Some(r)) => format!("into “{}”", text(r, "name")),
+                    (None, None) => "at the top level".to_string(),
+                };
+                // the Lightroom id tells apart collections that share a name (#2165)
+                warnings.push(format!("{}: {why}; imported {to} (Lightroom collection {})", album.name, number(collection, "id_local")));
+            }
+            if album.folder {
+                added_folders.insert(id);
+            }
             ops.push(Op::AddAlbum { album });
         }
     }
-    albums.len()
+    Ok(albums.len())
 }
 
 /// Turn the read catalog into library records in one undo step and return the import report
@@ -1099,7 +1194,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
-    let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings);
+    let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings)?;
     if !ops.is_empty() {
         s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
     }
@@ -1108,6 +1203,23 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// The collection set a Lightroom collection's album goes into (`None`: the top level), and whether that isn't its
+/// Lightroom parent. A LightCraft album nests only in a folder, but Lightroom also keeps a print, book, slideshow or
+/// web gallery (or, in an odd catalog, a collection) inside a plain or smart collection, and a parent can be
+/// system-only (not imported) or gone from the catalog. Such an album joins the nearest collection set above it.
+fn collection_parent(collection: &Row, collections: &HashMap<i64, &Row>, sets: &HashSet<i64>) -> (Option<i64>, bool) {
+    let mut at = number(collection, "parent");
+    let mut seen = HashSet::from([number(collection, "id_local")]);
+    while at != 0 && !sets.contains(&at) {
+        // `validate` rejects cycles and deep chains; stop at the top level if one got here anyway.
+        if seen.len() > 64 || !seen.insert(at) {
+            return (None, true);
+        }
+        at = collections.get(&at).map_or(0, |r| number(r, "parent"));
+    }
+    ((at != 0).then_some(at), at != number(collection, "parent"))
 }
 
 #[cfg(test)]

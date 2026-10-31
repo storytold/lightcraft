@@ -5,6 +5,15 @@
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
 
+## 2026-10-26
+
+### Lightroom catalogs with a print inside a collection import their collections
+- Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
+  LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
+  existing folder" and brought over no collections, and photos whose originals were offline were lost with them
+  (issues #2165, #2532). Such a collection now joins the nearest collection set above it, or the top level, and the
+  import result names it under warnings; so does one whose parent is system-only or gone from the catalog.
+
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box
@@ -111,7 +120,6 @@
 ### Find the grid shortcut in View
 - Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
   shortcut changes; clicking a menu row still selects that grid (issue #2500).
-
 
 ## 2026-10-21
 
