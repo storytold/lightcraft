@@ -1,4 +1,4 @@
-use super::fs::{quick_image_srgb, raf_preview_extent, read_prefix, read_prefix_at};
+use super::fs::{Planned, quick_image_srgb, raf_preview_extent, read_planned, read_prefix, read_prefix_at};
 use super::{Arc, Filter, Orientation, PreviewLoader, Rgb32f, SourceInfo, fit};
 
 /// Orientation for an embedded preview: its own EXIF orientation when it has one, else the raw file's.
@@ -251,8 +251,6 @@ pub(super) const PLAN_PREFIX: u64 = 64 * 1024;
 /// gives what the whole file gives), so a window that still fails to decode ends in the same
 /// whole-file fallback in [`fs_preview_loader`], never in a wrong picture.
 fn planned_preview(file: &mut std::fs::File, path: &str, total: u64, max_edge: usize) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
-    use std::io::{Read, Seek, SeekFrom};
-
     if total > MAX_PREVIEW_PLAN_BYTES {
         return Ok(None);
     }
@@ -263,58 +261,42 @@ fn planned_preview(file: &mut std::fs::File, path: &str, total: u64, max_edge: u
     head.copy_from_slice(&header);
     let mut loaded = lightcraft_raw::sparse::Ranges::new();
     loaded.insert(0, header.len() as u64);
-    for _ in 0..MAX_PREVIEW_PLAN_ROUNDS {
-        match lightcraft_raw::sparse::preview_plan(&buf, &loaded) {
-            lightcraft_raw::sparse::HeaderPlan::Need(ranges) => {
-                let wanted = loaded.total().saturating_add(ranges.total());
-                if wanted.saturating_mul(10) > total.saturating_mul(MAX_PREVIEW_PLAN_SHARE) {
-                    return Ok(None);
-                }
-                for &(start, end) in ranges.spans() {
-                    let (Ok(a), Ok(b)) = (usize::try_from(start), usize::try_from(end)) else { return Ok(None) };
-                    let Some(dst) = buf.get_mut(a..b) else { return Ok(None) };
-                    file.seek(SeekFrom::Start(start)).map_err(|e| format!("{path}: {e}"))?;
-                    file.read_exact(dst).map_err(|e| format!("{path}: {e}"))?;
-                    loaded.insert(start, end);
-                }
-            }
-            lightcraft_raw::sparse::HeaderPlan::Ready => {
-                // the plan loads every preview's strips, so the JPEG picked for `max_edge` is the whole file's pick
-                let edge = u32::try_from(max_edge).unwrap_or(u32::MAX);
-                let Some(window) = lightcraft_raw::embedded_preview_covering(&buf, edge) else { return Ok(None) };
-                // The quick path hands the JPEG to the decoder alone, so what the *container* says
-                // about the preview has to be something the bytes it is handed can show. Two container
-                // facts change the pixels and are not in the JPEG: the preview's colour space (which
-                // the whole-file path applies through `decode_raw_preview`) and, when the JPEG carries
-                // no orientation of its own, the file's EXIF orientation. The colour space is read
-                // here and handed on ([`PreviewRead::adobe_rgb`]: a Sony α1 writes Adobe RGB previews,
-                // which used to send each of them to the whole-file path, issue #1440); a container
-                // that says sRGB agrees with the JPEG-only decode (its own declaration, else sRGB).
-                // Where the orientation is present and the header cannot answer for it, the
-                // whole-file path keeps the preview.
-                let adobe_rgb = lightcraft_raw::embedded_preview_color_space(&buf) == Some(lightcraft_raw::PreviewColorSpace::AdobeRgb);
-                // `extract` copies a TIFF's bytes to hand on its Exif block, so ask the cheap side
-                // first: a JPEG that carries its own orientation needs nothing from the container.
-                if lightcraft_meta::extract(&window).orientation.is_none()
-                    && lightcraft_meta::extract(&header).orientation.is_none()
-                    && lightcraft_meta::extract(&buf).orientation.is_some()
-                {
-                    return Ok(None);
-                }
-                let read = PreviewRead { read: loaded.total(), total, header_path: true, planned: true, adobe_rgb };
-                // A plan-driven preview is the one that used to cost the whole file, so it is worth
-                // saying what it cost now too.
-                if lightcraft_pipeline::profiling() {
-                    eprintln!("[profile] preview {path}: read {} of {} bytes (plan, window {})", read.read, total, window.len());
-                }
-                // The planner's buffer is the file's length, so give its pages back the way a decode
-                // does (see `fs_pair_loader`).
-                drop(buf);
-                crate::memory::release();
-                return Ok(Some((header, window, read)));
-            }
-            lightcraft_raw::sparse::HeaderPlan::Whole(_) => return Ok(None),
-        }
+    let planned = read_planned(file, &mut buf, &mut loaded, MAX_PREVIEW_PLAN_ROUNDS, MAX_PREVIEW_PLAN_SHARE, lightcraft_raw::sparse::preview_plan)
+        .map_err(|e| format!("{path}: {e}"))?;
+    if planned != Planned::Ready {
+        return Ok(None);
     }
-    Ok(None)
+    // the plan loads every preview's strips, so the JPEG picked for `max_edge` is the whole file's pick
+    let edge = u32::try_from(max_edge).unwrap_or(u32::MAX);
+    let Some(window) = lightcraft_raw::embedded_preview_covering(&buf, edge) else { return Ok(None) };
+    // The quick path hands the JPEG to the decoder alone, so what the *container* says
+    // about the preview has to be something the bytes it is handed can show. Two container
+    // facts change the pixels and are not in the JPEG: the preview's colour space (which
+    // the whole-file path applies through `decode_raw_preview`) and, when the JPEG carries
+    // no orientation of its own, the file's EXIF orientation. The colour space is read
+    // here and handed on ([`PreviewRead::adobe_rgb`]: a Sony α1 writes Adobe RGB previews,
+    // which used to send each of them to the whole-file path, issue #1440); a container
+    // that says sRGB agrees with the JPEG-only decode (its own declaration, else sRGB).
+    // Where the orientation is present and the header cannot answer for it, the
+    // whole-file path keeps the preview.
+    let adobe_rgb = lightcraft_raw::embedded_preview_color_space(&buf) == Some(lightcraft_raw::PreviewColorSpace::AdobeRgb);
+    // `extract` copies a TIFF's bytes to hand on its Exif block, so ask the cheap side
+    // first: a JPEG that carries its own orientation needs nothing from the container.
+    if lightcraft_meta::extract(&window).orientation.is_none()
+        && lightcraft_meta::extract(&header).orientation.is_none()
+        && lightcraft_meta::extract(&buf).orientation.is_some()
+    {
+        return Ok(None);
+    }
+    let read = PreviewRead { read: loaded.total(), total, header_path: true, planned: true, adobe_rgb };
+    // A plan-driven preview is the one that used to cost the whole file, so it is worth
+    // saying what it cost now too.
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] preview {path}: read {} of {} bytes (plan, window {})", read.read, total, window.len());
+    }
+    // The planner's buffer is the file's length, so give its pages back the way a decode
+    // does (see `fs_pair_loader`).
+    drop(buf);
+    crate::memory::release();
+    Ok(Some((header, window, read)))
 }

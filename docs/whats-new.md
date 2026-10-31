@@ -791,6 +791,15 @@
   read; reload the page to try again.
 ## 2026-10-14
 
+### Lightroom catalog import
+- Large catalogs import several times faster: originals are described from their headers, so a raw's pixel data is
+  never read (a DNG or CR3 from 2–3 % of its bytes; a raw shown from its embedded preview with that preview). A
+  38,500-photo catalog with 1.1 TB of originals on a USB SSD took about 2 minutes instead of about half an hour.
+  NEF, ORF, PEF, ARW6 and JPEG files are still read whole.
+- Photos appear batch by batch while the catalog is imported. ✕ keeps what was added; importing the catalog again
+  continues and adds the collections.
+- Adding the photos no longer pauses the window: XMP and develop settings are prepared in the background.
+
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time

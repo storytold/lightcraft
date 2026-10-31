@@ -125,17 +125,42 @@ Lightroom's `-999999` deferred-adjustment sentinel is omitted from both catalog 
 it is reported, included in any saved archive, and never clamped into a real slider value. Deferred Adobe Auto Tone
 is not evaluated by the importer; LightCraft's Auto control remains available after migration.
 
-New photo records are moved into staged operations; only masters needed for virtual copies
-retain a second owned record while the import commits.
-Applying catalog operations collects affected source-cache IDs before consuming the operations,
-avoiding another full operation copy. Full-strength develop patches reuse their JSON without
-serializing an unused copy of the current settings.
+New photo records are moved into staged operations; only masters whose virtual copies are in the
+same batch retain a second owned record while the batch commits. Applying catalog operations
+collects affected source-cache IDs before consuming the operations, avoiding another full operation
+copy. Full-strength develop patches reuse their JSON without serializing an unused copy of the
+current settings.
 
-Native desktop inspection/import runs on a cancellable background worker with progress. Only
-prepared catalog operations commit on the owner thread; archive index writing stays on a worker.
-Late results from a closed or switched library are rejected, including reopening the same path.
-Ordinary edits during preparation remain intact. CLI commands complete synchronously using the
-same preparation/commit pipeline; browser builds reject native catalog import.
+Native desktop inspection/import runs on a cancellable background worker. The worker reads the
+catalog, then prepares its photos in batches of 256 (masters ahead of their virtual copies): it
+probes their originals and parses their XMP and maps their develop settings. Each batch is added on
+the owner thread as it arrives, so photos appear while the rest is read; the progress counts each
+original as it is read. Cancelling (✕ in the activity stack) keeps the photos added so far, without
+collections, as one undo step; importing the catalog again continues where it stopped (their
+identities are in the import index) and then adds the collections. Each batch is saved as it is added, so the
+same holds after a crash or a forced quit: a master is found again by its path, a virtual copy
+through the import index, which is written after each batch of virtual copies (they come after
+every master, in the last batches). Late batches from a closed or
+switched library are rejected, including reopening the same path. Ordinary edits during the import
+remain intact (and, as with any batched import, fall into its undo step). The archive index is
+written on a worker. CLI commands run the same pipeline synchronously; browser builds reject native
+catalog import.
+
+Originals are described from their headers: for DNG, CR3, CR2, ARW, RAF, RW2 and SRW files the
+pixel data, nearly all of a raw file's bytes, is never read (`lightcraft_raw::sparse`; on the
+raw.pixls.us corpus a CR3 or DNG is described from 2–3 % of its bytes, the result identical to
+reading all of it). A raw LightCraft doesn't decode yet, shown from its embedded preview, is read
+with that preview: a few megabytes of its tens. NEF, ORF, PEF and ARW6 files (their header probe looks at samples), JPEG and other rendered files and
+files under 4 MiB are read whole, as a normal import reads them. On a 38,500-photo catalog with
+1.1 TB of originals on a USB SSD (mostly EOS R5 Mark II CR3s, plus DNG, ORF and JPEG files) the
+import took about 2 minutes instead of about half an hour. A raw described from its headers gets no content
+hash. A later import of a copy of it from elsewhere still finds it by hashing it then (when at most 16
+photos without a hash share the copy's size), and that hash is kept. Until a photo has a hash, Find
+Missing Photos matches its file by name and size only, and Reload from Disk takes the same file as
+unchanged (its size, dimensions and preview state decide: no undo step, previews kept). A
+background pass filling in the missing hashes would lift both limits. Sidecars are looked for in a listing of each folder,
+read once, rather than by asking the drive for each possible name (slow for files that aren't there
+on exFAT and network drives).
 
 Archive version 1 begins with the 12 bytes `LC-LRARCH\0\x01Z`, followed by zlib-compressed JSON.
 Recovery readers must cap decompression at 32 MiB. JSON retains source identities, photo paths,

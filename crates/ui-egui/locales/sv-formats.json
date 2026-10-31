@@ -117,6 +117,7 @@
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "Lightroom-geometrin för {path} bevarades inte; den sparade transformeringen ignoreras eftersom Upright är av.",
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "Lightroom-geometrin för {path} bevarades inte; sparad Upright-transformering stöds inte.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Lightroom-geometrin bevarades inte för {path}; {mode} beräknas om.",
+  "Lightroom import cancelled · {imported} photos added": "Lightroom-importen avbröts · {imported} foton har lagts till",
   "Lightroom import complete: {imported} photos added": "Lightroom-importen är klar: {imported} foton har lagts till",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom-importen är klar: {imported} foton har lagts till, {failed} misslyckades",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom-importen är klar: {imported} foton har lagts till; indexvarning: {warning}",

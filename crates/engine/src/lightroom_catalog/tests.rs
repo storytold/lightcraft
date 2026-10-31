@@ -80,6 +80,24 @@ fn a_catalog_original_that_is_not_a_photo_file_is_not_imported() {
     assert!(warnings.contains("image 4: not imported"), "the virtual copy of the refused original goes with it: {warnings}");
 }
 
+/// A refused original with id 0 (a malformed catalog) is left out alone: `masterImage` is 0
+/// for every master, so the catalog's other photos still import.
+#[test]
+fn a_refused_original_with_id_zero_leaves_the_other_masters_alone() {
+    let mut data = sample();
+    let mut refused = data.photos[1].clone();
+    refused.source_id = 0;
+    refused.uuid = "refused".into();
+    refused.path = "/missing/refused.ARW".into();
+    refused.image = row(json!({"id_local":0,"fileFormat":"ARW","fileWidth":20,"fileHeight":10}));
+    refused.original = Original::Refused("it is on another computer".into());
+    data.photos.insert(0, refused);
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "the master and its copy: {r}");
+    assert!(s.catalog.photos().all(|p| !matches!(&p.source, Source::File { path } if path.ends_with("refused.ARW"))));
+}
+
 #[test]
 fn offline_local_master_and_copy_join_library_with_one_undo_step() {
     let mut s = crate::Session::new();
@@ -93,21 +111,21 @@ fn offline_local_master_and_copy_join_library_with_one_undo_step() {
     let mut index = ImportIndex::default();
     let missing_sources = [key("/missing/test.ARW")].into_iter().collect();
     let mut import = |s: &mut crate::Session| {
-        let undo0 = s.undo.len();
-        apply_prepared(
-            s,
-            data.clone(),
-            ApplyPrepared {
-                update_existing: false,
-                files: Default::default(),
-                index: &mut index,
-                archive_path: None,
-                missing_sources: &missing_sources,
-                undo0,
-            },
-        )
-        .unwrap()
-        .report
+        let mut steps = ImportSteps::default();
+        let mut apply = LightroomApply::new(s, data.source.clone(), false, index.clone(), Vec::new(), "now".into());
+        let photos = data
+            .photos
+            .iter()
+            .cloned()
+            .map(|src| {
+                let shape = Shape::of(&catalog_photo(&src, PhotoId(0), ""));
+                MappedPhoto::new(src, shape)
+            })
+            .collect();
+        steps.run(s, |s| apply.batch(s, photos, Default::default(), &missing_sources)).unwrap();
+        let report = steps.run(s, |s| apply.finish(s, &data.collections, &data.members, true, None)).unwrap();
+        index = apply.index.clone();
+        report
     };
     let first = import(&mut s);
     assert_eq!(first["mapping"]["1"], master_id.0);
@@ -158,6 +176,29 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
 }
 /// A library photo at `path`, already committed.
+/// `data`'s photos added the way the import adds a batch, whose file import reported `files`, then
+/// its collections; `index` is the import index (a library on disk keeps it between imports).
+fn apply_batch(s: &mut crate::Session, mut data: CatalogImport, files: crate::import::ImportReport, index: &mut ImportIndex) -> Value {
+    refuse_non_media(&mut data);
+    validate(&data).unwrap();
+    let now = (s.clock)();
+    let mut apply = LightroomApply::new(s, data.source.clone(), false, std::mem::take(index), data.warnings.clone(), now.clone());
+    apply.skipped = data.skipped.clone();
+    let mut probe = Photo::new(PhotoId(0), Source::File { path: String::new() }, "", "", 0, 0, &now);
+    let photos = data
+        .photos
+        .into_iter()
+        .map(|src| {
+            probe.format = text(&src.image, "fileFormat").to_string();
+            MappedPhoto::new(src, Shape::of(&probe))
+        })
+        .collect();
+    apply.batch(s, photos, files, &HashSet::new()).unwrap();
+    let report = apply.finish(s, &data.collections, &data.members, true, None).unwrap();
+    *index = std::mem::take(&mut apply.index);
+    report
+}
+
 fn library_photo(s: &mut crate::Session, path: &str, edit: impl FnOnce(&mut Photo)) -> PhotoId {
     let id = s.catalog.alloc_photo_id();
     let mut p = Photo::new(id, Source::File { path: path.into() }, "a.ARW", "ARW", 20, 10, "before");
@@ -216,21 +257,7 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
             }],
             ..Default::default()
         };
-        let undo0 = s.undo.len();
-        let r = apply_prepared(
-            &mut s,
-            data,
-            ApplyPrepared {
-                update_existing: false,
-                files,
-                index: &mut ImportIndex::default(),
-                archive_path: None,
-                missing_sources: &HashSet::new(),
-                undo0,
-            },
-        )
-        .unwrap()
-        .report;
+        let r = apply_batch(&mut s, data, files, &mut ImportIndex::default());
         assert_eq!(r["imported"], 1, "{case}: {r}");
         assert_eq!(r["inRecentlyDeleted"], 0, "{case}: {r}");
         let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
@@ -277,21 +304,7 @@ fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
         }],
         ..Default::default()
     };
-    let undo0 = s.undo.len();
-    let r = apply_prepared(
-        &mut s,
-        data,
-        ApplyPrepared {
-            update_existing: false,
-            files,
-            index: &mut ImportIndex::default(),
-            archive_path: None,
-            missing_sources: &HashSet::new(),
-            undo0,
-        },
-    )
-    .unwrap()
-    .report;
+    let r = apply_batch(&mut s, data, files, &mut ImportIndex::default());
     let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
     assert_eq!(*new.develop, new.camera_defaults(), "{r}");
     assert_eq!((new.develop.wb.temp, new.develop.wb.tint), (5200.0, 4.0), "the file's as-shot white balance");
@@ -337,9 +350,7 @@ fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() 
             ..Default::default()
         })
     }));
-    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
-    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
-    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let r = run_job(&mut s, &source).report;
     let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
     assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{r}");
     assert_eq!(new.rating, 5, "the catalog's own metadata applies: {r}");
@@ -377,23 +388,7 @@ fn a_reimport_counts_each_trashed_match_once() {
     let mut s = crate::Session::new();
     // one import index across both imports, as a library on disk keeps in Interop/
     let mut index = ImportIndex::default();
-    let mut import = |s: &mut crate::Session| {
-        let undo0 = s.undo.len();
-        apply_prepared(
-            s,
-            sample(),
-            ApplyPrepared {
-                update_existing: false,
-                files: Default::default(),
-                index: &mut index,
-                archive_path: None,
-                missing_sources: &HashSet::new(),
-                undo0,
-            },
-        )
-        .unwrap()
-        .report
-    };
+    let mut import = |s: &mut crate::Session| apply_batch(s, sample(), Default::default(), &mut index);
     let first = import(&mut s);
     let ids: Vec<PhotoId> = ["1", "2"].iter().map(|k| PhotoId(first["mapping"][k].as_u64().unwrap())).collect();
     for id in &ids {
@@ -1069,6 +1064,49 @@ fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
     std::fs::remove_file(path).unwrap();
 }
 
+/// A one-photo catalog (its original, `/catalog/Photos/test.ARW`, is missing).
+fn fixture_catalog() -> Vec<u8> {
+    native_catalog(&photo_tables(("/catalog/", "")))
+}
+
+/// The synchronous import (CLI, MCP): read, batches, collections, one undo step, the index.
+#[test]
+fn import_reads_a_catalog_end_to_end() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lr-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(dir.join("Library"), false).unwrap();
+    let catalog = dir.join("fixture.lrcat");
+    std::fs::write(&catalog, fixture_catalog()).unwrap();
+    let undo0 = s.undo.len();
+    let report = import(&mut s, &catalog, false).unwrap();
+    assert_eq!(report["photos"], 1, "{report}");
+    assert_eq!(report["missing"].as_array().map(Vec::len), Some(1), "the original is missing: kept for relinking");
+    assert!(report.get("cancelled").is_none());
+    let photo = s.catalog.photos().next().unwrap();
+    assert_eq!((photo.rating, photo.flag), (5, Flag::Pick));
+    assert_eq!(s.undo.len(), undo0 + 1, "one undo step");
+    let index = load_index(Some(&dir.join("Library/Interop/lightroom-index.json"))).unwrap();
+    assert_eq!(index.photos.get("fixture-image"), Some(&photo.id.0));
+    // importing again maps the same photo
+    let again = import(&mut s, &catalog, false).unwrap();
+    assert_eq!(again["mapping"], report["mapping"]);
+    assert_eq!(s.catalog.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The import as a host runs it: the catalog read, every batch added, then the collections.
+fn run_job(s: &mut crate::Session, source: &Path) -> crate::lightroom_job::LightroomCompletion {
+    let cancel = AtomicBool::new(false);
+    let mut job = crate::lightroom_job::LightroomJob::new(s, source.to_path_buf(), false).unwrap();
+    let start = job.start(&cancel).unwrap();
+    let mut import = crate::lightroom_job::LightroomImport::begin(s, start).unwrap();
+    while let Some(batch) = job.next_batch(&cancel) {
+        import.commit(s, batch.unwrap()).unwrap();
+    }
+    import.finish(s, true).unwrap()
+}
+
 /// Reads `tables` as a catalog file and returns what the reader made of it.
 fn read_tables(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], name: &str) -> CatalogImport {
     let path = std::env::temp_dir().join(format!("lightcraft-{name}-{}.lrcat", std::process::id()));
@@ -1126,6 +1164,21 @@ fn a_virtual_copy_of_a_skipped_master_is_skipped_too() {
     validate(&catalog).unwrap();
 }
 
+/// The batched import (CLI, MCP and the desktop app) reports the reader's skipped images too.
+#[test]
+fn skipped_images_reach_the_batched_import_report() {
+    use SqlValue::Integer as I;
+    let mut tables = one_row(photo_tables(("/catalog/", "")));
+    tables[3].2[0][2] = I(2); // Adobe_images.rootFile → no such file
+    let path = std::env::temp_dir().join(format!("lightcraft-skipped-batched-{}.lrcat", std::process::id()));
+    std::fs::write(&path, native_catalog_rows(&tables, None)).unwrap();
+    let mut s = crate::Session::new();
+    let report = import(&mut s, &path, false).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(report["skipped"], json!([{"image": 1, "reason": "missingFile"}]), "{report}");
+    assert!(s.catalog.is_empty());
+}
+
 #[test]
 fn skipped_images_are_in_the_import_report() {
     let mut data = sample();
@@ -1154,10 +1207,8 @@ fn preparation_skips_missing_original_probes_but_keeps_catalog_records() {
         calls.fetch_add(1, Ordering::Relaxed);
         Err("a known-missing original must not be probed".into())
     }));
-    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
-    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let result = run_job(&mut s, &source);
     assert_eq!(probes.load(Ordering::Relaxed), 0);
-    let result = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap();
     assert_eq!(result.report["imported"], 1);
     assert_eq!(result.report["failed"], json!([]));
     assert_eq!(result.report["missing"].as_array().unwrap().len(), 1);
@@ -1184,9 +1235,7 @@ fn probed_original_is_counted_once_and_reimport_adds_nothing() {
         Ok(crate::media::ProbeInfo { format: "ARW".into(), width: 20, height: 10, ..Default::default() })
     }));
     for expected in [1, 0] {
-        let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source.clone(), false).unwrap();
-        let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
-        let completion = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap();
+        let completion = run_job(&mut s, &source);
         assert_eq!(completion.report["imported"], expected);
         assert_eq!(completion.report["missing"], json!([]));
         assert_eq!(completion.report["failed"], json!([]));

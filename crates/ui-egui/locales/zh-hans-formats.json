@@ -130,6 +130,7 @@
   "Build Standard-Sized Previews ({scope})": "生成标准尺寸预览（{scope}）",
   "Discard Smart Previews ({scope})": "丢弃智能预览（{scope}）",
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "已检查 Lightroom 目录：{photos} 张照片，{collections} 个收藏夹，{missing} 个缺失",
+  "Lightroom import cancelled · {imported} photos added": "已取消 Lightroom 导入 · 已添加 {imported} 张照片",
   "Lightroom import complete: {imported} photos added": "Lightroom 导入完成：已添加 {imported} 张照片",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom 导入完成：已添加 {imported} 张照片，{failed} 张失败",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom 导入完成：已添加 {imported} 张照片；索引警告：{warning}",

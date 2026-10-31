@@ -130,6 +130,7 @@
   "Build Standard-Sized Previews ({scope})": "Buat pratinjau ukuran standar ({scope})",
   "Discard Smart Previews ({scope})": "Buang pratinjau pintar ({scope})",
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "Katalog Lightroom diperiksa: {photos} foto, {collections} koleksi, {missing} hilang",
+  "Lightroom import cancelled · {imported} photos added": "Impor Lightroom dibatalkan · {imported} foto ditambahkan",
   "Lightroom import complete: {imported} photos added": "Impor Lightroom selesai: {imported} foto ditambahkan",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Impor Lightroom selesai: {imported} foto ditambahkan, {failed} gagal",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Impor Lightroom selesai: {imported} foto ditambahkan; peringatan indeks: {warning}",

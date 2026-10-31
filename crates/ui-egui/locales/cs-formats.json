@@ -98,6 +98,7 @@
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "Geometrie Lightroom pro {path} se nezachovala; uložená transformace narovnání perspektivy není podporována.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "Geometrie Lightroom pro {path} se nezachovala; uložená transformace se ignoruje, protože narovnání perspektivy je vypnuté.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Geometrie Lightroom pro {path} se nezachovala; {mode} se přepočítá.",
+  "Lightroom import cancelled · {imported} photos added": "Import z Lightroom byl zrušen · přidaných fotografií: {imported}",
   "Lightroom import complete: {imported} photos added": "Import z Lightroom byl dokončen: přidaných fotografií: {imported}",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Import z Lightroom byl dokončen: přidaných fotografií: {imported}, neúspěšných: {failed}",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Import z Lightroom byl dokončen: přidaných fotografií: {imported}; varování indexu: {warning}",

@@ -123,11 +123,28 @@ fn ext_upper(name: &str) -> String {
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
-    let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
+    probe_bytes_with(name, bytes, true)
+}
+
+/// What [`lightcraft_raw::probe_info`] says about a raw file (`None`: not a raw).
+pub(super) type RawProbe = Option<lightcraft_raw::Result<lightcraft_raw::RawInfo>>;
+
+pub(super) fn raw_probe(bytes: &[u8]) -> RawProbe {
+    lightcraft_raw::probe(bytes).is_some().then(|| lightcraft_raw::probe_info(bytes))
+}
+
+/// [`probe_bytes`], with the content hash only when `hash` (a buffer read in part has none).
+fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<ProbeInfo, String> {
+    describe(name, bytes, raw_probe(bytes), hash)
+}
+
+/// [`probe_bytes_with`] given what the raw reader said about `bytes` ([`raw_probe`]).
+pub(super) fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<ProbeInfo, String> {
+    let content_hash = hash.then(|| lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
-    if lightcraft_raw::probe(bytes).is_some() {
-        let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
+    if let Some(raw) = raw {
+        let raw = match raw.map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
