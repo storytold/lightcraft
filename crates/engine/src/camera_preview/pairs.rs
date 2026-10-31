@@ -355,7 +355,8 @@ pub(super) fn search_ordered(
     bright: &HighlightCheck,
     scaled: bool,
 ) -> Option<(CameraLook, Attempt)> {
-    let profiles: &[bool] = if colour.is_some() { &[true, false] } else { &[false] };
+    // The scaled retry changes only learned colour; a given profile was already tried.
+    let profiles: &[bool] = if colour.is_some() && !scaled { &[true, false] } else { &[false] };
     order.iter().find_map(|&tone| {
         profiles.iter().find_map(|&profile| {
             [false, true].into_iter().find_map(|away_from_edges| {
