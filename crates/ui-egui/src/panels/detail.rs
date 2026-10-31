@@ -958,7 +958,14 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
         return Overlay::Spots(app.ui.spots_threshold.clamp(0.0, 100.0).round() as u8);
     }
     let edit = app.ui.right == RightPanel::Edit;
-    if edit && app.ui.point_color_visualize && app.ui.flyout_open("pointColor") && app.ui.point_color < d.point_colors.len() {
+    // (a B&W photo's mixer shows its B&W mix, not Point Color)
+    if edit
+        && app.ui.point_color_visualize
+        && app.ui.flyout_open("mixer")
+        && app.ui.mixer_tab == "point"
+        && !crate::is_bw(d)
+        && app.ui.point_color < d.point_colors.len()
+    {
         return Overlay::PointColorRange(app.ui.point_color as u8);
     }
     if edit && app.ui.hdr_visualize && d.hdr.enabled {

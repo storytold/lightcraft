@@ -157,6 +157,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.editKeywords", "Edit Keywords", Some("Cmd+Shift+K"), ""),
     ("panel.activity", "History", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
+    // the Color Mixer's layout {tab?: mixer|point, adjust?: hsl|color, group?: hue|sat|lum|all,
+    // band?: red…magenta}: opens it in the Edit panel (the sliders are the mixer.* controls)
+    ("view.colorMixer", "Color Mixer Layout", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
     ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),
     ("section.color", "Color", Some("Cmd+2"), "Window>Edit Sections"),

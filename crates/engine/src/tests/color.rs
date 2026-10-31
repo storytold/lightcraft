@@ -125,7 +125,19 @@ fn targeted_adjustment_on_curve_and_mixer() {
     assert!(!o.is_empty() && o.keys().all(|k| k.starts_with("mixer.") && k.ends_with(".sat")), "{r}");
     assert!(o.values().any(|v| v.as_f64() == Some(-30.0)), "{r}");
     assert!(o.values().all(|v| v.as_f64().unwrap() < 0.0));
+    let top_band = |o: &serde_json::Map<String, serde_json::Value>| {
+        let (k, _) = o.iter().max_by(|a, b| a.1.as_f64().unwrap().abs().total_cmp(&b.1.as_f64().unwrap().abs())).unwrap();
+        k.split('.').nth(1).unwrap().to_string()
+    };
+    let sky_band = top_band(o);
     assert!(s.execute("develop.targeted", &json!({"target": "nope", "x": 0.5, "y": 0.5, "delta": 1})).is_err());
+    // a B&W profile's photo: the Luminance targeted adjustment moves its B&W mix, as the panel shows
+    s.execute("develop.profile", &json!({"id": "lc.bw.mono-rich"})).unwrap();
+    let r = s.execute("develop.targeted", &json!({"target": "lum", "x": 0.5, "y": 0.1, "delta": 10})).unwrap();
+    let o = r.as_object().unwrap();
+    assert!(!o.is_empty() && o.keys().all(|k| k.starts_with("bw.")), "{r}");
+    // ... the band of the sky's own colour, not of the grey the profile renders
+    assert_eq!(top_band(o), sky_band, "{r}");
 }
 
 /// Issue #730: on a raw whose camera has measured colour matrices the white-balance commands write Kelvin, mark

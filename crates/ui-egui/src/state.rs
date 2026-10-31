@@ -238,8 +238,15 @@ pub struct UiState {
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
-    /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
+    /// The colour band shown in the Color Mixer's Color mode (one of `MIXER_BANDS`).
     pub mixer_mode: String,
+    /// The Color Mixer's tab: "mixer" | "point" (Point Color). Remembered.
+    pub mixer_tab: String,
+    /// What the Mixer adjusts by: "hsl" (eight sliders per Hue / Saturation / Luminance) |
+    /// "color" (one colour at a time). Remembered; HSL by default.
+    pub mixer_adjust: String,
+    /// The HSL group shown: "hue" | "sat" | "lum" | "all". Remembered.
+    pub mixer_group: String,
     /// Selected colour grading tab: "3way" | "shadows" | "midtones" | "highlights".
     pub grading_mode: String,
     /// Colour grading wheels (shadows, midtones, highlights) hidden for viewing by their eye, and
@@ -457,7 +464,10 @@ impl Default for UiState {
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
-            mixer_mode: "hue".into(),
+            mixer_mode: "red".into(),
+            mixer_tab: "mixer".into(),
+            mixer_adjust: "hsl".into(),
+            mixer_group: "hue".into(),
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
