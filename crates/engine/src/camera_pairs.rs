@@ -62,6 +62,9 @@ struct Photo {
 
 /// The pairs file for `photos`, each photo's pairs in value order ([`canonical_order`]).
 pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
+    if photos.len() > MAX_PHOTOS {
+        return Err(format!("{} photos is more than a pairs file may hold ({MAX_PHOTOS})", photos.len()));
+    }
     let photos = photos
         .iter()
         .map(|p| {
@@ -200,6 +203,17 @@ mod tests {
     }
 
     const ID: &str = "00112233445566778899aabbccddeeff";
+
+    #[test]
+    fn write_enforces_photo_limit() {
+        let photo = photo("ILCE-7M4", ID, 1);
+        let mut photos = vec![&photo; MAX_PHOTOS];
+        let bytes = write(&photos).unwrap();
+        assert_eq!(read(&bytes, "at limit").unwrap().len(), MAX_PHOTOS);
+        photos.push(&photo);
+        let error = write(&photos).unwrap_err();
+        assert!(error.contains("photos is more than a pairs file may hold"), "{error}");
+    }
 
     #[test]
     fn base64_round_trips() {
