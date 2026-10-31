@@ -3385,9 +3385,16 @@ fn browsing_the_same_folder_again_does_not_restart() {
     }));
     let browse = |h: &mut Headless| h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
     assert_eq!(browse(&mut h)["result"]["scanning"], true);
-    std::thread::sleep(Duration::from_millis(200));
+    // the read is under way (held at its one file), however long a loaded machine takes to get there
+    // (frames run meanwhile: the read hands its files on from the frame loop)
+    h.step_until(SETTLE, |_| started.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    assert_eq!(started.load(std::sync::atomic::Ordering::Relaxed), 1, "the read started");
     assert_eq!(browse(&mut h)["result"]["scanning"], true);
-    std::thread::sleep(Duration::from_millis(200));
+    // a second read would reach the folder's one file as the first did, a few frames after it started
+    // (the first is still held there, so nothing else probes meanwhile)
+    for _ in 0..30 {
+        h.step();
+    }
     assert_eq!(started.load(std::sync::atomic::Ordering::Relaxed), 1, "the second click must not start another read");
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     h.settle(SETTLE);
