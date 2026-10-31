@@ -138,7 +138,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     is saved; the stored library is left as it was.
   - A panic (wasm is built with `panic = "abort"`) replaces the page with a message saying the
     stored library is kept and to reload, instead of a frozen canvas.
-- **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⌘⇧I</kbd>) opens the
+- **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⇧⌘I</kbd>) opens the
   browser's file picker. You can also drop files anywhere on the page. The bytes are written to
   storage, then imported and decoded by the same engine code as the desktop app
   (`lightcraft_engine::files::{probe_bytes, load_bytes}`): JPEG/PNG/TIFF/WebP and the supported
@@ -153,12 +153,19 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   threads or `SharedArrayBuffer`. If no worker starts, rendering falls back to the main thread.
 - **Every develop control** (sliders, curves, mixer, grading, masking, crop…) works as it does
   on the desktop, since it's the same crate.
-- **Export downloads the file.** *Export…* (<kbd>⌘⇧E</kbd>) runs the same `app.export` path as
+- **Export downloads the file.** *Export…* (<kbd>⇧⌘E</kbd>) runs the same `app.export` path as
   the desktop app (`lightcraft_engine::export`: JPEG/PNG/TIFF/WebP, sizing, naming). The host's
   `write` service hands each file to the browser as a download instead of writing it to disk.
 - **Automation.** `await lightcraft.command("library.info", "{}")` runs any engine or UI command
   by id on the next frame and resolves to the JSON result (`web.stats` reports storage, workers
-  and the render queue). This is how the headless-Chrome checks drive the page.
+  and the render queue). The params are a JSON object; empty text and JSON `null` mean `{}`
+  (no params: a command that takes photo ids then acts on the selection). Any other text that
+  isn't an object rejects the promise and runs nothing, as the control channel and MCP do, so a
+  typo can't run a command on the selection. This is how the headless-Chrome checks drive the page.
+- **The page title names the open photo**: `<file name> — LightCraft`, with ` •` after the name while
+  changes are not yet written to browser storage (`LightcraftApp::page_title`). eframe's web runner
+  ignores the window title the desktop app sets, and a host that embeds the page reads this title to
+  tell which photo a drop opened and whether it is saved (issue #2397).
 
 ## Not yet
 

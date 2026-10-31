@@ -1,5 +1,5 @@
 //! Bounded, allocation-free (apart from small shape lists) graph checking.
-use super::*;
+use super::{Data, Graph, HashMap, MAX_TENSOR, NetError, Node, Result, pads, pair, shape_err, unsupported};
 use crate::graph::{Attr, Weight};
 
 pub(super) fn elements(s: &[usize]) -> Result<usize> {

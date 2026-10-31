@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::LightcraftApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
-use crate::widgets::register;
+use crate::widgets::{register, register_response};
 
 /// A slider's label in the effect lists (the colour tint's hue and saturation are one "Color").
 pub fn field_label(k: &str) -> &'static str {
@@ -123,7 +123,7 @@ struct MenuState {
 }
 
 fn state_id() -> egui::Id {
-    egui::Id::new("maskEffectMenuState")
+    egui::Id::unique("maskEffectMenuState")
 }
 
 /// The effects the menu lists for `query`: (section heading, effect name, its row widget id).
@@ -223,7 +223,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
             // (rows scrolled out of view can't be clicked)
             if ui.is_rect_visible(rect) {
-                register(ui.ctx(), widget.clone(), rect);
+                register(ui, widget.clone(), rect);
             }
             let lit = st.highlight == Some(i) || resp.hovered();
             if lit {
@@ -237,7 +237,12 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
             let elided = g.elided;
             ui.painter().galley(rect.left_center() + vec2(18.0, -g.size().y / 2.0), g, t.text);
             if fav {
-                ui.painter().text(rect.right_center() - vec2(4.0, 0.0), egui::Align2::RIGHT_CENTER, "★", t.font(11.0), t.text_dim);
+                crate::rating::paint_star(
+                    ui.painter(),
+                    egui::Rect::from_center_size(rect.right_center() - vec2(10.0, 0.0), vec2(11.0, 11.0)),
+                    true,
+                    t.text_dim,
+                );
             }
             if moved && st.highlight == Some(i) {
                 resp.scroll_to_me(None);
@@ -265,7 +270,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
     ui.separator();
     let item = |ui: &mut egui::Ui, id: &str, text: String, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(text).frame(false));
-        register(ui.ctx(), id.to_string(), r.rect);
+        register(ui, id.to_string(), r.rect);
         r.clicked()
     };
     if item(ui, "maskEffectMenu:reset", crate::i18n::tr("Reset Sliders").to_string(), true) {
@@ -317,7 +322,7 @@ fn preview(app: &mut LightcraftApp, mask: &Mask, name: &str) {
 fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str, fav: bool) {
     let run = |app: &mut LightcraftApp, ui: &mut egui::Ui, text: &str, cmd: &str, p: Value| {
         let r = ui.button(crate::i18n::tr(text));
-        register(ui.ctx(), format!("maskEffectRow:{text}"), r.rect);
+        register(ui, format!("maskEffectRow:{text}"), r.rect);
         if r.clicked() {
             if let Err(e) = app.run(cmd, p) {
                 app.toast_error(ui.ctx(), e);
@@ -393,7 +398,7 @@ pub fn save_body(
             .width(ui.available_width() - 30.0)
             .show(ui);
         let pick = ui.small_button("…").on_hover_text(crate::i18n::tr("Choose a group"));
-        register(ui.ctx(), "button:effectGroupPick", pick.rect);
+        register(ui, "button:effectGroupPick", pick.rect);
         egui::Popup::menu(&pick).show(|ui| {
             for (g, _) in fx::menu_order(&app.session.mask_effects) {
                 if ui.button(if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.clone() }).clicked() {
@@ -417,7 +422,7 @@ pub fn save_body(
             // the sliders this mask changes stand out; the others are dimmed
             let text = if changed.iter().any(|c| c == k) { text.color(t.text).strong() } else { text.color(t.text_dim) };
             let r = cols[i % 2].checkbox(&mut on, text);
-            register(&r.ctx, format!("effectInclude:{k}"), r.rect);
+            register_response(format!("effectInclude:{k}"), r.rect, &r);
             if r.changed() {
                 fields.retain(|f| f != k);
                 if on {
@@ -429,7 +434,7 @@ pub fn save_body(
     ui.horizontal(|ui| {
         for (id, text) in [("all", "All"), ("none", "None"), ("changed", "Changed Only")] {
             let b = ui.small_button(crate::i18n::tr(text));
-            register(ui.ctx(), format!("effectInclude:{id}"), b.rect);
+            register(ui, format!("effectInclude:{id}"), b.rect);
             if b.clicked() {
                 *fields = match id {
                     "all" => list.iter().map(|k| k.to_string()).collect(),
@@ -445,9 +450,9 @@ pub fn save_body(
             .size(11.0),
     );
     let r = ui.checkbox(amount, crate::i18n::tr("Include Amount"));
-    register(ui.ctx(), "check:effectAmount", r.rect);
+    register(ui, "check:effectAmount", r.rect);
     let r = ui.checkbox(brush, crate::i18n::tr("Include brush size, feather and flow"));
-    register(ui.ctx(), "check:effectBrush", r.rect);
+    register(ui, "check:effectBrush", r.rect);
     enter
 }
 
@@ -514,7 +519,7 @@ pub fn manage_body(
                 egui::Label::new(egui::RichText::new(format!("{heading}  ({})", list.len())).font(t.semibold(12.0)).color(t.text_label))
                     .sense(Sense::click()),
             );
-            register(ui.ctx(), format!("effectGroup:{group}"), h.rect);
+            register(ui, format!("effectGroup:{group}"), h.rect);
             if h.clicked() {
                 // a click on the heading selects the group
                 *selected = list.iter().map(|e| e.name.clone()).collect();
@@ -522,10 +527,7 @@ pub fn manage_body(
             for e in list {
                 let sel = selected.contains(&e.name);
                 ui.horizontal(|ui| {
-                    let star = ui.add(egui::Button::new(if e.favorite { "★" } else { "☆" }).frame(false)).on_hover_text(crate::i18n::tr("Favorite"));
-                    if ui.is_rect_visible(star.rect) {
-                        register(ui.ctx(), format!("effectStar:{}", e.name), star.rect);
-                    }
+                    let star = crate::rating::favorite_button(ui, format!("effectStar:{}", e.name), e.favorite, crate::i18n::tr("Favorite"));
                     if star.clicked() {
                         toggle_star = Some((e.name.clone(), !e.favorite));
                     }
@@ -543,7 +545,7 @@ pub fn manage_body(
                     }
                     let (rect, r) = ui.allocate_exact_size(vec2(240.0, 22.0), Sense::click());
                     if ui.is_rect_visible(rect) {
-                        register(ui.ctx(), format!("effectRow:{}", e.name), rect);
+                        register(ui, format!("effectRow:{}", e.name), rect);
                     }
                     if sel {
                         ui.painter().rect_filled(rect, 3.0, t.tool_active);
@@ -601,14 +603,14 @@ pub fn manage_body(
         );
         ui.horizontal(|ui| {
             let d = ui.button(crate::i18n::tr("Delete"));
-            register(ui.ctx(), "button:effectDeleteConfirm", d.rect);
+            register(ui, "button:effectDeleteConfirm", d.rect);
             if d.clicked() {
                 let _ = app.run("mask.deleteEffect", json!({"names": selected.clone()}));
                 selected.clear();
                 *confirm_delete = false;
             }
             let c = ui.button(crate::i18n::tr("Cancel"));
-            register(ui.ctx(), "button:effectDeleteCancel", c.rect);
+            register(ui, "button:effectDeleteCancel", c.rect);
             if c.clicked() {
                 *confirm_delete = false;
             }
@@ -618,7 +620,7 @@ pub fn manage_body(
     ui.horizontal_wrapped(|ui| {
         let button = |ui: &mut egui::Ui, id: &str, text: &str, enabled: bool| {
             let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(text)));
-            register(ui.ctx(), format!("button:effect{id}"), r.rect);
+            register(ui, format!("button:effect{id}"), r.rect);
             r.clicked()
         };
         if button(ui, "Apply", "Apply", one.is_some() && mask.is_some())
@@ -648,7 +650,7 @@ pub fn manage_body(
             let _ = app.run("mask.favoriteEffect", json!({"names": selected.clone(), "favorite": !all_fav}));
         }
         let g = ui.add_enabled(n > 0, egui::Button::new(crate::i18n::tr("Move to Group…")));
-        register(ui.ctx(), "button:effectGroup", g.rect);
+        register(ui, "button:effectGroup", g.rect);
         egui::Popup::menu(&g).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             let names = selected.clone();
             for (grp, _) in fx::menu_order(&app.session.mask_effects) {
@@ -681,23 +683,38 @@ pub fn manage_body(
     }
 }
 
+/// The distinct values, sorted.
+fn distinct<'a>(values: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut v: Vec<&str> = values.collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 /// The toast after an import (`preset.import` / `mask.importEffects` result): how many effects,
 /// in how many groups, and the settings they carry that LightCraft can't apply.
 pub fn import_toast(v: &Value) -> String {
     let rows: Vec<&Value> = v["effects"].as_array().or_else(|| v["imported"].as_array()).into_iter().flatten().collect();
-    let n = rows.len();
-    let mut msg = crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", if n == 1 { "" } else { "s" }, e = n);
-    let mut groups: Vec<&str> = rows.iter().filter_map(|r| r["group"].as_str()).filter(|g| !g.is_empty()).collect();
-    groups.sort_unstable();
-    groups.dedup();
+    let mut msg = imported_effects_message(rows.len());
+    let groups = distinct(rows.iter().filter_map(|r| r["group"].as_str()).filter(|g| !g.is_empty()));
     if !groups.is_empty() {
-        msg += &crate::i18n::tr_format!(" in {g} group{}", if groups.len() == 1 { "" } else { "s" }, g = groups.len());
+        msg += &in_groups_message(groups.len());
     }
-    let mut skipped: Vec<&str> = rows.iter().flat_map(|r| r["unmapped"].as_array().into_iter().flatten()).filter_map(Value::as_str).collect();
-    skipped.sort_unstable();
-    skipped.dedup();
+    let skipped = distinct(rows.iter().flat_map(|r| r["unmapped"].as_array().into_iter().flatten()).filter_map(Value::as_str));
     if !skipped.is_empty() {
-        msg += &crate::i18n::tr_format!(" — kept but not applied: {}", skipped.join(", "));
+        msg += &not_applied_message(&skipped);
     }
     msg
+}
+
+fn imported_effects_message(n: usize) -> String {
+    crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", crate::i18n::plural_s(n), e = n)
+}
+
+fn in_groups_message(groups: usize) -> String {
+    crate::i18n::tr_format!(" in {g} group{}", crate::i18n::plural_s(groups), g = groups)
+}
+
+fn not_applied_message(settings: &[&str]) -> String {
+    crate::i18n::tr_format!(" — kept but not applied: {}", settings.join(", "))
 }
