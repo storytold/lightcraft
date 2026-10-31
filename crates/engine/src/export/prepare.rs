@@ -1,4 +1,4 @@
-use super::batch::{export_gpu, run_batch};
+use super::batch::{export_gpu, export_mix, run_batch};
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
@@ -52,6 +52,9 @@ pub struct PreparedExport {
     pub(super) weight: usize,
     /// Its renders may use the GPU ([`export_gpu`] when it was prepared).
     pub(super) gpu: bool,
+    /// When the GPU is busy with other photos it renders on the processor instead of waiting
+    /// ([`export_mix`] when it was prepared).
+    pub(super) mix: bool,
 }
 
 struct RenderWork {
@@ -161,7 +164,7 @@ fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, gpu: export_gpu() })
+    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight, gpu: export_gpu(), mix: export_mix() })
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
@@ -336,7 +339,21 @@ impl PreparedExport {
                     };
                     Ok((r, hdr, gpu_fallback))
                 };
-                let (r, hdr, gpu_fallback) = if hdr_on_gpu { lightcraft_gpu::in_one_turn(src_px, out_px, renders) } else { renders() }?;
+                let (r, hdr, gpu_fallback) = if self.gpu && self.mix {
+                    // the GPU and the processor at once: this photo takes the GPU when it is free,
+                    // else it renders on the processor rather than wait (Test my machine picks it)
+                    match lightcraft_gpu::try_batch_turn(src_px, out_px) {
+                        Some(_turn) => renders(),
+                        None => {
+                            lap("the GPU is busy: rendering on the processor", &mut t);
+                            lightcraft_gpu::on_cpu(renders)
+                        }
+                    }
+                } else if hdr_on_gpu {
+                    lightcraft_gpu::in_one_turn(src_px, out_px, renders)
+                } else {
+                    renders()
+                }?;
                 lap("renders", &mut t);
                 check()?;
                 // 3. The encode, on this lane's thread after its turn (the next photo renders meanwhile)

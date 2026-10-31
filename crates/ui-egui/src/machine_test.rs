@@ -24,6 +24,8 @@ pub struct MachineTask {
 pub fn apply(st: &AppSettings) {
     lightcraft_engine::export::set_export_lanes(lanes(st));
     lightcraft_engine::export::set_export_gpu(!st.export_cpu_only);
+    // (the GPU and the processor at once when the last test found it faster)
+    lightcraft_engine::export::set_export_mix(!st.export_cpu_only && st.machine_test.as_ref().is_some_and(|m| m.mix));
     lightcraft_engine::gpu::set_batch_limits(Some(u64::from(st.gpu_export_mb) << 20).filter(|b| *b > 0), gpu_jobs(st));
 }
 

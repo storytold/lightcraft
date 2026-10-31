@@ -26,7 +26,8 @@ pub(crate) use batch::export_batch_tuned;
 #[cfg(test)]
 use batch::run_batch_with;
 pub use batch::{
-    MAX_EXPORT_LANES, export_gpu, export_lanes_override, export_parallelism, run_batch, run_batch_cancellable, set_export_gpu, set_export_lanes,
+    MAX_EXPORT_LANES, export_gpu, export_lanes_override, export_mix, export_parallelism, run_batch, run_batch_cancellable, set_export_gpu,
+    set_export_lanes, set_export_mix,
 };
 #[cfg(test)]
 use encoding::{FIT_ENCODES, linear_of_8bit};

@@ -26,6 +26,8 @@ pub struct TestRun {
     pub lanes: usize,
     /// The GPU was used.
     pub gpu: bool,
+    /// The processor rendered photos too while the GPU was busy ([`crate::export::export_mix`]).
+    pub mix: bool,
     pub photos: usize,
     pub seconds: f64,
     pub photos_per_min: f64,
@@ -55,6 +57,8 @@ pub struct MachineReport {
     pub lanes: usize,
     pub use_gpu: bool,
     pub gpu_jobs: usize,
+    /// The processor renders photos too while the GPU is busy with others.
+    pub mix: bool,
     /// Photos a minute with the choice.
     pub photos_per_min: f64,
     /// What limits it, in plain words.
@@ -92,7 +96,7 @@ pub fn lane_choices(cores: usize, quick: bool) -> Vec<usize> {
 /// The fastest run, preferring fewer lanes (less memory) when within 3 % of it.
 pub fn best_run(runs: &[TestRun]) -> Option<&TestRun> {
     let top = runs.iter().map(|r| r.photos_per_min).fold(0.0f64, f64::max);
-    runs.iter().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu))
+    runs.iter().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu, r.mix))
 }
 
 /// Run the test. `progress(done, total, what)` after each step; `false` stops it (`Err("cancelled")`).
@@ -128,8 +132,9 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     if let Some(edge) = o.long_edge {
         opts.resize = Some(crate::export::Resize::long_edge(edge));
     }
-    // (+1: warming up; +1: the processor alone at the best lanes, when there is a GPU)
-    let total = lanes.len() + 1 + usize::from(gpu);
+    // (+1: warming up; +2: the processor alone, and the GPU and the processor at once, at the
+    // best lanes, when there is a GPU)
+    let total = lanes.len() + 1 + 2 * usize::from(gpu);
     let mut step = 0;
     let mut tick = |what: &str| {
         step += 1;
@@ -138,17 +143,20 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     // (as many photos as lanes, so every lane works: at least 4 or 6)
     let per_run = |l: usize| l.max(if o.quick { 4 } else { 6 });
     // warm up (not counted): the decoder, the caches, the GPU's kernels; and one photo's peak on the GPU
-    let warm = export_round(&mut session, &ids[..1], &opts, 1, gpu)?;
+    let warm = export_round(&mut session, &ids[..1], &opts, 1, gpu, false)?;
     let peak = warm.gpu_peak;
     tick("Warming up")?;
     let mut runs = Vec::new();
     for &l in &lanes {
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, gpu)?);
+        runs.push(export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, gpu, false)?);
         tick(&format!("{l} photos side by side"))?;
     }
     if gpu && let Some(best) = best_run(&runs).cloned() {
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, false)?);
+        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, false, false)?);
         tick("The processor alone")?;
+        // photos the GPU is too busy for render on the processor meanwhile (note 28's hybrid)
+        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, true, true)?);
+        tick("The graphics card and the processor together")?;
     }
     let best = best_run(&runs).cloned().ok_or("no measurement")?;
     let vram = crate::gpu::adapter_memory().unwrap_or(0);
@@ -163,6 +171,7 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
         use_gpu: best.gpu,
         // exports sharing the GPU: as many as its memory holds at the measured peak of one
         gpu_jobs: gpu_jobs_for(vram, peak),
+        mix: best.gpu && best.mix,
         photos_per_min: best.photos_per_min,
         limit: limit_text(&runs, &best),
         runs,
@@ -202,6 +211,7 @@ fn export_round(
     o: &ExportOptions,
     lanes: usize,
     gpu: bool,
+    mix: bool,
 ) -> Result<TestRun, String> {
     for &id in ids {
         session.media.forget(id); // every original is decoded again, as in a real export
@@ -210,7 +220,7 @@ fn export_round(
     let gpu0 = crate::gpu::batch_usage().waits;
     crate::gpu::reset_memory_peak();
     let t = Instant::now();
-    let files = crate::export::export_batch_tuned(session, ids, o, lanes, gpu)?;
+    let files = crate::export::export_batch_tuned(session, ids, o, lanes, gpu, mix)?;
     let seconds = t.elapsed().as_secs_f64().max(1e-3);
     if let Some(e) = files.iter().find_map(|f| f.get("error")) {
         return Err(format!("the test export failed: {e}"));
@@ -219,6 +229,7 @@ fn export_round(
     Ok(TestRun {
         lanes,
         gpu,
+        mix: gpu && mix,
         photos: files.len(),
         seconds,
         photos_per_min: files.len() as f64 * 60.0 / seconds,
@@ -246,6 +257,11 @@ fn limit_text(runs: &[TestRun], best: &TestRun) -> String {
 fn summary(r: &MachineReport) -> String {
     let cpu = r.runs.iter().filter(|x| !x.gpu).map(|x| x.photos_per_min).fold(0.0f64, f64::max);
     let gpu_part = match (&r.gpu, r.use_gpu) {
+        (Some(g), true) if r.mix => format!(
+            "The graphics card ({g}) renders the edits, {} export{} at a time, and the processor renders the photos it has no room for.",
+            r.gpu_jobs,
+            if r.gpu_jobs == 1 { "" } else { "s" }
+        ),
         (Some(g), true) => {
             format!("The graphics card ({g}) renders the edits, {} export{} at a time.", r.gpu_jobs, if r.gpu_jobs == 1 { "" } else { "s" })
         }
@@ -265,6 +281,7 @@ fn summary(r: &MachineReport) -> String {
 pub fn apply(r: &MachineReport) {
     crate::export::set_export_lanes(Some(r.lanes).filter(|l| *l > 0));
     crate::export::set_export_gpu(r.use_gpu);
+    crate::export::set_export_mix(r.use_gpu && r.mix);
     crate::gpu::set_batch_limits(None, Some(r.gpu_jobs).filter(|j| *j > 0));
 }
 
@@ -275,6 +292,7 @@ pub fn tuning() -> serde_json::Value {
         "lanes": crate::export::export_parallelism(usize::MAX),
         "lanesSetting": crate::export::export_lanes_override(),
         "gpu": crate::export::export_gpu(),
+        "mix": crate::export::export_mix(),
         "gpuJobs": b.limit_jobs,
         "gpuLimitMb": b.limit_bytes >> 20,
         "gpuMemoryMb": crate::gpu::adapter_memory().map(|m| m >> 20),
@@ -397,6 +415,10 @@ mod tests {
         let runs = [run(8, true, 9.0), run(8, false, 12.0)];
         assert_eq!(best_run(&runs).map(|r| r.gpu), Some(false), "the processor alone was faster");
         assert!(best_run(&[]).is_none());
+        // the GPU and the processor together only when clearly faster than the GPU alone
+        let mixed = |lanes, mix, ppm| TestRun { lanes, gpu: true, mix, photos_per_min: ppm, ..Default::default() };
+        assert!(!best_run(&[mixed(4, false, 20.0), mixed(4, true, 20.3)]).unwrap().mix, "about as fast: the GPU alone");
+        assert!(best_run(&[mixed(4, false, 20.0), mixed(4, true, 26.0)]).unwrap().mix);
     }
 
     #[test]

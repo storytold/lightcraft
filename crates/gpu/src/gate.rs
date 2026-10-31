@@ -76,6 +76,33 @@ pub(crate) fn in_one_turn<R>(bytes: u64, vram: u64, stop: &dyn Fn() -> bool, f: 
     r
 }
 
+/// A turn taken without waiting ([`try_turn`]): this thread's renders run in it until it is
+/// dropped, as inside [`in_one_turn`].
+pub(crate) struct Turn {
+    _permit: Option<Permit>,
+    was: bool,
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let was = self.was;
+        let _ = IN_TURN.try_with(|c| c.set(was));
+    }
+}
+
+/// [`in_one_turn`]'s turn if it is free now; `None` when it would have to wait for other
+/// exports (the caller renders on the CPU instead: exports on the GPU and the processor at once).
+/// Outside batch work, and inside a turn already taken, always a turn.
+pub(crate) fn try_turn(bytes: u64, vram: u64) -> Option<Turn> {
+    let was = IN_TURN.try_with(|c| c.get()).unwrap_or(false);
+    if !is_batch() || was {
+        return Some(Turn { _permit: None, was });
+    }
+    let permit = enter(bytes, vram, &|| true)?;
+    let _ = IN_TURN.try_with(|c| c.set(true));
+    Some(Turn { _permit: Some(permit), was })
+}
+
 /// Run `f` with this thread's GPU renders counted as batch work.
 pub(crate) fn as_batch<R>(f: impl FnOnce() -> R) -> R {
     let was = BATCH.with(|b| b.replace(true));
@@ -287,6 +314,26 @@ mod tests {
         let p = as_batch(|| enter(1 << 20, 0, &|| false));
         assert!(p.is_some() && t.elapsed() >= Duration::from_millis(250), "waited for the hold: {:?}", t.elapsed());
         drop(p);
+        set_limits(None, None);
+    }
+
+    #[test]
+    fn a_turn_is_taken_only_when_free() {
+        let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        set_limits(Some(10 << 30), Some(1));
+        as_batch(|| {
+            let t = try_turn(1 << 20, 0).expect("free");
+            assert_eq!(usage().0, 1);
+            // the renders inside it don't queue again
+            assert!(enter(1 << 20, 0, &|| true).is_some());
+            assert_eq!(usage().0, 1);
+            // another thread's photo finds it taken: no waiting
+            let other = std::thread::spawn(|| as_batch(|| try_turn(1 << 20, 0).is_none())).join().unwrap();
+            assert!(other, "taken: the other photo renders on the CPU");
+            drop(t);
+            assert_eq!(usage().0, 0);
+            assert!(!IN_TURN.with(|c| c.get()));
+        });
         set_limits(None, None);
     }
 

@@ -1506,7 +1506,7 @@ fn an_export_encodes_outside_its_renders() {
     }
     let o = ExportOptions::from_json(&json!({"longEdge": 256, "hdr": true, "quality": 90}));
     let before = crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed);
-    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true).unwrap();
+    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true, false).unwrap();
     assert_eq!(files.len(), 3, "{files:?}");
     assert!(files.iter().all(|f| f.get("error").is_none()), "{files:?}");
     assert_eq!(crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed), before, "no encode inside a photo's renders");
@@ -1535,7 +1535,7 @@ fn photos_side_by_side_overlap_on_one_gpu_turn() {
             s.media.forget(id);
         }
         let t = std::time::Instant::now();
-        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes, true).unwrap();
+        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes, true, false).unwrap();
         assert!(files.iter().all(|f| f.get("error").is_none() && f.get("gpuFallback").is_none()), "{files:?}");
         t.elapsed().as_secs_f64()
     };
@@ -1592,4 +1592,38 @@ fn a_cancelled_export_stops_within_a_second() {
     let after = cancelled_at.lock().unwrap().expect("cancelled").elapsed();
     assert!(after < std::time::Duration::from_millis(1500), "returned {after:?} after the cancel");
     assert!(files.len() < 12 && written == files.len(), "{} files, {written} written", files.len());
+}
+
+/// Note 28's hybrid, on the GPU (the coordinator runs it with the GPU on): with one export at a
+/// time on the card and the processor rendering the photos it has no room for, every photo
+/// comes out and none fails. Prints the time against the GPU alone.
+#[test]
+fn exports_render_on_the_gpu_and_the_processor_at_once() {
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        return;
+    }
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(4).collect();
+    for &id in &ids {
+        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+    }
+    let batch: Vec<_> = ids.iter().copied().cycle().take(8).collect();
+    let o = ExportOptions::from_json(&json!({"longEdge": 3000, "hdr": true, "quality": 90}));
+    lightcraft_gpu::set_batch_limits(None, Some(1));
+    let mut run = |mix: bool| {
+        for &id in &ids {
+            s.media.forget(id);
+        }
+        let t = std::time::Instant::now();
+        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, 4, true, mix).unwrap();
+        assert_eq!(files.len(), 8);
+        assert!(files.iter().all(|f| f.get("error").is_none()), "{files:?}");
+        t.elapsed().as_secs_f64()
+    };
+    run(false); // warm up
+    let gpu = run(false);
+    let both = run(true);
+    lightcraft_gpu::set_batch_limits(None, None);
+    eprintln!("8 HDR exports, 4 lanes: GPU alone {gpu:.2} s, GPU + processor {both:.2} s");
 }
