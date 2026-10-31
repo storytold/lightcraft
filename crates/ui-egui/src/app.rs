@@ -65,6 +65,8 @@ impl LightcraftApp {
             #[cfg(test)]
             library_passes: vec![],
             #[cfg(test)]
+            prep_ticks: 0,
+            #[cfg(test)]
             missing_count_test_delay: None,
             shadow: None,
             synthetic: vec![],
@@ -509,7 +511,12 @@ impl LightcraftApp {
 
     /// Preparing photos in the background ([`lightcraft_engine::prep`]): the whole view's previews
     /// once the user is culling in the loupe, built from the photo on screen in the direction of travel.
+    /// Advanced on every logic pass, the hidden ones too (a minimised window keeps preparing).
     fn background_prep(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        {
+            self.prep_ticks += 1;
+        }
         let mode = panels::detail::prep_mode(self);
         let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
         let at = if loupe { self.session.active() } else { None };

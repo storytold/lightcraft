@@ -222,6 +222,9 @@ pub struct LightcraftApp {
     /// effects (which the global shortcut guard also hides).
     #[cfg(test)]
     pub(crate) library_passes: Vec<panels::library_problem::LibraryPass>,
+    /// Test-only: how many times background preparation was advanced (once per logic pass).
+    #[cfg(test)]
+    pub(crate) prep_ticks: u32,
     /// Test-only: a delay for the sidebar's Missing Photos count worker (a slow disk). Kept here,
     /// not in `ui`, because `ui.set` rebuilds `ui` and would drop it.
     #[cfg(test)]
