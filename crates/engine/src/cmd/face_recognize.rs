@@ -1053,6 +1053,8 @@ mod imp {
                 id: a,
                 width,
                 height,
+                source_width: None,
+                source_height: None,
                 file_size: 1234,
                 content_hash: Some("edited".into()),
                 preview_only: None,

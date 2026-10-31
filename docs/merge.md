@@ -85,7 +85,20 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   not patch synthesis.
 - *Create Stack*: the result goes on top of a collapsed stack of its sources (`Catalog::stack_with_ops`); its
   caption also lists them.
-- Panorama output is limited to `maxMegapixels` (default 40) — blending memory is ~25 bytes/pixel.
+- Before Photo Merge decodes source pixels, it estimates the working set against the existing merge memory budget
+  (75% of RAM less the app cache budget; 8 GiB RAM is assumed when unknown, clamped to the target's addressable range).
+  The estimate keeps cropped frame dimensions separate from uncropped raw decoder dimensions, so a small DNG default
+  crop does not hide the full sensor allocation. Probed imports retain both dimensions in the catalog; an older raw
+  record without them (including Lightroom catalog imports) is probed from the original's headers before planning.
+  Files are read one at a time without decoding pixels; if uncropped dimensions cannot be obtained, planning fails
+  with an error rather than estimating from a potentially cropped frame. HDR,
+  panoramas and HDR panoramas include their operation-specific working memory; panorama estimates allow the projected
+  canvas to exceed source area (perspective bounds use the stitcher's 12× input-area limit), and previews account for
+  1024 px frames, concurrent decoder work and the retained preview cache (including the four-photo preview loader in
+  PR #2010). Inputs above the budget are refused with the estimate and advice to select fewer photos or lower-resolution
+  originals. HDR for Each Bracket Set checks each bracket independently.
+- Panorama output is limited to `maxMegapixels` (default 40) and may be scaled down further to fit the available memory,
+  including the output border and multiband tile padding — blending memory is ~25 bytes/pixel.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
   photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
   4.8 / 6.3 GB for 3 / 4). Half-float frames would halve the per-frame share.

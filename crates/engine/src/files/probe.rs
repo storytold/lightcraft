@@ -118,6 +118,15 @@ fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
 
+fn oriented_dimensions(width: usize, height: usize, swaps_axes: bool) -> Result<(u32, u32), String> {
+    let mut width = u32::try_from(width).map_err(|_| "raw source width exceeds the supported dimension range")?;
+    let mut height = u32::try_from(height).map_err(|_| "raw source height exceeds the supported dimension range")?;
+    if swaps_axes {
+        std::mem::swap(&mut width, &mut height);
+    }
+    Ok((width, height))
+}
+
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:
 /// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
@@ -135,6 +144,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                 return Ok(ProbeInfo {
                     width: w,
                     height: h,
+                    source_width: 0,
+                    source_height: 0,
                     format: ext_upper(name),
                     kind: MediaKind::Raw,
                     file_size: bytes.len() as u64,
@@ -150,10 +161,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             Err(Err(e)) => return Err(e),
         };
         let (w, h) = raw.developed_size();
-        let (mut w, mut h) = (w.max(1) as u32, h.max(1) as u32);
-        if raw.orientation.swaps_axes() {
-            std::mem::swap(&mut w, &mut h);
-        }
+        let (w, h) = oriented_dimensions(w.max(1), h.max(1), raw.orientation.swaps_axes())?;
+        let (source_width, source_height) = oriented_dimensions(raw.width, raw.height, raw.orientation.swaps_axes())?;
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         let as_shot_wb = Some(scale.as_shot(lightcraft_raw::color::as_shot_white_xy_of(&raw)));
         let embedded_lens = crate::lens_profiles::for_raw(&raw, || m.clone());
@@ -161,6 +170,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             embedded_lens,
             width: w,
             height: h,
+            source_width,
+            source_height,
             format: ext_upper(name),
             kind: MediaKind::Raw,
             file_size: bytes.len() as u64,
@@ -193,6 +204,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     Ok(ProbeInfo {
         width: w,
         height: h,
+        source_width: w,
+        source_height: h,
         format,
         kind: MediaKind::Image,
         file_size: bytes.len() as u64,

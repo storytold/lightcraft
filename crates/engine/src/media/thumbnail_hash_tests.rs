@@ -78,6 +78,8 @@ fn source_from_before_content_reload_is_not_accepted() {
             id: PhotoId(1),
             width: 6000,
             height: 4000,
+            source_width: None,
+            source_height: None,
             file_size: 99,
             content_hash: Some("replacement".into()),
             preview_only: None,

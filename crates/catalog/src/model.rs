@@ -231,6 +231,12 @@ pub struct Photo {
     pub format: String,
     pub width: u32,
     pub height: u32,
+    /// Dimensions the source decoder reads before applying a raw's default crop. Rendered images
+    /// use their native dimensions. Zero means a probe or older catalog did not record this geometry.
+    #[serde(default)]
+    pub source_width: u32,
+    #[serde(default)]
+    pub source_height: u32,
     #[serde(default)]
     pub file_size: u64,
     /// ISO 8601 local capture time.
@@ -380,6 +386,8 @@ impl Photo {
             format: format.to_string(),
             width,
             height,
+            source_width: width,
+            source_height: height,
             file_size: 0,
             captured: None,
             imported: imported.to_string(),
