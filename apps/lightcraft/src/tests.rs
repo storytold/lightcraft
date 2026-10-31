@@ -362,6 +362,46 @@ fn a_gpu_lost_while_running_turns_the_gpu_off_next_time() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Issue #1337: the window's own device was lost (DX12 "device instance has been suspended",
+/// 0x887A0005) and wgpu-core panicked in `PendingWrites::activate` with `Err(Lost)`; the compute
+/// device never noticed, so the stop was not even recognised as a GPU loss. The panic payload says
+/// it; other panics are not mistaken for one.
+#[test]
+fn a_lost_window_device_is_recognised_from_the_panic() {
+    let payload: Box<dyn std::any::Any + Send> = Box::new("called `Result::unwrap()` on an `Err` value: Lost".to_string());
+    assert_eq!(lost_device_panic(payload.as_ref()).as_deref(), Some("the window's GPU device was lost"));
+    let payload: Box<dyn std::any::Any + Send> = Box::new("Validation Error\n\nCaused by:\n  Parent device is lost");
+    assert!(lost_device_panic(payload.as_ref()).is_some());
+    let payload: Box<dyn std::any::Any + Send> = Box::new("device lost (Unknown): Device is lost".to_string());
+    assert!(lost_device_panic(payload.as_ref()).is_some());
+    for other in ["index out of bounds: the len is 3 but the index is 7", "called `Result::unwrap()` on an `Err` value: Lost connection to peer"] {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(other.to_string());
+        assert_eq!(lost_device_panic(payload.as_ref()), None, "{other}");
+    }
+    let payload: Box<dyn std::any::Any + Send> = Box::new(42u32);
+    assert_eq!(lost_device_panic(payload.as_ref()), None, "not a message");
+}
+
+/// Issue #1337: after a driver reset LightCraft starts again instead of stopping — once: a start
+/// that loses the device again within two minutes stops with the dialog (no restart loop).
+#[test]
+fn a_gpu_loss_restarts_once_not_in_a_loop() {
+    assert!(may_restart_after_gpu_lost(None, 1_000));
+    assert!(may_restart_after_gpu_lost(Some("100"), 1_000), "a restart long ago");
+    assert!(!may_restart_after_gpu_lost(Some("950"), 1_000), "lost again right after a restart");
+    assert!(!may_restart_after_gpu_lost(Some("1000"), 1_000));
+    assert!(may_restart_after_gpu_lost(Some("garbage"), 1_000), "an unreadable value is no restart");
+    // the restart keeps the options, but files named at launch are not imported a second time
+    let args: Vec<std::ffi::OsString> =
+        ["--control", "7980", "C:\\photos\\a.jpg", "--library", "D:\\Lib", "--no-demo", "b.arw"].iter().map(Into::into).collect();
+    let kept: Vec<String> = restart_args(args).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    assert_eq!(kept, ["--control", "7980", "--library", "D:\\Lib", "--no-demo"]);
+    // the restarted window says what happened, and that an unfinished import needs running again
+    let notice = gpu_lost_restart_notice("the window's GPU device was lost");
+    assert!(notice.contains("restarted") && notice.contains("reset the GPU (the window's GPU device was lost)"), "{notice}");
+    assert!(notice.contains("library was saved") && notice.contains("import or export"), "{notice}");
+}
+
 /// Issue #136: a GPU init marker left by a crashed launch is reported once and removed.
 #[test]
 fn gpu_crash_marker_is_reported_once() {
