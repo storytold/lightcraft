@@ -194,7 +194,7 @@ pub(crate) fn pixel_aspect_of(raw: &Ifd, bytes: &[u8], frame: Rect) -> f32 {
         let r = (frame.width as f64 * f64::from(ph)) / (frame.height as f64 * f64::from(pw));
         tall(r).filter(|n| (r - n).abs() <= 0.1)
     };
-    tagged.or_else(|| (frame.width / 2 >= frame.height).then(previewed).flatten()).unwrap_or(1.0) as f32
+    tagged.or_else(|| (frame.width > frame.height.saturating_mul(2)).then(previewed).flatten()).unwrap_or(1.0) as f32
 }
 
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -701,8 +701,7 @@ mod tests {
         raw
     }
 
-    fn d1x(resolution: (u32, u32), preview: Option<(u16, u16)>) -> Vec<u8> {
-        let (w, h) = (96, 32);
+    fn d1x((w, h): (usize, usize), resolution: (u32, u32), preview: Option<(u16, u16)>) -> Vec<u8> {
         let mut raw = cfa_ifd(1, 14, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
         raw.set(t::X_RESOLUTION, Value::Rational(vec![(resolution.0, 1)]));
         raw.set(t::Y_RESOLUTION, Value::Rational(vec![(resolution.1, 1)]));
@@ -730,13 +729,14 @@ mod tests {
 
     #[test]
     fn d1x_square_resolution_tags_take_the_pixel_shape_from_the_preview() {
-        let aspect = |res, preview| decode(&d1x(res, preview), Mode::Header).unwrap().pixel_aspect;
-        assert_eq!(aspect((600, 300), None), 2.0);
-        assert_eq!(aspect((600, 600), Some((48, 32))), 2.0);
-        assert_eq!(aspect((600, 600), Some((96, 32))), 1.0);
-        assert_eq!(aspect((600, 600), Some((64, 48))), 1.0);
-        assert_eq!(aspect((600, 600), None), 1.0);
-        let full = decode(&d1x((600, 600), Some((48, 32))), Mode::Full).unwrap();
+        let aspect = |frame, res, preview| decode(&d1x(frame, res, preview), Mode::Header).unwrap().pixel_aspect;
+        assert_eq!(aspect((96, 32), (600, 300), None), 2.0);
+        assert_eq!(aspect((96, 32), (600, 600), Some((48, 32))), 2.0);
+        assert_eq!(aspect((96, 32), (600, 600), Some((96, 32))), 1.0);
+        assert_eq!(aspect((96, 32), (600, 600), Some((64, 48))), 1.0);
+        assert_eq!(aspect((96, 32), (600, 600), None), 1.0);
+        assert_eq!(aspect((64, 32), (600, 600), Some((32, 32))), 1.0);
+        let full = decode(&d1x((96, 32), (600, 600), Some((48, 32))), Mode::Full).unwrap();
         assert_eq!(full.info().developed_size(), (96, 64));
     }
 
