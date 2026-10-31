@@ -16,7 +16,7 @@ pub(crate) fn adapter_memory(info: &wgpu::AdapterInfo) -> Option<u64> {
     if let Some((_, b)) = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(n, _)| *n == info.name) {
         return *b;
     }
-    let found = probe(&info.name, info.vendor);
+    let found = probe(&info.name, info.vendor, info.device);
     if let Some(b) = found {
         log::info!("gpu: {} has {} MiB of memory", info.name, b >> 20);
     }
@@ -34,7 +34,7 @@ pub(crate) fn assumed(info: &wgpu::AdapterInfo) -> u64 {
 }
 
 #[cfg(windows)]
-fn probe(name: &str, _vendor: u32) -> Option<u64> {
+fn probe(name: &str, _vendor: u32, _device: u32) -> Option<u64> {
     use std::os::windows::process::CommandExt;
     /// No console window flashes up for the query (the app has none).
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -54,7 +54,7 @@ fn probe(name: &str, _vendor: u32) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-fn probe(name: &str, vendor: u32) -> Option<u64> {
+fn probe(name: &str, vendor: u32, device: u32) -> Option<u64> {
     let nvidia = || {
         let out = std::process::Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output().ok()?;
         parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout), name)
@@ -66,19 +66,17 @@ fn probe(name: &str, vendor: u32) -> Option<u64> {
     {
         return Some(b);
     }
-    // amdgpu (and others) publish it in sysfs: only the cards of this adapter's vendor count
+    // amdgpu (and others) publish it in sysfs: the card with this adapter's PCI ids
     let cards = (0..8).map(|i| {
         let read = |file: &str| std::fs::read_to_string(format!("/sys/class/drm/card{i}/device/{file}")).ok();
-        (
-            read("vendor").and_then(|v| parse_hex(v.trim())).and_then(|v| u32::try_from(v).ok()),
-            read("mem_info_vram_total").and_then(|s| s.trim().parse::<u64>().ok()),
-        )
+        let id = |file: &str| read(file).and_then(|v| parse_hex(v.trim())).and_then(|v| u32::try_from(v).ok());
+        SysfsCard { vendor: id("vendor"), device: id("device"), memory: read("mem_info_vram_total").and_then(|s| s.trim().parse::<u64>().ok()) }
     });
-    sysfs_memory(cards, vendor)
+    sysfs_memory(cards, vendor, device)
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn probe(_name: &str, _vendor: u32) -> Option<u64> {
+fn probe(_name: &str, _vendor: u32, _device: u32) -> Option<u64> {
     None
 }
 
@@ -86,12 +84,31 @@ fn probe(_name: &str, _vendor: u32) -> Option<u64> {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NVIDIA: u32 = 0x10de;
 
-/// The largest memory sysfs reports among `cards` (each its PCI vendor id and memory, when known)
-/// of vendor `vendor`: another vendor's GPU (an integrated GPU beside a discrete card) never sizes
-/// this one.
+/// A DRM card in sysfs: its PCI vendor and device ids and its memory, when known.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn sysfs_memory(cards: impl Iterator<Item = (Option<u32>, Option<u64>)>, vendor: u32) -> Option<u64> {
-    cards.filter(|(v, _)| *v == Some(vendor)).filter_map(|(_, m)| m).max()
+#[derive(Clone, Copy)]
+struct SysfsCard {
+    vendor: Option<u32>,
+    device: Option<u32>,
+    memory: Option<u64>,
+}
+
+/// The memory sysfs reports for the adapter with PCI ids `vendor`:`device` among `cards`: the
+/// cards with both ids (several are the same model, so the same size), else, when the device id
+/// matches none, the vendor's cards if they all report one size. Two of the vendor's cards of
+/// different sizes that can't be told apart give `None`, so the caller assumes a safe size
+/// rather than another card's; another vendor's GPU (an integrated GPU beside a discrete card)
+/// never sizes this one.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn sysfs_memory(cards: impl Iterator<Item = SysfsCard>, vendor: u32, device: u32) -> Option<u64> {
+    let mine: Vec<SysfsCard> = cards.filter(|c| c.vendor == Some(vendor)).collect();
+    let exact = mine.iter().filter(|c| device != 0 && c.device == Some(device)).filter_map(|c| c.memory).max();
+    if exact.is_some() {
+        return exact;
+    }
+    let mut sizes = mine.iter().filter_map(|c| c.memory);
+    let first = sizes.next()?;
+    sizes.all(|m| m == first).then_some(first)
 }
 
 /// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
@@ -175,11 +192,28 @@ mod tests {
     #[test]
     fn sysfs_memory_counts_only_the_adapters_vendor() {
         const AMD: u32 = 0x1002;
-        let cards = || [(Some(AMD), Some(512u64 << 20)), (Some(NVIDIA), None), (None, Some(1 << 30))].into_iter();
-        assert_eq!(sysfs_memory(cards(), NVIDIA), None, "the integrated AMD GPU's memory is not the NVIDIA card's");
-        assert_eq!(sysfs_memory(cards(), AMD), Some(512 << 20));
-        let two = [(Some(AMD), Some(16u64 << 30)), (Some(AMD), Some(512 << 20))].into_iter();
-        assert_eq!(sysfs_memory(two, AMD), Some(16 << 30), "the largest of the vendor's cards");
+        let card = |vendor, device, memory| SysfsCard { vendor, device, memory };
+        let cards = || {
+            [card(Some(AMD), Some(0x164e), Some(512u64 << 20)), card(Some(NVIDIA), Some(0x2783), None), card(None, None, Some(1 << 30))].into_iter()
+        };
+        assert_eq!(sysfs_memory(cards(), NVIDIA, 0x2783), None, "the integrated AMD GPU's memory is not the NVIDIA card's");
+        assert_eq!(sysfs_memory(cards(), AMD, 0x164e), Some(512 << 20));
+        assert_eq!(sysfs_memory(cards(), AMD, 0), Some(512 << 20), "the vendor's one card, without a device id");
+    }
+
+    /// Review of PR #3499 (9e2ff593e): two cards of one vendor of different sizes; each adapter is
+    /// sized by its own card, never the larger one.
+    #[test]
+    fn sysfs_memory_is_the_adapters_own_card() {
+        const AMD: u32 = 0x1002;
+        let card = |device, memory| SysfsCard { vendor: Some(AMD), device: Some(device), memory: Some(memory) };
+        let two = || [card(0x744c, 16u64 << 30), card(0x164e, 512 << 20)].into_iter();
+        assert_eq!(sysfs_memory(two(), AMD, 0x164e), Some(512 << 20), "the small card is not sized by the large one");
+        assert_eq!(sysfs_memory(two(), AMD, 0x744c), Some(16 << 30));
+        assert_eq!(sysfs_memory(two(), AMD, 0x1234), None, "unmatched among different sizes: the safe assumed size");
+        assert_eq!(sysfs_memory(two(), AMD, 0), None);
+        let same = [card(0x744c, 16u64 << 30), card(0x744c, 16 << 30)].into_iter();
+        assert_eq!(sysfs_memory(same, AMD, 0), Some(16 << 30), "cards of one size, unmatched: that size");
         assert_eq!(parse_hex("0x1002\n"), Some(0x1002), "sysfs writes the vendor id as hex");
     }
 
