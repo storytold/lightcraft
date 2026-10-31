@@ -3716,6 +3716,7 @@ dependencies = [
  "lightcraft-scenes",
  "lightcraft-segment",
  "lightcraft-slideshow",
+ "lightcraft-sysmem",
  "lightcraft-testkit",
  "lightcraft-tiff",
  "log",

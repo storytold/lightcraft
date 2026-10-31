@@ -23,6 +23,8 @@ pub struct GpuStages {
     entries: Mutex<Vec<Entry>>,
     /// The uploaded source (a view renders one photo at several sizes).
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
+    /// The device generation the buffers belong to (0: none yet; see [`GpuStages::adopt_generation`]).
+    generation: std::sync::atomic::AtomicU64,
 }
 
 const CAPACITY: usize = 2;
@@ -113,6 +115,15 @@ impl GpuStages {
         total
     }
 
+    /// Use these stages on the device of `generation`: what was cached on another one (a device
+    /// that failed and was replaced) is dropped first.
+    pub(crate) fn adopt_generation(&self, generation: u64) {
+        use std::sync::atomic::Ordering;
+        if self.generation.swap(generation, Ordering::Relaxed) != generation {
+            self.clear();
+        }
+    }
+
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();
@@ -131,6 +142,8 @@ pub(crate) struct Cx<'a> {
     enc: Option<wgpu::CommandEncoder>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
+    /// The last submission (a batch render waits for it before the next: see `gate::throttle`).
+    last: Option<wgpu::SubmissionIndex>,
 }
 
 /// Kernel invocations recorded before a render submits them (under one full-size pass over a
@@ -142,7 +155,7 @@ const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), pending: 0, last: None }
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -170,7 +183,12 @@ impl<'a> Cx<'a> {
     pub fn flush(&mut self) {
         self.pending = 0;
         if let Some(enc) = self.enc.take() {
-            self.gpu.submit([enc.finish()]);
+            // an export keeps one submission queued at a time: the window's frames slot in between
+            if !crate::gate::throttle(&self.gpu.device, self.last.take()) {
+                fail(FailKind::Busy, "the GPU did not finish an earlier step in time (busy)".into());
+                return;
+            }
+            self.last = Some(self.gpu.submit([enc.finish()]));
         }
     }
 
@@ -468,10 +486,11 @@ static SOURCE_UPLOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 /// stages; it is released with the buffer pool when the app idles.
 static SHARED_SOURCE: std::sync::Mutex<Option<(std::sync::Weak<Rgb32f>, Arc<Buf>)>> = std::sync::Mutex::new(None);
 
-fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
+fn shared_source(src: &Arc<Rgb32f>, generation: u64, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
     let mut g = SHARED_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((weak, buf)) = &*g
         && weak.upgrade().is_some_and(|s| Arc::ptr_eq(&s, src))
+        && buf.generation() == generation
     {
         return buf.clone();
     }
@@ -628,6 +647,7 @@ pub fn render(
     s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&GpuStages>,
+    host_stages: Option<&lightcraft_pipeline::StageCache>,
     fault: Option<crate::Fault>,
     display: bool,
 ) -> Option<Output> {
@@ -675,7 +695,9 @@ pub fn render(
             // cut from the photo's own pixels, and what its stages keep is its own sampled pixels)
             let src_buf = match stages {
                 Some(c) if src.data.len() * 12 <= RETAIN_SOURCE_BYTES => c.source(src, upload),
-                Some(_) => shared_source(src, upload),
+                // (an export keeps its own: photos side by side would take the one copy from each other)
+                Some(_) if !crate::gate::is_batch() => shared_source(src, gpu.generation, upload),
+                Some(_) => Arc::new(upload()),
                 None => Arc::new(upload()),
             };
             sample(&mut cx, src, src_buf, &plan)
@@ -695,6 +717,21 @@ pub fn render(
         None => Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host)),
     };
     lap("wb/nr", &mut t, &mut cx);
+    // host copies for a CPU render of the same plan that follows (an export's HDR rendition)
+    if let Some(hc) = host_stages.filter(|c| c.keeps_host_stages()) {
+        let sampled_host = match host.sampled.take() {
+            Some(img) => Arc::new(img),
+            None => Arc::new(cx.read_rgb(&sampled, w, h)),
+        };
+        let lin_host = match &host.lin {
+            Some(l) => l.clone(),
+            None => Arc::new(cx.read_rgb(&lin, w, h)),
+        };
+        host.lin = Some(lin_host.clone());
+        if !crate::ctx::failed() {
+            hc.seed_linear(src, plan.geo, sampled_host, plan.lin_key, lin_host);
+        }
+    }
 
     // 3. spatial planes
     let mut planes = match cached.map(|e| e.planes) {
@@ -1411,7 +1448,7 @@ mod tests {
         let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use lightcraft_raster::blur;
         let Some(gpu) = crate::device() else { return };
-        let _scope = crate::ctx::RenderScope::new(gpu);
+        let _scope = crate::ctx::RenderScope::new(&gpu);
         let v = |x: usize, y: usize, c: usize| ((x * 7 + y * 13 + c * 5) % 17) as f32 / 16.0 + if x % 61 < 3 { 2.0 } else { 0.0 };
         for (w, h) in [(1000, 5), (257, 3), (5, 4), (1, 9)] {
             for sigma in [0.8f32, 2.0, 4.5, 30.0, 250.0, 1000.0] {
@@ -1419,7 +1456,7 @@ mod tests {
                 let want: Vec<Plane> = planes.iter().map(|p| blur::gaussian(p, sigma)).collect();
                 for nc in [1, 2, 3] {
                     let words: Vec<f32> = (0..w * h).flat_map(|i| (0..nc).map(move |c| (i, c))).map(|(i, c)| planes[c].data[i]).collect();
-                    let mut cx = Cx::new(gpu);
+                    let mut cx = Cx::new(&gpu);
                     let src = gpu.upload(&words);
                     let out = gaussian(&mut cx, &src, w, h, nc, sigma);
                     let got: Vec<f32> = cx.read(&out, w * h * nc);
@@ -1439,14 +1476,14 @@ mod tests {
         // (creating the device writes the crash sentinel another test swaps out)
         let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(gpu) = crate::device() else { return };
-        let _scope = crate::ctx::RenderScope::new(gpu);
+        let _scope = crate::ctx::RenderScope::new(&gpu);
         let (w, h) = (6000, 4000);
         eprintln!("{} ({:?})", gpu.info.name, gpu.info.backend);
         let src = gpu.upload(&vec![0.5f32; w * h * 3]);
         let time = |name: &str, f: &mut dyn FnMut(&mut Cx<'_>)| {
             let mut best = f64::MAX;
             for _ in 0..5 {
-                let mut cx = Cx::new(gpu);
+                let mut cx = Cx::new(&gpu);
                 cx.sync();
                 let t = std::time::Instant::now();
                 f(&mut cx);
@@ -1485,12 +1522,12 @@ mod tests {
             assert!(!why.contains("kernels failed to build"), "{why}");
             return;
         };
-        let _scope = crate::ctx::RenderScope::new(gpu);
+        let _scope = crate::ctx::RenderScope::new(&gpu);
         let img = lightcraft_scenes::demo_library()[3].render(640, 427);
         let buf = gpu.upload(rgb_words(&img));
         let mut differ = Vec::new();
         for (tx, ty, r) in [(25.6, 213.0, 19.2), (320.0, 192.0, 19.2), (100.0, 50.0, 12.0), (600.0, 400.0, 25.0), (320.0, 213.0, 6.0)] {
-            let mut cx = Cx::new(gpu);
+            let mut cx = Cx::new(&gpu);
             let g = auto_source(&mut cx, &buf, img.width, img.height, (tx, ty), r);
             let c = lightcraft_pipeline::spots::auto_source(&img, (tx, ty), r);
             if g != c {
