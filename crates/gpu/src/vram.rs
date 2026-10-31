@@ -61,10 +61,10 @@ fn probe(name: &str, vendor: u32) -> Option<u64> {
     };
     // NVIDIA's driver publishes no sysfs size: ask it first (an integrated AMD GPU's small
     // carve-out in sysfs is not this card's memory)
-    if vendor == NVIDIA {
-        if let Some(b) = nvidia() {
-            return Some(b);
-        }
+    if vendor == NVIDIA
+        && let Some(b) = nvidia()
+    {
+        return Some(b);
     }
     // amdgpu (and others) publish it in sysfs: only the cards of this adapter's vendor count
     let cards = (0..8).map(|i| {
@@ -74,15 +74,7 @@ fn probe(name: &str, vendor: u32) -> Option<u64> {
             read("mem_info_vram_total").and_then(|s| s.trim().parse::<u64>().ok()),
         )
     });
-    let sysfs = sysfs_memory(cards, vendor);
-    if sysfs.is_some() {
-        return sysfs;
-    }
-    if vendor == NVIDIA {
-        return None;
-    }
-    let out = std::process::Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output().ok()?;
-    parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout), name)
+    sysfs_memory(cards, vendor)
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -188,14 +180,7 @@ mod tests {
         assert_eq!(sysfs_memory(cards(), AMD), Some(512 << 20));
         let two = [(Some(AMD), Some(16u64 << 30)), (Some(AMD), Some(512 << 20))].into_iter();
         assert_eq!(sysfs_memory(two, AMD), Some(16 << 30), "the largest of the vendor's cards");
-        assert_eq!(
-            parse_hex(
-                "0x1002
-"
-            ),
-            Some(0x1002),
-            "sysfs writes the vendor id as hex"
-        );
+        assert_eq!(parse_hex("0x1002\n"), Some(0x1002), "sysfs writes the vendor id as hex");
     }
 
     const REG: &str = r"
