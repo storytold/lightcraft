@@ -681,6 +681,11 @@
 
 ## 2026-10-20
 
+### Adding a curve point doesn't move the curve
+- Clicking the Tone Curve graph to add a point now puts it on the curve at the clicked spot's input value, as in
+  Lightroom Classic, so the photo doesn't change until you drag the point (LightCraft Classic issue #340). The point
+  used to land at the pointer's height, so a click a pixel off the line already bent the curve.
+
 ### Smart albums check File Path rules faster
 - A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't
   empty) no longer builds new text for every photo. On a synthetic library of 312,000 photos, a File Path "contains"
