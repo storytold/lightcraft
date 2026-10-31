@@ -11,7 +11,7 @@ pub(crate) fn adapter_memory(info: &wgpu::AdapterInfo) -> Option<u64> {
     if info.device_type != wgpu::DeviceType::DiscreteGpu {
         return None;
     }
-    let found = probe(&info.name);
+    let found = probe(&info.name, info.vendor);
     if let Some(b) = found {
         log::info!("gpu: {} has {} MiB of memory", info.name, b >> 20);
     }
@@ -28,7 +28,7 @@ pub(crate) fn assumed(info: &wgpu::AdapterInfo) -> u64 {
 }
 
 #[cfg(windows)]
-fn probe(name: &str) -> Option<u64> {
+fn probe(name: &str, _vendor: u32) -> Option<u64> {
     use std::os::windows::process::CommandExt;
     /// No console window flashes up for the query (the app has none).
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -48,22 +48,52 @@ fn probe(name: &str) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-fn probe(name: &str) -> Option<u64> {
-    // amdgpu (and others) publish it in sysfs
-    let sysfs = (0..8)
-        .filter_map(|i| std::fs::read_to_string(format!("/sys/class/drm/card{i}/device/mem_info_vram_total")).ok())
-        .filter_map(|s| s.trim().parse::<u64>().ok())
-        .max();
+fn probe(name: &str, vendor: u32) -> Option<u64> {
+    let nvidia = || {
+        let out = std::process::Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output().ok()?;
+        parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout), name)
+    };
+    // NVIDIA's driver publishes no sysfs size: ask it first (an integrated AMD GPU's small
+    // carve-out in sysfs is not this card's memory)
+    if vendor == NVIDIA {
+        if let Some(b) = nvidia() {
+            return Some(b);
+        }
+    }
+    // amdgpu (and others) publish it in sysfs: only the cards of this adapter's vendor count
+    let cards = (0..8).map(|i| {
+        let read = |file: &str| std::fs::read_to_string(format!("/sys/class/drm/card{i}/device/{file}")).ok();
+        (
+            read("vendor").and_then(|v| parse_hex(v.trim())).and_then(|v| u32::try_from(v).ok()),
+            read("mem_info_vram_total").and_then(|s| s.trim().parse::<u64>().ok()),
+        )
+    });
+    let sysfs = sysfs_memory(cards, vendor);
     if sysfs.is_some() {
         return sysfs;
+    }
+    if vendor == NVIDIA {
+        return None;
     }
     let out = std::process::Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output().ok()?;
     parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout), name)
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn probe(_name: &str) -> Option<u64> {
+fn probe(_name: &str, _vendor: u32) -> Option<u64> {
     None
+}
+
+/// PCI vendor id of NVIDIA.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const NVIDIA: u32 = 0x10de;
+
+/// The largest memory sysfs reports among `cards` (each its PCI vendor id and memory, when known)
+/// of vendor `vendor`: another vendor's GPU (an integrated GPU beside a discrete card) never sizes
+/// this one.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn sysfs_memory(cards: impl Iterator<Item = (Option<u32>, Option<u64>)>, vendor: u32) -> Option<u64> {
+    cards.filter(|(v, _)| *v == Some(vendor)).filter_map(|(_, m)| m).max()
 }
 
 /// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
@@ -141,6 +171,26 @@ fn parse_nvidia_smi(text: &str, name: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review of PR #3499: an NVIDIA card beside an integrated AMD GPU is not sized by the AMD
+    /// GPU's sysfs carve-out; cards of the adapter's own vendor are.
+    #[test]
+    fn sysfs_memory_counts_only_the_adapters_vendor() {
+        const AMD: u32 = 0x1002;
+        let cards = || [(Some(AMD), Some(512u64 << 20)), (Some(NVIDIA), None), (None, Some(1 << 30))].into_iter();
+        assert_eq!(sysfs_memory(cards(), NVIDIA), None, "the integrated AMD GPU's memory is not the NVIDIA card's");
+        assert_eq!(sysfs_memory(cards(), AMD), Some(512 << 20));
+        let two = [(Some(AMD), Some(16u64 << 30)), (Some(AMD), Some(512 << 20))].into_iter();
+        assert_eq!(sysfs_memory(two, AMD), Some(16 << 30), "the largest of the vendor's cards");
+        assert_eq!(
+            parse_hex(
+                "0x1002
+"
+            ),
+            Some(0x1002),
+            "sysfs writes the vendor id as hex"
+        );
+    }
 
     const REG: &str = r"
 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000

@@ -396,8 +396,8 @@ view shows a GPU-resident draft reads that texture back for the picture (`Screen
   render 1.69 ms median from the texture vs 2.05 ms with the readback; the UI thread unchanged
   within noise (~1 ms). The difference grows with the loupe's size (4K/5K displays, zoom).
 - With the renderer on the window's device, errors the device raises outside a render (the window's
-  own included) are logged and stop GPU rendering (CPU from then on) instead of wgpu's default
-  panic.
+  own included) are logged and counted instead of wgpu's default panic; the renders, which check
+  their own error scopes, go on. A lost device is still replaced (*Getting the GPU back*).
 
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its

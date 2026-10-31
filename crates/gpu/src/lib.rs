@@ -242,7 +242,7 @@ pub fn unavailable_reason() -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         if let Some(r) = slot::lost_reason() {
-            return Some(if slot::recoveries() >= slot::MAX_RECOVERIES {
+            return Some(if slot::gave_up() {
                 format!("stopped after a GPU failure: {r}")
             } else {
                 format!("paused after a GPU failure, restarting the graphics card: {r}")

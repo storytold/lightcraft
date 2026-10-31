@@ -210,9 +210,10 @@ pub(crate) fn usage() -> (usize, u64, usize, u64, u64) {
 /// Between a batch render's submissions: wait for its previous one (`prev`) to finish first, so
 /// the queue stays short for the window (see the module doc). `false`: the wait failed (timeout,
 /// a lost device): the caller fails the render.
-pub(crate) fn throttle(device: &wgpu::Device, prev: Option<wgpu::SubmissionIndex>) -> bool {
+/// The wait goes through [`crate::ctx::Gpu::poll`], which never panics and records a lost device.
+pub(crate) fn throttle(gpu: &crate::ctx::Gpu, prev: Option<wgpu::SubmissionIndex>) -> bool {
     let Some(prev) = prev.filter(|_| is_batch()) else { return true };
-    device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: Some(THROTTLE_TIMEOUT) }).is_ok()
+    gpu.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: Some(THROTTLE_TIMEOUT) }).is_ok()
 }
 
 /// Longest a batch render waits for its previous submission before it gives the GPU up.
