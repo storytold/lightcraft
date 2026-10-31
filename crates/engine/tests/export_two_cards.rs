@@ -32,6 +32,12 @@ fn helper_on() -> bool {
     let _ = gpu::list_adapters();
     gpu::set_helper(&want).expect("the second card");
     assert!(gpu::wait_helper(Duration::from_secs(240)), "the second device's set-up didn't finish");
+    // a device lost by an earlier test here is replaced after a pause of a few seconds (asking for
+    // it starts the replacement, on a thread of its own): wait for it rather than skip
+    let t = Instant::now();
+    while !gpu::helper_ready() && gpu::helper_status().state == "lost" && t.elapsed() < Duration::from_secs(120) {
+        std::thread::sleep(Duration::from_millis(250));
+    }
     if !gpu::helper_ready() {
         lightcraft_testkit::skip!(Gpu, "no second device: {:?}", gpu::helper_status());
         return false;
