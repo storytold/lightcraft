@@ -763,8 +763,8 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     let mut data = sample();
     data.photos.truncate(1);
     data.photos[0].image.remove("masterImage");
-    data.photos[0].settings = "s = { AutoTone = true, Exposure2012 = -999999, Contrast2012 = -999999, Shadows2012 = 65, Temperature = 6150 }".into();
-    data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-999999" crs:Contrast2012="-999999" crs:Blacks2012="-22"/></rdf:RDF></x:xmpmeta>"#.into();
+    data.photos[0].settings = "s = { AutoTone = true, Exposure2012 = -999999, Contrast2012 = -999999, Shadows2012 = 65, Temperature = 6150, PostCropVignetteStyle = 2, PerspectiveUpright = 2 }".into();
+    data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-999999" crs:Contrast2012="-999999" crs:PostCropVignetteStyle="-999999" crs:PerspectiveUpright="-999999" crs:Blacks2012="-22"/></rdf:RDF></x:xmpmeta>"#.into();
     let mut s = crate::Session::new();
     let report = apply(&mut s, data, false).unwrap();
     let p = s.catalog.photos().next().unwrap();
@@ -772,6 +772,8 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     assert_eq!(p.develop.light.contrast, 0.0);
     assert_eq!(p.develop.light.shadows, 65.0);
     assert_eq!(p.develop.light.blacks, -22.0);
+    assert_eq!(p.develop.vignette.style, lightcraft_develop::VignetteStyle::ColorPriority);
+    assert_eq!(p.develop.geometry.upright, lightcraft_develop::Upright::Level);
     assert!(report["unmapped"]["2"].as_array().unwrap().iter().any(|v| v.as_str().is_some_and(|v| v.contains("Deferred"))));
     let (partial, _) = mapped_settings(
         "s = { Exposure2012 = -5, Contrast2012 = -100 }",
