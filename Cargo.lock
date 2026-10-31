@@ -1182,6 +1182,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crw"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -3902,6 +3910,8 @@ dependencies = [
 name = "lightcraft-raw"
 version = "0.16.0"
 dependencies = [
+ "chrono",
+ "craft-crw",
  "dhat",
  "jpeg-encoder",
  "jxl-oxide",

@@ -1139,7 +1139,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 number(&src.image, "fileHeight").max(0) as u32,
                 &now,
             );
-            if ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
+            if ["RAW", "DNG", "ARW", "CR2", "CR3", "CRW", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
                 p.kind = lightcraft_catalog::MediaKind::Raw;
             }
             p
