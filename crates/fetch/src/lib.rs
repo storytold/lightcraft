@@ -466,15 +466,24 @@ fn parse_content_range(v: &str) -> Option<(u64, Option<u64>)> {
     let v = v.trim().strip_prefix("bytes")?.trim();
     let (range, total) = v.split_once('/')?;
     let (a, b) = range.split_once('-')?;
-    let (a, b) = (a.trim().parse::<u64>().ok()?, b.trim().parse::<u64>().ok()?);
+    let (a, b) = (digits(a)?, digits(b)?);
     if b < a {
         return None;
     }
     let total = match total.trim() {
         "*" => None,
-        t => Some(t.parse::<u64>().ok()?),
+        t => Some(digits(t)?),
     };
     Some((a, total))
+}
+
+/// A non-empty run of ASCII digits as a `u64` (no sign, unlike `str::parse`).
+fn digits(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 #[cfg(test)]

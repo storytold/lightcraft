@@ -50,30 +50,35 @@ fn path(s: &str) -> Option<PathBuf> {
     Some(PathBuf::from(s))
 }
 
-/// `--library`, then `LIGHTCRAFT_LIBRARY`, then the setting; `--memory` never asks.
+/// `--library`, then `LIGHTCRAFT_LIBRARY`, then the setting; `--memory` never asks. Only the
+/// library remembered in Settings is `remembered` (issue #3239: a missing one is reported, not
+/// made anew), and not when it is the default location.
 #[test]
 fn the_launch_plan_puts_the_flag_and_the_variable_before_the_setting() {
     let ask = AppSettings { at_launch: LaunchLibrary::Ask, library_path: "/last".into(), ..AppSettings::default() };
     let last = AppSettings { library_path: "/last".into(), recent_libraries: vec!["/last".into(), "/older".into()], ..AppSettings::default() };
+    let at_default = AppSettings { library_path: "/default".into(), ..AppSettings::default() };
     let fresh = AppSettings::default();
-    let open = |dir: &str, alt_asks| Launch::Open { dir: path(dir), alt_asks };
+    let open = |dir: &str, alt_asks, remembered| Launch::Open { dir: path(dir), alt_asks, remembered };
     // --library, then LIGHTCRAFT_LIBRARY, whatever the setting says; neither asks on Alt
     for s in [None, Some(&ask), Some(&last)] {
-        assert_eq!(launch_plan(false, path("/flag"), path("/env"), s, path("/default")), open("/flag", false));
-        assert_eq!(launch_plan(false, None, path("/env"), s, path("/default")), open("/env", false));
+        assert_eq!(launch_plan(false, path("/flag"), path("/env"), s, path("/default")), open("/flag", false, false));
+        assert_eq!(launch_plan(false, None, path("/env"), s, path("/default")), open("/env", false, false));
     }
     // Ask me asks, with or without a recent list
     assert_eq!(launch_plan(false, None, None, Some(&ask), path("/default")), Launch::Ask);
     let ask_empty = AppSettings { at_launch: LaunchLibrary::Ask, ..AppSettings::default() };
     assert_eq!(launch_plan(false, None, None, Some(&ask_empty), None), Launch::Ask);
     // Open the last library: the last one, else the default place; Alt can still ask
-    assert_eq!(launch_plan(false, None, None, Some(&last), path("/default")), open("/last", true));
-    assert_eq!(launch_plan(false, None, None, Some(&fresh), path("/default")), open("/default", true));
-    assert_eq!(launch_plan(false, None, None, None, path("/default")), open("/default", true));
-    assert_eq!(launch_plan(false, None, None, None, None), Launch::Open { dir: None, alt_asks: true });
+    assert_eq!(launch_plan(false, None, None, Some(&last), path("/default")), open("/last", true, true));
+    assert_eq!(launch_plan(false, None, None, Some(&last), None), open("/last", true, true));
+    assert_eq!(launch_plan(false, None, None, Some(&at_default), path("/default")), open("/default", true, false));
+    assert_eq!(launch_plan(false, None, None, Some(&fresh), path("/default")), open("/default", true, false));
+    assert_eq!(launch_plan(false, None, None, None, path("/default")), open("/default", true, false));
+    assert_eq!(launch_plan(false, None, None, None, None), Launch::Open { dir: None, alt_asks: true, remembered: false });
     // --memory never asks and opens no folder
-    assert_eq!(launch_plan(true, None, None, Some(&ask), path("/default")), Launch::Open { dir: None, alt_asks: false });
-    assert_eq!(launch_plan(true, path("/flag"), None, Some(&last), None), Launch::Open { dir: None, alt_asks: false });
+    assert_eq!(launch_plan(true, None, None, Some(&ask), path("/default")), Launch::Open { dir: None, alt_asks: false, remembered: false });
+    assert_eq!(launch_plan(true, path("/flag"), None, Some(&last), None), Launch::Open { dir: None, alt_asks: false, remembered: false });
 }
 
 /// Each listed library is checked when the window opens; the last one opened is selected.
@@ -1025,5 +1030,105 @@ fn found_again(multipass: bool) {
         row(&h)
     );
     drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #3239: Try Again on a remembered library that was missing at launch makes no library in
+/// its folder when the folder is there but empty (a share's mount point before the share is
+/// connected): the window stays and says so. Once the folder holds the library again, it opens.
+#[test]
+fn try_again_on_a_missing_remembered_library_makes_nothing_in_an_empty_folder() {
+    let dir = temp("retry-existing");
+    let mount = dir.join("Share");
+    std::fs::create_dir_all(&mount).unwrap();
+    let path = mount.to_string_lossy().into_owned();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
+    app.library_problem = Some(LibraryProblem { existing_only: true, ..LibraryProblem::new(path.clone(), "missing") });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    settle(&mut h);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryRetry"}), T)["ok"], true);
+    settle(&mut h);
+    assert!(!lightcraft_engine::library::is_library(&mount), "no catalog is made in the empty folder");
+    assert_eq!(std::fs::read_dir(&mount).unwrap().count(), 0, "nothing is written there");
+    assert!(h.app.session.library.is_none());
+    let p = h.app.library_problem.as_ref().expect("the window stays");
+    assert_eq!(p.error, "There is no LightCraft library in this folder any more.");
+    assert!(has(&h, "button:libraryRetry"));
+    // the share is connected again: Try Again opens the library in it
+    make_library(&mount);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryRetry"}), T)["ok"], true);
+    settle(&mut h);
+    assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.to_string_lossy().into_owned()), Some(path));
+    assert!(h.app.library_problem.is_none());
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #3239: why Try Again didn't open a remembered library is in the interface language,
+/// both when its folder is empty and when the folder itself is gone.
+#[test]
+fn try_again_says_why_the_remembered_library_is_missing_in_the_interface_language() {
+    let dir = temp("retry-lang");
+    let mount = dir.join("Share");
+    std::fs::create_dir_all(&mount).unwrap();
+    let path = mount.to_string_lossy().into_owned();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
+    app.ui.language = crate::i18n::Locale::De;
+    app.library_problem = Some(LibraryProblem { existing_only: true, ..LibraryProblem::new(path, "missing") });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    settle(&mut h);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryRetry"}), T)["ok"], true);
+    settle(&mut h);
+    let error = h.app.library_problem.as_ref().map(|p| p.error.clone()).unwrap_or_default();
+    assert_eq!(error, "In diesem Ordner ist keine LightCraft-Bibliothek mehr.");
+    std::fs::remove_dir(&mount).unwrap();
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryRetry"}), T)["ok"], true);
+    settle(&mut h);
+    let error = h.app.library_problem.as_ref().map(|p| p.error.clone()).unwrap_or_default();
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    assert!(error.starts_with("Die Bibliothek ist nicht da:"), "{error}");
+    assert!(!mount.exists(), "nothing is made where it was");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #3239: a remembered library whose folder can't be looked into (no permission) isn't
+/// reported as gone: Try Again says the folder can't be read, and nothing is written there.
+#[cfg(unix)]
+#[test]
+fn try_again_on_a_remembered_library_it_may_not_read_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp("retry-denied");
+    let locked = dir.join("Locked");
+    let path = make_library(&locked);
+    let names = |dir: &Path| {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        names.sort();
+        names
+    };
+    let before = names(&locked);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::read_dir(&locked).is_ok();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
+    app.library_problem = Some(LibraryProblem { existing_only: true, ..LibraryProblem::new(path, "missing") });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    settle(&mut h);
+    if !readable {
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryRetry"}), T)["ok"], true);
+        settle(&mut h);
+    }
+    let error = h.app.library_problem.as_ref().map(|p| p.error.clone()).unwrap_or_default();
+    let library = h.app.session.library.is_some();
+    drop(h);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        let _ = std::fs::remove_dir_all(&dir);
+        lightcraft_testkit::skip!(System, "running as root: a folder with mode 000 is still readable");
+        return;
+    }
+    assert!(error.starts_with("This folder can't be read:"), "{error}");
+    assert!(error.to_lowercase().contains("permission denied"), "{error}");
+    assert!(!library, "nothing opened");
+    assert_eq!(names(&locked), before, "nothing written there");
     let _ = std::fs::remove_dir_all(&dir);
 }

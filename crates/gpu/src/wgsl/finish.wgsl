@@ -106,7 +106,9 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     let lab0 = oklab(rgb);
     var l = lab0.x;
     var c = sqrt(lab0.y * lab0.y + lab0.z * lab0.z);
-    var h = atan2(lab0.z, lab0.y);
+    // a neutral (black or grey) pixel has no hue: atan2(0, 0) is undefined in WGSL (NaN on some
+    // GPUs, which a later lightening such as the vignette then shows); the CPU's atan2 gives 0
+    var h = select(atan2(lab0.z, lab0.y), 0.0, c == 0.0);
     if (pu(F_MIXER) != 0u) {
         let w = band_weights(h);
         var dh = 0.0;
