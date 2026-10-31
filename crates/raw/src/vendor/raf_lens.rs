@@ -8,13 +8,14 @@
 //! demosaic already registers the colour planes, so the stored shift over-corrects (see the document).
 //!
 //! Layout (`n` knots): `[scale, knot × n, value × n]`. `scale × n` is the half diagonal of the recorded image in
-//! pixels. Knots are positions along the radius, the last one being the farthest
-//! corner; they are evenly spaced in `r` (`0, 0.1 … 1`) or in `r²` (`√(k/8)`, last `√(9/8)`) depending on the body.
+//! pixels. Knots are radii in half diagonals, evenly spaced in `r` (`0, 0.1 … 1`) or in `r²` (`√(k/8)`) depending
+//! on the body; the corner is at 1. The nine-knot tables run one knot past it, to `√(9/8)` (on the X-T4 the ninth
+//! repeats the eighth's value).
 //!
 //! - distortion: percent, the bracket `1 + D/100` multiplies the radius; the camera's JPEG samples the raw at
-//!   `source = z · r · (1 + D(ρ(source))/100)`, `ρ = knot_last · radius / half diagonal`, with the zoom `z` that
-//!   keeps the output rectangle inside the source (`1 / max` of the bracket over the frame's border radii).
-//! - vignetting: relative illumination in percent at the source radius; the correction is the gain `100 / V`.
+//!   `source = z · r · (1 + D(source)/100)`, radii in half diagonals, with the zoom `z` that keeps the output
+//!   rectangle inside the source (`1 / max` of the bracket over the frame's border radii).
+//! - vignette: relative illumination in percent at the source radius; the correction is the gain `100 / V`.
 
 use crate::{Opcode, Rect};
 use lightcraft_tiff::Ifd;
@@ -33,8 +34,18 @@ const FIT_ROUNDS: usize = 40;
 /// understood).
 const SCALE_TOLERANCE: f64 = 0.005;
 
+/// Dimensions and half diagonals of the 26.1 MP (`6240 × 4160`) and 40 MP (`7728 × 5152`) active areas in pixels.
+/// The X-S20 writes `scale × n = 4643` (the 40 MP half diagonal) on its uncropped 26.1 MP frame (`3749` px
+/// half diagonal), while indexing the 9 knots `√(k/8)` over the 26.1 MP active area.
+const XTRANS4_26MP_WIDTH: usize = 6240;
+const XTRANS4_26MP_HEIGHT: usize = 4160;
+const XTRANS4_26MP_HALF_DIAGONAL: f64 = 3749.0;
+const XTRANS5_40MP_HALF_DIAGONAL: f64 = 4643.0;
+
 /// Camera models whose tables were checked against the camera's own JPEG (distortion within 0.01 of the best free
 /// radial fit's correlation on at least one lens, see docs/fuji-lens-corrections.md). Other bodies stay uncorrected.
+/// The nine-knot bodies other than the X-T4 were checked with their tables read at `knot_last · r`; the plain radius
+/// they are now read at was measured on the X-T4 only ("Knot radius" in that doc).
 const VALIDATED: &[&str] = &[
     "FinePix F770EXR",
     "FinePix HS30EXR",
@@ -103,9 +114,22 @@ struct Table {
     values: Vec<f64>,
 }
 
+/// Whether `scale × n` matches the recorded image's `half_diagonal` (or, on an uncropped 26.1 MP X-S20 frame,
+/// the 40 MP reference half diagonal that its firmware writes).
+fn scale_matches(model: &str, scale_times_n: f64, half_diagonal: f64, w: usize, h: usize) -> bool {
+    if (scale_times_n / half_diagonal - 1.0).abs() <= SCALE_TOLERANCE {
+        return true;
+    }
+    model == "X-S20"
+        && w == XTRANS4_26MP_WIDTH
+        && h == XTRANS4_26MP_HEIGHT
+        && (half_diagonal / XTRANS4_26MP_HALF_DIAGONAL - 1.0).abs() <= SCALE_TOLERANCE
+        && (scale_times_n / XTRANS5_40MP_HALF_DIAGONAL - 1.0).abs() <= SCALE_TOLERANCE
+}
+
 /// Read and sanity-check a table. `half_diagonal` is the recorded image's half diagonal in pixels, which
 /// `scale × n` must reproduce.
-fn read(ifd: &Ifd, tag: u16, half_diagonal: f64) -> Option<Table> {
+fn read(model: &str, ifd: &Ifd, tag: u16, half_diagonal: f64, w: usize, h: usize) -> Option<Table> {
     let v = ifd.f64s(tag)?;
     if v.is_empty() || v.iter().any(|x| !x.is_finite()) {
         return None;
@@ -115,7 +139,7 @@ fn read(ifd: &Ifd, tag: u16, half_diagonal: f64) -> Option<Table> {
         return None;
     }
     let scale = v[0];
-    if scale <= 0.0 || (scale * n as f64 / half_diagonal - 1.0).abs() > SCALE_TOLERANCE {
+    if scale <= 0.0 || !scale_matches(model, scale * n as f64, half_diagonal, w, h) {
         return None;
     }
     let knots = v[1..1 + n].to_vec();
@@ -143,9 +167,6 @@ impl Table {
             Some(i) => y[i - 1] + (y[i] - y[i - 1]) * (x - k[i - 1]) / (k[i] - k[i - 1]),
         }
     }
-    fn last(&self) -> f64 {
-        self.knots[self.knots.len() - 1]
-    }
 }
 
 /// Source radius of the output radius `r` (both in half diagonals) with the distortion zoom.
@@ -155,8 +176,9 @@ struct Geometry<'a> {
 }
 
 impl Geometry<'_> {
+    /// The radius bracket `1 + D/100` at source radius `source` (half diagonals, the table's own unit); 1 without a table.
     fn bracket(&self, source: f64) -> f64 {
-        self.table.map_or(1.0, |t| 1.0 + t.at(source * t.last(), Some(0.0)) / 100.0)
+        self.table.map_or(1.0, |t| 1.0 + t.at(source, Some(0.0)) / 100.0)
     }
     fn source(&self, r: f64) -> f64 {
         let mut s = self.zoom * r;
@@ -260,9 +282,9 @@ fn solve<const N: usize>(mut a: [[f64; N]; N], mut b: [f64; N]) -> Option<[f64; 
 }
 
 /// The warp (distortion with the frame-filling zoom) for a recorded image of `w × h` pixels.
-fn warp(ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
+fn warp(model: &str, ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
     let half = (w as f64).hypot(h as f64) / 2.0;
-    let table = read(ifd, DISTORTION, half)?;
+    let table = read(model, ifd, DISTORTION, half, w, h)?;
     // Percent: anything beyond a third is not distortion; an all-zero table has nothing to correct.
     if table.values.iter().any(|d| d.abs() > 30.0) || table.values.iter().all(|d| *d == 0.0) {
         return None;
@@ -277,13 +299,13 @@ fn warp(ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
 }
 
 /// Radial illumination gain `100 / V` as DNG `FixVignetteRadial` (`1 + k0 r² + … + k4 r¹⁰`).
-fn vignette(ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
+fn vignette(model: &str, ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
     let half = (w as f64).hypot(h as f64) / 2.0;
-    let t = read(ifd, VIGNETTING, half)?;
+    let t = read(model, ifd, VIGNETTING, half, w, h)?;
     if t.values.iter().any(|v| !(10.0..=130.0).contains(v)) {
         return None;
     }
-    let gain = |r: f64| 100.0 / t.at(r * t.last(), Some(100.0));
+    let gain = |r: f64| 100.0 / t.at(r, Some(100.0));
     if (0..=SAMPLES).all(|j| (gain(j as f64 / SAMPLES as f64) - 1.0).abs() < 1e-4) {
         return None;
     }
@@ -302,10 +324,11 @@ fn vignette(ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
 /// The lens corrections of a RAF whose camera `model` was validated (anything else, and any table that is not in
 /// the understood layout and scale, is left uncorrected). `active` is the recorded image (the raw crop).
 pub(super) fn corrections(model: &str, raw: &Ifd, active: Rect) -> Vec<Opcode> {
-    if !VALIDATED.contains(&model.trim()) || active.width < 2 || active.height < 2 {
+    let model = model.trim();
+    if !VALIDATED.contains(&model) || active.width < 2 || active.height < 2 {
         return Vec::new();
     }
-    warp(raw, active.width, active.height).into_iter().chain(vignette(raw, active.width, active.height)).collect()
+    warp(model, raw, active.width, active.height).into_iter().chain(vignette(model, raw, active.width, active.height)).collect()
 }
 
 #[cfg(test)]
@@ -347,25 +370,30 @@ mod tests {
         r * (k[0] + r * r * (k[1] + r * r * (k[2] + r * r * k[3])))
     }
 
+    /// The X-T4's arrays become a one-plane warp with the frame-filling zoom and a vignette gain read at the plain radius.
     #[test]
     fn x_t4_tables_become_a_warp_and_a_vignette_gain() {
         let ops = corrections("X-T4", &xt4(), XT4_AREA);
         let [Opcode::WarpRectilinear { planes, center }, Opcode::FixVignetteRadial { k, center: vc }] = ops.as_slice() else { panic!("{ops:?}") };
         assert_eq!((*center, *vc), ([0.5, 0.5], [0.5, 0.5]));
         assert_eq!(planes.len(), 1, "no colour planes: lateral CA is not applied");
-        // barrel distortion: zoomed to fill the frame (measured against the camera JPEG: 1.030..1.033), the
-        // corner samples inside the raw (-6.4 % bracket)
+        // barrel distortion: zoomed to fill the frame, the corner samples inside the raw (-6.4 % bracket; the measured
+        // free fit below gives 0.9635 there)
         let green = &planes[0];
         assert!((1.02..1.04).contains(&green[0]), "{}", green[0]);
         let corner = evaluate(green, 1.0);
-        assert!((corner - 0.9668).abs() < 0.002, "{corner}");
+        assert!((corner - 0.9641).abs() < 0.002, "{corner}");
         // vignette: 67.457 % at the corner, 100 % on the axis
         let gain = |r: f64| 1.0 + (0..5).map(|i| k[i] * r.powi(2 * i as i32 + 2)).sum::<f64>();
         assert!((gain(1.0) - 100.0 / 67.45703125).abs() < 0.01, "{}", gain(1.0));
         assert!((gain(0.0) - 1.0).abs() < 1e-12);
-        assert!((gain(0.5) - 100.0 / (96.87792969 + (94.90234375 - 96.87792969) * (0.5 * 1.06056338 - 0.5) / (0.6126760563 - 0.5))).abs() < 0.01);
+        // read at the plain radius: r = 0.5 is the second knot, r = 0.85 lies between the fifth and sixth
+        assert!((gain(0.5) - 100.0 / 96.87792969).abs() < 0.01, "{}", gain(0.5));
+        let v = 84.73291016 + (78.43701172 - 84.73291016) * (0.85 - 0.7908450704) / (0.8661971831 - 0.7908450704);
+        assert!((gain(0.85) - 100.0 / v).abs() < 0.01, "{}", gain(0.85));
     }
 
+    /// The warp follows a free radial fit of the camera's own JPEG of pixls 3913 to within 0.0012 half diagonals.
     #[test]
     fn matches_the_measured_x_t4_geometry() {
         // Free radial fit (data/testing/raf-lens/tools/fit_model.py) of the camera JPEG against LightCraft's uncorrected
@@ -378,7 +406,7 @@ mod tests {
             let r = i as f64 / 20.0;
             let r2 = r * r;
             let reference = measured[0] * r * (1.0 + measured[1] * r2 + measured[2] * r2 * r2 + measured[3] * r2 * r2 * r2);
-            assert!((evaluate(&planes[0], r) - reference).abs() < 0.004, "{r}: {} vs {reference}", evaluate(&planes[0], r));
+            assert!((evaluate(&planes[0], r) - reference).abs() < 0.0012, "{r}: {} vs {reference}", evaluate(&planes[0], r));
         }
     }
 
@@ -395,8 +423,20 @@ mod tests {
     fn rejects_unknown_scale_layout_and_values() {
         let scale = 3749.0 / 9.0;
         let bad = |ifd: Ifd| corrections("X-T4", &ifd, XT4_AREA);
-        // another normalisation (X-S20 stores the 40 MP half diagonal), non-increasing knots, wrong lengths, garbage
+        // another normalisation (ignoring camera exceptions like the X-S20 which writes the 40 MP half diagonal), non-increasing knots, wrong lengths, garbage
         assert!(bad(only(DISTORTION, table(4643.0 / 9.0, &KNOTS9, &XT4_DIST))).is_empty());
+        // X-S20 accepts the 40 MP normalization on its uncropped 26 MP sensor, but rejects in-camera crops
+        let xs20_ops = corrections("X-S20", &only(DISTORTION, table(4643.0 / 9.0, &KNOTS9, &XT4_DIST)), XT4_AREA);
+        assert!(matches!(xs20_ops.as_slice(), [Opcode::WarpRectilinear { .. }]), "{xs20_ops:?}");
+        // Nonzero active-frame offsets are permitted as long as dimensions are 6240 × 4160
+        let offset_area = Rect::new(32, 20, 6240, 4160);
+        let xs20_offset_ops = corrections("X-S20", &only(DISTORTION, table(4643.0 / 9.0, &KNOTS9, &XT4_DIST)), offset_area);
+        assert!(matches!(xs20_offset_ops.as_slice(), [Opcode::WarpRectilinear { .. }]), "{xs20_offset_ops:?}");
+        let cropped = Rect::new(0, 0, 4992, 3328);
+        assert!(corrections("X-S20", &only(DISTORTION, table(4643.0 / 9.0, &KNOTS9, &XT4_DIST)), cropped).is_empty());
+        // Differing active dimensions are rejected even if hypothetically close in half-diagonal
+        let wrong_dim = Rect::new(0, 0, 6242, 4157);
+        assert!(corrections("X-S20", &only(DISTORTION, table(4643.0 / 9.0, &KNOTS9, &XT4_DIST)), wrong_dim).is_empty());
         let mut flat = KNOTS9;
         flat[3] = flat[2];
         assert!(bad(only(DISTORTION, table(scale, &flat, &XT4_DIST))).is_empty());
@@ -439,6 +479,27 @@ mod tests {
         let nearest = 5999.0f64.min(3999.0) / 5999.0f64.hypot(3999.0);
         let at_edge = evaluate(&planes[0], nearest) / nearest;
         assert!((at_edge - planes[0][0]).abs() < 0.004);
+    }
+
+    #[test]
+    fn xs20_40mp_scale_table_produces_warp_and_vignette() {
+        let scale = 4643.0 / 9.0;
+        let ifd = Ifd {
+            entries: vec![
+                Entry { tag: DISTORTION, value: table(scale, &KNOTS9, &XT4_DIST), offset: 0 },
+                Entry { tag: VIGNETTING, value: table(scale, &KNOTS9, &XT4_VIG), offset: 0 },
+            ],
+            ..Default::default()
+        };
+        // X-S20 on its uncropped 26 MP sensor emits both WarpRectilinear and FixVignetteRadial
+        let ops = corrections("X-S20", &ifd, XT4_AREA);
+        let [Opcode::WarpRectilinear { planes, center: wc }, Opcode::FixVignetteRadial { k, center: vc }] = ops.as_slice() else {
+            panic!("expected warp and vignette for X-S20: {ops:?}");
+        };
+        assert_eq!((*wc, *vc), ([0.5, 0.5], [0.5, 0.5]));
+        assert_eq!(planes.len(), 1);
+        assert!((planes[0][0] - 1.03).abs() < 0.02);
+        assert!((k[0]).abs() > 0.0);
     }
 
     #[test]

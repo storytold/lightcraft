@@ -1,11 +1,805 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### A keyboard shortcut for Clear Color Label
+- Clear Color Label is now a command of its own in Help ▸ Keyboard Shortcuts, so it can have a key like Set Rating or
+  Set Flag; before, only the red, yellow, green and blue labels (6–9) had keys and clearing a label was menu-only. It has
+  no key until you give it one. Photo ▸ Set Color Label ▸ None runs it and shows its key. The key clears the label of
+  the selected photos as one undo step, only the active photo in Compare and Survey, and moves on with Auto Advance,
+  as the other label keys do.
+
+### Samsung panoramas import
+- Some panoramas from Samsung phones were refused as truncated ("the image data doesn't end with an end-of-image
+  marker"), although other apps open them whole: their image data runs straight into the Samsung (SEF) block at the
+  end of the file, with no end-of-image marker in between. When the file ends with a valid SEF block, the image now
+  ends where that block begins, so these photos import, show and build previews. A JPEG that is really cut short is
+  still refused.
+
+### Photos waiting for a library wait for a running import too
+- Photos given on the command line or dropped on the launch list are imported once a library opens. If another import
+  or a Synchronize Folder is still running then, they now wait for it to end instead of being dropped, and a message
+  says so (issue #2779).
+
+### Export sizes keep the pixels typed
+- Export ▸ Image Sizing kept pixel sizes only in steps of 16, so a typed 1080 became 1088 and 3000 became 3008. The
+  long edge, short edge, width and height fields now keep any whole number of pixels.
+
+### The control channel refuses pointer positions that aren't on any screen
+- `ui.click`, `ui.move`, `ui.drag`, `ui.dragWidget`, `ui.pointer` and `ui.scroll` with a coordinate or delta far past
+  any screen (such as `1e308`) used to queue an infinite or NaN position. A debug build panicked on it and a release
+  build handed it to every widget. Numbers outside ±1,000,000 are now an error, and nothing is queued.
+
+### The histogram stays SDR when HDR is switched off
+- After an HDR edit was dragged and HDR was then switched off, dragging a slider showed the old HDR histogram (with its
+  SDR / HDR colour bar) again until the drag ended. The histogram now follows the edit: an SDR edit shows the SDR
+  histogram while you drag, too.
+
+### At most 64 red eye corrections per photo
+- Every pixel of a render goes through every red eye correction, so a sidecar, preset or agent with thousands of
+  them could stall a preview or export for hours. A photo now renders its first 64, and Red Eye refuses a 65th.
+
+### Reliability
+- A damaged or crafted Olympus ORF, Samsung SRW, Sony ARW or Pentax PEF whose strip sizes add up past the largest
+  64-bit number no longer crashes LightCraft (debug builds) when it is read: the file is refused, or read as far as
+  its data go.
+
+### A colour-range mask keeps at most 64 samples, however it arrives
+- A colour-range mask compares every pixel with every colour it has sampled, so a mask with thousands of samples
+  could stall a render or export, or lose the GPU for the rest of the session. `mask.add` and `mask.update` already
+  kept the first 64; a sidecar's `lc:settings`, a preset, `develop.merge`, `render --settings` and the catalog and
+  edit history now keep the first 64 too, in order, and the extra ones are skipped as they are read. Masks made in
+  the app (up to 5 samples) are unchanged.
+
+### A SAM 3 model in the wrong format says so
+- Object and Describe need `model.safetensors` from `facebook/sam3` in the Hugging Face format. The
+  `sam3.safetensors` on community mirrors is Meta's original checkpoint, with other tensor names; installed in its
+  place, AI masks failed with "unsupported dtype C64". LightCraft now says that the file is Meta's original
+  checkpoint and which file it needs instead.
+
+### Reliability
+- A photo with a mask id at the 32-bit limit (from a damaged or hand-edited sidecar, a paste or an agent) no longer
+  breaks the masks added after it: new masks, duplicates and the masks of a preset each get an id no other mask has.
+  Before, the next id wrapped around to 0, so a second new mask shared the first one's id (debug builds crashed).
+
+## 2026-10-29
+
+### A person's page opens in seconds in a large library
+- Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
+  runs on every processor core, and each comparison of two faces uses the processor's vector instructions. In a
+  library of 92 000 unnamed faces, a person with 4 100 named ones is estimated to have taken about 2 minutes 40 seconds
+  on one core of an Apple M1 Pro, with the window frozen, and now about 3 seconds (both measured on 3 000 of those
+  faces, 5.3 s and 0.1 s, and scaled up). Name suggestions and the order of the unnamed
+  faces get the faster comparison too.
+
+### Move Folder To… no longer freezes the window
+- Move Folder To…, in the menu of a folder in Folders or Local, now opens its folder dialog the way Import and Move to
+  Folder… do: the window keeps drawing and answering while you choose, and the folder moves when the dialog closes,
+  with the same "Moved; N photo(s) relinked" message. Before, the dialog held up the whole window until it closed;
+  on Linux with X11 the app could stop responding altogether. While the dialog is open, another library can't be
+  opened (the move belongs to the library it was started in), and while Open Library… or New Library… waits for
+  its folder, Move Folder To… is unavailable.
+
+### A library on a disconnected drive is reported at launch, not replaced
+- When the library LightCraft last opened is missing at launch, because its drive or network share isn't connected
+  yet or it was moved, the window now says it couldn't open the library and offers Try Again, Choose Another
+  Library…, Continue Without Saving and Quit. Before, LightCraft quietly made a new, empty library at that path,
+  filled it with the demo photos and opened it, so it looked as if the photos and edits were gone. Nothing is
+  written there now, and Try Again opens the library once its drive or share is back: on an empty folder left in
+  its place, such as a share's mount point, it says so again instead of making a new library there. A library
+  folder LightCraft isn't allowed to read is reported as unreadable, with the system's reason, not as gone. A
+  library given with `--library` or `LIGHTCRAFT_LIBRARY`, and the default location on first launch, are still
+  created as before.
+
+### The histogram's clipping buttons read in light themes
+- The two buttons at the histogram's top corners (shadow and highlight clipping) are no longer near-black tiles with a
+  grey chevron. They take the theme's own raised fill, and the chevron stands out from it in Charcoal, Midnight, Silver
+  and Paper alike.
+
+### Object and Describe masks show their pins
+- With Show Pins on, an Object mask now has a pin where you first clicked the object, and a Describe mask has one in
+  the middle of what its description found. Before, these masks had no pin on the photo, so they couldn't be picked
+  there. Clicking a pin selects its mask; dragging it changes nothing, as these masks follow what they selected.
+  With the Object tool on, a click on another mask's pin selects that mask too, instead of adding a click to the
+  selected Object mask, and a click on the selected mask's own pin adds nothing. Subject, Sky, Background and the
+  range masks still have no pin.
+
+## 2026-10-28
+
+### The empty photo grid names Import Photos' shortcut as it is bound
+- When a view is empty and the way in is File ▸ Import Photos…, the message under "No photos" used a fixed "Cmd+Shift+I" (or a translation's fixed copy of it) whatever the platform or the binding. It now shows the key as the menu bar writes it (on a Mac its glyphs, elsewhere Ctrl+Shift+I) on its own line under the sentence, follows a remapped key, and names no key when Import Photos has none. The sentence now wraps in a narrow window instead of running off its edge.
+
+### The photo in Detail is named with its file for screen readers
+- With VoiceOver, the photo in Detail view is now announced with its file name, rating, flag and colour label ("Photo:
+  IMG_0042.JPG, 4 stars, picked") instead of only "Photo", as the grid names the same photo.
+
+### The grid's thumbnail size slider is a slider to screen readers
+- With VoiceOver, the Thumbnail size control at the right of the grid's bottom bar is now announced as a slider with its
+  value and range, instead of a button with no value. Increment and Decrement (VoiceOver's Control-Option-Up and Down) and,
+  while it has the keyboard focus, the Up and Down arrow keys change it by one step, as the `=` and `-` keys do.
+
+### Local's standard places can't be renamed by mistake
+- The Pictures, Desktop, Downloads and Home rows of Local no longer offer Rename Folder… or Move Folder To…. Before,
+  the Rename prompt began with the row's translated label rather than the folder's name, so in German pressing OK
+  on “Bilder” renamed your real Pictures folder to “Bilder”, and Home could be renamed the same way. Folders inside
+  them, and folders you keep in Local with Browse Folder…, rename as before, starting from their real name. The
+  `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
+  so a script or an agent can't do it either.
+
+
+## 2026-10-27
+
+### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
+- Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
+
+### Screen readers name the sidebar's disclosure triangles
+- Each triangle in the left sidebar (album folders, local folders, By Date, imported folders, keywords) and in the
+  keyword list now says which row it opens or closes: "Expand Travel", "Collapse 2026". They were all named just
+  "Expand" or "Collapse", so VoiceOver read a list of identical buttons.
+
+### Screen readers and Voice Control name the grid's date headers as they read
+- A date header in the photo grid is now named with the text it shows ("Sunday, 20 September 2026 · 1 photo"), where
+  it was named with the bare date key ("2026-09-20"). VoiceOver reads what a sighted person reads, and Voice Control's
+  "click Sunday" finds the header.
+
+### Reading a photo from a network share asks the server less
+- Checking a photo (before an import, and for Reload, Recheck, Relink and Convert) asked for the file's size, then
+  opened it, then asked for its modification time as a question of its own. It now opens the file once and reads
+  both from the open file, so each photo costs the server fewer round trips (about a quarter less time to read a
+  set of photos from an SMB share, in one measurement on one share). What is imported and the messages for a file
+  that can't be read are the same.
+
+### A refused name prompt stays open and says why
+- A one-line prompt (Rename Folder, New Folder on Disk, the preset and version names, New Library for a name it can't
+  use, Auto-Tag from Tracklog) that the app refuses, for example a folder name that is taken, now stays open with what
+  you typed and shows the reason, so you can change the name. Before, it closed without a word. A New Folder on Disk
+  that works now says so: “Created folder “Selects” in “2026/Shoot””. Cancel and Esc still close the prompt.
+
+### The macOS menu bar shows every row
+- File ▸ Export… no longer reads “Custom…”, File ▸ Export with Preset keeps its Custom… row, and Photo ▸ Add to Album keeps New Album…. When two menu rows ran the same command, the menu bar left the second one out and gave the first one its label; now each row is its own item and a click on either one runs the command. The View menu now also lists its second Layout Image row (without a key), as the in-window menu does.
+
+### Shortcuts read the same way everywhere on macOS
+- Wherever LightCraft shows a shortcut (the menu bar's labels, a button's tooltip, the empty-library hint, the
+  line under "No photos" in an empty album, the Keyboard Shortcuts dialog and its search) it lists the modifiers in
+  the order macOS menus use, Control, Option, Shift, Command: `⇧⌘I` where it used to say `⌘⇧I`. The line under
+  "No photos" also shows the shortcut as it is bound now, and as Ctrl+Shift+I on Windows and Linux, where it
+  always said Cmd+Shift+I. Windows and Linux otherwise keep the order a shortcut is written in.
+
+### Screen readers name a slider's value field "value"
+- The number beside a slider is now named "Exposure value" (the slider's name and "value"), and "Click to type a value,
+  drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
+  VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
+
+## 2026-10-29
+
+### A dialog no longer dims the macOS title bar
+- On macOS the top bar is the window's title bar, and the window buttons drawn over it stayed bright while a dialog dimmed
+  the bar under them. As under a macOS sheet, the dialog's backdrop now leaves the bar alone: its buttons are inactive, a
+  click on it does not close the dialog, and dragging its empty space still moves the window. Windows, Linux and full
+  screen are unchanged.
+
+## 2026-10-28
+
+### The window's parts are named for screen readers
+- The top bar, the tool strip and the bottom bar are now announced as toolbars (Top bar, Tool strip, Bottom bar), and the
+  sidebar (Library), the photos, the Tools panel (or Presets) and the filmstrip as landmarks, so a screen reader can list
+  them and jump to one instead of walking every control. Nothing on screen changes. Not yet tried with a real VoiceOver session.
+
+### Dialogs are exposed to screen readers as dialogs
+- Export, Settings and the other dialogs, the library chooser and the prompts that stop the window (the quit question, a
+  library that could not be opened, a settings file problem) are now exposed to screen readers as dialogs: modal ones, so the
+  rest of the window is marked as blocked while one is open, and an alert dialog for the prompts. The answer to Check for
+  Updates is a dialog too, but not a modal one. Before, each was a plain group that only carried the dialog's title.
+- An alert dialog also carries what it says as its description: a screen reader can read the library problem's path, error and
+  explanation, or a prompt's text, together with the dialog.
+
+### Screen readers no longer read the shortcut with every button name
+- Icon-only buttons (the tool strip, the view buttons and Before/After and Filmstrip in the bottom bar, the top bar's
+  Import Photos…, the mask overlay and White Balance Selector buttons, the slideshow controls) are now announced by
+  their label alone ("Edit", "Presets", "Photo Grid"), and the shortcut is the button's description ("E", "Shift+P",
+  "G"), which VoiceOver reads after a pause or on request. Before, it read "Edit (E)" every time it landed on the
+  button. This holds in every language, including Japanese and Traditional Chinese, which write the shortcut in
+  full-width brackets. The tooltip you see on hover is unchanged.
+
+## 2026-10-25
+
+### A one-field white balance edit no longer shifts the other one
+- Settings that name only a white balance temperature, or only a tint — `develop.merge`,
+  `lightcraft-cli render --settings <partial JSON>`, an MCP `set_develop {settings: …}` call, or a hand-written
+  preset naming one of the two — used to change the colour balance of photos they never mentioned. On a raw edited in
+  Kelvin the field the partial left out was re-read on the other scale: `wb {temp: 5800}` on a photo at 5000 K /
+  +12 tint came back at 5800 K with the +12 read as a relative shift, moving the green–magenta balance by a visible
+  amount. The kept field now carries the look the photo had, and the result is stored on the scale that photo is
+  edited on.
+- The same partial on a photo still on As Shot — or on a named white balance preset, on a raw with a Kelvin scale —
+  stored the number without any render ever reading it: those modes answer their own white, so the panel showed
+  5800 K over a picture still at the file's white. That white is now written out as Custom values before the partial
+  lands; a partial that names a mode itself still gets that mode.
+- Presets made from a photo and the crs / XMP and Luminar importers name mode, temperature, tint and scale together,
+  and partials naming both fields (or neither) behave exactly as before; a partial that says `"scale": "kelvin"` is
+  still read in Kelvin.
+
+### JPEG ICC chunks are validated before colour conversion
+- JPEG ICC profiles are assembled only when every chunk is present exactly once, the sequence numbers and
+  declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
+  sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
+
+
+## 2026-10-25
+
+### `>=` and `<=` work in the search box
+- Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
+  the `=` was read as part of the number, so such a search quietly showed no photos at all.
+
+### Import rename numbering stops safely at its limit
+- Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
+  reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay
+  accounted for and catalogued. A `renameStart` value outside this platform's range is rejected before setup.
+
+### Incomplete timestamps no longer become plausible photo times
+- An ISO date ending in `T`, a clock with extra components, or a malformed fractional second is no longer read as a
+  different valid time. XMP keeps the original property available and can use the next valid capture-time field;
+  GPX treats an invalid point time as untimed, so it cannot tag a photo at a fabricated time.
+
+### Invalid EXIF capture clocks no longer become plausible dates
+- An EXIF capture time with extra clock components is ignored as a whole. LightCraft can use a valid DateTimeDigitized,
+  IFD0 DateTime or embedded XMP value instead, while All Metadata continues to show the original tag. This also keeps
+  malformed timestamps from creating false matches when geotagging from a track log.
+
+### Drags reach the screen a frame sooner
+- The window queues one frame ahead of the display again instead of two, as eframe does by default (since #136 it
+  used egui-wgpu's high-throughput setting). Sliders, crop handles, brushes and every other drag show up one display
+  frame sooner: 8.3 ms at 120 Hz, 16.7 ms at 60 Hz. On a MacBook Pro at 120 Hz, a heavy develop drag went from
+  about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
+  a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
+  1200–1500-point-wide window on a Retina display.
+
+
+## 2026-10-24
+
+### A right-click on a text field while you carry photos opens no menu
+- While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
+  Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
+  as before.
+
+### Typed GPS coordinates are validated before editing metadata
+
+- Entered coordinates must contain a complete decimal or degrees/minutes/seconds value. Unknown text, exponent notation, wrong-axis or conflicting hemispheres, and minutes or seconds outside [0,60) are rejected instead of being silently ignored and reinterpreted. A rejected GPS value also leaves the other fields in the same metadata edit unchanged.
+
+### The Slideshow settings page stays put while the preview renders
+
+- In Settings ▸ Slideshow, the line under the slide preview ("The selected photo as a slide…") now shows from the first
+  frame instead of only once the preview has finished rendering. Before, it appeared with the render, pushing the page
+  below it down by a line, so a click made in that moment could land beside the control you aimed at.
+
+### A refused move no longer switches the Move Photos question off
+- Ticking Don't ask again in the question that appears when you drop photos on a Folders row used to be remembered even when the move was then refused (for example because a file of the same name is already in that folder). The choice is now kept only once the move has started, so a refused move leaves the question on.
+
+### Importing a folder from a network share waits less
+- After the import review, the import used to check that each photo was still as the review had seen it by asking the
+  disk about one photo after another, so on a network share every photo waited for a round trip to the server. It now
+  asks about up to 16 photos at a time, the same wait for every 16 instead of for each one. Reading the photos in the review
+  is unchanged.
+- Looking for each photo's `.xmp` sidecar, which asks the disk several names for every photo, also goes up to 16
+  photos at a time.
+
+### Original export checks embedded place names when removing location
+- Original copies are refused when “Remove Location Info” is enabled and the source contains GPS or a nonblank sublocation, city, state or country. Use JPEG or TIFF for rendered output; DNG is available for raw photos.
+
+### Auto straighten finds the horizon and plumb lines
+- Auto straighten (Auto in the crop panel, or a double-click with the Straighten tool) now finds a sea or
+  landscape horizon among waves and clouds, and levels buildings by where their verticals converge, so a photo shot
+  upward is no longer turned by the lean of its walls. Measured on 113 photos straightened by hand in Lightroom
+  Classic, it straightens 50 of them instead of 29, without making more of them worse.
+- It turns a photo by at most 5° (before: 10°); only two of those photos needed more.
+
+### Sidecar keywords stay searchable in other applications
+- Saving an XMP sidecar wrote each keyword's path into `dc:subject`, so after any change, even a star rating, a
+  photo keyworded `Places|Italy|Rome` listed `Places|Italy|Rome` there instead of `Places`, `Italy` and `Rome`,
+  and a search for "Rome" in Lightroom, darktable, digiKam or another DAM no longer found it. Sidecars now get the
+  names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
+  reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
+  saved.
+
+
+### Relative-date filters and smart albums follow the clock
+- A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
+  minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
+  direct or nested smart albums. Held views keep photos that expired until Refresh View while admitting photos that
+  newly match; expiry itself does not create an undo step.
+
+### The histogram's tonal zones adjust the Basic tones
+- The histogram is a control surface again, as in Lightroom Classic: hovering one of its five zones (Blacks, Shadows,
+  Exposure, Highlights, Whites) tints it and shows its name and value under the plot ("Exposure: +0.45 EV"). Dragging one
+  sideways moves that control — the zone you pressed stays locked while the pointer crosses the others, Shift drags a
+  tenth as far, and the whole drag is one undo step. Double-clicking a zone puts its control back to its default.
+
+### Drag the parametric Tone Curve
+- In the Tone Curve's parametric mode the graph is now drawn from the renderer's own curve, so it always matches the
+  photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
+  Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
+## 2026-10-24
+
+### Virtual-copy numbering stops cleanly at its limit
+- Creating a numbered virtual copy now reports when the `Copy N` sequence is exhausted, before any copies in a
+  batch are created. An explicit name remains available even when the numeric sequence is full.
+
+### A right-click while you carry photos opens no menu
+- While you drag photos from the grid, a right-click opens no context menu, on an album, folder or keyword row in
+  the sidebar or on any other row or thumbnail that has one. Before, the menu opened on the row the photos were over.
+  The menu of a text field (Cut, Copy, Paste) is not held back.
+
+### Adding photos that are already in an album no longer costs an undo step
+- Add to Album and dragging photos to an album now leave the album, the undo history and Redo alone when every
+  photo was in the album already. Before, they still recorded an undo step, so Redo was lost and Undo had a step
+  that changed nothing. Photos the library no longer has (a selection kept after an Undo took them away) are also
+  left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does
+  nothing and says nothing when none of them is left, and counts only the photos it changed.
+
+## 2026-10-23
+
+### Videos in the grid are no longer sent to the image decoders
+- A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
+  grid thumbnail (issue #2682). They can't read one, so each video failed with "unrecognised image format", showed a
+  "!" and was tried again whenever the library changed, filling the log. Its cell now keeps the plain placeholder until
+  LightCraft can show video frames. The background face search skips videos too, instead of failing on each one at
+  every launch. A video is recognised by its type, by the format `VIDEO` that Lightroom catalogs
+  give videos, or by its extension (`.mp4`, `.mov`, `.m4v`, `.avi`, `.mts`, `.m2ts`, `.3gp`, `.mkv`, `.webm`, `.wmv`,
+  `.mpg`, `.mpeg`).
+### Right-button drags no longer pick up photos in the grid
+- Dragging with the right mouse button over a photo in the grid used to pick up the photos and, on a photo that wasn't
+  selected, replace the selection with it. Now only the left button drags photos, and a right-button release while you
+  are dragging photos no longer drops them on an album, folder or keyword. Right-click still opens the photo menu.
+
+### A damaged GIF or BMP can no longer crash an import
+- A GIF or BMP whose header claims an enormous picture (a file of a few dozen bytes can claim a billion pixels) is
+  now refused with an error when importing or opening it (issue #2553). Before, LightCraft set aside memory for the
+  whole picture, several gigabytes, and could close without warning, losing unsaved work. At import, a GIF or BMP
+  picture larger than 4 megapixels now has its size read from the header instead of being decoded; smaller ones are
+  still decoded, so a damaged file is caught then. A picture that is mostly blank (a run-length-encoded BMP that ends
+  early, or a GIF whose first frame is smaller than the picture) still opens up to 4 megapixels; a larger one is
+  refused, because opening it would still set aside memory for the whole picture.
+
+### Merge previews after a failed one
+- The HDR, Panorama and HDR Panorama dialogs make a new preview each time they open (issue #2708). After a preview
+  had failed once, for example because a photo's file was missing, opening the dialog again with the same options
+  showed neither a preview nor an error until an option was changed.
+
+### Edits read from a sidecar are kept in range
+- LightCraft edits read back from an XMP sidecar (Read Metadata from File, or at import) are now checked like presets
+  and pasted settings: sliders and curves are kept in their ranges and the straighten angle within ±45° (issue
+  #2555). A turned crop that reaches far past the photo is trimmed to the photo when it is shown or exported. Before,
+  a damaged or hand-edited sidecar could set a crop that made a full-size export ask for trillions of pixels and
+  close the app. Crops made with the crop tool are unchanged.
+
+### Text boxes in Settings
+- Esc in a text box of Settings (Copyright, Creator, the Auto Import album, the two External Editing boxes) gives
+  the text back and stays in Settings; in the first three it used to save what was typed, and in all of them it
+  closed the window. Those three now have the Cut / Copy / Paste menu too, and what is typed in Copyright or
+  Creator is saved when another tab is clicked, where it used to be dropped.
+
+### The histogram stays in view
+- The histogram stays at the top of the Edit panel while its sliders scroll under it (issue #2679). It used to scroll
+  away with them, so it was out of sight while using the sliders further down the panel.
+
+### No maze pattern in noisy raws
+- Flat areas of high-ISO raws, such as a dim wall or a blurred background, could show short horizontal and vertical
+  strokes instead of grain, often orange and blue under warm light. Noise reduction made them stand out more, because
+  it smooths the grain around them. The demosaic chose between a horizontal and a vertical guess at each pixel, and
+  in a flat area the noise alone decided which. Where neither guess is clearly better it now blends the two, so the
+  noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
+  are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
+
+
+### Tab leaves the name field in New Album, New Smart Album and the name prompts
+- In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
+  keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
+  Before, the field took the focus back every frame, so only Return and Esc got you out of it. Return still
+  confirms and Esc still cancels.
+
+### A thumbnail that can't be read is tried again only when its photo changes
+- A file the grid can't draw (a damaged JPEG, a file the decoders can't read) was decoded again after every change to
+  the library, even a change to another photo: face recognition and metadata reads at launch made each such file
+  fail 20 to 40 times in a few minutes, one log warning each time (issue #2682). It is now tried again when that photo
+  changes (Locate Missing File, Reload, an edit) or when the library can't say which photos changed. A photo whose
+  file is missing, such as one on a drive that is unplugged, is still tried again at every change, so it comes back
+  once the drive does.
+
+### Foreign XMP metadata survives namespace-prefix collisions
+- Saving a sidecar keeps another application's properties even when its namespace uses prefixes such as `lc`
+  or `xmp`. Those foreign properties no longer become LightCraft settings or ratings when imported.
+
+### Find Missing Photos finds the files of a library made on Windows
+- A library made on Windows records its originals with Windows paths. Opened on macOS or Linux, its photos are
+  missing until relinked, and Find Missing Photos found them only by their content, so it missed every photo it had
+  no fingerprint for (such as photos brought in from a Lightroom catalog) or that had been edited since, even in a
+  folder holding every file under the same name. It now matches them by name as it does any other photo: the name
+  after the last `/` or `\`, in any letter case, checked against the size when the library has one. Several files
+  of that name are still reported rather than guessed, and undo puts back the paths as they were.
+
+### Auto straighten leaves straight photos alone
+- Auto straighten (Auto in the crop panel, or a double-click with the Straighten tool) no longer turns a photo by
+  more than 10°, and acts only when at least three lines agree. Before, it often turned photos that were straight:
+  the edges of wooden planks, a branch or a bird's wing were taken for the horizon, sometimes for a 25° turn.
+- When it finds no horizon or vertical lines, it says so instead of doing nothing without a word.
+
+### PSD and PSB metadata stays available
+- LightCraft now imports PSD and PSB files with EXIF and XMP image resources. Capture dates, GPS and descriptive fields
+  stay available in All Metadata; PSD edit copies keep their capture date. Original exports with Remove Location Info enabled
+  are refused when a PSD or PSB embeds GPS, since LightCraft cannot strip metadata from a byte-for-byte original copy.
+
+### Quitting on macOS leaves no lock note
+- Quitting LightCraft on macOS no longer leaves `catalog.lock.owner` in the library folder. The note, which names the
+  program that has the library open, stayed behind after Quit and the window's close button, pointing at a process
+  that no longer existed. The library's lock is now released as soon as everything is saved, as it already was on
+  the other systems.
+
+### Asking for the missing photos no longer freezes the window
+- `library.missing` (the control channel and `mcp --connect`) looked at every photo's file on the thread that draws
+  the window, so on a library of hundreds of thousands of photos on a network share the app stopped answering for
+  minutes. The files are now checked in the background: a "Missing Photos" row in the activity stack counts them and
+  its ✕ stops the check, and the request is answered with the same list when the check ends. A second request meanwhile
+  shares the running check. A caller that stops waiting (the control server gives a request 60 s) gets the answer of
+  that check when it asks again within ten minutes, instead of another walk of the share, as long as the photos have
+  not changed since; otherwise the files are checked again. If photos change while the files are being checked (an
+  import adds some, others are removed, moved to Recently Deleted or relinked), the answer leaves out the photos that
+  no longer apply, a photo added meanwhile is not part of that check, and the answer is not kept for a later request.
+
+
+### Choose where a Lightroom catalog goes
+- File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
+  library open now, or create a new library for them, named after the catalog and placed next to the open library
+  (both can be changed). LightCraft opens the new library, then imports the catalog into it. Cancel does nothing.
+  Open Library… on a Lightroom catalog goes through the same choice.
+- To import as before without the question, choose Settings ▸ General ▸ When importing a Lightroom catalog ▸
+  Always merge into the open library, or tick Don't ask again in the window. Ask where to import it brings the
+  question back.
+
+### Choose which library opens at launch
+- Settings ▸ General ▸ **At launch**: *Open the last library* (as before) or *Ask me*. With *Ask me*, LightCraft
+  starts with a window listing your recent libraries: each one's name, the folder it is in and when you last opened
+  it. One that is gone (moved, renamed, on a disconnected drive), can't be read or no longer holds a library is
+  greyed out with the reason. Each one is checked in the background, showing *Checking…* until it answers (and that
+  the drive isn't answering after 5 s), so the list never waits on a network share that is offline or a disk that
+  has to wake up; File ▸ Open Recent Library uses the same answers (it greys out only libraries that are gone). Making the list only looks: it never locks or writes anything in your libraries, so one
+  that another program has open is reported, with who has it, when you press **Open**, and the window stays. The
+  last library is selected; **Open** (or Return, or a double-click) opens it,
+  **Open Another…** asks for a folder, **New Library…** makes one, **Quit** (or Esc) quits. ↑ and ↓ move through
+  the list.
+- Holding Alt (Option on a Mac) as the window appears shows the same list once, over the library that opened: open
+  another one from it, or press Esc to keep working where you were. On a Mac, an Option key held from before
+  LightCraft starts is only noticed once it changes, so press it as the window appears.
+- `--library` and `LIGHTCRAFT_LIBRARY` still decide the library when given, and `lightcraft-cli` never asks.
+- File ▸ Open Recent Library ▸ **Remove from List** forgets one library, and the launch window's **Remove from
+  List** does the same. Only the entry goes: the library and its photos stay where they are. Agents use
+  `app.recentLibraries {remove: path}`; its list now also says when each library was last opened (`lastOpened`).
+- Photos dropped on the window while the list (or the window of a library that couldn't open) is up wait for the
+  library you open and are imported into it, as files given on the command line are; presets dropped then are
+  refused with a note, since they belong to a library.
+
+### Editing a smart album made from an album keeps the album
+- A smart album saved from the view of an album stays limited to that album when you edit its rules and press OK. It used to match the whole library afterwards, because the rules dialog has no album field and replaced the album along with the rules.
+### Drag photos from the filmstrip
+- You can now drag a photo from the filmstrip onto the sidebar, as you can from the grid: onto an
+  album, a folder or a keyword. Dragging a selected photo takes the whole selection; dragging one that isn't selected
+  takes just that photo and selects it. In the Compare view, a photo that isn't selected is dragged alone and the
+  selection, the active photo and the two photos on screen stay as they were. Clicking a filmstrip photo works as
+  before: outside Compare it selects the photo, and in Compare a plain click puts the photo into the active side.
+### Dropping photos on a folder or album that shares its name
+- When photos are dragged onto a Folders row and another folder has the same name (two folders called `Home` on
+  different disks), the label at the pointer, the Move Photos question and the message afterwards name the folder
+  it is in, for example `Home (/Volumes/Archive/Photos)`, so you can tell which one you are about to move them
+  into. Long parent paths keep their last names behind `…/`, unless that would read like another folder's path of the
+  same name (a mirror on another disk): then the whole path is shown. A name that nothing else uses stays as it was, except that a network share's row is now
+  named as the Folders list shows it (`photos on tokyo`) instead of by the last part of its mount path.
+- Photos dropped on an album that shares its name with an album in another folder say so too (`Garden (Travel
+  2026)`). Two albums with the same name in the same place have nothing to tell them apart by and keep the plain
+  name.
+
+### Panel layout messages, face recognition prompts and the second window's title in your language
+- The messages shown when a panel layout cannot be restored or a panel move is not applied, the face recognition
+  prompts (the banner and the name box's offer, with their buttons), the "Face recognition is on" and "is installed"
+  messages, and the title of the second window are now in the interface language in all 17 languages. They stayed in
+  English before. So did "The download failed", shown under a denoise or face recognition model's download when the
+  download gives no reason.
+
+
+## 2026-10-22
+
+### Exports don't create a photo's sidecar
+- Saving an export, a preset or any other file as `IMG_1.xmp` or `IMG_1.jpg.xmp` in the folder of the library photo
+  `IMG_1.jpg` is now refused when no sidecar is there yet, as writing over an existing one already was. The library
+  would have read the new file back as that photo's edits.
+
+### Dodge and burn with the brush on the photo itself
+- With the mask overlay hidden (O, View ▸ Show Mask Overlay or the eye beside Masks, or after a mask slider hid it),
+  the brush stroke you are painting is no longer drawn in the overlay colour while you hold the button, so the photo
+  stays visible as you dodge and burn (issue #2549). The stroke's effect still appears when you let go. With the
+  overlay shown, the stroke is tinted as before; a colour overlay at opacity 0 leaves it untinted too.
+
+
+### Reliability
+- Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
+  is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's
+  temporary files, issue #1502).
+
+### Keys reach text fields and the shortcut editor on macOS
+- While a text field has focus, the native menu now lets go of the keys the field needs (`G`, the digits `0`–`9`,
+  `P`, `U` and the like), and while Keyboard Shortcuts is recording a key it lets go of all of them (⌘, and ⌘Q in
+  the LightCraft menu too), except the system's own items (Hide LightCraft ⌘H, Hide Others ⌥⌘H, Close Window ⌘W
+  and Minimize ⌘M) and the two keys of the Help menu (⌘/ and F1). Before, the menu item kept its key on macOS, so the
+  key could still run the menu command instead of reaching the field or the editor. The keys come back on the menu
+  items when the field loses focus or recording ends; the menu's order, checkmarks and enabled state are unchanged.
+
+### Find the grid shortcut in View
+- Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
+  shortcut changes; clicking a menu row still selects that grid (issue #2500).
+
+### GPX track logs read escaped values correctly
+- Coordinates, elevations and times in a GPX track can contain XML character references such as
+  `&#53;`. LightCraft now decodes those characters before parsing values, reports malformed or
+  undeclared references as an error, and keeps CDATA literal. Auto-Tag places photos at the track
+  position represented by their capture time.
+
+## 2026-10-21
+
+### Settings window
+- Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
+  size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls (in a very short
+  LightCraft window, where the page has too little room to scroll by itself, the tabs and the page scroll together), a
+  page that goes on below shows a scroll handle without the pointer on it, and each page remembers where it was
+  scrolled to, also when Settings is closed and opened again.
+- Nothing in Settings runs off the side any more. A row with more choices than fit (the languages on General) wraps
+  onto further lines and a long label wraps in its column, where both used to widen the window: in a small
+  LightCraft window the labels and the Close button of General ended up off screen.
+- The Slideshow tab is one column like the other tabs, with the slide preview first, instead of a column beside the
+  preview that made Settings much wider on that tab. The preview stays above the page while it scrolls, so pointing
+  at a template further down still shows it there (in a very short window it scrolls with the page instead). Pointing
+  at a template no longer pushes its rows out from under the pointer, and the Export buttons wrap.
+- A long folder (General ▸ Library ▸ Location, the folder Auto Import watches, the smart previews folder, a monitor
+  profile's file) is shortened to its last folders ("…/Pictures/Library") on one line; rest the pointer on it for
+  the whole path.
+### One star rating control
+- The stars in the bottom bar, the Info panel and the filter bar are now one shared control, and the badges on grid
+  cells, filmstrip thumbnails and the Compare caption use the same drawing. Hovering a star in the filter bar now
+  previews the rating like the others do, and with a star focused (Tab), ← and → lower and raise the rating.
+### Progress looks the same everywhere
+- Download, scan, denoise and activity progress now use one bar that fills the width it is given, with its text on
+  it, and a gentle sweep while the amount of work isn't known yet. Waits that only said "Selecting…", "Waiting to
+  start…" or "Installing…" now show a small turning arc beside the text, and a thumbnail still being made shows a
+  quiet placeholder that fits the theme in the grid, the filmstrip and Compare. Screen readers hear a progress
+  indicator with its percentage.
+### Menu names that say what they are
+- Switches in the menus are named for what they show, with the check mark saying whether it is on: Filmstrip ✓,
+  Focus Point ✓, Clipping ✓, Photo Counts ✓, Mask Overlay ✓ instead of Show Focus Point ✓. No two commands share a
+  name any more: View ▸ Detail is now Detail View (the Edit section Detail keeps its name), Window ▸ Edit is Edit
+  Panel, and Compare Before and After is Before/After Side by Side, next to Split and Top/Bottom.
+- The preview cache command has one name, Discard Preview Cache, in File ▸ Previews and in the toast that confirms
+  it. Keyboard shortcuts are unchanged.
+### Dropping files shows what will happen
+- While files are dragged over the window, it dims and a card says what dropping will do: review the photos and
+  folders for import, import the presets, or open the face model. If a dialog is open, the card asks you to close it
+  first, and a drop is refused with a message instead of replacing the dialog. The same goes while an import is
+  running, and in the web version.
+- The import review of a finished scan (a drop, or File ▸ Import) no longer replaces a dialog you opened in the
+  meantime; it opens as soon as that dialog is closed.
+- Photos and folders dropped on the window now open the same import review as File ▸ Import, so you pick add, copy or
+  move, the destination and a preset before anything is imported. Settings ▸ Import ▸ "Import dropped files without
+  review" brings back the old behaviour of importing at once.
+- In the web version, a dropped file the browser can't read, or that can't be imported, now shows a message instead of
+  failing silently.
+- For scripts: `ui.dropFiles` hovers files over the window or drops them, as the operating system does.
+### Counting many smart albums is faster
+- Counting every smart album at once (the numbers in the Albums list, and the `albums.list` command) now works out an
+  album that other smart albums test (“album is …”) once for the whole library, instead of again for every album
+  that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
+  the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
+  the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Selection rings you can see in the light themes
+- The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
+  selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
+  it also shows on a white one) and the other selected photos a lighter one (1.5 pt), in colours each theme picks to
+  stand out from its grid. The filmstrip rings its photos the same way, and so do Compare, Reference and Survey (where
+  the ring is the only sign of the active photo) and the People view's chosen person.
+### Smart albums open and count faster on large libraries
+- A smart album that tests another smart album and also a file path or other text (for example "in Rejects, and the
+  path contains …") now checks the quick rules first and the slow ones last, so most photos are ruled out before the
+  other album is asked about them. The photos in the album and their order are the same, and the rules still show in
+  the order you wrote them. (A library whose smart albums test each other in a circle, which LightCraft doesn't let
+  you make, or test each other 32 deep, keeps testing the rules as written.) On a 312,000-photo test library, opening
+  51 such albums in turn went from about 19 s to about 5.8 s (about 377 ms to 113 ms each; a busy machine,
+  so rough numbers).
+### A count never covers a name in the sidebar
+- In the left panel, the count of a deeply indented row (a folder, keyword or album) no longer prints over its icon
+  and name when the panel is narrow. It follows the name, wholly past the panel's edge, and scrolling sideways
+  reaches it; so does the colour dot of a labelled folder. A row with room for its name keeps its count at the edge, as before.
+
+### Dialog buttons say what they do
+- The confirm button in dialogs now names its action instead of "OK": Create for a new album, smart album, folder or
+  preset, Rename for photos, albums, keywords, people and presets, Create Stacks for Auto-Stack, Change Time for Capture Time,
+  Copy and Paste for settings, and Export 12 Photos in the Export dialog. Rename Photos now explains what its Tags
+  button lists and what happens on disk, instead of pointing at the button. Contact Sheet, Auto-Stack and
+  Slideshow Export no longer say "1 photos" or "1 stacks". The Import review's Move button counts photos that are
+  in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
+  Photo".
+
+
+### Sharper resampling in HDR and panorama merges
+- Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
+  photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
+  hard edges such as clipped highlights.
+
+### Scrolling past editing sliders
+- Leaving a selected slider disarms its vertical mouse-wheel adjustment (issue #1355), even when the pointer leaves
+  and comes back between two screen updates. Scrolling back over it now scrolls the panel instead of unexpectedly
+  changing the photo. Click or drag the slider again to adjust it with the vertical wheel; keyboard arrow
+  adjustments and an ongoing drag still work. A slider reached with Tab takes the arrow keys but not the wheel:
+  click it to scroll-adjust it. Sideways scrolling still adjusts the slider under the pointer without selecting it
+  first.
+
+### A pinch no longer re-renders the photo at every zoom step
+- Pinching the loupe now keeps the size the fit view is rendered at until the gesture is quiet, as it already did for
+  the render sizes and windows. Before, each frame of a pinch asked for a new full-frame render at a new size.
+
+### Fujifilm lens corrections that match the camera
+- X-T4 raws now read the lens's own distortion and vignetting tables the way the camera does. Many photos from zoom
+  lenses got no distortion correction at all (more than half of those checked from the XF16-55 and XF70-300), and
+  corners came out up to 6.5 % brighter than in the camera's JPEG. The corrected photo now lines up with the camera's
+  framing. Other recent Fujifilm bodies whose tables have nine knots are read the same way, but only the X-T4 was
+  measured. Thumbnails are redrawn when the library next shows them.
+
+### Reference view reliability
+- Escape now leaves Reference for Detail without changing the active photo or its edits; the next
+  Escape returns to the grid. A dialog, tool or Lights Out still handles Escape first.
+- Opening or creating a different library clears the pinned reference. Photo IDs belong to one
+  catalog; a pin no longer silently becomes another library's photo with the same numeric ID.
+- Missing or Recently Deleted photos cannot be pinned. Deleting the pinned reference stops drawing
+  it; re-entering Reference chooses a live photo, and restoring the deleted photo makes it pinnable again.
+  In Recently Deleted, Set as Reference Photo is greyed out, and a refusal says to restore the photo.
+- Switching library from Reference view goes to the grid instead of an empty Reference canvas. A refused
+  or failed switch keeps both the reference and the Compare pair.
+- `photo.setReference` refuses an `id` that is not a photo id (a string, a negative or fractional
+  number) instead of pinning the active photo; only an absent or null `id` means the active photo.
+
+### Edit Capture Time leaves a capture time it can't read as it was
+- A capture time that is cut short, has seconds that aren't digits or has text after it (a Lightroom catalog's capture
+  time is copied as it is) is no longer shifted into a clean-looking wrong time: Edit Capture Time leaves the photo as
+  it was and says so, and its preview says the photo's time can't be read instead of previewing a wrong one.
+  `photo.setCaptureTime` counts those photos as `unreadable`. Set date & time still repairs such a photo selected on
+  its own; with other photos selected it says why it can't move them by the same amount. When the dialog can't make a
+  change (a time that isn't a date, a shift past year 9999), it now says why and stays open, instead of closing.
+
+### Month names in folder and file name templates
+- Date templates take the month by name: `%B` gives January, `%b` gives Jan. Import ▸ Folders ▸ Custom template…
+  `{date:%Y}/{date:%B}` files photos into 2026/January, 2026/February…, the layout many existing libraries already
+  use. The names are English in every interface language, so folders don't change when the language does. Rename
+  Photos and export file names take them too.
+
+## 2026-10-20
+
+### Smart albums check File Path rules faster
+- A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't
+  empty) no longer builds new text for every photo. On a synthetic library of 312,000 photos, a File Path "contains"
+  or "doesn't contain" rule took about 17 ms per pass instead of about 62 ms, around 3.5 times faster, with the same
+  photos matched; about 6 ms of that is only reading the paths. Paths and rule text with letters beyond A–Z are
+  compared as before.
+## 2026-10-19
+
+### AI Denoise on DirectX 12 with NVIDIA GTX 10-series cards
+- AI Denoise on the GPU under DirectX 12 (the Windows default) gives the same result as on the CPU again on an NVIDIA
+  GeForce GTX 1070. The driver ran the denoise network's output stores wrong, so every second pixel's colour
+  channels came out shifted and the denoised photo was wrong without any error. Vulkan was not affected.
+
+### The Before label stays in view when zoomed in
+- Zoomed in, the "Before" label (\ key or the Before view) now sits at the canvas' corner instead of leaving the
+  screen with the photo's corner (issue #2267).
+
+### Synchronize Folder on a folder that is up to date
+- When the scan finds nothing to import, relink, remove or read, the Synchronize Folder dialog says the library is up
+  to date with the folder and has one Close button. It used to show four greyed choices, two of them still ticked,
+  and a Synchronize button that started a job with nothing to do. Files it skipped (already in the library elsewhere,
+  or unreadable) are still listed.
+
+### Hidden Local locations come back one at a time
+- With several locations removed from Local, "Show N hidden locations" now lists them, so each comes back on its own
+  (Restore All is there too). The row used to bring every hidden location back at once (issue #2114).
+
+### Rating in a filtered view keeps your place
+- When a filter shows only one-star photos and you take the star off a photo, it leaves the view and the photo after
+  it is now selected, so you carry on from where you were (issue #2312). The same goes for flags and colour labels,
+  in Picks and in smart albums. Before, the photo stayed selected although the grid no longer showed it, and → or
+  Auto Advance jumped back to the first photo of the view. With Auto Advance on, or with Shift+0–5, you land on the
+  photo after it: no photo is skipped.
+
+## 2026-10-18
+
+### Thumbnails of Lightroom HDR and panorama merges in a second
+- Grid and filmstrip thumbnails of DNGs that Lightroom merged (HDR, Panorama, HDR Panorama) now develop from the
+  small copies of the raw image Lightroom keeps inside the file (256 to 2048 px), not from the whole merge. A 23836 ×
+  7078 drone panorama's 512 px thumbnail took 38 s and now takes about a second, with the same look; your edits still
+  apply. Loupe previews larger than the biggest copy, 1:1 views and exports still read the full image.
+
+### Fewer false "not imported" warnings for Lightroom raws
+- Importing raws with Lightroom XMP sidecars no longer lists settings Lightroom writes only for itself as adjustments
+  that weren't imported: `CompatibleVersion`, the camera and lens profile checksums, the lens profile's name, file and
+  setup, the crop's "constrain to image" option, and the lens profile's strength when it is at its default of 100 %.
+  A raw sidecar used to name all of them for every photo. Settings LightCraft really doesn't apply, such as `Look`,
+  are still reported.
+
+### Fill Location from GPS: no more neighbouring town in City
+- The offline place names list towns of 15,000 people or more, so a photo taken in a smaller one got the nearest larger
+  town in City, sometimes another municipality (issue #2242). The Fill Location tooltip and the command help now say so,
+  and `metadata.reverseGeocode` takes `maxDistance` (metres): past it, City stays empty (State and Country still fill)
+  and the reply names the town it found as `nearestCity`.
+
+### A preset that couldn't be saved is no longer lost silently
+- When presets.json can't be written (a full disk, or the browser's storage quota), the new or changed preset now
+  counts as unsaved, like other changes: the top bar warns, saving is retried, and quitting asks first (issue #2266).
+  Before, the failure was only logged, and the preset could be lost without any warning.
+
+### Portrait crop ratios stay portrait
+- A crop ratio no longer flips to the photo's orientation (issue #2253): after X turns the crop portrait, picking
+  another ratio (4 × 5, 2 × 3…) keeps it portrait, as in Lightroom, and a Custom ratio taller than wide gives a
+  portrait crop.
+
+## 2026-10-17
+
+### Short Epson and Mamiya raws are refused
+- An Epson ERF or Mamiya MEF whose raw strip runs past the end of the file is now an error on import (issue #2119).
+  Before, the header probe trusted the declared strip length and sized its sample buffer from it, so a few KB of file
+  could make it allocate gigabytes.
+
+## 2026-10-16
+
+### Synchronize Folder shows that it is listing the folder
+- A folder with tens of thousands of photos, above all on a network share, can take minutes to list before
+  Synchronize Folder checks a single photo. Its row in the activity stack used to sit at "0 of 64085" with an empty
+  bar all that time, as if it had stopped. It now says how many folders and files it has listed so far, with a bar
+  that moves on its own, and then counts the photos it checks. The dialog says the same.
+- ✕ on the row stops the listing too, not only the checks after it.
+
+### The photo grid keeps up with imports into a large library
+- While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
+  every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
+  for as long as the import ran. Changing one photo's capture time or crop is quicker too.
+
+## 2026-10-15
+
+### Photo Merge takes each photo once
+- A merge that names the same photo more than once (through `ids` on the control channel, MCP or the CLI) now merges
+  it once (issue #1947). Naming one photo three times no longer "merges" it with itself, and a long repeated list no
+  longer decodes the photo again for every entry.
+
+### Constrain Crop tightens the crop you see
+- Geometry ▸ Constrain Crop now changes the crop itself, as in Lightroom (issue #1927). Ticking it, or moving a
+  Geometry slider, Upright or a lens correction while it is ticked, shrinks the crop about its centre until the blank
+  corners left by the correction are gone, and the Crop tool shows the tighter crop. Before, it only applied when the
+  photo was shown outside the Crop tool, so in the Crop panel, where the checkbox is, nothing seemed to change. A crop
+  you draw by hand is kept as drawn, and unticking keeps the tighter crop.
+
+### Web: no backup that misses unsaved changes
+- In the browser version, File ▸ Back Up Library… no longer reports success while a save is failing (storage full or
+  cleared): the backup copies the stored library, so it left out the changes that couldn't be saved (issue #1508). It
+  now refuses to start and says how many changes are unsaved and why. LightCraft retries the save with every change;
+  back up once nothing is left unsaved.
+
+### Web: an unreadable library is not opened
+- In the browser version, a library file that exists but can't be read at start-up is no longer taken for a missing
+  one (issue #1507). LightCraft used to open the library without it, showing an incomplete catalog that the next save
+  would write over the stored copy. It now leaves the library unopened, saves nothing and says which file couldn't be
+  read; reload the page to try again.
 ## 2026-10-14
 
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time
   limit, and each of a server's addresses then got the whole connect timeout of its own.
+
+### Sony A7CR distortion correction
+
+- Full-frame 3:2 Bayer A7CR raws with distortion Auto or forced Auto now use their embedded distortion table. The corrected render is closer to the camera JPEG geometry. Off files keep their original geometry. APS-C, aspect crops and lossless M/S remain excluded.
+- The warp also supplies the geometry needed by the lens-aligned camera-look fit in PR #1586. The pairing code is a separate change. Details and numeric validation are in `docs/sony-lens-corrections.md`.
 
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
@@ -157,9 +951,20 @@
   ⇧-click and the line tapers from the old values to the new ones. The whole line is one undo step.
   `mask.brushStroke {connect: true}` does the same for agents.
 
+### Local folders you browse are kept
+- Browsing a folder under Local now records it as browsed, so the photos in folders you use aren't forgotten after
+  the number of days set in Settings → Performance. Only the `library.browse` command recorded it before, so a
+  folder browsed every day from the sidebar was forgotten anyway and read again from scratch on the next visit,
+  which is slow on a network share.
+
 ### Hard-edged Heal and Clone spots
 - A spot with Feather at 0 no longer draws black pixels exactly on its radius. This also fixes spots at 0% Opacity
   changing pixels along their edge. The hard edge now leaves pixels on the radius unchanged.
+
+### Search finds people
+- Typing a person's name in Search Photos finds the photos with that named face (issue #1449).
+- Quotes keep several words together: `person:"Jane Doe"` finds exactly that person, `"jane doe"` those words side
+  by side, and `keyword:"new york"` a keyword of two words.
 
 ### Where the camera focused
 - **View ▸ Show Focus Point** (⌥F) draws the autofocus frame the camera recorded over the photo, in Detail, Compare
@@ -228,6 +1033,15 @@
   on the top bar it comes back zoomed. The other way round, a window you drag out until it is as wide as the
   screen and nearly as tall counts as zoomed.
 - For scripts: a size set with `ui.resize` is remembered like any other, so a script that needs a size sets it.
+
+### Keyword List: a keyword shows that one inside it is applied
+- In the Keyword List (right panel ▸ Keywords), a keyword whose box is empty now carries a dot in it when the
+  selected photos have a keyword inside it, at any depth: with `Places › Italy › Rome` on a photo, `Places` and
+  `Italy` show the dot and `Rome` the tick. A folded keyword no longer hides that something in it is applied.
+  Resting on the box names what is inside.
+- The tick and the dash are as they were, and are about the keyword itself: all of the selected photos have it, or
+  some do. A keyword the photos have themselves shows that, not the dot. A click on the box still gives the
+  keyword itself to the selected photos.
 
 ### HDR merges keep the lens correction
 - An HDR made with Photo ▸ Photo Merge ▸ HDR now keeps the lens correction the photos carry (Sony's, Panasonic's
@@ -543,6 +1357,18 @@
   is missing (moved, drive unplugged) is not exported; it gets its own error naming it.
 - The choice is saved in export presets and Export with Previous. Agents pass
   `destinationMode: "sameAsOriginal"` (or `"specificFolder"`) to `app.export`; `dir` is then not needed.
+
+### Alt/Option-drag previews
+- Hold Alt (Option on macOS) while dragging Exposure, Highlights or Whites to see which areas clip to white: the
+  photo turns black, fully clipped areas show white and areas clipped in one or two channels show those channels'
+  colour. Shadows and Blacks do the same for clipping to black, on white (issue #937).
+- In Detail ▸ Sharpening the same key shows Amount in greyscale, Radius and Detail as the fine detail being
+  sharpened, and Masking as the mask: white is sharpened, black is protected. Radius and Detail don't change the
+  render yet, so their preview stays the same while you drag them. Noise Reduction's Luminance, Detail and Contrast
+  show the photo in greyscale.
+- The preview lasts while the key and the slider are held, and never changes the edit, its history or exports.
+- Linux: KDE Plasma (and some other desktops) move windows with Alt+drag. If Alt+drag moves the window instead,
+  set the window manager's move modifier to Meta.
 
 ### Open Library knows a Lightroom catalog
 - Choosing a Lightroom Classic catalog folder in File → Open Library… (or one of its `Previews.lrdata` /

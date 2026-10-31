@@ -2,6 +2,7 @@
 //! weekday and month names, shifting a time by an offset, and grouping a photo list into runs of
 //! the same day / month / year (the date headers of the photo grid).
 
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 pub use crate::stacks::iso_seconds;
@@ -11,48 +12,97 @@ pub const WEEKDAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "
 pub const MONTHS: [&str; 12] =
     ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/// Unix seconds → `YYYY-MM-DDTHH:MM:SS` (proleptic Gregorian; H. Hinnant's algorithm).
+/// Unix seconds → `YYYY-MM-DDTHH:MM:SS` (UTC, proleptic Gregorian). A time outside chrono's year
+/// range still converts: the calendar repeats every 400 years, so the instant is moved into range
+/// by whole cycles and only the year is carried (matching the old `civil_from_days`), rather than
+/// resetting to the epoch. The callers here stay well inside years 0000–9999.
 pub fn civil(secs: i64) -> String {
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let (y, m, d) = civil_from_days(days);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
-}
-
-/// Days since 1970-01-01 → (year, month 1..=12, day 1..=31).
-pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
+    let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+    // `rest + 719_163` (1970-01-01 is CE day 719_163) is always a valid CE day, and `sod` < 86_400.
+    let date = i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt);
+    let time = u32::try_from(sod).ok().and_then(|s| chrono::NaiveTime::from_num_seconds_from_midnight_opt(s, 0));
+    match (date, time) {
+        (Some(d), Some(t)) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            let y = i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX });
+            // `{:04}` rather than `%Y`, which writes a `+` before years past 9999 (the old `{y:04}` did not).
+            format!("{y:04}-{}", d.and_time(t).format("%m-%dT%H:%M:%S"))
+        }
+        _ => "1970-01-01T00:00:00".to_string(), // unreachable
+    }
 }
 
 /// Weekday name of an ISO date (`None` if it doesn't parse).
 pub fn weekday(iso: &str) -> Option<&'static str> {
     let days = iso_seconds(iso.get(..10)?)?.div_euclid(86_400);
-    // 1970-01-01 was a Thursday
-    Some(WEEKDAYS[(days + 3).rem_euclid(7) as usize])
+    let date = chrono::NaiveDate::from_num_days_from_ce_opt(i32::try_from(days.checked_add(719_163)?).ok()?)?;
+    Some(WEEKDAYS[date.weekday().num_days_from_monday() as usize])
 }
 
 /// Shift an ISO time by `secs`, keeping anything after the seconds (fractions, zone) as it was.
 /// A date without a time gets one. `None` if it doesn't parse, or if the result leaves years
 /// 0000–9999 (an ISO date here has four year digits, so it couldn't be read back); `secs` may be
-/// anything, it never overflows.
+/// anything, it never overflows. Stricter than [`iso_seconds`], which reads what it can for sorting:
+/// a time cut short, seconds that aren't digits or anything after the zone is `None` here, not
+/// written back as a clean-looking time.
 pub fn shift_iso(iso: &str, secs: i64) -> Option<String> {
-    let t = iso_seconds(iso)?.checked_add(secs)?;
+    let iso = iso.trim();
+    let tail = iso.get(tail_start(iso)?..)?;
+    let base = iso_seconds(iso)?;
+    // reject impossible dates that the arithmetic silently rolls over (2026-02-30)
+    if civil(base).get(..10) != iso.get(..10) {
+        return None;
+    }
+    let t = base.checked_add(secs)?;
     let (first, last) = (iso_seconds("0000-01-01T00:00:00")?, iso_seconds("9999-12-31T23:59:59")?);
     if !(first..=last).contains(&t) {
         return None;
     }
-    let iso = iso.trim();
-    // the seconds are optional (`10:00+02:00`): without them the tail starts right after the minutes
-    let tail = iso.get(if iso.get(16..17) == Some(":") { 19 } else { 16 }..).unwrap_or("");
     Some(format!("{}{tail}", civil(t)))
+}
+
+/// Where the part of an ISO time that [`shift_iso`] keeps as it was (fraction, zone) starts, or
+/// `None` unless `iso` is a date alone (`2026-01-01`) or a date and `HH:MM`, optional `:SS` with
+/// an optional fraction (`.5`), and an optional zone (`Z`, `+02:00`, `-0500`, `+02`), and nothing after.
+fn tail_start(iso: &str) -> Option<usize> {
+    let b = iso.as_bytes();
+    let digits = |x: &[u8]| !x.is_empty() && x.iter().all(u8::is_ascii_digit);
+    let digits_at = |a: usize, z: usize| b.get(a..z).is_some_and(digits);
+    let at = |i: usize, c: u8| b.get(i) == Some(&c);
+    if !(digits_at(0, 4) && at(4, b'-') && digits_at(5, 7) && at(7, b'-') && digits_at(8, 10)) {
+        return None;
+    }
+    if b.len() == 10 {
+        return Some(10);
+    }
+    if !((at(10, b'T') || at(10, b' ')) && digits_at(11, 13) && at(13, b':') && digits_at(14, 16)) {
+        return None;
+    }
+    // the seconds are optional (`10:00+02:00`): without them the tail starts right after the minutes
+    let start = if !at(16, b':') {
+        16
+    } else if digits_at(17, 19) {
+        19
+    } else {
+        return None;
+    };
+    let mut zone = b.get(start..)?;
+    // a fraction only after the seconds: `10:00.5` is half a minute, not half a second
+    if let ([b'.', rest @ ..], 19) = (zone, start) {
+        let n = rest.iter().take_while(|c| c.is_ascii_digit()).count();
+        zone = rest.get(n..)?;
+        if n == 0 {
+            return None;
+        }
+    }
+    let ok = match zone {
+        [] | [b'Z'] => true,
+        [b'+' | b'-', h1, h2, b':', m1, m2] => digits(&[*h1, *h2, *m1, *m2]),
+        [b'+' | b'-', hm @ ..] => matches!(hm.len(), 2 | 4) && digits(hm),
+        _ => false,
+    };
+    ok.then_some(start)
 }
 
 /// Normalize user input to `YYYY-MM-DDTHH:MM:SS` (accepts a space instead of `T`, missing
@@ -156,38 +206,56 @@ impl Catalog {
     /// never split by a header. Empty for sort keys without a date and for [`GroupBy::None`]
     /// ([`GroupBy::Auto`] means days here).
     pub fn date_runs(&self, ids: &[PhotoId], key: SortKey, by: GroupBy) -> Vec<DateRun> {
-        if by == GroupBy::None || ids.is_empty() {
+        if !groups_by_date(key, by) || ids.is_empty() {
             return Vec::new();
         }
-        let n = by.prefix();
-        let date_of = |id: &PhotoId| -> String {
-            let Some(p) = self.photo(*id) else { return String::new() };
-            let d = match key {
-                SortKey::CaptureDate => p.captured.as_deref(),
-                SortKey::ImportDate => Some(p.imported.as_str()),
-                SortKey::EditDate => p.edited.as_deref(),
-                _ => None,
-            };
-            d.filter(|d| iso_seconds(d.get(..10).unwrap_or("")).is_some()).and_then(|d| d.get(..n)).unwrap_or("").to_string()
-        };
-        if !matches!(key, SortKey::CaptureDate | SortKey::ImportDate | SortKey::EditDate) {
-            return Vec::new();
-        }
-        let stacks = self.stack_index();
-        let mut runs: Vec<DateRun> = Vec::new();
-        let mut stack_key: std::collections::HashMap<crate::StackId, String> = Default::default();
-        for (i, id) in ids.iter().enumerate() {
-            let k = match stacks.get(id) {
-                Some((sid, _)) => stack_key.entry(*sid).or_insert_with(|| date_of(id)).clone(),
-                None => date_of(id),
-            };
-            match runs.last_mut() {
-                Some(r) if r.key == k => r.count += 1,
-                _ => runs.push(DateRun { label: group_label(&k), key: k, start: i, count: 1 }),
-            }
-        }
-        runs
+        date_runs_of(ids, &self.stack_index(), |_, id| self.date_group(id, key, by))
     }
+
+    /// The date group of photo `id` on its own for [`Catalog::date_runs`] (`2026-09-30` /
+    /// `2026-09` / `2026`; empty without a usable date): a stack's members take the group of its
+    /// first photo in the list there.
+    pub fn date_group(&self, id: PhotoId, key: SortKey, by: GroupBy) -> String {
+        let Some(p) = self.photo(id) else { return String::new() };
+        let d = match key {
+            SortKey::CaptureDate => p.captured.as_deref(),
+            SortKey::ImportDate => Some(p.imported.as_str()),
+            SortKey::EditDate => p.edited.as_deref(),
+            _ => None,
+        };
+        d.filter(|d| iso_seconds(d.get(..10).unwrap_or("")).is_some()).and_then(|d| d.get(..by.prefix())).unwrap_or("").to_string()
+    }
+}
+
+/// Whether [`Catalog::date_runs`] has runs for sort key `key` grouped `by`.
+pub fn groups_by_date(key: SortKey, by: GroupBy) -> bool {
+    by != GroupBy::None && matches!(key, SortKey::CaptureDate | SortKey::ImportDate | SortKey::EditDate)
+}
+
+/// [`Catalog::date_runs`] from each photo's own group (`group(position, id)`, see
+/// [`Catalog::date_group`]) and the stack index ([`Catalog::stack_index`]).
+pub fn date_runs_of<K: AsRef<str>>(
+    ids: &[PhotoId],
+    stacks: &std::collections::HashMap<PhotoId, (crate::StackId, usize)>,
+    mut group: impl FnMut(usize, PhotoId) -> K,
+) -> Vec<DateRun> {
+    let mut runs: Vec<DateRun> = Vec::new();
+    let mut stack_key: std::collections::HashMap<crate::StackId, String> = Default::default();
+    for (i, id) in ids.iter().enumerate() {
+        let own;
+        let k: &str = match stacks.get(id) {
+            Some((sid, _)) => stack_key.entry(*sid).or_insert_with(|| group(i, *id).as_ref().to_string()),
+            None => {
+                own = group(i, *id);
+                own.as_ref()
+            }
+        };
+        match runs.last_mut() {
+            Some(r) if r.key == k => r.count += 1,
+            _ => runs.push(DateRun { label: group_label(k), key: k.to_string(), start: i, count: 1 }),
+        }
+    }
+    runs
 }
 
 #[cfg(test)]
@@ -199,6 +267,14 @@ mod tests {
     fn calendar() {
         assert_eq!(civil(0), "1970-01-01T00:00:00");
         assert_eq!(civil(951_782_400), "2000-02-29T00:00:00");
+        // A year past 9999 keeps the plain zero-padded year (no `+`), as the old `{y:04}` did.
+        assert_eq!(civil(253_402_300_800), "10000-01-01T00:00:00");
+        // Beyond chrono's year range the old `civil_from_days` still converted; pin that output
+        // (never the epoch) in both directions and at the i64 extremes.
+        assert_eq!(civil(10_000_000_000_000), "318857-05-20T17:46:40");
+        assert_eq!(civil(-10_000_000_000_000), "-314918-08-13T06:13:20");
+        assert_eq!(civil(i64::MAX), "292277026596-12-04T15:30:07");
+        assert_eq!(civil(i64::MIN), "-292277022657-01-27T08:29:52");
         assert_eq!(weekday("2026-09-30"), Some("Wednesday"));
         assert_eq!(weekday("2026-10-01T09:00:00"), Some("Thursday"));
         assert_eq!(weekday("2000-02-29"), Some("Tuesday"));
@@ -225,12 +301,88 @@ mod tests {
     }
 
     #[test]
+    fn shift_refuses_impossible_dates() {
+        assert_eq!(shift_iso("2026-02-30T10:00:00", 60), None);
+        assert_eq!(shift_iso("2026-02-29T10:00:00", 0), None);
+        assert_eq!(shift_iso("2026-04-31T10:00:00", 0), None);
+        assert_eq!(shift_iso("2024-02-29T10:00:00", 0).as_deref(), Some("2024-02-29T10:00:00"));
+    }
+
+    #[test]
     fn shift_keeps_the_zone_of_a_time_without_seconds() {
         assert_eq!(shift_iso("2026-01-01T10:00+02:00", 3600).as_deref(), Some("2026-01-01T11:00:00+02:00"));
         assert_eq!(shift_iso("2026-01-01T10:00Z", 60).as_deref(), Some("2026-01-01T10:01:00Z"));
         assert_eq!(shift_iso("2026-01-01T10:00", 3600).as_deref(), Some("2026-01-01T11:00:00"));
         assert_eq!(shift_iso("2026-01-01T10:00:00.5-05:00", 3600).as_deref(), Some("2026-01-01T11:00:00.5-05:00"));
         assert_eq!(iso_seconds("2026-01-01T10:00+02:00"), iso_seconds("2026-01-01T10:00"));
+    }
+
+    #[test]
+    fn shift_refuses_a_time_it_cant_fully_read() {
+        for bad in [
+            "2026-01-01T10:0",
+            "2026-01-01T10",
+            "2026-01-01T",
+            "2026-01-01T10:00:xx",
+            "2026-01-01T10:00:0",
+            "2026-01-01T10:00:00+",
+            "2026-01-01T10:00:00+2",
+            "2026-01-01T10:00:00+02:0",
+            "2026-01-01T10:00:00.",
+            "2026-01-01T10:00:00.5.5",
+            "2026-01-01T10:00.5",
+            "2026-01-01T10:00:00ZZ",
+            "2026-01-01T10:00:00 and more",
+            "2026-01-01T10:00 and more",
+            "2026-01-01x10:00:00",
+            "2026/01/01T10:00:00",
+        ] {
+            assert_eq!(shift_iso(bad, 3600), None, "{bad} doesn't fully read, so it must not be written back");
+        }
+        // multi-byte characters where the time, the seconds and the zone start never panic
+        for at in [11, 16, 18, 21] {
+            let mut s = String::from("2026-01-01T10:00:00+02:00");
+            s.replace_range(at..at + 1, "é");
+            assert_eq!(shift_iso(&s, 3600), None, "{s}");
+            assert_eq!(shift_iso(s.get(..at + 2).unwrap(), 3600), None, "{s}");
+        }
+    }
+
+    #[test]
+    fn shift_keeps_a_fraction_and_zone_and_reads_back() {
+        for (from, to) in [
+            ("2026-01-01", "2026-01-01T01:00:00"),
+            (" 2026-01-01T10:00 ", "2026-01-01T11:00:00"),
+            ("2026-01-01 10:00:30", "2026-01-01T11:00:30"),
+            ("2026-01-01T10:00:30.5", "2026-01-01T11:00:30.5"),
+            ("2026-01-01T10:00:30Z", "2026-01-01T11:00:30Z"),
+            ("2026-01-01T10:00:30+02:00", "2026-01-01T11:00:30+02:00"),
+            ("2026-01-01T10:00:30-0500", "2026-01-01T11:00:30-0500"),
+            ("2026-01-01T10:00:30+02", "2026-01-01T11:00:30+02"),
+            ("2026-01-01T10:00:30.125+02:00", "2026-01-01T11:00:30.125+02:00"),
+        ] {
+            assert_eq!(shift_iso(from, 3600).as_deref(), Some(to), "{from}");
+            assert_eq!(shift_iso(to, 0).as_deref(), Some(to), "{to} reads back");
+        }
+    }
+
+    /// Sorting, grouping and date rules read with `iso_seconds`, which stays lenient: only the
+    /// write path refuses what it can't fully read.
+    #[test]
+    fn reading_stays_lenient_for_sorting() {
+        let at_ten = iso_seconds("2026-01-01T10:00:00");
+        assert_eq!(iso_seconds("2026-01-01T10:00:00 and more"), at_ten);
+        assert_eq!(iso_seconds("2026-01-01T10:00:xx"), at_ten);
+        assert_eq!(iso_seconds("2026-01-01T10:0"), iso_seconds("2026-01-01"));
+    }
+
+    #[test]
+    fn impossible_times_are_rejected_not_rolled_over() {
+        for bad in ["2026-04-01T10:75:00", "2026-04-01 10:00:75", "2026-04-01T10:60", "2026-04-01T24:00:00", "2026-04-01T10:59:60"] {
+            assert_eq!(normalize_iso(bad), None, "{bad}");
+            assert_eq!(shift_iso(bad, 5), None, "{bad}");
+        }
+        assert_eq!(normalize_iso("2026-04-01T23:59:59").as_deref(), Some("2026-04-01T23:59:59"));
     }
 
     #[test]

@@ -4,6 +4,10 @@ The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gp
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
 
+CPU fast guided-filter allocation measurements and reproduction commands are documented in
+[guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
+and does not change the GPU's coefficient buffers.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
@@ -43,6 +47,8 @@ Overrides (read once at launch):
 - else `WGPU_BACKEND` (wgpu's own variable, same names) — before #136 only the window honoured it,
   the compute device always used Vulkan + DX12 (+ Metal).
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
+- Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
+  and the AI mask model (SAM 3 on Metal) on the CPU.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -54,6 +60,13 @@ compile error, its indirect-validation pipelines fail, the device is lost, and t
 chooses; with `dxc`, put `dxcompiler.dll` *and* `dxil.dll` (DXC ≥ 1.8.2502) next to `lightcraft.exe`.
 FXC builds the compute kernels somewhat slower than DXC (≈ 9 s vs 7.5 s for the GPU test suite on an
 RTX 4080), off the startup path.
+
+FXC merges stores to neighbouring elements of a storage array into one wider store. NVIDIA's DX12 driver ran
+the 16-byte store it made of a denoise convolution's output wrong on a GTX 1070 (every second pixel's channels
+shifted; DXC and Vulkan were right), so `nn_conv.wgsl` steps those stores by `1 + zero` from its uniform and FXC
+leaves them apart. The transposed convolution's merged store ran right on that card, but it steps the same way.
+`nn::tests::a_layer_stores_every_pixels_channels_where_the_next_reads_them` catches the fault on such a card;
+`a_transposed_convolution_stores_every_pixels_channels_where_the_next_reads_them` checks the other store exactly.
 
 **Off the startup path.** The compute device is created on a background thread once the window is
 up (`gpu::warm_up` from the first frame's settings), and never while GPU rendering is off: with
@@ -92,12 +105,22 @@ or worked around with `LIGHTCRAFT_GPU_BACKEND`.
 **The window's renderer and its fallback (Windows).** Before the window opens, each renderer is probed in
 order: DX12, Vulkan, GL, then eframe's OpenGL renderer (glow). A probe creates a device and builds egui's
 pipeline inside wgpu error scopes, so a driver that cannot compile egui's shaders ("The parameter is
-incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app. The renderer
+incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app; no pop-up
+unless that renderer was forced (#1624). The renderer
 that worked is remembered in the settings folder (`window-renderer`); a start that dies before the window is up
 leaves `window-init.marker`, and the next start (relaunched automatically, at most 4 times) tries that
 renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
+
+**The window's surface: one frame in flight.** The window's wgpu options start from eframe's defaults
+(`NativeOptions::default().wgpu_options`, `window_gpu::base_options`), whose surface is egui-wgpu's
+`SurfaceConfig::LOW_LATENCY`: vsync, at most one frame queued ahead of the display (two drawables on
+Metal). egui-wgpu's bare `WgpuConfiguration::default()` is `HIGH_THROUGHPUT` (two frames queued, three
+drawables), and the window used it from #136 until this change, so a drag reached the screen one frame
+(8.3 ms at 120 Hz, 16.7 ms at 60 Hz) later. The window's own GPU work is small (egui's meshes and
+texture uploads; renders run on the compute device), which is what `LOW_LATENCY` is meant for.
+During a live window resize egui-wgpu still uses three drawables on macOS.
 
 **Troubleshooting a crash at startup (Windows).** Start LightCraft from a `.cmd` file or a terminal
 with `set LIGHTCRAFT_GPU_BACKEND=dx12` (the default since #136), or `=off` to keep the GPU out of
@@ -152,6 +175,8 @@ walks the drive.
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
+- Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
+  warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.
 - Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
   run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
@@ -220,7 +245,7 @@ passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gp
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
 with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
-Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
+Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
@@ -228,7 +253,7 @@ real failure still stops the whole process. Such a test asserts on its own rende
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
 
 ## Correctness: CPU oracle and equivalence tests
-`crates/gpu/tests/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
+`crates/gpu/tests/it/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
 bounds **mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB** per channel. Measured (Apple M4 Pro, Metal):
 **max 1 LSB, mean ≤ 0.0003 LSB** for every case — 26 settings cases (all tone/colour/effects tools,
 3 vignette styles, grain, curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
@@ -245,12 +270,19 @@ cut back after the readback. The tests skip (pass with a note) when no adapter e
 non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max 1 LSB, 10 are
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
-(`cargo test -p lightcraft-gpu --release --test equivalence -- --nocapture`).
+(`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
 
 ## Measurements
+**In the app:** Help ▸ Debug ▸ Frame Rate (`view.frameRate`, `{show?}`; `LIGHTCRAFT_FPS=1`
+starts with it on, never saved) draws frames per second, each frame's UI CPU time against its
+time spent waiting (for vsync, or for the GPU), the latest whole-frame and zoom-window render
+times, the render queue, renders thrown away as superseded, the GPU adapter and its memory, and a
+graph of the last frames with a tick where a render arrived. Once a second it logs the same
+numbers (`fps-hud:`), so a scripted drag (`ui.dragWidget`) can be measured from the log.
+
 `render_bench` on `corpus/raw/arw-sony-a7m3-compressed.arw` (24 MP; loupe = 2560 px preview →
 1920×1280), min of 7 runs, wall clock, on a heavily shared machine (load average 60–110 on 14 cores,
 so CPU numbers are pessimistic; the GPU numbers are less affected):
@@ -278,6 +310,14 @@ GPU timings include the readback of the 8-bit result and the histogram. Device c
 compilation: ~0.4 s once per process — the desktop app starts it on a background thread at launch
 (`lightcraft_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
 the device on their first GPU render. `lightcraft_gpu::ready()` asks without blocking.
+
+On Windows / DX12 the kernels cost more: FXC compiles each pipeline single-threaded inside
+`create_compute_pipeline` (issue #471). Built one after another, the 27 took ~2.2 s on an Intel Core
+Ultra 7 165U iGPU (`app.gpu` 2.4 s median, up to 7 s on the first run after an install), so
+`ctx::build_kernels` shares them out to worker threads (issue #2936): ~1.05 s there (`app.gpu` 1.2 s),
+most likely the largest kernel (`finish.wgsl`) alone (not timed per kernel). wgpu's error scopes are per thread, so every worker
+opens its own; a refused kernel still means no GPU. The `gpu:` info log line gives the kernel count
+and build time.
 
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its

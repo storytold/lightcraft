@@ -23,7 +23,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     crate::widgets::divider(ui);
     // the title, where a dragged keyword goes back to the top level
     let (title, title_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
-    register(ui.ctx(), "keywordList:topLevel", title);
+    register(ui, "keywordList:topLevel", title);
     let dragging = app.ui.dragging_keyword.clone();
     let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
     let over_title = shown_under(ui, title, pointer);
@@ -42,7 +42,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !open {
         return;
     }
-    let fid = egui::Id::new("keyword-list-filter");
+    let fid = egui::Id::unique("keyword-list-filter");
     let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.add_space(24.0);
@@ -52,13 +52,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .show(ui);
         // + creates a keyword (inside the picked one), − deletes the picked one
         let plus = ui.button("+").on_hover_text(crate::i18n::tr("Create Keyword Tag"));
-        register(ui.ctx(), "keywordList:create", plus.rect);
+        register(ui, "keywordList:create", plus.rect);
         if plus.clicked() {
             app.ui.dialog = Some(create_dialog(app));
         }
         let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
         let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
-        register(ui.ctx(), "keywordList:delete", minus.rect);
+        register(ui, "keywordList:delete", minus.rect);
         if minus.clicked()
             && let Some(k) = picked
         {
@@ -130,11 +130,14 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     let name = keyword.rsplit('|').next().unwrap_or(&keyword).to_string();
-    egui::Area::new(egui::Id::new("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
-            ui.label(egui::RichText::new(name).color(Color32::WHITE).font(t.semibold(12.0)));
-        });
-    });
+    egui::Area::new(egui::Id::unique("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(
+        ctx,
+        |ui| {
+            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
+                ui.label(egui::RichText::new(name).color(Color32::WHITE).font(t.semibold(12.0)));
+            });
+        },
+    );
 }
 
 /// Drop the dragged `keyword` inside `parent` (`None`: the top level). Where one of its name is
@@ -167,7 +170,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
     crate::widgets::announce(&resp, r.path.clone());
-    register(ui.ctx(), format!("keywordRow:{}", r.path), rect);
+    register(ui, format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
         app.ui.dragging_keyword = Some(r.path.clone());
     }
@@ -185,9 +188,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if r.has_children {
         let c = pos2(x + 6.0, cy);
         let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
-        let tr = ui.interact(tri, egui::Id::new(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
-        crate::widgets::announce(&tr, crate::i18n::tr(if r.open { "Collapse" } else { "Expand" }));
-        register(ui.ctx(), format!("keywordRowToggle:{}", r.path), tri);
+        let tr = ui.interact(tri, egui::Id::unique(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
+        crate::widgets::announce(&tr, super::left::disclosure_name(r.open, &r.name));
+        register(ui, format!("keywordRowToggle:{}", r.path), tri);
         // while a filter opens the levels the triangle does nothing: it doesn't light up either
         let lit = tr.hovered() && can_fold;
         paint(ui.painter(), tri, if r.open { Icon::ChevronDown } else { Icon::ChevronRight }, if lit { t.text } else { t.text_dim });
@@ -202,13 +205,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     // the tick box: does the selection have it?
     let state = ticks.tick(&r.path);
+    let inside = ticks.inside(&r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
     let on = !selection.is_empty();
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
-    let tb = ui.interact(boxr.expand(3.0), egui::Id::new(("keyword-list-tick", r.path.to_lowercase())), sense);
+    let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
     crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
-    register(ui.ctx(), format!("keywordCheck:{}", r.path), boxr);
+    register(ui, format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
     match state {
         Tick::All => {
@@ -222,14 +226,27 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         }
         Tick::No => {
             ui.painter().rect_stroke(boxr, 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
+            // the selection has a keyword inside this one: a dot in the empty box, so a folded
+            // keyword shows that it holds something applied (a shape of its own beside the tick
+            // and the dash, which are about the keyword itself)
+            if !inside.is_empty() {
+                let dot = Rect::from_center_size(boxr.center(), vec2(5.0, 5.0));
+                ui.painter().circle_filled(dot.center(), 2.5, t.text);
+                register(ui, format!("keywordInside:{}", r.path), dot);
+            }
         }
     }
     // (with nothing selected it does nothing, and says nothing)
     let tb = if on {
-        tb.on_hover_text(crate::i18n::tr(match state {
+        let does = crate::i18n::tr(match state {
             Tick::All => "Remove from Selected Photos",
             _ => "Add to Selected Photos",
-        }))
+        });
+        // what is inside comes first: it is what the box shows
+        match inside_said(inside) {
+            Some(said) => tb.on_hover_text(format!("{said}\n{does}")),
+            None => tb.on_hover_text(does),
+        }
     } else {
         tb
     };
@@ -240,12 +257,12 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // the count, then the arrow left of it (shown on hover)
     let count = ui.painter().layout_no_wrap(r.count.to_string(), t.font(12.0), t.text_dim);
     let count_rect = Rect::from_min_size(pos2(inner.right() - 6.0 - count.size().x, cy - count.size().y / 2.0), count.size());
-    register(ui.ctx(), format!("keywordCount:{}", r.path), count_rect);
+    register(ui, format!("keywordCount:{}", r.path), count_rect);
     ui.painter().galley(count_rect.min, count, t.text_dim);
     let arrow = Rect::from_center_size(pos2(count_rect.left() - 12.0, cy), vec2(16.0, 16.0));
-    let ar = ui.interact(arrow, egui::Id::new(("keyword-list-show", r.path.to_lowercase())), Sense::click());
+    let ar = ui.interact(arrow, egui::Id::unique(("keyword-list-show", r.path.to_lowercase())), Sense::click());
     crate::widgets::announce(&ar, crate::i18n::tr("Show photos"));
-    register(ui.ctx(), format!("keywordShow:{}", r.path), arrow);
+    register(ui, format!("keywordShow:{}", r.path), arrow);
     if resp.hovered() || ar.hovered() {
         paint(ui.painter(), arrow, Icon::ChevronRight, if ar.hovered() { t.text } else { t.text_dim });
     }
@@ -253,17 +270,29 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         super::left::browse_all_photos(app, true);
         let _ = app.run("library.filter", json!({"keyword": r.path}));
     }
-    // the name, cut short before the arrow
-    let room = (arrow.left() - 4.0 - (x + 34.0)).max(0.0);
+    // the name, cut short before the arrow, leaving room for the dot and the + that follow it
+    let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path));
+    let in_shortcut = app.session.catalog.keyword_info(&r.path).is_some_and(|i| i.keyword_shortcut);
     let font = t.font(13.0);
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
+    let marks = if is_default { 10.0 } else { 0.0 } + if in_shortcut { 5.0 + measure("+") } else { 0.0 };
+    let room = (arrow.left() - 4.0 - (x + 34.0) - marks).max(0.0);
     let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
     let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
     // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
-    if app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path)) {
+    let mut after = label.right();
+    if is_default {
         let dot = Rect::from_center_size(pos2(label.right() + 7.0, cy), vec2(6.0, 6.0));
         ui.painter().circle_filled(dot.center(), 3.0, t.accent);
-        register(ui.ctx(), format!("keywordDefault:{}", r.path), dot);
+        register(ui, format!("keywordDefault:{}", r.path), dot);
+        after = dot.right();
+    }
+    // part of the keyword shortcut (⇧K adds it): a + after the name
+    if in_shortcut {
+        let plus = ui.painter().text(pos2(after + 5.0, cy), Align2::LEFT_CENTER, "+", font.clone(), t.accent);
+        register(ui, format!("keywordShortcut:{}", r.path), plus);
+        ui.interact(plus, egui::Id::unique(("keyword-list-shortcut", r.path.to_lowercase())), Sense::hover())
+            .on_hover_text(crate::i18n::tr("Part of the keyword shortcut"));
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {
@@ -272,14 +301,27 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if resp.double_clicked() {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
-    resp.context_menu(|ui| menu(app, ui, &r.path, selection));
+    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
+}
+
+/// How many of the keywords inside one are named before the rest are counted.
+const INSIDE_NAMED: usize = 4;
+
+/// "Inside: Rome, Venice": the applied keywords inside a keyword, the first few by name.
+fn inside_said(inside: &[String]) -> Option<String> {
+    let named = inside.iter().take(INSIDE_NAMED).map(String::as_str).collect::<Vec<_>>().join(", ");
+    let more = inside.len().saturating_sub(INSIDE_NAMED);
+    let names = if more > 0 { format!("{named} {}", crate::i18n::tr_format!("+{n} more", n = more)) } else { named };
+    (!inside.is_empty()).then(|| crate::i18n::tr_format!("Inside: {names}", names = names))
 }
 
 /// A row while a keyword or photos are dragged: outlined under the pointer when the drop would
 /// do something (a keyword never goes inside itself), and a release there does it: nests the
 /// keyword inside this one, or gives this keyword to the photos.
 fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &str) {
-    let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    // a dragged keyword drops on any button's release (it began with any button); photos only on the primary's
+    let (pointer, released) =
+        ui.input(|i| (i.pointer.latest_pos(), i.pointer.primary_released() || (app.ui.dragging_keyword.is_some() && i.pointer.any_released())));
     if !shown_under(ui, rect, pointer) {
         return;
     }
@@ -326,7 +368,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(label));
-        register(ui.ctx(), format!("keywordMenu:{id}"), r.rect);
+        register(ui, format!("keywordMenu:{id}"), r.rect);
         r.clicked()
     };
     if item(ui, "create", &crate::i18n::tr_format!("Create Keyword Tag Inside “{name}”…", name = name), true) {
@@ -344,6 +386,10 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
     if item(ui, "defaultParent", &label, true) {
         let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
+    }
+    // the keyword shortcut becomes this keyword alone
+    if item(ui, "useAsShortcut", crate::i18n::tr("Use This as Keyword Shortcut"), true) {
+        let _ = app.run("keyword.setShortcut", json!({"keywords": [path]}));
     }
     ui.separator();
     let some = !selection.is_empty();
@@ -485,23 +531,51 @@ pub(crate) struct Ticks {
     photos: usize,
     /// Photos with it, by cleaned lower-case keyword.
     counts: std::collections::HashMap<String, usize>,
+    /// The applied keywords inside each keyword (by cleaned lower-case keyword): their own names,
+    /// in order, each once. What a folded keyword's box says of what it holds.
+    inside: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Ticks {
     pub(crate) fn of(catalog: &Catalog, photos: &[PhotoId]) -> Ticks {
         let photos = super::keywording::distinct(catalog, photos);
         let mut counts: std::collections::HashMap<String, usize> = Default::default();
+        // (each keyword as it was first written, to name it by)
+        let mut shown: std::collections::HashMap<String, String> = Default::default();
         let mut seen = std::collections::HashSet::new();
         for p in &photos {
             seen.clear();
             for k in &p.meta.keywords {
-                let key = lightcraft_catalog::keywords::clean(k).to_lowercase();
+                let clean = lightcraft_catalog::keywords::clean(k);
+                let key = clean.to_lowercase();
                 if seen.insert(key.clone()) {
-                    *counts.entry(key).or_default() += 1;
+                    *counts.entry(key.clone()).or_default() += 1;
+                    shown.entry(key).or_insert(clean);
                 }
             }
         }
-        Ticks { photos: photos.len(), counts }
+        // every keyword above an applied one holds it: worked out here, once per selection, from the
+        // keywords the selection has (not per row and frame)
+        let mut inside: std::collections::HashMap<String, Vec<String>> = Default::default();
+        let mut applied: Vec<(&String, &String)> = shown.iter().collect();
+        applied.sort();
+        for (key, as_written) in applied {
+            let name = as_written.rsplit('|').next().unwrap_or(as_written);
+            for (at, _) in key.match_indices('|') {
+                let Some(above) = key.get(..at) else { continue };
+                let names = inside.entry(above.to_string()).or_default();
+                if !names.iter().any(|n| same(n, name)) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        Ticks { photos: photos.len(), counts, inside }
+    }
+
+    /// The applied keywords inside `path` (their own names): what the selection has of the
+    /// keywords below it, at any depth. Empty for a keyword with nothing applied inside.
+    pub(crate) fn inside(&self, path: &str) -> &[String] {
+        self.inside.get(&lightcraft_catalog::keywords::clean(path).to_lowercase()).map_or(&[], Vec::as_slice)
     }
 
     /// The tick box of `path`: a photo counts when it has the keyword itself (any case); one with
@@ -519,6 +593,35 @@ impl Ticks {
 fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
     tree.iter().any(|n| same(&n.path, path) || (lightcraft_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
 }
+
+/// The labels the Keyword List and its dialogs pass to `tr` through variables, out of reach of a
+/// literal search: the translation gaps report (`i18n`) checks them.
+#[cfg(test)]
+pub(crate) const VARIABLE_LABELS: &[&str] = &[
+    "Include on Export",
+    "Export Containing Keywords",
+    "Export Synonyms",
+    "Person",
+    "Merge Keywords",
+    "No keywords yet",
+    "No keywords match",
+    "Add to Selected Photos",
+    "Remove from Selected Photos",
+    "Keywords",
+    "& Containing",
+    "Will Export",
+    "No keywords are exported",
+    "Add to All Selected Photos",
+    "Set name",
+    "Edit Set…",
+    "Edit Keyword Set",
+    "A keyword set needs a name",
+    "Recent Keywords",
+    "Keywords (⌥1–⌥9)",
+    "Save as a new set",
+    "Import Keywords…",
+    "Export Keywords…",
+];
 
 #[cfg(test)]
 mod tests {
@@ -590,44 +693,30 @@ mod tests {
         assert_eq!(Ticks::of(&c, &ids).tick("ärzte"), Tick::Some);
     }
 
-    /// The labels the Keyword List and its dialogs pass to `tr` through variables (out of reach of
-    /// a literal search) are translated in every language.
+    /// Given photos that have keywords inside other keywords, when the list is asked what is
+    /// inside a keyword for the selection, then every keyword above an applied one names it (by
+    /// its own name, once, in order), whichever case it was written in and however deep; a keyword
+    /// with nothing applied inside, a keyword that is itself the applied one, and an empty
+    /// selection name nothing.
     #[test]
-    fn labels_passed_through_variables_are_translated() {
-        use crate::i18n::Locale;
-        let labels = [
-            "Include on Export",
-            "Export Containing Keywords",
-            "Export Synonyms",
-            "Person",
-            "Merge Keywords",
-            "No keywords yet",
-            "No keywords match",
-            "Add to Selected Photos",
-            "Remove from Selected Photos",
-            "Keywords",
-            "& Containing",
-            "Will Export",
-            "No keywords are exported",
-            "Add to All Selected Photos",
-            "Set name",
-            "Edit Set…",
-            "Edit Keyword Set",
-            "A keyword set needs a name",
-            "Recent Keywords",
-            "Keywords (⌥1–⌥9)",
-            "Save as a new set",
-            "Import Keywords…",
-            "Export Keywords…",
-        ];
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
-        for code in ["de", "es", "fr", "pt-br", "ru", "uk", "it", "ka", "ja", "zh-hans", "zh-hant", "pl", "cs"] {
-            let text = std::fs::read_to_string(dir.join(format!("{code}.json"))).unwrap();
-            let catalog: std::collections::HashMap<String, String> = serde_json::from_str(&text).unwrap();
-            for label in labels {
-                assert!(catalog.contains_key(label), "{code}: “{label}”");
-            }
-        }
-        assert_eq!(Locale::ALL.len(), 14, "a language added: list its file above");
+    fn a_keyword_names_the_applied_keywords_inside_it() {
+        let (c, ids) = library(&[&["Travel|Italy|Rome", "beach"], &["travel|italy|venice", "travel|Spain"], &["travel|italy|ROME"]]);
+        let all = Ticks::of(&c, &ids);
+        assert_eq!(all.inside("travel"), ["Italy|Rome", "Italy|venice", "Spain"].map(|k| k.rsplit('|').next().unwrap()));
+        assert_eq!(all.inside("Travel|Italy"), ["Rome", "venice"]);
+        assert_eq!(all.inside("travel|italy|rome"), [] as [&str; 0], "nothing is inside the applied keyword itself");
+        assert_eq!(all.inside("travel|spain"), [] as [&str; 0]);
+        assert_eq!(all.inside("beach"), [] as [&str; 0]);
+        assert_eq!(all.inside("weddings"), [] as [&str; 0], "a keyword no photo has anything of");
+        // the selection decides: the third photo alone has nothing of Spain or Venice
+        assert_eq!(Ticks::of(&c, &ids[2..]).inside("travel"), ["ROME"]);
+        assert_eq!(Ticks::of(&c, &[]).inside("travel"), [] as [&str; 0]);
+        // a keyword applied itself and with one inside: the tick is its own, and what is inside is still named
+        let (c, ids) = library(&[&["travel", "travel|Italy"]]);
+        let t = Ticks::of(&c, &ids);
+        assert_eq!((t.tick("travel"), t.inside("travel")), (Tick::All, &["Italy".to_string()][..]));
+        // a name that only starts like another is not inside it
+        let (c, ids) = library(&[&["travelling|Rome"]]);
+        assert_eq!(Ticks::of(&c, &ids).inside("travel"), [] as [&str; 0]);
     }
 }

@@ -313,30 +313,15 @@ pub(crate) fn reload_ops(
 }
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
-/// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
+/// dimensions and content hash, cached sources dropped. The app runs the same steps
+/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = s.targets(p)?;
-    let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
-        .iter()
-        .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
-            Some(Source::File { path }) => Some((*id, path)),
-            _ => None,
-        })
-        .collect();
-    let probed = crate::import::probe_paths(s, &paths.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());
-    let mut ops = Vec::new();
-    let mut reloaded = Vec::new();
-    for ((id, _), info) in paths.into_iter().zip(probed) {
-        let Ok(info) = info else { continue };
-        reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
-    }
-    for id in &reloaded {
-        s.media.forget(*id);
-    }
-    if !ops.is_empty() {
-        s.commit("Reload Changed Files", Op::Batch { ops })?;
-    }
-    Ok(json!({"reloaded": reloaded.iter().map(|i| i.0).collect::<Vec<_>>()}))
+    use crate::cmd::reload as r;
+    let items = r::plan(s, p)?;
+    let probe = r::file_probe(s);
+    let results = r::probe(probe.as_ref(), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
+    let reloaded = r::apply(s, items, results)?;
+    Ok(r::to_json(&reloaded))
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
@@ -401,7 +386,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings) → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
             has_selection,
             reload
         ),

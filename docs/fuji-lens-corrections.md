@@ -6,9 +6,10 @@ LightCraft reads the distortion and vignetting tables that Fujifilm cameras stor
 path, EXIF orientation handling and DNG export use them like any other embedded correction.
 
 Corrected: **distortion** (with the camera's frame-filling zoom) and **vignetting**, for the 59 bodies listed in
-`crates/raw/src/vendor/raf_lens.rs` (`VALIDATED`). **Not corrected: lateral chromatic aberration** (the third table,
-`0xf00f`); see "Chromatic aberration" below. Bodies without a checked sample, and tables in a layout or normalisation
-that was not understood, stay uncorrected.
+`crates/raw/src/vendor/raf_lens.rs` (`VALIDATED`); the nine-knot bodies among them other than the X-T4 were checked
+with an earlier reading of their tables than the one they now get (see "Knot radius"). **Not corrected: lateral
+chromatic aberration** (the third table, `0xf00f`); see "Chromatic aberration" below. Bodies without a checked sample,
+and tables in a layout or normalisation that was not understood, stay uncorrected.
 
 ## Clean-room evidence
 
@@ -27,12 +28,15 @@ Every table is an array of signed rationals with `n` knots:
 ```
 
 - `scale × n` is the half diagonal of the recorded image (the RAF crop) in pixels: 3749 for 6240×4160, 4643 for
-  7728×5152, 2942 for 4896×3264, 7280 for 11648×8736, on 61 of the 65 bodies. Files that store another number (X-S20,
-  X-T30 III and X-M5 write the 40 MP value, 4643; an X-T5 in an in-camera crop) are left uncorrected.
-- Knots are positions along the radius. The **last knot is the farthest corner**: `ρ = knot_last · r`, `r` the
-  distance from the centre in half diagonals. Older bodies use 11 knots `0, 0.1 … 1`, newer ones 9 knots evenly
-  spaced in `r²` (`√(k/8)`, last `√(9/8) = 1.0607`), GFX 50 bodies 8 (`√(k/8)`, last 1). The distortion zero and the 100 %
-  illumination at the axis are anchored at `ρ = 0` when the first knot lies above it.
+  7728×5152, 2942 for 4896×3264, 7280 for 11648×8736, on 61 of the 65 bodies. Files that store another number (X-T30 III and X-M5 write the 40 MP value, 4643; an X-T5 in an in-camera crop)
+  are left uncorrected. X-S20 writes the 40 MP reference value 4643 despite its 26 MP sensor, but indexes its 9 knots
+  over the 26 MP active frame; LightCraft accepts this scale for X-S20.
+- Knots are **radii in half diagonals**: the farthest corner is at 1, and a table is read at `ρ = r`, the distance
+  from the centre in half diagonals. Older bodies use 11 knots `0, 0.1 … 1`, newer ones 9 knots evenly spaced in `r²`
+  (`√(k/8)`), GFX 50 bodies 8 (`√(k/8)`, last 1). In the nine-knot tables the eighth knot is the corner and the ninth,
+  `√(9/8) = 1.0607`, lies beyond it. In all 1,140 tables of 570 X-T4 raws, taken with three lenses at every focal
+  length they were shot at, the ninth repeats the eighth's value. The distortion zero and the 100 % illumination at the axis
+  are anchored at `ρ = 0` when the first knot lies above it.
 - Distortion values are percent: the bracket `1 + D/100` multiplies the radius.
 - Vignetting values are percent of the axial illumination at the (source) radius.
 - The chromatic-aberration table has the layout `[scale, knots, red × n, blue × n, scale]` (fractions of the radius,
@@ -43,8 +47,8 @@ Every table is an array of signed rationals with `n` knots:
 The camera's JPEG samples the raw at
 
 ```
-source = z · r · (1 + D(ρ(source)) / 100)         ρ = knot_last · source
-z      = 1 / max over the output border radii of (1 + D(ρ(source)) / 100)
+source = z · r · (1 + D(source) / 100)
+z      = 1 / max over the output border radii of (1 + D(source) / 100)
 ```
 
 The table is indexed by the **source** (sensor) radius, not the output radius, and the zoom `z` keeps the output
@@ -54,10 +58,15 @@ radius is solved per radius by fixed-point iteration, then `source(r) = r (k0 + 
 tables 0.0007, median 0.00012) or folds is rejected. The correction itself is the warp's bracket; the camera's rounding
 and interpolation between knots are not reproduced beyond linear interpolation between knots.
 
-Vignetting is the gain `100 / V(ρ(r))` at the source radius, fitted by a 5-term minimax polynomial in `r²`
+Vignetting is the gain `100 / V(r)` at the source radius, fitted by a 5-term minimax polynomial in `r²`
 (`FixVignetteRadial`); a fit more than 0.025 off the table is rejected.
 
 ## Validation
+
+The tables were first read with the last knot at the corner (`ρ = knot_last · r`). For the 11-knot and GFX 50 tables,
+whose last knot is 1, that is the same reading. For the nine-knot tables it reads every value from 6 % further out;
+"Knot radius" below has the evidence that changed it. The figures in the rest of this section were measured with the
+earlier reading.
 
 Method: LightCraft's uncorrected render of each RAF (1200 px long edge) against the camera JPEG (`camera-jpeg/`,
 resized to the same size). Per file the high-passed luminance is correlated (NCC) after a warp with a free global scale and
@@ -104,6 +113,35 @@ tables (X-M5, X-T2, X-T3) give a gain of zero in the JPEG. Through the shipped c
 β at least halves on 30 of them. Seven combinations show only a fraction of the amplitude
 (S1, SL1000, X-A2, X-A3, X-S1, X-T1, X-Pro3); the camera setting that governs them is not recorded.
 
+### Knot radius
+
+On the X-T4, the nine-knot tables read at the plain radius match the camera and the earlier reading does not:
+
+- **Geometry, against the free fit measured above** (`matches_the_measured_x_t4_geometry`, pixls 3913, XF16-55 at 16 mm):
+  the camera's scale is 1.0300. Read at the plain radius the table gives a zoom of 1.0298 and stays within 0.0008 half
+  diagonals of the fit at every radius; the earlier reading gave 1.0333 and strayed up to 0.0034
+- **Geometry and gain, against synthetic charts the camera converted.** Copies of the same raw with patches of known
+  colour, converted by the camera in its USB raw conversion mode. Against the camera's geometry from 445 chart markers,
+  the distortion table read at the plain radius is at most 1.2 pixels off at 3120 × 2080 out to 0.92 of the half
+  diagonal (earlier reading 4.2), and against its corner gain from 46,818 flat windows the vignetting table is within
+  1.2 % out to 0.9 of the half diagonal (earlier reading up to 6.5 % too bright, 5.9 % at 0.8)
+- **On photographs**, 500 of the contributor's own X-T4 raws (XF16-55, XF70-300 and a 13 mm lens), shown only as
+  aggregates. With the earlier reading the table bends inside the frame, where the ninth knot's repeated value begins
+  (`1 / 1.0607 = 0.943` of the half diagonal), and on 253 of the 425 zoom-lens raws the warp polynomial failed its fit
+  checks, so they got no distortion correction at all. Read at the plain radius the bend is at the corner and 424 of
+  the 425 get their warp. The 75 raws from the 13 mm lens record an all-zero distortion table, so they have nothing to
+  correct either way. Against the camera's own conversion of each raw (LightCraft's render at 1,200 pixels, compared
+  at 780 × 520), the correlation of the high-passed luminance went from a median of 0.03 to 0.90 on the XF16-55 (327
+  raws) and from 0.02 to 0.83 on the XF70-300 (91), and stayed at 0.96 on the 13 mm. Over flat areas, LightCraft's
+  corners less its centre, against the camera's, went from +0.56 to +0.21 L* on the XF16-55 and from +0.49 to +0.21 on
+  the XF70-300. A further 292 raws held back from all of this gave the same: correlation 0.06 to 0.91 and 0.21 to
+  0.85, corners +0.62 to +0.26 and +0.35 to +0.14 L*
+
+The other bodies with nine-knot tables are read at the plain radius too, because their knots have the same layout
+(`√(k/8)`, the eighth at the corner), but none of them was measured at it: their place in `VALIDATED` rests on the
+figures under "Validation" above, taken with the earlier reading, and is unconfirmed for the plain radius until a camera
+JPEG from each is checked. Render cache version 66 redraws thumbnails rendered with the earlier reading.
+
 ### Chromatic aberration (not applied)
 
 The CA table is real: on the raw mosaics themselves (uncompressed RAFs, colour planes built by normalised convolution so
@@ -124,5 +162,5 @@ before demosaicing would be needed.
   vignette gain on the X-T4's real arrays, and the X-T4 geometry against its measured free fit.
 - `crates/raw/src/vendor/raf.rs`: a synthetic RAF through header and full decode, only for validated models, and a DNG
   round trip.
-- `crates/raw/tests/corpus.rs` `fuji_embedded_lens_tables_follow_the_validated_models`: the corpus' `raf-fuji-*` files,
+- `crates/raw/tests/it/corpus.rs` `fuji_embedded_lens_tables_follow_the_validated_models`: the corpus' `raf-fuji-*` files,
   or any folder of RAFs in `LIGHTCRAFT_FUJI` (the pixls set: 129 decoded, 88 warps, 98 vignette gains).

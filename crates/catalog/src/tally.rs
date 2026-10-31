@@ -8,7 +8,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{AlbumId, Aspects, Catalog, PhotoId};
+use crate::query::Filter;
+use crate::rules::{AlbumPass, MAX_ALBUM_DEPTH};
+use crate::{Album, AlbumId, Aspects, Catalog, PhotoId};
 
 /// The most photos an edit may touch for the counts to follow it photo by photo.
 const MAX_FOLLOWED: usize = 256;
@@ -20,7 +22,7 @@ const WORDS_TO_START: usize = 1024;
 
 /// The photos a smart album holds.
 #[derive(Clone, Debug)]
-enum Members {
+pub(crate) enum Members {
     /// One bit a photo id, and how many are set.
     Bits {
         words: Vec<u64>,
@@ -41,8 +43,7 @@ impl Members {
         }
     }
 
-    #[cfg(test)]
-    fn holds(&self, id: PhotoId) -> bool {
+    pub(crate) fn holds(&self, id: PhotoId) -> bool {
         match self {
             Members::Bits { words, .. } => {
                 usize::try_from(id.0 / 64).ok().and_then(|at| words.get(at)).is_some_and(|word| word & (1u64 << (id.0 % 64)) != 0)
@@ -114,20 +115,45 @@ pub struct AlbumTally {
 
 impl AlbumTally {
     /// Counted from every photo.
+    ///
+    /// A smart album that tests another (`album is #14`) reads that album's photos, counted once for the whole
+    /// pass, instead of working its rules out again for every photo: albums are counted shortest chain first.
+    /// The photos are kept only until this function returns, so they can't be older than the catalog counted.
+    /// An album whose rules lead into a loop, or through a chain too deep to be sure of, is counted by its rules
+    /// as before: the pass ends before the first of them (they sort last), so nothing they evaluate reads it.
     pub fn of(cat: &Catalog) -> AlbumTally {
+        let heights = chain_heights(cat);
+        let height_of = |id: AlbumId| heights.get(&id).copied().flatten().filter(|h| *h <= MAX_ALBUM_DEPTH);
+        let mut smart: Vec<AlbumId> = cat.albums().filter(|a| a.is_smart()).map(|a| a.id).collect();
+        smart.sort_by_key(|id| height_of(*id).unwrap_or(usize::MAX));
+        let held_by = |id: AlbumId| {
+            let mut held = Members::none();
+            for p in cat.photos().filter(|p| cat.album_contains(id, p)) {
+                held.set(p.id, true);
+            }
+            held
+        };
+
         let mut counts = HashMap::new();
         let mut members = HashMap::new();
-        for album in cat.albums() {
-            if album.is_smart() {
-                let mut held = Members::none();
-                for p in cat.photos().filter(|p| cat.album_contains(album.id, p)) {
-                    held.set(p.id, true);
-                }
-                counts.insert(album.id, held.len());
-                members.insert(album.id, held);
-            } else {
-                counts.insert(album.id, cat.album_count(album.id));
+        let split = smart.partition_point(|id| height_of(*id).is_some());
+        let (with_height, without) = smart.split_at(split);
+        let pass = AlbumPass::begin();
+        for id in with_height {
+            let held = held_by(*id);
+            counts.insert(*id, held.len());
+            if let Some(height) = height_of(*id) {
+                pass.remember(*id, height, held);
             }
+        }
+        members.extend(pass.finish());
+        for id in without {
+            let held = held_by(*id);
+            counts.insert(*id, held.len());
+            members.insert(*id, held);
+        }
+        for album in cat.albums().filter(|a| !a.is_smart()) {
+            counts.insert(album.id, cat.album_count(album.id));
         }
         AlbumTally { revision: cat.revision, counts, members }
     }
@@ -182,6 +208,57 @@ impl AlbumTally {
         }
         self.revision = cat.revision;
     }
+}
+
+/// For each smart album, the most smart albums in a chain its rules lead through (itself included), or `None`
+/// when a loop is reachable from it (its answer may then depend on which albums are being evaluated around it).
+fn chain_heights(cat: &Catalog) -> HashMap<AlbumId, Option<usize>> {
+    struct Frame {
+        id: AlbumId,
+        tests: Vec<AlbumId>,
+        next: usize,
+        tallest: usize,
+        loops: bool,
+    }
+    let tests = |id: AlbumId| -> Vec<AlbumId> {
+        let tested = cat.album(id).and_then(|a| a.smart.as_deref()).map(Filter::albums_tested).unwrap_or_default();
+        tested.into_iter().filter(|t| cat.album(*t).is_some_and(Album::is_smart)).collect()
+    };
+    let frame = |id: AlbumId| Frame { id, tests: tests(id), next: 0, tallest: 0, loops: false };
+    let mut done: HashMap<AlbumId, Option<usize>> = HashMap::new();
+    let mut open: HashSet<AlbumId> = HashSet::new();
+    for root in cat.albums().filter(|a| a.is_smart()).map(|a| a.id) {
+        if done.contains_key(&root) {
+            continue;
+        }
+        open.insert(root);
+        let mut stack = vec![frame(root)];
+        while let Some(top) = stack.last_mut() {
+            if let Some(&kid) = top.tests.get(top.next) {
+                top.next += 1;
+                match done.get(&kid) {
+                    Some(Some(h)) => top.tallest = top.tallest.max(*h),
+                    Some(None) => top.loops = true,
+                    None if open.contains(&kid) => top.loops = true,
+                    None => {
+                        open.insert(kid);
+                        stack.push(frame(kid));
+                    }
+                }
+            } else if let Some(finished) = stack.pop() {
+                open.remove(&finished.id);
+                let height = (!finished.loops).then_some(finished.tallest + 1);
+                done.insert(finished.id, height);
+                if let Some(parent) = stack.last_mut() {
+                    match height {
+                        Some(h) => parent.tallest = parent.tallest.max(h),
+                        None => parent.loops = true,
+                    }
+                }
+            }
+        }
+    }
+    done
 }
 
 #[cfg(test)]

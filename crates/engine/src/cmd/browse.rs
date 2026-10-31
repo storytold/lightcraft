@@ -35,8 +35,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v: Vec<String> = std::fs::read_dir(&dir)
             .map_err(|e| bad(C, format!("{path}: {e}")))?
             .flatten()
+            .filter(|e| !crate::walk::is_hidden_entry(e))
             .map(|e| e.path())
-            .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|f| f.is_file() && is_supported(f))
             .map(|f| f.to_string_lossy().to_string())
             .collect();
         v.sort();
@@ -114,6 +115,16 @@ fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -
     forgotten
 }
 
+impl Session {
+    /// Record that the folder `root` was browsed now, with the folders of `files` (the photos it showed): what
+    /// `library.browse` does after reading a folder, for a UI that reads it on a worker thread instead. Untouched
+    /// Local photos are forgotten only from folders not browsed for the set number of days, so a browse that
+    /// isn't recorded lets a folder in daily use be forgotten.
+    pub fn note_browsed(&mut self, root: &str, files: &[String]) {
+        stamp_browsed(self, root, files);
+    }
+}
+
 /// Folders whose browse time is refreshed at most this often (keeps repeated browsing from
 /// growing the log; far finer than the days the eviction counts in).
 const RESTAMP_SECS: i64 = 3600;
@@ -148,7 +159,11 @@ fn stamp_browsed(s: &mut Session, root: &str, files: &[String]) {
 /// referred to by an undo / redo step.
 fn in_use(s: &mut Session) -> std::collections::HashSet<PhotoId> {
     let mut keep = held(s);
-    keep.extend(s.visible().iter().copied());
+    // Missing Photos lists library photos only, never Local records, so it keeps nothing here; and
+    // working it out checks every original (minutes on a sleeping NAS when the library opens on it)
+    if s.source != crate::LibrarySource::Missing {
+        keep.extend(s.visible().iter().copied());
+    }
     keep
 }
 
@@ -241,10 +256,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rename Folder",
             [],
             None,
-            "{path, name} — rename a folder on disk (its files and sidecars go along) and relink the photos in it; one undo step (undo renames it back, refused if the old name is taken) → {path, relinked}",
+            "{path, name} — rename a folder on disk (its files and sidecars go along) and relink the photos in it; one undo step (undo renames it back, refused if the old name is taken); refused for the home folder and its Pictures, Desktop and Downloads → {path, relinked}",
             always,
             |s, p| {
                 let from = str_param(p, "path").ok_or_else(|| bad("folder.rename", "missing path"))?.trim_end_matches(['/', '\\']).to_string();
+                refuse_protected_place("folder.rename", &from)?;
                 let name = str_param(p, "name")
                     .map(str::trim)
                     .filter(|n| !n.is_empty() && !n.contains(['/', '\\']) && *n != "." && *n != "..")
@@ -259,10 +275,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Folder",
             [],
             None,
-            "{path, into: destination folder} — move a folder on disk into another and relink the photos in it; one undo step (undo moves it back, refused if the old place is taken) → {path, relinked}",
+            "{path, into: destination folder} — move a folder on disk into another and relink the photos in it; one undo step (undo moves it back, refused if the old place is taken); refused for the home folder and its Pictures, Desktop and Downloads → {path, relinked}",
             always,
             |s, p| {
                 let from = str_param(p, "path").ok_or_else(|| bad("folder.move", "missing path"))?.trim_end_matches(['/', '\\']).to_string();
+                refuse_protected_place("folder.move", &from)?;
                 let into = str_param(p, "into").ok_or_else(|| bad("folder.move", "missing into"))?;
                 let name = Path::new(&from).file_name().ok_or_else(|| bad("folder.move", "bad path"))?;
                 let to = Path::new(into).join(name).to_string_lossy().to_string();
@@ -468,12 +485,20 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
     // a library folder chosen at or below it follows too, as a source or as a filter
     follow_library_folder(&mut s.library_folder, from, to);
     follow_library_folder(&mut s.filter.library_folder, from, to);
+    follow_library_folder(&mut s.filter.folder, from, to);
+    if let Some(f) = s.shelved_filter.as_mut() {
+        follow_library_folder(&mut f.library_folder, from, to);
+        follow_library_folder(&mut f.folder, from, to);
+    }
     if let Some(b) = &mut s.browse
         && let Ok(rel) = Path::new(&b.path).strip_prefix(from)
     {
         b.path = Path::new(to).join(rel).to_string_lossy().to_string();
-        let f = b.path.clone();
-        s.filter.folder = Some(f);
+        // with filters off the filter stays empty: Cmd+L brings back the one put aside
+        if s.shelved_filter.is_none() {
+            let f = b.path.clone();
+            s.filter.folder = Some(f);
+        }
     }
 }
 
@@ -531,4 +556,194 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     }
     follow_folder(s, from, to);
     Ok(n)
+}
+
+/// Whether `path` is the user's home folder or one of its standard places (Pictures, Desktop,
+/// Downloads): the computer's own folders, which renaming or moving would break for every other
+/// program. `home` is passed in so the check can be tested; the commands read the real one.
+pub(crate) fn is_protected_place(path: &Path, home: &Path) -> bool {
+    use lightcraft_catalog::query::folder_key;
+    let home = home.to_string_lossy();
+    if home.is_empty() {
+        return false;
+    }
+    // compared without case where the usual volumes ignore it (macOS, Windows): there `pictures` is `Pictures`
+    let fold = cfg!(any(target_os = "macos", windows));
+    let key = |p: &str| if fold { folder_key(p).to_lowercase() } else { folder_key(p) };
+    let path = key(&path.to_string_lossy());
+    std::iter::once(home.to_string())
+        .chain(["Pictures", "Desktop", "Downloads"].map(|sub| Path::new(&*home).join(sub).to_string_lossy().to_string()))
+        .any(|p| key(&p) == path)
+}
+
+/// Refuses `from` when renaming or moving it would take the home folder or a standard place of it.
+fn refuse_protected_place(command: &str, from: &str) -> Result<()> {
+    refuse_protected_place_in(command, from, crate::library::home_folder().as_deref())
+}
+
+/// What `from` names once the file system has read it: made absolute against the working folder
+/// (the commands act on it that way) and with its parent's links followed, so a spelling through a
+/// linked folder is the same place. The last name stays as written (a link that merely points at
+/// Pictures is its own folder: renaming it renames the link), except that a name which is not a
+/// link is also read in full, which turns a Windows short name (`DOWNLO~1`) into the long one.
+fn named_places(from: &str) -> Vec<std::path::PathBuf> {
+    let spelled = std::path::absolute(from).unwrap_or_else(|_| from.into());
+    let followed = spelled.parent().and_then(|p| p.canonicalize().ok()).zip(spelled.file_name()).map(|(p, name)| p.join(name));
+    let is_link = std::fs::symlink_metadata(&spelled).is_ok_and(|m| m.file_type().is_symlink());
+    let read = if is_link { None } else { spelled.canonicalize().ok() };
+    std::iter::once(spelled).chain(followed).chain(read).collect()
+}
+
+/// The home folder and its standard places.
+fn standard_places(home: &Path) -> Vec<std::path::PathBuf> {
+    std::iter::once(home.to_path_buf()).chain(["Pictures", "Desktop", "Downloads"].map(|sub| home.join(sub))).collect()
+}
+
+/// Whether `from` is, on disk, one of `places`, however it is spelled (a firmlink or bind mount
+/// reaches the same folder under another path). A link to a place is not the place, but a place
+/// that is itself a link stands for the folder it points to (the places are read through their
+/// links), since renaming that folder would break the place.
+#[cfg(unix)]
+fn is_one_of(from: &str, places: &[std::path::PathBuf]) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(mine) = std::fs::symlink_metadata(std::path::absolute(from).unwrap_or_else(|_| from.into())) else { return false };
+    mine.is_dir() && places.iter().filter_map(|p| std::fs::metadata(p).ok()).any(|m| (m.dev(), m.ino()) == (mine.dev(), mine.ino()))
+}
+
+#[cfg(not(unix))]
+fn is_one_of(_from: &str, _places: &[std::path::PathBuf]) -> bool {
+    false
+}
+
+fn refuse_protected_place_in(command: &str, from: &str, home: Option<&Path>) -> Result<()> {
+    let Some(home) = home.filter(|h| !h.as_os_str().is_empty()) else { return Ok(()) };
+    let homes: Vec<std::path::PathBuf> = std::iter::once(home.to_path_buf()).chain(home.canonicalize().ok()).collect();
+    let spelled = named_places(from).iter().any(|place| homes.iter().any(|h| is_protected_place(place, h)));
+    if spelled || is_one_of(from, &homes.iter().flat_map(|h| standard_places(h)).collect::<Vec<_>>()) {
+        return Err(bad(
+            command,
+            format!(
+                "{from} is the home folder or one of its standard places (Pictures, Desktop, Downloads); rename or move it in the system's file manager instead"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_protected_place, refuse_protected_place_in};
+    use std::path::Path;
+
+    #[test]
+    fn the_home_folder_and_its_standard_places_are_protected() {
+        let home = Path::new("/home/example");
+        for path in [
+            "/home/example",
+            "/home/example/",
+            "/home/example/Pictures",
+            "/home/example/Pictures/",
+            "/home/example/Desktop",
+            "/home/example/Downloads",
+        ] {
+            assert!(is_protected_place(Path::new(path), home), "{path}");
+        }
+        for path in ["/home/example/Pictures/Trip", "/home/example/Documents", "/home/other", "/home", "/home/example2", "Pictures", ""] {
+            assert!(!is_protected_place(Path::new(path), home), "{path}");
+        }
+        // no home known: nothing is protected, and no relative path is mistaken for a place
+        assert!(!is_protected_place(Path::new("Pictures"), Path::new("")));
+        assert!(!is_protected_place(Path::new(""), Path::new("")));
+        // case counts only where the volume ignores it
+        assert_eq!(is_protected_place(Path::new("/home/example/pictures"), home), cfg!(any(target_os = "macos", windows)));
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lightcraft-protected-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("home/Pictures")).expect("scratch home");
+        dir
+    }
+
+    #[test]
+    fn a_protected_place_is_refused_by_name_with_the_reason() {
+        let dir = scratch("named");
+        let home = dir.join("home");
+        for from in [home.clone(), home.join("Pictures"), home.join("Pictures").join(".")] {
+            let e = refuse_protected_place_in("folder.rename", &from.to_string_lossy(), Some(&home)).expect_err("refused").to_string();
+            assert!(e.contains("home folder") && e.contains("file manager"), "{e}");
+        }
+        assert!(refuse_protected_place_in("folder.move", &home.join("Pictures").join("Trip").to_string_lossy(), Some(&home)).is_ok());
+        assert!(refuse_protected_place_in("folder.rename", &home.to_string_lossy(), None).is_ok(), "no home known");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_relative_path_to_a_protected_place_is_refused() {
+        let dir = scratch("relative");
+        // the home folder is spelled through a link, so only the spelling as given can match it
+        #[cfg(unix)]
+        let home = {
+            std::os::unix::fs::symlink(dir.join("home"), dir.join("alias")).expect("link");
+            dir.join("alias")
+        };
+        #[cfg(not(unix))]
+        let home = dir.join("home");
+        // the commands act on the process's working folder, so a relative path names the real place
+        let cwd = std::env::current_dir().expect("working folder");
+        let relative = pathdiff(&home.join("Pictures"), &cwd);
+        if !Path::new(&relative).is_absolute() {
+            // what the commands will see: the working folder's spelling of the same place
+            assert!(super::named_places(&relative).iter().any(|p| is_protected_place(p, &home)), "{relative}");
+            assert!(refuse_protected_place_in("folder.rename", &relative, Some(&home)).is_err(), "{relative}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `target` as a path relative to `from` (both absolute), with `..` steps.
+    fn pathdiff(target: &Path, from: &Path) -> String {
+        let (t, f): (Vec<_>, Vec<_>) = (target.components().collect(), from.components().collect());
+        let common = t.iter().zip(&f).take_while(|(a, b)| a == b).count();
+        let mut out = std::path::PathBuf::new();
+        f[common..].iter().for_each(|_| out.push(".."));
+        t[common..].iter().for_each(|c| out.push(c));
+        out.to_string_lossy().to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_protected_place_spelled_through_a_firmlink_is_refused() {
+        let dir = scratch("firmlink");
+        let home = dir.join("home");
+        // the data volume is also reachable under /System/Volumes/Data: the same folders, spelled otherwise
+        let real = home.canonicalize().expect("home");
+        let spelled = Path::new("/System/Volumes/Data").join(real.strip_prefix("/").expect("absolute"));
+        if spelled.is_dir() {
+            for from in [spelled.clone(), spelled.join("Pictures")] {
+                assert!(refuse_protected_place_in("folder.rename", &from.to_string_lossy(), Some(&home)).is_err(), "{}", from.display());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_protected_place_reached_through_a_linked_parent_is_refused() {
+        let dir = scratch("linked");
+        let home = dir.join("home");
+        let alias = dir.join("alias");
+        std::os::unix::fs::symlink(&home, &alias).expect("link");
+        // the home folder is spelled one way, the path another, both naming the same folder
+        let through_the_link = alias.join("Pictures");
+        assert!(refuse_protected_place_in("folder.rename", &through_the_link.to_string_lossy(), Some(&home)).is_err());
+        assert!(
+            refuse_protected_place_in("folder.rename", &alias.join("Pictures").to_string_lossy(), Some(&alias)).is_err(),
+            "home spelled through the link"
+        );
+        // a link that merely points at Pictures is its own folder: renaming it renames the link
+        let shortcut = dir.join("shortcut");
+        std::os::unix::fs::symlink(home.join("Pictures"), &shortcut).expect("link");
+        assert!(refuse_protected_place_in("folder.rename", &shortcut.to_string_lossy(), Some(&home)).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

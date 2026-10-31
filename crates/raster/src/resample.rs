@@ -19,7 +19,8 @@ impl Filter {
             Filter::Lanczos3 => 3.0,
         }
     }
-    fn eval(self, x: f32) -> f32 {
+    /// The filter's weight at distance `x` (pixels of the source).
+    pub(crate) fn eval(self, x: f32) -> f32 {
         let x = x.abs();
         match self {
             Filter::Box => {

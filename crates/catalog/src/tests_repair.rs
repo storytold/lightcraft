@@ -108,6 +108,74 @@ fn folder_loops_and_missing_parents_move_to_the_top() {
     let _ = c.apply(Op::MoveAlbum { id: AlbumId(11), parent: Some(AlbumId(10)) });
 }
 
+/// Check the postcondition needed by every consumer that follows parent folders. This inspects
+/// the repaired catalog, not its cache or a second implementation of the repair algorithm.
+fn assert_all_album_chains_reach_roots(c: &Catalog) {
+    for album in c.albums.values() {
+        let mut seen = std::collections::HashSet::new();
+        let mut current = album;
+        while let Some(parent) = current.parent {
+            assert!(seen.insert(current.id), "album {} still reaches a cycle", album.id.0);
+            current = c.albums.get(&parent).expect("every retained parent exists");
+            assert!(current.folder, "every retained parent is a folder");
+        }
+    }
+}
+
+#[test]
+fn a_child_visited_before_a_folder_cycle_keeps_its_content_and_gets_a_rooted_chain() {
+    let (c, ids) = sound();
+    let (mut c, report) = load_edited(&c, |v| {
+        // BTreeMap order visits10 first: cached Bad11/12 used to be skipped without repair.
+        v["albums"]["10"] = serde_json::to_value(album(10, Some(11), false, vec![ids[2]])).unwrap();
+        v["albums"]["11"] = serde_json::to_value(album(11, Some(12), true, vec![])).unwrap();
+        v["albums"]["12"] = serde_json::to_value(album(12, Some(11), true, vec![])).unwrap();
+    });
+    assert_all_album_chains_reach_roots(&c);
+    assert_eq!(c.album(AlbumId(10)).unwrap().parent, Some(AlbumId(11)), "the child remains in its actual folder");
+    assert_eq!(c.album(AlbumId(10)).unwrap().photos, vec![ids[2]], "repair preserves the child's photos");
+    assert_eq!(c.album(AlbumId(11)).unwrap().parent, None, "one cycle edge is repaired");
+    assert_eq!(c.album(AlbumId(12)).unwrap().parent, Some(AlbumId(11)), "the other folder edge is retained");
+    assert!(report.repaired.iter().any(|message| message.starts_with("album 11:")), "{:?}", report.repaired);
+    assert!(c.repair().is_empty(), "a second repair is idempotent");
+}
+
+#[test]
+fn a_child_visited_before_a_folder_with_a_missing_parent_does_not_hide_the_bad_ancestor() {
+    let (c, ids) = sound();
+    let (mut c, report) = load_edited(&c, |v| {
+        v["albums"]["10"] = serde_json::to_value(album(10, Some(11), false, vec![ids[2]])).unwrap();
+        v["albums"]["11"] = serde_json::to_value(album(11, Some(999), true, vec![])).unwrap();
+    });
+    assert_all_album_chains_reach_roots(&c);
+    assert_eq!(c.album(AlbumId(10)).unwrap().parent, Some(AlbumId(11)));
+    assert_eq!(c.album(AlbumId(10)).unwrap().photos, vec![ids[2]]);
+    assert_eq!(c.album(AlbumId(11)).unwrap().parent, None, "repair the missing-parent edge itself");
+    assert!(report.repaired.iter().any(|message| message.starts_with("album 11:")), "{:?}", report.repaired);
+    assert!(c.repair().is_empty());
+}
+
+#[test]
+fn a_long_valid_folder_chain_is_retained_when_its_child_is_visited_first() {
+    let (c, ids) = sound();
+    let (mut c, report) = load_edited(&c, |v| {
+        v["albums"]["10"] = serde_json::to_value(album(10, Some(100), false, vec![ids[2]])).unwrap();
+        for id in 100..612 {
+            v["albums"][id.to_string()] = serde_json::to_value(album(id, Some(id + 1), true, vec![])).unwrap();
+        }
+        v["albums"]["612"] = serde_json::to_value(album(612, None, true, vec![])).unwrap();
+    });
+    assert_all_album_chains_reach_roots(&c);
+    assert_eq!(c.album(AlbumId(10)).unwrap().parent, Some(AlbumId(100)));
+    assert_eq!(c.album(AlbumId(10)).unwrap().photos, vec![ids[2]]);
+    for id in 100..612 {
+        assert_eq!(c.album(AlbumId(id)).unwrap().parent, Some(AlbumId(id + 1)), "valid edge{id} remains");
+    }
+    assert_eq!(c.album(AlbumId(612)).unwrap().parent, None);
+    assert!(!report.repaired.iter().any(|message| message.starts_with("album ")), "valid parents must not be repaired: {:?}", report.repaired);
+    assert!(c.repair().is_empty());
+}
+
 /// Id counters left at the top (or behind the ids in use) by a damaged file: allocating no longer
 /// overflows (a panic in debug builds) and never hands out an id already in use.
 #[test]
@@ -125,6 +193,33 @@ fn id_counters_are_moved_past_the_ids_in_use() {
     let p = Photo::new(PhotoId(u64::MAX), Source::Demo { scene: 1 }, "a", "JPEG", 1, 1, "t");
     c.apply(Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
     assert!(c.apply(Op::AddPhoto { photo: Box::new(p) }).is_err(), "the id is taken: refused, not overwritten");
+}
+
+/// History was bounded only where an edit adds a step, so a snapshot holding more steps kept
+/// every one in memory on each load (#2579). The newest are kept and the cursor stays on its step.
+#[test]
+fn history_beyond_the_limit_is_trimmed_on_load() {
+    let (mut c, ids) = sound();
+    let extra = HISTORY_LIMIT * 5;
+    let step = HistoryStep { label: "s0".into(), settings: std::sync::Arc::new(lightcraft_develop::DevelopSettings::default()) };
+    c.apply(Op::PushHistory { id: ids[0], step }).unwrap();
+    c.apply(Op::SetHistoryCursor { id: ids[0], cursor: Some(extra - 3) }).unwrap();
+    let (loaded, report) = load_edited(&c, |v| {
+        let history = &mut v["photos"][ids[0].0.to_string()]["history"];
+        let one = history[0].clone();
+        *history = (0..extra)
+            .map(|i| {
+                let mut s = one.clone();
+                s["label"] = format!("s{i}").into();
+                s
+            })
+            .collect();
+    });
+    let p = loaded.photo(ids[0]).unwrap();
+    assert_eq!(p.history.len(), HISTORY_LIMIT);
+    assert_eq!(p.history[0].label, format!("s{}", extra - HISTORY_LIMIT));
+    assert_eq!(p.history_index().map(|i| p.history[i].label.clone()), Some(format!("s{}", extra - 3)));
+    assert_eq!(report.repaired.len(), 1, "{:?}", report.repaired);
 }
 
 /// A sound catalog loads unchanged.
@@ -149,4 +244,28 @@ fn an_album_filed_under_another_id_gets_its_own() {
     let a = c.album(inner).unwrap();
     assert_eq!((a.id, a.parent), (inner, Some(folder)));
     assert_eq!(c.album_children(Some(folder)).iter().map(|a| a.id).collect::<Vec<_>>(), vec![inner]);
+}
+
+/// What was worked out from the albums (whether rules may be tested cheapest first) is worked out
+/// again when a repair changes the albums.
+#[test]
+fn a_repair_forgets_what_was_worked_out_from_the_albums() {
+    let (mut c, _) = sound();
+    let smart = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album { smart: Some(Box::default()), ..album(smart.0, None, false, vec![]) } }).unwrap();
+    assert!(!c.keeps_written_order(), "worked out, and remembered");
+    // damaged outside `apply`: the smart album tests itself, and an album is filed under another id
+    let rules: Filter =
+        serde_json::from_value(serde_json::json!({"ruleSet": {"match": "all", "rules": [{"field": "album", "op": "is", "value": smart.0}]}}))
+            .unwrap();
+    if let Some(a) = c.albums.get_mut(&smart) {
+        a.smart = Some(Box::new(rules));
+    }
+    let inner = c.albums().find(|a| !a.folder && a.smart.is_none()).unwrap().id;
+    if let Some(mut a) = c.albums.remove(&inner) {
+        a.id = AlbumId(900);
+        c.albums.insert(inner, a);
+    }
+    assert!(!c.repair().is_empty());
+    assert!(c.keeps_written_order(), "the loop the repair left is seen");
 }

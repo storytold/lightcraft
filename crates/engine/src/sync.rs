@@ -34,8 +34,8 @@
 //! - a sidecar is found as Read Metadata from File finds it, including the other naming
 //!   scheme's file (`IMG_1.xmp` for `IMG_1.JPG` beside `IMG_1.CR3`).
 //!
-//! The walk for new files stops at the import's limits on depth and entries (logged), and is
-//! not cancelled midway.
+//! The walk for new files stops at the import's limits on depth and entries (logged), or when the
+//! scan is cancelled.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,19 +46,25 @@ use serde::Serialize;
 
 use crate::import::{ImportCandidate, ImportMode, ImportOptions, ScanInput, ScanProgress};
 use crate::media::ProbeInfo;
-use crate::sidecar::SidecarNaming;
+use crate::sidecar::{SidecarLookup, SidecarNaming};
 use crate::{EngineError, Result, Session};
 
 /// The largest XMP sidecar read when looking for metadata updates; a bigger one is skipped.
 const MAX_SIDECAR_BYTES: u64 = 16 * 1024 * 1024;
 
-/// How far a scan is: the folder's files probed ([`ScanProgress`], whose `cancel` stops the
-/// whole scan) and the library's photos checked.
+/// How far a scan is: the folders and files listed so far (the walk, which comes first and on a
+/// network share can take minutes), the folder's files probed ([`ScanProgress`], whose `cancel`
+/// stops the whole scan, walk included) and the library's photos checked.
 #[derive(Default)]
 pub struct SyncProgress {
     pub files: ScanProgress,
     pub checked: std::sync::atomic::AtomicUsize,
     pub to_check: std::sync::atomic::AtomicUsize,
+    /// Folders and files (photos or not) the walk has listed.
+    pub folders_listed: std::sync::atomic::AtomicUsize,
+    pub files_listed: std::sync::atomic::AtomicUsize,
+    /// The walk is over (or there was nothing to walk).
+    pub listed: std::sync::atomic::AtomicBool,
 }
 
 impl SyncProgress {
@@ -67,6 +73,15 @@ impl SyncProgress {
         use std::sync::atomic::Ordering::Relaxed;
         let done = self.files.done.load(Relaxed).saturating_add(self.checked.load(Relaxed));
         (done, self.files.total.load(Relaxed).saturating_add(self.to_check.load(Relaxed)))
+    }
+
+    /// While a scan lists the folder (before any file can be checked): the folders and files
+    /// listed so far. `None` once the listing is over.
+    pub fn listing(&self) -> Option<(usize, usize)> {
+        use std::sync::atomic::Ordering::{Acquire, Relaxed};
+        // (Acquire pairs with the Release store of `listed`: once the listing is seen to be
+        // over, so is what was stored before it, and the counts that follow are the final ones)
+        (!self.listed.load(Acquire)).then(|| (self.folders_listed.load(Relaxed), self.files_listed.load(Relaxed)))
     }
 }
 
@@ -196,26 +211,42 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     let SyncInput { folder, scan, ids, naming, labels } = input;
     let seen: Vec<Arc<Photo>> = ids.iter().filter_map(|id| labels.photo(*id)).map(Arc::clone).collect();
     if !cfg!(target_arch = "wasm32") && !Path::new(&folder).is_dir() {
+        progress.listed.store(true, std::sync::atomic::Ordering::Release);
         return FolderChanges { path: folder, seen, offline: true, ..Default::default() };
     }
     // (how each photo's sidecar is named: a pass over the library, made here and not while the
     // session waits, and not at all for a folder that is not there)
-    let namings = crate::sidecar::namings_in(&labels, naming, &ids);
-    let photos: Vec<(Arc<Photo>, SidecarNaming)> =
+    let namings = crate::sidecar::lookups_in(&labels, naming, &ids);
+    let photos: Vec<(Arc<Photo>, SidecarLookup)> =
         ids.iter().zip(namings).filter_map(|(id, naming)| labels.photo(*id).map(|p| (Arc::clone(p), naming))).collect();
     // The folder is walked once, and its listing answers for the library's photos in it: on a
     // network share that is one request for a folder's names where it was several for each
     // photo. Then both halves wait on the disk at once: the new files are probed (on their own
     // threads) beside the checks of the photos, which ask the disk only what the listing can't say.
-    // (how many photos there are to check is known before the walk: the count shows while it runs)
+    // (how many photos there are to check is known before the walk; while the walk runs, the
+    // folders and files it listed tell how far it is)
     progress.to_check.store(photos.len(), std::sync::atomic::Ordering::Relaxed);
     let mut listing = Listing::default();
     let (files, _) = crate::import::expand_noting(
         std::slice::from_ref(&folder),
         scan.skip(),
         crate::walk::Limits::default(),
-        Some(&mut |dir, names, complete| listing.note(dir, names, complete)),
+        Some(&mut |dir, names, complete| {
+            use std::sync::atomic::Ordering::Relaxed;
+            progress.folders_listed.fetch_add(1, Relaxed);
+            let files = names.iter().filter(|(_, kind)| *kind == crate::walk::EntryKind::File).count();
+            progress.files_listed.fetch_add(files, Relaxed);
+            listing.note(dir, names, complete);
+            // ✕ stops the walk too (a cancelled scan's result is not used)
+            !progress.files.cancel.load(Relaxed)
+        }),
     );
+    progress.listed.store(true, std::sync::atomic::Ordering::Release);
+    // ✕ during the listing: its result is not used, so nothing more is asked of the disk (the files' cached probes
+    // would each be checked against the file, a round trip per file on a network share)
+    if progress.files.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return FolderChanges { path: folder, seen, ..Default::default() };
+    }
     let listing = &listing;
     // (no threads on the web: one after the other there)
     #[cfg(target_arch = "wasm32")]
@@ -478,7 +509,7 @@ impl Listing {
     }
 }
 
-fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing) -> Check {
+fn check_photo(p: &Photo, naming: SidecarLookup, labels: &Catalog, listing: &Listing) -> Check {
     let Some(file) = crate::cmd::missing::checked_path(p) else { return Check::Nothing };
     let file = Path::new(file);
     if !listing.or_ask(listing.exists(file), || file.exists()) {
@@ -492,11 +523,11 @@ fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Lis
 
 /// [`check_photo`] for each photo, in order, on several threads (each file is a wait on the
 /// disk, not work for the CPU). Photos not reached before a cancel count as nothing found.
-fn check_photos(photos: &[(Arc<Photo>, SidecarNaming)], labels: &Catalog, listing: &Listing, progress: &SyncProgress) -> Vec<Check> {
+fn check_photos(photos: &[(Arc<Photo>, SidecarLookup)], labels: &Catalog, listing: &Listing, progress: &SyncProgress) -> Vec<Check> {
     use std::sync::atomic::Ordering::Relaxed;
     progress.to_check.store(photos.len(), Relaxed);
     let cancel = &progress.files.cancel;
-    let check = |p: &Photo, naming: SidecarNaming| {
+    let check = |p: &Photo, naming: SidecarLookup| {
         let c = check_photo(p, naming, labels, listing);
         progress.checked.fetch_add(1, Relaxed);
         c
@@ -565,12 +596,12 @@ impl Session {
 
 /// Whether `p`'s XMP sidecar file was saved after the library last had its say about the photo
 /// (imported, or edited here) and says something the library doesn't.
-fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing: &Listing) -> bool {
+fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing: &Listing) -> bool {
     let Source::File { path } = &p.source else { return false };
     // ([`crate::sidecar::find_sidecar`], each name looked up in the listing before the disk)
     // (a name the listing holds is read for its date next, and one that can't be read is passed
     // over for the next name, as a name that is no file was)
-    let found = crate::sidecar::sidecar_candidates(path, naming).find_map(|c| {
+    let found = naming.candidates(path).find_map(|c| {
         let there = listing.or_ask(listing.is_file(&c), || c.is_file());
         let meta = there.then(|| std::fs::metadata(&c).ok()).flatten().filter(std::fs::Metadata::is_file)?;
         Some((c, meta))
@@ -623,7 +654,7 @@ pub struct SyncWork {
     moved: Vec<FolderMoved>,
     missing: Vec<FolderPhoto>,
     /// (photo, its file, how its sidecar is named)
-    sidecars: Vec<(PhotoId, String, SidecarNaming, crate::crs::Target)>,
+    sidecars: Vec<(PhotoId, String, SidecarLookup, crate::crs::Target)>,
 }
 
 /// The catalog half of a synchronize (see [`SyncJob`]).
@@ -671,7 +702,7 @@ impl SyncJob {
         };
         let now = import.as_ref().map_or_else(|| (s.clock)(), |(j, _)| j.now().to_string());
         let sidecars = if choice.read_metadata {
-            let namings = s.sidecar_namings(&metadata.iter().map(|m| PhotoId(m.id)).collect::<Vec<_>>());
+            let namings = s.sidecar_lookups(&metadata.iter().map(|m| PhotoId(m.id)).collect::<Vec<_>>());
             metadata
                 .into_iter()
                 .zip(namings)
@@ -763,8 +794,8 @@ impl SyncWork {
 }
 
 /// Read and parse photo file `path`'s XMP sidecar file.
-fn read_sidecar(path: &str, naming: SidecarNaming, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
-    let file = crate::sidecar::find_sidecar(path, naming).ok_or_else(|| "no XMP sidecar".to_string())?;
+fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
+    let file = naming.find(path).ok_or_else(|| "no XMP sidecar".to_string())?;
     let len = std::fs::metadata(&file).map_err(|e| format!("{}: {e}", file.display()))?.len();
     if len > MAX_SIDECAR_BYTES {
         return Err(format!("{}: too large for an XMP sidecar", file.display()));
@@ -814,13 +845,12 @@ impl SyncCommit {
                 }
             }
             SyncStep::Remove(gone) => {
-                let ops: Vec<Op> = gone
-                    .iter()
-                    .filter(|id| s.catalog.photo(**id).is_some_and(|p| p.in_library()))
-                    .map(|id| Op::SetDeleted { id: *id, deleted: true })
-                    .collect();
+                let ids: Vec<PhotoId> = gone.into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.in_library())).collect();
+                let mut ops: Vec<Op> = ids.iter().map(|id| Op::SetDeleted { id: *id, deleted: true }).collect();
                 let n = ops.len();
                 if n > 0 {
+                    // Like `photo.delete`, take them out of their stacks.
+                    ops.extend(s.catalog.remove_from_stacks_ops(&ids));
                     match s.commit("Remove Missing Photos", Op::Batch { ops }) {
                         Ok(()) => report.removed += n,
                         Err(e) => report.failed.push((String::new(), e.to_string())),

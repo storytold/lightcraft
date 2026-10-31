@@ -161,7 +161,8 @@ struct ConvParams {
     cout: u32,
     leaky: u32,
     alpha: f32,
-    pad: u32,
+    /// Always 0: the kernel steps its output stores by `1 + zero`, so FXC cannot merge them (`nn_conv.wgsl`).
+    zero: u32,
 }
 
 #[repr(C)]
@@ -234,32 +235,35 @@ fn round_up(v: usize, to: usize) -> usize {
     v.div_ceil(to) * to
 }
 
-/// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
-fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
+fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<(), String> {
     if !net.fits_tile(tile) {
         return unsupported("the tile does not fit the network");
     }
     if tile > MAX_TILE {
         return unsupported("the tile is larger than the kernels' dispatches reach");
     }
+    if !net.in_channels.is_multiple_of(4) {
+        return unsupported("the input channel count is not a multiple of 4");
+    }
+    let count = ops.len();
+    let ends_right = matches!(
+        (count.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
+        (Some(Op::Conv(conv)), Some(Op::DepthToSpace2 { src }))
+            if conv.k == 1 && conv.src2.is_none() && *src == count - 1 && conv.cout == 12 && conv.leaky.is_none()
+    );
+    if ends_right { Ok(()) } else { unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space") }
+}
+
+/// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
+fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
+    let ops = net.ops();
+    validate_plan(net, tile, ops)?;
     let side = |t: usize| -> usize {
         let level = net.shape(t).map_or(0, |s| s.level);
         if level >= 0 { tile >> level } else { tile << (-level) }
     };
     let chan = |t: usize| net.shape(t).map_or(0, |s| s.channels);
-    if !net.in_channels.is_multiple_of(4) {
-        return unsupported("the input channel count is not a multiple of 4");
-    }
-    let ops = net.ops();
-    // the network must end in a 1 × 1 convolution and a depth-to-space (they run as one kernel)
     let n_ops = ops.len();
-    let ends_right = matches!(
-        (n_ops.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
-        (Some(Op::Conv(c)), Some(Op::DepthToSpace2 { src })) if c.k == 1 && c.src2.is_none() && *src == n_ops - 1 && c.cout == 12 && c.leaky.is_none()
-    );
-    if !ends_right {
-        return unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space");
-    }
     // the last layer that reads each tensor
     let mut last_use = vec![0usize; n_ops + 1];
     for (i, op) in ops.iter().enumerate() {
@@ -349,7 +353,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     cout: c.cout as u32,
                     leaky: u32::from(c.leaky.is_some()),
                     alpha: c.leaky.unwrap_or(0.0),
-                    pad: 0,
+                    zero: 0,
                 };
                 let src = get(&place, c.src)?;
                 let src2 = c.src2.map(|t| get(&place, t)).transpose()?;
@@ -416,7 +420,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     cout: c.cout as u32,
                     leaky: u32::from(c.leaky.is_some()),
                     alpha: c.leaky.unwrap_or(0.0),
-                    pad: 0,
+                    zero: 0,
                 };
                 let src = get(&place, c.src)?;
                 let slot = alloc((4 * m * c.cout * 4) as u64, &mut slots, &mut free);
@@ -648,15 +652,71 @@ impl Shared {
     }
 }
 
+/// Workspaces not in use, and how many exist (free or with a tile in flight).
+struct Slots<T> {
+    free: Vec<T>,
+    made: usize,
+}
+
+/// Up to `cap` workspaces shared by the threads that run tiles. The free list and the count share one lock, so a caller
+/// that finds none free and waits cannot miss one being given back or forgotten in between (issue #2577).
+struct Workspaces<T> {
+    slots: Mutex<Slots<T>>,
+    wake: Condvar,
+    cap: usize,
+}
+
+impl<T> Workspaces<T> {
+    fn new(first: T, cap: usize) -> Self {
+        Workspaces { slots: Mutex::new(Slots { free: vec![first], made: 1 }), wake: Condvar::new(), cap }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Slots<T>> {
+        self.slots.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A free workspace, a new one from `make` when fewer than `cap` exist, else wait for one to come back or be
+    /// forgotten.
+    fn take(&self, make: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+        let mut s = self.lock();
+        loop {
+            if let Some(w) = s.free.pop() {
+                return Ok(w);
+            }
+            if s.made < self.cap {
+                s.made += 1;
+                drop(s);
+                let w = make();
+                if w.is_err() {
+                    self.forget();
+                }
+                return w;
+            }
+            s = self.wake.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    fn give(&self, w: T) {
+        self.lock().free.push(w);
+        self.wake.notify_one();
+    }
+
+    /// One workspace fewer exists: a waiting caller may make another.
+    fn forget(&self) {
+        let mut s = self.lock();
+        s.made = s.made.saturating_sub(1);
+        drop(s);
+        self.wake.notify_one();
+    }
+}
+
 /// A network on the GPU for one tile size. Cheap to share between threads: each call takes a free workspace.
 pub struct NetRunner {
     shared: Shared,
     tile: usize,
     in_channels: usize,
-    free: Mutex<Vec<Workspace>>,
-    /// Workspaces made so far (they are made when a call finds none free, up to [`WORKSPACES`]).
-    made: Mutex<usize>,
-    wake: Condvar,
+    /// Workspaces are made when a call finds none free, up to [`WORKSPACES`].
+    workspaces: Workspaces<Workspace>,
     bytes: u64,
 }
 
@@ -707,7 +767,7 @@ pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
     if let Some(e) = errors.into_iter().flatten().next() {
         return Err(format!("{}: the denoise kernels could not be set up ({e})", d.info.name));
     }
-    Ok(NetRunner { shared, tile, in_channels: net.in_channels, free: Mutex::new(vec![first]), made: Mutex::new(1), wake: Condvar::new(), bytes })
+    Ok(NetRunner { shared, tile, in_channels: net.in_channels, workspaces: Workspaces::new(first, WORKSPACES), bytes })
 }
 
 impl NetRunner {
@@ -728,45 +788,30 @@ impl NetRunner {
 
     /// A free workspace, a new one when fewer than [`WORKSPACES`] exist, else wait for one to come back.
     fn take(&self) -> Result<Workspace, Error> {
-        let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            if let Some(w) = free.pop() {
-                return Ok(w);
+        self.workspaces.take(|| {
+            // a caller woken by the last tiles failing on a lost device makes nothing on it
+            if let Some(why) = broken_reason() {
+                return Err(Error::Runtime(format!("the GPU is not used any more: {why}")));
             }
-            {
-                let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
-                if *made < WORKSPACES {
-                    *made += 1;
-                    drop(made);
-                    drop(free);
-                    let d = self.shared.dev;
-                    let scopes =
-                        [d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory), d.device.push_error_scope(wgpu::ErrorFilter::Validation)];
-                    let w = self.shared.workspace();
-                    let [oom, validation] = scopes;
-                    let (validation, oom) = (pollster::block_on(validation.pop()), pollster::block_on(oom.pop()));
-                    if let Some(e) = oom.or(validation) {
-                        self.forget();
-                        return Err(Error::Runtime(format!("the GPU could not make room for another tile: {e}")));
-                    }
-                    return Ok(w);
-                }
+            let d = self.shared.dev;
+            let scopes = [d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory), d.device.push_error_scope(wgpu::ErrorFilter::Validation)];
+            let w = self.shared.workspace();
+            let [oom, validation] = scopes;
+            let (validation, oom) = (pollster::block_on(validation.pop()), pollster::block_on(oom.pop()));
+            if let Some(e) = oom.or(validation) {
+                return Err(Error::Runtime(format!("the GPU could not make room for another tile: {e}")));
             }
-            free = self.wake.wait(free).unwrap_or_else(|e| e.into_inner());
-        }
+            Ok(w)
+        })
     }
 
     fn give(&self, w: Workspace) {
-        self.free.lock().unwrap_or_else(|e| e.into_inner()).push(w);
-        self.wake.notify_one();
+        self.workspaces.give(w);
     }
 
     /// A workspace is gone (dropped after a failure): room for a new one, and a waiting caller may make it.
     fn forget(&self) {
-        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
-        *made = made.saturating_sub(1);
-        drop(made);
-        self.wake.notify_one();
+        self.workspaces.forget();
     }
 
     fn execute(&self, w: &Workspace, input: &[f32]) -> Result<Vec<f32>, Error> {
@@ -880,6 +925,25 @@ impl TileRunner for NetRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The denoise kernels validate without a GPU: the pooling kernel, and the convolution for every block size the
+    /// planner picks for these layer widths and channel counts.
+    #[test]
+    fn the_network_kernels_validate_without_a_gpu() {
+        assert_eq!(crate::validate_wgsl("nn_pool", include_str!("wgsl/nn_pool.wgsl")), Ok(()));
+        let mut sizes: Vec<(u32, u32, u32)> = Vec::new();
+        for n in [1usize, 3, 8, 16, 24, 32, 48, 64, 96, 128, 256, 512] {
+            for cin in [1usize, 3, 4, 8, 16, 32, 48, 64, 128, 256, 512] {
+                let b = blocks(n, cin);
+                if !sizes.contains(&b) {
+                    sizes.push(b);
+                }
+            }
+        }
+        for (bm, bn, bk) in sizes {
+            assert_eq!(crate::validate_wgsl(&format!("nn_conv {bm}x{bn}x{bk}"), &conv_source(bm, bn, bk)), Ok(()));
+        }
+    }
     use lightcraft_denoise::{onnx, reference, synthetic};
 
     fn net(tile: u64, ch: u64, depth: usize, seed: u64) -> Net {
@@ -918,6 +982,44 @@ mod tests {
         assert!(a.iter().chain(b).all(|v| v.is_finite()), "non-finite denoise output");
         let scale = b.iter().fold(1e-3f32, |m, v| m.max(v.abs()));
         a.iter().zip(b).fold(0f32, |m, (x, y)| m.max((x - y).abs())) / scale
+    }
+
+    /// A 1 × 1 convolution from 4 channels to `cout` that copies input channel `co % 4` to each output channel `co`.
+    fn copy(src: usize, cout: usize) -> Op {
+        let mut weight = vec![0f32; cout * 4];
+        for co in 0..cout {
+            weight[co * 4 + co % 4] = 1.0;
+        }
+        Op::Conv(lightcraft_denoise::net::Conv { src, src2: None, cin: 4, cout, k: 1, weight, bias: vec![0.0; cout], leaky: None })
+    }
+
+    /// Two 1 × 1 layers that only copy channels, so the right answer is exact: the first layer's stores (mode 0) went
+    /// wrong on DX12 with FXC on an NVIDIA GTX 1070, where every second pixel came out with its channels shifted.
+    #[test]
+    fn a_layer_stores_every_pixels_channels_where_the_next_reads_them() {
+        let n = Net::new(4, vec![copy(0, 4), copy(1, 12), Op::DepthToSpace2 { src: 2 }]).unwrap();
+        let Some(g) = gpu(&n, 3) else { return };
+        let x: Vec<f32> = (1..=36).map(|i| i as f32).collect();
+        assert_eq!(g.run(&x).unwrap(), reference::run(&n, 3, &x).unwrap());
+    }
+
+    /// The same for a transposed convolution's stores (mode 1): a max-pool halves the tile, and the 2 × 2 transposed
+    /// convolution copies each pooled pixel's channels to the four pixels it becomes.
+    #[test]
+    fn a_transposed_convolution_stores_every_pixels_channels_where_the_next_reads_them() {
+        use lightcraft_denoise::net::ConvT2;
+        // [cin][cout][2][2]: channel c to channel c at all four places
+        let mut weight = vec![0f32; 4 * 4 * 4];
+        for c in 0..4 {
+            for q in 0..4 {
+                weight[(c * 4 + c) * 4 + q] = 1.0;
+            }
+        }
+        let up = Op::ConvT2(ConvT2 { src: 1, cin: 4, cout: 4, weight, bias: vec![0.0; 4], leaky: None });
+        let n = Net::new(4, vec![Op::MaxPool2 { src: 0 }, up, copy(2, 12), Op::DepthToSpace2 { src: 3 }]).unwrap();
+        let Some(g) = gpu(&n, 6) else { return };
+        let x: Vec<f32> = (1..=144).map(|i| i as f32).collect();
+        assert_eq!(g.run(&x).unwrap(), reference::run(&n, 6, &x).unwrap());
     }
 
     #[test]
@@ -1074,5 +1176,61 @@ mod tests {
         assert!(plan(&n, 15, u64::MAX).is_err());
         // a buffer limit smaller than the activations
         assert!(plan(&n, 16, 64).is_err());
+    }
+
+    /// Issue #2577: a tile failing between a caller finding every workspace in use and that caller waiting still wakes
+    /// it. The caller holds the lock from its check to its wait, as `Workspaces::take` does, so `forget` waits for it. A
+    /// wait that runs out fails, whatever the count is by then: the wakeup itself has to arrive.
+    #[test]
+    fn a_caller_that_finds_every_workspace_in_use_hears_one_being_forgotten() {
+        let ws = Workspaces::new(0u32, 1);
+        assert_eq!(ws.lock().free.pop(), Some(0));
+        std::thread::scope(|scope| {
+            // where take() is between finding every workspace in use and waiting
+            let mut s = ws.lock();
+            assert!(s.free.is_empty() && s.made == ws.cap);
+            scope.spawn(|| ws.forget());
+            // the tile in flight fails now
+            std::thread::sleep(Duration::from_millis(50));
+            // wait as take() does, and again only after a spurious wakeup that changed nothing
+            loop {
+                let (next, r) = ws.wake.wait_timeout(s, Duration::from_secs(10)).unwrap_or_else(|e| e.into_inner());
+                assert!(!r.timed_out(), "the caller missed the workspace being forgotten");
+                s = next;
+                if s.made != ws.cap {
+                    break;
+                }
+            }
+            assert_eq!(s.made, 0);
+        });
+    }
+
+    #[test]
+    fn take_waits_for_a_workspace_to_come_back_or_be_forgotten() {
+        let ws = std::sync::Arc::new(Workspaces::new(0u32, 1));
+        let fail = || Err(Error::Runtime("no room".into()));
+        assert_eq!(ws.take(fail).unwrap(), 0);
+        // a caller on a thread nobody joins: if its wakeup never comes, the test fails on its timeout instead of hanging
+        let caller = |made: u32| {
+            let (ws, (tx, rx)) = (ws.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || tx.send(ws.take(|| Ok(made))));
+            rx
+        };
+        // the only workspace is in flight: a caller waits until it is forgotten, then makes a new one
+        let rx = caller(1);
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err(), "took a workspace while none was free");
+        ws.forget();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap(), 1);
+        // or until it comes back, and takes that one
+        let rx = caller(2);
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err(), "took a workspace while none was free");
+        ws.give(1);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap(), 1);
+        // a workspace that could not be made leaves room for the next try
+        ws.forget();
+        assert!(ws.take(fail).is_err());
+        assert_eq!(ws.lock().made, 0);
+        assert_eq!(ws.take(|| Ok(3)).unwrap(), 3);
+        assert_eq!(ws.lock().made, 1);
     }
 }

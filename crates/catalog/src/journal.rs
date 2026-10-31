@@ -263,14 +263,36 @@ fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
 
+/// The most `resync` spends re-validating the suffixes of one line whose whole bytes are not valid
+/// UTF-8 (a real fragment ends at any byte): one line of a modest malformed log that holds a start
+/// of a record in every few bytes used to re-validate the whole remaining suffix at every attempt
+/// (CWE-407). Past the budget the rest of the line stays a torn tail, which the damaged path keeps
+/// and reports, same state as before, minus the CPU.
+const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
+
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
 /// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
+    // One record per line, so a line of valid UTF-8 holds a valid suffix at every record start and
+    // one validation covers every candidate; only a line that is not wholly valid re-checks, and
+    // then up to the budget rather than the suffix length times the candidate count.
+    let whole = std::str::from_utf8(line).ok();
+    let mut spent = 0usize;
     (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
+        let text = match &whole {
+            Some(t) => &t[i..],
+            None => {
+                if spent >= RESYNC_BUDGET_BYTES {
+                    return None;
+                }
+                spent = spent.saturating_add(line.len() - i);
+                std::str::from_utf8(&line[i..]).ok()?
+            }
+        };
+        let rec = decode_record(text.trim_end_matches('\r'))?;
         (rec.0 <= last.saturating_add(1)).then_some((i, rec))
     })
 }
@@ -712,5 +734,30 @@ impl Drop for Journal {
         {
             log::error!("catalog: background snapshot failed: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_resync {
+    use super::*;
+
+    /// A torn first line may end at any byte and a failed append's retried records may follow its
+    /// own start `{"seq":` more than once: `resync` finds the CRC-valid record after a fragment of
+    /// many record starts. UTF-8 is validated once for a valid line, and for a line that isn't
+    /// wholly valid only up to the budget instead of the suffix length per candidate (CWE-407).
+    #[test]
+    fn resync_finds_the_retried_record_after_a_fragment_of_many_starts() {
+        let op = Op::Batch { ops: vec![] };
+        let record = encode_record(5, &op);
+        let mut line = Vec::from(b"\xf2" as &[u8]); // an invalid byte, so the whole line is not UTF-8
+        for i in 0..1024 {
+            line.extend_from_slice(format!("{{\"seq\":{},\"crc\":{{", i).as_bytes());
+        }
+        let fragment = line.len();
+        line.extend_from_slice(record.as_bytes());
+        assert_eq!(resync(&line, 4).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+        // a retry is still recognised past `last`: the fragment logs nothing valid, but the CRC
+        // matches, so the double `Some` is only reached with `last >= 4`
+        assert_eq!(resync(&line, 100).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
     }
 }

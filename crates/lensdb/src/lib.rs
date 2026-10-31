@@ -159,23 +159,41 @@ impl LensDb {
 
     /// The camera with this EXIF make and model.
     pub fn find_camera(&self, make: &str, model: &str) -> Option<&Camera> {
-        let (mk, md) = (tokens(make), tokens(model));
+        let mk = tokens(make);
+        let raw = tokens(model);
+        let md = strip_maker(raw.clone(), &mk);
         if md.is_empty() {
             return None;
         }
-        self.cameras.iter().find(|c| tokens(&c.model) == md && maker_matches(&tokens(&c.maker), &mk))
+        self.cameras.iter().find(|c| {
+            let cm = tokens(&c.maker);
+            // with no EXIF make, the model may still start with the maker's word
+            let md = if mk.is_empty() { strip_maker(raw.clone(), &cm) } else { md.clone() };
+            maker_matches(&cm, &mk) && strip_maker(tokens(&c.model), &cm) == md
+        })
     }
 
     /// The best profile for an EXIF lens model (and lens make, when the file has one), preferring lenses for the
     /// camera's mount. `None` when no name is a convincing match.
     pub fn find_lens(&self, lens_make: Option<&str>, lens_model: &str, camera: Option<&Camera>) -> Option<&Profile> {
+        self.best_lens(lens_make, lens_model, camera, |_| true).or_else(|| self.find_fixed_lens(&tokens(lens_model), camera?))
+    }
+
+    /// [`find_lens`](Self::find_lens) among the profiles one of whose names is exactly `name`
+    /// ([`Profile::names_exactly`]), for names that carry no maker, such as [`spec_name`]s: another maker's lens with
+    /// the same specification scores as high, and must neither win nor, by coming first, hide the profile named so.
+    pub fn find_lens_named(&self, lens_make: Option<&str>, name: &str, camera: Option<&Camera>) -> Option<&Profile> {
+        self.best_lens(lens_make, name, camera, |l| l.names_exactly(name))
+    }
+
+    fn best_lens(&self, lens_make: Option<&str>, lens_model: &str, camera: Option<&Camera>, eligible: impl Fn(&Profile) -> bool) -> Option<&Profile> {
         let exif = tokens(lens_model);
         if exif.is_empty() {
             return None;
         }
         let make = lens_make.map(tokens).unwrap_or_default();
         let mut best: Option<(f64, &Profile)> = None;
-        for lens in &self.lenses {
+        for lens in self.lenses.iter().filter(|l| eligible(l)) {
             let maker = tokens(&lens.maker);
             if !make.is_empty() && !maker.is_empty() && !maker_matches(&maker, &make) {
                 continue;
@@ -193,6 +211,64 @@ impl LensDb {
         }
         best.map(|(_, l)| l)
     }
+
+    /// Compact cameras with a built-in lens: lensfun names the lens after the camera and gives it the camera's own
+    /// mount, while EXIF reports only a focal / aperture range ("6.0-72.0 mm f/2.7-3.5"). Match by mount, then by
+    /// how much of the calibrated focal range lies inside the EXIF focal range.
+    fn find_fixed_lens(&self, exif: &[String], cam: &Camera) -> Option<&Profile> {
+        if cam.mount.is_empty() {
+            return None;
+        }
+        let cands: Vec<&Profile> = self
+            .lenses
+            .iter()
+            .filter(|l| l.mounts.iter().any(|m| m.eq_ignore_ascii_case(&cam.mount)))
+            .filter(|l| !l.models.iter().any(|m| tokens(m).iter().any(|t| t == "mm")))
+            .collect();
+        // an interchangeable mount has many lenses; a built-in lens has one or a few profiles
+        if cands.is_empty() || cands.len() > MAX_FIXED_CANDIDATES {
+            return None;
+        }
+        let Some((lo, hi)) = exif_focal_range(exif) else {
+            return (cands.len() == 1).then(|| cands[0]);
+        };
+        let (lo, hi) = (lo * 0.9, hi * 1.1);
+        if !lo.is_finite() || !hi.is_finite() {
+            return None;
+        }
+        let mut best: Option<(f64, &Profile)> = None;
+        for p in cands {
+            let focals: Vec<f64> =
+                p.distortion.iter().map(|d| d.0).chain(p.tca.iter().map(|t| t.0)).chain(p.vignetting.iter().map(|v| v.focal)).collect();
+            if focals.is_empty() {
+                continue;
+            }
+            let score = focals.iter().filter(|f| (lo..=hi).contains(*f)).count() as f64 / focals.len() as f64;
+            if score > 0.0 && best.is_none_or(|(s, _)| score > s) {
+                best = Some((score, p));
+            }
+        }
+        best.map(|(_, p)| p)
+    }
+}
+
+/// Most profiles a camera's mount may have for it to count as a built-in-lens mount.
+const MAX_FIXED_CANDIDATES: usize = 4;
+
+/// Drop the maker's words from a model name ("Canon PowerShot S5 IS" → "powershot s5 is").
+fn strip_maker(model: Vec<String>, maker: &[String]) -> Vec<String> {
+    let first = maker.first();
+    let stripped: Vec<String> = model.iter().filter(|t| Some(*t) != first).cloned().collect();
+    if stripped.is_empty() { model } else { stripped }
+}
+
+/// The numbers before the first "mm" in tokenised EXIF lens text: (shortest, longest) focal length.
+fn exif_focal_range(exif: &[String]) -> Option<(f64, f64)> {
+    let end = exif.iter().position(|t| t == "mm")?;
+    let nums: Vec<f64> = exif.get(..end)?.iter().filter_map(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).collect();
+    let lo = nums.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = nums.iter().copied().fold(0.0, f64::max);
+    (lo.is_finite() && hi > 0.0).then_some((lo, hi))
 }
 
 fn read_capped(path: &Path) -> Result<String, Error> {
@@ -372,7 +448,30 @@ fn by_focal<T: Copy>(points: &[(f64, T)], focal: f64, eval: impl Fn(&T) -> f64) 
     Some(a + (b - a) * t)
 }
 
+/// A lens name built from a lens specification (min / max focal length, f-number at each), for files that name
+/// no lens model, only its specification (Nikon DSLRs' maker note): "24-70mm f/2.8", "18-55mm f/3.5-5.6",
+/// "85mm f/1.8". Such a name says nothing about the maker, so [`Profile::names_exactly`] must confirm a match.
+pub fn spec_name(spec: [f64; 4]) -> String {
+    fn num(v: f64) -> String {
+        let t = format!("{v:.1}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+    fn range(a: f64, b: f64) -> String {
+        if (a - b).abs() < 0.05 { num(a) } else { format!("{}-{}", num(a), num(b)) }
+    }
+    format!("{}mm f/{}", range(spec[0], spec[1]), range(spec[2], spec[3]))
+}
+
 impl Profile {
+    /// Whether one of the profile's names is exactly `name` (same words and numbers, ignoring case and
+    /// punctuation): the check for names that carry no maker, such as [`spec_name`]s, where the best partial match
+    /// could be another maker's lens with the same focal range. The maker's words count too, so "Samyang 85mm f/1.4"
+    /// is not "85mm f/1.4"; only a name given for the purpose (a user's alias) matches.
+    pub fn names_exactly(&self, name: &str) -> bool {
+        let want = tokens(name);
+        !want.is_empty() && self.models.iter().any(|m| tokens(m) == want)
+    }
+
     /// Distortion ratio `r_d / r_u` at lensfun radius `r` for `focal` (1 when the profile has none).
     pub fn distortion_ratio(&self, focal: f64, r: f64) -> f64 {
         if !self.rectilinear {

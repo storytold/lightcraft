@@ -74,7 +74,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let r = Rect::from_min_size(pos2(title.right() + 14.0, head.center().y - 12.0), vec2(width, 24.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
         let b = crate::widgets::arrow_button(&mut child, RichText::new(label).font(t.font(13.0)), crate::icons::Icon::ChevronRight, false);
-        register(ui.ctx(), "people:last", b.rect);
+        register(ui, "people:last", b.rect);
         if b.on_hover_text(crate::i18n::tr("Back to this person")).clicked() {
             let _ = app.run("view.person", json!({"name": last}));
         }
@@ -153,12 +153,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// The badge on a person's picture: the full number of photos (the app has no digit-grouping helper, so counts elsewhere are plain too).
+fn badge_count(count: usize) -> String {
+    count.to_string()
+}
+
+/// "6110 photos", for what assistive tools announce.
+fn photo_count_text(count: usize) -> String {
+    crate::i18n::tr_format!("{n} photo{}", if count == 1 { "" } else { "s" }, n = count)
+}
+
 fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, edge: f32, ppp: f32, selected: bool) {
     let t = Tokens::get(ui.ctx());
     let face = Rect::from_min_size(r.min, vec2(edge, edge));
-    let resp = ui.interact(r, egui::Id::new(("person-card", &person.name)), Sense::click());
-    crate::widgets::announce(&resp, person.name.clone());
-    register(ui.ctx(), format!("person:{}", person.name), r);
+    let resp = ui.interact(r, egui::Id::unique(("person-card", &person.name)), Sense::click());
+    crate::widgets::announce(&resp, format!("{}, {}", person.name, photo_count_text(person.count)));
+    register(ui, format!("person:{}", person.name), r);
     let view = app.session.face_view(person.photo, person.face);
     let p = ui.painter();
     p.rect_filled(face, 3.0, t.canvas);
@@ -168,26 +178,26 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
         p.image(tex.tex.id(), face, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     // how many photos they are in, on the picture
-    let count = if person.count > 999 { "999+".to_string() } else { person.count.to_string() };
-    let g = p.layout_no_wrap(count, t.font(11.5), Color32::WHITE);
-    let pill = Rect::from_min_size(pos2(face.right() - g.size().x - 14.0, face.bottom() - g.size().y - 11.0), g.size() + vec2(10.0, 6.0));
+    let g = p.layout_no_wrap(badge_count(person.count), t.font(11.5), Color32::WHITE);
+    let pill = Rect::from_min_size(
+        pos2((face.right() - g.size().x - 14.0).max(face.left() + 2.0), face.bottom() - g.size().y - 11.0),
+        g.size() + vec2(10.0, 6.0),
+    );
     p.rect_filled(pill, 4.0, Color32::from_black_alpha(175));
     p.galley(pill.min + vec2(5.0, 3.0), g, Color32::WHITE);
     if selected {
-        p.rect_stroke(face, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        super::grid::selection_ring(p, &t, face, lightcraft_engine::SelectionState::Active);
     } else if resp.hovered() {
         p.rect_stroke(face, 3.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
     }
     // a long name must not run past the card
     let name = fit(p, &person.name, t.semibold(13.0), edge);
     p.text(pos2(r.left() + 2.0, face.bottom() + 14.0), Align2::LEFT_CENTER, name, t.semibold(13.0), t.text);
-    let photos = crate::i18n::tr_format!("{n} photo{}", if person.count == 1 { "" } else { "s" }, n = person.count);
-    p.text(pos2(r.left() + 2.0, face.bottom() + 32.0), Align2::LEFT_CENTER, photos, t.font(12.0), t.text_dim);
     let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
     let full = person.name.clone();
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         let r = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui.ctx(), "personMenu:rename", r.rect);
+        register(ui, "personMenu:rename", r.rect);
         if r.clicked() {
             open_rename(app, &full);
         }
@@ -205,6 +215,13 @@ pub(crate) fn open_rename(app: &mut LightcraftApp, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_badge_shows_the_full_count_not_a_capped_one() {
+        assert_eq!((badge_count(6110), badge_count(1), badge_count(999_999)), ("6110".to_string(), "1".to_string(), "999999".to_string()));
+        assert_eq!(photo_count_text(6110), "6110 photos");
+        assert_eq!(photo_count_text(1), "1 photo");
+    }
 
     #[test]
     fn faces_follow_the_thumbnail_slider_within_their_own_limits() {

@@ -29,7 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Olympus ORF bodies that write uncompressed / packed data (crates/raw/src/vendor/orf.rs). Everything else
 # writes compressed ORF, which is preview-only (the E-M5 II / PEN-F high-res mode alone is decoded).
-ORF_DECODED = re.compile(r"^(E-1|E-10|E-20|EVOLT E-300|EVOLT E-330|EVOLT E-400|EVOLT E-500|E-300|E-330|E-500|Camedia C-\S+.*|Stylus XZ-2 iHS)$")
+ORF_DECODED = re.compile(r"^(E-1|E-10|E-20|EVOLT E-300|EVOLT E-330|EVOLT E-400|EVOLT E-500|E-300|E-330|E-500|Camedia C-\S.*|Stylus XZ-2 iHS)$")
 # Samsung SRW bodies with compressed raw data (crates/raw/src/vendor/srw.rs refuses 32770 / 32772 / 32773).
 SRW_COMPRESSED = re.compile(r"(^|\W)(NX1|NX30|NX300|NX300M|NX500|NX2000|NX3000|NX3300|NX mini|EK-GN\d+|EK-KN\d+)(\W|$)")
 # Fujifilm bodies before the X series whose RAF has no raw IFD (crates/raw/src/vendor/raf.rs).
@@ -66,6 +66,8 @@ def classify(maker, camera, ext_field):
             return "unverified", "ARW", "ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)"
         if e == "SR2":
             return "unverified", "SR2", "SR2 decoder"
+        if e == "SRF":
+            return "unsupported", "SRF", "SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file"
         if e == "RAF":
             if RAF_OLD.search(camera):
                 return "preview", "RAF", "pre-X FinePix RAF without a raw IFD"
@@ -87,7 +89,9 @@ def classify(maker, camera, ext_field):
         return "unverified", "MEF", "MEF decoder (uncompressed 12-bit)"
     if e == "ERF":
         return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks)"
-    if e in ("CRW", "3FR", "FFF", "IIQ", "MOS", "KDC", "MRW", "X3F", "RAW", "ORI"):
+    if e == "MRW":
+        return "unverified", "MRW", "MRW decoder (12-bit packed, 16-bit words)"
+    if e in ("CRW", "3FR", "FFF", "IIQ", "MOS", "KDC", "X3F", "RAW", "ORI"):
         return "preview", e, f"{e} is opened from its embedded JPEG only"
     return "unsupported", e, f"{e or 'unknown'} is not imported"
 
@@ -119,7 +123,7 @@ def main():
     classes = ["verified", "unverified", "preview", "unsupported"]
     by_maker = {}
     for r in rows:
-        by_maker.setdefault(r["maker"], {c: 0 for c in classes})[r["class"]] += 1
+        by_maker.setdefault(r["maker"], dict.fromkeys(classes, 0))[r["class"]] += 1
     print("| Maker | Adobe models | verified | unverified | preview | unsupported |")
     print("|---|---:|---:|---:|---:|---:|")
     for m, c in sorted(by_maker.items(), key=lambda kv: -sum(kv[1].values())):

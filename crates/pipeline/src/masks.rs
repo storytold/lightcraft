@@ -25,6 +25,33 @@ pub enum MatteKind {
     Glasses,
 }
 
+impl MatteKind {
+    /// A stable code for serialization (e.g. a smart preview's stored mattes); never renumber.
+    pub fn code(self) -> u8 {
+        match self {
+            MatteKind::Sky => 0,
+            MatteKind::Person => 1,
+            MatteKind::Skin => 2,
+            MatteKind::Hair => 3,
+            MatteKind::Teeth => 4,
+            MatteKind::Glasses => 5,
+        }
+    }
+
+    /// [`MatteKind::code`]'s inverse (`None` for a code this build doesn't know).
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(MatteKind::Sky),
+            1 => Some(MatteKind::Person),
+            2 => Some(MatteKind::Skin),
+            3 => Some(MatteKind::Hair),
+            4 => Some(MatteKind::Teeth),
+            5 => Some(MatteKind::Glasses),
+            _ => None,
+        }
+    }
+}
+
 /// Segmentation mattes that came with the source: 0..255 alpha planes, each covering the whole
 /// (EXIF-oriented) source image at its own resolution. Several mattes of one kind (e.g. one per
 /// person) are combined with max.
@@ -54,6 +81,12 @@ impl Mattes {
     /// Memory held (bytes).
     pub fn bytes(&self) -> usize {
         self.mattes.iter().map(|(_, m)| m.data.len()).sum()
+    }
+
+    /// The stored mattes, in insertion order (kind and plane), e.g. for storing them with a
+    /// photo's proxy source.
+    pub fn iter(&self) -> impl Iterator<Item = (MatteKind, &Image<u8>)> {
+        self.mattes.iter().map(|(k, m)| (*k, m))
     }
 
     fn of(&self, kinds: &[MatteKind]) -> Vec<&Image<u8>> {
@@ -218,7 +251,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         }
         MaskShape::ColorRange { samples, refine } => {
             let tol = color_range_tolerance(*refine);
-            let samples: Vec<[f32; 3]> = samples.iter().map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
+            // (a settings value built in code can skip the deserializer's cap: cost is pixels x samples)
+            let samples: Vec<[f32; 3]> =
+                samples.iter().take(lightcraft_develop::MAX_COLOR_RANGE_SAMPLES).map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
             for (v, c) in out.data.iter_mut().zip(&img.data) {
                 let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
                 let d = samples
@@ -248,7 +283,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             // 2 % of the long edge, so previews and exports match)
             let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
             let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
-            sample_seg(seg.as_ref(), detail, gain, frame, w, h, &mut out);
+            sample_seg(seg.as_ref(), detail, gain, frame, w, h, log_l, &mut out);
             if e > 0.0 {
                 smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
             }
@@ -310,13 +345,40 @@ impl SegGrid {
         let bot = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
         top * (1.0 - ty) + bot * ty
     }
+
+    /// Output pixels per grid cell (the longer side of a cell: the grid is square over a
+    /// rectangle).
+    fn cell_px(&self, frame: &Frame, w: usize) -> f64 {
+        let px = frame.px_per_long(w) / frame.ow.max(frame.oh).max(1e-9);
+        ((self.r[2] - self.r[0]) * frame.ow).max((self.r[3] - self.r[1]) * frame.oh) * px / self.side.max(1) as f64
+    }
 }
+
+/// [`sample_seg`]'s window, in grid cells (Gaussian sigma): the width of the band bilinear
+/// enlargement leaves uncertain, about a cell on either side of the contour.
+const SEG_WINDOW: f64 = 1.5;
+/// [`sample_seg`]'s guided-filter regularization (EV² of log luminance): an edge of ~0.1 EV
+/// contrast counts half.
+const SEG_EPS: f32 = 0.01;
 
 /// Stored model segmentations at each output pixel: the zoomed-in `detail` passes inside
 /// their rectangles (the highest of them where they overlap), the whole-photo `seg`
 /// elsewhere; the logit (times `gain`: > 1 is a harder edge) through a sigmoid. Damaged
 /// data selects nothing.
-fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, out: &mut Plane) {
+///
+/// Issue #3272: a model's grid is much coarser than an export (a 288² grid has ~20 px cells on
+/// 24 MP), and its bilinear contour passes up to a cell from the photo's edge, so the mask spilled
+/// onto the background (a bright outline under a raised Exposure). Where the grid is coarser than
+/// the output, the logits are guided-filtered by the photo's log luminance ([`guided_cross_fast`]; a
+/// window of [`SEG_WINDOW`] cells, so previews and exports draw the same edge): near the contour
+/// the logit follows the photo's tones and its edge lands on the photo's. Filtering logits, not
+/// coverage, makes the confident side win (a strip at 0.3 between 1 and 0 goes to 0, not 0.1),
+/// and leaves a linear ramp of logits, where the photo has no edge, as it was. Pixels whose
+/// window is all inside or all outside (|mean logit| ≥ 7, times `gain`) keep their sample exactly,
+/// as do those where the photo has no edge to follow. Refine Edges
+/// then works on the combined mask ([`evaluate_one`]) and finds these edges already in place.
+#[allow(clippy::too_many_arguments)]
+fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, log_l: &Plane, out: &mut Plane) {
     let coarse = seg.and_then(SegGrid::new);
     // (capped: a hostile document can hold many)
     let patches: Vec<SegGrid> = detail.iter().take(lightcraft_develop::segmask::MAX_DETAIL).filter_map(SegGrid::new).collect();
@@ -328,10 +390,15 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
         for (x, v) in row.iter_mut().enumerate() {
             let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
             let fine = patches.iter().filter(|p| p.contains(n)).map(|p| p.logit(n)).reduce(f32::max);
-            let l = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0);
-            *v = 1.0 / (1.0 + (-l * gain).exp());
+            *v = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0) * gain;
         }
     });
+    // (the coarsest grid sets the window: it leaves the widest uncertain band)
+    let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
+    if cell >= 1.0 {
+        guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
+    }
+    out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
 }
 
 fn frame_px(frame: &Frame, w: usize) -> f32 {
@@ -484,8 +551,26 @@ pub fn push_pressures(pressure: &mut Vec<f32>, added: usize, from: f32, to: f32)
 /// pointer is held still (the same screen position mapped again, up to float rounding).
 const STATIONARY_PX: f64 = 1e-6;
 
+/// Most dabs one stroke holds (32 MiB of centres). A segment is capped on its own, but a stroke of
+/// many hostile segments (an agent, a crafted XMP or catalog) would otherwise add up without
+/// bound; past this the rest of the stroke lays nothing (#1520).
+pub const MAX_STROKE_DABS: usize = 2_000_000;
+
 /// The dabs of stroke `s` in a `w × h` output.
 pub fn brush_dabs(s: &BrushStroke, frame: &Frame, w: usize, h: usize) -> BrushDabs {
+    brush_dabs_within(s, frame, w, h, MAX_STROKE_DABS)
+}
+
+/// [`brush_dabs`] stopping at `max` dabs instead of [`MAX_STROKE_DABS`].
+///
+/// For a caller that discards a stroke past a threshold of its own: it builds to that threshold
+/// rather than to the stroke budget and throws the difference away. The GPU path rejects a brush
+/// mask past 4096 dabs in total and the Auto Mask spot window past 200,000, both far below the
+/// two million a single stroke may otherwise construct first (#1520).
+///
+/// Ask for one more than the threshold to tell "at it" from "past it": a result shorter than
+/// `max` is the whole stroke.
+pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max: usize) -> BrushDabs {
     let to_out = frame.norm_to_out(w, h);
     let ppl = frame.px_per_long(w);
     let r = (s.size * ppl).max(0.5);
@@ -498,10 +583,14 @@ pub fn brush_dabs(s: &BrushStroke, frame: &Frame, w: usize, h: usize) -> BrushDa
     let with_pressure = !s.pressure.is_empty();
     let mut prev = None;
     let mut prev_p = 1.0;
+    let mut emitted = 0usize;
     for (i, p) in s.points.iter().enumerate() {
+        if emitted >= max {
+            break;
+        }
         let q = to_out.apply(*p);
         let before = dabs.len();
-        if push_dabs(&mut dabs, prev, q, r) {
+        if push_dabs_within(&mut dabs, &mut emitted, prev, q, r, max) {
             let pq = s.pressure_at(i);
             if with_pressure {
                 // the first dab of the stroke has nothing to interpolate from
@@ -537,11 +626,30 @@ pub fn dab_spacing(r: f64) -> f64 {
 /// their dabs with this, so they cover the same pixels (issue #517). A sample where the pointer
 /// hasn't moved (a stationary hold records one per frame) or that is not a finite point lays
 /// nothing, so holding the brush still adds no coverage (#518). Returns whether `q` was stamped;
-/// callers move `prev` on only then.
+/// callers move `prev` on only then. A stroke holding [`MAX_STROKE_DABS`] takes no more.
 pub fn push_dabs(dabs: &mut Vec<Point>, prev: Option<Point>, q: Point, r: f64) -> bool {
-    if !(q.x.is_finite() && q.y.is_finite()) {
+    let mut emitted = dabs.len();
+    push_dabs_counted(dabs, &mut emitted, prev, q, r)
+}
+
+/// Append one segment using a persistent count of all dabs emitted for this stroke, including
+/// dabs no longer held in `dabs`. Incremental callers retain `emitted` when clearing their buffer;
+/// it advances only by the number actually appended. Acceptance and spacing match [`push_dabs`].
+pub fn push_dabs_counted(dabs: &mut Vec<Point>, emitted: &mut usize, prev: Option<Point>, q: Point, r: f64) -> bool {
+    push_dabs_within(dabs, emitted, prev, q, r, MAX_STROKE_DABS)
+}
+
+/// [`push_dabs_counted`] against a caller's own budget rather than [`MAX_STROKE_DABS`].
+///
+/// A caller that will not look at more than `max` dabs should build no more than `max`: a length
+/// check after the vector exists bounds nothing, it only throws away what was already paid for
+/// (#1520).
+pub fn push_dabs_within(dabs: &mut Vec<Point>, emitted: &mut usize, prev: Option<Point>, q: Point, r: f64, max: usize) -> bool {
+    let room = max.min(MAX_STROKE_DABS).saturating_sub(*emitted);
+    if room == 0 || !(q.x.is_finite() && q.y.is_finite()) {
         return false;
     }
+    let before = dabs.len();
     if let Some(prev) = prev {
         let dist = prev.dist(q);
         if dist.is_nan() || dist <= STATIONARY_PX {
@@ -550,12 +658,15 @@ pub fn push_dabs(dabs: &mut Vec<Point>, prev: Option<Point>, q: Point, r: f64) -
         let n = (dist / dab_spacing(r)).ceil();
         // a hostile or degenerate segment (huge) gets no in-between dabs rather than a huge
         // allocation: 1 M dabs is far more than any on-screen stroke needs
-        let n = if n.is_finite() { n.clamp(0.0, 1_000_000.0) as usize } else { 0 };
+        let n = if n.is_finite() && n <= 1_000_000.0 { n.max(0.0) as usize } else { 0 };
+        // the in-between dabs and `q` together fit what is left of the stroke's budget
+        let n = n.min(room);
         for k in 1..n {
             dabs.push(prev.lerp(q, k as f64 / n as f64));
         }
     }
     dabs.push(q);
+    *emitted += dabs.len() - before;
     true
 }
 
@@ -614,9 +725,20 @@ pub fn auto_refine(r: f64) -> (f32, f32) {
     ((0.25 * r).max(1.0) as f32, 0.02)
 }
 
-/// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
-/// guide's.
-pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+/// A guided filter's linear model at each pixel (`q = a · guide + b`, coefficients averaged over
+/// the windows that hold the pixel), the window mean of the filtered plane and, when asked for,
+/// how much of an edge the guide has there (`var / (var + eps)`, averaged like the coefficients:
+/// 0 where the guide is flat and the model is only a blur).
+struct Guided {
+    a: Plane,
+    b: Plane,
+    mean: Plane,
+    edge: Option<Plane>,
+}
+
+/// The guided filter (He, Sun and Tang) of `p` steered by `guide`, both the same size: Gaussian
+/// windows of `sigma` px, `eps` the regularization (in guide units squared).
+fn guided_coeffs(guide: &Plane, p: &Plane, sigma: f32, eps: f32, with_edge: bool) -> Guided {
     use lightcraft_raster::blur::gaussian;
     let mi = gaussian(guide, sigma);
     let mp = gaussian(p, sigma);
@@ -624,18 +746,68 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     let cii = gaussian(&guide.map(|a| a * a), sigma);
     let mut a = Plane::new(p.width, p.height);
     let mut b = Plane::new(p.width, p.height);
+    let mut edge = Plane::new(if with_edge { p.width } else { 0 }, if with_edge { p.height } else { 0 });
     for i in 0..p.data.len() {
         let var = (cii.data[i] - mi.data[i] * mi.data[i]).max(0.0);
         let k = (cip.data[i] - mi.data[i] * mp.data[i]) / (var + eps);
         a.data[i] = k;
         b.data[i] = mp.data[i] - k * mi.data[i];
+        if let Some(e) = edge.data.get_mut(i) {
+            *e = var / (var + eps);
+        }
     }
-    let (ma, mb) = (gaussian(&a, sigma), gaussian(&b, sigma));
+    Guided { a: gaussian(&a, sigma), b: gaussian(&b, sigma), mean: mp, edge: with_edge.then(|| gaussian(&edge, sigma)) }
+}
+
+/// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
+/// guide's.
+pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    let g = guided_coeffs(guide, p, sigma, eps, false);
     let mut q = Plane::new(p.width, p.height);
     for i in 0..q.data.len() {
-        q.data[i] = (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0);
+        q.data[i] = (g.a.data[i] * guide.data[i] + g.b.data[i]).clamp(0.0, 1.0);
     }
     q
+}
+
+/// [`guided_cross`] in its subsampled form (He and Sun, "Fast Guided Filter", 2015, as
+/// [`crate::local::guided_fast`] is of the self-guided filter, at its step), in place and
+/// unclamped, for a `p` that is smooth at the window's scale (a mask enlarged from a model's grid):
+/// the linear model is fitted on both planes box-reduced to about 3 px of window, sampled
+/// bilinearly and applied to the full-resolution guide, which is where the edge comes from. A
+/// pixel moves to the filtered value by `weight` of its window mean of `p` times how much of an
+/// edge the guide has there (0 keeps it exactly: where the photo is flat the filter could only
+/// blur `p`). Extra memory: the reduced planes only (the coefficients are sampled per pixel, not
+/// enlarged into planes).
+fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight: impl Fn(f32) -> f32 + Sync + Send) {
+    use lightcraft_raster::resample::{Filter, resize};
+    let (w, h) = (p.width, p.height);
+    if guide.width != w || guide.height != h || w == 0 || h == 0 || !sigma.is_finite() {
+        return;
+    }
+    // (a window past the whole frame fits one model to it all)
+    let sigma = sigma.clamp(0.5, w.max(h) as f32);
+    let s = crate::local::guided_fast_step(sigma);
+    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
+    let g = guided_coeffs(&resize(guide, lw, lh, Filter::Box), &resize(p, lw, lh, Filter::Box), sigma / s as f32, eps, true);
+    let Some(edge) = &g.edge else {
+        return;
+    };
+    // (the reduced planes span the same frame: their pixel per full pixel)
+    let (kx, ky) = (lw as f32 / w as f32, lh as f32 / h as f32);
+    for_rows(&mut p.data, w, |y, row| {
+        let fy = (y as f32 + 0.5) * ky;
+        for (x, (v, i)) in row.iter_mut().zip(guide.row(y)).enumerate() {
+            let fx = (x as f32 + 0.5) * kx;
+            let k = weight(bilinear(&g.mean, fx, fy));
+            // (no edge in the photo: nothing to follow, keep the sample)
+            let k = if k > 0.0 { k * smooth(0.05, 1.0, bilinear(edge, fx, fy)) } else { 0.0 };
+            if k > 0.0 {
+                let q = bilinear(&g.a, fx, fy) * i + bilinear(&g.b, fx, fy);
+                *v += (q - *v) * k;
+            }
+        }
+    });
 }
 
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
@@ -687,419 +859,4 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use lightcraft_develop::{DevelopSettings, MaskComponent};
-
-    fn frame(w: usize, h: usize) -> Frame {
-        Frame::new(w, h, &DevelopSettings::default(), true)
-    }
-
-    #[test]
-    fn linear_gradient_ramps() {
-        let f = frame(100, 50);
-        let img = Rgb32f::new(100, 50);
-        let l = Plane::new(100, 50);
-        let a = shape_alpha(&MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) }, &f, 100, 50, &img, &l, 0.0, None);
-        assert!(a.get(1, 25) > 0.99 && a.get(98, 25) < 0.01);
-        assert!((a.get(50, 25) - 0.5).abs() < 0.05);
-    }
-
-    #[test]
-    fn stored_segmentations_render_at_any_size_and_follow_the_crop() {
-        // the left half selected, on a 16² logit grid
-        let side = 16;
-        let logits: Vec<f32> = (0..side * side).map(|i| if i % side < side / 2 { 12.0 } else { -12.0 }).collect();
-        let seg = SegMask::from_logits(side, &logits);
-        for shape in [
-            MaskShape::Object { hint: vec![Point::new(0.25, 0.5)], exclude: vec![], seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
-            MaskShape::Prompt { text: "left".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
-        ] {
-            for (w, h) in [(40, 20), (400, 200)] {
-                let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
-                assert!(a.get(1, h / 2) > 0.99 && a.get(w - 2, h / 2) < 0.01, "{w}×{h}");
-                if w >= 400 {
-                    let soft = (0..w).filter(|x| (0.05..0.95).contains(&a.get(*x, h / 2))).count();
-                    assert!((2..30).contains(&soft), "an anti-aliased edge, not a ramp: {soft} px");
-                }
-            }
-        }
-        // cropped to the right half: nothing left selected
-        let mut d = DevelopSettings::default();
-        d.crop.geometry.rect = lightcraft_geom::Rect::from_center(Point::new(0.75, 0.5), 0.5, 1.0);
-        let f = Frame::new(40, 20, &d, true);
-        let shape = MaskShape::Prompt { text: "left".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
-        let a = shape_alpha(&shape, &f, 20, 20, &Rgb32f::new(20, 20), &Plane::new(20, 20), 0.0, None);
-        assert!(a.data.iter().all(|v| *v < 0.05));
-    }
-
-    #[test]
-    fn detail_patches_replace_the_coarse_mask_inside_their_rectangle() {
-        // coarse: nothing; a patch over the right half selects its own left half (x 0.5..0.75)
-        let coarse = SegMask::from_logits(4, &[-12.0; 16]);
-        let side = 16;
-        let l: Vec<f32> = (0..side * side).map(|i| if i % side < side / 2 { 12.0 } else { -12.0 }).collect();
-        let patch = SegMask::from_logits_in(side, &l, [0.5, 0.0, 1.0, 1.0]);
-        let shape = MaskShape::Object { hint: vec![Point::new(0.6, 0.5)], exclude: vec![], seg: Some(coarse), detail: vec![patch], edge: 0.0 };
-        let (w, h) = (200, 100);
-        let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
-        assert!(a.get(20, 50) < 0.01, "outside the patch: the coarse mask");
-        assert!(a.get(120, 50) > 0.99, "inside the patch, its selected half");
-        assert!(a.get(190, 50) < 0.01, "inside the patch, its unselected half");
-    }
-
-    #[test]
-    fn a_hostile_number_of_detail_patches_is_capped() {
-        // built in memory (a deserialized document is capped already): only the first
-        // MAX_DETAIL are decoded and sampled, so this needs 4 × 4 MB, not 20 000 × 4 MB
-        let side = 1024;
-        let l: Vec<f32> = vec![12.0; side * side];
-        let patch = SegMask::from_logits_in(side, &l, [0.0, 0.0, 0.5, 1.0]);
-        let shape = MaskShape::Object { hint: vec![Point::new(0.2, 0.5)], exclude: vec![], seg: None, detail: vec![patch; 20_000], edge: 0.0 };
-        let (w, h) = (64, 32);
-        let t = std::time::Instant::now();
-        let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
-        assert!(a.get(5, 16) > 0.99 && a.get(60, 16) < 0.01);
-        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
-    }
-
-    #[test]
-    fn the_edge_setting_hardens_or_feathers_the_transition() {
-        let side = 16;
-        let l: Vec<f32> = (0..side * side).map(|i| ((i % side) as f32 - 7.5) * -0.6).collect(); // a gentle ramp
-        let seg = SegMask::from_logits(side, &l);
-        let (w, h) = (400, 40);
-        let soft_px = |edge: f64| {
-            let shape = MaskShape::Prompt { text: "x".into(), seg: Some(seg.clone()), detail: vec![], edge };
-            let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
-            assert!(a.get(2, h / 2) > 0.9 && a.get(w - 3, h / 2) < 0.1, "still the same selection at {edge}");
-            (0..w).filter(|x| (0.1..0.9).contains(&a.get(*x, h / 2))).count()
-        };
-        let (hard, plain, soft) = (soft_px(-100.0), soft_px(0.0), soft_px(100.0));
-        assert!(hard < plain && plain < soft, "transition widths {hard} < {plain} < {soft}");
-    }
-
-    #[test]
-    fn ai_shapes_without_a_segmentation_select_nothing() {
-        let f = frame(30, 30);
-        let (img, l) = (Rgb32f::new(30, 30), Plane::new(30, 30));
-        for shape in [
-            MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
-            MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
-            MaskShape::Prompt { text: "sky".into(), seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None }), detail: vec![], edge: 0.0 },
-        ] {
-            assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
-        }
-    }
-
-    #[test]
-    fn radial_inside_and_invert() {
-        let f = frame(100, 100);
-        let img = Rgb32f::new(100, 100);
-        let l = Plane::new(100, 100);
-        let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 20.0, invert: false };
-        let a = shape_alpha(&shape, &f, 100, 100, &img, &l, 0.0, None);
-        assert!(a.get(50, 50) > 0.99 && a.get(5, 5) < 0.01);
-        let m = Mask { components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: true, shape }], ..Default::default() };
-        let e = evaluate(&[m], &f, 100, 100, &img, &l, 0.0, None);
-        assert!(e[0].alpha.get(50, 50) < 0.01);
-    }
-
-    /// Issue #517: dabs along a long segment (a fast stroke: two pointer samples far apart) are at
-    /// most [`dab_spacing`] apart, painting dab by dab (the live stroke) or the whole path at once
-    /// (the committed one).
-    #[test]
-    fn a_long_segment_gets_dabs_at_most_the_spacing_apart() {
-        let r = 12.0;
-        let pts = [Point::new(10.0, 20.0), Point::new(610.0, 260.0), Point::new(611.0, 260.0), Point::new(40.0, 400.0)];
-        let mut live = Vec::new();
-        let mut prev = None;
-        for q in pts {
-            if push_dabs(&mut live, prev, q, r) {
-                prev = Some(q);
-            }
-        }
-        assert!(live.len() > 3 * 600 / 12, "{} dabs", live.len());
-        assert!(live.windows(2).all(|w| w[0].dist(w[1]) <= dab_spacing(r) + 1e-9));
-        assert_eq!(live.first(), pts.first());
-        assert_eq!(live.last(), pts.last());
-        // the committed stroke places the same dabs (in output pixels; this frame maps 1:1 scaled)
-        let (w, h) = (1000, 500);
-        let f = frame(w, h);
-        let stroke = BrushStroke { points: pts.map(|p| Point::new(p.x / w as f64, p.y / h as f64)).to_vec(), ..Default::default() };
-        let committed = brush_dabs(&stroke, &f, w, h);
-        let mut again = Vec::new();
-        let mut prev = None;
-        for p in &stroke.points {
-            let q = f.norm_to_out(w, h).apply(*p);
-            if push_dabs(&mut again, prev, q, committed.r) {
-                prev = Some(q);
-            }
-        }
-        assert_eq!(committed.dabs, again);
-        assert!(committed.dabs.windows(2).all(|w| w[0].dist(w[1]) <= dab_spacing(committed.r) + 1e-9));
-        // a hostile segment places no in-between dabs
-        let mut v = Vec::new();
-        assert!(!push_dabs(&mut v, Some(Point::new(f64::NAN, 0.0)), Point::new(1.0, 1.0), r));
-        assert!(!push_dabs(&mut v, None, Point::new(f64::INFINITY, 1.0), r));
-        push_dabs(&mut v, Some(Point::new(0.0, 0.0)), Point::new(1e300, 1.0), 0.0);
-        assert!(v.len() <= 1_000_002, "{}", v.len());
-    }
-
-    /// Pen pressure scales each dab's radius and flow; a stroke without pressure data paints as before, and hostile
-    /// pressures (NaN, out of range, a short list) neither panic nor paint more than full pressure.
-    #[test]
-    fn pen_pressure_scales_dab_size_and_flow() {
-        let (w, h) = (400, 100);
-        let f = frame(w, h);
-        let img = Rgb32f::new(w, h);
-        let l = Plane::new(w, h);
-        let line = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
-        let alpha = |pressure: Vec<f32>| {
-            let s = BrushStroke { points: line.clone(), size: 0.05, feather: 0.0, flow: 100.0, pressure, ..Default::default() };
-            shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
-        };
-        let full = alpha(vec![]);
-        assert_eq!(full.data, alpha(vec![1.0, 1.0]).data, "full pressure is no pressure");
-        // light at the start, full at the end: thin and faint on the left, as wide as the brush on the right
-        let ramp = alpha(vec![0.1, 1.0]);
-        let width = |a: &Plane, x: usize| (0..h).filter(|y| a.get(x, *y) > 0.01).count();
-        assert!(width(&ramp, 60) < width(&full, 60) / 2, "{} vs {}", width(&ramp, 60), width(&full, 60));
-        assert!(width(&ramp, 350) + 2 >= width(&full, 350));
-        assert!(ramp.get(60, 50) < full.get(60, 50) + 1e-6);
-        let faint = alpha(vec![0.2]);
-        assert!(faint.data.iter().zip(&full.data).all(|(a, b)| *a <= *b + 1e-6), "never more than full pressure");
-        assert!(faint.get(200, 50) > 0.0 && faint.get(200, 50) < full.get(200, 50));
-        for hostile in [vec![f32::NAN, f32::INFINITY], vec![-3.0], vec![0.5; 10_000]] {
-            let a = alpha(hostile);
-            assert!(a.data.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
-        }
-        assert_eq!(pressure_radius(10.0, f32::NAN), 10.0);
-        assert_eq!(pressure_radius(10.0, 0.0), 1.0);
-        assert_eq!(pressure_flow(0.8, 2.0), 0.8);
-    }
-
-    #[test]
-    fn brush_and_subtract() {
-        let f = frame(200, 100);
-        let img = Rgb32f::new(200, 100);
-        let l = Plane::new(200, 100);
-        let stroke = BrushStroke { points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)], size: 0.05, ..Default::default() };
-        let erase = BrushStroke { points: vec![Point::new(0.5, 0.5)], size: 0.05, erase: true, feather: 0.0, ..Default::default() };
-        let m = Mask {
-            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke, erase] } }],
-            ..Default::default()
-        };
-        let e = evaluate(&[m], &f, 200, 100, &img, &l, 0.0, None);
-        let a = &e[0].alpha;
-        assert!(a.get(40, 50) > 0.9, "{}", a.get(40, 50));
-        assert!(a.get(100, 50) < 0.05, "erased centre {}", a.get(100, 50));
-        assert!(a.get(40, 5) < 0.01);
-    }
-
-    /// #518: holding the brush still adds no coverage. A press plus any number of stationary
-    /// pointer samples paints exactly the single dab of the press, whatever the frame rate.
-    #[test]
-    fn holding_the_brush_still_adds_no_coverage() {
-        let (w, h) = (200, 100);
-        let f = frame(w, h);
-        let img = Rgb32f::new(w, h);
-        let l = Plane::new(w, h);
-        let p = Point::new(0.5, 0.5);
-        let spot = |samples: usize, flow: f64| {
-            let s = BrushStroke { points: vec![p; samples], size: 0.1, feather: 80.0, flow, ..Default::default() };
-            shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
-        };
-        for flow in [100.0, 40.0] {
-            let press = spot(1, flow);
-            // the feathered edge is soft to begin with
-            let edge = press.get(100 + 14, 50);
-            assert!(edge > 0.05 && edge < 0.6, "flow {flow}: edge {edge}");
-            for n in [2, 5, 60, 600] {
-                let held = spot(n, flow);
-                assert!(held.data == press.data, "flow {flow}: {n} stationary samples hardened the edge {edge} → {}", held.get(100 + 14, 50));
-            }
-        }
-        let s = BrushStroke { points: vec![p; 60], size: 0.1, ..Default::default() };
-        assert_eq!(brush_dabs(&s, &f, w, h).dabs.len(), 1, "one dab for the press");
-        // a stroke that pauses partway lays the same dabs as one that doesn't
-        let (a, b) = (Point::new(0.2, 0.5), Point::new(0.8, 0.5));
-        let paused = BrushStroke { points: vec![a, p, p, p, p, b], flow: 30.0, ..Default::default() };
-        let smooth = BrushStroke { points: vec![a, p, b], flow: 30.0, ..Default::default() };
-        assert_eq!(brush_dabs(&paused, &f, w, h).dabs, brush_dabs(&smooth, &f, w, h).dabs);
-    }
-
-    /// Flow builds up by passes: going back over an area in the same stroke adds coverage.
-    #[test]
-    fn a_second_pass_builds_up_with_low_flow() {
-        let (w, h) = (200, 100);
-        let f = frame(w, h);
-        let img = Rgb32f::new(w, h);
-        let l = Plane::new(w, h);
-        let (a, b) = (Point::new(0.2, 0.5), Point::new(0.8, 0.5));
-        let paint = |points: Vec<Point>| {
-            let s = BrushStroke { points, size: 0.05, feather: 50.0, flow: 20.0, ..Default::default() };
-            shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
-        };
-        let once = paint(vec![a, b]);
-        let twice = paint(vec![a, b, a]);
-        let thrice = paint(vec![a, b, a, b]);
-        let (o, t, th) = (once.get(100, 50), twice.get(100, 50), thrice.get(100, 50));
-        assert!(o > 0.05 && o < 0.99, "one pass {o}");
-        assert!(t > o + 0.02 && th > t + 0.01, "passes build up: {o} → {t} → {th}");
-    }
-
-    #[test]
-    fn auto_mask_stops_at_edges() {
-        // dark left half, bright right half; a stroke along the boundary, centred on the dark side
-        let (w, h) = (200, 100);
-        let f = frame(w, h);
-        let img = Rgb32f::from_fn(w, h, |x, _| if x < 100 { [0.03; 3] } else { [0.6, 0.5, 0.4] });
-        let l = img.map(crate::local::log_lum);
-        let stroke = |auto_mask| BrushStroke {
-            points: vec![Point::new(0.47, 0.2), Point::new(0.47, 0.8)],
-            size: 0.08,
-            feather: 0.0,
-            auto_mask,
-            ..Default::default()
-        };
-        let comp = |auto| MaskShape::Brush { strokes: vec![stroke(auto)] };
-        let plain = shape_alpha(&comp(false), &f, w, h, &img, &l, 0.0, None);
-        let auto = shape_alpha(&comp(true), &f, w, h, &img, &l, 0.0, None);
-        // without Auto Mask the brush spills over the edge; with it, it stays on the dark side
-        assert!(plain.get(105, 50) > 0.9, "{}", plain.get(105, 50));
-        assert!(auto.get(105, 50) < 0.05, "spill {}", auto.get(105, 50));
-        assert!(auto.get(110, 50) < 0.02);
-        assert!(auto.get(90, 50) > 0.9, "painted side {}", auto.get(90, 50));
-        assert!(auto.get(99, 50) > 0.8, "up to the edge {}", auto.get(99, 50));
-        // on a flat area Auto Mask paints like the plain brush
-        let flat = Rgb32f::from_fn(w, h, |_, _| [0.2; 3]);
-        let fl = flat.map(crate::local::log_lum);
-        let a = shape_alpha(&comp(true), &f, w, h, &flat, &fl, 0.0, None);
-        let b = shape_alpha(&comp(false), &f, w, h, &flat, &fl, 0.0, None);
-        assert!((a.get(94, 50) - b.get(94, 50)).abs() < 0.02, "{} vs {}", a.get(94, 50), b.get(94, 50));
-    }
-
-    /// Refine Edges: a soft mask over a hard edge in the photo snaps to that edge.
-    #[test]
-    fn refine_edges_follows_the_photo() {
-        let (w, h) = (120usize, 80usize);
-        // left half dark, right half bright
-        let img = Rgb32f::from_fn(w, h, |x, _| if x < 60 { [0.05; 3] } else { [0.6; 3] });
-        let log_l = Plane::from_fn(w, h, |x, _| if x < 60 { (0.05f32).log2() } else { (0.6f32).log2() });
-        let f = Frame::new(w, h, &Default::default(), true);
-        let soft = Mask {
-            components: vec![MaskComponent {
-                name: None,
-                op: MaskOp::Add,
-                invert: false,
-                shape: MaskShape::Linear { start: Point::new(0.75, 0.5), end: Point::new(0.25, 0.5) },
-            }],
-            ..Default::default()
-        };
-        let refined = Mask { refine: 100.0, ..soft.clone() };
-        let step = |m: &Mask| {
-            let a = evaluate_one(m, &f, w, h, &img, &log_l, 0.0, None);
-            a.data[40 * w + 63] - a.data[40 * w + 56]
-        };
-        let (plain, sharp) = (step(&soft), step(&refined));
-        assert!(sharp > plain * 1.5 && sharp > 0.1, "the edge in the mask follows the photo's: {plain} → {sharp}");
-    }
-
-    /// Issue #157: a colour-range sample of one flat patch must not select a clearly different
-    /// patch. The two patches are the ones from the report (sRGB 120,150,155 and 200,198,195),
-    /// sampled the way `mask.sampleColor` does (3×3 mean of the selection-space OkLab).
-    #[test]
-    fn color_range_keeps_to_the_sampled_colour() {
-        use lightcraft_color::{REC2020, SRGB, transfer::decode_srgb8};
-        let (w, h) = (120usize, 40usize);
-        let m = SRGB.to_space(&REC2020);
-        let patch = |rgb: [u8; 3]| m.apply_f32(rgb.map(decode_srgb8));
-        let (left, right) = (patch([120, 150, 155]), patch([200, 198, 195]));
-        let img = Rgb32f::from_fn(w, h, |x, _| if x < 60 { left } else { right });
-        let log_l = img.map(crate::local::log_lum);
-        let f = Frame::new(w, h, &Default::default(), true);
-        let mut sample = [0f64; 3];
-        for y in 19..=21 {
-            for x in 29..=31 {
-                let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(img.data[y * w + x]));
-                for k in 0..3 {
-                    sample[k] += lab[k] as f64 / 9.0;
-                }
-            }
-        }
-        let alpha = |refine| {
-            let shape = MaskShape::ColorRange { samples: vec![sample], refine };
-            let a = shape_alpha(&shape, &f, w, h, &img, &log_l, 0.0, None);
-            (a.get(30, 20), a.get(90, 20))
-        };
-        for refine in [0.0, 50.0, 85.0] {
-            let (l, r) = alpha(refine);
-            assert!(l > 0.95, "refine {refine}: sampled patch {l}");
-            assert!(r < 0.05, "refine {refine}: other patch {r}");
-        }
-        // Refine 100 reaches furthest (the grey is ~0.063 away, the fade ends at 0.075), but the
-        // other patch stays mostly out
-        let (l, r) = alpha(100.0);
-        assert!(l > 0.95 && r < 0.3, "refine 100: {l} vs {r}");
-    }
-
-    /// A half-resolution matte selecting the left `frac` of a `w × h` source.
-    fn left_matte(w: usize, h: usize, frac: f64) -> Image<u8> {
-        Image::from_fn(w / 2, h / 2, |x, _| if (x as f64 + 0.5) < frac * (w / 2) as f64 { 255 } else { 0 })
-    }
-
-    /// The Sky mask follows the source's sky matte where it has one (here: the bottom-left of a
-    /// uniformly bright blue photo, where the heuristic sees no sky, and not its top right, where
-    /// it does), through user orientation, at any output size; without one it keeps the heuristic.
-    #[test]
-    fn sky_uses_the_sources_matte() {
-        let (w, h) = (200, 100);
-        let img = Rgb32f::filled(w, h, [0.5, 0.7, 1.4]);
-        let l = img.map(crate::local::log_lum);
-        let mut mattes = Mattes::default();
-        mattes.push(MatteKind::Sky, left_matte(w, h, 0.5));
-        let f = frame(w, h);
-        let heuristic = shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, None);
-        let matte = shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, Some(&mattes));
-        assert!(heuristic.get(150, 5) > 0.9 && heuristic.get(25, 90) < 0.1, "{} {}", heuristic.get(150, 5), heuristic.get(25, 90));
-        assert!(matte.get(150, 5) < 0.01 && matte.get(25, 90) > 0.99, "{} {}", matte.get(150, 5), matte.get(25, 90));
-        // mattes of other kinds leave the heuristic alone
-        let mut hair = Mattes::default();
-        hair.push(MatteKind::Hair, left_matte(w, h, 0.5));
-        assert_eq!(shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, Some(&hair)), heuristic);
-        // rotated 90° clockwise, the source's left half is the top half; a preview and a larger
-        // render agree
-        let s = lightcraft_develop::DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
-        let f = Frame::new(w, h, &s, true);
-        for (ow, oh) in [(100, 200), (25, 50)] {
-            let small = Rgb32f::filled(ow, oh, [0.5, 0.7, 1.4]);
-            let a = shape_alpha(&MaskShape::Sky, &f, ow, oh, &small, &small.map(crate::local::log_lum), 0.0, Some(&mattes));
-            let at = |x: f64, y: f64| a.get((x * ow as f64) as usize, (y * oh as f64) as usize);
-            assert!(at(0.5, 0.2) > 0.99 && at(0.5, 0.8) < 0.01, "{ow}×{oh}: {} {}", at(0.5, 0.2), at(0.5, 0.8));
-        }
-    }
-
-    /// Subject, Background and People use person mattes: the whole person is the union of the
-    /// parts; a People part without a matte keeps the heuristic.
-    #[test]
-    fn people_and_subject_use_person_mattes() {
-        let (w, h) = (200, 100);
-        let img = Rgb32f::filled(w, h, [0.2; 3]);
-        let l = img.map(crate::local::log_lum);
-        let mut mattes = Mattes::default();
-        mattes.push(MatteKind::Skin, left_matte(w, h, 0.25));
-        let right: Image<u8> = Image::from_fn(w / 2, h / 2, |x, _| if x >= 75 { 255 } else { 0 });
-        mattes.push(MatteKind::Hair, right);
-        let f = frame(w, h);
-        let eval = |shape: &MaskShape| shape_alpha(shape, &f, w, h, &img, &l, 0.0, Some(&mattes));
-        let subject = eval(&MaskShape::Subject);
-        assert!(subject.get(10, 50) > 0.99 && subject.get(190, 50) > 0.99 && subject.get(100, 50) < 0.01);
-        let background = eval(&MaskShape::Background);
-        assert!(background.get(100, 50) > 0.99 && background.get(10, 50) < 0.01);
-        let hair = eval(&MaskShape::People { person: 0, parts: vec!["Hair".into()] });
-        assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
-        let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
-        assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
-    }
-}
+mod tests;

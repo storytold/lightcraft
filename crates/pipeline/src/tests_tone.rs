@@ -188,6 +188,27 @@ fn median_matches_a_plain_per_pixel_median() {
 }
 
 #[test]
+fn median_orders_special_values_and_ties_like_total_cmp() {
+    // the running window keeps keys in `f32::total_cmp` order: NaNs of either sign, signed zeros,
+    // infinities and long runs of equal values come out bit for bit as a sorted per-pixel window
+    // does, also on planes narrower or shorter than the window
+    let special = [f32::NAN, -f32::NAN, 0.0, -0.0, f32::INFINITY, f32::NEG_INFINITY, f32::MIN_POSITIVE, -1.0, 1.0, 1.0, 1.0];
+    let bits = |p: &Plane| p.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    for (w, h) in [(1, 1), (2, 3), (5, 1), (19, 7), (61, 9)] {
+        let p = Plane::from_fn(w, h, |x, y| special[(x * 7 + y * 3 + (x * y) % 5) % special.len()]);
+        for r in [1, 2, 9, 24] {
+            let med = |v: &mut Vec<f32>| {
+                v.sort_by(f32::total_cmp);
+                v[r]
+            };
+            let rows = Plane::from_fn(w, h, |x, y| med(&mut (0..=2 * r).map(|k| p.get((x + k).saturating_sub(r).min(w - 1), y)).collect()));
+            let want = Plane::from_fn(w, h, |x, y| med(&mut (0..=2 * r).map(|k| rows.get(x, (y + k).saturating_sub(r).min(h - 1))).collect()));
+            assert_eq!(bits(&local::median_hv(&p, r)), bits(&want), "{w}x{h} r {r}");
+        }
+    }
+}
+
+#[test]
 fn v1_keeps_the_base_it_always_had() {
     // V1's base is the edge-aware filter of log luminance itself, as before process V2: no median
     // radius, and `tone_base` at 0 is that filter bit for bit

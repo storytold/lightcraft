@@ -28,21 +28,10 @@ impl DateTime {
         // A timestamp must represent a real Gregorian calendar day, not just
         // numbers in the range 1..=31. Invalid dates would otherwise be
         // accepted from EXIF/XMP and silently normalized during time arithmetic.
-        let leap = self.year.is_multiple_of(4) && (!self.year.is_multiple_of(100) || self.year.is_multiple_of(400));
-        let max_day = match self.month {
-            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-            4 | 6 | 9 | 11 => 30,
-            2 if leap => 29,
-            2 => 28,
-            _ => 0,
-        };
-        let ok = self.day >= 1
-            && self.day <= max_day
-            && self.hour < 24
-            && self.minute < 60
-            && self.second < 61
-            && self.year > 0
-            && self.offset_minutes.is_none_or(|o| o.abs() <= 18 * 60);
+        // chrono rejects impossible days (leap years and all); the time is checked
+        // by hand so a leap second (`second == 60`) stays acceptable.
+        let day_ok = self.year > 0 && chrono::NaiveDate::from_ymd_opt(i32::from(self.year), u32::from(self.month), u32::from(self.day)).is_some();
+        let ok = day_ok && self.hour < 24 && self.minute < 60 && self.second < 61 && self.offset_minutes.is_none_or(|o| o.unsigned_abs() <= 18 * 60);
         ok.then_some(self)
     }
 
@@ -54,15 +43,27 @@ impl DateTime {
         if dp.len() != 3 {
             return None;
         }
-        let tp: Vec<&str> = if t.is_empty() { vec![] } else { t.split(':').collect() };
-        let g = |v: &Vec<&str>, i: usize| v.get(i).map(|x| num(x.trim())).unwrap_or(Some(0));
+        let (hour, minute, second) = if t.is_empty() {
+            (0, 0, 0)
+        } else {
+            let mut parts = t.split(':');
+            let hour = num(parts.next()?.trim())?;
+            let minute = parts.next().map(|part| num(part.trim())).unwrap_or(Some(0))?;
+            let second = parts.next().map(|part| num(part.trim())).unwrap_or(Some(0))?;
+            // A fourth value cannot be represented; accepting only the prefix could turn a
+            // malformed DateTimeOriginal into a plausible capture time and block fallbacks.
+            if parts.next().is_some() {
+                return None;
+            }
+            (hour, minute, second)
+        };
         DateTime {
             year: num(dp[0])?.try_into().ok()?,
             month: num(dp[1])?.try_into().ok()?,
             day: num(dp[2])?.try_into().ok()?,
-            hour: g(&tp, 0)?.try_into().ok()?,
-            minute: g(&tp, 1)?.try_into().ok()?,
-            second: g(&tp, 2)?.try_into().ok()?,
+            hour: hour.try_into().ok()?,
+            minute: minute.try_into().ok()?,
+            second: second.try_into().ok()?,
             millis: 0,
             offset_minutes: None,
         }
@@ -85,7 +86,7 @@ impl DateTime {
             None if rest.len() == 4 => (num(rest.get(..2)?)?, num(rest.get(2..)?)?),
             None => (num(rest)?, 0),
         };
-        if h > 18 || m > 59 {
+        if h > 18 || m > 59 || (h == 18 && m > 0) {
             return None;
         }
         Some(sign * (h * 60 + m) as i16)
@@ -104,7 +105,11 @@ impl DateTime {
     /// ISO 8601 (XMP date): `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, `YYYY-MM-DDThh:mm[:ss[.s+]][TZD]`.
     pub fn parse_iso(s: &str) -> Option<DateTime> {
         let s = s.trim();
-        let (d, t) = s.split_once('T').unwrap_or((s, ""));
+        let (d, t) = match s.split_once('T') {
+            Some((d, t)) if !t.is_empty() => (d, t),
+            Some(_) => return None,
+            None => (s, ""),
+        };
         let dp: Vec<&str> = d.split('-').collect();
         let year = num(dp.first()?)?.try_into().ok()?;
         let month = dp.get(1).map(|m| num(m)).unwrap_or(Some(1))?.try_into().ok()?;
@@ -118,13 +123,26 @@ impl DateTime {
                 Some(i) => (&t[..i], Some(&t[i..])),
                 None => (t, None),
             };
-            let cp: Vec<&str> = clock.split(':').collect();
-            dt.hour = num(cp.first()?)?.try_into().ok()?;
-            dt.minute = num(cp.get(1)?)?.try_into().ok()?;
-            if let Some(sec) = cp.get(2) {
-                let (whole, frac) = sec.split_once('.').unwrap_or((sec, ""));
+            let mut cp = clock.split(':');
+            dt.hour = num(cp.next()?)?.try_into().ok()?;
+            dt.minute = num(cp.next()?)?.try_into().ok()?;
+            if let Some(sec) = cp.next() {
+                let (whole, fraction) = match sec.split_once('.') {
+                    Some((whole, fraction)) => {
+                        if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+                            return None;
+                        }
+                        (whole, Some(fraction))
+                    }
+                    None => (sec, None),
+                };
                 dt.second = num(whole)?.try_into().ok()?;
-                dt = dt.with_subsec(frac);
+                if let Some(fraction) = fraction {
+                    dt = dt.with_subsec(fraction);
+                }
+            }
+            if cp.next().is_some() {
+                return None;
             }
             if let Some(o) = off {
                 dt.offset_minutes = Some(Self::parse_offset(o)?);
@@ -146,20 +164,20 @@ impl DateTime {
         }
         if let Some(o) = self.offset_minutes {
             let sign = if o < 0 { '-' } else { '+' };
-            s += &format!("{sign}{:02}:{:02}", o.abs() / 60, o.abs() % 60);
+            let o = o.unsigned_abs();
+            s += &format!("{sign}{:02}:{:02}", o / 60, o % 60);
         }
         s
     }
 
     /// Seconds since 1970-01-01T00:00:00 of the civil time (UTC when the offset is known, else "local" seconds).
     pub fn unix_seconds(&self) -> i64 {
-        // days from civil (proleptic Gregorian), Howard Hinnant's public-domain algorithm
-        let (y, m, d) = (self.year as i64 - if self.month <= 2 { 1 } else { 0 }, self.month as i64, self.day as i64);
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        let days = era * 146097 + doe - 719468;
+        // Every `DateTime` reaching here is a real calendar day (`valid()` ran in the parsers);
+        // an out-of-range one (built by hand) reads as the epoch rather than panicking.
+        let days = chrono::NaiveDate::from_ymd_opt(i32::from(self.year), u32::from(self.month), u32::from(self.day))
+            .zip(chrono::NaiveDate::from_ymd_opt(1970, 1, 1))
+            .map(|(d, epoch)| (d - epoch).num_days())
+            .unwrap_or(0);
         days * 86400 + self.hour as i64 * 3600 + self.minute as i64 * 60 + self.second as i64 - self.offset_minutes.unwrap_or(0) as i64 * 60
     }
 }
@@ -192,13 +210,49 @@ mod tests {
     }
 
     #[test]
+    fn exif_clock_rejects_extra_components() {
+        for value in
+            ["2026:01:01 12:34:56:99", "2026:01:01 12:34:56:junk", "2026:01:01 12:34:56:", "2026:01:01 12:34:56::", "2026:01:01 12:34:56:99:junk"]
+        {
+            assert!(DateTime::parse_exif(value).is_none(), "accepted malformed EXIF clock {value:?}");
+        }
+    }
+
+    #[test]
+    fn exif_clock_supported_forms_keep_their_meaning() {
+        for (value, expected) in [
+            ("2026:01:01", "2026-01-01T00:00:00"),
+            ("2026:01:01 12", "2026-01-01T12:00:00"),
+            ("2026:01:01 12:34", "2026-01-01T12:34:00"),
+            ("2026:01:01 12:34:56", "2026-01-01T12:34:56"),
+            ("2026-01-01T12:34:56", "2026-01-01T12:34:56"),
+            (" 2026:01:01 12:34:56\0", "2026-01-01T12:34:56"),
+            ("2026:01:01T12:34:60", "2026-01-01T12:34:60"),
+        ] {
+            assert_eq!(DateTime::parse_exif(value).map(|date| date.to_iso()), Some(expected.to_string()), "{value:?}");
+        }
+    }
+
+    #[test]
     fn offsets() {
         assert_eq!(DateTime::parse_offset("+02:00"), Some(120));
         assert_eq!(DateTime::parse_offset("-05:30"), Some(-330));
         assert_eq!(DateTime::parse_offset("Z"), Some(0));
         assert_eq!(DateTime::parse_offset("+0930"), Some(570));
+        assert_eq!(DateTime::parse_offset("+18:00"), Some(1080));
+        assert_eq!(DateTime::parse_offset("-18:00"), Some(-1080));
+        assert_eq!(DateTime::parse_offset("+18:01"), None);
+        assert_eq!(DateTime::parse_offset("-18:01"), None);
         assert_eq!(DateTime::parse_offset("   :  "), None);
         assert_eq!(DateTime::parse_offset("+99:00"), None);
+    }
+
+    #[test]
+    fn extreme_offsets_do_not_overflow() {
+        // `DateTime` deserializes with public fields, so an offset can arrive without passing `valid()`
+        let d = DateTime { offset_minutes: Some(i16::MIN), ..DateTime::parse_iso("2024-06-01T13:45:59").unwrap() };
+        assert_eq!(d.to_iso(), "2024-06-01T13:45:59-546:08");
+        assert_eq!(d.valid(), None);
     }
 
     #[test]
@@ -225,6 +279,36 @@ mod tests {
         assert_eq!(DateTime::parse_iso("2019-07-04T10:11").unwrap().minute, 11);
         assert!(DateTime::parse_iso("nonsense").is_none());
         assert!(DateTime::parse_iso("2019-07-04Tab:cd").is_none());
+    }
+
+    #[test]
+    fn iso_rejects_incomplete_or_unconsumed_clock_text() {
+        for value in [
+            "2026-01-01T",
+            "2026-01-01T12:34:56:99Z",
+            "2026-01-01T12:34:56.Z",
+            "2026-01-01T12:34:56.123junkZ",
+            "2026-01-01T12:34:56.1.2Z",
+            "2026-01-01T12:34:56.12 3Z",
+            "2026-01-01T12:34:56:99Z",
+            "2026-01-01T12::34Z",
+        ] {
+            assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
+        }
+    }
+
+    #[test]
+    fn iso_validates_clock_while_preserving_supported_forms() {
+        assert_eq!(DateTime::parse_iso("2019").unwrap().to_iso(), "2019-01-01T00:00:00");
+        assert_eq!(DateTime::parse_iso("2019-07").unwrap().to_iso(), "2019-07-01T00:00:00");
+        assert_eq!(DateTime::parse_iso("2019-07-04").unwrap().to_iso(), "2019-07-04T00:00:00");
+        assert_eq!(DateTime::parse_iso("2019-07-04T10:11").unwrap().to_iso(), "2019-07-04T10:11:00");
+        assert_eq!(DateTime::parse_iso("2019-07-04T10:11:12").unwrap().to_iso(), "2019-07-04T10:11:12");
+        assert_eq!(DateTime::parse_iso("2019-07-04T10:11:12Z").unwrap().offset_minutes, Some(0));
+        assert_eq!(DateTime::parse_iso("2019-07-04T10:11:12-05:30").unwrap().offset_minutes, Some(-330));
+        assert_eq!(DateTime::parse_iso("2019-07-04T10:11:12.123456Z").unwrap().millis, 123);
+        assert_eq!(DateTime::parse_iso(" 2019-07-04T10:11:12.5Z ").unwrap().millis, 500);
+        assert_eq!(DateTime::parse_iso("2019-07-04T10:11:60Z").unwrap().second, 60);
     }
 
     #[test]

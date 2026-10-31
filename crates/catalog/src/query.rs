@@ -20,7 +20,7 @@ pub enum RatingOp {
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
-    /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
+    /// location or format. Tokens like `rating:3`, `rating:>=3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
     pub text: String,
     pub rating: u8,
     pub rating_op: RatingOp,
@@ -29,9 +29,17 @@ pub struct Filter {
     /// Only these photos (Find Similar results…); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub only: Vec<PhotoId>,
+    /// Show nothing: an explicit empty result (Find Similar with no matches), since an empty
+    /// `only` means "no constraint".
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub only_none: bool,
     /// Any of these labels (the filter bar's multi-select); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<ColorLabel>,
+    /// Any of these flags (the filter bar's multi-select: Picked and Unflagged hide only the
+    /// rejects); empty = no constraint.
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "null_as_empty")]
+    pub flags: Vec<Flag>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
     pub album: Option<AlbumId>,
@@ -66,6 +74,11 @@ pub struct Filter {
     /// Smart-album rules (all / any / none, nested groups; see [`crate::rules`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_set: Option<crate::RuleSet>,
+}
+
+/// A list that may be given as `null`, read as empty: agents clear `flags` the way they clear `flag`.
+fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,28 +152,64 @@ fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
 pub(crate) struct Prepared {
     root: Option<String>,
     only: Option<std::collections::HashSet<PhotoId>>,
+    /// [`Filter::rule_set`] with its rules in the order to test them ([`crate::RuleSet::by_cost`]);
+    /// `None` tests them as written.
+    rules: Option<crate::RuleSet>,
+}
+
+/// The tokens of a search text: split at whitespace, except inside double quotes, so
+/// `person:"Jane Doe"` is one token (issue #1449). An unclosed quote runs to the end of the text; a
+/// backslash is an ordinary character. One pass over the text, nothing allocated.
+fn search_tokens(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return None;
+        }
+        let mut quoted = false;
+        let end = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                quoted ^= c == '"';
+                !quoted && c.is_whitespace()
+            })
+            .map_or(rest.len(), |(i, _)| i);
+        let (tok, tail) = rest.split_at(end);
+        rest = tail;
+        Some(tok)
+    })
+}
+
+/// `s` without the double quotes around it (a missing closing quote is allowed).
+fn unquote(s: &str) -> &str {
+    s.strip_prefix('"').map_or(s, |inner| inner.strip_suffix('"').unwrap_or(inner))
 }
 
 fn token_matches(p: &Photo, tok: &str) -> bool {
     let t = tok.to_lowercase();
-    if let Some((field, val)) = t.split_once(':') {
-        let num = |s: &str| -> Option<(char, f64)> {
-            let (op, rest) = match s.chars().next()? {
-                c @ ('>' | '<' | '=') => (c, &s[1..]),
-                _ => ('=', s),
-            };
-            rest.parse().ok().map(|v| (op, v))
+    // a token that starts with a quote is a phrase, even with a colon in it
+    if let Some((field, quoted)) = t.split_once(':').filter(|_| !t.starts_with('"')) {
+        let val = unquote(quoted);
+        // `>=` / `<=` before `>` / `<`: otherwise `rating:>=3` reads `=3` as the number and matches nothing
+        let num = |s: &str| -> Option<(&str, f64)> {
+            let op = [">=", "<=", ">", "<", "="].into_iter().find(|op| s.starts_with(op)).unwrap_or("");
+            s.get(op.len()..)?.parse().ok().map(|v| (op, v))
         };
         let cmp = |x: f64, s: &str| match num(s) {
-            Some(('>', v)) => x > v,
-            Some(('<', v)) => x < v,
+            Some((">", v)) => x > v,
+            Some(("<", v)) => x < v,
+            Some((">=", v)) => x >= v,
+            Some(("<=", v)) => x <= v,
             Some((_, v)) => (x - v).abs() < 1e-9,
             None => false,
         };
         // Fields stored as `f32` compare at f32 precision: 2.8f32 widened to f64 is not 2.8.
         let cmp32 = |x: f32, s: &str| match num(s) {
-            Some(('>', v)) => x > v as f32,
-            Some(('<', v)) => x < v as f32,
+            Some((">", v)) => x > v as f32,
+            Some(("<", v)) => x < v as f32,
+            Some((">=", v)) => x >= v as f32,
+            Some(("<=", v)) => x <= v as f32,
             Some((_, v)) => x == v as f32,
             None => false,
         };
@@ -180,18 +229,22 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
-            // Not a known field: the colon is part of a plain word ("10:30", "Re:").
+            // Not a known field: the colon is part of a plain word ("10:30", "Re:"), its value unquoted
+            // (`re:"a b"` is the text `re:a b`).
+            _ if val.len() != quoted.len() => text_matches(p, &format!("{field}:{val}")),
             _ => text_matches(p, &t),
         };
     }
-    text_matches(p, &t)
+    text_matches(p, unquote(&t))
 }
 
 /// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
-/// format or a keyword of `p`.
+/// format, a keyword or the name of a person (a named face) of `p`.
 fn text_matches(p: &Photo, t: &str) -> bool {
     let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
-    hay.iter().any(|h| h.to_lowercase().contains(t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
+    hay.iter().any(|h| h.to_lowercase().contains(t))
+        || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
+        || p.people().iter().any(|n| n.to_lowercase().contains(t))
 }
 
 /// Whether `p` has a named face region called `name` (case-insensitive).
@@ -201,6 +254,17 @@ fn has_person(p: &Photo, name: &str) -> bool {
 }
 
 impl Filter {
+    /// The labels that `label` and `labels` let through together (they AND), in `labels`' order;
+    /// `None` when neither is set, empty when they exclude each other. The chip and the filter
+    /// bar's buttons show this, so they match what is filtered.
+    pub fn labels_shown(&self) -> Option<Vec<ColorLabel>> {
+        match (self.label, self.labels.is_empty()) {
+            (None, true) => None,
+            (Some(l), true) => Some(vec![l]),
+            (l, false) => Some(self.labels.iter().copied().filter(|x| l.is_none_or(|l| l == *x)).collect()),
+        }
+    }
+
     /// Human-readable summary of the active rules (smart album tooltips, `album.list`).
     pub fn describe(&self) -> String {
         self.describe_in(None)
@@ -209,6 +273,17 @@ impl Filter {
     /// [`Filter::describe`] naming the albums its rules test (`RuleSet::describe_with`).
     pub fn describe_with(&self, cat: &crate::Catalog) -> String {
         self.describe_in(Some(cat))
+    }
+
+    /// The flags that `flag` and `flags` let through together (they AND), in the filter bar's
+    /// order; `None` when neither is set, empty when they exclude each other. The chip and the
+    /// filter bar's buttons show this, so they match what is filtered.
+    pub fn flags_shown(&self) -> Option<Vec<Flag>> {
+        if self.flag.is_none() && self.flags.is_empty() {
+            return None;
+        }
+        let passes = |f: &Flag| self.flag.is_none_or(|x| x == *f) && (self.flags.is_empty() || self.flags.contains(f));
+        Some([Flag::Pick, Flag::Reject, Flag::None].into_iter().filter(passes).collect())
     }
 
     fn describe_in(&self, cat: Option<&crate::Catalog>) -> String {
@@ -223,6 +298,9 @@ impl Filter {
         }
         if let Some(f) = self.flag {
             v.push(format!("flag {}", format!("{f:?}").to_lowercase()));
+        }
+        if !self.flags.is_empty() {
+            v.push(format!("flag {}", self.flags.iter().map(|f| format!("{f:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
         }
         if let Some(l) = self.label {
             v.push(format!("label {}", format!("{l:?}").to_lowercase()));
@@ -277,18 +355,35 @@ impl Filter {
     }
 
     pub fn matches(&self, p: &Photo, cat: &Catalog) -> bool {
-        self.matches_in(p, cat, &self.prepare_one())
+        // one photo: its rules are tested as written (ordering them would cost more than it saves)
+        self.matches_in(p, cat, &Prepared { root: self.library_root(), only: None, rules: None })
     }
 
-    /// [`Filter::prepare`] for testing one photo (the `only` ids are looked through, not hashed).
-    pub(crate) fn prepare_one(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: None }
+    /// [`Filter::prepare`] for testing one photo at a time, with what each needs worked out once
+    /// (the `only` ids are looked through, not hashed).
+    pub(crate) fn prepare_one(&self, cat: &Catalog) -> Prepared {
+        Prepared { root: self.library_root(), only: None, rules: self.ordered_rules(cat) }
+    }
+
+    /// The rule set to test, cheapest rule first: once per prepared filter, not per photo. `None`
+    /// (as written) while any smart album tests itself or a chain is too deep ([`Catalog::keeps_written_order`]), where the
+    /// order could change which photos match.
+    fn ordered_rules(&self, cat: &Catalog) -> Option<crate::RuleSet> {
+        if cat.keeps_written_order() {
+            return None;
+        }
+        self.rule_set.as_ref().map(|rs| rs.by_cost(cat))
     }
 
     /// What [`Filter::matches_in`] needs worked out once for a pass over many photos rather than
-    /// once per photo: the library folder's identity and the `only` ids as a set.
-    pub(crate) fn prepare(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
+    /// once per photo: the library folder's identity, the `only` ids as a set and the rules in the
+    /// order to test them.
+    pub(crate) fn prepare(&self, cat: &Catalog) -> Prepared {
+        Prepared {
+            root: self.library_root(),
+            only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()),
+            rules: self.ordered_rules(cat),
+        }
     }
 
     /// [`Filter::library_folder`] as a folder identity ([`folder_key`]); `None` without a choice.
@@ -332,11 +427,17 @@ impl Filter {
             return false;
         }
         if let Some(rs) = &self.rule_set
-            && !rs.matches(p, cat)
+            && !prepared.rules.as_ref().unwrap_or(rs).matches(p, cat)
         {
             return false;
         }
         if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
+            return false;
+        }
+        if !self.flags.is_empty() && !self.flags.contains(&p.flag) {
+            return false;
+        }
+        if self.only_none {
             return false;
         }
         if !self.only.is_empty() && !prepared.only.as_ref().map_or_else(|| self.only.contains(&p.id), |only| only.contains(&p.id)) {
@@ -409,7 +510,7 @@ impl Filter {
         {
             return false;
         }
-        self.text.split_whitespace().all(|tok| token_matches(p, tok))
+        search_tokens(&self.text).all(|tok| token_matches(p, tok))
     }
 }
 
@@ -429,9 +530,9 @@ impl Catalog {
     /// album's rules, the filter bar), as long as they are still where the view looks (`within`: in the library,
     /// the album, the folder; not deleted).
     pub fn query_keeping(&self, filter: &Filter, sort: &Sort, keep: &std::collections::HashSet<PhotoId>, within: &Filter) -> Vec<PhotoId> {
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(self);
         // `within` only decides for the few kept photos: worked out per photo, not hashed
-        let within_prepared = within.prepare_one();
+        let within_prepared = within.prepare_one(self);
         let mut v: Vec<&Photo> = self
             .photos()
             .map(|p| p.as_ref())
@@ -449,7 +550,7 @@ impl Catalog {
     pub fn follow(&self, was: &[PhotoId], touched: &[PhotoId], filter: &Filter, sort: &Sort, within: Option<&Filter>) -> Vec<PhotoId> {
         let listed: std::collections::HashSet<PhotoId> = was.iter().copied().filter(|id| touched.binary_search(id).is_ok()).collect();
         let mut ids: Vec<PhotoId> = was.iter().copied().filter(|id| !listed.contains(id)).collect();
-        let (prepared, within_prepared) = (filter.prepare_one(), within.map(Filter::prepare_one));
+        let (prepared, within_prepared) = (filter.prepare_one(self), within.map(|w| w.prepare_one(self)));
         for id in touched {
             let Some(p) = self.photo(*id) else { continue };
             let kept = within.zip(within_prepared.as_ref()).is_some_and(|(w, wp)| listed.contains(id) && w.matches_in(p, self, wp));
@@ -464,7 +565,7 @@ impl Catalog {
 
     /// How many photos match `filter`: [`Catalog::query`]'s length without its sorting.
     pub fn count(&self, filter: &Filter) -> usize {
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(self);
         self.photos().filter(|p| filter.matches_in(p, self, &prepared)).count()
     }
 
@@ -521,7 +622,7 @@ impl Catalog {
     pub fn people_in(&self, filter: &Filter) -> Vec<Person> {
         let filter = Filter { person: None, ..filter.clone() };
         let mut m: std::collections::HashMap<String, (Person, f64)> = Default::default();
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(self);
         for p in self.photos().filter(|p| filter.matches_in(p, self, &prepared)) {
             let mut seen: Vec<String> = Vec::new();
             for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {

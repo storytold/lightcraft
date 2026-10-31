@@ -3,15 +3,18 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.9.1"
+version = "0.16.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.90"
+rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
@@ -50,7 +53,10 @@ sha2 = "0.10"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 rayon = "1"
+winapi-util = "0.1" # lightcraft-catalog reads a file's volume serial number and file index with it on Windows
 proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
@@ -59,8 +65,8 @@ libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
 # formats
-quick-xml = "0.38"
-miniz_oxide = "0.8"
+quick-xml = "0.41"
+miniz_oxide = "0.9"
 
 # codecs
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
@@ -91,11 +97,14 @@ pollster = "1"
 naga = { version = "30", default-features = false, features = ["wgsl-in"] } # dev-only: validates WGSL shaders in tests (pure Rust, from wgpu)
 
 # ui
-egui = "0.36"
-egui_extras = { version = "0.36", default-features = false }
-eframe = { version = "0.36", default-features = false }
-egui-wgpu = { version = "0.36", default-features = false }
-egui_kittest = "0.36"
+# 0.37: `default_fonts` is no longer an egui default and the monochrome emoji faces moved behind
+# `monochrome_emoji_fonts`. Every resolution root (native, CLI/headless, kittest, wasm) needs both:
+# kittest's own dev-dependencies do not propagate to its consumers.
+egui = { version = "0.37", default-features = false, features = ["default_fonts", "monochrome_emoji_fonts"] }
+egui_extras = { version = "0.37", default-features = false }
+eframe = { version = "0.37", default-features = false }
+egui-wgpu = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
 rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
 # macOS: the profile of the screen showing the window (safe AppKit bindings; muda and wgpu use the same)
@@ -117,18 +126,22 @@ web-sys = "0.3"
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
-too_many_arguments = "allow"
 needless_range_loop = "allow"
 type_complexity = "allow"
 excessive_precision = "allow"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.release]
 debug = "line-tables-only"
@@ -169,19 +182,26 @@ jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
 
+# Keep the complete egui family and native event bridge on reviewed fork commits.
 # HDR display (crates/hdr-display, LR-VIEW-HDR-DISPLAY) needs egui-wgpu's `SurfaceConfig::prefer_hdr`
-# (emilk/egui#8703). Until a release has it, every egui crate comes from egui 0.36.2 plus that one
-# commit (all pinned to one commit of the branch egui-wgpu-hdr-surface-0.36.2, so the crates stay
-# one egui and the lockfile cannot drift). PENDING a maintainer decision:
-# this git patch, or wait for the egui release.
+# (emilk/egui#8703), which storytold/egui does not have yet. So the egui family is pinned to
+# JordyUSA/egui 6268f70 (branch egui-wgpu-hdr-surface-037): exactly ONE commit on top of the reviewed
+# storytold/egui 6d518fc, touching only crates/egui-wgpu. PENDING a maintainer decision: replacing the
+# reviewed storytold fork commit with the PR author's fork (or landing that commit on storytold/egui
+# and pinning back to it). winit stays on the reviewed storytold fork.
 [patch.crates-io]
-ecolor = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-eframe = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-egui = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-egui-wgpu = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-egui-winit = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-egui_glow = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-egui_kittest = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-emath = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-epaint = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
-epaint_default_fonts = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+ecolor = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+emath = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+epaint = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+epaint_default_fonts = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui-winit = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui-wgpu = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_glow = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_extras = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_kittest = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_system_font_provider = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+eframe = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_demo_lib = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_inspection = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

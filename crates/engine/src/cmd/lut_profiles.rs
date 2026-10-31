@@ -17,7 +17,7 @@ pub struct LutProfile {
     pub id: String,
     pub name: String,
     pub group: String,
-    /// The `.cube` file (the library's copy when there is a library on disk).
+    /// The library's copy of the `.cube` file (empty without a library on disk).
     pub file: String,
 }
 
@@ -123,12 +123,9 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 std::fs::write(&f, &text).map_err(|e| bad(C, format!("{}: {e}", f.display())))?;
                 f.to_string_lossy().to_string()
             }
-            None => {
-                // no library on disk: remember the original (the in-memory session ends with the app)
-                let f = std::env::temp_dir().join(format!("lightcraft-{}.cube", id.trim_start_matches("lut:")));
-                std::fs::write(&f, &text).map_err(|e| bad(C, e.to_string()))?;
-                f.to_string_lossy().to_string()
-            }
+            // no library on disk: the registered LUT is all this session needs (a copy would only
+            // be read back when a library opens, and that takes its own list from its prefs)
+            None => String::new(),
         };
         lightcraft_pipeline::lut::register(&id, lut);
         s.lut_profiles.push(LutProfile { id: id.clone(), name: display.clone(), group: group.clone(), file });

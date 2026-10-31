@@ -40,7 +40,15 @@ pub fn database() -> Option<&'static LensDb> {
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
-    let lens = db.find_lens(m.lens_make.as_deref(), m.lens_model.as_deref()?, camera)?;
+    let lens = match m.lens_model.as_deref() {
+        Some(model) => db.find_lens(m.lens_make.as_deref(), model, camera)?,
+        // Nikon DSLRs record only the lens specification ("24-70mm f/2.8"); a profile must be named exactly that
+        // (a user's alias), since the specification fits other makers' lenses too
+        None => {
+            let name = lightcraft_lensdb::spec_name(m.lens_spec?);
+            db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
+        }
+    };
     let crop = frame_crop_factor(camera.map(|c| c.crop_factor), focal, m.focal_length_35mm);
     let shot = Shot { focal, aperture: m.f_number, distance: None, crop_factor: crop, width: w, height: h };
     let corr = lens.correction(&shot)?;
@@ -106,6 +114,27 @@ mod tests {
         assert!(lookup(&db, &lightcraft_meta::Metadata { focal_length: None, ..meta() }, 6000.0, 4000.0, Orientation::Normal).is_none());
         let other = lightcraft_meta::Metadata { lens_model: Some("70-200mm F4".into()), ..meta() };
         assert!(lookup(&db, &other, 6000.0, 4000.0, Orientation::Normal).is_none());
+    }
+
+    /// A Nikon DSLR raw names no lens, only its specification (maker note `0x0084`): it is looked up by the name
+    /// built from it, and only a profile named exactly that is used, never another maker's lens that merely shares
+    /// the focal range and aperture.
+    #[test]
+    fn lens_specification_needs_a_profile_named_by_it() {
+        let nikon = lightcraft_meta::Metadata { lens_model: None, lens_spec: Some([18.0, 55.0, 3.5, 5.6]), ..meta() };
+        let at = |db: &LensDb| lookup(db, &nikon, 6000.0, 4000.0, Orientation::Normal);
+        // "Testcam 18-55mm f/3.5-5.6" fits the specification, but so would any maker's 18-55 f/3.5-5.6: refused
+        assert!(at(&LensDb::parse(DB).unwrap()).is_none());
+        let aliased = LensDb::parse(
+            &DB.replace("<model>Testcam 18-55mm f/3.5-5.6</model>", "<model>Testcam 18-55mm f/3.5-5.6</model><model>18-55mm f/3.5-5.6</model>"),
+        )
+        .unwrap();
+        let lens = at(&aliased).unwrap();
+        assert!(lens.warp.is_some() && lens.vignette.is_some());
+        assert_eq!(Some(lens), lookup(&aliased, &meta(), 6000.0, 4000.0, Orientation::Normal), "same profile as by its name");
+        // a lens model, when the file has one, still decides
+        let named_other = lightcraft_meta::Metadata { lens_model: Some("70-200mm F4".into()), ..nikon.clone() };
+        assert!(lookup(&aliased, &named_other, 6000.0, 4000.0, Orientation::Normal).is_none());
     }
 
     /// A full-frame body in APS-C / Super 35 mode (an ILCE-1M2 at 70 mm records 105 mm equivalent) frames only the
