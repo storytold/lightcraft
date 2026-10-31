@@ -239,26 +239,38 @@ fn settings_tab_learn_and_edit_a_key() {
     ] {
         assert!(h.app.widgets.iter().any(|(w, _)| w == id), "{id}");
     }
+    touch_to_find_selects_keys_and_dials(&mut h);
+    an_action_picked_from_the_list_is_bound(&mut h);
+    the_other_sections_open(&mut h);
+    a_rebound_key_shows_runs_and_is_saved(&mut h, &store);
+}
+
+/// Touch to find (on while the Keys and Dials page is open): a touched key or dial is selected, and nothing runs.
+fn touch_to_find_selects_keys_and_dials(h: &mut Headless) {
     // Touch to find (on while this page is open): touch key 5 on the surface: it is selected,
     // and nothing runs
     let clip = h.app.widgets.iter().find(|(w, _)| w == "check:surface.touchFind").map(|(_, r)| *r).unwrap();
     assert!(clip.bottom() < 900.0, "Touch to find is on screen: {clip:?}");
     assert!(h.app.surface.runtime.learning());
     let before = h.app.session.active();
-    assert_eq!(input(&mut h, json!([{"control": "key.5", "press": true}]))["ok"], true);
+    assert_eq!(input(h, json!([{"control": "key.5", "press": true}]))["ok"], true);
     h.settle(T);
     assert_eq!(h.app.surface.editor.control.as_deref(), Some("key.5"));
     assert_eq!(h.app.session.active(), before, "a learnt press doesn't act");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "field:surfaceActionSearch"), "the selected key's editor");
     // touching a dial switches the drawing to the Dialpad, and the photo doesn't change
-    let exposure_before = exposure(&h);
-    assert_eq!(input(&mut h, json!([{"control": "dial", "ticks": 1}]))["ok"], true);
-    assert_eq!(input(&mut h, json!([{"control": "dial", "ticks": 3}]))["ok"], true);
+    let exposure_before = exposure(h);
+    assert_eq!(input(h, json!([{"control": "dial", "ticks": 1}]))["ok"], true);
+    assert_eq!(input(h, json!([{"control": "dial", "ticks": 3}]))["ok"], true);
     h.settle(T);
     assert_eq!(h.app.surface.editor.device, "dialpad");
     assert_eq!(h.app.surface.editor.control.as_deref(), Some("dial"));
-    assert_eq!(exposure(&h), exposure_before, "a touched dial is found, not turned");
+    assert_eq!(exposure(h), exposure_before, "a touched dial is found, not turned");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "button:surfaceControl-dial"), "the Dialpad is drawn");
+}
+
+/// An action picked from the list (search, click) is bound to the selected dial.
+fn an_action_picked_from_the_list_is_bound(h: &mut Headless) {
     // pick an action from the list: search, click
     h.app.surface.editor.filter = "Highlights".into();
     h.settle(T);
@@ -269,6 +281,10 @@ fn settings_tab_learn_and_edit_a_key() {
         p.pages.iter().any(|pg| pg.bindings.get("dial") == Some(&lightcraft_surface::Binding::value("light.highlights"))),
         "the dial moves Highlights now"
     );
+}
+
+/// The other sections of the Controls tab open, once the Keys and Dials window over them is closed.
+fn the_other_sections_open(h: &mut Headless) {
     // the other sections open. They are in the Settings window, under the Keys and Dials window
     // while that is open: a covered button takes no click, so close it first (as its close box does)
     let covered = h.request("ui.clickWidget", json!({"id": "button:surfaceSection-feel"}), T);
@@ -288,6 +304,10 @@ fn settings_tab_learn_and_edit_a_key() {
     assert!(h.app.widgets.iter().any(|(w, _)| w == "window:surfaceEditor"), "the Keys and Dials window is back");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:surfaceDevice-keypad"}), T)["ok"], true);
     h.settle(T);
+}
+
+/// Key 5 rebound to Contrast shows its new label, moves Contrast on the dial, and is saved.
+fn a_rebound_key_shows_runs_and_is_saved(h: &mut Headless, store: &MemStore) {
     // make key 5 put Contrast on the dial
     let profile = h.app.surface.settings().profile.clone();
     let mut s = h.app.surface.settings().clone();
@@ -304,8 +324,8 @@ fn settings_tab_learn_and_edit_a_key() {
     }
     assert!(!h.app.surface.runtime.learning(), "Touch to find stopped with the page");
     // press it: the dial moves Contrast until pressed again
-    assert_eq!(input(&mut h, json!([{"control": "key.5", "press": true}, {"control": "dial", "ticks": 4}]))["ok"], true);
-    finish_gesture(&mut h);
+    assert_eq!(input(h, json!([{"control": "key.5", "press": true}, {"control": "dial", "ticks": 4}]))["ok"], true);
+    finish_gesture(h);
     let id = h.app.session.active().unwrap();
     assert!(h.app.session.develop_of(id).unwrap().light.contrast > 0.0);
     // saved
