@@ -171,7 +171,13 @@ pub struct Meta {
     pub lens: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
+    /// Shutter speed for display, from [`lightcraft_meta::format_exposure_time`] (`1/3`, `0.3571`, `2.5`).
     pub shutter: String,
+    /// The file's exact exposure time in seconds, kept beside the rounded `shutter` text so export
+    /// writes the original duration; read through [`Meta::shutter_seconds`]. Left out of the catalog
+    /// JSON when unknown, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_time: Option<f64>,
     pub iso: Option<u32>,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
@@ -204,6 +210,16 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+}
+
+impl Meta {
+    /// Shutter speed in seconds: the exact [`Meta::exposure_time`] while `shutter` still shows it,
+    /// otherwise whatever `shutter` says (set by hand, or a catalog from before the exact time was kept).
+    pub fn shutter_seconds(&self) -> Option<f64> {
+        self.exposure_time
+            .filter(|t| lightcraft_meta::format_exposure_time(*t).is_some_and(|text| text == self.shutter.trim()))
+            .or_else(|| parse_shutter_seconds(&self.shutter))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -714,5 +730,31 @@ mod edited_tests {
             assert_eq!(p.camera_defaults().wb.mode, WbMode::AsShot);
             assert!(!p.is_edited());
         }
+    }
+}
+
+#[cfg(test)]
+mod shutter_tests {
+    use super::*;
+
+    #[test]
+    fn shutter_seconds_prefers_the_exact_time_while_the_text_still_shows_it() {
+        let mut m = Meta { shutter: "0.3571".into(), exposure_time: Some(1.0 / 2.8), ..Default::default() };
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 2.8));
+        m.shutter = "1/3".into();
+        m.exposure_time = Some(1.0 / 3.0);
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 3.0));
+        // the text no longer matches the stored time (edited elsewhere): the text wins
+        m.shutter = "1/250".into();
+        assert_eq!(m.shutter_seconds(), Some(1.0 / 250.0));
+        // an older catalog without the exact time
+        m.exposure_time = None;
+        m.shutter = "2.5".into();
+        assert_eq!(m.shutter_seconds(), Some(2.5));
+        // the exact time stays out of the JSON when unknown, and round-trips when known
+        assert!(!serde_json::to_string(&m).unwrap().contains("exposure_time"));
+        m.exposure_time = Some(2.5);
+        let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.exposure_time, Some(2.5));
     }
 }

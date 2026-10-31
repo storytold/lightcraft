@@ -272,6 +272,12 @@ mod tests {
         assert!(!p.rust(), "only files something compiles in");
     }
 
+    #[test]
+    fn app_icon_changes_retest_both_hosts_and_the_update_prompt() {
+        let users: Vec<_> = embedders("assets/app-icon/hicolor/128x128/apps/ai.storyteller.lightcraft.png").collect();
+        assert_eq!(users, ["lightcraft", "lightcraft-ui-egui"]);
+    }
+
     /// Every `include_str!` / `include_bytes!` of a file outside its package, and every `"../…"`
     /// path in a build script, is listed in `EMBEDDED` for that package.
     #[test]

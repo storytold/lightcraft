@@ -338,7 +338,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
-        out.exposure_time = lightcraft_catalog::parse_shutter_seconds(&m.shutter);
+        out.exposure_time = m.shutter_seconds();
         out.iso = m.iso;
     }
     Some(out)
