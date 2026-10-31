@@ -43,7 +43,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         d.insert_temp(search_id, search.clone());
         d.insert_temp(all_id, show_all);
     });
-    ui.label(RichText::new(crate::i18n::tr("Click a shortcut, then press the new keys (Esc cancels).")).size(11.0).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr("Click a shortcut, then press the new keys (Esc cancels).")).font(t.caption()).color(t.text_dim));
     ui.add_space(4.0);
 
     let needle = search.trim().to_lowercase();
