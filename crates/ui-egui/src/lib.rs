@@ -92,6 +92,7 @@ mod services;
 #[cfg(test)]
 use app::{import_tick_allowed, sam_download_ended, shot_ready};
 pub(crate) use caches::key_of;
+use caches::{AlbumCounts, AlbumRecount};
 pub use caches::{FilterValues, LibraryCounts, RulesView};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
@@ -595,10 +596,12 @@ pub struct Caches {
     counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
-    /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally
-    /// that follows edits, and the counts as the panels take them.
-    album_counts:
-        Option<(String, lightcraft_catalog::tally::AlbumTally, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>)>,
+    /// The albums' counts as the sidebar shows them, with the tally that follows edits.
+    album_counts: Option<AlbumCounts>,
+    /// A count of every photo running off the UI thread; the counts above are shown until it is done.
+    album_recount: Option<AlbumRecount>,
+    /// The library, catalog revision and minute a count of every photo failed at: not tried again until one changes.
+    album_recount_failed: Option<(u64, u64, String)>,
     /// How often the album counts were made from every photo (tests check that unchanged frames, and edits to a
     /// photo or a few, don't).
     pub album_count_scans: usize,
