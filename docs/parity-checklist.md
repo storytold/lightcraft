@@ -50,12 +50,12 @@ cited here still exists. Formerly docs/parity.md.
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 86 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 420 | 66 | 57 | 35 | 195/203 (96%) | 146/161 (91%) |
+| **Total** | 421 | 66 | 57 | 35 | 195/203 (96%) | 146/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 543 in-scope rows — P0 98.0% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 544 in-scope rows — P0 98.0% of 203 · P1 94.4% of 161 · P2 57.0% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
