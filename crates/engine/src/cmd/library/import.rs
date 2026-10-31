@@ -33,6 +33,11 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         "move" => crate::import::ImportMode::Move,
         other => return Err(bad("library.import", format!("unknown mode `{other}` (add|copy|move)"))),
     };
+    if mode == crate::import::ImportMode::Move {
+        for path in &paths {
+            crate::file_access::check_write(path).map_err(|e| bad("library.import", e))?;
+        }
+    }
     let preset = match str_param(p, "preset").filter(|x| !x.is_empty()) {
         Some(id) => Some(s.presets.iter().find(|x| x.id == id).cloned().ok_or_else(|| bad("library.import", format!("unknown preset `{id}`")))?),
         None => None,

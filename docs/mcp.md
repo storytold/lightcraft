@@ -31,6 +31,49 @@ A malformed, incomplete, oversized or mismatched reply also closes the connectio
 an unknown outcome without resending. An idless `ok: false` with a string `error` is preserved
 as a pre-dispatch refusal (for example, too many control connections); the next call reconnects.
 
+### Automation roots confinement
+
+For autonomous environments and sandboxed agent workflows, `lightcraft-cli mcp` can confine all file operations to designated directories:
+
+- `--automation-read-root DIR`: Confines all file reads (imports, probes, previews, presets) to `DIR`.
+- `--automation-write-root DIR`: Confines all file writes (exports, renders, sidecars) to `DIR`.
+
+#### Confinement semantics & rules:
+- **In-process headless only**: Confinement applies strictly to the in-process headless server. Combining `--automation-read-root` or `--automation-write-root` with `--connect` is immediately rejected with an error because a running external desktop app cannot be confined by CLI arguments.
+- **Strict canonicalization**: Both roots and target paths are canonicalized with all symbolic links resolved.
+- **Traversal & link escape refusal**: Path traversal attempts (e.g. `..`), symlinks pointing outside roots, and dangling symlinks are refused before any filesystem operation begins. Denied writes never create parent directories or truncate existing files.
+- **Case-insensitivity & device names**: Windows path matching is case-insensitive, and reserved DOS device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) are unconditionally blocked.
+- **Root permissions**: Specifying neither root preserves 100% unconfined default behavior. When automation roots are configured, read access is permitted within either the read root or write root (allowing tools to read back exported files), while write access is strictly confined to the write root. A read-only root denies all writes.
+- **Threat model limits**: Confinement enforces path boundary invariants against accidental or adversarial paths emitted by LLM tool calls. It does not replace OS-level kernel sandbox primitives against external processes racing or modifying folder trees concurrently.
+- **Operator configuration vs. agent file access**: Startup flags such as `--library DIR` designate operator-chosen configuration rather than LLM-directed paths. The server's internal library catalog storage is operated under unconfined authority, while all agent-driven operations (reads, imports, exports, sidecars, browsing) are strictly confined to the configured automation roots.
+
+#### Covered commands & authority enforcement points
+
+Confinement is applied in depth across the filesystem abstraction layer (`RealFs`, `folder_on_disk`), engine command dispatch, and MCP protocol routing:
+
+| Operation / Tool | Command / Subsystem | Authority Required | Enforcement Point |
+|---|---|---|---|
+| `import` | `library.import`, `expand_paths` | Read (Write for Move source & destination) | `crates/mcp/src/tools.rs`, `cmd/library.rs`, `import.rs`, `import_move.rs` |
+| Import preview | `library.importPreview` | Read | `crates/engine/src/cmd/library.rs` |
+| Folder browsing | `library.browse` | Read | `crates/engine/src/cmd/browse.rs` |
+| Create folder | `folder.create`, `folder_on_disk` | Write | `crates/engine/src/cmd/browse.rs` |
+| Rename / Move folder | `folder.rename`, `folder.move`, `move_folder` | Write (both source and destination) | `crates/engine/src/cmd/browse.rs` |
+| Move photo to folder | `photo.moveToFolder` | Write (both source and destination) | `crates/engine/src/cmd/browse.rs`, `rename.rs` |
+| Batch rename photos | `photo.rename`, `apply_file_plans` | Write (both source and destination) | `crates/engine/src/cmd/manage.rs`, `rename.rs` (`RealFs`) |
+| Low-level file moves / copies / deletes | `RealFs` (`MoveFs`) | Read for source copy; Write for target & remove | `crates/engine/src/rename.rs` (`RealFs`) |
+| Original & sidecar reads | `files.rs`, `sidecar.rs`, `read_packet` | Read | `crates/engine/src/files.rs`, `crates/engine/src/sidecar.rs` |
+| Sidecar writes | `photo.saveMetadataToFile`, `sidecar.rs` | Write | `crates/engine/src/sidecar.rs` (`save_sidecar_with`) |
+| Export photo | `app.export`, `export.rs` | Write | `crates/engine/src/export.rs` (`write_with`) |
+| Render to disk | `ui.render` / `render_photo` | Write (in-memory if no explicit path) | `crates/mcp/src/headless.rs`, `crates/engine/src/export.rs` |
+| Preset & LUT import | `preset.import`, `lut_profiles.rs` | Read | `crates/engine/src/cmd/preset_files.rs`, `lut_profiles.rs` |
+| Mask effect import | `mask.importEffects` | Read (top-level and per-directory) | `crates/engine/src/cmd/mask_effect_files.rs` |
+| Keywords import / export | `keywords.import`, `keywords.export` | Read / Write | `crates/engine/src/cmd/keywords.rs` |
+| Lightroom Classic interop | `library.inspectLightroom`, `library.importLightroom` | Read | `crates/engine/src/cmd/library/specs.rs`, `lightroom_catalog.rs` |
+| Duplicate photo | `photo.duplicate` | Read source, Write destination | `crates/engine/src/cmd/convert.rs` |
+| Convert photo to DNG | `photo.convertToDng` | Read source, Write destination | `crates/engine/src/cmd/convert.rs` |
+| Smart previews location | `library.smartPreviewsLocation` | Write target folder | `crates/engine/src/cmd/previews.rs` |
+| Relink photo | `photo.relink` | Read target path | `crates/engine/src/cmd/missing.rs` |
+
 Logs go to stderr; stdout carries only protocol messages.
 
 ## Wiring it into a client

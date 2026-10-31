@@ -440,12 +440,14 @@ pub fn read(path: &Path) -> Result<CatalogImport, String> {
 /// stopping when `cancel` is set. Images whose catalog records are incomplete are left out and
 /// listed in [`CatalogImport::skipped`] instead of failing the read.
 pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize, done: &AtomicUsize) -> Result<CatalogImport, String> {
+    crate::file_access::check_read(path)?;
     // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+    crate::file_access::check_read(&wal_path)?;
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     let main = FileSource::open(path)?;
     let wal = match std::fs::metadata(&wal_path) {
@@ -808,6 +810,9 @@ fn strip_xmp_sentinels(value: &mut Value) {
 /// Import into the current library. Existing edited records are preserved unless explicitly
 /// requested; missing originals remain catalogued for later relinking. The source catalog is read-only.
 pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> crate::Result<Value> {
+    crate::file_access::check_read(path).map_err(error)?;
+    let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+    crate::file_access::check_read(&wal_path).map_err(error)?;
     let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?;
     let cancel = AtomicBool::new(false);
     let prepared = job.prepare(&cancel)?;

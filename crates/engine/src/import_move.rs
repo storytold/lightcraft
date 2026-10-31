@@ -147,6 +147,9 @@ pub(crate) fn sidecars_of(src: &Path) -> Vec<(PathBuf, bool)> {
 /// Put `src` into `dir` as `name` (-1, -2… when taken) with its sidecars, leaving the source
 /// untouched. On failure nothing is left at the destination.
 pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String> {
+    crate::file_access::check_read(src)?;
+    crate::file_access::check_write(src)?;
+    crate::file_access::check_write(dir)?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -167,6 +170,8 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
     let Some(dst) = dst else { return Err(format!("move {}: no free name in {}", src.display(), dir.display())) };
     let mut placed = Placed { src: src.to_path_buf(), dst, sidecars: Vec::new() };
     for (sc, stem_named) in sidecars_of(src) {
+        crate::file_access::check_read(&sc)?;
+        crate::file_access::check_write(&sc)?;
         let sc_ext = sc.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "xmp".into());
         let sc_dst =
             if stem_named { placed.dst.with_extension(&sc_ext) } else { PathBuf::from(format!("{}.{sc_ext}", placed.dst.to_string_lossy())) };
@@ -201,6 +206,8 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
 /// (whose recorded metadata and hash would be stale). Without one the copy is compared byte for
 /// byte with the source.
 pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+    crate::file_access::check_read(src)?;
+    crate::file_access::check_write(dir)?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -240,6 +247,7 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
     if injected(Fault::FailRemove) {
         return Err("could not remove the original (injected): it stays where it was".into());
     }
+    crate::file_access::check_write(&p.src)?;
     fs::remove_file(&p.src).map_err(|e| format!("could not remove the original ({e}): it stays where it was"))?;
     let mut kept = Vec::new();
     for sc in &p.sidecars {
@@ -254,7 +262,7 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
             kept.push((path, format!("also the sidecar of {other}: kept beside it")));
             continue;
         }
-        if let Err(e) = fs::remove_file(&sc.src) {
+        if let Err(e) = crate::file_access::check_write(&sc.src).and_then(|()| fs::remove_file(&sc.src).map_err(|e| e.to_string())) {
             kept.push((path, format!("could not remove the sidecar ({e})")));
         }
     }

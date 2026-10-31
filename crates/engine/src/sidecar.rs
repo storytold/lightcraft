@@ -525,18 +525,25 @@ fn file_path(p: &Photo) -> Option<&str> {
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
     if let Some(sc) = find_sidecar(original, naming) {
+        if crate::file_access::check_read(&sc).is_err() {
+            return None;
+        }
         // A discovered sidecar keeps precedence even when reading it fails.
         return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
-        return Some((x, PathBuf::from(original)));
+        if crate::file_access::check_read(original).is_ok() {
+            let bytes = std::fs::read(original).ok()?;
+            let x = lightcraft_meta::embedded(&bytes).xmp?;
+            return Some((x, PathBuf::from(original)));
+        }
     }
     if kind == MediaKind::Image {
-        let mut file = std::fs::File::open(original).ok()?;
-        let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
-        return Some((x, PathBuf::from(original)));
+        if crate::file_access::check_read(original).is_ok() {
+            let mut file = std::fs::File::open(original).ok()?;
+            let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
+            return Some((x, PathBuf::from(original)));
+        }
     }
     None
 }
@@ -814,6 +821,7 @@ impl Session {
         let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        crate::file_access::check_write(&path).map_err(EngineError::Other)?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
         let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;

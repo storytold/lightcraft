@@ -61,6 +61,7 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| bad(C, "no photo (give `id`)"))?;
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     let abs = std::path::absolute(path).map_err(|e| bad(C, e.to_string()))?;
+    crate::file_access::check_read(&abs).map_err(|e| bad(C, e))?;
     if !abs.is_file() {
         return Err(bad(C, format!("{path}: no such file")));
     }

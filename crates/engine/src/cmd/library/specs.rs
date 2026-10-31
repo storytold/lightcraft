@@ -1252,7 +1252,11 @@ pub fn specs() -> Vec<CommandSpec> {
         "{path: .lrcat} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
         always, |_, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
-            let data = crate::lightroom_catalog::read(std::path::Path::new(path)).map_err(|e| bad("library.inspectLightroom",e))?;
+            let catalog_path = std::path::Path::new(path);
+            crate::file_access::check_read(catalog_path).map_err(|e| bad("library.inspectLightroom", e))?;
+            let wal_path = std::path::PathBuf::from(format!("{}-wal", catalog_path.display()));
+            crate::file_access::check_read(&wal_path).map_err(|e| bad("library.inspectLightroom", e))?;
+            let data = crate::lightroom_catalog::read(catalog_path).map_err(|e| bad("library.inspectLightroom",e))?;
             Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings,"skipped":data.skipped}))
         }),
         cmd!(
@@ -1264,7 +1268,11 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
-                crate::lightroom_catalog::import(s, std::path::Path::new(path), bool_or(p, "updateExisting", false))
+                let catalog_path = std::path::Path::new(path);
+                crate::file_access::check_read(catalog_path).map_err(|e| bad("library.importLightroom", e))?;
+                let wal_path = std::path::PathBuf::from(format!("{}-wal", catalog_path.display()));
+                crate::file_access::check_read(&wal_path).map_err(|e| bad("library.importLightroom", e))?;
+                crate::lightroom_catalog::import(s, catalog_path, bool_or(p, "updateExisting", false))
             }
         ),
         cmd!(
@@ -1278,6 +1286,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let paths = strs(p, "paths");
                 if paths.is_empty() {
                     return Err(bad("library.importPreview", "no paths"));
+                }
+                for path in &paths {
+                    crate::file_access::check_read(path).map_err(|e| bad("library.importPreview", e))?;
                 }
                 let c = crate::import::scan(s, &paths);
                 let dups = c.iter().filter(|c| c.duplicate.is_some()).count();

@@ -16,6 +16,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
+mod automation_args;
 
 use std::io::Write;
 use std::path::Path;
@@ -51,6 +52,8 @@ USAGE:
         --demo            headless: start with the procedurally generated demo library
         --library DIR     headless: open (or create) a persistent LightCraft library; edits are saved
         --compact         list only the helper tools (every command stays reachable via run_command)
+        --automation-read-root DIR   confine tool/engine file reads to DIR (in-process headless only)
+        --automation-write-root DIR  confine tool/engine file writes to DIR (in-process headless only)
   lightcraft-cli render <IN> -o <OUT> [OPTIONS]
       Develop one file and export it (.jpg, .png, .tif, .webp, .avif, .jxl, .psd or .dng by extension) with the
       same encoder as the app's Export dialog. Options:
@@ -296,21 +299,22 @@ fn calibrate(args: &[String]) -> Result<(), String> {
 }
 
 fn mcp(args: &[String]) -> Result<(), String> {
+    let (auto_args, remaining) = automation_args::AutomationArgs::parse(args)?;
     let mut connect: Option<String> = None;
     let mut demo = false;
     let mut library: Option<String> = None;
     let mut compact = false;
     let mut files = Vec::new();
     let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
+    while i < remaining.len() {
+        match remaining[i].as_str() {
             "--connect" => {
                 // Optional address argument. A bare port (all digits) is taken as a port on the
                 // loopback default — matches the help's `--connect [ADDR]` hint alongside the
                 // `--control 7980` example. A non-numeric, non-`--`-prefixed token (e.g. a
                 // command id like `ui.inspect`) leaves the address at its default so the
                 // command is still consumed next. (#1178)
-                match args.get(i + 1).filter(|a| a.contains(':') || a.chars().all(|c| c.is_ascii_digit())) {
+                match remaining.get(i + 1).filter(|a| a.contains(':') || a.chars().all(|c| c.is_ascii_digit())) {
                     Some(a) => {
                         connect = Some(if a.contains(':') { a.clone() } else { format!("127.0.0.1:{a}") });
                         i += 1;
@@ -322,11 +326,21 @@ fn mcp(args: &[String]) -> Result<(), String> {
             "--headless" => connect = None,
             "--demo" => demo = true,
             "--compact" => compact = true,
-            "--library" => library = Some(take_value(args, &mut i, "--library")?.to_string()),
+            "--library" => library = Some(take_value(&remaining, &mut i, "--library")?.to_string()),
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
             f => files.push(f.to_string()),
         }
         i += 1;
+    }
+    if connect.is_some() && (auto_args.read_root.is_some() || auto_args.write_root.is_some()) {
+        return Err("--automation-read-root and --automation-write-root confine the in-process server; a running app is not confined by them, so drop --connect".into());
+    }
+    let roots = lightcraft_engine::file_access::AutomationRoots::new(
+        auto_args.read_root.as_deref().map(Path::new),
+        auto_args.write_root.as_deref().map(Path::new),
+    )?;
+    if let Some(r) = &roots {
+        lightcraft_engine::file_access::confine_process(r.clone());
     }
     let backend: Box<dyn Backend> = match connect {
         Some(addr) => {
@@ -356,6 +370,9 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 None if demo => Headless::demo(),
                 None => Headless::default(),
             };
+            if let Some(r) = &roots {
+                h = h.with_automation_roots(r.clone());
+            }
             if !files.is_empty() {
                 let paths = expand_paths(&files);
                 let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;

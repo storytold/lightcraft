@@ -604,6 +604,7 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(location_json(s));
     }
     // the new place must work before anything moves; there is no fallback to another drive
+    crate::file_access::check_write(&new_dir).map_err(|e| bad(C, e))?;
     crate::smart::check_writable(&new_dir).map_err(|e| bad(C, e))?;
     let (held, _) = crate::smart::stats(&current);
     let existing = match str_param(p, "existing") {
