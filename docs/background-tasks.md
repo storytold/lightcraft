@@ -49,6 +49,18 @@ guard.detail(&file_name);
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
+## Waiting in line
+
+Jobs that must not run side by side share a lane (`activity::Lane`; for now only the preview builds: Build Previews and
+the background Build / Discard Smart Previews). A call that sets `queue: true` while its lane is busy does not fail:
+`Activity::enqueue` keeps what it was asked (`Request`: the command and its parameters, with the photos written out)
+and `Session::start_waiting` runs it, under the id it had in line, once the lane is free. The engine calls it after
+every command and the app every frame. `activity.list` shows a waiting task after the running ones (`waiting`,
+`place`, `lane`); the activity stack in the app draws only running tasks. `activity.cancel` takes a waiting task out
+of the line, `activity.cancel {all: true}` empties it, and opening another library drops it: the photos it names
+belong to the old one. At most `MAX_WAITING` (100) tasks wait. Without `queue` a call is refused while its lane is
+busy, as before. A waiting task whose start fails (there is no smart previews folder any more, say) is logged and the next in line goes on.
+
 ## Examples in the code
 
 | Job | Where | Shows how to |
