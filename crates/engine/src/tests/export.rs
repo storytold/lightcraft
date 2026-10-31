@@ -1492,3 +1492,57 @@ fn huge_export_size_is_an_error() {
     assert!(s.render_now(id, huge, huge).is_err());
     assert!(s.render_now(id, 10, 70_000).is_err());
 }
+
+/// Note 28: photos side by side took turns at an idle GPU because a photo's turn covered its
+/// decode and its encode too. A gain map export (HDR and a mask) decodes before its renders and
+/// encodes after them, never inside them.
+#[test]
+fn an_export_encodes_outside_its_renders() {
+    use std::sync::atomic::Ordering;
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(3).collect();
+    for &id in &ids {
+        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+    }
+    let o = ExportOptions::from_json(&json!({"longEdge": 256, "hdr": true, "quality": 90}));
+    let before = crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed);
+    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true).unwrap();
+    assert_eq!(files.len(), 3, "{files:?}");
+    assert!(files.iter().all(|f| f.get("error").is_none()), "{files:?}");
+    assert_eq!(crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed), before, "no encode inside a photo's renders");
+}
+
+/// Note 28, on the GPU (the coordinator runs it with the GPU on): with one export at a time on the
+/// card, photos side by side still go faster than one by one, since only their renders take
+/// turns (decode, the gain map and the encode overlap). Prints per-photo
+/// times; `LIGHTCRAFT_PROFILE=1` prints each stage with its thread.
+#[test]
+fn photos_side_by_side_overlap_on_one_gpu_turn() {
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        return;
+    }
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(4).collect();
+    for &id in &ids {
+        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+    }
+    let batch: Vec<_> = ids.iter().copied().cycle().take(8).collect();
+    let o = ExportOptions::from_json(&json!({"longEdge": 3000, "hdr": true, "quality": 90}));
+    lightcraft_gpu::set_batch_limits(None, Some(1));
+    let mut run = |lanes: usize| {
+        for &id in &ids {
+            s.media.forget(id);
+        }
+        let t = std::time::Instant::now();
+        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes, true).unwrap();
+        assert!(files.iter().all(|f| f.get("error").is_none() && f.get("gpuFallback").is_none()), "{files:?}");
+        t.elapsed().as_secs_f64()
+    };
+    run(1); // warm up
+    let one = run(1);
+    let four = run(4);
+    lightcraft_gpu::set_batch_limits(None, None);
+    eprintln!("8 HDR exports: 1 lane {one:.2} s, 4 lanes {four:.2} s ({:.1}x)", one / four.max(1e-3));
+    assert!(four * 1.3 < one, "4 lanes {four:.2} s vs 1 lane {one:.2} s: lanes must overlap");
+}

@@ -4,7 +4,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
@@ -648,9 +647,9 @@ fn can_display(gpu: &Gpu, plan: &Plan<'_>, req: &RenderRequest) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     gpu: &Gpu,
+    plan: Plan<'_>,
     src: &Arc<Rgb32f>,
     info: &SourceInfo,
-    s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&GpuStages>,
     host_stages: Option<&lightcraft_pipeline::StageCache>,
@@ -668,7 +667,6 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan(src, info, s, req);
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));
@@ -1423,6 +1421,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_develop::DevelopSettings;
 
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {

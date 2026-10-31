@@ -2,7 +2,7 @@ use super::batch::run_batch;
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
-use super::{ExportOptions, Metadata, OutputDepth, lap, lap_clock};
+use super::{DeepImage, ExportOptions, Metadata, OutputDepth, lap, lap_clock};
 
 /// One exported file.
 pub struct Exported {
@@ -213,12 +213,51 @@ fn source_px(full_px: usize, long: usize, level: crate::media::SourceLevel) -> u
     (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize
 }
 
+/// Whether an export's render job decodes its original when it runs (no cached picture stands in
+/// for it): [`PreparedExport::run`] then decodes it first, outside the photo's turn at the GPU.
+fn needs_source(job: &crate::media::RenderJob) -> bool {
+    job.cache.is_none() && job.view_cache.is_none() && job.preview_cut.is_none() && !matches!(job.source, crate::media::SourceRef::Loaded(_))
+}
+
+thread_local! {
+    /// This thread is inside a photo's renders ([`TurnMark`]): what holds its turn at the GPU.
+    static IN_RENDERS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Marks the renders of one photo (what may hold its turn at the GPU) on this thread.
+struct TurnMark;
+
+impl TurnMark {
+    fn enter() -> Self {
+        let _ = IN_RENDERS.try_with(|c| c.set(c.get().saturating_add(1)));
+        TurnMark
+    }
+}
+
+impl Drop for TurnMark {
+    fn drop(&mut self) {
+        let _ = IN_RENDERS.try_with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+/// Encodes that ran inside a photo's renders (tests: an encode must never hold the GPU turn).
+#[cfg(test)]
+pub(crate) static ENCODES_IN_TURN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Count an encode that runs inside a photo's renders (tests).
+pub(super) fn note_encode() {
+    #[cfg(test)]
+    if IN_RENDERS.try_with(|c| c.get() > 0).unwrap_or(false) {
+        ENCODES_IN_TURN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl PreparedExport {
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { mut job, hdr_job, meta, opts, src_px } = *w;
+                let RenderWork { mut job, mut hdr_job, meta, opts, src_px } = *w;
                 // A gain map's HDR rendition renders on the GPU too when the SDR one can: from the
                 // stages the SDR render left on the device, in one turn at the GPU (the memory
                 // those stages hold is never another export's to take meanwhile).
@@ -227,8 +266,24 @@ impl PreparedExport {
                     && lightcraft_gpu::enabled()
                     && lightcraft_gpu::handles(OutputDepth::F32Hdr, false, lightcraft_pipeline::Overlay::None);
                 let out_px = job.request.max_w.saturating_mul(job.request.max_h);
-                let render = || -> Result<Exported, String> {
+                let mut t = lap_clock();
+                // 1. The original is decoded (and AI-denoised when asked) before the photo's turn
+                // at the GPU, on this lane's thread: other photos render on the GPU meanwhile
+                // (note 28: the turn used to cover the decode and the encode too, so photos side
+                // by side took turns at an idle card).
+                if needs_source(&job) {
+                    let src = job.source.load_source()?;
+                    if let Some(hj) = &mut hdr_job {
+                        hj.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
+                    }
+                    job.source = crate::media::SourceRef::Loaded(Box::new(src));
+                    lap("decode", &mut t);
+                }
+                // 2. The renders (the GPU's part): the SDR rendition, and a gain map's HDR one
+                let renders = || -> Result<(lightcraft_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
                     let mut t = lap_clock();
+                    lap("waiting for the GPU", &mut t);
+                    let _turn = TurnMark::enter();
                     // A gain map's HDR rendition is the same photo rendered a second time: it starts
                     // from the SDR render's decoded original and its stages (on the device, or when
                     // it renders on the CPU, the white-balanced, denoised, retouched image and
@@ -245,7 +300,7 @@ impl PreparedExport {
                     let loaded = result.loaded.take();
                     let r = result.rendered?;
                     let gpu_fallback = result.gpu_fallback;
-                    let bytes = match hdr_job {
+                    let hdr = match hdr_job {
                         Some(mut hj) => {
                             if let Some(src) = loaded {
                                 hj.source = crate::media::SourceRef::Loaded(Box::new(src));
@@ -259,18 +314,21 @@ impl PreparedExport {
                             }
                             let hr = hj.run().rendered?;
                             lap("HDR render", &mut t);
-                            let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
-                            encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
+                            Some(hr.deep.ok_or("the HDR render has no float samples")?)
                         }
-                        None => {
-                            let b = encode_rendered(&r, &opts, meta.as_ref())?;
-                            lap("encode", &mut t);
-                            b
-                        }
+                        None => None,
                     };
-                    Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                    Ok((r, hdr, gpu_fallback))
                 };
-                if hdr_on_gpu { lightcraft_gpu::in_one_turn(src_px, out_px, render) } else { render() }
+                let (r, hdr, gpu_fallback) = if hdr_on_gpu { lightcraft_gpu::in_one_turn(src_px, out_px, renders) } else { renders() }?;
+                lap("renders", &mut t);
+                // 3. The encode, on this lane's thread after its turn (the next photo renders meanwhile)
+                let bytes = match &hdr {
+                    Some(hdr) => encode_gain_map_jpeg(&r.image, hdr, &opts, meta.as_ref())?,
+                    None => encode_rendered(&r, &opts, meta.as_ref())?,
+                };
+                lap("encode", &mut t);
+                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
