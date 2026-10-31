@@ -3,6 +3,9 @@
 // blurred chromaticity when HAS_CHROMA), aux
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
 
+// `lightcraft_pipeline::finish::PAINT_LEVEL`: where a painted corner settles, as a fraction of white.
+const PAINT_LEVEL: f32 = 0.08;
+
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
         return 0.0;
@@ -495,17 +498,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let t = sstep(start, start + pf(F_VIG_WIDTH), dist);
         if (t > 0.0) {
             let lum = clamp(lum2020(d), 0.0, 1.0);
+            let style = pu(F_VIG_STYLE);
             if (amount < 0.0) {
-                var f = 1.0 + amount * t;
-                let style = pu(F_VIG_STYLE);
-                if (style == 1u) {
-                    f += (1.0 - f) * pf(F_VIG_HL) * sstep(0.4, 1.0, lum);
-                }
                 if (style == 2u) {
-                    d = d * (1.0 - (-amount) * t) + 0.0;
+                    // paint the corner: it settles on the paint's own level instead of scaling towards zero
+                    let k = (-amount) * t;
+                    d = d * (1.0 - k) + vec3<f32>(PAINT_LEVEL * k);
                 } else {
+                    var f = 1.0 + amount * t;
+                    if (style == 1u) {
+                        f += (1.0 - f) * pf(F_VIG_HL) * sstep(0.4, 1.0, lum);
+                    }
                     d = d * f;
                 }
+            } else if (style == 2u) {
+                let k = amount * t;
+                let flat = 1.0 - PAINT_LEVEL;
+                // never pulls a pixel down, so anything brighter than the paint (HDR highlights included)
+                // is left alone
+                d = d + max(vec3<f32>(flat) - d, vec3<f32>(0.0)) * k;
             } else {
                 d = d + (1.0 - d) * amount * t * 0.85;
             }
