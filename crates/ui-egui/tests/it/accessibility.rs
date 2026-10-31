@@ -294,7 +294,7 @@ fn tool_strip_and_toolbar_buttons_are_named_by_label_with_the_shortcut_as_descri
     for (name, help) in [
         ("Presets", "Shift+P"),
         ("Edit", "E"),
-        ("Crop & Rotate", "C"),
+        ("Crop & Geometry", "C"),
         ("Masking", "M"),
         ("Versions", "Shift+V"),
         ("History & Activity", "Y"),
