@@ -264,6 +264,8 @@
   "Keywords of {n} selected photos": "Parole chiave delle foto selezionate: {n}",
   "new, inside {parent}": "nuova, dentro {parent}",
   "Delete these {n} effect presets?": "Eliminare questi preset effetto ({n})?",
+  "Backed up the library to {}": "Libreria salvata in {}",
+  "The library was not backed up: {}": "Il backup della libreria non è stato eseguito: {}",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "Imported {e} mask effect{} (Masking → Effect)",
   "{photos} catalog records processed; {collections} collections.": "Record del catalogo elaborati: {photos}; raccolte: {collections}.",
   "Skipped {problem}": "Saltato: {problem}",

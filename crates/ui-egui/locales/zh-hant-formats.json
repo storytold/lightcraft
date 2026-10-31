@@ -272,6 +272,8 @@
   "{name} opened in the other editor": "已在其他編輯器中開啟 {name}",
   "{n} originals opened in the other editor": "已在其他編輯器中開啟 {n} 個原始檔案",
   "· {in_source} identical copies": "· {in_source} 個相同副本",
+  "Backed up the library to {}": "已將照片庫備份到 {}",
+  "The library was not backed up: {}": "未能備份照片庫：{}",
   "{count} more warnings.": "另有 {count} 則警告。",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "有 {skipped} 張影像未匯入，因為它們在目錄中的記錄不完整。",
   "{photos} catalog records processed; {collections} collections.": "已處理 {photos} 筆目錄記錄；{collections} 個收藏集。",

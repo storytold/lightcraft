@@ -7,12 +7,13 @@
 //! - **determinism**: replaying the log reproduces the state exactly (property-tested).
 //!
 //! **Catalog format version** ([`journal::VERSION`], see [`journal`] → *Format versions*): adding
-//! an [`Op`] variant or a serialized field means bumping it. Newer builds read every older format
-//! (and upgrade it on open); older builds refuse a newer library with [`CatalogError::Newer`]
-//! instead of reading part of it.
+//! an [`Op`] variant or a serialized field means adding a row to [`journal::FORMATS`]. Newer
+//! builds read every older format (and upgrade it on open); older builds refuse a newer library
+//! with [`CatalogError::Newer`] instead of reading part of it.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod backup;
 pub mod dates;
 pub mod folders;
 mod index;
@@ -24,8 +25,10 @@ pub mod model;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
+pub mod segments;
 pub mod stacks;
 pub mod store;
+mod stored;
 pub mod tally;
 
 use std::collections::BTreeMap;
@@ -41,6 +44,7 @@ pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
 pub use rules::{Match, Rule, RuleSet};
+pub use segments::Segment;
 use serde::{Deserialize, Serialize};
 pub use store::{FsStore, MemStore, Store};
 
@@ -77,6 +81,7 @@ pub const HISTORY_LIMIT: usize = 200;
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Op {
     AddPhoto {
+        #[serde(serialize_with = "stored::photo")]
         photo: Box<Photo>,
     },
     RemovePhoto {
@@ -96,12 +101,14 @@ pub enum Op {
     },
     SetDevelop {
         id: PhotoId,
+        #[serde(serialize_with = "stored::settings", deserialize_with = "stored::read_settings")]
         settings: Arc<DevelopSettings>,
         label: String,
         edited: Option<String>,
     },
     SetMeta {
         id: PhotoId,
+        #[serde(serialize_with = "stored::meta")]
         meta: Box<Meta>,
     },
     SetDeleted {
@@ -115,16 +122,19 @@ pub enum Op {
     },
     SetVersions {
         id: PhotoId,
+        #[serde(serialize_with = "stored::versions")]
         versions: Vec<Version>,
     },
     SetHistory {
         id: PhotoId,
+        #[serde(serialize_with = "stored::history")]
         history: Vec<HistoryStep>,
     },
     /// Append one History entry (dropping the oldest beyond [`HISTORY_LIMIT`]). Logged instead of
     /// a full `SetHistory` so each edit costs one step in the op log.
     PushHistory {
         id: PhotoId,
+        #[serde(serialize_with = "stored::step")]
         step: HistoryStep,
     },
     /// Move the History cursor (see [`Photo::history_cursor`]) without changing the steps.
@@ -264,6 +274,7 @@ pub enum Op {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Catalog {
+    #[serde(serialize_with = "stored::photos")]
     photos: BTreeMap<PhotoId, Arc<Photo>>,
     albums: BTreeMap<AlbumId, Album>,
     next_photo: u64,
@@ -1038,6 +1049,59 @@ impl Catalog {
 
     // ---- persistence
 
+    /// The photos by id (what the journal saves in segments).
+    pub(crate) fn photo_map(&self) -> &BTreeMap<PhotoId, Arc<Photo>> {
+        &self.photos
+    }
+
+    /// Everything but the photos: what `catalog.snap` holds of a catalog whose photos are in
+    /// segments.
+    pub(crate) fn without_photos(&self) -> Catalog {
+        // every field by name: a new one doesn't compile until it is saved here too
+        let Catalog {
+            photos: _,
+            albums,
+            next_photo,
+            next_album,
+            stacks,
+            next_stack,
+            label_names,
+            browsed,
+            keyword_list,
+            folder_records,
+            revision,
+            changes: _,
+            index: _,
+        } = self;
+        Catalog {
+            photos: BTreeMap::new(),
+            albums: albums.clone(),
+            next_photo: *next_photo,
+            next_album: *next_album,
+            stacks: stacks.clone(),
+            next_stack: *next_stack,
+            label_names: label_names.clone(),
+            browsed: browsed.clone(),
+            keyword_list: keyword_list.clone(),
+            folder_records: folder_records.clone(),
+            revision: *revision,
+            // (what the latest ops touched is this session's to remember: not saved)
+            changes: Changes::default(),
+            // (lookups worked out from the rest: not saved)
+            index: index::Indexes::default(),
+        }
+    }
+
+    /// The catalog's photos, for the journal to keep as what is on disk.
+    pub(crate) fn into_photo_map(self) -> BTreeMap<PhotoId, Arc<Photo>> {
+        self.photos
+    }
+
+    /// Give a catalog read without its photos the photos read from its segments.
+    pub(crate) fn set_photos(&mut self, photos: BTreeMap<PhotoId, Arc<Photo>>) {
+        self.photos = photos;
+    }
+
     /// Full snapshot as JSON.
     pub fn to_snapshot(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
@@ -1193,6 +1257,8 @@ mod tests_album_order;
 #[cfg(test)]
 mod tests_background;
 #[cfg(test)]
+mod tests_backup;
+#[cfg(test)]
 mod tests_folder_records;
 #[cfg(test)]
 mod tests_folders;
@@ -1210,6 +1276,12 @@ mod tests_lock;
 mod tests_repair;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_segments;
+#[cfg(test)]
+mod tests_stored;
+#[cfg(test)]
+mod tests_stored_settings;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]

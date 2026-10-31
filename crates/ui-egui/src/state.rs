@@ -36,6 +36,10 @@ pub struct UiState {
     /// The Build Previews run last announced (its identity, finished?).
     #[serde(skip)]
     pub preview_build_seen: Option<(usize, bool)>,
+    /// The library backup whose end was announced (see `backup_status`): an address, only good
+    /// for this run.
+    #[serde(skip)]
+    pub backup_seen: Option<usize>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).
     #[serde(skip)]
@@ -362,6 +366,7 @@ impl Default for UiState {
             docking_version: crate::docking::DOCKING_VERSION,
             language: crate::i18n::default_language(),
             preview_build_seen: None,
+            backup_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,

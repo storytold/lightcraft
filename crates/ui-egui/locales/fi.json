@@ -2327,5 +2327,10 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Back Up Library": "Varmuuskopioi kirjasto",
+  "Backing up the library": "Kirjastoa varmuuskopioidaan",
+  "Backup Status": "Varmuuskopion tila",
+  "Check Backup": "Tarkista varmuuskopio",
+  "Backup Preferences": "Varmuuskopioinnin asetukset"
 }
