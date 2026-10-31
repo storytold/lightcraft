@@ -359,7 +359,14 @@ pub fn rule_date(s: &str) -> Result<String, Issue> {
         let zone = after_fraction.as_bytes();
         match zone {
             [] | [b'Z' | b'z'] => true,
-            [b'+' | b'-', h1, h2, b':', m1, m2] => [h1, h2, m1, m2].iter().all(|c| c.is_ascii_digit()),
+            [b'+' | b'-', h1, h2, b':', m1, m2] => {
+                if ![h1, h2, m1, m2].iter().all(|c| c.is_ascii_digit()) {
+                    return false;
+                }
+                let hours = (*h1 - b'0') * 10 + (*h2 - b'0');
+                let minutes = (*m1 - b'0') * 10 + (*m2 - b'0');
+                hours < 18 || hours == 18 && minutes == 0
+            }
             _ => false,
         }
     };
