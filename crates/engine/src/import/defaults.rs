@@ -13,6 +13,21 @@ pub fn has_import_look(p: &Photo) -> bool {
     *p.develop == p.camera_defaults()
 }
 
+/// [`has_import_look`], or the only change is the profile, such as a default profile picked for a
+/// body's photos: the camera's JPEG then shows the photo as framed and exposed, a fair stand-in for
+/// a focus check at 100 %.
+pub fn looks_as_shot(p: &Photo) -> bool {
+    if has_import_look(p) {
+        return true;
+    }
+    let neutral = |d: &lightcraft_develop::DevelopSettings| {
+        let mut d = d.clone();
+        d.profile.id = lightcraft_develop::Profile::default().id;
+        d
+    };
+    neutral(&p.develop) == neutral(&p.camera_defaults())
+}
+
 /// User defaults applied on import (Settings → Import; saved in the library's `prefs.json`).
 /// Presets are referenced by id; a preset that no longer exists is ignored.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

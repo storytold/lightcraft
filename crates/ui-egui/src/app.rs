@@ -21,6 +21,19 @@ pub(crate) use frame::import_tick_allowed;
 pub(crate) use screenshot::shot_ready;
 
 impl LightcraftApp {
+    /// A cell on screen or the loupe has no picture yet in frame `pass` ([`render::Renderer::frame`]), its first one on its way:
+    /// this window's own background requests (photos ahead, real thumbnails behind stand-ins) wait,
+    /// and so does the engine's background work ([`lightcraft_engine::prep::pictures_missing`]).
+    pub fn pictures_missing(&mut self, pass: u64) {
+        self.pictures_missing_pass = Some(pass);
+        lightcraft_engine::prep::pictures_missing();
+    }
+
+    /// Whether a picture was missing in frame `pass` or the one before.
+    pub fn pictures_busy(&self, pass: u64) -> bool {
+        self.pictures_missing_pass.is_some_and(|p| pass.saturating_sub(p) <= 1)
+    }
+
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
     /// to a worker so frames apply results instead of waiting.
     pub fn new(mut session: Session, services: Services) -> Self {
@@ -94,6 +107,11 @@ impl LightcraftApp {
             space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            loupe_timing: Default::default(),
+            prep_synced: false,
+            thumb_first: Default::default(),
+            pictures_missing_pass: None,
+            look_ahead: Default::default(),
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),
@@ -106,6 +124,7 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            scans_stopping: Vec::new(),
             waiting_import: Default::default(),
             sync: None,
             sync_owns_changes: false,
@@ -123,6 +142,8 @@ impl LightcraftApp {
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,
+            disk_space_notice: false,
+            disk_notice: None,
             memory_applied: None,
             display_applied: None,
             display_error: None,
@@ -488,6 +509,32 @@ impl LightcraftApp {
         }
     }
 
+    /// The app-wide background preparation settings live with the app settings (`ui.json`): taken
+    /// into the session once, then a change made through `prefs.setBackgroundPrep` is saved with
+    /// them. Run at the start of every logic pass, before any command of that pass (also before
+    /// the fonts are ready and the window is drawn).
+    fn sync_prep_settings(&mut self) {
+        if !self.prep_synced {
+            self.session.prep.app = self.ui.settings.background_prep.sanitized();
+            self.prep_synced = true;
+        } else if self.session.prep.app != self.ui.settings.background_prep {
+            self.ui.settings.background_prep = self.session.prep.app;
+        }
+    }
+
+    /// Preparing photos in the background ([`lightcraft_engine::prep`]): the whole view's previews
+    /// once the user is culling in the loupe, built from the photo on screen in the direction of travel.
+    fn background_prep(&mut self, ctx: &egui::Context) {
+        let mode = panels::detail::prep_mode(self);
+        let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
+        let at = if loupe { self.session.active() } else { None };
+        let backward = self.look_ahead.backward();
+        self.session.prep_tick(mode, at, backward);
+        if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
@@ -584,6 +631,7 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.sync_prep_settings();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and

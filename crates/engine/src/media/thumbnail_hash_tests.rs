@@ -6,6 +6,85 @@ fn session() -> crate::Session {
     s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     s
 }
+/// PERF-CULL: an unedited raw's camera JPEG is read once for the loupe and kept in memory for a
+/// step back; the full-size one (zoomed in) is made at the size asked for and kept nowhere; an
+/// edited raw or another file has none.
+#[test]
+fn camera_previews_are_kept_for_a_revisit_and_full_size_ones_are_not() {
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut s = crate::Session::new();
+    let r = reads.clone();
+    s.media.preview_loader = Some(Arc::new(move |_: &str, edge: usize| {
+        r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(Rgba8 { width: edge.min(64), height: 2, data: vec![[9, 8, 7, 255]; edge.min(64) * 2] })
+    }));
+    let mut raw = Photo::new(PhotoId(1), Source::File { path: "a.cr3".into() }, "a.cr3", "CR3", 6000, 4000, "2026-01-01");
+    raw.kind = MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let jpeg = Photo::new(PhotoId(2), Source::File { path: "b.jpg".into() }, "b.jpg", "JPEG", 600, 400, "2026-01-01");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(jpeg) }).unwrap();
+    for _ in 0..3 {
+        let q = s.quick_view_job(PhotoId(1), 48, true).unwrap();
+        let r = q.run();
+        assert_eq!(r.quick, Some(QuickSource::Embedded));
+    }
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "read once, then from memory");
+    let full = s.embedded_full_job(PhotoId(1), 8192).unwrap();
+    assert!(full.embedded_cache.is_none() && full.cached.is_empty() && full.small.is_none());
+    assert_eq!(full.embedded.as_ref().map(|e| e.2), Some(8192));
+    assert_ne!(full.key, s.quick_view_job(PhotoId(1), 48, true).unwrap().key);
+    assert_eq!(full.run().quick, Some(QuickSource::Embedded));
+    assert!(s.embedded_full_job(PhotoId(2), 8192).is_none(), "not a raw");
+    let mut edited = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    edited.light.exposure = 1.0;
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edited), label: "edit".into(), edited: None }).unwrap();
+    assert!(s.embedded_full_job(PhotoId(1), 8192).is_none(), "an edit is shown rendered");
+}
+
+/// A raw with a profile picked (e.g. a default profile for its body, on every photo of a folder)
+/// still shows its camera JPEG first, in the grid and the loupe, until its render replaces it;
+/// only an unedited raw's is final.
+#[test]
+fn a_raw_with_a_profile_picked_still_shows_its_camera_preview_first() {
+    let mut s = crate::Session::new();
+    s.media.preview_loader =
+        Some(Arc::new(|_: &str, edge: usize| Some(Rgba8 { width: edge.min(8), height: 2, data: vec![[9, 8, 7, 255]; edge.min(8) * 2] })));
+    let mut raw = Photo::new(PhotoId(1), Source::File { path: "a.cr3".into() }, "a.cr3", "CR3", 6000, 4000, "2026-01-01");
+    raw.kind = MediaKind::Raw;
+    let mut d = raw.camera_defaults();
+    d.profile.id = "lc.vivid".into();
+    raw.develop = Arc::new(d);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    assert!(!s.embedded_thumb_is_final(&p), "its render replaces the camera JPEG");
+    let q = s.quick_view_job(PhotoId(1), 64, true).unwrap();
+    assert!(q.embedded.is_some(), "the loupe's stand-in is the camera JPEG");
+    assert_eq!(q.run().quick, Some(QuickSource::Embedded));
+    let thumb = s.thumb_job(PhotoId(1), 256).unwrap();
+    let q = s.quick_thumb_job(&thumb).expect("the grid's stand-in");
+    assert_eq!(q.run().quick, Some(QuickSource::Embedded));
+    assert!(s.embedded_full_job(PhotoId(1), 8192).is_some(), "framed and exposed as shot: a fair focus check");
+}
+
+/// A virtual copy shares its master's file and, unedited, its settings; its loupe stand-ins
+/// are its own all the same (CodeRabbit on #3080).
+#[test]
+fn a_virtual_copy_has_its_own_stand_in_keys() {
+    let mut s = crate::Session::new();
+    s.media.preview_loader = Some(Arc::new(|_: &str, _: usize| None::<Rgba8>));
+    for id in [1, 2] {
+        let mut raw = Photo::new(PhotoId(id), Source::File { path: "a.cr3".into() }, "a.cr3", "CR3", 6000, 4000, "2026-01-01");
+        raw.kind = MediaKind::Raw;
+        raw.develop = Arc::new(raw.camera_defaults());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    }
+    let quick = |s: &mut crate::Session, id: u64| s.quick_view_job(PhotoId(id), 48, true).unwrap().key;
+    assert_ne!(quick(&mut s, 1), quick(&mut s, 2));
+    let full = |s: &mut crate::Session, id: u64| s.embedded_full_job(PhotoId(id), 8192).unwrap().key;
+    assert_ne!(full(&mut s, 1), full(&mut s, 2));
+}
+
 #[test]
 fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_before() {
     let mut s = session();
@@ -107,6 +186,8 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
         key: 9,
         cached: Vec::new(),
         embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| -> Option<Rgba8> { panic!("preview reader bug") }), 256)),
+        embedded_cache: None,
+        embedded_on_disk: false,
         minimum_embedded_edge: None,
         small: None,
     };

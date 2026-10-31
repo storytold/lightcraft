@@ -39,6 +39,7 @@ mod organize;
 mod persist;
 mod prefs;
 mod presets_scale;
+mod preview_prep;
 mod print;
 mod process;
 mod recheck;

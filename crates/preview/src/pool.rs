@@ -8,12 +8,16 @@
 //! Native: a fixed set of worker threads, started on first use. wasm32 (no threads): the host
 //! calls [`JobPool::run_inline`] once per frame.
 //!
+//! A pool may keep a few workers for cheap jobs only ([`JobPool::with_fast_lane`]): the stand-ins
+//! a view shows first (a raw's embedded JPEG, a cached thumbnail) never wait for a worker while
+//! every other one is busy with a render that takes seconds.
+//!
 //! No worker outlives its pool by more than a deadline (issue #620: a render still inside the GPU
 //! driver while the process exits crashes there): [`JobPool::shutdown`] and dropping the pool
 //! discard the queued jobs and wait, bounded, for the running ones.
 
 use std::hash::Hash;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -37,6 +41,12 @@ struct Shared<S, R> {
     busy: Mutex<Vec<S>>,
     cv: Condvar,
     shutdown: AtomicBool,
+    /// Which slots' jobs are cheap: the fast lane's workers take only those.
+    is_fast: Option<fn(&S) -> bool>,
+    /// Background jobs (priority below `.0`) running at once at most (`.1`; see
+    /// [`JobPool::cap_background`]), and how many run now (locked inside `queue`).
+    background_cap: Mutex<(u32, usize)>,
+    background_running: AtomicUsize,
     /// The worker threads that have not ended yet, and the signal that one did.
     #[cfg(not(target_arch = "wasm32"))]
     live: Mutex<Vec<std::thread::ThreadId>>,
@@ -65,6 +75,9 @@ pub struct JobPool<S, R> {
     early: Option<Done<S, R>>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     threads: usize,
+    /// Of `threads`, the workers that take only fast jobs ([`JobPool::with_fast_lane`]).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fast_threads: usize,
     started: bool,
     seq: u64,
     #[cfg(not(target_arch = "wasm32"))]
@@ -76,6 +89,18 @@ pub struct JobPool<S, R> {
 impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     /// A pool with `threads` workers (none on wasm; `0` = jobs only run via [`JobPool::run_inline`]).
     pub fn new(threads: usize) -> Self {
+        Self::build(threads, 0, None)
+    }
+
+    /// A pool with `threads` workers for any job and `fast_threads` more that take only the jobs of
+    /// slots `is_fast` names (cheap ones, e.g. a stand-in picture): those always find a worker,
+    /// however long the other jobs run. The other workers take fast jobs too, by priority.
+    pub fn with_fast_lane(threads: usize, fast_threads: usize, is_fast: fn(&S) -> bool) -> Self {
+        Self::build(threads, fast_threads, Some(is_fast))
+    }
+
+    fn build(threads: usize, fast_threads: usize, is_fast: Option<fn(&S) -> bool>) -> Self {
+        let fast_threads = if is_fast.is_some() { fast_threads } else { 0 };
         let (tx, rx) = channel();
         JobPool {
             shared: Arc::new(Shared {
@@ -83,6 +108,9 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 busy: Mutex::new(Vec::new()),
                 cv: Condvar::new(),
                 shutdown: AtomicBool::new(false),
+                is_fast,
+                background_cap: Mutex::new((0, usize::MAX)),
+                background_running: AtomicUsize::new(0),
                 #[cfg(not(target_arch = "wasm32"))]
                 live: Mutex::new(Vec::new()),
                 #[cfg(not(target_arch = "wasm32"))]
@@ -92,6 +120,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
             rx,
             early: None,
             threads,
+            fast_threads,
             started: false,
             seq: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -121,15 +150,17 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         {
             // held while spawning: a worker that ends at once still finds its id listed
             let mut live = self.shared.live.lock().unwrap_or_else(|e| e.into_inner());
-            for i in 0..self.threads {
+            for i in 0..self.threads.saturating_add(self.fast_threads) {
                 let shared = self.shared.clone();
                 let tx = self.tx.clone();
-                let spawned = std::thread::Builder::new().name(format!("lc-job-{i}")).spawn(move || {
+                let fast_only = i >= self.threads;
+                let name = if fast_only { format!("lc-job-fast-{}", i - self.threads) } else { format!("lc-job-{i}") };
+                let spawned = std::thread::Builder::new().name(name).spawn(move || {
                     let _ended = Ended(&shared);
-                    while let Some(e) = take(&shared, true) {
+                    while let Some((e, background)) = take(&shared, true, fast_only) {
                         let t0 = std::time::Instant::now();
                         // the slot is free again when the job ends, also if it panics
-                        let _free = Free(&shared, e.slot);
+                        let _free = Free(&shared, e.slot, background);
                         let result = (e.job)();
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
                         if tx.send(done).is_err() {
@@ -146,6 +177,13 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 }
             }
         }
+    }
+
+    /// At most `max` jobs below `priority` run at once (background work: a whole folder's
+    /// thumbnail renders), so workers stay free for what is on screen.
+    pub fn cap_background(&self, priority: u32, max: usize) {
+        *self.shared.background_cap.lock().unwrap_or_else(|e| e.into_inner()) = (priority, max.max(1));
+        self.shared.cv.notify_all();
     }
 
     /// Stop the pool: queued jobs are dropped, no new one starts, and the call waits up to
@@ -189,7 +227,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
         q.retain(|e| e.slot != slot);
         q.push(Entry { slot, key, priority, seq: self.seq, job });
-        cv.notify_one();
+        cv.notify_all(); // (all: a fast-lane worker woken for a job it may not take would leave it waiting)
     }
 
     /// Change queued jobs' priorities: `f(slot, priority)` returns the new priority, or `None` to
@@ -237,8 +275,8 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     pub fn run_inline(&mut self, n: usize) -> usize {
         let mut ran = 0;
         while ran < n {
-            let Some(e) = take(&self.shared, false) else { break };
-            let _free = Free(&self.shared, e.slot);
+            let Some((e, background)) = take(&self.shared, false, false) else { break };
+            let _free = Free(&self.shared, e.slot, background);
             let result = (e.job)();
             let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
             ran += 1;
@@ -247,9 +285,10 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     }
 }
 
-/// Pop the best job (highest priority, newest first). Blocks when `wait` until one is queued or
-/// the pool shuts down.
-fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Entry<S, R>> {
+/// Pop the best job (highest priority, newest first; `fast_only`: of the fast slots only). Blocks
+/// when `wait` until one is queued or the pool shuts down.
+/// The flag says the job counts as background work ([`JobPool::cap_background`]).
+fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool, fast_only: bool) -> Option<(Entry<S, R>, bool)> {
     let mut q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if shared.shutdown.load(Ordering::Relaxed) {
@@ -258,12 +297,24 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
         // (a slot with a job running waits for it: see `Shared::busy`)
         let best = {
             let busy = shared.busy.lock().unwrap_or_else(|e| e.into_inner());
-            q.iter().enumerate().filter(|(_, e)| !busy.contains(&e.slot)).max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i)
+            let cheap = |e: &Entry<S, R>| shared.is_fast.is_some_and(|f| f(&e.slot));
+            let (below, max) = *shared.background_cap.lock().unwrap_or_else(|e| e.into_inner());
+            let room = shared.background_running.load(Ordering::Relaxed) < max;
+            // (a cheap job is never held back as background work)
+            let background = |e: &Entry<S, R>| e.priority < below && !cheap(e);
+            q.iter()
+                .enumerate()
+                .filter(|(_, e)| !busy.contains(&e.slot) && (!fast_only || cheap(e)) && (room || !background(e)))
+                .max_by_key(|(_, e)| (e.priority, e.seq))
+                .map(|(i, e)| (i, background(e)))
         };
-        if let Some(i) = best {
+        if let Some((i, background)) = best {
             let e = q.swap_remove(i);
             shared.busy.lock().unwrap_or_else(|e| e.into_inner()).push(e.slot);
-            return Some(e);
+            if background {
+                shared.background_running.fetch_add(1, Ordering::Relaxed);
+            }
+            return Some((e, background));
         }
         if !wait {
             return None;
@@ -272,11 +323,16 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
     }
 }
 
-/// The job for `slot` ended: a job queued for it may start.
-fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S) {
+/// The job for `slot` ended (`background`: it counted as background work): a job queued for it
+/// may start.
+fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S, background: bool) {
     {
         // under the queue lock: a worker is either before its look at `busy` or waiting
         let _q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
+        if background {
+            let n = shared.background_running.load(Ordering::Relaxed);
+            shared.background_running.store(n.saturating_sub(1), Ordering::Relaxed);
+        }
         let mut busy = shared.busy.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = busy.iter().position(|s| s == slot) {
             busy.swap_remove(i);
@@ -286,11 +342,11 @@ fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S) {
 }
 
 /// Frees a job's slot when the job ends (see [`finished`]).
-struct Free<'a, S: PartialEq, R>(&'a Shared<S, R>, S);
+struct Free<'a, S: PartialEq, R>(&'a Shared<S, R>, S, bool);
 
 impl<S: PartialEq, R> Drop for Free<'_, S, R> {
     fn drop(&mut self) {
-        finished(self.0, &self.1);
+        finished(self.0, &self.1, self.2);
     }
 }
 
