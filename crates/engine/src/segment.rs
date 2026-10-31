@@ -102,6 +102,8 @@ pub struct Polled {
     pub messages: Vec<String>,
     /// A mask that got a new selection (worth a detail pass).
     pub refine: Option<u32>,
+    /// A Describe result created this component; the UI may now select its actual row.
+    pub created: Option<(PhotoId, u32, usize)>,
 }
 
 /// The model download (`segment.model.*`).
@@ -680,12 +682,19 @@ impl Session {
                         self.execute("mask.addComponent", &p)
                     }
                 };
-                match r {
-                    Ok(_) => {
-                        polled.changed = true;
-                        polled.refine = self.active_mask;
-                    }
-                    Err(e) => polled.messages.push(e.to_string()),
+                // NotSaved means creation succeeded in memory. Report the error and the new
+                // row together, so the UI cannot keep a destructive stale selection.
+                if r.is_ok() || matches!(r, Err(crate::EngineError::NotSaved(_))) {
+                    polled.changed = true;
+                    polled.refine = self.active_mask;
+                    polled.created = self.active_mask.and_then(|mask| {
+                        let d = self.develop_of(photo)?;
+                        let component = d.masks.iter().find(|m| m.id == mask)?.components.len().checked_sub(1)?;
+                        Some((photo, mask, component))
+                    });
+                }
+                if let Err(e) = r {
+                    polled.messages.push(e.to_string());
                 }
             }
             Tag::Detail { photo, mask, comp, shape } => {
@@ -727,6 +736,50 @@ mod tests {
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");
+    }
+
+    /// Only a successful, still-applicable Describe result announces a newly created row.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn prompt_completion_reports_the_created_component() {
+        for scenario in ["new", "component", "empty", "failed", "switched", "deleted"] {
+            let mut s = Session::with_demo();
+            let photo = s.active().unwrap();
+            s.execute("mask.add", &serde_json::json!({"kind":"radial"})).unwrap();
+            let mask = if scenario == "new" { None } else { s.active_mask };
+            if scenario == "switched" {
+                let other = s.catalog.photos().find(|p| p.id != photo).unwrap().id;
+                s.execute("library.select", &serde_json::json!({"ids":[other.0]})).unwrap();
+            }
+            if scenario == "deleted" {
+                s.execute("mask.delete", &serde_json::json!({})).unwrap();
+            }
+            let result = match scenario {
+                "empty" => Ok(None),
+                "failed" => Err("synthetic worker failure".into()),
+                _ => Ok(Some(seg_box(4, 1, 1, 3, 3))),
+            };
+            s.segmenter
+                .results
+                .0
+                .send(worker::Outcome {
+                    tag: Tag::NewPrompt { photo, mask, op: "add".into(), name: None, text: "tree".into() },
+                    result,
+                    superseded: false,
+                    notice: None,
+                })
+                .unwrap();
+            let polled = s.segment_poll();
+            match scenario {
+                "new" => assert_eq!(polled.created, Some((photo, 2, 0))),
+                "component" => assert_eq!(polled.created, Some((photo, 1, 1))),
+                _ => {
+                    assert_eq!(polled.created, None, "{scenario}");
+                    assert!(!polled.changed);
+                    assert!(!polled.messages.is_empty());
+                }
+            }
+        }
     }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {

@@ -11,7 +11,8 @@ below) works, and no render, export or command ever waits for it.
 
 ## Using them
 
-In the Masking panel (M):
+In the Masking panel (M), choose a type directly for the first mask. Once a mask exists, use +
+in the Masks header to create another:
 
 - **Object**: click the thing you want; every click refines the selection. ⌥-click (Alt) a part
   to leave it out. Clicks show as green (include) and red (leave out) dots.
@@ -47,7 +48,7 @@ look: ~3 s on an Apple M4 Pro, plus a one-time ~6 s for compiling GPU kernels an
 model after launch). That starts in the background as soon as you pick Object; after it, each
 click takes ~35 ms and each description ~0.6 s. Everything the model does runs on its own worker
 thread: the window stays responsive, a click shows its dot at once and the selection follows
-when it's computed ("Selecting…" / "Analyzing the photo…" under the mask tiles). The model is
+when it's computed ("Selecting…" / "Analyzing the photo…" under the Masks header). The model is
 unloaded after 10 minutes without use (it takes several GB of memory) and loaded again when
 needed.
 

@@ -58,6 +58,9 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 }
 
 pub const UI_COMMANDS: &[UiCommand] = &[
+    ("ui.maskPanel", "Arrange Masks Panel", None, ""),
+    ("mask.selectComponent", "Select Mask Component", None, ""),
+    ("mask.brushSettings", "Brush Settings", None, ""),
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
     ("modelSetup.cancel", "Cancel Pending Photo Action", None, ""),
