@@ -1,6 +1,10 @@
 use super::curve::set_tat;
 use super::sliders::{control, sub_title};
-use super::{BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, hex, json, paint, register, text_button, vec2};
+use super::{
+    BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, apply_slider_out, controls, hex, json, paint, register,
+    slider, text_button, vec2,
+};
+use egui::{Align2, pos2};
 
 // ------------------------------------------------------------------------------ colour mixer
 
