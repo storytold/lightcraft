@@ -246,6 +246,15 @@ pub enum Dialog {
         #[serde(default)]
         error: Option<String>,
     },
+    /// An openly licensed AI mask model (`model`: its key in `ai.models.status`, e.g. `subject`, `scene`,
+    /// `sam2`) isn't installed: offer to download it (what it does, size, licence, progress).
+    /// `then`: the AI mask to start once it is there, as for [`Dialog::SamModel`].
+    AiModel {
+        model: String,
+        then: Option<(String, String)>,
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// Open Library was given a Lightroom Classic catalog (issue #891): offer File ▸ Import
     /// Lightroom Catalog… with `catalog` (the `.lrcat` found; `None`: ask for it) instead.
     /// `folder`: what was chosen.

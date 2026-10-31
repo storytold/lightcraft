@@ -13,6 +13,8 @@ pub enum AiModel {
     FaceDetector,
     /// SAM 3, behind Object and Describe masks (`segment.model.download`).
     Sam3,
+    /// An openly licensed AI-mask model, by its key (`segment.models`, `segment.model.download {key}`).
+    Open(&'static str),
 }
 
 /// The kind of an [`EngineError`] (or of an error a frontend raised itself: [`ErrorKind::Other`]).

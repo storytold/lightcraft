@@ -30,7 +30,7 @@ use frame::{
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
 pub(crate) use sam_model::show_model_folder;
-use sam_model::{sam_by_hand, sam_model_body};
+use sam_model::{ai_model_body, sam_by_hand, sam_model_body};
 use slideshow_export::slideshow_export_body;
 
 pub mod credits;
@@ -282,6 +282,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
+        Dialog::AiModel { .. } => "Download an AI Model?",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
         Dialog::ViewOptions => "View Options",
@@ -303,16 +304,26 @@ struct SamState {
     failed: bool,
     /// no download location in this build: nothing to offer but the manual install
     by_hand: bool,
+    /// The AI model the dialog offers (`Dialog::AiModel`): installed, downloading, failed.
+    ai: Option<(bool, bool, bool)>,
 }
 
 impl SamState {
-    fn of(app: &LightcraftApp) -> Self {
+    fn of(app: &LightcraftApp, dlg: &Dialog) -> Self {
         let sam = &app.session.segmenter;
+        let ai = match dlg {
+            Dialog::AiModel { model, .. } => {
+                let d = sam.model_download_status(model);
+                Some((sam.model_installed(model), d.running, d.error.is_some()))
+            }
+            _ => None,
+        };
         SamState {
             installed: sam.installed(),
             running: sam.download_status().running,
             failed: sam.download_status().error.is_some(),
             by_hand: sam_by_hand(sam),
+            ai,
         }
     }
 }
@@ -323,6 +334,8 @@ fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
         Dialog::SamModel { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
+        Dialog::AiModel { .. } if sam.ai.is_some_and(|(installed, running, _)| installed || running) => "Close",
+        Dialog::AiModel { .. } => "Not Now",
         _ => "Cancel",
     }
 }
@@ -357,7 +370,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::SynchronizeFolder { .. } if informational => "Close",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
-        Dialog::SamModel { .. } => return sam_ok_label(dlg, sam).to_string(),
+        Dialog::SamModel { .. } | Dialog::AiModel { .. } => return sam_ok_label(dlg, sam).to_string(),
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
         _ if informational => "Close",
         _ => "OK",
@@ -371,6 +384,9 @@ fn sam_ok_label(dlg: &Dialog, sam: &SamState) -> &'static str {
         Dialog::SamModel { then: Some(_), .. } if sam.installed => "Continue",
         Dialog::SamModel { .. } if sam.installed || sam.running || sam.by_hand => "",
         Dialog::SamModel { error, .. } if error.is_some() || sam.failed => "Try Again",
+        Dialog::AiModel { then: Some(_), .. } if sam.ai.is_some_and(|(installed, _, _)| installed) => "Continue",
+        Dialog::AiModel { .. } if sam.ai.is_some_and(|(installed, running, _)| installed || running) => "",
+        Dialog::AiModel { error, .. } if error.is_some() || sam.ai.is_some_and(|(_, _, failed)| failed) => "Try Again",
         _ => "Download",
     }
 }
@@ -397,7 +413,7 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
 /// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
 fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
     let informational = is_informational(dlg);
-    let sam = SamState::of(app);
+    let sam = SamState::of(app, dlg);
     let cancel = cancel_label(dlg, &sam);
     let ok = ok_label(app, dlg, informational, &sam);
     let ok = ok.as_str();
@@ -465,8 +481,8 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             app.toast(ctx, e)
         }
         // the SAM 3 dialog stays open to show the download (or why it can't start)
-        Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
-            if let Dialog::SamModel { error, .. } = dlg {
+        Err(e) if matches!(dlg, Dialog::SamModel { .. } | Dialog::AiModel { .. }) => {
+            if let Dialog::SamModel { error, .. } | Dialog::AiModel { error, .. } = dlg {
                 *error = Some(e);
             }
         }
@@ -499,7 +515,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             app.toast(ctx, e);
         }
         Ok(_) if keeps_open(app, dlg) => {
-            if let Dialog::SamModel { error, .. } = dlg {
+            if let Dialog::SamModel { error, .. } | Dialog::AiModel { error, .. } = dlg {
                 *error = None;
             }
         }
@@ -515,7 +531,11 @@ const BACKDROP_SHOWN: &str = "dialog-backdrop-shown";
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
 /// downloads).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
-    matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+    match dlg {
+        Dialog::SamModel { .. } => !app.session.segmenter.installed(),
+        Dialog::AiModel { model, .. } => !app.session.segmenter.model_installed(model),
+        _ => false,
+    }
 }
 
 /// The body of the AutoStack dialog.
@@ -1814,6 +1834,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         // scrolls: its tab bar stays put and its pages scroll by themselves)
         Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),
         Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
+        Dialog::AiModel { model, error, .. } => ai_model_body(app, ui, model, error.as_deref()),
         Dialog::KeywordTag { .. } => keyword_tag_body(app, ui, t, confirm, dlg),
         Dialog::KeywordSet { .. } => keyword_set_body(ui, t, confirm, dlg),
         Dialog::MoveKeyword { .. } => move_keyword_body(ui, t, dlg),

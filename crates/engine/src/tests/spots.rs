@@ -284,7 +284,7 @@ fn mask_and_spot_targets_preserve_explicit_defaults_and_selection_clearing() {
         assert!(matches!(d.masks[1].components[1].shape, MaskShape::ColorRange { .. }));
     }
     s.execute("mask.update", &json!({"id": 1, "component": 0, "shape": {"kind": "sky"}})).unwrap();
-    assert!(matches!(s.develop_of(s.active().unwrap()).unwrap().masks[0].components[0].shape, MaskShape::Sky));
+    assert!(matches!(s.develop_of(s.active().unwrap()).unwrap().masks[0].components[0].shape, MaskShape::Sky { .. }));
     for params in [json!({"points": [[0.2, 0.2]]}), json!({"id": null, "points": [[0.4, 0.4]]})] {
         s.execute("mask.brushStroke", &params).unwrap();
     }

@@ -1,21 +1,69 @@
-# AI masks (Object and Describe)
+# AI masks
 
-LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
-pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
-through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't run it, it runs on
-the CPU (see the worker below).
+LightCraft's AI masks run in pure Rust in `crates/segment`: the larger models on
+[candle](https://github.com/huggingface/candle) plus plain-Rust kernels, Google's MediaPipe models on
+a small built-in TFLite interpreter that reads the files Google publishes, unchanged. Everything runs
+on the CPU (an experimental GPU path for the largest matrix products is opt-in, see Speed), except
+the optional SAM 3, which runs on the GPU through Metal on macOS and falls back to the CPU when the
+GPU can't run it (see the worker below). Each mask
+type uses a model whose weights are openly licensed, which LightCraft can host and download without
+accounts:
 
-**The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object and Describe offer to download it, every other feature (and every existing mask, see
-below) works, and no render, export or command ever waits for it.
+| Mask | Model | Weights licence | Training-data tier | Download | Without it |
+|---|---|---|---|---|---|
+| **People**: entire person, face / body skin, hair, clothes | MediaPipe Selfie Multiclass (Google) | Apache-2.0 | A (Google's own) | 16 MB | the entire person from EoMT; parts: not available |
+| **People**: eyebrows, eye sclera, iris and pupil, lips, teeth; telling people apart | MediaPipe Face Landmarker (BlazeFace + FaceMesh-V2, Google) | Apache-2.0 | A (Google's own) | 4 MB | not available |
+| **Subject**, **Background** | BiRefNet-portrait (Swin-L) | MIT | pending (maintainer decision) | 885 MB | the person from MediaPipe, else EoMT's most confident object, else a heuristic |
+| **Sky**, **Landscape**; People without MediaPipe | EoMT-S, COCO panoptic (DINOv2 ViT-S) | MIT (backbone Apache-2.0) | pending (maintainer decision) | 96 MB | Sky: a heuristic; Landscape: approximate (empty) |
+| **Object** (clicks) | SAM 2.1 Hiera-Tiny (Meta) | Apache-2.0 | A (Meta's own) | 156 MB | SAM 3 if installed |
+| **Describe** (text) | SAM 3 (optional) | SAM License (Meta, gated) | — | 3.4 GB | none: the dialog explains how to install SAM 3 |
+
+Depth Anything V2 Small is ported (`crates/segment/src/depth.rs`) but **not offered**: its training
+data includes SA-1B (whose licence restricts derivative works) and Virtual KITTI 2 (non-commercial).
+Tiers: **A** the rights holder released the weights permissively and the training data is theirs or
+cleared; **pending** the weights are permissive but a training dataset is research-only without an
+explicit derived-data clause — a maintainer decision, shown in the app as "licence pending a
+maintainer decision"; models whose weights or data explicitly forbid commercial use (tier B) are
+never offered.
+
+**No model is required.** None is part of LightCraft, its repository or its installers. Each is
+downloaded once, into its own folder of the models folder, only after the user agreed (the dialog
+names the model, its size and its licence). Without one, Object says what to download, and Subject,
+Sky and Background are made by a heuristic — the Masking panel says the mask is approximate and
+offers the model. Renders, exports and every other feature never touch a model: the model's result
+is stored with the mask.
 
 ## Using them
 
 In the Masking panel (M):
 
+- **Subject**, **Sky**, **Background**: one click. With the model installed the mask appears as
+  the heuristic at once and is replaced by the model's selection a moment later ("Analyzing the
+  photo for AI masks…" under the tiles; one undo step). Background is the subject inverted.
+- **People**: pick everyone or Person 1–4 (counted from the left, by their face) and the parts —
+  Entire Person, Face Skin, Body Skin, Hair, Clothes, Eyebrows, Eye Sclera, Iris and Pupil, Lips,
+  Teeth — then **Create Mask** (`mask.add {"kind": "people", "person": n, "parts": [...]}`). Face
+  parts come from landmarks (polygons; teeth are the bright part of the mouth opening) and need a
+  face that isn't in profile; with several people, body parts go to the person whose face is nearest. **Face Skin**
+  and **Body Skin** are skin only: the eyes (with the lash line), eyebrows, lips and mouth
+  (teeth, tongue) are cut out, and so is facial hair — the model's hair class, plus, in the lower
+  face, pixels clearly darker and more textured than the cheeks (beards, moustaches, stubble; skin
+  in shadow is dark but smooth and stays). Each eye is cut out whole, lids and lashes, however far it
+  is open (a smiling or blinking eye's opening is only a sliver), and each brow at least a fifth of
+  its length thick. Face Skin reaches the hairline: above the brows, inside the face's outline
+  stretched up to where the hair starts, what has the forehead's own colour and isn't hair is skin
+  (the class map alone fades out on a high forehead). Nostrils stay in the skin. On a face seen in profile the
+  features can't be located: only hair is left out there, and the app says so. Pick Lips, Eyebrows
+  and so on alongside a skin part to add them back.
+  **Clothes** on its own leaves the skin and hair the class map's blur spills onto (a neckline,
+  arms, hands) out, and its edge is pulled onto the photo's.
+- **Landscape**: pick a class under the tiles — Sky, Water, Vegetation, Mountains, Architecture,
+  Natural Ground, Artificial Ground.
+- **Update**: a mask made before its model was installed (or an older document) keeps its
+  heuristic; once the model is there, the panel offers **Update** (`mask.recompute`).
 - **Object**: click the thing you want; every click refines the selection. ⌥-click (Alt) a part
   to leave it out. Clicks show as green (include) and red (leave out) dots.
-- **Describe**: type what to select — `sky`, `trees`, `the red car` — and press Return. Every
+- **Describe** (SAM 3 only): type what to select — `sky`, `trees`, `the red car` — and press Return. Every
   instance the model finds (score above 0.5) joins the mask; if nothing matches, nothing is
   created and you are told so. Around what it found, the mask follows the model's semantic mask
   for the phrase, which is sure inside and runs on where two instances touch (the instances'
@@ -25,28 +73,106 @@ In the Masking panel (M):
 - **+ / −** under the selected mask (and the Add / Subtract / Intersect menus) combine
   selections: Describe `car`, click the mask, + ▸ Describe… `road`; − ▸ Describe… `people` takes
   the people out of a sky mask; − ▸ Object then clicks remove one object.
-- **Edge** (per selection, −100…100): below 0 a crisper border, above 0 a feathered one (up to 2 %
-  of the long edge, so previews and exports match).
-- **Detail:** about a second after the last click (or right after a description), the photo
-  around the selection is analyzed again, zoomed in, from a sharper source (~5 s on an M4 Pro,
-  in the background); the result is kept as a high-resolution patch (at most 4 per selection),
-  so small objects get 5–10× finer edges than one pass over the whole photo gives.
+- **Edge** (Object and Describe, −100…100): below 0 a crisper border, above 0 a feathered one (up to 2 %
+  of the long edge, so previews and exports match). **Refine Edges** (every mask) snaps the edge to the photo's.
+- **Detail** (Object and Describe): about a second after the last click (or right after a description), the photo
+  around the selection is analyzed again, zoomed in, from a sharper source; the result is kept as a
+  high-resolution patch (at most 4 per selection), so small objects get 5–10× finer edges than one
+  pass over the whole photo gives.
 
-The first Object or Describe on a photo analyzes it (the image encoder runs once per photo and
-look: ~3 s on an Apple M4 Pro, plus a one-time ~6 s for compiling GPU kernels and loading the
-model after launch). That starts in the background as soon as you pick Object; after it, each
-click takes ~35 ms and each description ~0.6 s. Everything the model does runs on its own worker
-thread: the window stays responsive, a click shows its dot at once and the selection follows
-when it's computed ("Selecting…" / "Analyzing the photo…" under the mask tiles). The model is
-unloaded after 10 minutes without use (it takes several GB of memory) and loaded again when
-needed.
+Everything a model does runs on one worker thread: the window stays responsive. Models are loaded
+when first needed and unloaded after 10 minutes without use.
 
-The result is stored with the mask: the model's 288 × 288 mask logits over the uncropped photo
-(quantized, compressed, ~10–30 KB). Renders and exports sample them at any resolution and never
+What is stored with the mask: the model's logits over the uncropped photo, quantized and compressed
+— 1024 × 1024 for Subject / Background (BiRefNet's own resolution: hair strands survive), 256 × 256
+for Sky / People / Landscape (EoMT predicts at 160 px on the long edge), 256 × 256 for an SAM 2.1
+Object selection, 288 × 288 for SAM 3. Renders and exports sample them at any resolution and never
 need the model, so masks survive moving the library to a machine without it, and the web build
-renders them. Editing the photo's look later does not recompute a mask (click again to update).
+renders them. Editing the photo's look later does not recompute a mask (Update does).
 
-## Remote Metal inference
+### Speed
+
+Measured on a Ryzen 9 5950X (16 cores), Windows 11, release build, on the CPU, per photo (the
+model input is rendered at 1024 px on the long edge):
+
+| Model | Load (cold) | Per photo (warm) | Notes |
+|---|---|---|---|
+| MediaPipe Selfie Multiclass | 8–18 ms | ~45 ms network, ~130 ms with resampling | TFLite interpreter (matches LiteRT to 2e-5 relative) |
+| MediaPipe Face Landmarker | 7 ms | ~4 ms per BlazeFace window, ~13 ms per FaceMesh face; ~330 ms for a photo (about ten windows) | faces in profile are not landmarked |
+| EoMT-S | ~75 ms | ~0.9–1 s | Sky, Landscape and People share one pass per photo |
+| SAM 2.1 Tiny | ~0.15 s | encode ~1.2 s, then ~45 ms per click | |
+| BiRefNet-portrait | ~1.5 s | ~9–12 s | Subject and Background share one pass; the slow one |
+
+The first mask of each kind on a photo pays the "per photo" time; further masks on the same photo
+reuse the result. GPU: `LIGHTCRAFT_AI_GPU=1` sends BiRefNet's large matrix products to the GPU
+(wgpu, DX12 / Vulkan / Metal). On an RTX 5070 it saved ~20 % of a warm pass but its first pass costs
+~20 s more (kernel compilation, uploading 885 MB of weights), so it is off by default. Measured
+alternatives (scratch evaluation, not shipped): burn on wgpu ran EoMT in 76 ms and SAM 2.1's encoder
+in 200 ms on the same GPU, but compiles each model into the app, pulls in C code through its
+dependencies and failed to import BiRefNet and SAM 2.1's decoder; tract (pure-Rust ONNX) can't read
+MediaPipe's files, needs an assembler at build time and was 2–7× slower here.
+
+## The openly licensed models: download and licences
+
+The first time a mask needs a model that isn't installed, LightCraft asks: **Download an AI
+Model?** — what the model does, its size, its licence (MIT or Apache-2.0: open-source licences that
+allow any use, including commercial work) and a link to it — **Not Now** / **Download**. The
+download runs in the background (a row in the activity stack with ✕ to cancel; the Masking panel
+shows its progress), resumes where it stopped if interrupted, and tries the next location when one
+fails. Each file is written as `<name>.part` and moved into place only when it has the exact size
+and SHA-256 pinned in `crates/segment/src/models.rs`; a file that doesn't match is deleted, never
+used.
+
+Folders: `models/<name>/` in LightCraft's settings folder — `%APPDATA%\LightCraft\models\` (Windows),
+`~/Library/Application Support/LightCraft/models/` (macOS), `~/.config/lightcraft/models/` (Linux) —
+or the folder `LIGHTCRAFT_AI_MODELS_DIR` names: `birefnet-portrait/`, `eomt-s-coco/`,
+`sam2.1-hiera-tiny/`, `depth-anything-v2-small/`. To install one by hand, put its files there
+(`model.safetensors`, plus `config.json` for EoMT and Depth Anything).
+
+Download locations, in order: `LIGHTCRAFT_<MODEL>_MIRRORS` (`LIGHTCRAFT_SUBJECT_MIRRORS`,
+`LIGHTCRAFT_SCENE_MIRRORS`, `LIGHTCRAFT_SAM2_MIRRORS`, `LIGHTCRAFT_DEPTH_MIRRORS`; base URLs
+separated by commas or spaces), the file `models/<folder>-mirrors.txt`, then the built-in list: the
+publisher's own Hugging Face repository, pinned to a commit (their licences allow redistribution
+and the repositories are not gated). **Maintainers:** put LightCraft's own mirror first in each
+list (`TODO(maintainer)` in `models.rs`), with the files unchanged and each model's licence next
+to them.
+
+Agents and scripts: `ai.models.status`, `ai.models.download {"id": "subject"|"scene"|"sam2"|"depth",
+"acknowledged": true}` (refused without `acknowledged`: pass it only after the user agreed),
+`ai.models.cancel {"id"}`.
+
+### Licences, checked 2026-10-14
+
+| Model | Code | Weights | Gated | Training data (task) | Sources checked |
+|---|---|---|---|---|---|
+| BiRefNet-portrait (pending) | MIT | MIT | no | P3M-10k (released under the MIT license) + TR-humans (Apache-2.0, synthetic); the starting checkpoint isn't stated | <https://huggingface.co/ZhengPeng7/BiRefNet-portrait>, <https://github.com/ZhengPeng7/BiRefNet>, P3M-10k dataset agreement |
+| EoMT-S COCO panoptic (pending) | MIT | MIT; DINOv2 backbone Apache-2.0 | no | COCO panoptic (annotations CC BY 4.0; images under Flickr's terms) | <https://huggingface.co/tue-mps/coco_panoptic_eomt_small_640_2x>, <https://github.com/tue-mps/eomt> |
+| SAM 2.1 Hiera-Tiny | Apache-2.0 | Apache-2.0 | no | SA-1B (Meta's) + SA-V (CC BY 4.0) | <https://github.com/facebookresearch/sam2>, <https://huggingface.co/facebook/sam2.1-hiera-tiny> |
+| Depth Anything V2 Small (not offered) | Apache-2.0 | Apache-2.0 (Base / Large are CC-BY-NC) | no | teacher on Virtual KITTI 2 (non-commercial) among others; student on SA-1B pseudo-labels | <https://github.com/DepthAnything/Depth-Anything-V2>, <https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf> |
+| MediaPipe Selfie Multiclass | Apache-2.0 | Apache-2.0 (model card) | no | Google's own (card) | <https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Multiclass%20Segmentation.pdf> |
+| MediaPipe Face Landmarker (BlazeFace, FaceMesh-V2) | Apache-2.0 | Apache-2.0 (model cards) | no | "consented images of people" captured by Google (cards) | <https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20(Short%20Range).pdf>, <https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf> |
+| SAM 3 | SAM License | SAM License | yes | — | see [Licence of SAM 3](#licence-of-sam-3) |
+
+Rejected, and why: YuNet (its training set WIDER FACE is CC BY-NC-ND), the general BiRefNet / BiRefNet_lite / IS-Net checkpoints (trained on DIS5K,
+whose terms forbid commercial use), BiRefNet matting / HR (PPM-100, CC BY-NC-SA), RMBG 1.4 / 2.0
+(non-commercial, gated), ViTMatte (Adobe's Composition-1k), SegFormer (NVIDIA non-commercial
+licence), ADE20K-trained Mask2Former / OneFormer (ADE20K images are for non-commercial research),
+Depth Anything V2 Base / Large (CC-BY-NC), every face-parsing network found (CelebAMask-HQ, LaPa,
+Helen, iBugMask, LIP, FaceSynthetics, Sapiens: non-commercial). Backbones pre-trained on ImageNet
+are industry practice and not counted against a model.
+
+Not yet covered: **Describe** without SAM 3 (Florence-2-base, MIT, and OWLv2 / Grounding DINO are
+candidates, all with research-only data in their training sets: a maintainer decision) and
+**Depth Range**. No openly licensed face-parsing network exists (all are trained on
+non-commercial datasets), so face parts come from MediaPipe's landmarks.
+
+## SAM 3 (optional)
+
+SAM 3 (Segment Anything with Concepts, Meta 2025) is the only model for Describe, and when it is
+installed Object uses it instead of SAM 2.1. Its weights are gated under Meta's SAM License, so
+LightCraft can't host or download them by default. On macOS it runs on the GPU through Metal.
+
+### Remote Metal inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while
 a Mac runs SAM 3. Build both ends from the same revision. On the Mac, install the model
@@ -82,11 +208,15 @@ error, not a silent CPU fallback. Restore the tunnel and retry. Unset
 `LIGHTCRAFT_SAM3_REMOTE` to use the local model again. This offloads segmentation only,
 not RAW development, denoising, or upscaling. The model licence below still applies.
 
-## Getting the model
+### Getting SAM 3
 
-### In the app (recommended)
+#### In the app (recommended)
 
-The first time you pick Object or Describe without the model, LightCraft asks:
+Object uses SAM 3 when it is installed or a remote worker is set (`LIGHTCRAFT_SAM3_REMOTE`, above),
+else SAM 2.1; with none of them, it offers SAM 2.1 (the open model above). With a remote worker,
+Object and Describe need no local SAM 3 and nothing is offered for download (an unreachable worker
+is an error). Otherwise, the first time you pick Describe without SAM 3 (or install SAM 3 for
+Object), LightCraft asks:
 
 > **Download the SAM 3 model?** Object and Describe masks use SAM 3, Meta's segmentation model.
 > It isn't part of LightCraft, and everything else works without it. Download it once (about
@@ -106,7 +236,7 @@ Agents and scripts use the same commands (control channel, `lightcraft-cli mcp -
 explicit `acknowledged`: pass it only after the user agreed to the download and the licence),
 `segment.model.cancel`.
 
-### Download locations
+#### Download locations
 
 The model is fetched from an ordered list of mirrors: base URLs where `<base>/model.safetensors`,
 `<base>/vocab.json` and `<base>/merges.txt` live. The list is, in order:
@@ -140,7 +270,7 @@ The download is plain HTTP/1.1 over TLS in pure Rust (rustls with the RustCrypto
 the Mozilla root certificates; no OpenSSL, `ring` or `aws-lc`, nothing compiled from C), with a
 15 s connect timeout and a 30 s stall timeout; it follows redirects but doesn't use HTTP proxies.
 
-### By hand
+#### By hand
 
 Put `model.safetensors`, `vocab.json` and `merges.txt` from `facebook/sam3` in the model folder:
 `models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. Developers
@@ -156,7 +286,7 @@ tools/install-sam3.sh --check                     # verify an installation
 $env:HF_TOKEN = "hf_..."; .\tools\install-sam3.ps1   # Windows
 ```
 
-## Licence of the model
+### Licence of SAM 3
 
 LightCraft's code is MIT OR Apache-2.0; `crates/segment` (a port of Apache-2.0 code) is
 Apache-2.0. **The SAM 3 weights are neither**: they are Meta's, released under the **SAM
@@ -189,6 +319,13 @@ Therefore:
 | `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt", …}` | the same as a component |
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
+| `mask.add` | `{kind: "subject"\|"background"\|"sky", seg?}` | an automatic mask; `{pending}` in the app, `{approximate, model, note}` without its model |
+| `mask.add` | `{kind: "people", person?: 0..n, parts?: ["Hair", "Lips", …]}` | a People mask (none or "Entire Person": the whole person) |
+| `mask.add` | `{kind: "landscape", class: sky\|water\|vegetation\|mountains\|architecture\|naturalGround\|artificialGround}` | a Landscape mask |
+| `mask.recompute` | `{id?, component?}` | compute a mask's automatic selections again with their models (Update) → `{updated, pending}` |
+| `ai.models.status` | `{}` | every model: `{id, title, purpose, installed, dir, sizeBytes, license, licenseUrl, pageUrl, open, licencePending, mirrors, download}` |
+| `ai.models.download` | `{id, acknowledged: true}` | download one in the background (an activity row) → `{started, installed, downloading}` |
+| `ai.models.cancel` | `{id}` | stop it (it resumes next time) → `{cancelled}` |
 | `segment.prepare` | `{}` | load the model and analyze the active photo → `{busy}` |
 | `segment.model.status` | `{}` | `{available, installed, remote, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download}` |
 | `segment.model.download` | `{acknowledged: true}` | start the download in the background → `{started}` |
@@ -203,8 +340,11 @@ download on.
 
 Coordinates are normalized to the uncropped, oriented photo, like every mask shape. `seg` passes
 a stored segmentation (as `mask.list` / the develop settings hold it): the mask is made without
-the model. Without the model, the AI kinds fail with an error starting "The SAM 3 model is not
-installed" that says how to get it.
+the model. Without SAM 3 (local, or a remote worker set by `LIGHTCRAFT_SAM3_REMOTE`), Describe
+(`prompt`) fails with an error starting "The SAM 3 model is not installed" that says how to get it;
+Object fails only when there is no SAM 3 and SAM 2.1 isn't installed either, with an error offering
+SAM 2.1. With a remote worker, an unreachable worker is reported as such, not as a missing model. Subject, Background and Sky never fail for a missing model: they
+return an approximate mask (`{approximate, model, note}`).
 
 In the desktop app the commands don't wait for the model: `mask.objectPoint` returns
 `{pending: true}` and the selection is applied when it's computed (one undo step per settled

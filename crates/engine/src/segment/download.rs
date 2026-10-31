@@ -126,7 +126,8 @@ impl Downloader {
         task.detail(name);
         task.progress(0, s.total.load(Ordering::SeqCst));
         let guard = Running(s.clone());
-        let spawned = std::thread::Builder::new().name("sam3-download".into()).spawn(move || {
+        let name = name.to_string();
+        let spawned = std::thread::Builder::new().name("model-download".into()).spawn(move || {
             let s = guard.0.clone();
             let mut last_file = String::new();
             let mut on_progress = |p: &Progress| {
@@ -144,14 +145,14 @@ impl Downloader {
             let error = match r {
                 Ok(Ok(())) => {
                     s.finished.store(true, Ordering::SeqCst);
-                    log::info!("SAM 3 model downloaded to {}", dir.display());
+                    log::info!("{name} model downloaded to {}", dir.display());
                     None
                 }
                 Ok(Err(e)) => Some(e.to_string()),
                 Err(_) => Some("the download failed unexpectedly".to_string()),
             };
             if let Some(e) = &error {
-                log::warn!("SAM 3 download: {e}");
+                log::warn!("{name} download: {e}");
             }
             let mut text = lock(&s.text);
             text.cancelled = cancelled;

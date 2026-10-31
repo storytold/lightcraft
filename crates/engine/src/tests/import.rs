@@ -674,7 +674,7 @@ fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
     // an AI mask uses the mattes that came with the file
     let mut sky = DevelopSettings::default();
     sky.masks.push(Mask {
-        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky }],
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky { seg: None } }],
         adjust: LocalAdjustments { exposure: 2.0, ..Default::default() },
         ..Default::default()
     });

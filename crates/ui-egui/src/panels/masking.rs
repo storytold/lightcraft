@@ -49,9 +49,9 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
         MaskShape::ColorRange { .. } => ("Color Range", Icon::Picker),
         MaskShape::LuminanceRange { .. } => ("Luminance Range", Icon::Sliders),
         MaskShape::DepthRange { .. } => ("Depth Range", Icon::Sliders),
-        MaskShape::Subject => ("Subject", Icon::Subject),
-        MaskShape::Sky => ("Sky", Icon::Sky),
-        MaskShape::Background => ("Background", Icon::Subject),
+        MaskShape::Subject { .. } => ("Subject", Icon::Subject),
+        MaskShape::Sky { .. } => ("Sky", Icon::Sky),
+        MaskShape::Background { .. } => ("Background", Icon::Subject),
         MaskShape::Object { .. } => ("Object", Icon::Subject),
         MaskShape::Prompt { .. } => ("Describe", Icon::Subject),
         MaskShape::People { .. } => ("People", Icon::Subject),
@@ -93,12 +93,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
-        let tiles: [(&str, &str, Icon); 10] = [
+        let tiles: [(&str, &str, Icon); 12] = [
             ("object", "Object", Icon::Subject),
             ("prompt", "Describe", Icon::Subject),
             ("subject", "Subject", Icon::Subject),
             ("sky", "Sky", Icon::Sky),
             ("background", "Background", Icon::Subject),
+            ("people", "People", Icon::Subject),
+            ("landscape", "Landscape", Icon::Sky),
             ("brush", "Brush", Icon::Brush),
             ("linear", "Linear", Icon::Linear),
             ("radial", "Radial", Icon::Radial),
@@ -146,6 +148,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             app.ui.tool = kind.to_string();
                             let _ = app.run("mask.add", json!({"kind": kind}));
                         }
+                        "landscape" => app.ui.landscape_pick = !app.ui.landscape_pick,
+                        "people" => app.ui.people_pick = if app.ui.people_pick.is_some() { None } else { Some((0, Vec::new())) },
+                        k @ ("subject" | "sky" | "background") => add_auto(app, ui.ctx(), json!({"kind": k}), None),
                         k => {
                             let _ = app.run("mask.add", json!({"kind": k}));
                         }
@@ -157,6 +162,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         describe_field(app, ui, true);
+        people_picker(app, ui);
+        landscape_picker(app, ui);
+        ai_notes(app, ui);
         let seg = &app.session.segmenter;
         let status = if seg.analyzing() {
             Some("Analyzing the photo for AI masks…")
@@ -706,11 +714,202 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
 /// offered (with `then` to start afterwards) instead of starting an AI mask.
 fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
     let seg = &app.session.segmenter;
-    let missing = lightcraft_engine::segment::Segmenter::AVAILABLE && seg.remote_endpoint().is_none() && seg.dir.is_some() && !seg.installed();
-    if missing {
-        app.offer_sam_download(Some((kind, op)));
+    let sam3 = seg.remote_endpoint().is_some() || seg.installed();
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE || sam3 {
+        return false;
     }
-    missing
+    // Object runs on SAM 2.1 (open) when SAM 3 isn't there; Describe needs SAM 3
+    if kind == "object" && seg.models_root.is_some() {
+        if seg.model_installed("sam2") {
+            return false;
+        }
+        if !app.offer_ai_model("sam2", Some((kind, op))) {
+            model_offer_waits(app);
+        }
+        return true;
+    }
+    if seg.dir.is_some() {
+        if !app.offer_sam_download(Some((kind, op))) {
+            model_offer_waits(app);
+        }
+        return true;
+    }
+    false
+}
+
+/// The download offer can't open over another dialog: say why nothing happened.
+fn model_offer_waits(app: &mut LightcraftApp) {
+    let until = app.tick_now() + 6.0;
+    app.ui.toast =
+        Some((crate::i18n::tr("This mask needs an AI model that isn't installed. Close the open window to download it.").to_string(), until, None));
+}
+
+/// Add an automatic AI mask (`params` for `mask.add`, or `mask.addComponent` with `op`): when its
+/// model isn't installed it is made by the heuristic, and the panel says so ([`ai_notes`]).
+pub(crate) fn add_auto(app: &mut LightcraftApp, ctx: &egui::Context, params: serde_json::Value, op: Option<&str>) {
+    let r = match op {
+        None => app.run("mask.add", params),
+        Some(op) => {
+            let mut p = params;
+            p["op"] = json!(op);
+            app.run("mask.addComponent", p)
+        }
+    };
+    match r {
+        Ok(r) => {
+            if r.get("approximate").and_then(serde_json::Value::as_bool) == Some(true) {
+                app.ui.ai_hint = r.get("model").and_then(serde_json::Value::as_str).map(str::to_string);
+            }
+        }
+        Err(e) => app.ai_error(ctx, e, None),
+    }
+}
+
+/// The People parts Lightroom offers, in its order (the names are stored with the mask).
+const PEOPLE_PARTS: [&str; 10] =
+    ["Entire Person", "Face Skin", "Body Skin", "Hair", "Clothes", "Eyebrows", "Eye Sclera", "Iris and Pupil", "Lips", "Teeth"];
+
+/// The People picker, under the tiles once the People tile was clicked: everyone or one person
+/// (counted from the left), the parts, and Create Mask.
+fn people_picker(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let Some((mut person, mut parts)) = app.ui.people_pick.clone() else { return };
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        let r = ui.selectable_label(person == 0, crate::i18n::tr("Everyone"));
+        register(ui, "maskPeople:person:0", r.rect);
+        if r.clicked() {
+            person = 0;
+        }
+        for n in 1..=4u32 {
+            let r = ui.selectable_label(person == n, crate::i18n::tr_format!("Person {n}", n = n));
+            register(ui, format!("maskPeople:person:{n}"), r.rect);
+            if r.clicked() {
+                person = n;
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        for part in PEOPLE_PARTS {
+            let whole = part == "Entire Person";
+            let mut on = if whole { parts.is_empty() } else { parts.iter().any(|p| p == part) };
+            let r = ui.checkbox(&mut on, crate::i18n::tr(part));
+            register(ui, format!("maskPeople:part:{part}"), r.rect);
+            if r.changed() {
+                if whole {
+                    parts.clear();
+                } else if on {
+                    parts.push(part.to_string());
+                } else {
+                    parts.retain(|p| p != part);
+                }
+            }
+        }
+    });
+    let create = ui.button(crate::i18n::tr("Create Mask"));
+    register(ui, "maskPeople:create", create.rect);
+    if create.clicked() {
+        app.ui.people_pick = None;
+        add_auto(app, ui.ctx(), json!({"kind": "people", "person": person, "parts": parts}), None);
+        return;
+    }
+    app.ui.people_pick = Some((person, parts));
+}
+
+/// The Landscape classes, under the tiles once the Landscape tile was clicked.
+fn landscape_picker(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if !app.ui.landscape_pick {
+        return;
+    }
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        for (class, label) in [
+            ("sky", "Sky"),
+            ("water", "Water"),
+            ("vegetation", "Vegetation"),
+            ("mountains", "Mountains"),
+            ("architecture", "Architecture"),
+            ("naturalGround", "Natural Ground"),
+            ("artificialGround", "Artificial Ground"),
+        ] {
+            let b = ui.button(crate::i18n::tr(label));
+            register(ui, format!("maskLandscape:{class}"), b.rect);
+            if b.clicked() {
+                app.ui.landscape_pick = false;
+                add_auto(app, ui.ctx(), json!({"kind": "landscape", "class": class}), None);
+            }
+        }
+    });
+}
+
+/// Under the tiles: an AI mask made by the heuristic because its model is missing (with a button to
+/// get it), a selected mask whose AI selections can now be computed by their model (Update), and
+/// openly licensed model downloads while their dialog is closed.
+fn ai_notes(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    if let Some(model) = app.ui.ai_hint.clone() {
+        if app.session.segmenter.model_installed(&model) {
+            app.ui.ai_hint = None;
+        } else {
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::tr("This mask is approximate: its AI model isn't installed, so a simpler method made it."))
+                        .color(t.text_dim),
+                )
+                .wrap(),
+            );
+            ui.horizontal_wrapped(|ui| {
+                if text_button(ui, "maskAiGetModel", crate::i18n::tr("Get the AI Model…"), false).clicked() {
+                    app.offer_ai_model(&model, None);
+                }
+                if text_button(ui, "maskAiHintDismiss", crate::i18n::tr("Not Now"), false).clicked() {
+                    app.ui.ai_hint = None;
+                }
+            });
+        }
+    }
+    // the selected mask has automatic selections without a model's segmentation, and the model is there now
+    let stale = app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| {
+        d.masks.iter().find(|m| Some(m.id) == app.session.active_mask).is_some_and(|m| {
+            m.components.iter().any(|c| {
+                lightcraft_engine::segment::AutoKind::of(&c.shape)
+                    .is_some_and(|k| k.seg_of(&c.shape).is_some_and(Option::is_none) && app.session.segmenter.auto_model(&k).is_ok())
+            })
+        })
+    });
+    if stale && !app.session.segmenter.busy() {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("The AI model for this mask is installed.")).color(t.text_dim));
+            if text_button(ui, "maskAiUpdate", crate::i18n::tr("Update"), false).clicked()
+                && let Err(e) = app.run("mask.recompute", json!({}))
+            {
+                app.ai_error(ui.ctx(), e, None);
+            }
+        });
+    }
+    if app.ui.dialog.is_none() {
+        for key in app.ui.ai_downloading.clone() {
+            let d = app.session.segmenter.model_download_status(&key);
+            if !d.running {
+                continue;
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let pct = if d.total > 0 { d.done as f64 / d.total as f64 } else { 0.0 };
+                let title = app.session.segmenter.model_status().into_iter().find(|m| m.id == key).map(|m| m.title).unwrap_or_default();
+                let r = ui.add(
+                    egui::ProgressBar::new(pct as f32)
+                        .desired_width(ui.available_width() - 70.0)
+                        .text(format!("{title}: {} %", (pct * 100.0).floor())),
+                );
+                register(ui, format!("maskAiProgress:{key}"), r.rect);
+                if text_button(ui, &format!("maskAiDetails:{key}"), crate::i18n::tr("Details"), false).clicked() {
+                    app.offer_ai_model(&key, None);
+                }
+            });
+        }
+    }
 }
 
 /// Start an Object selection (SAM 3 clicks): a new mask, or a component of the selected one
@@ -866,6 +1065,8 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         if b.clicked() {
             if kind == "brush" {
                 let _ = app.run("tool.brush", json!({"op": op}));
+            } else if matches!(kind, "sky" | "subject") {
+                add_auto(app, ui.ctx(), json!({"kind": kind}), Some(op));
             } else {
                 let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
             }

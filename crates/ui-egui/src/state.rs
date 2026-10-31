@@ -198,6 +198,20 @@ pub struct UiState {
     /// A SAM 3 download was started from the app (to report its end once).
     #[serde(skip)]
     pub sam_downloading: bool,
+    /// Openly licensed AI model downloads started from the app (model keys), to report their end once.
+    #[serde(skip)]
+    pub ai_downloading: Vec<String>,
+    /// An AI mask was made by a heuristic because its model isn't installed: the model's key (the
+    /// Masking panel says so, with a button to get the model) until it is installed or dismissed.
+    #[serde(skip)]
+    pub ai_hint: Option<String>,
+    /// The Landscape classes are shown under the mask tiles (the Landscape tile was clicked).
+    #[serde(skip)]
+    pub landscape_pick: bool,
+    /// The People picker under the mask tiles (the People tile was clicked): who (0 everyone, n the
+    /// n-th person from the left) and which parts (Lightroom's names; none: the entire person).
+    #[serde(skip)]
+    pub people_pick: Option<(u32, Vec<String>)>,
     /// When to start the zoomed-in detail pass of an AI mask (app time) and which mask: set by
     /// each click or description, so the pass runs once the clicking stops (monotonic app time).
     #[serde(skip)]
@@ -431,6 +445,10 @@ impl Default for UiState {
             describe: None,
             detail_due: None,
             sam_downloading: false,
+            ai_downloading: Vec::new(),
+            ai_hint: None,
+            landscape_pick: false,
+            people_pick: None,
             renaming_component: None,
             quit: false,
             dragging_photos: None,
