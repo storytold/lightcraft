@@ -144,16 +144,22 @@ fn first<'a>(props: &'a Props, k: &str) -> Option<&'a str> {
 }
 
 fn num(props: &Props, k: &str) -> Option<f64> {
-    parse_num(first(props, k)?)
+    let value = parse_num(props.get(k)?.first()?)?;
+    note(k);
+    Some(value)
 }
 
-fn parse_num(s: &str) -> Option<f64> {
+/// A CRS number, excluding Lightroom's deferred/unset sentinel before any mapping or clamping.
+pub(crate) fn parse_num(s: &str) -> Option<f64> {
+    let s = s.trim();
     let s = s.strip_prefix('+').unwrap_or(s);
-    if let Some((n, d)) = s.split_once('/') {
+    let value = if let Some((n, d)) = s.split_once('/') {
         let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
-        return (d != 0.0).then_some(n / d).filter(|v| v.is_finite());
-    }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+        (d != 0.0).then_some(n / d)?
+    } else {
+        s.parse::<f64>().ok()?
+    };
+    (value.is_finite() && value != -999999.0).then_some(value)
 }
 
 fn boolean(props: &Props, k: &str) -> Option<bool> {
@@ -182,18 +188,18 @@ pub fn rel_to_kelvin(r: f64) -> f64 {
 
 /// Parse a point curve stored as an `rdf:Seq` of `"x, y"` strings in 0..255.
 fn curve(props: &Props, k: &str) -> Option<Value> {
-    note(k);
     let items = props.get(k)?;
     let mut pts = Vec::new();
     for it in items {
         let (x, y) = it.split_once(',')?;
         // (`parse` reads "NaN" and "inf" too: a curve with such a point is not a curve)
-        let (x, y) = (x.trim().parse::<f64>().ok().filter(|v| v.is_finite())?, y.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
+        let (x, y) = (parse_num(x)?, parse_num(y)?);
         pts.push(json!({"x": (x / 255.0).clamp(0.0, 1.0), "y": (y / 255.0).clamp(0.0, 1.0)}));
     }
     if pts.len() < 2 {
         return None;
     }
+    note(k);
     // A straight 0,0 → 255,255 line is the identity: store it as "no curve".
     let identity = pts.len() == 2 && items.iter().all(|it| it.split(',').map(|v| v.trim()).collect::<Vec<_>>().windows(2).all(|w| w[0] == w[1]));
     Some(if identity { json!([]) } else { Value::Array(pts) })
@@ -453,7 +459,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
     // Validate before marking fields read or applying defaults. A supplied invalid value (including
     // Lightroom's deferred sentinel) must not replace an existing crop, even with HasCrop=True.
-    let crop = CROP.map(|k| props.get(k).and_then(|v| v.first()).and_then(|s| parse_num(s.trim())).filter(|v| *v != -999999.0));
+    let crop = CROP.map(|k| props.get(k).and_then(|v| v.first()).and_then(|s| parse_num(s)));
     let valid_crop = CROP.iter().zip(crop).all(|(k, v)| !props.contains_key(*k) || v.is_some());
     match boolean(props, "crs:HasCrop").or_else(|| crop.iter().any(Option::is_some).then_some(true)) {
         Some(true) if valid_crop => {

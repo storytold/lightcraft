@@ -39,6 +39,27 @@ fn settings() -> (DevelopSettings, Vec<String>) {
 }
 
 #[test]
+fn deferred_local_numbers_are_dropped_before_scaling() {
+    let packet = PACKET.replace(r#"crs:LocalExposure2012="-0.25""#, r#"crs:LocalExposure2012="-999999""#);
+    let d = lightcraft_meta::parse_xmp(&packet).unwrap();
+    let (partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+    assert!(partial["masks"][0]["adjust"].get("exposure").is_none(), "{partial}");
+    assert_eq!(partial["masks"][0]["adjust"]["saturation"], 30.0);
+}
+
+#[test]
+fn deferred_compound_numbers_do_not_become_coordinates() {
+    let packet = PACKET.replace("0.4 0.5 0.8 0.9", "-999999 0.5 0.8 0.9").replace("d 0.1 0.2", "d -999999 0.2");
+    let d = lightcraft_meta::parse_xmp(&packet).unwrap();
+    let (partial, skipped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+    assert!(skipped.iter().any(|s| s == "Mask: luminance range"), "{skipped:?}");
+    assert_eq!(partial["masks"][1]["components"].as_array().unwrap().len(), 1);
+    assert_eq!(partial["masks"][2]["components"][0]["shape"]["strokes"][0]["points"], json!([{"x": 0.15, "y": 0.22}]));
+    let legacy = "centerX = -999999, centerY = 0.3, radius = 0.01";
+    assert!(legacy_spot(legacy, 1.5).is_none());
+}
+
+#[test]
 fn corrections_become_masks() {
     let (s, unmapped) = settings();
     assert_eq!(s.light.exposure, 0.2, "global settings still map");
