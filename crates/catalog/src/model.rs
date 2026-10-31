@@ -347,7 +347,7 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW", "CRW"]
+    ["ARW", "SR2", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW", "CRW"]
         .iter()
         .any(|f| format.eq_ignore_ascii_case(f))
 }
@@ -676,6 +676,7 @@ mod edited_tests {
     fn supported_raws_use_relative_white_balance() {
         for (name, format, relative) in [
             ("a.arw", "ARW", true),
+            ("a.sr2", "sR2", true),
             ("a.nef", "NEF", true),
             ("a.nrw", "nrw", true),
             ("a.rw2", "RW2", true),
@@ -728,7 +729,7 @@ mod edited_tests {
             ("Panasonic DMC-GX85", "RW2", false),
             ("LEICA CAMERA AG D-LUX 7", "RWL", false),
             ("RICOH PENTAX K-3 Mark III", "PEF", false),
-            ("SONY DSC-R1", "ARW", true),
+            ("SONY DSC-R1", "SR2", true),
             ("FUJIFILM X-T4", "RAF", false),
             ("ILCE-7M3", "ARW", false),
             ("SONY ILCE-7M2", "ARW", false),
@@ -745,7 +746,7 @@ mod edited_tests {
             p.as_shot_wb = Some((4986.0, -2.0));
             assert_eq!(p.relative_wb(), relative, "{camera} {format}");
             assert_eq!(relative_wb_camera(format, camera), relative, "{camera} {format}");
-            assert_eq!(p.fitted_look(), ["ARW", "NEF", "CR2", "CR3", "RAF", "RW2", "RWL", "PEF"].contains(&format), "{camera} {format}");
+            assert_eq!(p.fitted_look(), ["ARW", "SR2", "NEF", "CR2", "CR3", "RAF", "RW2", "RWL", "PEF"].contains(&format), "{camera} {format}");
             let wb = p.camera_defaults().wb;
             assert_eq!((wb.temp, wb.tint), if relative { (6500.0, 0.0) } else { (4986.0, -2.0) }, "{camera} {format}");
             assert_eq!(wb.scale, if relative { WbScale::Legacy } else { WbScale::Kelvin }, "{camera} {format}");
