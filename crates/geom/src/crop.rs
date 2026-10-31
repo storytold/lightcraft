@@ -24,17 +24,20 @@ impl Default for CropGeometry {
 }
 
 impl CropGeometry {
+    #[must_use]
     pub fn is_identity(&self) -> bool {
         self.angle == 0.0 && self.rect == Rect::UNIT
     }
 
     /// Crop rectangle in pixels of the rotated frame for an image of `w × h`.
+    #[must_use]
     pub fn rect_px(&self, w: f64, h: f64) -> Rect {
         self.rect.scale(w, h)
     }
 
     /// Transform from *output* (cropped) pixel coordinates to *source* (oriented image) pixel
     /// coordinates, for an output of `out_w × out_h` pixels rendered from a `w × h` source.
+    #[must_use]
     pub fn output_to_source(&self, w: f64, h: f64, out_w: f64, out_h: f64) -> Affine {
         let r = self.rect_px(w, h);
         // output -> crop rect in rotated frame
@@ -50,6 +53,7 @@ impl CropGeometry {
     /// photo, so a real crop is unchanged while one reaching far past the photo can no longer make
     /// a full-size output of billions of pixels. A rect with nothing left (reversed, or not finite)
     /// is the whole frame.
+    #[must_use]
     pub fn bounded(&self, w: f64, h: f64) -> CropGeometry {
         let angle = if self.angle.is_finite() { self.angle.clamp(-45.0, 45.0) } else { 0.0 };
         let (sin, cos) = angle.to_radians().sin_cos();
@@ -70,6 +74,7 @@ impl CropGeometry {
     }
 
     /// Whether every crop corner lies within the rotated image.
+    #[must_use]
     pub fn is_within_image(&self, w: f64, h: f64) -> bool {
         let r = self.rect_px(w, h);
         let back = Affine::rotate_about(-self.angle.to_radians(), Point::new(w / 2.0, h / 2.0));
@@ -81,6 +86,8 @@ impl CropGeometry {
 
     /// Shrink the crop (about its centre, keeping aspect) and then shift it until it fits inside the
     /// rotated image.
+    #[must_use]
+    #[expect(clippy::many_single_char_names, reason = "Crop fitting uses conventional rectangle, centre, scale and interpolation notation.")]
     pub fn constrained(&self, w: f64, h: f64) -> CropGeometry {
         if self.is_within_image(w, h) {
             return *self;
@@ -90,7 +97,7 @@ impl CropGeometry {
         let c = Point::new(w / 2.0, h / 2.0);
         let mut best = *self;
         for i in 1..=32 {
-            let t = i as f64 / 32.0;
+            let t = f64::from(i) / 32.0;
             let nc = r.center().lerp(c, t);
             let cand = CropGeometry { rect: Rect::from_center(nc, r.width(), r.height()).scale(1.0 / w, 1.0 / h), angle: self.angle };
             if cand.is_within_image(w, h) {
@@ -121,6 +128,8 @@ impl CropGeometry {
     /// largest at the new angle, so it grows back as the angle returns towards 0° (issue #1388).
     /// Any other crop never grows: a crop dragged in from a corner still touches two edges of the
     /// photo, and turning it used to swap it for the largest crop of its aspect (issue #1794).
+    #[must_use]
+    #[expect(clippy::many_single_char_names, reason = "Angle fitting uses conventional rectangle, aspect and scale notation.")]
     pub fn with_angle(&self, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
         let r = self.rect_px(w, h);
         // a degenerate rect has no aspect to keep: fall back to the image's own
@@ -152,6 +161,7 @@ impl CropGeometry {
 
     /// The largest scale, at most 1, at which this crop shrunk about its own centre lies inside the
     /// rotated image; `None` when its centre is outside it.
+    #[expect(clippy::many_single_char_names, reason = "The scale inequalities use conventional centre/delta/extent notation.")]
     fn fit_scale_about_centre(&self, w: f64, h: f64) -> Option<f64> {
         let r = self.rect_px(w, h);
         let back = Affine::rotate_about(-self.angle.to_radians(), Point::new(w / 2.0, h / 2.0));
@@ -177,6 +187,8 @@ impl CropGeometry {
 
 /// Largest scale `s` such that a centred `cw·s × ch·s` rectangle fits inside a `w × h` image rotated
 /// by `angle_deg` about its centre.
+#[must_use]
+#[expect(clippy::many_single_char_names, reason = "The inscribed-rectangle formula uses conventional half-extent and sine/cosine notation.")]
 pub fn max_inscribed_scale(w: f64, h: f64, angle_deg: f64, cw: f64, ch: f64) -> f64 {
     let a = angle_deg.to_radians().abs();
     let (s, c) = a.sin_cos();
@@ -189,6 +201,8 @@ pub fn max_inscribed_scale(w: f64, h: f64, angle_deg: f64, cw: f64, ch: f64) -> 
 }
 
 /// The biggest crop of the image's own aspect (or `aspect` if given) that fits at `angle_deg`.
+#[must_use]
+#[expect(clippy::many_single_char_names, reason = "Crop fitting uses conventional aspect, base rectangle and scale notation.")]
 pub fn crop_fit_angle(w: f64, h: f64, angle_deg: f64, aspect: Option<f64>) -> CropGeometry {
     let a = aspect.unwrap_or(w / h);
     let base = Rect::new(0.0, 0.0, w, h).fit_aspect(a);
@@ -219,8 +233,8 @@ mod tests {
         let b = wild.bounded(w, h).rect_px(w, h);
         assert!(b.width() <= w * 1.5 && b.height() <= h * 1.5, "{b:?}");
         // angle beyond the tools' range, or not a number; a rect that is not a number
-        assert_eq!(CropGeometry { rect: Rect::UNIT, angle: 400.0 }.bounded(w, h).angle, 45.0);
-        assert_eq!(CropGeometry { rect: Rect::UNIT, angle: f64::NAN }.bounded(w, h).angle, 0.0);
+        assert_eq!(CropGeometry { rect: Rect::UNIT, angle: 400.0 }.bounded(w, h).angle.to_bits(), 45.0_f64.to_bits());
+        assert_eq!(CropGeometry { rect: Rect::UNIT, angle: f64::NAN }.bounded(w, h).angle.to_bits(), 0.0_f64.to_bits());
         let nan = CropGeometry { rect: Rect::new(f64::NAN, 0.0, 1.0, 1.0), angle: 3.0 }.bounded(w, h);
         assert_eq!(nan.rect, Rect::UNIT);
         // a crop entirely off the turned photo has nothing left: the whole frame
@@ -269,7 +283,7 @@ mod tests {
         for ang in [-3.0, 0.5, 2.0, 5.0] {
             let t = c.with_angle(ang, 600.0, 400.0);
             assert_eq!(t.rect, c.rect, "{ang}°");
-            assert_eq!(t.angle, ang);
+            assert_eq!(t.angle.to_bits(), ang.to_bits());
         }
     }
 
@@ -281,7 +295,7 @@ mod tests {
             assert!(t.is_within_image(600.0, 400.0), "{rect:?} at {ang}°");
             let (a, b) = (c.rect_px(600.0, 400.0), t.rect_px(600.0, 400.0));
             assert!((a.aspect() - b.aspect()).abs() < 1e-9, "aspect kept: {} vs {}", a.aspect(), b.aspect());
-            assert_eq!(t.angle, ang);
+            assert_eq!(t.angle.to_bits(), ang.to_bits());
         }
     }
 
@@ -303,6 +317,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::many_single_char_names, reason = "The regression uses conventional rectangle and before/after notation.")]
     fn with_angle_shrinks_a_crop_against_the_edge_about_its_own_centre() {
         // issue #1794: a crop dragged in from one corner keeps the opposite corner on the photo's,
         // so it stops fitting at the first fraction of a degree; it used to become the largest crop
@@ -314,7 +329,7 @@ mod tests {
             let t = c.with_angle(ang, w, h);
             let b = t.rect_px(w, h);
             assert!(t.is_within_image(w, h), "{ang}°");
-            assert_eq!(t.angle, ang);
+            assert_eq!(t.angle.to_bits(), ang.to_bits());
             assert!(b.width() <= a.width() + 1e-9, "{ang}°: never larger than the crop made, {} vs {}", b.width(), a.width());
             assert!((a.aspect() - b.aspect()).abs() < 1e-9, "{ang}°: aspect kept");
             assert!(b.center().dist(a.center()) < 1e-9, "{ang}°: shrunk about its own centre");
@@ -328,6 +343,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::many_single_char_names, reason = "The regression uses conventional rectangle and before/after notation.")]
     fn with_angle_never_grows_a_crop_whose_centre_leaves_the_photo() {
         // a sliver in the corner: at 45° its centre is outside the turned photo, so it can't shrink
         // in place; it moves to the centre at its own size, not at the largest of its aspect

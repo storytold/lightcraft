@@ -20,11 +20,14 @@ pub trait Real:
     + Div<f64, Output = Self>
 {
     /// `if |v| < tiny { tiny } else { v }`: the guard of a denominator against zero ([`crate::Homography::apply`]).
+    #[must_use]
     fn clamp_tiny(self, tiny: f64) -> Self;
     /// The square root of a non-negative value (a negative one gives NaN, or for an [`Interval`] its lower bound
     /// is taken as 0, since the value is a sum of squares).
+    #[must_use]
     fn sqrt_nonneg(self) -> Self;
     /// `self` limited to `lo..=hi` (`lo <= hi`).
+    #[must_use]
     fn clamp_range(self, lo: f64, hi: f64) -> Self;
 }
 
@@ -61,21 +64,25 @@ impl Interval {
     const UNDECIDED: Interval = Interval { lo: f64::NAN, hi: f64::NAN };
 
     /// `[lo, hi]` exactly (the bounds are `f64` values already); undecided unless finite with `lo <= hi`.
+    #[must_use]
     pub fn new(lo: f64, hi: f64) -> Interval {
         if lo.is_finite() && hi.is_finite() && lo <= hi { Interval { lo, hi } } else { Interval::UNDECIDED }
     }
 
     /// The lower bound (NaN if undecided).
+    #[must_use]
     pub fn lo(self) -> f64 {
         self.lo
     }
 
     /// The upper bound (NaN if undecided).
+    #[must_use]
     pub fn hi(self) -> f64 {
         self.hi
     }
 
     /// Whether the bounds are usable (not undecided).
+    #[must_use]
     pub fn is_decided(self) -> bool {
         self.lo <= self.hi
     }
