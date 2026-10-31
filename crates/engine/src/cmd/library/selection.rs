@@ -3,7 +3,7 @@ use super::{AlbumId, Flag, Op, PhotoId, Result, Selection, Session, Value, bad, 
 /// The selection after photos left the view (deleted, or rated, flagged or labelled out of it).
 /// Its callers end an open edit (a slider drag) before their own change, as moving to the next
 /// photo does, so it is its own undo step and comes first.
-pub(super) fn select_after_deletion(s: &mut Session, before: &[PhotoId]) {
+pub(crate) fn select_after_deletion(s: &mut Session, before: &[PhotoId]) {
     let at = before.iter().position(|id| Some(*id) == s.selection.active);
     let remaining: std::collections::HashSet<_> = s.visible_cloned().into_iter().collect();
     s.selection.ids.retain(|id| remaining.contains(id));
