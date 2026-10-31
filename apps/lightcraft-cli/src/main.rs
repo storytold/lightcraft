@@ -10,7 +10,7 @@
 //! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
-//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli calibrate [--max N] [--out DIR] [--pairs FILE] [--from-pairs FILE]… FOLDERS/FILES…
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -104,12 +104,18 @@ USAGE:
         --max-connections N   concurrent clients (default 8)
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
-  lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+  lightcraft-cli calibrate [--max N] [--out DIR] [--pairs FILE] [--from-pairs FILE]… [FOLDERS/FILES…]
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+        --pairs FILE        also write the sampled colour pairs to FILE, to share: per photo its camera model,
+                            an id (a hash of the raw's bytes, not its name), Sony's DRO flag and the colour pairs;
+                            no image, file name, GPS, serial number or date. Without --out, only FILE is written
+                            (no profile is fitted or installed).
+        --from-pairs FILE   pool the pairs of a file written by --pairs (repeat for several, mix with folders);
+                            the profile is the same as from the same raws. Photos listed twice count once.
   lightcraft-cli --version | --help
 ";
 
@@ -222,9 +228,13 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     let mut max = 300usize;
     let mut out: Option<std::path::PathBuf> = None;
     let mut inputs = Vec::new();
+    let mut pairs_out: Option<std::path::PathBuf> = None;
+    let mut pairs_in: Vec<std::path::PathBuf> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--pairs" => pairs_out = Some(take_value(args, &mut i, "--pairs")?.into()),
+            "--from-pairs" => pairs_in.push(take_value(args, &mut i, "--from-pairs")?.into()),
             "--max" => max = take_value(args, &mut i, "--max")?.parse().map_err(|_| "--max needs a number".to_string())?,
             "--out" => out = Some(take_value(args, &mut i, "--out")?.into()),
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
@@ -232,8 +242,8 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    if inputs.is_empty() {
-        return Err("calibrate needs folders or raw files".into());
+    if inputs.is_empty() && pairs_in.is_empty() {
+        return Err("calibrate needs folders, raw files or --from-pairs FILE".into());
     }
     let mut files = Vec::new();
     for input in &inputs {
@@ -246,8 +256,23 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         // spread over all folders (dates, scenes) rather than the first N
         files = (0..max).filter_map(|k| files.get(k * found / max).cloned()).collect();
     }
-    eprintln!("calibrate: {} of {found} raw files", files.len());
-    let dir = out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?;
+    if !inputs.is_empty() {
+        eprintln!("calibrate: {} of {found} raw files", files.len());
+    }
+    // `--pairs` alone only exports: no profile is fitted into the folder LightCraft reads
+    let fit = pairs_out.is_none() || out.is_some();
+    let dir = if fit { Some(out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?) } else { None };
+    // pairs files first, so a bad one fails before any raw file is decoded (the pool's order doesn't matter)
+    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+    for path in &pairs_in {
+        let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+        if size > lightcraft_engine::camera_pairs::MAX_FILE {
+            return Err(format!("{}: {size} bytes is too large for a pairs file", path.display()));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let n = pool.add_pairs_file(&bytes, &path.display().to_string())?;
+        eprintln!("calibrate: {}: {n} photo(s) from a pairs file", path.display());
+    }
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
@@ -271,10 +296,24 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
-    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
     for p in pools {
         pool.merge(p);
     }
+    if let Some(path) = &pairs_out {
+        let bytes = pool.pairs_file()?;
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let photos: usize = pool.files().iter().map(|(_, n)| n).sum();
+        println!("{photos} photos, {} bytes of colour pairs → {}", bytes.len(), path.display());
+        if photos == 0 {
+            return Err("no photo contributed colour pairs".into());
+        }
+    }
+    let Some(dir) = dir else { return Ok(()) };
     let mut written = 0;
     for result in pool.fit(5) {
         match result {
