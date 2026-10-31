@@ -58,7 +58,7 @@ pub(crate) fn starting_colour(
             if !file_local_look(raw.format) {
                 return None;
             }
-            let (sensor, reference, clipped) = look_proxies(raw, bytes, t, lens, embedded)?;
+            let (sensor, reference, clipped, _) = look_proxies(raw, bytes, t, lens, embedded)?;
             fit_dark_tone(&sensor, &reference, &clipped)
         },
     );
