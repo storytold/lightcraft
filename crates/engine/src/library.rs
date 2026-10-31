@@ -653,7 +653,8 @@ impl Session {
             }
         }
         // keywords read whole from a list a line long (before they were split) become one each
-        if self.split_multiline_keywords() > 0
+        let journaled = self.pending_log.len();
+        if (self.split_multiline_keywords() > 0 || self.pending_log.len() > journaled)
             && let Err(e) = self.persist()
         {
             log::error!("library: {e}");
@@ -669,12 +670,39 @@ impl Session {
 
     /// Photos whose keywords hold line breaks (a camera preset's whole keyword list read as one
     /// keyword by an earlier version) get one keyword a line, journaled, not an undo step. Returns
-    /// how many photos changed.
+    /// how many photos changed. A listed keyword with line breaks hands its options to the names it
+    /// splits into (a name listed already keeps its own, but is left out of export when either was),
+    /// and with automatic XMP writing on, the repaired photos' sidecars are written as a command's are.
     pub fn split_multiline_keywords(&mut self) -> usize {
+        let breaks = |k: &str| k.contains(['\r', '\n', '\u{2028}', '\u{2029}']);
+        let log_start = self.pending_log.len();
+        let listed: Vec<(String, lightcraft_catalog::keywords::KeywordInfo)> =
+            self.catalog.listed_keywords().filter(|k| breaks(&k.path)).map(|k| (k.path.clone(), k.info.clone())).collect();
+        for (path, info) in listed {
+            let mut ops = Vec::new();
+            for name in lightcraft_catalog::keywords::from_file(std::slice::from_ref(&path), &[]) {
+                let moved = match self.catalog.keyword_info(&name) {
+                    Some(kept) => {
+                        let mut kept = kept.clone();
+                        kept.include_on_export &= info.include_on_export;
+                        kept
+                    }
+                    None => info.clone(),
+                };
+                ops.push(lightcraft_catalog::Op::SetKeyword { path: name, info: Some(moved) });
+            }
+            ops.push(lightcraft_catalog::Op::SetKeyword { path, info: None });
+            for op in ops {
+                match self.catalog.apply(op.clone()) {
+                    Ok(_) => self.pending_log.push(op),
+                    Err(e) => log::warn!("split keywords: {e}"),
+                }
+            }
+        }
         let fix: Vec<(lightcraft_catalog::PhotoId, lightcraft_catalog::Meta)> = self
             .catalog
             .photos()
-            .filter(|p| p.meta.keywords.iter().any(|k| k.contains(['\r', '\n', '\u{2028}', '\u{2029}'])))
+            .filter(|p| p.meta.keywords.iter().any(|k| breaks(k)))
             .map(|p| {
                 let mut meta = p.meta.clone();
                 meta.keywords = lightcraft_catalog::keywords::from_file(&meta.keywords, &[]);
@@ -691,6 +719,10 @@ impl Session {
         }
         if n > 0 {
             log::info!("split the line-separated keywords of {n} photo(s) into one keyword a line");
+        }
+        // not run through a command, so the sidecars are written here, as after a command
+        if self.xmp.auto_write && self.pending_log.len() > log_start {
+            self.auto_write_sidecars_since(log_start);
         }
         n
     }
