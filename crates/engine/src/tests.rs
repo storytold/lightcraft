@@ -1133,6 +1133,19 @@ fn auto_sync_hdr_off_returns_selected_photos_to_sdr() {
 }
 
 #[test]
+fn develop_lens_blur_toggles_enabled() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let id = PhotoId(s.catalog.photos().next().unwrap().id.0);
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    assert!(!s.develop_of(id).unwrap().lens_blur.enabled, "default-off fixture");
+    s.execute("develop.lensBlur", &json!({"enabled": true})).unwrap();
+    assert!(s.develop_of(id).unwrap().lens_blur.enabled);
+    s.execute("develop.lensBlur", &json!({})).unwrap();
+    assert!(!s.develop_of(id).unwrap().lens_blur.enabled, "no `enabled` param toggles");
+}
+
+#[test]
 fn json_delta_keeps_only_changes() {
     let a = json!({"light": {"exposure": 0, "contrast": 5}, "masks": [1], "x": 1});
     let b = json!({"light": {"exposure": 1, "contrast": 5}, "masks": [1, 2], "x": 1});

@@ -19,6 +19,7 @@ pub enum Section {
     BwMix,
     Grading,
     Effects,
+    LensBlur,
     Vignette,
     Grain,
     Detail,
@@ -40,6 +41,7 @@ impl Section {
             Section::BwMix => "B&W Mixer",
             Section::Grading => "Color Grading",
             Section::Effects => "Effects",
+            Section::LensBlur => "Lens Blur",
             Section::Vignette => "Vignette",
             Section::Grain => "Grain",
             Section::Detail => "Detail",
@@ -243,6 +245,9 @@ controls! {
     "effects.texture" => effects.texture, "Texture", Effects, -100, 100, 0, 1, 0, Centered;
     "effects.clarity" => effects.clarity, "Clarity", Effects, -100, 100, 0, 1, 0, Centered;
     "effects.dehaze" => effects.dehaze, "Dehaze", Effects, -100, 100, 0, 1, 0, Centered;
+    "lensBlur.amount" => lens_blur.amount, "Amount", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.focalDistance" => lens_blur.focal_distance, "Focal Distance", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.focalRange" => lens_blur.focal_range, "Focal Range", LensBlur, 0, 100, 0, 1, 0, Plain;
     "vignette.amount" => vignette.amount, "Vignette", Vignette, -100, 100, 0, 1, 0, Gradient { from: "#101010", to: "#f0f0f0" };
     "vignette.midpoint" => vignette.midpoint, "Midpoint", Vignette, 0, 100, 50, 1, 0, Plain;
     "vignette.roundness" => vignette.roundness, "Roundness", Vignette, -100, 100, 0, 1, 0, Centered;

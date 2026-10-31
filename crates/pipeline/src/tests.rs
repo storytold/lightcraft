@@ -75,6 +75,26 @@ fn directional_sliders() {
     assert!(at("effects.dehaze", -100.0) != base);
 }
 
+#[test]
+fn lens_blur_changes_the_render_once_enabled() {
+    let src = scene();
+    let base = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(96, 96)).image;
+    let mut s = DevelopSettings::default();
+    s.lens_blur = lightcraft_develop::LensBlur { enabled: true, amount: 100.0, focal_distance: 100.0, focal_range: 0.0 };
+    let blurred = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).image;
+    assert!(max_diff(&base, &blurred) > 5, "Lens Blur should change the render once enabled");
+}
+
+#[test]
+fn lens_blur_is_a_no_op_at_zero_amount() {
+    let src = scene();
+    let base = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(96, 96)).image;
+    let mut s = DevelopSettings::default();
+    s.lens_blur.enabled = true; // amount stays at its default, 0
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).image;
+    assert_eq!(max_diff(&base, &r), 0, "enabling Lens Blur at amount 0 must not change the render");
+}
+
 /// Dehaze crushed dark regions next to bright ones to black: the dark channel is a blur, not a
 /// patch minimum, so near the boundary it credited the dark pixels with the bright side's veil and
 /// the subtraction went past zero (#2504). The veil credited to a pixel is now bounded by its own

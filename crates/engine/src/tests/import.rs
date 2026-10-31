@@ -1016,6 +1016,74 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Assisted culling: a photo's score follows its face, not the whole frame, once it has a face
+/// region — a sharp background must not hide a blurred subject.
+#[test]
+fn assisted_culling_scores_the_face_not_just_the_whole_frame() {
+    let dir = temp_dir("cull_face");
+    let scene = lightcraft_scenes::demo_library()[0].render(480, 320);
+    let soften = |img: &lightcraft_raster::Rgb32f, r: usize| {
+        let (w, h) = (img.width, img.height);
+        let mut out = img.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let (mut acc, mut n) = ([0f32; 3], 0.0);
+                for yy in y.saturating_sub(r)..(y + r + 1).min(h) {
+                    for xx in x.saturating_sub(r)..(x + r + 1).min(w) {
+                        let c = img.data[yy * w + xx];
+                        acc = [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]];
+                        n += 1.0;
+                    }
+                }
+                out.data[y * w + x] = acc.map(|v| v / n);
+            }
+        }
+        out
+    };
+    // the left third blurred (where the face region goes below), the rest of the frame sharp
+    let soft = soften(&scene, 6);
+    let mut portrait = scene.clone();
+    for y in 0..portrait.height {
+        for x in 0..portrait.width / 3 {
+            portrait.data[y * portrait.width + x] = soft.data[y * portrait.width + x];
+        }
+    }
+    let data: Vec<[u8; 4]> = portrait
+        .data
+        .iter()
+        .map(|c| {
+            let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+            [e(c[0]), e(c[1]), e(c[2]), 255]
+        })
+        .collect();
+    let png = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: portrait.width, height: portrait.height, data }),
+        &Default::default(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("portrait.png"), png).unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().find(|p| p.file_name == "portrait.png").unwrap().id;
+    s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    let whole_frame = s.catalog.photo(id).unwrap().analysis.unwrap().sharpness;
+
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.regions = vec![lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect::new(0.02, 0.1, 0.3, 0.9),
+        kind: lightcraft_meta::RegionKind::Face,
+        name: None,
+        description: None,
+    }];
+    s.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    let face = s.catalog.photo(id).unwrap().analysis.unwrap().sharpness;
+
+    assert!(face < whole_frame - 5.0, "face-targeted score ({face}) should catch the blurred left third that the whole-frame score ({whole_frame}) smooths over");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Assisted culling: a photo listed twice is analysed once and is not a burst with itself.
 #[test]
 fn assisted_culling_ignores_repeated_ids() {

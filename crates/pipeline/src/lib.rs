@@ -31,6 +31,7 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod lensblur;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -211,6 +212,10 @@ pub(crate) struct Prepared {
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
+    /// Lens Blur's depth estimate and the fully-blurred layer it mixes in with distance from the
+    /// focal plane (see [`lensblur`]); both `None` unless Lens Blur is enabled with `amount` > 0.
+    pub lens_blur_depth: Option<Arc<Plane>>,
+    pub lens_blur_img: Option<Arc<Rgb32f>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).

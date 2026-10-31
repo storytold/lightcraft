@@ -274,6 +274,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         for c in ["effects.texture", "effects.clarity", "effects.dehaze"] {
             control(app, ui, d, c, true);
         }
+        sub_title(ui, crate::i18n::tr("Lens Blur"));
+        {
+            let mut enabled = d.lens_blur.enabled;
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 2 }).show(ui, |ui| {
+                let r = ui.checkbox(&mut enabled, crate::i18n::tr("Lens Blur"));
+                register(ui, "check:lensBlurEnabled", r.rect);
+                if r.changed() {
+                    let _ = app.run("develop.lensBlur", json!({"enabled": enabled}));
+                }
+            });
+        }
+        for c in ["lensBlur.amount", "lensBlur.focalDistance", "lensBlur.focalRange"] {
+            control(app, ui, d, c, d.lens_blur.enabled);
+        }
         sub_title(ui, crate::i18n::tr("Vignette"));
         {
             use lightcraft_develop::VignetteStyle as V;
