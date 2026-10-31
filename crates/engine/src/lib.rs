@@ -628,10 +628,12 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
+    /// undo, redo and opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -645,7 +647,14 @@ impl Session {
         Ok(())
     }
 
+    /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        self.apply_through(op, Catalog::apply)
+    }
+
+    /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
+    /// was), then forget what the session cached of the photos it replaced.
+    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -664,7 +673,7 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        let inv = apply(&mut self.catalog, op)?;
         for id in invalidated {
             self.media.forget(id);
         }

@@ -8,7 +8,7 @@ use super::{BACKDROP_SHOWN, ControlSpec, Dialog, LightcraftApp, Tokens};
 /// while the dialog is shown counts: in the frame a dialog appears, its input is the click that
 /// opened it (a quick click on a slow frame presses and releases in that one frame), so it never
 /// closes it. (Read from the raw events: egui forgets the press origin on release.)
-pub(super) fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, popup_was_open: bool) -> bool {
+pub(super) fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, title_bar: Option<egui::Rect>, popup_was_open: bool) -> bool {
     let press_id = egui::Id::unique("dialog-backdrop-press");
     let frame = ctx.cumulative_frame_nr();
     // the same frame too: a second pass of it gets no input
@@ -27,12 +27,12 @@ pub(super) fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, popup_wa
         (at(true), at(false), i.pointer.primary_clicked())
     });
     if let Some(p) = press {
-        let outside = !window.contains(p) && !popup_was_open;
+        let outside = !window.contains(p) && !title_bar.is_some_and(|b| b.contains(p)) && !popup_was_open;
         ctx.data_mut(|d| d.insert_temp(press_id, outside));
     }
     let Some(release) = release else { return false };
     let pressed_outside = ctx.data_mut(|d| d.remove_temp::<bool>(press_id)).unwrap_or(false);
-    clicked && pressed_outside && !window.contains(release)
+    clicked && pressed_outside && !window.contains(release) && !title_bar.is_some_and(|b| b.contains(release))
 }
 
 /// Room kept free above and below a dialog (#781).

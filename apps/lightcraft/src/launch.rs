@@ -3,7 +3,8 @@ use super::prefs::config_dir;
 pub(crate) const HELP: &str = "\
 lightcraft — photo library + raw developer
 
-USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported)
+USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported; a library's catalog.snap or
+                                               folder opens that library)
 
 OPTIONS:
   --library DIR    open (or create) this library (env LIGHTCRAFT_LIBRARY; default: the last library opened, or
@@ -30,17 +31,48 @@ ENVIRONMENT:
 
 /// The launch arguments' files and folders to import (absolute), and a notice for each one that
 /// is not imported (see [`lightcraft_engine::import::launch_path`]; issue #374).
-pub(crate) fn launch_imports(args: &[String]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn launch_imports(args: &[String]) -> LaunchArgs {
     let cwd = std::env::current_dir().ok();
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
     launch_imports_in(args, cwd.as_deref(), home.as_deref())
 }
 
-pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> (Vec<String>, Vec<String>) {
-    use lightcraft_engine::import::{LaunchPath, launch_path};
-    let (mut files, mut notices) = (Vec::new(), Vec::new());
+/// The library a launch argument names, after `--library` (`flag`) and `LIGHTCRAFT_LIBRARY` (`env`):
+/// the library to pass on as the flag, and whether the argument chose it (it is then remembered).
+pub(crate) fn launch_library_choice(
+    flag: Option<std::path::PathBuf>,
+    env: Option<&std::path::PathBuf>,
+    argument: Option<std::path::PathBuf>,
+) -> (Option<std::path::PathBuf>, bool) {
+    match (flag, env, argument) {
+        (Some(flag), _, _) => (Some(flag), false),
+        (None, None, Some(argument)) => (Some(argument), true),
+        _ => (None, false),
+    }
+}
+
+/// What the launch arguments ask for: files and folders to import, a library to open (a library's `catalog.snap`
+/// or folder, double-clicked in the file manager), and a notice for each argument
+/// left alone.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LaunchArgs {
+    pub(crate) files: Vec<String>,
+    pub(crate) library: Option<std::path::PathBuf>,
+    pub(crate) notices: Vec<String>,
+}
+
+pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> LaunchArgs {
+    use lightcraft_engine::import::{LaunchPath, launch_deadline, launch_path_until};
+    let (mut files, mut notices, mut library) = (Vec::new(), Vec::new(), None);
+    // one deadline for every argument's library check: they all run before the window opens
+    let deadline = launch_deadline();
     for a in args {
-        match launch_path(a, cwd, home, lightcraft_engine::devices::dcim_in) {
+        match launch_path_until(a, cwd, home, lightcraft_engine::devices::dcim_in, deadline) {
+            Some(LaunchPath::Library(dir)) if library.is_none() => library = Some(std::path::PathBuf::from(dir)),
+            Some(LaunchPath::Library(dir)) => {
+                log::warn!("one library at a time: not opening {dir} given at launch");
+                notices.push(format!("{dir} was not opened: LightCraft opens one library at a time. Open it with File ▸ Open Library…"));
+            }
             Some(LaunchPath::Import(p)) => files.push(p),
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
@@ -50,7 +82,7 @@ pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, 
             None => {}
         }
     }
-    (files, notices)
+    LaunchArgs { files, library, notices }
 }
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).

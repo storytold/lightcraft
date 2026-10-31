@@ -1,5 +1,5 @@
 use super::albums::pointer_over_row;
-use super::local::{same_folder, subfolders};
+use super::local::{is_builtin_place, same_folder, subfolders};
 use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
 use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
 
@@ -40,7 +40,7 @@ pub(super) fn folder_tree(
         // at the tree's own indent, as in Albums and Folders: the triangle sits in the gutter and the
         // icon lines up with the rows above
         let resp = Row::new(&format!("local:{path}"), Icon::Folder, name).selected(sel).indent(indent).show(app, ui).on_hover_text(path);
-        let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"));
+        let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"), name);
         if !tr.clicked()
             && resp.clicked()
             && let Err(e) = app.run("library.browse", json!({"path": path}))
@@ -69,24 +69,20 @@ pub(super) fn folder_tree(
                 let _ = app.run("local.hide", json!({"path": path}));
                 ui.close();
             }
-            if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
-                app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                    title: crate::i18n::tr_format!("Rename “{name}”", name = name),
-                    hint: "Folder name (renamed on disk; its photos follow)".into(),
-                    value: name.to_string(),
-                    command: "folder.rename".into(),
-                    params: json!({"path": path}),
-                    key: "name".into(),
-                });
-            }
-            if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
-                let into = app.services.pick_folder.as_mut().and_then(|f| f());
-                if let Some(into) = into {
-                    match app.run("folder.move", json!({"path": path, "into": into})) {
-                        Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved; {} photo(s) relinked", r["relinked"])),
-                        Err(e) => app.toast(ui.ctx(), e),
-                    }
+            // a built-in place is one of the computer's own folders under a translated label (Home is
+            // the user's whole home): Local offers no Rename or Move for it (the other items stay)
+            if !(indent == 0.0 && is_builtin_place(app, path)) {
+                if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
+                    app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+                        title: crate::i18n::tr_format!("Rename “{name}”", name = name),
+                        hint: "Folder name (renamed on disk; its photos follow)".into(),
+                        value: name.to_string(),
+                        command: "folder.rename".into(),
+                        params: json!({"path": path}),
+                        key: "name".into(),
+                    });
                 }
+                move_folder_item(app, ui, path);
             }
             if app.services.reveal.is_some()
                 && ui.button(crate::i18n::tr(crate::menus::reveal_label())).clicked()
@@ -345,7 +341,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
     folder_drop_target(app, ui, &resp, n, open_id, open);
     let mut toggled = false;
     if !n.children.is_empty() {
-        let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path));
+        let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path), name);
         toggled = tr.clicked();
         // the triangle sits on the row and takes its clicks: the menu opens from it too
         row_menu(app, &tr, n);
@@ -380,7 +376,8 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         return;
     }
     spring_open(ui, n, open_id, open);
-    let name = std::path::Path::new(&n.path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| n.name.clone());
+    // (the label, the confirmation and the toast say which folder when another row has the name)
+    let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog), &n.path);
     let photos: Vec<_> = ids.iter().filter_map(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(*id))).collect();
     let refused = if !n.selectable {
         Some(crate::i18n::tr("This row covers more than one disk: drop on a folder inside it"))
@@ -395,7 +392,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     };
     let all_here = !photos.is_empty() && photos.iter().all(|p| here(p));
     let count = photos.len();
-    let released = ui.input(|i| i.pointer.any_released());
+    let released = ui.input(|i| i.pointer.primary_released());
     let hint = match (&refused, all_here) {
         (Some(_), _) => crate::i18n::tr("Can't be moved here").to_string(),
         (None, true) => crate::i18n::tr_format!("Already in “{}”", name),
@@ -484,6 +481,13 @@ pub(crate) fn moved_text(n: u64, name: &str) -> String {
     }
 }
 
+/// What `folder.create` of the folder at `path` inside `parent` says when it succeeds: the folder
+/// is on disk now, but it has no photos, so the Folders list may not show it yet.
+pub(crate) fn created_text(path: &str, parent: &str) -> String {
+    let name = std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |f| f.to_string_lossy().to_string());
+    crate::i18n::tr_format!("Created folder “{name}” in “{parent}”", name = name, parent = lightcraft_catalog::folders::folder_label(parent))
+}
+
 /// [`move_photos`], saying how it went in a toast.
 fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[u64]>, path: &str, name: &str) {
     match move_photos(app, ids, path) {
@@ -560,6 +564,52 @@ fn library_node_for(tree: &[FolderNode], path: &str) -> Option<(FolderNode, Stri
     Some((node, name))
 }
 
+/// Move Folder To… can't start while Open Library… or New Library… waits for its folder: the
+/// dialogs answer in the order they were opened ([`crate::pick::poll`]), so the library could
+/// switch first and the move then run in the other library, moving the folder on disk with
+/// nothing to relink (issue #3140).
+fn can_move_folder(app: &LightcraftApp) -> Result<(), String> {
+    for (command, label) in [("app.openLibrary", "Open Library…"), ("app.newLibrary", "New Library…")] {
+        if app.pending_picks.iter().any(|p| p.command == command) {
+            return Err(format!("wait for {label} to finish before moving a folder"));
+        }
+    }
+    Ok(())
+}
+
+/// Move Folder To… of a folder row (widget `folderMoveTo`): asks for the destination through the
+/// shared folder dialog, off the UI thread where the host has one (issue #3140: a dialog on the UI
+/// thread froze the window); `folder.move` then runs when it closes ([`crate::pick::poll`]).
+/// Disabled while a library dialog is up ([`can_move_folder`]).
+fn move_folder_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
+    if app.services.pick_folder.is_none() && app.services.picker.is_none() {
+        return;
+    }
+    let r = ui.add_enabled(can_move_folder(app).is_ok(), egui::Button::new(crate::i18n::tr("Move Folder To…")));
+    register(ui, "folderMoveTo", r.rect);
+    if !r.clicked() {
+        return;
+    }
+    if let Err(e) = can_move_folder(app) {
+        app.toast(ui.ctx(), e);
+        ui.close();
+        return;
+    }
+    let req = crate::pick::PickRequest::folder(crate::i18n::tr("Move Folder To…"));
+    let params = json!({"path": path});
+    let picked = crate::pick::ask(app, "folder.move", &params, "into", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x]));
+    if let crate::pick::Picked::Now(v) = picked
+        && let Some(into) = v.into_iter().next()
+    {
+        let said = app.run("folder.move", json!({"path": path, "into": into})).map(|r| crate::pick::answered_message("folder.move", &r));
+        match said {
+            Ok(Some(text)) | Err(text) => app.toast(ui.ctx(), text),
+            Ok(None) => {}
+        }
+    }
+    ui.close();
+}
+
 /// Synchronize Folder… of a Folders row (widget `folderSynchronize`): opens its dialog, which
 /// scans the folder in the background.
 fn synchronize_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, name: &str) {
@@ -609,16 +659,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
             });
             ui.close();
         }
-        if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
-            let into = app.services.pick_folder.as_mut().and_then(|f| f());
-            if let Some(into) = into {
-                match app.run("folder.move", json!({"path": path, "into": into})) {
-                    Ok(r) => app.toast(ui.ctx(), format!("Moved; {} photo(s) relinked", r["relinked"])),
-                    Err(e) => app.toast(ui.ctx(), e),
-                }
-            }
-            ui.close();
-        }
+        move_folder_item(app, ui, path);
         if ui.button(crate::i18n::tr("New Folder on Disk…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
                 title: crate::i18n::tr_format!("New Folder in “{name}”", name = label),
@@ -637,6 +678,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
                 .on_hover_text(crate::i18n::tr("Moves the files and their XMP sidecars into this folder; never overwrites"))
                 .clicked()
         {
+            let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog), path);
             move_photos_here(app, ui.ctx(), None, path, &name);
             ui.close();
         }
