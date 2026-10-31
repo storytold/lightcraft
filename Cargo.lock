@@ -7827,8 +7827,11 @@ version = "0.16.0"
 dependencies = [
  "brotli",
  "flate2",
+ "lightcraft-faces",
  "serde_json",
  "sha2",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

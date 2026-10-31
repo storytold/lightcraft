@@ -235,6 +235,67 @@ The detector's output matches OpenCV's own YuNet on a 45-photo public-domain tes
 mean box overlap 0.97), including marble busts and paintings, with no false boxes on the landscape and architecture
 photos in the set.
 
+### And how well does it find faces?
+
+`cargo xtask ai-bench` measures the detector on the **WIDER FACE validation set** (3,226 photos, 39,708 faces) and prints the
+average precision (AP) for the benchmark's three settings: easy, medium and hard (hard includes the smallest faces). The photos are the publisher's, not ours: they are licensed CC BY-NC-ND 4.0, for non-commercial research
+use only, so the command downloads them to your machine only when you pass `--accept-terms`, and they are never part of
+this repository.
+
+```text
+cargo xtask ai-bench fetch --accept-terms --set wider-face-val   # WIDER_val.zip, the evaluation toolkit's ground truth
+                                                   # and YuNet, into corpus/ai-bench (SHA-256 checked; needs curl and tar or unzip)
+cargo xtask ai-bench run face-detection --set wider-face-val
+```
+
+`--dir DIR` puts the files elsewhere (the set goes in `DIR/wider-face-val`), `--model FILE` measures another
+YuNet-architecture `.onnx`, and `--limit N` scores up to N photos spread evenly, for a quick look. Detection uses the same
+code as **Photo ▸ Detect Faces** (a 640-pixel input), keeps every box scoring at least 0.02 as the protocol expects, and
+scores by the benchmark's published procedure: intersection over union of at least 0.5, scores normalised over the whole
+set, 1,000 thresholds. The scoring is our own implementation of that description, not the toolkit's MATLAB code.
+
+Measured with the pinned YuNet 2023mar model on an Intel Core i9-13950HX (32 threads, CPU only): **87.8 easy, 83.7 medium,
+59.8 hard** AP in 41 s for the 3,226 photos. The published figures for this model are 88.44 / 86.56 / 75.03. The gap is widest on hard, which includes the smallest
+faces, and those are what a 640-pixel input resolves worst (the limit noted above).
+
+### And how well does it recognise them?
+
+`cargo xtask ai-bench run face-recognition --set lfw` measures the recognition models LightCraft knows by hash (SFace and
+AuraFace) on **LFW** (Labeled Faces in the Wild), the standard face-verification benchmark: 6,000 pairs of photos in ten
+folds, half of them the same person. The photos are the University of Massachusetts Amherst's
+([vis-www.cs.umass.edu/lfw](http://vis-www.cs.umass.edu/lfw/), read through the
+[Internet Archive's copy of the page](https://web.archive.org/web/20191205130041/http://vis-www.cs.umass.edu/lfw/)): news
+photos of public figures, published with no licence but for research on face verification only, and the publisher warns
+that no result on them shows an algorithm to be suitable for commercial use. Like WIDER FACE they go to your machine only
+when you pass `--accept-terms` and are never part of this repository. The publisher's own host no longer resolves, so
+`fetch` downloads the Internet Archive's copies of its `lfw.tgz` (173 MB; the md5 it prints, `a17d05bd...`, matches) and
+`pairs.txt`, pinned by SHA-256.
+
+```text
+cargo xtask ai-bench fetch --accept-terms --set lfw     # lfw.tgz, pairs.txt, YuNet, SFace and AuraFace (about 470 MB)
+cargo xtask ai-bench run face-recognition --set lfw
+```
+
+Each photo goes through the code **Photo ▸ Detect Faces** and the recognition scan use: YuNet at its default options finds the
+faces, the one nearest the centre (LFW photos are centred on the person) is aligned to the ArcFace template from the
+detector's five landmarks, and the model's embedding of it is compared by cosine. A photo where YuNet finds no face, or whose landmarks cannot be aligned, has its
+centre cut out instead, and the count is printed (none were needed). A pair scores the cosine of its two embeddings; for each
+fold the best cut-off on the other nine is applied to it, and the result is the mean accuracy over the ten folds. There is
+no mirrored-face (flip) test, as the app does none. `--model FILE` measures one recognition `.onnx` LightCraft knows by its
+SHA-256, and `--limit N` scores up to N pairs spread evenly (at least 20, so each of the ten folds has a same-person and a
+different-person pair). A pair with a photo that could not be read or embedded gets no score: it is left out when the
+cut-off is chosen, counts as wrong in its fold, and is reported.
+
+Measured on an Intel Core i9-13950HX (32 threads, CPU only: LightCraft's pure-Rust engine), all 6,000 pairs of 7,701 photos:
+
+| Model | Accuracy (10 folds) | Published | Wall time |
+| --- | --- | --- | --- |
+| SFace 2021dec | **99.47 %** (std 0.44) | 99.40 % ([OpenCV Zoo](https://github.com/opencv/opencv_zoo/blob/25f423d0e04c31a17254620e58febd7386da523b/models/face_recognition_sface/README.md), measured with its [LFW evaluation](https://github.com/opencv/opencv_zoo/blob/25f423d0e04c31a17254620e58febd7386da523b/tools/eval/README.md)) | 148 s |
+| AuraFace v1 | **99.40 %** (std 0.42) | 99.65 % ([model card](https://huggingface.co/fal/AuraFace-v1/blob/af6d057c9b0ec4071d4c49c80e3539258798b609/README.md)) | 395 s |
+
+SFace matches its published figure. AuraFace is a quarter of a point (about 15 pairs) short of its card, which does not say
+how it was aligned or whether it used a flip test; we have not tried to close that gap.
+
 ## Suggesting who is in a photo
 
 With **Recognise faces** switched on in Settings ▸ Faces and a recognition model chosen (**Use**; the switch cannot be
