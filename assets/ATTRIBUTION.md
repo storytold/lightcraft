@@ -54,3 +54,6 @@ Notes
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their licences and attribution in its
   `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
   releases). Never commit font files here; add new fonts to craft-fonts.
+
+| `crates/engine/src/comfyui/Lightcraft-masking-api.json` | Lightcraft-masking native-node API workflow | LightCraft contributors | original work | MIT OR Apache-2.0 | 2026-10-28 | Parameterized photo, mask, model, prompts and seed; raw region output for local compositing |
+| `crates/engine/src/comfyui/Lightcraft-masking-qwen21-api.json` | Lightcraft-masking Qwen Image 2.1 API workflow | LightCraft contributors | original work; configured from the user's installed Qwen workflow node schemas | MIT OR Apache-2.0 | 2026-10-28 | Qwen GGUF loader, BF16 compute, original-photo and combined-mask reference conditioning, masked sampling; RGB region output for local compositing |

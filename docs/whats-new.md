@@ -106,6 +106,9 @@
 
 ## 2026-10-28
 
+### Generate a replacement inside a mask with ComfyUI
+- Select a mask, enter a replacement prompt in Masking, and configure your own ComfyUI server and model (Qwen Image 2.1 GGUF or an SDXL checkpoint) in Settings ▸ ComfyUI, where the instruction sent to Qwen can be edited. Generate runs the bundled Lightcraft-masking workflow in the background. Accept saves a new full-size sRGB PNG stacked with the original; Try again changes the seed, and Discard leaves the library alone. Pixels outside the mask stay unchanged from the developed render. Nothing is sent until Generate is pressed. See [ComfyUI generation](comfyui.md) for setup and limitations.
+
 ### The empty photo grid names Import Photos' shortcut as it is bound
 - When a view is empty and the way in is File ▸ Import Photos…, the message under "No photos" used a fixed "Cmd+Shift+I" (or a translation's fixed copy of it) whatever the platform or the binding. It now shows the key as the menu bar writes it (on a Mac its glyphs, elsewhere Ctrl+Shift+I) on its own line under the sentence, follows a remapped key, and names no key when Import Photos has none. The sentence now wraps in a narrow window instead of running off its edge.
 

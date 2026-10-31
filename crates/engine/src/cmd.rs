@@ -8,6 +8,7 @@ mod activity;
 mod before;
 pub(crate) mod browse;
 mod color;
+mod comfyui;
 pub(crate) mod convert;
 mod cull;
 pub mod curves;
@@ -147,6 +148,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
+        v.extend(comfyui::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());

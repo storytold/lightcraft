@@ -93,6 +93,8 @@ pub struct UiState {
     /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
     /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
     pub mask_overlay: bool,
+    /// User-chosen ComfyUI connection and generation settings (no automatic requests).
+    pub generation: lightcraft_engine::comfyui::Settings,
     pub mask_overlay_mode: String,
     pub mask_overlay_color: [u8; 3],
     pub mask_overlay_opacity: f32,
@@ -406,6 +408,7 @@ impl Default for UiState {
             proof_intent: lightcraft_engine::proof::ProofIntent::Perceptual,
             proof_paper_ink: false,
             mask_overlay: true,
+            generation: Default::default(),
             mask_overlay_mode: "color".into(),
             mask_overlay_color: [230, 30, 40],
             mask_overlay_opacity: 50.0,
