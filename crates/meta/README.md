@@ -25,6 +25,11 @@ with more than three colon-separated components is rejected as a whole, allowing
 fallback to supply the capture time. The original tag remains available in All Metadata. JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
 malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
+IPTC `Date Created` / `Time Created` is projected only when the entire decoded time is valid: a blank or absent time
+keeps date-only behavior, six ASCII digits remain a supported local clock, and the complete eleven-character
+`HHMMSS±HHMM` form carries an offset. Partial offsets, extra digits and trailing text are ignored as capture-time
+candidates, so they cannot block valid XMP or the import file-date fallback; other IPTC fields remain available.
+
 ## XMP namespaces
 
 Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchicalSubject`) and ours,
