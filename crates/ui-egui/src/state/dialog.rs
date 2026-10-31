@@ -165,6 +165,12 @@ pub enum Dialog {
     },
     /// Help ▸ What's New.
     WhatsNew,
+    /// First launch: a short tour of the main views, one page at a time.
+    Welcome {
+        /// The page on show (0-based; clamped when rendered).
+        #[serde(default)]
+        page: usize,
+    },
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
     /// of each burst; shots at most `burst_gap` seconds apart and at least `similarity` alike are
     /// a burst.

@@ -2,6 +2,7 @@ use super::{
     LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
     shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
+use crate::startup;
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -26,6 +27,24 @@ impl LightcraftApp {
             self.font_language = self.ui.language;
         } else {
             self.fonts_ready = true;
+        }
+        // First run ever, or a fresh version: the tour, or What's New. Never headless —
+        // snapshots and scripted runs hold session-local state and must not gain a modal.
+        // Every frame until it shows: another dialog open on the first frame (a delivered file)
+        // keeps its place, and so does the blocking library window (the launch chooser or a
+        // library error — it is not in `ui.dialog`). The startup dialog opens once that window
+        // closes or is dismissed. Choosing it here is only dueing it: the version is recorded
+        // when the dialog is actually presented (`dialogs::show`), so a host that runs `logic`
+        // and quits before a visible frame does not burn the tour.
+        if self.ui.dialog.is_none()
+            && self.library_problem.as_ref().is_none_or(|p| p.dismissed)
+            && let Some(dialog) = startup::open_at_startup(self.ui.seen_version.as_deref(), self.headless_host)
+        {
+            self.ui.dialog = Some(dialog);
+            // a drop queued on this same frame (a delivered file, a host drop on the first pass)
+            // arrived before the dialog did: mark it, so it waits behind the dialog and imports
+            // once it closes instead of taking the close-the-dialog refusal on the first UI pass
+            self.defer_dropped_files();
         }
     }
 

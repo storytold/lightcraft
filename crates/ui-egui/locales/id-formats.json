@@ -320,5 +320,8 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Masukkan foto melalui File › Impor foto… ({keys}).",
+  "View › Detail View ({keys}).": "Tampilan › Tampilan Detail ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys})."
 }

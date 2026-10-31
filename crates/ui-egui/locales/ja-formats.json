@@ -317,5 +317,8 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
+  "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
+  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"
 }

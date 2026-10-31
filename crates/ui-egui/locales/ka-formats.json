@@ -320,5 +320,8 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  "Bring photos in with File › Import Photos… ({keys}).": "ფოტოების შემოსატანად გამოიყენეთ ფაილი › ფოტოების იმპორტი… ({keys}).",
+  "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys})."
 }
