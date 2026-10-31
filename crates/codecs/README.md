@@ -32,6 +32,11 @@ let found = gainmap::read_jpeg(&bytes);                  // ours, cameras', Ligh
 gainmap::apply(&mut base_linear, w, h, &found.gain, &found.meta, 1.0)?;
 ```
 
+For already decoded legacy Apple gain maps, `gainmap::apple::{Metadata, apply}` provides a
+separate ratio-based reconstruction helper. It is not wired into JPEG/HEIF import. See
+[Apple gain maps](../../docs/apple-gain-maps.md) for the mathematical contract, limitations,
+and an optional macOS Core Image comparison probe.
+
 Thumbnail fallback decoding limits the source to 64 million pixels by default.
 Non-JPEG decoders allocate at source resolution before resizing, even for a tiny
 thumbnail. Use `decode_thumbnail_with` and `ThumbnailOptions::max_pixels` to set
