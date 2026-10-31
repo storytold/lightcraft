@@ -275,7 +275,11 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
             Box::new(|| {
                 let mut c = cargo();
                 c.args(["clippy", "--workspace", "--all-targets", "--keep-going", "--", "-D", "warnings"]);
-                run(c, "cargo clippy --workspace --all-targets --keep-going -- -D warnings")
+                run(c, "cargo clippy --workspace --all-targets --keep-going -- -D warnings")?;
+                // the GPU crate's optional parts (the SAM 3 kernels may be off in the workspace build)
+                let mut c = cargo();
+                c.args(["clippy", "-p", "lightcraft-gpu", "--features", "denoise,sam", "--all-targets", "--keep-going", "--", "-D", "warnings"]);
+                run(c, "cargo clippy -p lightcraft-gpu --features denoise,sam --all-targets --keep-going -- -D warnings")
             }),
         ),
         (
@@ -315,7 +319,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 let mut failed = Vec::new();
                 for (backend, adapter) in backends {
                     let step = format!("gpu-{backend}");
-                    let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
+                    let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise,sam"]));
                     c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
                     let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok();

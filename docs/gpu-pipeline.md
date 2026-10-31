@@ -359,6 +359,166 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
 - Result (M4 Pro, 14 raws, loupe, 12 steps): peak RSS 1.9–2.3 GB → 0.83–0.99 GB, peak footprint
   2.5–2.6 GB → 0.91–0.96 GB, heap peak 930 → ~600 MB; stepping median ~13 ms (unchanged).
 
+## SAM 3 backbone (M12)
+AI masks (Object, Subject, Describe) spend almost all of their time in SAM 3's vision backbone, a 32-layer ViT
+(`crates/segment/src/vit.rs`, ~4.6 TFLOP plus attention per photo): ~37–40 s on the CPU through candle. With the
+`sam` feature, `lightcraft_gpu::sam3::backbone(&WeightReader)` runs it with wgpu compute kernels instead and returns
+a `lightcraft_segment::BackboneAccel` for `Sam3::load_accelerated`; the heads stay on candle (the necks: below). It has a
+device of its own (like denoise and faces) with the same switches, crash sentinel, shutdown gate and
+stop-after-a-device-error handling; any failure is an `Err` and the candle backbone runs instead.
+- Same math as `vit.rs`: patch embedding (im2col + matrix product, 24 × 24 position table tiled), `ln_pre`, then per
+  layer LN → one q|k|v product (the three weights concatenated) → 2-D RoPE (`rope_tables`, recomputed bit for bit)
+  → attention over 24 × 24 windows, or all 5184 tokens in layers 7/15/23/31 → output projection + residual → LN →
+  MLP 1024 → 4736 → 1024 with GELU (erf form; A&S 7.1.26, |error| < 1.5e-7) + residual.
+- Tokens stay in *window order* (window-major, row-major inside a window) from the patch embedding to the last
+  layer: a window is a contiguous range of keys, the position table repeats per window (a bias table indexed by
+  row % 576), and global attention does not depend on order (its RoPE table is stored in window order). The last
+  kernel writes the `[1024, 72, 72]` channels-first output.
+- Kernels (`wgsl/sam3_*.wgsl`): `sam3_matmul` (Y = X · Wᵀ with the checkpoint's `[N, K]` weights as they are,
+  64 × 64 tiles, 4 × 4 per thread, k in steps of 16 through padded workgroup memory, bias/GELU/residual in the
+  epilogue; written out per tile size with one variable per accumulator), `sam3_attention` (flash style: one query
+  per thread, keys and values 32 at a time through workgroup memory, online softmax; the 16 × 5184² scores of a
+  global layer never exist; also written out, since arrays indexed in loops spilled to local memory and ran 3.5 ×
+  slower), `sam3_ops` (layer norm, RoPE in place with the 1/8 scale folded into q, im2col, the final reorder). No
+  subgroups and no shader-f16 needed.
+- All 228 dispatches, their parameters (one uniform buffer) and bind groups are recorded once with the weights; a
+  forward pass writes the pixels, submits one command buffer per layer and reads the result back once.
+- Limits requested: WebGPU downlevel defaults plus 98 MB storage bindings / buffers (the MLP's activations,
+  5184 × 4736 floats) and 16 KB of workgroup memory. Device memory: 1.8 GB of f32 weights + 0.2 GB of work
+  buffers. When the f32 weights don't fit (out-of-memory while uploading), it retries with f16 weights (pairs
+  packed in u32, unpacked with `unpack2x16float`, products still in f32): 0.9 GB, but ~20 × the error (below).
+  An adapter short of a limit gets no device (`short_limits`, e.g. "max_storage_buffer_binding_size 67108864 <
+  98205696"), nor does one whose device creation fails or panics (the crash sentinel keeps a driver crash from
+  repeating on the next start); SAM 3 then runs in candle on the CPU, and `segment.model.status` → `backend.fallback`
+  and Settings ▸ Performance ▸ AI masks say why.
+- Measured (RTX 5070, Vulkan, `examples/sam3_backbone_bench.rs`): device + kernel compile 0.16–0.3 s (≈1 s with a
+  cold driver shader cache), weight upload 1.1 s, first forward 0.43–0.47 s, warm forward 0.43–0.44 s; candle on
+  the CPU 36–40 s. Matrix products ~13.5 TFLOP/s (~80 % of the time), attention ~12 TFLOP/s. f16 weights: 0.47 s
+  (no faster: the products are compute-bound), upload 2.9 s.
+- Accuracy (`tests/it/sam3_backbone.rs`, a photo with a Hugging Face reference from `tools/sam3_reference.py`): GPU vs
+  CPU backbone max abs 5.3e-2 at a scale of 223 (max rel 2.4e-4), mean abs 2.2e-5; against Hugging Face the GPU is
+  as close as the CPU port (max rel 1.4e-4 vs 2.0e-4). Click masks and a Describe mask ("person") from either
+  backbone: IoU 1.0. With f16 weights: max rel 3.8e-3, mean abs 5.4e-4, mask IoU ≥ 0.9997.
+- Tests: kernel unit tests against plain loops (`src/sam3/tests.rs`: cut-off tiles, K not a multiple of the tile,
+  windowed and global attention, LN, RoPE, im2col/reorder, f16 rounding), skipped without a GPU; the end-to-end
+  test runs with `LIGHTCRAFT_SAM3_DIR` set. Tested on NVIDIA (RTX 5070, Vulkan) and Apple silicon (M4 Pro, Metal
+  through wgpu: first forward 3.1 s, CPU 17.2 s; max rel 4.9e-5, masks IoU ≥ 0.99992). AMD, Intel and DX12 are untested.
+
+### SAM 3 necks
+After the backbone, the click decoder needs the tracker neck (`tracker_neck`) and Describe the detector's
+(`detector_model.vision_encoder.neck`): the same `Sam3VisionNeck` (`crates/segment/src/neck.rs`) with other weights,
+three levels each (288², 144² and 72², 256 channels; the 36² level is used by neither head). In candle on the CPU
+they took ~2.3 and ~2.6 s per photo, more than the GPU backbone. `BackboneAccel::neck` runs them with the backbone's
+device (`crates/gpu/src/sam3/neck.rs`); `Sam3` turns the levels into candle tensors on its device, checks their
+sizes and values, and on any `Err` warns once and runs that neck in candle from then on (the other neck and the
+backbone stay on the GPU).
+- Images are pixel rows (`[pixels, channels]`), so every step is the backbone's matrix kernel. A 2 × 2 stride-2
+  transposed convolution is one product per input pixel, `[pixels, cin] · [cin, 4 · cout]` (PyTorch's
+  `[cin, cout, 2, 2]` weight laid out as `[(ky, kx, cout), cin]` on upload, the bias repeated 4 ×), GELU (erf)
+  between level 0's two in the epilogue. Its output rows hold each pixel's four outputs one after the other; `proj1`
+  (1 × 1) doesn't care about pixel order, so one reorder (`unshuffle` in `wgsl/sam3_neck.wgsl`) after it puts the
+  pixels of one or two up-samplings in row-major order.
+- `proj2` (3 × 3, padding 1) is an implicit GEMM: the matrix kernel with another A-tile loader
+  (`wgsl/sam3_conv.wgsl`, spliced in place of the dense one between `// #if dense` marks of `sam3_matmul.wgsl`) that
+  reads the 9 · 256 numbers of a pixel's neighbourhood straight from the image (K ordered tap-major, so each vec4 is
+  four channels of one pixel; zero outside). The im2col matrix (764 MB at 288²) never exists. The weights go to
+  `[cout, ky, kx, cin]` on upload. The last step is `to_chw` with one window over the whole image.
+- Built on first use, not with the backbone: the three kernels compile (≈0.2 s with a cold driver cache, a few ms
+  warm), the work buffers are made (pixel rows of the backbone, 21 MB, and two 85 MB buffers the steps alternate
+  between, shared by both necks), and the neck's weights (~27 MB) are read, laid out and uploaded (~0.1 s). Each
+  level is recorded once and is one submission with its own read-back (85 / 21 / 5 MB), so no buffer exceeds the
+  backbone's 98 MB limits and no limit is raised. Device memory: ~245 MB with both necks built.
+- Measured (RTX 5070, Vulkan, `examples/sam3_backbone_bench.rs`; `--app` times the app's per-photo steps,
+  `--cpu-necks` the same with candle's necks): a neck 38 ms warm (level 0: 13 ms of products at ~12 TFLOP/s, the
+  rest mostly the 85 MB read-back), first use 0.08–0.12 s (0.4 s with a cold driver shader cache); candle 2.3–3.5 s.
+  Per photo in the app's order: click features (the tracker neck plus the tracker's two 1 × 1 convolutions, still
+  candle) 0.11–0.19 s instead of 2.0–2.3 s, so encode + click features 0.56–0.69 s instead of 2.4–2.9 s; the first
+  Describe 5.1–5.8 s instead of 7.0–7.4 s (the rest of it is the DETR encoder and decoder in candle).
+- Accuracy (`tests/it/sam3_necks.rs`, both models fed the same GPU backbone output): every level of both necks within
+  max rel 2.1e-6, mean abs ≤ 7.7e-7 of candle; click and Describe masks IoU 1.0.
+- Tests: kernel unit tests against plain f64 loops (`src/sam3/neck/tests.rs`: transposed convolutions + reorder
+  with odd sides, the 3 × 3 convolution at every border, single-pixel and odd sizes, cut-off tiles, the weight
+  layouts, a whole small neck against a transcription of `Neck::forward`); `crates/segment` tests the fallback
+  (wrong sizes, NaN) with a fake accelerator.
+
+### SAM 3 DETR encoder
+Each text prompt (Describe; Subject's "person") runs the text detector (`crates/segment/src/detector.rs`), whose
+DETR encoder fuses the prompt into the 72 × 72 image tokens: ~4–5 s of the ~5–7 s a prompt took on the CPU. The
+same accelerator runs it (`BackboneAccel::detr_encoder`, `src/sam3/detr.rs`); `Detector::predict` uses its result
+as the encoder memory and runs the rest in candle. Any failure (no such accelerator, out of memory, a wrong-sized
+or non-finite result) is logged once and noted (`Sam3::detr_fallback`), and from then on candle runs the encoder
+for that model.
+- Same math as `detector.rs`, six layers over 5184 tokens of 256: LN (eps 1e-5, PyTorch's default) → self-attention
+  (8 heads of 32; q and k from the normed tokens plus their sine position encoding, v from the normed tokens; q | k
+  one product with the weights concatenated) → output projection + residual → LN → cross-attention to the prompt's
+  32 tokens (k | v one product) with the key-padding bias → output projection + residual → LN → MLP 256 → 2048 →
+  256 with ReLU + residual.
+- Kernels: the backbone's matrix product (ReLU as a third epilogue activation) and layer norm (with eps 1e-5), and
+  `wgsl/sam3_detr.wgsl`: attention for heads of 32 (flash style, written out like the backbone's) whose q, k and v
+  come from separate buffers with their own strides and offsets, with an optional per-key bias stored after the
+  prompt's k | v (0 or f32::MIN, as candle's `padding_bias`; the running maximum starts at f32::MIN, so a padded key
+  weighs exactly nothing and an all-padding prompt averages, as candle's softmax does); and a sum (tokens + position).
+- Loaded on the first prompt, not with the backbone: kernels, 38 MB of f32 weights, 80 MB of work buffers (model
+  load time and memory before the first Describe are unchanged). 84 dispatches, recorded once; a prompt writes the
+  tokens, their position encoding, the prompt's tokens and its padding bias, submits one command buffer per layer
+  and reads the memory back.
+- Measured (RTX 5070, Vulkan; CPU busy with parallel builds, load ~7–10): the encoder 23–25 ms with uploads and
+  read-back (self-attention 2.2 ms a layer at 12 TFLOP/s, products 10–12 TFLOP/s), candle 4.6–5.7 s (3.9–4.4 s on
+  an idle CPU). A Describe on a photo already analyzed (second prompt) 6.6 s → 2.0 s. What remains, per prompt:
+  CLIP text encoder 0.27–0.46 s, DETR decoder 0.75–1.3 s (of it the box relative-position bias ~75 ms a layer),
+  mask head ~0.9–1.4 s (pixel decoder 3 × 3 convs at 144² and 288² ~0.75–1.2 s, 1 × 1 instance projection 0.12 s,
+  mask products 25 ms; now on the GPU, below).
+- Accuracy (`tests/it/sam3_detr.rs`, the photo of `tools/sam3_reference.py`, prompts "person", "sky", "the red car";
+  both models share one GPU backbone, so only the encoder differs): memory max rel 1.7e-6–4.2e-6, mean abs
+  2.3e-6–7.7e-6; query logits max abs ≤ 2.5e-4; presence logits ≤ 2.3e-5 apart; boxes ≤ 1.2e-4; the same instances
+  and Describe mask IoU 1.0. Kernel unit tests (`src/sam3/detr/tests.rs`): self-attention with 8 × 32 heads and a
+  part-empty last workgroup, cross-attention to 32 keys with 0, 1, 5 and 32 real tokens, ReLU, the sum, the eps.
+
+### SAM 3 mask head
+A prompt's masks come from the detector's mask decoder (`mask_decoder` in the checkpoint): the encoder memory attends
+to the prompt (`prompt_cross_attn`, after its layer norm) and is added to it; the pixel decoder brings it from 72² to
+288² in two stages, each nearest 2 × up-sampling + the detector neck's level of that size → 3 × 3 convolution →
+GroupNorm (8 groups, eps 1e-5) → ReLU; the 1 × 1 instance projection follows, and each query's mask embedding (the
+`mask_embedder` MLP on the decoder's queries) times that is its mask logits. ~0.7–1.4 s per prompt in candle on the
+CPU, most of it the 288² convolution. `BackboneAccel::mask_decoder` runs it on the accelerator (`src/sam3/pixel.rs`);
+any failure (out of memory, a wrong-sized or non-finite result) is logged once and noted (`Sam3::mask_fallback`), and
+candle runs the decoder for that model from then on.
+- Interface: the encoder memory, the prompt's tokens and which are real, both neck levels (channels-first, as
+  `Features` holds them) and `rows` `[r, 256]` with a bias `[r]` (r ≤ 256), each row a 1 × 1 projection of the pixel
+  decoder's output; it returns `[r, 288, 288]`. The detector folds the instance projection into its 200 mask
+  embeddings on the CPU (e · (W x + b) = (e W) x + e b: 13 MFLOP instead of the projection's 11 GFLOP), so one
+  product `[82944, 256] · [200, 256]ᵀ` on the GPU gives the masks and the CPU fallback stays the candle code as it was.
+  SAM 3's semantic segmentation head (the semantic mask Describe and Subject share out to their instances, #1963) is
+  another 1 × 1 read-out of the same output, so it is one more row: 201 rows, the last one the semantic mask.
+- Kernels: the prompt attention is the DETR encoder's (torch-eps layer norm, products, attention with the padding
+  bias); the convolutions are the necks' implicit GEMM; `wgsl/sam3_pixel.wgsl` adds the up-sampling, which adds the
+  neck level as uploaded (channels-first, so no separate reorder), and GroupNorm + ReLU: two-pass statistics per
+  chunk of 256 pixels (thread = channel, so the loads are contiguous), merged per group with the parallel variance
+  formula, then normalized in place. The projection's `[pixels, r]` goes channels-first with `to_chw`.
+- Loaded on the first prompt, like the encoder: kernels, 6 MB of weights, 282 MB of work buffers (and an 85 MB
+  read-back buffer in host memory). 17 dispatches, recorded once per row count; a prompt uploads the memory (5 MB),
+  the prompt, both neck levels (106 MB) and the rows, submits once and reads `r · 288²` numbers back (66 MB).
+  Keeping the levels on the device after `BackboneAccel::neck` would save the 106 MB upload (a few ms) but needs an
+  image identity in the interface and another 106 MB of device memory per photo; not done.
+- Measured (RTX 5070, Vulkan, `examples/sam3_backbone_bench.rs`, quiet machine): the decoder 33 ms warm with the
+  uploads and the read-back (by FLOP count about a third of it kernels, the 288² convolution ~8 ms at ~12 TFLOP/s;
+  the rest transfers), first use 0.09–0.17 s. Per prompt in the app (`--app`, against `--cpu-masks`): a Describe on a
+  photo already analyzed 1.9–2.2 s → 1.04–1.06 s, the first on a photo 2.0–2.1 s → 1.11–1.12 s (2.5 s → 1.65 s with
+  the first load); under load (~15, parallel builds) 1.9 s → 1.1–1.2 s. With the CPU-side text cache and one-pass box
+  bias as well: a new prompt on an analyzed photo ~0.7 s, a prompt used before 0.45–0.46 s. What remains is in candle
+  on the CPU: the DETR decoder (~0.4 s) and, for a new prompt, the CLIP text encoder (~0.25 s).
+- Accuracy (`tests/it/sam3_mask_decoder.rs`; both models share one GPU accelerator, so only the mask decoder differs):
+  against the decoder transcribed with candle's tensor ops in f64, the GPU's instance features are within max rel
+  4.2e-6, mean abs 1.7e-7; candle's own f32 decoder is 1.1e-3–1.5e-3 / 2e-4 from it, all of that from its GroupNorm's
+  f32 sums over 2.6 M numbers per group (with those in f64 the f32 transcription is within 1.1e-6). So GPU vs candle,
+  all 200 queries' mask logits: max rel 1.0e-3–1.7e-3; the same instances, Describe mask IoU 1.0 ("person", "sky",
+  "the red car" on the photo of `tools/sam3_reference.py`). Kernel unit tests (`src/sam3/pixel/tests.rs`): the
+  up-sampling + level (odd sizes), GroupNorm + ReLU (cut-off chunks, a mean of 50, 1–8 groups), a two-stage small
+  decoder (up-sampling → convolution at every border → GroupNorm) against f64 loops, and the size checks.
+- Not done: masks only for the queries above the threshold (`merge` keeps sigmoid(logit) · sigmoid(presence) > 0.5).
+  `Sam3::detect` returns all 200 and the reference test (`crates/segment/tests/reference.rs`) checks the
+  best-scoring query's mask, which need not pass the threshold; with `rows` it is a matter of passing fewer of them.
+
 ## Open items
 - Keep the loupe texture on the GPU (render into an `egui-wgpu` texture on eframe's device instead of
   reading back); share the device with eframe.
