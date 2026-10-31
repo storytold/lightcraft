@@ -179,7 +179,8 @@ static ACTIVE: Mutex<u32> = Mutex::new(0);
 /// Write this file before the compute device is created or any shader / pipeline is compiled
 /// (the kernels, the denoise network's), and remove it once that returned (successfully or not).
 /// A file still there at the next launch means the process died inside the driver — e.g. Apple's
-/// Metal compiler (`MTLCompilerService`) aborting on a kernel, issue #250: see
+/// Metal compiler (`MTLCompilerService`) aborting on a kernel, issue #250 — or ended while a device
+/// creation that passed its time limit was still stuck there (issue #3068): see
 /// [`take_init_marker`]. `None` (the default) writes nothing.
 pub fn set_init_marker(path: Option<PathBuf>) {
     *MARKER.lock().unwrap_or_else(|e| e.into_inner()) = path;
@@ -225,6 +226,7 @@ impl Drop for Armed<'_> {
 
 /// Run driver work `f` (`what`: "device creation", "kernel compilation"…) between writing and
 /// removing the init marker (if one is set).
+#[cfg_attr(not(feature = "denoise"), allow(dead_code))] // the denoise network's kernels
 pub(crate) fn with_marker<T>(what: &str, f: impl FnOnce() -> T) -> T {
     let marker = MARKER.lock().unwrap_or_else(|e| e.into_inner()).clone();
     with_marker_on(marker, &ACTIVE, what, f)
@@ -240,9 +242,32 @@ fn with_marker_on<T>(marker: Option<PathBuf>, active: &Mutex<u32>, what: &str, f
     f()
 }
 
-/// Run device creation (and the kernel build that follows it) `f` under the init marker.
-pub(crate) fn with_init_marker<T>(backends: Backends, f: impl FnOnce() -> T) -> T {
-    with_marker(&format!("device and kernel creation (backends {backends:?})"), f)
+/// The init marker (if one is set) and its scope counter, taken on the thread that asks for a device
+/// and carried to the thread that creates it (`init.rs`, issue #3068): the marker stays while the
+/// driver work really runs, also past the caller's time limit.
+pub(crate) struct InitMarker {
+    path: Option<PathBuf>,
+    active: &'static Mutex<u32>,
+}
+
+impl InitMarker {
+    /// The process-wide marker ([`set_init_marker`]).
+    pub(crate) fn current() -> InitMarker {
+        InitMarker { path: MARKER.lock().unwrap_or_else(|e| e.into_inner()).clone(), active: &ACTIVE }
+    }
+
+    /// A marker at `path` on its own scope counter (tests: other tests create real devices through
+    /// the process-wide one).
+    #[cfg(test)]
+    pub(crate) fn at(path: PathBuf, active: &'static Mutex<u32>) -> InitMarker {
+        InitMarker { path: Some(path), active }
+    }
+
+    /// Run device creation (and the kernel build that follows it) `f` on `backends` between writing
+    /// and removing the marker.
+    pub(crate) fn run<T>(self, backends: Backends, f: impl FnOnce() -> T) -> T {
+        with_marker_on(self.path, self.active, &format!("device and kernel creation (backends {backends:?})"), f)
+    }
 }
 
 /// If the init marker `path` is present — the last process died while creating the GPU device —
@@ -443,12 +468,12 @@ mod tests {
     }
 
     #[test]
-    fn with_init_marker_writes_the_process_wide_marker() {
+    fn the_current_init_marker_is_the_process_wide_one() {
         let dir = std::env::temp_dir().join(format!("lc-gpu-global-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
         set_init_marker(Some(m.clone()));
-        let seen = with_init_marker(Backends::DX12, || m.exists());
+        let seen = InitMarker::current().run(Backends::DX12, || m.exists());
         set_init_marker(None);
         // not checked for removal: device-creating tests running in parallel may still hold the file
         // (the test above checks removal on its own scope counter)
