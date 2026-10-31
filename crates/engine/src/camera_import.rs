@@ -16,7 +16,9 @@
 //!   doesn't date are fetched, and the review's content check marks any duplicate among them.
 //! - **Already staged** (an earlier fetch that was cancelled, or a review that was closed): reused
 //!   when its size matches, so a second try doesn't read the card again. Anything else in the
-//!   staging folder (files no longer on the camera, or now in the library) is removed.
+//!   staging folder (files no longer on the camera, or now in the library) is removed, except a
+//!   file a library photo still uses: a review set to Add (in place) catalogs the staged file
+//!   itself, so it is that photo's original.
 //!
 //! Every file is written as `<name>.part`, flushed to disk, checked against the size the camera
 //! reported, and only then renamed; a failed file leaves nothing behind and the others carry on.
@@ -61,15 +63,41 @@ impl Source for lightcraft_cameras::Session {
 pub struct Known {
     photos: HashSet<(String, u64)>,
     times: std::collections::HashMap<(String, u64), Vec<i64>>,
+    /// Staging-folder files that library photos use as their originals (added in place): never
+    /// cleaned away. As stored and, when they exist, with links resolved (macOS's temp folder is
+    /// under `/var`, a link to `/private/var`).
+    in_use: HashSet<PathBuf>,
 }
 
 impl Known {
     pub fn of(catalog: &lightcraft_catalog::Catalog) -> Known {
         let mut k = Known::default();
-        for p in catalog.photos().filter(|p| !p.deleted && !p.local) {
-            k.add(&p.file_name, p.file_size, p.captured.as_deref());
+        for p in catalog.photos() {
+            if !p.deleted && !p.local {
+                k.add(&p.file_name, p.file_size, p.captured.as_deref());
+            }
+            // every photo that has its file in a staging folder, also in Recently Deleted (restoring
+            // it needs the file) and browsed ones
+            if let lightcraft_catalog::Source::File { path } = &p.source
+                && Path::new(path).components().any(|c| c.as_os_str() == STAGING)
+            {
+                k.uses(Path::new(path));
+            }
         }
         k
+    }
+
+    /// A library photo uses the file at `path` as its original.
+    pub fn uses(&mut self, path: &Path) {
+        if let Ok(real) = path.canonicalize() {
+            self.in_use.insert(real);
+        }
+        self.in_use.insert(path.to_path_buf());
+    }
+
+    /// A library photo uses the file at `path` (as given or with links resolved).
+    fn in_use(&self, path: &Path) -> bool {
+        self.in_use.contains(path) || path.canonicalize().is_ok_and(|real| self.in_use.contains(&real))
     }
 
     pub fn add(&mut self, file_name: &str, size: u64, captured: Option<&str>) {
@@ -195,7 +223,7 @@ pub fn fetch(source: &dyn Source, known: &Known, dir: &Path, progress: &Progress
             }
         }
     }
-    clean_staging(dir, &seen_paths);
+    clean_staging(dir, &seen_paths, known);
     let to_fetch: Vec<&(CameraFile, PathBuf)> = wanted.iter().filter(|(f, p)| !already_staged(f, p)).collect();
     progress.files_total.store(to_fetch.len() as u64, Ordering::Relaxed);
     progress.bytes_total.store(to_fetch.iter().filter_map(|(f, _)| f.size).sum(), Ordering::Relaxed);
@@ -265,8 +293,9 @@ fn fetch_one(source: &dyn Source, f: &CameraFile, path: &Path, cancel: &AtomicBo
 /// Remove what an earlier fetch left in `dir` that isn't wanted now (leftover `.part` files, files
 /// no longer on the camera or now in the library), then empty folders. Only regular files inside
 /// `dir` are touched, and only when `dir` is a staging folder of ours
-/// (`lightcraft-camera-import/<camera>`): never a folder someone pointed it at by mistake.
-fn clean_staging(dir: &Path, keep: &HashSet<PathBuf>) {
+/// (`lightcraft-camera-import/<camera>`): never a folder someone pointed it at by mistake. A file a
+/// library photo uses (added in place) stays.
+fn clean_staging(dir: &Path, keep: &HashSet<PathBuf>, known: &Known) {
     let ours = dir.parent().and_then(|p| p.file_name()).is_some_and(|n| n == STAGING);
     if !ours || !dir.is_dir() {
         return;
@@ -274,7 +303,7 @@ fn clean_staging(dir: &Path, keep: &HashSet<PathBuf>) {
     let files = crate::import::expand_within(&[dir.to_string_lossy().to_string()], None, crate::walk::Limits::default()).0;
     let parts = walk_parts(dir);
     for f in files.into_iter().map(PathBuf::from).chain(parts) {
-        if f.starts_with(dir) && !keep.contains(&f) && f.symlink_metadata().is_ok_and(|m| m.is_file()) {
+        if f.starts_with(dir) && !keep.contains(&f) && !known.in_use(&f) && f.symlink_metadata().is_ok_and(|m| m.is_file()) {
             let _ = std::fs::remove_file(&f);
         }
     }
@@ -404,6 +433,50 @@ mod tests {
         done(&dir);
     }
 
+    /// A review set to Add (in place) catalogs the staged file itself. Fetching the camera again
+    /// skips that photo (the library has it), and the cleanup must not take its original away.
+    #[test]
+    fn staged_originals_a_library_photo_uses_are_kept() {
+        let dir = temp("inplace");
+        let cam = fake(vec![file("DCIM/100", "A.JPG", 16, Some("2026-10-11T09:17:08")), file("DCIM/100", "B.JPG", 16, Some("2026-10-11T09:17:09"))]);
+        let r = fetch(&cam, &Known::default(), &dir, &Progress::default()).unwrap();
+        let (a, b) = (PathBuf::from(&r.staged[0]), PathBuf::from(&r.staged[1]));
+        let mut known = Known::default();
+        known.add("A.JPG", 16, Some("2026-10-11T09:17:08"));
+        known.add("B.JPG", 16, Some("2026-10-11T09:17:09"));
+        known.uses(&a);
+        let r = fetch(&cam, &known, &dir, &Progress::default()).unwrap();
+        assert_eq!((r.known, r.fetched), (2, 0), "{r:?}");
+        assert!(a.is_file(), "the library's original stays");
+        assert!(!b.exists(), "a staged copy the library doesn't use is still cleaned away");
+        done(&dir);
+    }
+
+    /// `Known::of` finds the staged files the catalog uses, also through a link to the temp
+    /// folder, and also for a photo in Recently Deleted.
+    #[test]
+    fn the_catalog_tells_which_staged_files_are_in_use() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let dir = temp("catalog");
+        std::fs::create_dir_all(dir.join("DCIM")).unwrap();
+        let (a, b) = (dir.join("DCIM/A.JPG"), dir.join("DCIM/B.JPG"));
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let mut c = lightcraft_catalog::Catalog::default();
+        let elsewhere = std::env::temp_dir().join("A.JPG");
+        for (id, path, deleted) in [(1, &a, false), (2, &b, true), (3, &elsewhere, false)] {
+            let mut p =
+                Photo::new(PhotoId(id), Source::File { path: path.to_string_lossy().into_owned() }, "A.JPG", "JPEG", 8, 8, "2026-10-11T09:17:08");
+            p.deleted = deleted;
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        let k = Known::of(&c);
+        assert!(k.in_use(&a) && k.in_use(&b));
+        assert!(k.in_use(&a.canonicalize().unwrap()), "found with links resolved");
+        assert!(!k.in_use(&elsewhere), "only files in a staging folder are tracked");
+        done(&dir);
+    }
+
     #[test]
     fn photos_already_in_the_library_are_not_read() {
         let dir = temp("known");
@@ -496,7 +569,7 @@ mod tests {
         let other = std::env::temp_dir().join(format!("lc-camimport-notours-{}", std::process::id()));
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("MINE.RAF"), b"x").unwrap();
-        clean_staging(&other, &HashSet::new());
+        clean_staging(&other, &HashSet::new(), &Known::default());
         assert!(other.join("MINE.RAF").is_file());
         let _ = std::fs::remove_dir_all(&other);
         done(&dir);
