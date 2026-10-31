@@ -253,6 +253,9 @@ fn encode(a: Activation) -> (u32, f32) {
 /// 1 × 1 convolution to 12 channels and depth-to-space, twice the size out), `true` RGB to RGB (the same size out, the
 /// last layer a convolution to 3 channels)?
 fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<bool, String> {
+    if ops.iter().any(|op| matches!(op, Op::PRelu { .. } | Op::Upsample { .. } | Op::Add { .. } | Op::Clip { .. })) {
+        return unsupported("the network has upscaler layers, which the kernels do not run yet");
+    }
     let rgb = net.fits_tile_at(tile, 0);
     if !rgb && !net.fits_tile(tile) {
         return unsupported("the tile does not fit the network");
@@ -273,7 +276,7 @@ fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<bool, String> {
     }
     let ends_right = matches!(
         (count.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
-        (Some(Op::Conv(conv)), Some(Op::DepthToSpace2 { src }))
+        (Some(Op::Conv(conv)), Some(Op::DepthToSpace { src, block: 2 }))
             if conv.k == 1 && conv.src2.is_none() && *src == count - 1 && conv.cout == 12 && conv.activation == Activation::None
     );
     if ends_right { Ok(false) } else { unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space") }
@@ -316,7 +319,10 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
         let reads: Vec<usize> = match op {
             Op::Conv(c) => std::iter::once(c.src).chain(c.src2).collect(),
             Op::ConvT2(c) => vec![c.src],
-            Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => vec![*src],
+            Op::MaxPool2 { src } | Op::DepthToSpace { src, .. } | Op::PRelu { src, .. } | Op::Upsample { src, .. } | Op::Clip { src, .. } => {
+                vec![*src]
+            }
+            Op::Add { a, b } => vec![*a, *b],
         };
         for t in reads {
             if let Some(l) = last_use.get_mut(t) {
@@ -511,7 +517,11 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                 });
             }
             // run as part of the 1 × 1 convolution before it
-            Op::DepthToSpace2 { .. } => {}
+            Op::DepthToSpace { .. } => {}
+            // refused by `validate_plan`
+            Op::PRelu { .. } | Op::Upsample { .. } | Op::Add { .. } | Op::Clip { .. } => {
+                return unsupported("an upscaler layer the kernels do not run yet");
+            }
         }
         // buffers whose last reader was this layer are free for the next layer's result
         for t in 0..=i {
@@ -1048,7 +1058,7 @@ mod tests {
     /// wrong on DX12 with FXC on an NVIDIA GTX 1070, where every second pixel came out with its channels shifted.
     #[test]
     fn a_layer_stores_every_pixels_channels_where_the_next_reads_them() {
-        let n = Net::new(4, vec![copy(0, 4), copy(1, 12), Op::DepthToSpace2 { src: 2 }]).unwrap();
+        let n = Net::new(4, vec![copy(0, 4), copy(1, 12), Op::DepthToSpace { src: 2, block: 2 }]).unwrap();
         let Some(g) = gpu(&n, 3) else { return };
         let x: Vec<f32> = (1..=36).map(|i| i as f32).collect();
         assert_eq!(g.run(&x).unwrap(), reference::run(&n, 3, &x).unwrap());
@@ -1067,7 +1077,7 @@ mod tests {
             }
         }
         let up = Op::ConvT2(ConvT2 { src: 1, cin: 4, cout: 4, weight, bias: vec![0.0; 4], activation: Activation::None });
-        let n = Net::new(4, vec![Op::MaxPool2 { src: 0 }, up, copy(2, 12), Op::DepthToSpace2 { src: 3 }]).unwrap();
+        let n = Net::new(4, vec![Op::MaxPool2 { src: 0 }, up, copy(2, 12), Op::DepthToSpace { src: 3, block: 2 }]).unwrap();
         let Some(g) = gpu(&n, 6) else { return };
         let x: Vec<f32> = (1..=144).map(|i| i as f32).collect();
         assert_eq!(g.run(&x).unwrap(), reference::run(&n, 6, &x).unwrap());
@@ -1315,6 +1325,9 @@ mod tests {
         assert!(plan(&n, 15, u64::MAX).is_err());
         // a buffer limit smaller than the activations
         assert!(plan(&n, 16, 64).is_err());
+        // a layer of the upscalers, though the network ends as a denoiser does
+        let prelu = Net::new(4, vec![Op::PRelu { src: 0, slope: vec![0.1; 4] }, copy(1, 12), Op::DepthToSpace { src: 2, block: 2 }]).unwrap();
+        assert!(plan(&prelu, 16, u64::MAX).is_err());
     }
 
     /// Issue #2577: a tile failing between a caller finding every workspace in use and that caller waiting still wakes

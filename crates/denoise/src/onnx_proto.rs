@@ -111,22 +111,24 @@ fn ints(w: Wire<'_>, out: &mut Vec<i64>, cap: usize) -> Result<()> {
 }
 
 #[derive(Default)]
-pub(super) struct AttributeProto {
+pub(super) struct AttributeProto<'a> {
     pub name: String,
     /// `None` when the file has no float value for the attribute.
     pub f: Option<f32>,
-    /// The declared attribute type (1 float, 2 int, 3 string, 7 ints); 0 when the file does not say.
+    /// The declared attribute type (1 float, 2 int, 3 string, 4 tensor, 7 ints); 0 when the file does not say.
     pub kind: i64,
     pub i: i64,
     pub s: Vec<u8>,
+    /// A tensor value (a `Constant` node's `value`).
+    pub t: Option<TensorProto<'a>>,
     pub ints: Vec<i64>,
 }
 #[derive(Default)]
-pub(super) struct NodeProto {
+pub(super) struct NodeProto<'a> {
     pub input: Vec<String>,
     pub output: Vec<String>,
     pub op_type: String,
-    pub attribute: Vec<AttributeProto>,
+    pub attribute: Vec<AttributeProto<'a>>,
 }
 #[derive(Default)]
 pub(super) struct TensorProto<'a> {
@@ -142,13 +144,13 @@ pub(super) struct ValueInfoProto {
 }
 #[derive(Default)]
 pub(super) struct Graph<'a> {
-    pub node: Vec<NodeProto>,
+    pub node: Vec<NodeProto<'a>>,
     pub initializer: Vec<TensorProto<'a>>,
     pub input: Vec<ValueInfoProto>,
     pub output: Vec<ValueInfoProto>,
 }
 
-fn attribute(b: &[u8]) -> Result<AttributeProto> {
+fn attribute(b: &[u8]) -> Result<AttributeProto<'_>> {
     let mut a = AttributeProto::default();
     let mut fields = Fields::new(b);
     while let Some((n, w)) = fields.next()? {
@@ -162,14 +164,15 @@ fn attribute(b: &[u8]) -> Result<AttributeProto> {
                 }
                 a.s = b.to_vec();
             }
+            (5, Wire::Bytes(b)) if a.t.is_none() => a.t = Some(tensor(b)?),
             (8, w) => ints(w, &mut a.ints, 16)?,
-            (20, Wire::Int(v @ (1 | 2 | 3 | 7))) if a.kind == 0 => a.kind = v as i64,
+            (20, Wire::Int(v @ (1 | 2 | 3 | 4 | 7))) if a.kind == 0 => a.kind = v as i64,
             _ => return Err(NetError::Unsupported("unknown attribute value".into())),
         }
     }
     Ok(a)
 }
-fn node(b: &[u8]) -> Result<NodeProto> {
+fn node(b: &[u8]) -> Result<NodeProto<'_>> {
     let mut a = NodeProto::default();
     let mut fields = Fields::new(b);
     while let Some((n, w)) = fields.next()? {
