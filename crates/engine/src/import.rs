@@ -46,14 +46,15 @@ pub(crate) use commit::workers;
 pub use commit::{batch_size, civil, commit_prepared, system_clock};
 pub use defaults::{CameraDefault, ImportDefaults, apply_import_defaults, has_import_look, import_defaults};
 pub use files::{
-    EXTENSIONS, LAUNCH_PROBE_LIMIT, LaunchPath, accept_list, expand, expand_within, is_supported, launch_deadline, launch_path, launch_path_until,
+    EXTENSIONS, Expansion, LAUNCH_PROBE_LIMIT, LaunchPath, accept_list, expand, expand_report, expand_within, is_supported, launch_deadline,
+    launch_path, launch_path_until,
 };
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
 use job::PreparedItem;
 pub use job::{ImportJob, Prepared, candidate_thumb_key, import, import_with};
 pub(crate) use scan::scan_files;
-pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
+pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_report, scan_with};
 #[cfg(test)]
 use scan::{library_files, library_hashes};
 pub use types::{

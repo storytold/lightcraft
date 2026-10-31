@@ -117,6 +117,8 @@
   "{name} On": "開啟{name}",
   "{name} — double-click to reset it": "{name} — 按兩下可重設",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} 項變更{:.0}已保留在記憶體，但尚未寫入磁碟：{e}\nLightCraft 會自動重試；現在結束程式會遺失{}。",
+  "{n} file{} skipped (not a supported photo type)": "已略過的檔案（不是支援的照片類型）：{n} 個{:.0}",
+  "{n} folder{} could not be read": "無法讀取的資料夾：{n} 個{:.0}",
   "{n} found · {sel} selected": "找到 {n} 張 · 已選取 {sel} 張",
   "{n} photos": "{n} 張照片",
   "{n} photos in {} are hidden by the filters above": "{}中的 {n} 張照片被上方篩選條件隱藏",

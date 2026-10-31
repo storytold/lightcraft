@@ -1870,6 +1870,7 @@
   "Metadata read": "Метаданные прочитаны",
   "Failed": "Ошибки",
   "Stopped": "Остановлено",
+  "Stopped at the scan limit: there may be more photos": "Остановлено на пределе сканирования: возможно, есть другие фото",
   "Stopped by an error (see the log)": "Остановлено из-за ошибки (см. журнал)",
   "Not saved": "Не сохранено",
   "A folder is being synchronized": "Папка синхронизируется",

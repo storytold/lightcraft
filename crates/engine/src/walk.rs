@@ -41,6 +41,13 @@ pub struct Walked {
     pub truncated: bool,
     /// Directory entries looked at.
     pub entries: usize,
+    /// Folders whose contents couldn't be listed (permissions, a folder that vanished or went
+    /// offline): the walk skipped them and carried on. Only a refused listing counts, not an
+    /// entry inside a listed folder that couldn't be examined.
+    pub unreadable: usize,
+    /// Files the walk reached that `keep` refused. Hidden entries and the skipped folder are left
+    /// out silently and not counted.
+    pub skipped: usize,
 }
 
 /// Whether the entry has a dot-prefixed name or a Windows or macOS hidden attribute.
@@ -93,7 +100,8 @@ pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, Entr
 
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
-/// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped.
+/// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped and counted
+/// ([`Walked::unreadable`]), as are the files `keep` refuses ([`Walked::skipped`]).
 pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
     walk(root, skip, limits, keep, None)
 }
@@ -120,6 +128,8 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
         if !is_dir {
             if keep(&path) {
                 out.files.push(path);
+            } else {
+                out.skipped = out.skipped.saturating_add(1);
             }
             continue;
         }
@@ -130,7 +140,10 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             out.truncated = true;
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&path) else { continue };
+        let Ok(rd) = std::fs::read_dir(&path) else {
+            out.unreadable = out.unreadable.saturating_add(1);
+            continue;
+        };
         let mut children: Vec<(PathBuf, bool)> = Vec::new();
         // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
         let mut listed = note.is_some().then(Vec::new);
@@ -315,6 +328,50 @@ mod tests {
         assert_eq!((w.files.len(), w.entries, w.truncated), (20, 20, true));
         let w = files_in(&wide, None, Limits::default(), all);
         assert_eq!((w.files.len(), w.truncated), (50, false));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Files the caller's `keep` refuses are counted (an import reports most of them as
+    /// unsupported), and so are only those: hidden files and the skipped folder are left out without a count, and
+    /// the files returned are the same ones in the same order.
+    #[test]
+    fn unkept_files_are_counted_as_skipped() {
+        let d = tmp("skipped");
+        for f in ["a.jpg", "b.txt", "c.png", "sub/d.jpg", "sub/e.md", ".hidden.txt", "lib/l.txt"] {
+            let p = d.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let lib = d.join("lib");
+        let w = files_in(&d, Some(&lib), Limits::default(), |p| p.extension().is_some_and(|e| e == "jpg"));
+        let rel: Vec<String> = w.files.iter().map(|p| p.strip_prefix(&d).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(rel, ["a.jpg", "sub/d.jpg"]);
+        assert_eq!((w.skipped, w.unreadable, w.truncated), (3, 0, false), "{w:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder that is gone by the time the walk reaches it (here removed while an earlier file is
+    /// looked at, as an unplugged disk or a deleted folder would be) is counted as unreadable;
+    /// the walk carries on and still returns the other files.
+    #[test]
+    fn a_folder_that_vanishes_is_counted_as_unreadable() {
+        let d = tmp("vanished");
+        for f in ["a.jpg", "b/b.jpg", "c.jpg"] {
+            let p = d.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let gone = d.join("b");
+        // `a.jpg` is looked at before the folder `b` is entered
+        let w = files_in(&d, None, Limits::default(), |p| {
+            if p.ends_with("a.jpg") {
+                let _ = std::fs::remove_dir_all(&gone);
+            }
+            true
+        });
+        let rel: Vec<String> = w.files.iter().map(|p| p.strip_prefix(&d).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(rel, ["a.jpg", "c.jpg"]);
+        assert_eq!((w.unreadable, w.skipped, w.truncated), (1, 0, false), "{w:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
