@@ -364,6 +364,78 @@ impl SidecarData {
         }
         self
     }
+
+    /// Overlay fields supplied by `other` onto `self`: any field present in `other`
+    /// replaces the one in `self`.
+    pub fn override_with(&mut self, other: SidecarData) {
+        if other.rating.is_some() {
+            self.rating = other.rating;
+            if self.flag == Some(Flag::Reject) && other.flag.is_none() {
+                self.flag = Some(Flag::None);
+            }
+        }
+        if other.flag.is_some() {
+            self.flag = other.flag;
+        }
+        if other.label.is_some() {
+            self.label = other.label;
+            self.label_text = other.label_text;
+        }
+        if other.title.is_some() {
+            self.title = other.title;
+        }
+        if other.caption.is_some() {
+            self.caption = other.caption;
+        }
+        if other.copyright.is_some() {
+            self.copyright = other.copyright;
+        }
+        if other.copyright_marked.is_some() {
+            self.copyright_marked = other.copyright_marked;
+        }
+        if other.usage_terms.is_some() {
+            self.usage_terms = other.usage_terms;
+        }
+        if other.copyright_url.is_some() {
+            self.copyright_url = other.copyright_url;
+        }
+        if other.creator.is_some() {
+            self.creator = other.creator;
+        }
+        if other.location.is_some() {
+            self.location = other.location;
+        }
+        if other.city.is_some() {
+            self.city = other.city;
+        }
+        if other.state.is_some() {
+            self.state = other.state;
+        }
+        if other.country.is_some() {
+            self.country = other.country;
+        }
+        if other.alt_text.is_some() {
+            self.alt_text = other.alt_text;
+        }
+        if other.extended_description.is_some() {
+            self.extended_description = other.extended_description;
+        }
+        if other.keywords.is_some() {
+            self.keywords = other.keywords;
+        }
+        if other.regions.is_some() {
+            self.regions = other.regions;
+        }
+        if other.captured.is_some() {
+            self.captured = other.captured;
+        }
+        if other.develop.is_some() {
+            self.develop = other.develop;
+            self.warnings = other.warnings;
+        } else {
+            self.warnings.extend(other.warnings);
+        }
+    }
 }
 
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
