@@ -338,6 +338,12 @@
 
 ## 2026-10-23
 
+### Place names always download into the settings folder
+- Download Place Names (for Fill Location from GPS) always saves the GeoNames files in the settings folder (issue
+  #2575). An agent or script driving LightCraft could name another folder and another server, and have that
+  server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
+  is in its place instead of writing through a link to somewhere else.
+
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
   grid thumbnail (issue #2682). They can't read one, so each video failed with "unrecognised image format", showed a
