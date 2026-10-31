@@ -30,7 +30,7 @@ pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
 }
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+pub(crate) fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
     let master = !ToneCurve::point_curve_is_identity(&c.master);
     let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
@@ -317,7 +317,7 @@ pub(crate) fn finish(
         fp.for_display(d, proof);
     }
     let trc = fp.out_trc;
-    let data = finish_with(p, &fp, false, |e| match trc {
+    let data = finish_with(p, &fp, false, false, |e| match trc {
         OutputTrc::Srgb => [enc(e[0]), enc(e[1]), enc(e[2]), 255],
         t => {
             let x = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0)))));
@@ -345,18 +345,18 @@ pub(crate) fn finish_deep(
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+            let v = finish_with(p, &fp, true, false, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
         OutputDepth::F32Hdr => {
             // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
             let peak = fp.peak;
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
+            let v = finish_with(p, &fp, true, false, |e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
             DeepSamples::F32(v.into_flattened())
         }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            let v = finish_with(p, &fp, true, |e| match trc {
+            let v = finish_with(p, &fp, true, false, |e| match trc {
                 OutputTrc::Srgb => e.map(q),
                 t => e.map(|v| q(t.encode(srgb_to_linear(v.clamp(0.0, 1.0))))),
             });
@@ -373,6 +373,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     p: &Prepared,
     fp: &FinishParams,
     exact: bool,
+    stop_after_curves: bool,
     store: impl Fn([f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
@@ -520,6 +521,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 if fp.refine_sat < 1.0 {
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
+            }
+            if stop_after_curves {
+                // A diagnostic supplies only the selected curve's predecessors. Do not include
+                // grain, a LUT profile, proof warning colours or final output re-encoding.
+                *px = store(e);
+                continue;
             }
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));

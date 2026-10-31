@@ -28,6 +28,7 @@ pub mod blemish;
 pub mod colorops;
 pub mod cull;
 pub mod curve;
+pub mod curve_input;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
@@ -539,13 +540,13 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
 
 /// Render `src` with settings `s`.
 pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rendered {
-    render_impl(Src::Borrowed(src), info, s, req, None)
+    render_impl(Src::Borrowed(src), info, s, req, None, None)
 }
 
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
 /// identical to [`render`]'s.
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {
-    render_impl(Src::Shared(src), info, s, req, Some(cache))
+    render_impl(Src::Shared(src), info, s, req, Some(cache), None)
 }
 
 enum Src<'a> {
@@ -553,7 +554,14 @@ enum Src<'a> {
     Shared(&'a Arc<Rgb32f>),
 }
 
-fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+fn render_impl(
+    src: Src<'_>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    input: Option<curve_input::CurveInput>,
+) -> Rendered {
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
     let edit: &DevelopSettings = &effective;
@@ -613,6 +621,9 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
+    }
+    if let Some(input) = input {
+        return curve_input::finish(&prep, s, frame, info, req, input);
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);

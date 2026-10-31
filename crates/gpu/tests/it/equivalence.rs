@@ -94,6 +94,37 @@ fn check_warned(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSet
 
 type Edit = fn(&mut DevelopSettings);
 
+#[test]
+fn curve_input_matches_the_gpu_prefix_and_keeps_later_operations_out() {
+    use lightcraft_pipeline::curve_input::{self, CurveInput};
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(128, 64, |x, y| {
+        let v = 0.01 + x as f32 / 500.0;
+        [v, v * (0.25 + y as f32 / 100.0), v * 0.4]
+    }));
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 0.5;
+    s.curve.shadows = 45.0;
+    s.curve.master = vec![Point::new(0.0, 0.04), Point::new(0.25, 0.65), Point::new(1.0, 0.95)];
+    s.curve.red = s.curve.master.clone();
+    s.curve.refine_saturation = 25.0;
+    s.grain.amount = 60.0;
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(128, 64);
+    for ch in [CurveInput::Parametric, CurveInput::Master, CurveInput::Red, CurveInput::Green, CurveInput::Blue] {
+        let input = curve_input::render(&src, &info, &s, &req, None, ch);
+        let mut previous = s.clone();
+        previous.curve = ch.predecessors(&s.curve);
+        previous.grain = Default::default();
+        let reference = lightcraft_gpu::render(&src, &info, &previous, &req, None).expect("GPU prefix");
+        let (mean, max, _) = diff(&input.image, &reference.image);
+        eprintln!("curve input {ch:?}: mean {mean:.4}, max {max} LSB");
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{ch:?}: mean {mean}, max {max}");
+    }
+}
+
 fn typical(s: &mut DevelopSettings) {
     s.light.exposure = 0.3;
     s.light.highlights = -40.0;

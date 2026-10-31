@@ -510,6 +510,7 @@ impl Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            curve_input: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),
