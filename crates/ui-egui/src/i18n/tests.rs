@@ -1030,6 +1030,8 @@ fn contextual_entries_name_real_messages() {
     assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Preset name"), "Name des Presets");
     assert_eq!(Locale::De.tr("Preset name"), "Name der Vorgabe");
     assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Rename Preset"), "Preset umbenennen");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Export Presets"), "Presets exportieren");
+    assert_eq!(Locale::De.tr("Export Presets"), "Vorgaben exportieren");
     assert_eq!(tr_ctx_in(Locale::En, FILTER_BAR_CONTEXT, "Presets"), "Presets");
 }
 
