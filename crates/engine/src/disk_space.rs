@@ -17,9 +17,11 @@ use std::path::Path;
 pub const LOW_FREE_PERCENT: u64 = 10;
 /// …or when less than this is free (20 GB), whichever comes first.
 pub const LOW_FREE_BYTES: u64 = 20 << 30;
-/// While previews are built, the free space is read at most this often (statvfs on the cache's
+/// While a library is open, the free space is read at most this often (statvfs on the cache's
 /// drive: cheap, but not something for every frame or every write).
 pub const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// A read when the library opens that hasn't answered after this long shows in the activity stack.
+const SHOW_ROW_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Space on one drive, in bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,9 +138,35 @@ impl crate::Session {
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // a read when the library opens that takes more than a moment (a network share slow to
+            // answer, or the cache counted when the drive is low) shows in the activity stack; a quick
+            // one, and the quiet periodic ones every few minutes, don't
+            let activity = now.then(|| self.activity.clone());
             let (tx, rx) = std::sync::mpsc::channel();
             let started = std::thread::Builder::new().name("disk-space".into()).spawn(move || {
-                let _ = tx.send(read_now());
+                let answer = match activity {
+                    None => read_now(),
+                    Some(activity) => {
+                        let (done, answered) = std::sync::mpsc::channel();
+                        let reading = std::thread::Builder::new().name("disk-space-read".into()).spawn(move || {
+                            let _ = done.send(read_now());
+                        });
+                        match reading {
+                            Err(e) => {
+                                log::info!("disk space: can't start the free-space read: {e}");
+                                None
+                            }
+                            Ok(_) => match answered.recv_timeout(SHOW_ROW_AFTER) {
+                                Ok(answer) => answer,
+                                Err(_) => {
+                                    let _row = activity.start("cache", "Checking free disk space", crate::activity::Cancel::No);
+                                    answered.recv().ok().flatten()
+                                }
+                            },
+                        }
+                    }
+                };
+                let _ = tx.send(answer);
             });
             match started {
                 Ok(_) => self.disk_alert.probe = Some(rx),
@@ -209,6 +237,11 @@ impl crate::Session {
     #[doc(hidden)]
     pub fn forget_disk_space_check(&mut self) {
         self.disk_alert.checked_at = None;
+    }
+
+    /// Whether a free-space read is running on its worker (its answer not taken yet).
+    pub fn disk_space_reading(&self) -> bool {
+        self.disk_alert.probe.is_some()
     }
 
     /// Whether the low-disk alert was raised since the library opened (`library.info` →
@@ -309,6 +342,15 @@ mod tests {
         }));
         s.open_library(&dir, false).unwrap();
         assert!(s.take_disk_space_alert().is_none(), "the open didn't wait for the drive's answer");
+        // the read the open started shows in the activity stack once it takes more than a moment
+        // (CodeRabbit on #3077)
+        let reading = |s: &Session| s.activity.list().iter().any(|t| t.kind == "cache" && t.label == "Checking free disk space");
+        let until = web_time::Instant::now() + std::time::Duration::from_secs(10);
+        while !reading(&s) {
+            assert!(web_time::Instant::now() < until, "{:?}", s.activity.list());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(s.disk_space_reading());
         s.check_disk_space(true);
         assert!(s.take_disk_space_alert().is_none(), "nor does a check while the read runs");
         release.send(()).unwrap();
@@ -322,6 +364,7 @@ mod tests {
         };
         assert_eq!(alert.space.available, GB);
         assert!(s.disk_space_alert_raised());
+        assert!(!reading(&s) && !s.disk_space_reading(), "the row goes with the read");
         s.close_library().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
