@@ -63,12 +63,27 @@ pub fn is_dcp(bytes: &[u8]) -> bool {
     matches!(bytes.get(0..4), Some([b'I', b'I', b'R', b'C'] | [b'M', b'M', b'C', b'R']))
 }
 
-/// Parse a `.dcp` file. Files above 64 MiB are refused (real profiles are kilobytes to a few MB).
+/// The largest `.dcp` file read or parsed (real profiles are kilobytes to a few MB).
+pub const MAX_DCP_BYTES: u64 = 64 << 20;
+
+/// Read the `.dcp` file at `path`, reading at most [`MAX_DCP_BYTES`] + 1 bytes: a larger file is refused
+/// before it is loaded into memory.
+pub fn read_dcp(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.take(MAX_DCP_BYTES.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DCP_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the camera profile is larger than 64 MiB"));
+    }
+    Ok(bytes)
+}
+
+/// Parse a `.dcp` file. Files above 64 MiB ([`MAX_DCP_BYTES`]) are refused.
 pub fn parse_dcp(bytes: &[u8]) -> Result<DcpProfile, DcpError> {
     if !is_dcp(bytes) {
         return Err(DcpError::NotDcp);
     }
-    if bytes.len() > 64 << 20 {
+    if bytes.len() as u64 > MAX_DCP_BYTES {
         return Err(DcpError::Damaged("larger than 64 MiB".into()));
     }
     // the TIFF reader only knows 42 / BigTIFF / raw magics: give it a header with 42 in place of RC
@@ -159,6 +174,18 @@ pub fn write_dcp(p: &DcpProfile) -> Result<Vec<u8>, DcpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_a_profile_stops_past_the_size_limit() {
+        let dir = std::env::temp_dir().join(format!("lc-read-dcp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (fits, big) = (dir.join("fits.dcp"), dir.join("big.dcp"));
+        std::fs::File::create(&fits).unwrap().set_len(MAX_DCP_BYTES).unwrap();
+        std::fs::File::create(&big).unwrap().set_len(MAX_DCP_BYTES + 1).unwrap();
+        assert_eq!(read_dcp(&fits).unwrap().len() as u64, MAX_DCP_BYTES);
+        assert_eq!(read_dcp(&big).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A minimal single-illuminant profile (our own numbers) built in memory: no profile file is
     /// committed to the repository.

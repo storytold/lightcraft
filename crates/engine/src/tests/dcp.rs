@@ -544,3 +544,20 @@ fn a_lut_group_named_camera_profiles_joins_the_camera_profiles_group() {
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A `.dcp` file larger than the parser accepts is refused while it is read, before the whole file is loaded into
+/// memory (CodeRabbit on #1063): the import reports it as failed with its own reason.
+#[test]
+fn an_oversized_camera_profile_is_refused_while_it_is_read() {
+    let dir = temp_dir("oversized");
+    let big = dir.join("Big.dcp");
+    let mut bytes = write_dcp(&swapping_profile("Big")).unwrap();
+    bytes.truncate(4);
+    std::fs::write(&big, &bytes).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&big).unwrap().set_len(lightcraft_raw::dcp::MAX_DCP_BYTES + 1).unwrap();
+    let mut s = Session::new();
+    let r = s.execute("profile.import", &json!({"paths": [big.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"], json!([]), "{r}");
+    assert_eq!(r["failed"][0][1], json!("the camera profile is larger than 64 MiB"), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

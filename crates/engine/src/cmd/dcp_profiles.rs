@@ -62,7 +62,9 @@ pub fn register_all(s: &mut Session, profiles: Option<&Path>) {
     let loaded: Vec<(String, LoadedCameraProfile)> = s
         .dcp_profiles
         .iter()
-        .filter_map(|p| std::fs::read(&p.file).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d)))
+        .filter_map(|p| {
+            lightcraft_raw::dcp::read_dcp(Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d))
+        })
         .collect();
     s.media.camera_profiles = loaded.into_iter().collect();
 }
@@ -101,7 +103,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
     for f in dcp_files(paths) {
         let shown = f.display().to_string();
-        let bytes = match std::fs::read(&f) {
+        let bytes = match lightcraft_raw::dcp::read_dcp(&f) {
             Ok(b) => b,
             Err(e) => {
                 failed.push(json!([shown, e.to_string()]));
@@ -119,10 +121,9 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let stem = f.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Camera Profile".into());
         let name = if profile.name.trim().is_empty() { stem.clone() } else { profile.name.trim().to_string() };
         // the same profile imported again: keep the one there is
-        let same = s
-            .dcp_profiles
-            .iter()
-            .find(|p| p.name == name && p.camera_model == profile.camera_model && std::fs::read(&p.file).is_ok_and(|b| b == bytes));
+        let same = s.dcp_profiles.iter().find(|p| {
+            p.name == name && p.camera_model == profile.camera_model && lightcraft_raw::dcp::read_dcp(Path::new(&p.file)).is_ok_and(|b| b == bytes)
+        });
         if let Some(p) = same {
             imported.push(json!({"id": p.id, "name": p.name, "cameraModel": p.camera_model, "existing": true}));
             continue;
