@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (`cargo xtask test`: the tests alone, with `ci`'s caps and slot) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -73,6 +73,14 @@ module per file (`cargo test -p <crate> --test it <module>::`); a test that chan
 whole process (a global allocator, closing the GPU) keeps a binary of its own in `tests/`. The WASM
 build is one `cargo check --target wasm32-unknown-unknown --keep-going` over the wasm-safe crates.
 
+`ci`'s resource caps (build jobs by available RAM, at most 4 test threads, line-table debuginfo) and
+its one-run-per-machine slot (`xtask/src/ci_lock.rs`) also cover `cargo xtask test [-p PKG]…
+[--keep-going] [--doc] [-- ARGS]` (`xtask/src/test.rs`), the way to run the tests alone: subcommands
+opt into the caps with `use_ci_caps`. It builds every workspace test target once, as `ci` does, and
+runs each test binary, or the `-p` packages' binaries, itself (`test::run_binary`, which `ci --quick`
+uses too); `--keep-going` runs every binary and names each that failed instead of stopping at the
+first.
+
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
@@ -87,6 +95,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

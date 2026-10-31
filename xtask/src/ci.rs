@@ -1,7 +1,7 @@
 use super::layers::cmd_layers;
 use super::raw_samples::RAW_SAMPLES;
 use super::wasm::{cmd_wasm, cmd_wasm_for};
-use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, run};
+use super::{Command, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, run, test, use_ci_caps};
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
 /// is unknown. With line-table debuginfo, 4 jobs measured about 3 GB of RAM in use and 2 jobs
@@ -63,7 +63,7 @@ pub(crate) fn total_ram_gb() -> Option<u64> {
 const TEST_TARGETS: [&str; 3] = ["--lib", "--bins", "--tests"];
 
 /// `args` followed by [`TEST_TARGETS`].
-fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
     args.iter().copied().chain(TEST_TARGETS).collect()
 }
 
@@ -72,7 +72,7 @@ fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
 /// are cached per process: libtest runs a binary's tests in one process and generates each scene
 /// once, while nextest's process per test regenerates them (measured: the ui-egui tests take about
 /// 30 min under nextest, under 5 min under cargo test).
-fn nextest() -> bool {
+pub(crate) fn nextest() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FOUND.get_or_init(|| {
         if std::env::var_os("LIGHTCRAFT_NEXTEST").is_none_or(|v| v != "1") {
@@ -105,60 +105,6 @@ fn doctests() -> (Command, String) {
     let mut c = cargo();
     c.args(["test", "--workspace", "--doc"]);
     (c, "cargo test --workspace --doc".to_owned())
-}
-
-/// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
-/// `packages`. Building with `-p` instead would resolve features per selection: different
-/// artifacts from `ci`'s workspace build, so it would recompile ~130 crates. Doc tests are left to
-/// the full `ci`.
-fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, skip_log: &Path) -> Result<(), String> {
-    let manifests: std::collections::BTreeMap<String, String> = metadata()?["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|p| Some((p["manifest_path"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
-        .filter(|(_, name)| packages.contains(name))
-        .collect();
-    let what = "cargo test --workspace --no-run --lib --bins --tests";
-    eprintln!("$ {what} (then the test binaries of {})", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-    let out = cargo()
-        .args(with_test_targets(&["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"]))
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map_err(|e| format!("{what}: failed to spawn: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("{what}: exited with {}", out.status));
-    }
-    let mut binaries = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if msg["reason"] != "compiler-artifact" || msg["profile"]["test"] != true {
-            continue;
-        }
-        let (Some(exe), Some(manifest)) = (msg["executable"].as_str(), msg["manifest_path"].as_str()) else { continue };
-        if let Some(name) = manifests.get(manifest) {
-            binaries.push((name.clone(), manifest.to_owned(), exe.to_owned()));
-        }
-    }
-    if binaries.is_empty() {
-        println!("no test binaries in {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-        return Ok(());
-    }
-    let mut failed = Vec::new();
-    for (name, manifest, exe) in &binaries {
-        let dir = Path::new(manifest).parent().unwrap_or(root);
-        let mut c = Command::new(exe);
-        c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", name).env(ci_report::SKIP_LOG_ENV, skip_log);
-        if std::env::var_os("RUST_TEST_THREADS").is_none() {
-            // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
-            c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
-        }
-        let file = Path::new(exe).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        if run(c, &format!("{name}: {file}")).is_err() {
-            failed.push(format!("{name} ({file})"));
-        }
-    }
-    if failed.is_empty() { Ok(()) } else { Err(format!("tests failed in {}", failed.join(", "))) }
 }
 
 /// The test that prints the messages each language lacks (shown in English); it always passes.
@@ -210,6 +156,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     if base.is_some() && !quick {
         return Err("ci: --base only applies to --quick".into());
     }
+    use_ci_caps();
     let root = root();
     let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until ci returns: one run at a time per machine (ci_lock.rs)
@@ -296,7 +243,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         (
             "test",
             Box::new(|| match &plan {
-                Some(p) if !p.workspace_wide => test_selected(&root, &p.packages, &ci_report::skip_log(&root, "test")),
+                Some(p) if !p.workspace_wide => test::selected(&root, &p.packages, &ci_report::skip_log(&root, "test")),
                 _ => test(tests(&with_test_targets(&["--workspace"])), "test").and_then(|()| test(doctests(), "test")),
             }),
         ),
@@ -458,5 +405,19 @@ mod ci_jobs_tests {
         assert_eq!(ci_jobs(Some(500), 8), 1, "at least one");
         assert_eq!(ci_jobs(None, 32), 4, "unknown RAM keeps the old default");
         assert_eq!(ci_jobs(None, 2), 2);
+    }
+
+    #[test]
+    fn caps_cover_build_and_test_threads_and_yield_to_explicit_settings() {
+        let caps = crate::ci_caps();
+        let keys: Vec<&str> = caps.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS", "NEXTEST_TEST_THREADS"]);
+        for (key, value) in caps.iter().filter(|(k, _)| k.ends_with("TEST_THREADS")) {
+            let n: usize = value.parse().unwrap();
+            assert!((1..=4).contains(&n), "{key}={value}");
+        }
+        let set = crate::caps_to_set(caps, |key| key == "RUST_TEST_THREADS");
+        assert_eq!(set.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"]);
+        assert!(crate::caps_to_set(caps, |_| true).is_empty());
     }
 }
