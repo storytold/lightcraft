@@ -841,13 +841,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("auto"))).map_err(|e| bad("geometry.upright", e.to_string()))?;
                 let id = active(s, "geometry.upright")?;
                 let d = s.develop_of(id).unwrap_or_default();
-                let (transform, note) = match mode {
-                    Upright::Off | Upright::Guided => (None, None),
+                let (transform, note, family) = match mode {
+                    Upright::Off | Upright::Guided => (None, None, "vertical"),
                     m => {
                         let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad("geometry.upright", e))?;
                         let info = s.source_info(id);
                         let a = lightcraft_pipeline::upright::analyze_source(&src, &info, &d);
-                        (Some(lightcraft_pipeline::upright::solve(m, &a)), lightcraft_pipeline::upright::shortfall(m, &a))
+                        let family = lightcraft_pipeline::upright::missing_family(m, &a);
+                        (Some(lightcraft_pipeline::upright::solve(m, &a)), lightcraft_pipeline::upright::shortfall(m, &a), family)
                     }
                 };
                 edit(s, "geometry.upright", "Upright", |d| {
@@ -863,7 +864,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         Upright::Full => "No full correction",
                         _ => "No Upright correction",
                     };
-                    format!("{what}: {why}. Try Guided: draw lines along what should be vertical.")
+                    format!("{what}: {why}. Try Guided: draw lines along what should be {family}.")
                 });
                 Ok(json!({"mode": mode, "transform": transform, "note": note}))
             }

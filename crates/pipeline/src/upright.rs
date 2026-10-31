@@ -460,6 +460,8 @@ pub enum Reject {
     MeetInside,
     /// Correcting them would turn the camera too far to be a tilt (Auto leaves it to Vertical).
     TooSteep,
+    /// The horizon is tilted more than Auto levels (5°): usually intentional, or scene lines (Level fixes it anyway).
+    TooTilted,
 }
 
 impl Reject {
@@ -472,6 +474,7 @@ impl Reject {
             Reject::Disagree => "the long lines lean different ways",
             Reject::MeetInside => "the lines meet inside the photo (a floor or a road, not a tilted camera)",
             Reject::TooSteep => "the lines lean too far to be a tilted camera (Vertical corrects them anyway)",
+            Reject::TooTilted => "the horizon is tilted too far to be a levelling fix (Level corrects it anyway)",
         }
     }
 }
@@ -694,6 +697,12 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
     }
 }
 
+/// The line family Guided needs drawn when `mode` falls short ("vertical" or "horizontal"): Full that found its
+/// verticals but not its horizontals needs horizontal guides; everything else needs vertical ones.
+pub fn missing_family(mode: Upright, a: &Analysis) -> &'static str {
+    if mode == Upright::Full && a.vertical_vp.is_some() && a.horizontal_vp.is_none() { "horizontal" } else { "vertical" }
+}
+
 /// The Upright correction for `mode` from an analysis (lens-corrected → transformed, centred coordinates).
 pub fn solve(mode: Upright, a: &Analysis) -> Homography {
     let level = || level_angle(&a.vertical, &a.horizontal).map(rot_z_h).unwrap_or(Homography::IDENTITY);
@@ -745,6 +754,7 @@ fn auto(a: &Analysis) -> Result<Homography, Reject> {
     match level_angle(&a.vertical, &a.horizontal) {
         Some(d) if d.abs() <= 5.0 => Ok(rot_z_h(d)),
         _ if vertical.is_some() => Err(Reject::TooSteep),
+        Some(_) => Err(Reject::TooTilted),
         _ => Err(a.vertical_why.unwrap_or(Reject::TooFew)),
     }
 }

@@ -842,7 +842,8 @@ fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
     // a horizon 10° off: Auto leaves it alone, and says so
     let tilted = Analysis { horizontal: vec![line(10.0, -0.2), line(10.0, 0.2)], ..Analysis::default() };
     assert_eq!(solve(Upright::Auto, &tilted), Homography::IDENTITY);
-    assert_eq!(shortfall(Upright::Auto, &tilted), Some(Reject::TooFew.message()));
+    assert_eq!(shortfall(Upright::Auto, &tilted), Some(Reject::TooTilted.message()), "too tilted, not too few lines");
+    assert_ne!(solve(Upright::Level, &tilted), Homography::IDENTITY, "Level still fixes it");
     // lines meeting just below the photo: too steep for Auto, which says so; Vertical still corrects them
     let steep = Analysis { vertical_vp: Some([0.0, 0.3, 1.0]), ..Analysis::default() };
     assert_eq!(solve(Upright::Auto, &steep), Homography::IDENTITY);
@@ -850,4 +851,18 @@ fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
     assert_ne!(solve(Upright::Vertical, &steep), Homography::IDENTITY);
     // Level with no lines at all says there are too few, not that they disagree
     assert_eq!(shortfall(Upright::Level, &Analysis::default()), Some(Reject::TooFew.message()));
+}
+
+/// The Guided hint names the lines the mode is missing: Full with verticals but no horizontals asks for horizontal
+/// guides, and with no verticals (or in Vertical) for vertical ones.
+#[test]
+fn upright_hint_asks_for_the_missing_line_family() {
+    use crate::upright::{Analysis, missing_family};
+    use lightcraft_develop::Upright;
+    let verticals_only = Analysis { vertical_vp: Some([0.0, 8.0, 1.0]), ..Analysis::default() };
+    assert_eq!(missing_family(Upright::Full, &verticals_only), "horizontal");
+    assert_eq!(missing_family(Upright::Full, &Analysis::default()), "vertical");
+    assert_eq!(missing_family(Upright::Vertical, &Analysis::default()), "vertical");
+    let horizontals_only = Analysis { horizontal_vp: Some([8.0, 0.0, 1.0]), ..Analysis::default() };
+    assert_eq!(missing_family(Upright::Full, &horizontals_only), "vertical");
 }
