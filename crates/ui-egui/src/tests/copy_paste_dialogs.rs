@@ -33,7 +33,7 @@ fn exec(h: &mut Headless, command: &str, params: Value) {
 fn key(h: &mut Headless, k: Value) {
     let r = h.request("ui.key", k.clone(), T);
     assert_eq!(r["ok"], true, "{k}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.key");
 }
 
 fn copy_dialog(h: &mut Headless) {

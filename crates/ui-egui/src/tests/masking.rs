@@ -106,7 +106,7 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     brush_at(&mut h, 0.25, 0.5);
     assert!(mask_coverage(&h, 0, 25, 50) > 0.99, "Add must be composed after Subtract");
     assert_eq!(develop(&h).masks[0].components.len(), 3);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after brush_at");
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn new_brush_starts_a_separate_mask_in_paint_mode() {
     exec(&mut h, "edit.undo", json!({}));
     assert!(mask_coverage(&h, 1, 50, 50) > 0.99);
     assert_eq!(develop(&h).masks[0], original);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after edit.undo");
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     assert!(!panel.contains_rect(slider), "exposure initially needs scrolling: {slider:?} in {panel:?}");
     h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
     h.request("ui.scroll", json!({"dy": -160.0}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.scroll");
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
     assert!(panel.contains_rect(slider), "exposure is visible before clicking: {slider:?} in {panel:?}");
     let r = h.request("ui.clickWidget", json!({"id": "slider:exposure", "fx": 0.7}), T);
@@ -189,7 +189,7 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
         exec(&mut h, "mask.adjust", json!({"values": values}));
         assert!(!h.app.ui.mask_overlay);
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.adjust");
 }
 
 /// A slider hides the overlay (above); a new mask, an added part, a duplicate or picking a mask in
@@ -220,7 +220,7 @@ fn a_new_or_picked_mask_shows_the_overlay_hidden_by_a_slider() {
         exec(&mut h, cmd, params);
         assert!(shown(&h), "{cmd} shows the overlay");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after exec");
 }
 
 #[test]
@@ -360,7 +360,7 @@ fn mask_overlay_keys_and_pins() {
     exec(&mut h, "view.maskPins", json!({"show": false}));
     pointer(&mut h, json!([{"kind": "down", "x": 0.5, "y": 0.6}, {"kind": "up", "x": 0.5, "y": 0.6}]));
     assert_eq!(h.app.session.active_mask, Some(2));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after pointer");
 }
 
 /// Issue #3049: Show Pins draws a pin for an Object mask (at its first click) and a Describe
@@ -493,7 +493,7 @@ fn all_masks_overlay_outlines_every_visible_mask_but_only_the_selected_one_is_dr
     assert_eq!(h.app.session.active_mask, Some(2));
     // Pins add their own <maskPin:…> elements; keep them out of the handle count.
     exec(&mut h, "view.maskPins", json!({"show": false}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.maskPins");
 
     let handles_of = |h: &Headless, id: usize| h.app.widgets.iter().filter(|(w, _)| w.starts_with(&format!("maskHandle:{id}:"))).count();
     // The selected mask keeps its 4 edge handles and its rotation grip.
@@ -505,7 +505,7 @@ fn all_masks_overlay_outlines_every_visible_mask_but_only_the_selected_one_is_dr
     exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.5, 0.8], "rx": 0.08, "ry": 0.08}));
     assert_eq!(h.app.session.active_mask, Some(3));
     assert_eq!(handles_of(&h, 1), 0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.addComponent");
 }
 
 /// #2210: the outlines of *unselected* masks are painted, not registered as widgets, so the way to
@@ -527,7 +527,7 @@ fn all_masks_overlay_paints_the_outline_of_an_unselected_mask() {
             exec(h, "view.maskOverlayAll", json!({}));
         }
         assert_eq!(h.app.ui.mask_overlay_all, on);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
         let px = h.view.paint(&Default::default());
         px.pixels.iter().filter(|p| p.r() > 200 && p.g() > 200 && p.b() > 200).count()
     };
@@ -559,7 +559,7 @@ fn holding_the_brush_still_does_not_harden_the_spot() {
         assert!((quick - held).abs() < 0.01, "{dx} px from the centre: quick {quick}, held {held}");
     }
     assert!(mask_coverage(&h, 0, 70 + 6, 50) < 0.9, "the edge stays feathered");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 /// A ⇧-click with the brush paints a straight line from where the last stroke ended (issue #106 of the Classic
@@ -585,7 +585,7 @@ fn shift_click_paints_a_straight_line_from_the_last_stroke() {
     let d = develop(&h);
     let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
     assert_eq!(strokes.len(), 2, "one undo step takes the line back");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after edit.undo");
 }
 
 #[test]
@@ -615,7 +615,7 @@ fn brush_strokes_carry_auto_mask() {
     assert_eq!(strokes.len(), 2, "{strokes:?}");
     assert!(strokes[1].erase, "⌥ erases");
     assert!(!h.app.ui.brush_erase, "the brush mode is unchanged");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -677,7 +677,7 @@ fn remove_spots_by_pointer_and_keyboard() {
     assert_eq!(h.app.session.visible_cloned().len(), photos);
     h.request("ui.key", json!({"key": "delete"}), T);
     assert_eq!(spots(&h).len(), 1, "nothing selected: nothing deleted");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key delete");
 }
 
 /// Masks list: double-click renames in place, the hover eye hides a mask, the overlay colour
@@ -687,22 +687,22 @@ fn mask_list_rename_hide_and_overlay_colour() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "linear"}));
     exec(&mut h, "mask.add", json!({"kind": "radial"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.add");
     let first = develop(&h).masks[0].id;
     let r = h.request("ui.clickWidget", json!({"id": format!("mask:{first}"), "count": 2}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(Duration::from_secs(5));
+    h.settled(Duration::from_secs(5), "after ui.clickWidget");
     assert_eq!(h.app.ui.renaming_mask.as_ref().map(|r| r.0), Some(first), "double-click starts renaming");
     h.request("ui.key", json!({"key": "A", "cmd": true}), T);
     h.request("ui.text", json!({"text": "Sky"}), T);
     h.request("ui.key", json!({"key": "Enter"}), T);
-    h.settle(Duration::from_secs(5));
+    h.settled(Duration::from_secs(5), "after key Enter");
     assert!(h.app.ui.renaming_mask.is_none());
     assert_eq!(develop(&h).masks[0].name, "Sky");
     // hover the row, then click its eye
     let r = h.request("ui.hoverWidget", json!({"id": format!("mask:{first}")}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(Duration::from_secs(5));
+    h.settled(Duration::from_secs(5), "after ui.hoverWidget");
     let r = h.request("ui.clickWidget", json!({"id": format!("maskVisible:{first}")}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(!develop(&h).masks[0].visible);
@@ -729,14 +729,14 @@ fn command_drag_straightens_in_crop() {
     assert!(angle != before && (1.0..15.0).contains(&angle.abs()), "a slightly tilted line straightens: {angle}");
     assert_eq!(h.app.ui.tool, tool, "the crop tool stays active");
     assert!(h.app.gesture.is_none());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
 fn crop_drag_activates_the_remembered_ratio_and_undo_restores_the_photo() {
     let mut h = detail("panel.crop");
     h.app.ui.crop_default_aspect = Some(json!([1, 1]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.crop_default_aspect");
     let before = develop(&h);
     let undo = h.app.session.undo.len();
     assert!(before.crop.aspect.is_none());
@@ -751,7 +751,7 @@ fn crop_drag_activates_the_remembered_ratio_and_undo_restores_the_photo() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert_eq!(develop(&h).crop.aspect, Some((100, 100)));
     assert_eq!(h.app.session.undo.len(), undo + 1);
     exec(&mut h, "edit.undo", json!({}));
@@ -765,7 +765,7 @@ fn crop_drag_activates_the_remembered_ratio_and_undo_restores_the_photo() {
 fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
     let mut h = detail("panel.crop");
     h.app.ui.crop_default_aspect = None;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.crop_default_aspect");
     let before = develop(&h);
     assert!(before.crop.aspect.is_none());
     let p = h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().clone();
@@ -779,7 +779,7 @@ fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
     ]});
     let r = h.request("ui.pointer", drag.clone(), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(develop(&h).crop.aspect, Some(own), "the drag kept the photo's proportions");
     assert_eq!(h.app.ui.crop_default_aspect, None, "nothing was chosen explicitly");
     exec(&mut h, "edit.undo", json!({}));
@@ -787,9 +787,9 @@ fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
     // Lock off once: remembered as free, and from then on the same drag crops without a ratio
     let mut h = detail("panel.crop");
     h.app.ui.crop_default_aspect = None;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.crop_default_aspect");
     h.app.run("crop.aspect", json!({"aspect": "toggle"})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after crop.aspect");
     assert_eq!(h.app.ui.crop_default_aspect, Some(json!("free")));
     assert_eq!(h.app.crop_tool_aspect(), None);
     let before = develop(&h);
@@ -800,7 +800,7 @@ fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
     ] {
         let r = h.request("ui.pointer", json!({ "events": events }), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.pointer");
     }
     assert_ne!(develop(&h).crop, before.crop, "the drag cropped");
     assert_eq!(develop(&h).crop.aspect, None, "and left the ratio free");
@@ -813,7 +813,7 @@ fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
 fn a_bad_remembered_ratio_is_dropped_and_the_drag_still_crops() {
     let mut h = detail("panel.crop");
     h.app.ui.crop_default_aspect = Some(json!([0, -3]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.crop_default_aspect");
     let before = develop(&h);
     // a rotating drag outside the box (any crop drag starts cropping); the release on its own
     for events in [
@@ -822,7 +822,7 @@ fn a_bad_remembered_ratio_is_dropped_and_the_drag_still_crops() {
     ] {
         let r = h.request("ui.pointer", json!({ "events": events }), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.pointer");
     }
     assert_eq!(h.app.ui.crop_default_aspect, None, "the bad value is forgotten");
     assert_ne!(develop(&h).crop, before.crop, "the drag cropped");
@@ -832,12 +832,12 @@ fn a_bad_remembered_ratio_is_dropped_and_the_drag_still_crops() {
 #[test]
 fn double_click_in_crop_box_applies_the_crop() {
     let mut h = detail("panel.crop");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new detail session");
     assert_eq!(h.app.ui.right, crate::state::RightPanel::Crop);
     let c = h.app.image_rect.expect("image on screen").center();
     let r = h.request("ui.click", json!({"x": c.x, "y": c.y, "count": 2}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "double-click leaves the crop tool");
 }
 
@@ -854,7 +854,7 @@ fn option_digit_toggles_keyword_from_set() {
     let r = h.request("ui.clickWidget", json!({"id": "kwSet:1"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(!has(&h), "its button removes it again");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking kwSet:1");
 }
 
 fn develop_photo_keywords(h: &Headless) -> Vec<String> {
@@ -885,7 +885,7 @@ fn smart_album_rule_editor_creates_and_edits() {
     assert_eq!(r["ok"], true, "{r}");
     let n3 = h.app.session.catalog.photos().filter(|p| !p.deleted && p.rating >= 3).count();
     assert_eq!(h.app.session.catalog.album_count(a.id), n3);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
 }
 
 /// Given the rule editor, the field menu shows the top-level fields and one submenu per group;
@@ -897,7 +897,7 @@ fn smart_album_field_menu_groups_fields_in_submenus() {
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
     let r = h.request("ui.clickWidget", json!({"id": "ruleField:rules-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking ruleField:rules-0");
     assert!(has(&h, "ruleFieldItem:rating:rules-0"), "top-level fields are in the menu itself");
     for (group, _) in lightcraft_catalog::rules::FIELD_GROUPS {
         assert!(has(&h, &format!("ruleFieldGroup:{group}:rules-0")), "no {group} submenu");
@@ -906,10 +906,10 @@ fn smart_album_field_menu_groups_fields_in_submenus() {
     // clicking a group row (a touch, or a click faster than hover) opens it, not closes the menu
     let r = h.request("ui.clickWidget", json!({"id": "ruleFieldGroup:File:rules-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking ruleFieldGroup:File:rules-0");
     let r = h.request("ui.clickWidget", json!({"id": "ruleFieldItem:filePath:rules-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking ruleFieldItem:filePath:rules-0");
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &h.app.ui.dialog else { panic!("no rule editor") };
     let Rule::Field { field, op, .. } = &rules.rules[0] else { panic!("not a field rule") };
     assert_eq!((field.as_str(), op.as_str()), ("filePath", "contains"), "Rating's ≥ isn't a text operator");
@@ -924,7 +924,7 @@ fn smart_album_editor_keeps_an_unreadable_yes_no_value() {
     exec(&mut h, "dialog.smartAlbum", json!({"name": "Odd"}));
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     rules.rules[0] = serde_json::from_value(json!({"field": "edited", "op": "is", "value": "maybe"})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &h.app.ui.dialog else { panic!("no rule editor") };
     let Rule::Field { value, .. } = &rules.rules[0] else { panic!("not a field rule") };
     assert_eq!(value, &json!("maybe"), "drawing the editor doesn't rewrite the value");
@@ -941,7 +941,7 @@ fn smart_album_editor_marks_bad_rules_and_blocks_ok() {
     let set = |h: &mut Headless, rules: serde_json::Value| {
         let Some(crate::state::Dialog::SmartRules { rules: r, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
         *r = serde_json::from_value(json!({"rules": rules})).unwrap();
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
     };
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
     set(
@@ -959,7 +959,7 @@ fn smart_album_editor_marks_bad_rules_and_blocks_ok() {
     assert!(serde_json::to_string(rules).unwrap().contains(r#""value":9"#), "drawing doesn't clamp the rating to 5");
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:dialogOk");
     assert!(h.app.session.catalog.albums().all(|a| a.name != "Checked"), "OK is disabled");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert!(h.app.session.catalog.albums().all(|a| a.name != "Checked"), "confirm refuses too: {r}");
@@ -969,7 +969,7 @@ fn smart_album_editor_marks_bad_rules_and_blocks_ok() {
     assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("ruleProblem:")));
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:dialogOk");
     assert!(h.app.session.catalog.albums().any(|a| a.name == "Checked"));
 }
 
@@ -982,17 +982,17 @@ fn smart_album_editor_picks_an_album_from_a_list() {
     exec(&mut h, "dialog.smartAlbum", json!({"name": "In Trip"}));
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     rules.rules[0] = serde_json::from_value(json!({"field": "album", "op": "is", "value": 0})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "ruleProblem:rules-0"), "no album chosen yet");
     let r = h.request("ui.clickWidget", json!({"id": "albumPicker:rules-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking albumPicker:rules-0");
     let has = |h: &Headless, id: String| h.app.widgets.iter().any(|(w, _)| *w == id);
     assert!(has(&h, format!("albumPickerItem:{trip}:rules-0")), "plain albums are offered");
     assert!(has(&h, format!("albumPickerItem:{smart}:rules-0")), "smart albums too");
     let r = h.request("ui.clickWidget", json!({"id": format!("albumPickerItem:{trip}:rules-0")}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &h.app.ui.dialog else { panic!("no rule editor") };
     let Rule::Field { value, .. } = &rules.rules[0] else { panic!("not a field rule") };
     assert_eq!(value, &json!(trip));
@@ -1015,7 +1015,7 @@ fn smart_album_editor_never_rewrites_what_it_draws() {
     ]});
     let Some(crate::state::Dialog::SmartRules { rules: r, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     *r = serde_json::from_value(rules.clone()).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let Some(crate::state::Dialog::SmartRules { rules: r, .. }) = &h.app.ui.dialog else { panic!("no rule editor") };
     assert_eq!(serde_json::to_value(r).unwrap()["rules"], rules["rules"], "unchanged by drawing");
     let marked: Vec<&str> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("ruleProblem:")).collect();
@@ -1031,21 +1031,21 @@ fn smart_album_edit_with_bad_rules_keeps_the_name() {
     let Some(crate::state::Dialog::SmartRules { name, rules, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     *name = "Renamed".into();
     *rules = serde_json::from_value(json!({"rules": [{"field": "captureDate", "op": "is", "value": "banana"}]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:dialogOk");
     let _ = h.request("ui.dialog.confirm", json!({}), T);
     let album = h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).expect("album");
     assert_eq!(album.name, "Keep", "neither OK nor confirm renamed it");
     // fixed: OK renames it and sets the rules in one undo step
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &mut h.app.ui.dialog else { panic!("the editor stays open") };
     *rules = serde_json::from_value(json!({"rules": [{"field": "captureDate", "op": "is", "value": "2026"}]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let undo = h.app.session.undo.len();
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:dialogOk");
     let album = h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).expect("album");
     assert_eq!((album.name.as_str(), h.app.session.undo.len()), ("Renamed", undo + 1));
     exec(&mut h, "edit.undo", json!({}));
@@ -1063,12 +1063,12 @@ fn sidebar_marks_smart_albums_with_problems() {
     let id = exec(&mut h, "album.createSmart", json!({"name": "In Trip", "rules": rules}))["id"].as_u64().unwrap();
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert!(h.app.widgets.iter().any(|(w, _)| *w == format!("source:album:{id}")), "the album's row is on screen");
     let marked = |h: &Headless| h.app.widgets.iter().any(|(w, _)| *w == format!("albumProblem:{id}"));
     assert!(!marked(&h));
     exec(&mut h, "album.delete", json!({"id": trip}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after album.delete");
     assert!(marked(&h), "its album is gone");
 }
 
@@ -1085,24 +1085,24 @@ fn smart_album_editor_keeps_albums_from_including_themselves() {
     let set = |h: &mut Headless, value: serde_json::Value| {
         let Some(crate::state::Dialog::SmartRules { rules, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
         rules.rules = vec![serde_json::from_value(json!({"field": "album", "op": "is", "value": value})).unwrap()];
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
     };
     set(&mut h, json!(null));
     let r = h.request("ui.clickWidget", json!({"id": "albumPicker:rules-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking albumPicker:rules-0");
     let has = |h: &Headless, id: String| h.app.widgets.iter().any(|(w, _)| *w == id);
     assert!(has(&h, format!("albumPickerItem:{trip}:rules-0")));
     // itself and an album that tests it are shown, greyed: clicking them picks nothing
     for blocked in [excluded, travel] {
         let r = h.request("ui.clickWidget", json!({"id": format!("albumPickerItem:{blocked}:rules-0")}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
         let Some(crate::state::Dialog::SmartRules { rules, .. }) = &h.app.ui.dialog else { panic!("no rule editor") };
         assert!(matches!(&rules.rules[0], Rule::Field { value, .. } if value.is_null()), "{blocked} wasn't picked");
     }
     let _ = h.request("ui.key", json!({"key": "Escape"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     set(&mut h, json!(travel));
     assert!(has(&h, "ruleProblem:rules-0".to_string()), "a loop is marked");
 }
@@ -1123,14 +1123,14 @@ fn g_toggles_grids_and_shift_g_starts_guided_upright() {
     key(&mut h, true);
     assert_eq!((h.app.ui.view, h.app.ui.right, h.app.ui.tool.as_str()), (crate::state::ViewMode::Detail, RightPanel::Crop, "guidedUpright"));
     assert_eq!(develop(&h).geometry.upright, lightcraft_develop::Upright::Guided);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key");
 }
 
 #[test]
 fn luminance_range_drag_keeps_the_grabbed_handle() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "luminanceRange", "lo": 0.2, "hi": 0.8}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.add");
     let original = develop(&h);
     for (start, dx, steps) in [(0.2, 180.0, 10), (0.8, -180.0, 10), (0.2, 120.0, 1), (0.8, -120.0, 1)] {
         let undo0 = h.app.session.undo.len();
@@ -1155,7 +1155,7 @@ fn luminance_range_drag_keeps_the_grabbed_handle() {
 fn luminance_range_controls_and_map() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "luminanceRange", "lo": 0.6, "hi": 1.0}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.add");
     let lum = |h: &Headless| match &develop(h).masks[0].components[0].shape {
         MaskShape::LuminanceRange { lo, hi, lo_feather, .. } => (*lo, *hi, *lo_feather),
         s => panic!("{s:?}"),
@@ -1175,7 +1175,7 @@ fn luminance_range_controls_and_map() {
     let r = h.request("ui.clickWidget", json!({"id": "check:lumMap0"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_ne!(h.app.ui.mask_overlay_mode, "colorOnBw");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking check:lumMap0");
 }
 
 #[test]
@@ -1192,7 +1192,7 @@ fn b_adds_to_quick_collection_in_the_grid_and_brushes_in_edit() {
     assert_eq!(r["ok"], true, "{r}");
     let q = h.app.session.catalog.quick_collection().expect("quick collection");
     assert_eq!(h.app.session.catalog.album_count(q), 1);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key b");
 }
 
 #[test]
@@ -1206,7 +1206,7 @@ fn local_folder_tree_expands_and_browses() {
     h.hide_home_above(&base);
     exec(&mut h, "local.addRoot", json!({"path": base.to_string_lossy()}));
     exec(&mut h, "library.browse", json!({"path": base.to_string_lossy()}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     let base_s = base.to_string_lossy().to_string();
     let r = h.request("ui.clickWidget", json!({"id": format!("folderToggle:{base_s}")}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -1221,7 +1221,7 @@ fn local_folder_tree_expands_and_browses() {
     let r = h.request("ui.clickWidget", json!({"id": format!("source:local:{hidden}")}), T);
     assert_ne!(r["ok"], true, "hidden folders are not listed");
     let _ = std::fs::remove_dir_all(&base);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
 }
 
 /// A folder listed twice in Local (Pictures as a place of its own and again inside Home) opens
@@ -1240,7 +1240,7 @@ fn local_folder_listed_twice_opens_and_closes_each_row() {
     let sub = inner.join("Sub").to_string_lossy().to_string();
     exec(&mut h, "local.addRoot", json!({"path": base_s}));
     exec(&mut h, "local.addRoot", json!({"path": inner_s}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after local.addRoot");
     let r = h.request("ui.clickWidget", json!({"id": format!("folderToggle:{base_s}")}), T);
     assert_eq!(r["ok"], true, "{r}");
     let toggle = format!("folderToggle:{inner_s}");
@@ -1259,11 +1259,11 @@ fn local_folder_listed_twice_opens_and_closes_each_row() {
         let at = h.app.widgets.iter().filter(|(w, _)| *w == toggle).nth(copy).map(|(_, r)| r.center()).unwrap();
         let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.click");
         assert_eq!(rows(&h, &sub_row), 0, "copy {copy} closes again");
     }
     let _ = std::fs::remove_dir_all(&base);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -1277,7 +1277,7 @@ fn geometry_slider_drag_marks_the_grid() {
     let stop = crate::widgets::SliderOut { value: None, drag_started: false, drag_stopped: true, reset: false };
     crate::panels::edit::apply_slider_out(&mut h.app, spec, stop, |_, _| Ok(serde_json::Value::Null));
     assert!(h.app.ui.dragging_control.is_none());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after apply_slider_out");
 }
 
 #[test]
@@ -1305,7 +1305,7 @@ fn edit_in_external_editor_opens_the_copy() {
     assert!(calls[0].0.ends_with("-Edit.tif") && std::path::Path::new(&calls[0].0).exists(), "{calls:?}");
     assert_eq!(calls[0].1, "PhotoCraft");
     let _ = std::fs::remove_dir_all(&dir);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.editInExternal");
 }
 
 /// An editor that won't open the copy: the copy is in the library already, so the command succeeds
@@ -1328,7 +1328,7 @@ fn edit_in_reports_an_editor_that_wont_open_without_failing() {
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("the editor quit"), "{toast}");
     let _ = std::fs::remove_dir_all(&dir);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.editInExternal");
 }
 
 /// Edit in PhotoCraft: a PSD copy (what PhotoCraft saves back to), handed to "PhotoCraft" for
@@ -1388,7 +1388,7 @@ fn edit_in_photocraft_opens_a_psd_copy() {
     assert!(last.0.ends_with(".tif") && last.1 == "/opt/pc/photocraft", "{last:?}");
     assert!(crate::menus::ui_enabled(&h.app, "photo.editInPhotoCraft"));
     let _ = std::fs::remove_dir_all(&dir);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.editInPhotoCraft");
 }
 
 /// Open Original in Other Editor: each selected photo's own file (a raw stays a raw) goes to the
@@ -1471,7 +1471,7 @@ fn open_original_in_external_editor_hands_over_the_raw_itself() {
     }
     assert_eq!(opened.lock().unwrap().len(), calls);
     let _ = std::fs::remove_dir_all(&dir);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.openOriginalInExternal");
 }
 
 /// Issue #2135: a library record whose original is a program (an imported `.lrcat` names the
@@ -1535,7 +1535,7 @@ fn open_original_refuses_anything_that_is_not_a_photo_file() {
     assert_eq!(handed[0].len(), 1, "{handed:?}");
     assert!(std::path::Path::new(&handed[0][0]).is_absolute() && handed[0][0].ends_with("DSC_0001.NEF"), "{handed:?}");
     let _ = std::fs::remove_dir_all(&dir);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.openOriginalInExternal");
 }
 
 #[test]
@@ -1543,7 +1543,7 @@ fn second_window_shows_the_active_photo() {
     let mut h = detail("panel.edit");
     exec(&mut h, "view.photoGrid", json!({}));
     exec(&mut h, "view.secondWindow", json!({"show": true}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.secondWindow");
     // headless has no native windows: it's embedded, and renders the photo for its own slot
     let tex = h.app.renderer.textures.get(&crate::render::Slot::Second).map(|t| t.photo);
     assert_eq!(tex, h.app.session.active(), "the second window has its own render of the active photo");
@@ -1551,7 +1551,7 @@ fn second_window_shows_the_active_photo() {
     assert_eq!(r["ok"], true, "on screen: {r}");
     exec(&mut h, "view.secondWindow", json!({}));
     assert!(!h.app.ui.second_window);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.secondWindow");
 }
 
 /// Frame time of the photo grid on a 100k-photo library (ignored:
@@ -1599,7 +1599,7 @@ fn keyword_painter_toggles_on_click() {
     let mut h = detail("panel.edit");
     exec(&mut h, "tool.keywordPainter", json!({"keyword": "harbour"}));
     assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after tool.keywordPainter");
     let target = h.app.session.visible_cloned()[0];
     let has = |h: &Headless| h.app.session.catalog.photo(target).unwrap().meta.keywords.iter().any(|k| k == "harbour");
     let sel = h.app.session.selection.clone();
@@ -1622,7 +1622,7 @@ fn keyword_painter_toggles_on_click() {
     assert!(!has(&h), "a second click takes it away");
     h.request("ui.key", json!({"key": "escape"}), T);
     assert!(h.app.ui.keyword_painter.is_none());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key escape");
 }
 
 #[test]
@@ -1635,7 +1635,7 @@ fn grid_info_cycles_caption() {
     assert_ne!(r["ok"], true);
     exec(&mut h, "view.squareGrid", json!({}));
     exec(&mut h, "view.gridInfo", json!({"info": "exposure"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.gridInfo");
     // Photo Grid has no captions: picking one shows it in Square Grid
     exec(&mut h, "view.photoGrid", json!({}));
     exec(&mut h, "view.gridInfo", json!({"info": "date"}));
@@ -1657,7 +1657,7 @@ fn reference_view_pins_a_photo_beside_the_active_one() {
     exec(&mut h, "develop.set", json!({"control": "light.exposure", "value": 0.7}));
     assert_eq!(h.app.session.develop_of(active).unwrap().light.exposure, 0.7);
     assert_ne!(h.app.session.develop_of(first).unwrap().light.exposure, 0.7);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
     assert!(h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).is_some_and(|t| t.photo == first), "the reference is drawn");
 }
 
@@ -1675,7 +1675,7 @@ fn soft_proofing_flags_out_of_gamut_colours_and_makes_proof_copies() {
         let t = h.app.renderer.textures.get(&crate::render::Slot::Main).expect("loupe render");
         t.pixels.as_ref().expect("pixels kept").pixels.iter().filter(|c| c.r() == 255 && c.g() == 0 && c.b() == 0).count()
     };
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
     let before = red(&h);
     // S in the loupe: soft proofing on; the warning is the proof's own setting
     let r = h.request("ui.key", json!({"key": "s"}), T);
@@ -1686,7 +1686,7 @@ fn soft_proofing_flags_out_of_gamut_colours_and_makes_proof_copies() {
         st,
         json!({"on": true, "space": "srgb", "profile": null, "intent": "perceptual", "paperInk": false, "destWarning": true, "displayWarning": false})
     );
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.softProof");
     assert!(red(&h) > before, "out-of-gamut colours are painted red");
     let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"space": "cmyk"}}), T);
     assert_ne!(r["ok"], true);
@@ -1699,7 +1699,7 @@ fn soft_proofing_flags_out_of_gamut_colours_and_makes_proof_copies() {
     assert_eq!((st["intent"].as_str(), st["paperInk"].as_bool()), (Some("relative"), Some(true)), "{st}");
     assert!(st["profile"]["name"].as_str().is_some_and(|n| !n.is_empty()), "{st}");
     assert_ne!(h.app.ui.proof.profile, 0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.softProof");
     assert!(red(&h) > before, "the device gamut is flagged too");
     let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"profile": "/nonexistent.icc"}}), T);
     assert_ne!(r["ok"], true);
@@ -1843,7 +1843,7 @@ fn color_range_pick_button_samples_the_photo() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "colorRange"}));
     h.app.ui.tool.clear();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.add");
     click(&mut h, "button:colorPick0");
     assert_eq!(h.app.ui.tool, "colorRange", "Pick arms the eyedropper");
     brush_at(&mut h, 0.25, 0.5);
@@ -1861,7 +1861,7 @@ fn color_range_pick_button_samples_the_photo() {
     exec(&mut h, "crop.set", json!({"rect": [0.2, 0.1, 0.9, 0.8]}));
     h.app.ui.zoom = crate::state::Zoom::Percent(200.0);
     h.app.ui.pan = (0.5, 0.5);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.pan");
     brush_at(&mut h, 0.5, 0.5);
     let ui_sample = color_samples(&h);
     assert_eq!(ui_sample.as_array().map(Vec::len), Some(1));
@@ -1872,7 +1872,7 @@ fn color_range_pick_button_samples_the_photo() {
     // Pick again ends picking
     click(&mut h, "button:colorPick0");
     assert!(h.app.ui.tool.is_empty());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after click button:colorPick0");
 }
 
 #[test]
@@ -1881,7 +1881,7 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
     // the demo may open on the Edit panel already, which `panel.edit` then toggles shut
     let r = h.request("ui.set", json!({"right": "edit"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let name = "slider:light.exposure";
     let panel = h.app.widgets.iter().find(|(id, _)| id == "panel:right_panel").unwrap().1;
     let track = h.app.widgets.iter().find(|(id, _)| id == name).unwrap().1;
@@ -1941,7 +1941,7 @@ fn sideways_scrolling_adjusts_the_slider_under_the_pointer() {
     let mut h = detail("panel.edit");
     let r = h.request("ui.set", json!({"right": "edit"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let exposure = |h: &Headless| lightcraft_develop::controls::get(&develop(h), "light.exposure").expect("exposure");
     let scroll = |h: &mut Headless, params: serde_json::Value| {
         // the pointer rests on the track, the slider is not clicked
@@ -1969,13 +1969,13 @@ fn sideways_scrolling_adjusts_the_slider_under_the_pointer() {
 #[test]
 fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     let mut h = detail("panel.masking");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new detail session");
     exec(&mut h, "tool.brush", json!({"new": true}));
     let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 50.0, "brushFlow": 100.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     // the photo before painting, and where a normalized image point is on screen
     pointer(&mut h, json!([{"kind": "move", "x": 0.02, "y": 0.02}]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after pointer");
     let photo = h.paint();
     let img = h.app.image_rect.expect("the photo is on screen");
     let ppp = h.pixels_per_point;
@@ -2013,7 +2013,7 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
     assert!(strokes[0].points.len() >= 3, "{strokes:?}");
     // committed: the rendered overlay covers what the live stroke did, feather included
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after pointer");
     let done = h.paint();
     for (x, y) in [(0.3, a.1), (0.6, a.1), (0.3, a.1 + 0.02), (0.6, a.1 - 0.025), (0.45, a.1 + 0.06)] {
         let (l, k) = (px(&held, x, y), px(&done, x, y));

@@ -28,21 +28,21 @@ fn keywords_panel_at(size: [f32; 2]) -> (Headless, Vec<u64>) {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
     (h, ids)
 }
 
 fn run(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_json::Value {
     let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
     assert_eq!(r["ok"], true, "{command}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after engine.execute");
     r
 }
 
 fn ask(h: &mut Headless, method: &str, params: serde_json::Value) {
     let r = h.request(method, params.clone(), T);
     assert_eq!(r["ok"], true, "{method} {params}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 fn has(h: &Headless, id: &str) -> bool {
@@ -506,7 +506,7 @@ fn press_and_move(h: &mut Headless, from: egui::Pos2, to: egui::Pos2) {
 
 fn release(h: &mut Headless, at: egui::Pos2) {
     h.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
 }
 
 /// Esc gives up a keyword drag: released on another keyword afterwards, it stays where it is.
@@ -640,7 +640,7 @@ fn ticks_in_quick_succession_land_on_their_rows() {
         let r = h.request("ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     let mut have = keywords_of(&h, ids[0]);
     have.sort();
     assert_eq!(have, picked);

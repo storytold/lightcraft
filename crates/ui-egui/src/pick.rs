@@ -198,7 +198,7 @@ mod tests {
             Ok(rx)
         }));
         let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the new session");
         (h, asked)
     }
 
@@ -214,7 +214,7 @@ mod tests {
     /// The import review's sources once frames have run (the review opens after a background
     /// scan of the chosen paths).
     fn import_sources(h: &mut Headless) -> Option<Vec<String>> {
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
         match &h.app.ui.dialog {
             Some(Dialog::Import { opts }) => Some(opts.sources.clone()),
             _ => None,
@@ -238,7 +238,7 @@ mod tests {
         }
         // asking again while it is up opens no second dialog
         assert_eq!(h.app.run("file.addPhotos", json!({})).unwrap(), Value::Null);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after file.addPhotos");
         assert_eq!(asked.lock().unwrap().len(), 1);
         assert_eq!(h.app.pending_picks.len(), 1, "still waiting");
         // the user chooses a photo: the command runs again with it and opens the import review

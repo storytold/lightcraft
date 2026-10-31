@@ -30,9 +30,9 @@ fn crop_view(app: LightcraftApp, assert_settle: bool) -> Headless {
         assert_eq!(r["ok"], true, "{r}");
     }
     if assert_settle {
-        assert!(h.settle(SETTLE), "the crop view settles before the snapshot");
+        h.settled(SETTLE, "the crop view settles before the snapshot");
     } else {
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
     }
     h
 }
@@ -60,7 +60,7 @@ fn crop_fits(h: &Headless) -> bool {
 fn hover(h: &mut Headless, p: egui::Pos2) {
     let r = h.request("ui.move", json!({"x": p.x, "y": p.y}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.move");
 }
 
 /// Outside the crop box, where a drag rotates, the pointer becomes a curved double arrow drawn at
@@ -87,12 +87,12 @@ fn rotating_shows_the_angle() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert!(angle(&h) != 0.0, "the drag rotated the crop");
     assert!(has(&h, "cropAngleReadout"), "the angle is shown while rotating");
     let r = h.request("ui.pointer", json!({"events": [{"kind": "up", "x": -0.05, "y": 0.3}]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert!(!has(&h, "cropAngleReadout"), "and gone once released");
 }
 
@@ -102,7 +102,7 @@ fn the_straighten_value_takes_an_exact_angle() {
     let mut h = crop_tool();
     let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking sliderValue:crop.angle");
     for key in ["a", "Backspace"] {
         // select what is there and clear it
         let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
@@ -112,7 +112,7 @@ fn the_straighten_value_takes_an_exact_angle() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.key", json!({"key": "Enter"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Enter");
     assert!((angle(&h) - 2.5).abs() < 1e-9, "typed 2.5°, got {}", angle(&h));
     assert!(crop_fits(&h), "the Straighten value shrinks the crop to fit the photo");
 }
@@ -150,7 +150,7 @@ fn command_held_shows_the_straighten_crosshair() {
     let img = h.app.image_rect.expect("the photo on screen");
     h.events.push(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
     h.events.push(egui::Event::PointerMoved(egui::pos2(img.left() - 24.0, img.center().y)));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert_eq!(h.last_cursor, egui::CursorIcon::Crosshair);
     assert!(!has(&h, "cropRotateCursor"));
 }
@@ -161,7 +161,7 @@ fn the_crop_panel_has_an_angle_field() {
     let mut h = crop_tool();
     let r = h.request("ui.clickWidget", json!({"id": "cropAngleField"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking cropAngleField");
     for key in ["a", "Backspace"] {
         let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
         assert_eq!(r["ok"], true, "{r}");
@@ -170,7 +170,7 @@ fn the_crop_panel_has_an_angle_field() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.key", json!({"key": "Enter"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Enter");
     assert!((angle(&h) + 3.25).abs() < 1e-9, "typed -3.25°, got {}", angle(&h));
     assert!(crop_fits(&h), "the Angle field shrinks the crop to fit the photo");
 }
@@ -190,7 +190,7 @@ fn the_readout_stays_on_the_canvas() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     let readout = h.app.widgets.iter().find(|(w, _)| w == "cropAngleReadout").map(|(_, r)| *r).expect("the readout while rotating");
     assert!(canvas.contains_rect(readout), "{readout:?} in {canvas:?}");
 }
@@ -202,7 +202,7 @@ fn dragging_the_angle_field_is_one_undo_step() {
     let undo = h.app.session.undo.len();
     let r = h.request("ui.dragWidget", json!({"id": "cropAngleField", "dx": 40.0, "dy": 0.0, "steps": 6}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dragWidget");
     assert!(angle(&h) > 0.0, "dragged right: {}", angle(&h));
     assert_eq!(h.app.session.undo.len(), undo + 1, "one step for the whole drag");
 }
@@ -214,22 +214,22 @@ fn typing_in_the_angle_field_applies_on_return() {
     let mut h = crop_tool();
     let r = h.request("ui.clickWidget", json!({"id": "cropAngleField"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking cropAngleField");
     for key in ["a", "Backspace"] {
         let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.key");
     let (before, undo) = (angle(&h), h.app.session.undo.len());
     for ch in ["-", "3", ".", "2", "5"] {
         let r = h.request("ui.text", json!({"text": ch}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.text");
     }
     assert_eq!((angle(&h), h.app.session.undo.len()), (before, undo), "nothing applied while typing");
     let r = h.request("ui.key", json!({"key": "Enter"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Enter");
     assert!((angle(&h) + 3.25).abs() < 1e-9, "applied on Return: {}", angle(&h));
     assert_eq!(h.app.session.undo.len(), undo + 1, "as one undo step");
 }
@@ -250,7 +250,7 @@ fn the_readout_follows_the_pointer_in_the_margin() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     let readout = h.app.widgets.iter().find(|(w, _)| w == "cropAngleReadout").map(|(_, r)| *r).expect("the readout while rotating");
     assert!(readout.distance_to_pos(at) < 60.0, "{readout:?} near {at:?}");
 }
@@ -274,18 +274,18 @@ fn escape_in_the_angle_field_keeps_the_angle() {
     let mut h = crop_tool();
     let r = h.request("ui.clickWidget", json!({"id": "cropAngleField"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking cropAngleField");
     for key in ["a", "Backspace"] {
         let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
     let r = h.request("ui.text", json!({"text": "7"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     let (before, undo) = (angle(&h), h.app.session.undo.len());
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!((angle(&h), h.app.session.undo.len()), (before, undo), "Esc applied nothing");
     assert_eq!(h.app.ui.right, crate::state::RightPanel::Crop, "and only left the field");
 }
@@ -296,18 +296,18 @@ fn leaving_the_angle_field_applies_the_angle() {
     let mut h = crop_tool();
     let r = h.request("ui.clickWidget", json!({"id": "cropAngleField"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking cropAngleField");
     for key in ["a", "Backspace"] {
         let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
     let r = h.request("ui.text", json!({"text": "4.5"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     let undo = h.app.session.undo.len();
     let r = h.request("ui.key", json!({"key": "Tab"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert!((angle(&h) - 4.5).abs() < 1e-9, "applied on leaving: {}", angle(&h));
     assert_eq!(h.app.session.undo.len(), undo + 1);
 }
@@ -323,7 +323,7 @@ fn moving_the_box_never_shows_rotation() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(h.last_cursor, egui::CursorIcon::Move, "still moving");
     assert!(!has(&h, "cropRotateCursor"));
     assert_eq!(angle(&h), 0.0, "nothing rotated");
@@ -340,7 +340,7 @@ fn a_rotation_cut_short_leaves_nothing_behind() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert!(has(&h, "cropAngleReadout"), "rotating");
     for (method, params) in [
         ("engine.execute", json!({"command": "tool.done"})),
@@ -349,7 +349,7 @@ fn a_rotation_cut_short_leaves_nothing_behind() {
     ] {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the request");
     }
     let img = h.app.image_rect.expect("the photo on screen");
     hover(&mut h, img.center());
@@ -366,7 +366,7 @@ fn the_angle_field_reads_angles_as_people_type_them() {
     for (typed, want) in [("-3,25", -3.25), ("1.5°", 1.5), ("60", 45.0)] {
         let r = h.request("ui.clickWidget", json!({"id": "cropAngleField"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after clicking cropAngleField");
         for key in ["a", "Backspace"] {
             let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
             assert_eq!(r["ok"], true, "{r}");
@@ -375,7 +375,7 @@ fn the_angle_field_reads_angles_as_people_type_them() {
         assert_eq!(r["ok"], true, "{r}");
         let r = h.request("ui.key", json!({"key": "Enter"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after key Enter");
         assert!((angle(&h) - want).abs() < 1e-9, "{typed:?}: want {want}, got {}", angle(&h));
     }
 }
@@ -386,7 +386,7 @@ fn the_angle_field_writes_the_angle_like_the_readout() {
     let mut h = crop_tool();
     let r = h.request("engine.execute", json!({"command": "crop.straighten", "params": {"angle": 2.5}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after crop.straighten");
     let texts = h.painted_text();
     // the field's number follows its label (its "°" is painted on its own)
     let field = texts.iter().position(|t| t == "Angle").and_then(|i| texts.get(i + 1));
@@ -406,7 +406,7 @@ fn rotating_the_crop_dims_nothing_inside_the_box() {
     let plain = h.paint();
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": -45.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the rotated crop view settles before the snapshot");
+    h.settled(SETTLE, "the rotated crop view settles before the snapshot");
     assert_eq!(angle(&h), -45.0);
     let rotated = h.paint();
     let img = h.app.image_rect.expect("the photo on screen");
@@ -451,7 +451,7 @@ fn drag_left_handle(dx: f32, step: f32) -> Headless {
         .collect();
     let r = h.request("ui.pointer", json!({ "events": events }), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     h
 }
 
@@ -491,10 +491,10 @@ fn auto_straighten_says_when_it_finds_nothing() {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
     let r = h.request("ui.clickWidget", json!({"id": "button:straightenAuto"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:straightenAuto");
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "No horizon or vertical lines to level by"), "{:?}", h.app.ui.toast);
     assert_eq!(angle(&h), 0.0);
     let _ = std::fs::remove_dir_all(dir);

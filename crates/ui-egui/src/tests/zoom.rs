@@ -17,7 +17,7 @@ fn detail() -> Headless {
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
@@ -30,7 +30,7 @@ fn edit(h: &mut Headless, f: impl FnOnce(&mut lightcraft_develop::DevelopSetting
 
 fn at_100(h: &mut Headless) -> (f32, f32) {
     h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.zoom100");
     let r = h.app.image_rect.expect("the loupe drew the photo");
     (r.width(), r.height())
 }
@@ -151,7 +151,7 @@ fn zoomed_before_after_views_stay_in_their_panes() {
             h.app.ui.before_after = mode;
             h.app.ui.zoom = zoom;
             h.app.ui.pan = (0.3, 0.4);
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after setting ui.pan");
             let img = h.app.image_rect.expect("After view on screen");
             let canvas = h.app.canvas_rect.expect("canvas");
             shots.push((h.paint(), img, canvas));
@@ -190,13 +190,13 @@ fn zoomed_in_the_before_label_stays_in_view() {
         egui::Rect::from_min_size(egui::pos2(v[0], v[1]), egui::vec2(v[2], v[3]))
     };
     h.app.ui.zoom = Zoom::Fit;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.zoom");
     let (img, canvas) = (h.app.image_rect.expect("photo on screen"), h.app.canvas_rect.expect("canvas"));
     let fitted = label(&mut h);
     assert_eq!(fitted.min, img.min + egui::vec2(8.0, 8.0), "at Fit the label sits on the photo's corner");
     h.app.ui.zoom = Zoom::Percent(100.0);
     h.app.ui.pan = (0.3, 0.4);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.pan");
     let img = h.app.image_rect.expect("photo on screen");
     assert!(img.min.x < canvas.min.x && img.min.y < canvas.min.y, "100 % reaches past the canvas ({img:?} in {canvas:?})");
     let zoomed = label(&mut h);
@@ -214,7 +214,7 @@ fn zoomed_in_the_before_label_keeps_clear_of_the_info_overlay() {
     h.app.ui.info_overlay = InfoOverlay::Exposure;
     h.app.ui.zoom = Zoom::Percent(100.0);
     h.app.ui.pan = (0.3, 0.4);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.pan");
     let rect = |h: &mut Headless, id: &str| -> egui::Rect {
         let w = h.request("ui.widgets", json!({"filter": id}), T);
         let r = w["result"][0]["rect"].as_array().unwrap_or_else(|| panic!("{id} is registered: {w}"));
@@ -240,7 +240,7 @@ fn a_crop_of_no_size_lays_out_at_a_finite_size() {
         for zoom in ["view.zoomFit", "view.zoom100"] {
             let r = h.request("engine.execute", json!({"command": zoom}), T);
             assert_eq!(r["ok"], true, "{zoom}: {r}");
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after engine.execute");
             let img = h.app.image_rect.expect("the loupe laid the photo out");
             assert!(img.min.is_finite() && img.max.is_finite(), "{rect:?} at {zoom}: {img:?}");
             let r = h.request(

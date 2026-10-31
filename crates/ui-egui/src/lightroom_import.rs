@@ -580,7 +580,7 @@ mod tests {
         let app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
         let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
         // no render left running at exit (see tests_activity::demo)
-        h.settle(std::time::Duration::from_secs(20));
+        h.settled(std::time::Duration::from_secs(20), "the new session");
         h
     }
 

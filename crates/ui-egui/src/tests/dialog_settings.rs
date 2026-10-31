@@ -22,7 +22,7 @@ const SIZES: [[f32; 2]; 3] = [[1600.0, 1000.0], [900.0, 560.0], [640.0, 480.0]];
 fn headless(session: lightcraft_engine::Session, size: [f32; 2]) -> Headless {
     let mut h = Headless::new(LightcraftApp::new(session, Services::default()), size, 1.0);
     // let the first renders finish (a render still running at exit can crash in GPU teardown)
-    h.settle(T);
+    h.settled(T, "the new session");
     h
 }
 
@@ -34,7 +34,7 @@ fn demo(size: [f32; 2]) -> Headless {
 fn show(h: &mut Headless, tab: &str) {
     let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": tab}}), T);
     assert_eq!(r["ok"], true, "app.settings {tab}: {r}");
-    h.settle(T);
+    h.settled(T, "after app.settings");
     for _ in 0..4 {
         h.step();
     }
@@ -205,7 +205,7 @@ fn a_long_library_folder_is_cut_short_and_its_tooltip_has_all_of_it() {
         h.request("ui.scroll", json!({"dy": -400.0}), T);
         h.step();
     }
-    h.settle(T);
+    h.settled(T, "the UI");
     let (folder, room) = (rect(&h, "text:settingsAutoFolder"), rect(&h, "settings:pageRoom"));
     assert!(room.intersects(folder), "the watched folder {folder:?} is in view in {room:?}");
     assert!(folder.height() < 24.0 && folder.right() <= room.right(), "the watched folder {folder:?} is one line inside {room:?}");
@@ -216,7 +216,7 @@ fn a_long_library_folder_is_cut_short_and_its_tooltip_has_all_of_it() {
         let path = format!("{path}/{}/{name}", "d".repeat(2 + 3 * n));
         std::fs::create_dir_all(&path).unwrap();
         assert!(h.app.run("library.autoImport", json!({"folder": path})).is_ok());
-        h.settle(T);
+        h.settled(T, "after library.autoImport");
         for _ in 0..4 {
             h.step();
         }
@@ -247,7 +247,7 @@ fn library_default_stays_on_the_line_of_the_smart_previews_folder_whatever_its_l
             h.request("ui.scroll", json!({"dy": -400.0}), T);
             h.step();
         }
-        h.settle(T);
+        h.settled(T, "the UI");
         // Then "(library default)" stays inside the room, on the line of the path, after it
         let room = rect(&h, "settings:pageRoom");
         let (smart, note) = (rect(&h, "text:settingsSmartFolder"), rect(&h, "text:settingsSmartDefault"));
@@ -327,7 +327,7 @@ fn a_window_too_short_for_a_page_of_its_own_scrolls_tabs_and_page_together() {
         h.request("ui.scroll", json!({"dy": -120.0}), T);
         h.step();
     }
-    h.settle(T);
+    h.settled(T, "the UI");
     // Then the tabs and the page move as one, so every setting can still be reached
     let (tab_now, page_now) = (rect(&h, "button:settingsTab-import"), rect(&h, "check:settings.perCamera"));
     assert!(page_now.top() < page.top() - 50.0, "the page scrolled: {page:?} -> {page_now:?}");
@@ -349,7 +349,7 @@ fn the_tabs_stay_put_while_a_page_scrolls() {
         h.request("ui.scroll", json!({"dy": -120.0}), T);
         h.step();
     }
-    h.settle(T);
+    h.settled(T, "the UI");
     // Then the page moved
     let page_after = rect(&h, "check:settings.perCamera");
     assert!(page_after.top() < page_before.top() - 50.0, "the page scrolled: {page_before:?} -> {page_after:?}");
@@ -374,7 +374,7 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
         h.request("ui.scroll", json!({"dy": -120.0}), T);
         h.step();
     }
-    h.settle(T);
+    h.settled(T, "the UI");
     let scrolled = rect(&h, "check:settings.perCamera").top();
     assert!(scrolled < top - 50.0);
     // When another tab is opened, it starts at its top
@@ -386,7 +386,7 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
     assert!((rect(&h, "check:settings.perCamera").top() - scrolled).abs() < 0.5, "Import is where it was left");
     // And it is still there when Settings is closed and opened again (documented in What's New)
     assert_eq!(h.request("ui.dialog.cancel", json!({}), T)["ok"], true);
-    h.settle(T);
+    h.settled(T, "after ui.dialog.cancel");
     show(&mut h, "import");
     assert!((rect(&h, "check:settings.perCamera").top() - scrolled).abs() < 0.5, "Import is where it was left after a reopen");
 }

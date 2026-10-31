@@ -16,7 +16,7 @@ const T: Duration = Duration::from_secs(30);
 fn demo(services: Services) -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     h
 }
 
@@ -28,22 +28,25 @@ fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+#[track_caller]
 fn click(h: &mut Headless, id: &str) {
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settle(T);
+    h.settled(T, &format!("after clicking {id}"));
 }
 
+#[track_caller]
 fn drag(h: &mut Headless, id: &str, dx: f32, dy: f32) {
     let r = h.request("ui.dragWidget", json!({"id": id, "dx": dx, "dy": dy, "steps": 8}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settle(T);
+    h.settled(T, &format!("after dragging {id}"));
 }
 
+#[track_caller]
 fn cmd(h: &mut Headless, id: &str, params: Value) -> Value {
     let r = h.request("engine.execute", json!({"command": id, "params": params}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settle(T);
+    h.settled(T, &format!("after {id}"));
     r["result"].clone()
 }
 
@@ -328,7 +331,7 @@ fn the_print_dialog_fits_the_window_with_its_buttons_on_screen() {
         for style in ["singleImage", "customPackage"] {
             let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
             let mut h = Headless::new(app, size, 1.0);
-            h.settle(T);
+            h.settled(T, "the new session");
             cmd(&mut h, "print.set", json!({"layout": {"style": style}}));
             if style == "customPackage" {
                 cmd(&mut h, "print.cell.add", json!({"width": 4, "height": 6}));
@@ -360,7 +363,7 @@ fn print_job_colour_controls_reach_the_job_and_the_pdf() {
     assert_eq!(r["ok"], true, "{r}");
     for _ in 0..4 {
         h.request("ui.scroll", json!({"dy": -600.0}), T);
-        h.settle(T);
+        h.settled(T, "after ui.scroll");
     }
     let job = |h: &Headless| h.app.session.print.job.color.clone();
     assert_eq!(job(&h).intent, PrintIntent::Perceptual);
@@ -407,7 +410,7 @@ fn the_print_preview_does_not_rebuild_thumbnails_every_frame() {
     // Keep the demo's twelve-photo contact sheet with real files that decode cheaply.
     let library = SyntheticLibrary::with_photos("print-thumbnail-reuse", 12);
     let mut h = Headless::new(library.app(), [1400.0, 900.0], 1.0);
-    assert!(h.settle(T), "the print thumbnail fixture settles");
+    h.settled(T, "the print thumbnail fixture settles");
     assert_eq!(h.app.session.catalog.len(), 12, "the contact sheet retains twelve photos");
     let before = h.app.renderer.thumb_jobs_built;
     assert!(before > 0, "the fixture exercises actual thumbnail jobs");
@@ -419,7 +422,7 @@ fn the_print_preview_does_not_rebuild_thumbnails_every_frame() {
             cmd(&mut h, "print.cell.add", json!({"width": 2.0, "height": 2.5}));
             cmd(&mut h, "print.cell.add", json!({"width": 5.0, "height": 7.0}));
         }
-        assert!(h.settle(Duration::from_secs(5)), "{style}: the dialog settles");
+        h.settled(Duration::from_secs(5), &format!("{style}: the dialog settles"));
         let built = h.app.renderer.thumb_jobs_built;
         for _ in 0..60 {
             h.step();
@@ -439,7 +442,7 @@ fn page_options_checkboxes_set_the_page_and_hide_for_packages() {
         assert_eq!(r["ok"], true, "{r}");
         for _ in 0..4 {
             h.request("ui.scroll", json!({"dy": dy}), T);
-            h.settle(T);
+            h.settled(T, "after ui.scroll");
         }
     };
     // the Page panel is below Page Setup: scroll down to it

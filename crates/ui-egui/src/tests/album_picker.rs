@@ -28,7 +28,7 @@ fn id(v: serde_json::Value) -> u64 {
 fn click(h: &mut Headless, id: &str) {
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
 }
 
 /// Check the current frame registry for an exact widget ID.
@@ -63,7 +63,7 @@ fn library() -> Library {
     exec(&mut h, "dialog.smartAlbum", json!({"name": "Travel"}));
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     rules.rules = vec![serde_json::from_value(json!({"field": "album", "op": "isNot", "value": null})).unwrap()];
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     Library { h, utils, excluded, uncurated, trip }
 }
 
@@ -91,13 +91,13 @@ fn typing_finds_and_keys_pick() {
     click(&mut h, "albumPicker:rules-0");
     let r = h.request("ui.text", json!({"text": "utils"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     assert!(has(&h, &format!("albumPickerItem:{excluded}:rules-0")) && has(&h, &format!("albumPickerItem:{uncurated}:rules-0")));
     assert!(!has(&h, &format!("albumPickerItem:{trip}:rules-0")), "Trip doesn't match");
     for key in ["ArrowDown", "Enter"] {
         let r = h.request("ui.key", json!({"key": key}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.key");
     }
     assert_eq!(value(&h), json!(uncurated), "the second match");
 }
@@ -112,7 +112,7 @@ fn albums_that_would_loop_are_greyed() {
     exec(&mut h, "dialog.smartAlbum", json!({"id": excluded}));
     let Some(crate::state::Dialog::SmartRules { rules, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     rules.rules = vec![serde_json::from_value(json!({"field": "album", "op": "is", "value": null})).unwrap()];
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     click(&mut h, "albumPicker:rules-0");
     assert!(has(&h, &format!("albumPickerItem:{travel}:rules-0")), "shown");
     click(&mut h, &format!("albumPickerItem:{travel}:rules-0"));
@@ -147,14 +147,14 @@ fn the_popup_grows_back_when_the_search_is_cleared() {
     assert!(full > 80.0, "the open popup shows the tree: {full}");
     let r = h.request("ui.text", json!({"text": "zzzz"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     let none = popup_height(&h, search);
     assert!(none < full - 20.0, "no match shrinks the popup: {none} vs {full}");
     assert_eq!(rect_of(&h, "albumPickerSearch:rules-0"), search, "the search field stays put");
     for _ in 0..4 {
         let r = h.request("ui.key", json!({"key": "Backspace"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.key");
     }
     let again = popup_height(&h, search);
     assert!((again - full).abs() < 1.0, "cleared, the popup is {again} tall, not {full} as when it opened");
@@ -170,7 +170,7 @@ fn typing_after_a_folder_click_still_searches() {
     assert!(has(&h, &format!("albumPickerItem:{excluded}:rules-0")));
     let r = h.request("ui.text", json!({"text": "trip"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     assert!(has(&h, &format!("albumPickerItem:{trip}:rules-0")) && !has(&h, &format!("albumPickerItem:{excluded}:rules-0")), "searching for trip");
 }
 
@@ -202,7 +202,7 @@ mod import_review {
         let other = id(exec(&mut h, "album.create", json!({"name": "Favorites", "addSelected": false})));
         let smart = id(exec(&mut h, "album.createSmart", json!({"name": "Smart travel", "parent": folder, "rules": {"rating": 4}})));
         h.app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(crate::import::ImportDialog::new(Vec::new())) });
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.dialog");
         Review { h, folder, nested, album, other, smart }
     }
 
@@ -236,14 +236,14 @@ mod import_review {
     fn text(h: &mut Headless, value: &str) {
         let r = h.request("ui.text", json!({"text": value}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.settle(SETTLE));
+        h.settled(SETTLE, "after ui.text");
     }
 
     /// Send a public keyboard event and wait for its resulting UI state.
     fn key(h: &mut Headless, key: &str) {
         let r = h.request("ui.key", json!({"key": key}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.settle(SETTLE));
+        h.settled(SETTLE, "after ui.key");
     }
 
     /// Replace the pending new album name using normal field selection and typing.
@@ -364,7 +364,7 @@ mod import_review {
                 exec(&mut h, "view.theme", json!({"theme": theme}));
                 let r = h.request("ui.set", json!({"language": "de"}), T);
                 assert_eq!(r["ok"], true, "{r}");
-                assert!(h.settle(SETTLE));
+                h.settled(SETTLE, "after ui.set");
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
                 let rect = |h: &Headless, name: &str| h.app.widgets.iter().find(|(id, _)| id == name).unwrap().1;
                 assert!(screen.contains_rect(rect(&h, "albumPicker:import-album")), "{theme} {size:?}: selected long path");
@@ -393,7 +393,7 @@ mod import_review {
         for locale in Locale::ALL {
             let r = h.request("ui.set", json!({"language": locale.code()}), T);
             assert_eq!(r["ok"], true, "{r}");
-            assert!(h.settle(SETTLE));
+            h.settled(SETTLE, "after ui.set");
             assert!(button_text(&h, "albumPicker:import-album", locale.tr("None")), "{locale:?}: localized empty destination");
             click(&mut h, "albumPicker:import-album");
             assert!(button_text(&h, "importAlbum:new", locale.tr("New album…")), "{locale:?}: localized new-album option");
@@ -411,7 +411,7 @@ mod import_review {
         let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
         let mut h = Headless::new(app, [1000.0, 800.0], 1.0);
         h.app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(crate::import::ImportDialog::new(Vec::new())) });
-        assert!(h.settle(SETTLE));
+        h.settled(SETTLE, "after setting ui.dialog");
         click(&mut h, "albumPicker:import-album");
         assert!(h.painted_text().iter().any(|t| t == "No albums yet"));
         click(&mut h, "importAlbum:new");
@@ -455,7 +455,7 @@ mod import_review {
             h.app.ui.dialog = None;
             exec(&mut h, "file.addPhotos", json!({"paths": [fixture.0.to_string_lossy()], "album": album}));
             assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. }))));
-            assert!(h.settle(SETTLE));
+            h.settled(SETTLE, "the UI");
             assert_eq!(destination(&h).album, Some(album), "album-context import keeps its preselection");
             click(&mut h, "albumPicker:import-album");
             assert!(has(&h, &format!("albumPickerItem:{album}:import-album")), "preselection opens the right ancestors");
@@ -471,7 +471,7 @@ mod import_review {
                 "deleted" => {
                     key(&mut h, "Escape");
                     exec(&mut h, "album.delete", json!({"id": album}));
-                    assert!(h.settle(SETTLE));
+                    h.settled(SETTLE, "after album.delete");
                     assert_eq!(destination(&h).album, None, "a deleted destination matches the displayed None choice");
                     assert!(button_text(&h, "albumPicker:import-album", "None"));
                 }
@@ -481,7 +481,7 @@ mod import_review {
             let r = h.request("ui.dialog.confirm", json!({}), T);
             assert_eq!(r["ok"], true, "{r}");
             assert!(h.step_until(SETTLE, |h| h.app.import.is_none()));
-            assert!(h.settle(SETTLE));
+            h.settled(SETTLE, "the UI");
             let added: Vec<PhotoId> = h.app.session.catalog.photos().filter(|p| !before.contains(&p.id)).map(|p| p.id).collect();
             assert_eq!(added.len(), 1, "{choice}: exactly the scanned photo is imported");
             let receives = |id| h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().photos.contains(&added[0]);
@@ -497,7 +497,7 @@ mod import_review {
             }
             assert_eq!(h.app.session.undo.len(), undo + 1, "{choice}: one undo step");
             exec(&mut h, "edit.undo", json!({}));
-            assert!(h.settle(SETTLE));
+            h.settled(SETTLE, "after edit.undo");
             assert_eq!(h.app.session.catalog.len(), before.len());
             if choice == "new" {
                 assert!(h.app.session.catalog.albums().all(|a| a.name != "From card"), "undo removes the new album too");

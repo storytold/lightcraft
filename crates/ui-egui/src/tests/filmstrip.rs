@@ -23,7 +23,7 @@ fn filmstrip_shows_a_cjk_file_name() {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert!(h.app.ui.settings.film_names);
     let film = format!("film:{}", first.0);
     assert!(h.app.widgets.iter().any(|(w, _)| *w == film), "{film} drawn in the filmstrip");
@@ -44,18 +44,18 @@ fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the filmstrip settles before clicking its stack badge");
+    h.settled(SETTLE, "the filmstrip settles before clicking its stack badge");
     assert!(!h.app.session.visible_cloned().contains(&member), "collapsed: only the top shows");
     let badge = format!("filmstack:{}", top.0);
     let r = h.request("ui.clickWidget", json!({"id": badge}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the expanded stack settles");
+    h.settled(SETTLE, "the expanded stack settles");
     assert!(!h.app.session.catalog.stack(StackId(1)).unwrap().collapsed, "a click on the badge expands the stack");
     assert!(h.app.session.visible_cloned().contains(&member));
     assert_eq!(h.app.session.selection.active, Some(loose), "the loupe keeps its photo");
     let r = h.request("ui.clickWidget", json!({"id": badge}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the collapsed stack settles");
+    h.settled(SETTLE, "the collapsed stack settles");
     assert!(h.app.session.catalog.stack(StackId(1)).unwrap().collapsed, "a second click collapses it");
     assert!(!h.app.session.visible_cloned().contains(&member));
 }

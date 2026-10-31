@@ -31,7 +31,7 @@ fn open(h: &mut Headless, ids: &[lightcraft_catalog::PhotoId], active: lightcraf
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids, "active": active.0}}), T);
     let r = h.request("ui.menu.invoke", json!({"id": "dialog.captureTime"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.menu.invoke");
 }
 
 #[test]
@@ -48,12 +48,12 @@ fn shift_preview_says_the_photos_capture_time_cant_be_read() {
         }
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(painted(&h, "2026-01-01 10:00:00 → 2026-01-01 11:00:00"), "a readable time previews its shift: {:?}", h.painted_text());
 
     let bad = "2026-01-01T10:00:00 and more";
     set_captured(&mut h, id, bad);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after set_captured");
     assert!(painted(&h, "can't be read"), "the preview says the photo's time can't be read: {:?}", h.painted_text());
     assert!(!painted(&h, "Enter a date"), "no date was typed, so the preview doesn't ask for one: {:?}", h.painted_text());
 
@@ -84,7 +84,7 @@ fn set_mode_refuses_moving_others_by_an_unreadable_time_and_repairs_it_alone() {
             }
             other => panic!("Edit Capture Time is not open: {other:?}"),
         }
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
     };
 
     // with another photo selected, OK can't move it by the unreadable time's change: it says so
@@ -107,7 +107,7 @@ fn set_mode_refuses_moving_others_by_an_unreadable_time_and_repairs_it_alone() {
     assert!(preview.ends_with(" → 2026-01-01 11:00:00"), "the preview shows the time it will get, nothing after: {preview:?}");
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:dialogOk");
     assert!(h.app.ui.dialog.is_none(), "OK closes the dialog");
     assert_eq!(captured(&h, bad).as_deref(), Some("2026-01-01T11:00:00"), "alone, it gets the time typed");
 }
@@ -126,7 +126,7 @@ fn errors_are_shown_and_the_dialog_stays_open() {
         Some(Dialog::CaptureTime { time, .. }) => *time = "yesterday".into(),
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    assert!(h.settle(SETTLE), "capture-time dialog renders settled");
+    h.settled(SETTLE, "capture-time dialog renders settled");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
     // The request consumes the click. Inspect its short-lived notification before waiting
     // for unrelated rendering: settling advances the simulated clock and can expire the toast.
@@ -141,7 +141,7 @@ fn errors_are_shown_and_the_dialog_stays_open() {
         }
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    assert!(h.settle(SETTLE), "capture-time dialog renders settled");
+    h.settled(SETTLE, "capture-time dialog renders settled");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_ne!(r["ok"], true, "the shift is refused: {r}");
     assert!(r.to_string().contains("9999"), "{r}");

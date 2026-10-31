@@ -24,16 +24,16 @@ fn escape_leaves_the_crop_tool_before_the_view() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("engine.execute", json!({"command": "crop.set", "params": {"rect": [0.1, 0.1, 0.8, 0.9]}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after crop.set");
     assert_eq!(h.app.ui.right, RightPanel::Crop);
     let crop = h.app.session.catalog.photo(id).map(|p| p.develop.crop.geometry.rect);
     h.request("ui.key", json!({"key": "Escape"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_ne!(h.app.ui.right, RightPanel::Crop, "Esc closes the crop tool");
     assert_eq!(h.app.ui.view, ViewMode::Detail, "and stays on the photo");
     assert_eq!(h.app.session.catalog.photo(id).map(|p| p.develop.crop.geometry.rect), crop, "the crop is kept");
     h.request("ui.key", json!({"key": "Escape"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the next Esc goes back to the grid");
 }
 
@@ -48,18 +48,18 @@ fn escape_in_the_angle_field_only_leaves_the_field() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
     h.app.ui.view = ViewMode::Detail;
     h.request("engine.execute", json!({"command": "panel.crop"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.crop");
     let r = h.request("ui.clickWidget", json!({"id": "cropAngleField"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking cropAngleField");
     h.request("ui.text", json!({"text": "7"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     h.request("ui.key", json!({"key": "Escape"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!((h.app.ui.view, h.app.ui.right), (ViewMode::Detail, RightPanel::Crop), "Esc only left the field");
     // the field has let go: the next Esc is the crop tool's
     h.request("ui.key", json!({"key": "Escape"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!((h.app.ui.view, h.app.ui.right == RightPanel::Crop), (ViewMode::Detail, false));
 }
 
@@ -77,7 +77,7 @@ fn x_in_the_crop_tool_swaps_the_aspect_once() {
     h.request("engine.execute", json!({"command": "panel.crop"}), T);
     let r = h.request("engine.execute", json!({"command": "crop.aspect", "params": {"aspect": "3x4"}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after crop.aspect");
     assert_eq!(h.app.ui.right, RightPanel::Crop);
     let crop = |h: &Headless| {
         let p = h.app.session.catalog.photo(id).unwrap();
@@ -87,11 +87,11 @@ fn x_in_the_crop_tool_swaps_the_aspect_once() {
     assert_eq!(crop(&h), (true, Some((400, 300))), "a 3:4 crop follows the landscape photo");
     let undo = h.app.session.undo.len();
     h.request("ui.key", json!({"key": "x"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key x");
     assert_eq!(crop(&h), (false, Some((300, 400))), "X turns the crop portrait");
     assert_eq!(h.app.session.undo.len(), undo + 1, "one swap, one undo step");
     assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::None, "X doesn't reject while cropping");
     h.request("ui.key", json!({"key": "x"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key x");
     assert_eq!(crop(&h), (true, Some((400, 300))), "X again turns it back");
 }

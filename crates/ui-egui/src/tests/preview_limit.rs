@@ -162,7 +162,7 @@ mod in_the_loupe {
         let mut h = Headless::new(app, size, 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.set");
         let native = {
             let id = h.app.session.active().expect("a photo is open");
             let p = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -188,7 +188,7 @@ mod in_the_loupe {
         let mut h = Headless::new(app, size, 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.set");
         let (native, dims) = {
             let id = h.app.session.active().expect("a photo is open");
             let p = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -211,7 +211,7 @@ mod in_the_loupe {
     fn one_to_one_is_a_canvas_sized_frame_plus_a_native_window() {
         let (_fx, mut h, native) = detail();
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let main = rendered_long_edge(&h);
         assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
         let region = h.app.region_view.expect("a window render");
@@ -234,13 +234,13 @@ mod in_the_loupe {
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.app.ui.pan = (0.3, 0.4);
         h.app.ui.mask_overlay = false;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.mask_overlay");
         let (zoom, pan) = (h.app.ui.zoom, h.app.ui.pan);
         assert_eq!(zoom, crate::state::Zoom::Percent(100.0));
         let plain = h.app.region_view.expect("a window render without the overlay");
 
         h.app.ui.mask_overlay = true;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.mask_overlay");
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
         assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::Mask { .. }), "the mask overlay is shown");
@@ -253,7 +253,7 @@ mod in_the_loupe {
         assert_ne!(shown.settings, plain.settings, "the overlay is part of the window's look");
 
         h.app.ui.mask_overlay = false;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.mask_overlay");
         assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "hiding it keeps them too");
         assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
     }
@@ -277,7 +277,7 @@ mod in_the_loupe {
         assert_eq!(r["ok"], true, "{r}");
         assert!(h.app.ui.mask_overlay_all, "the all-masks overlay is on");
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
         assert!(
@@ -299,11 +299,11 @@ mod in_the_loupe {
     fn soft_proofing_at_one_to_one_is_a_window() {
         let (_fx, mut h, native) = detail();
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let plain = h.app.region_view.expect("a window render without the proof");
         let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": true, "destWarning": true}}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.softProof");
         assert!(h.app.ui.soft_proof);
         let main = rendered_long_edge(&h);
         assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
@@ -311,7 +311,7 @@ mod in_the_loupe {
         assert_eq!(proofed.full.0.max(proofed.full.1), native, "cut from the photo's own pixels");
         assert_ne!(proofed.settings, plain.settings, "the proof is part of the window's look");
         h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": false}}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.softProof");
         assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
     }
 
@@ -321,11 +321,11 @@ mod in_the_loupe {
     fn visualize_spots_at_one_to_one_is_a_window() {
         let (_fx, mut h, native) = detail();
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let plain = h.app.region_view.expect("a window render without the overlay");
         let r = h.request("ui.menu.invoke", json!({"id": "view.visualizeSpots"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.menu.invoke");
         assert!(h.app.ui.visualize_spots);
         let main = rendered_long_edge(&h);
         assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
@@ -341,7 +341,7 @@ mod in_the_loupe {
         assert!(native > 1600, "the demo photo must be larger than the cap for this to mean anything (is {native})");
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(rendered_long_edge(&h) <= 1600, "rendered {}", rendered_long_edge(&h));
     }
 
@@ -364,7 +364,7 @@ mod in_the_loupe {
         let (_fx, mut h, native) = detail();
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let (w, hh) = region_tile(&h).expect("a window render");
         // it covers what is on screen (the 1400×900 window less its chrome), and is not the frame
         assert!(w >= 1300 && hh >= 700, "{w}×{hh}");
@@ -378,13 +378,13 @@ mod in_the_loupe {
     fn eight_to_one_renders_only_what_is_visible() {
         let (_fx, mut h, native) = detail();
         h.app.ui.zoom = crate::state::Zoom::Percent(800.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         let (w, hh) = region_tile(&h).expect("a window render");
         assert!(w.max(hh) <= crate::region::MAX_SPAN && w < native * 8 / 2, "{w}×{hh}");
         // …and panning far away asks for another window
         let before = h.app.region_view.unwrap().window;
         h.app.ui.pan = (0.9, 0.9);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.pan");
         assert_ne!(h.app.region_view.unwrap().window, before);
     }
 
@@ -396,7 +396,7 @@ mod in_the_loupe {
         h.app.renderer.keep_pixels = true;
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let view = h.app.region_view.expect("a window render");
         let tile = h.app.renderer.textures.get(&Slot::Region).and_then(|t| t.pixels.clone()).expect("tile pixels");
         let main = h.app.renderer.textures.get(&Slot::Main).and_then(|t| t.pixels.clone()).expect("main pixels");
@@ -439,10 +439,10 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(region_tile(&h).is_some());
         h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoomFit");
         assert_eq!(region_tile(&h), None);
         assert_eq!(h.app.region_view, None);
     }
@@ -454,7 +454,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(tile(&h, Slot::Region).is_some() && tile(&h, Slot::RegionBefore).is_some());
         h.request("ui.set", json!({"view": "photoGrid"}), T);
         h.step();
@@ -469,10 +469,10 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let first = h.app.region_view.expect("a window");
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.0}}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after develop.set");
         let second = h.app.region_view.expect("a window");
         assert_ne!(first.settings, second.settings);
         assert_ne!(first.key, second.key);
@@ -494,7 +494,7 @@ mod in_the_loupe {
         h.app.session.set_develop(id, s, "Spot").unwrap();
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(region_tile(&h).is_some(), "a window render");
     }
 
@@ -505,10 +505,10 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.max_texture_side = 2048;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         for zoom in [crate::state::Zoom::Fit, crate::state::Zoom::Percent(100.0), crate::state::Zoom::Percent(800.0)] {
             h.app.ui.zoom = zoom;
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after setting ui.zoom");
             for (slot, t) in &h.app.renderer.textures {
                 assert!(t.size[0] <= 2048 && t.size[1] <= 2048, "{zoom:?} {slot:?}: {}×{}", t.size[0], t.size[1]);
             }
@@ -525,7 +525,7 @@ mod in_the_loupe {
         let (_fx, mut h, native) = detail_in([2600.0, 1200.0]);
         assert!(native > 2600, "the photo is wider than the canvas at 1:1: {native}");
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let canvas = h.app.canvas_rect.expect("the loupe was drawn");
         let image = h.app.image_rect.expect("the photo was drawn");
         let region = h.app.region_view.expect("a window");
@@ -545,10 +545,10 @@ mod in_the_loupe {
     fn a_slider_drag_when_zoomed_in_renders_canvas_sized_drafts() {
         let (_fx, mut h, native) = detail();
         h.app.ui.zoom = crate::state::Zoom::Percent(400.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         h.app.session.begin_interaction("Exposure").unwrap();
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after develop.set");
         let main = rendered_long_edge(&h);
         // canvas-sized: the whole canvas on the GPU, a 0.6 draft of it on the CPU (#330)
         let canvas = h.app.canvas_rect.expect("the loupe was drawn");
@@ -565,7 +565,7 @@ mod in_the_loupe {
     fn drag_exposure(h: &mut Headless) -> (usize, usize) {
         h.app.session.begin_interaction("Exposure").unwrap();
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after develop.set");
         let image = h.app.image_rect.expect("the photo was drawn");
         let small = (image.width().max(image.height()) * crate::region::CPU_DRAFT_SCALE) as usize + crate::state::LOUPE_EDGE_STEP;
         (rendered_long_edge(h), small)
@@ -596,7 +596,7 @@ mod in_the_loupe {
         let lut = lightcraft_pipeline::ProofLut::new(2, vec![[0.5, 0.5, 0.5, 0.0]; 8]).expect("a valid table");
         h.app.ui.proof.profile = lightcraft_pipeline::register_proof_profile(0x5eed_9f01, lut);
         h.app.ui.soft_proof = true;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.soft_proof");
         let (main, small) = drag_exposure(&mut h);
         assert!(main <= small, "the draft is {main} px, a small one at most {small}");
     }
@@ -612,7 +612,7 @@ mod in_the_loupe {
         let (_fx, mut h, native) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         let (after, before) = (h.app.region_view.expect("After window"), h.app.region_before_view.expect("Before window"));
         assert_eq!(after.full, before.full, "the same frame");
         assert_eq!(after.full.0.max(after.full.1), native);
@@ -641,7 +641,7 @@ mod in_the_loupe {
         }
         assert!(!h.app.session.media.has_source(id, lightcraft_engine::SourceLevel::Full), "the original is still decoding");
         assert_eq!(pending(&h), 1, "one window job decodes it");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
         assert!(tile(&h, Slot::Region).is_some() && tile(&h, Slot::RegionBefore).is_some(), "both windows arrived");
     }
 
@@ -651,7 +651,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::Original;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(h.app.region_before_view.is_some());
         assert_eq!(h.app.region_view, None);
         assert!(tile(&h, Slot::RegionBefore).is_some() && tile(&h, Slot::Region).is_none());
@@ -663,7 +663,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::Split;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert_eq!(h.app.region_view.map(|v| v.window), h.app.region_before_view.map(|v| v.window));
         assert!(tile(&h, Slot::Region).is_some() && tile(&h, Slot::RegionBefore).is_some());
     }
@@ -674,10 +674,10 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(tile(&h, Slot::RegionBefore).is_some());
         h.app.ui.before_after = crate::state::BeforeAfter::Off;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.before_after");
         assert_eq!(tile(&h, Slot::RegionBefore), None);
         assert_eq!(h.app.region_before_view, None);
         assert!(tile(&h, Slot::Region).is_some());
@@ -701,7 +701,7 @@ mod in_the_loupe {
         for _ in 0..60 {
             h.step();
         }
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
         let region = h.app.region_view.expect("the window arrives when the pinch is over");
         assert_eq!(region.full.0.max(region.full.1), native);
     }
@@ -923,7 +923,7 @@ mod in_the_loupe {
     fn no_window_over_a_picture_that_is_not_the_frame() {
         let (_fx, mut h, _) = detail();
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(h.app.region_view.is_some());
         let t = h.app.renderer.textures.get_mut(&Slot::Main).unwrap();
         t.size = [t.size[0], t.size[1] / 2];
@@ -949,7 +949,7 @@ mod in_the_loupe {
             let (mut h, native) = demo_detail_in(size);
             h.app.ui.soft_proof = proof;
             h.app.ui.zoom = if percent == 0.0 { crate::state::Zoom::Fit } else { crate::state::Zoom::Percent(percent) };
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after setting ui.zoom");
             h.app.session.begin_interaction("Exposure").unwrap();
             let mut ms = Vec::new();
             for tick in 0..20 {
@@ -1196,7 +1196,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.session.media.set_budget(16 << 20);
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(h.app.session.memory_report().full_source.bytes > 16 << 20, "the original stayed over budget");
         h.request("ui.set", json!({"view": "photoGrid"}), T);
         h.step();
@@ -1225,7 +1225,7 @@ mod in_the_loupe {
             let (_fx, mut h, _) = detail();
             h.app.ui.before_after = mode;
             h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after view.zoom100");
             h.step();
             let (stand_in, window) = (drawn(&h, Slot::Before), drawn(&h, Slot::RegionBefore));
             assert!(!stand_in.is_empty() && !window.is_empty(), "{mode:?}: the stand-in {stand_in:?} and the window {window:?} are both painted");
@@ -1252,7 +1252,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::Split;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         h.events.push(egui::Event::Key {
             key: egui::Key::Backslash,
             physical_key: Some(egui::Key::Backslash),
@@ -1260,11 +1260,11 @@ mod in_the_loupe {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the injected input");
         // (the key's own shortcut switches to the Before view; the wipe is chosen again with the
         // key still down, which is what holding `\` in a wipe is)
         h.app.ui.before_after = crate::state::BeforeAfter::Split;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.before_after");
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
         let window = drawn(&h, Slot::RegionBefore);
@@ -1279,7 +1279,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
         let (before, after) = (drawn(&h, Slot::RegionBefore), drawn(&h, Slot::Region));
@@ -1295,7 +1295,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert_eq!(h.app.region_tiles.len(), 2, "{:?}", h.app.region_tiles.keys().collect::<Vec<_>>());
     }
 
@@ -1305,16 +1305,16 @@ mod in_the_loupe {
     fn a_refused_window_falls_back_to_a_full_size_render() {
         let (_fx, mut h, native) = detail();
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(h.app.region_view.is_some());
         let id = h.app.session.active().unwrap();
         let look = h.app.session.develop_of(id).unwrap().hash64();
         h.app.window_refused = Some((id, look, native));
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting window_refused");
         assert_eq!(h.app.region_view, None);
         assert_eq!(rendered_long_edge(&h), native);
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after develop.set");
         assert!(h.app.region_view.is_some(), "a new look tries a window again");
     }
 
@@ -1324,7 +1324,7 @@ mod in_the_loupe {
     fn pinching_out_asks_for_no_new_windows() {
         let (_fx, mut h, _) = detail();
         h.app.ui.zoom = crate::state::Zoom::Percent(400.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         let key = h.app.region_view.expect("a window").key;
         let at = h.app.canvas_rect.unwrap().center();
         h.request("ui.move", json!({"x": at.x, "y": at.y}), T);
@@ -1340,7 +1340,7 @@ mod in_the_loupe {
     fn a_drag_over_the_stage_budget_does_not_clear_the_open_views() {
         let (_fx, mut h, _) = detail();
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         let held = |h: &Headless| {
             let m = h.app.renderer.memory();
             (m["stageCaches"]["gpuBytes"].as_u64().unwrap() + m["stageCaches"]["cpuBytes"].as_u64().unwrap()) as usize
@@ -1352,7 +1352,7 @@ mod in_the_loupe {
         h.app.session.begin_interaction("Exposure").unwrap();
         for tick in 0..8 {
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after develop.set");
         }
         assert_eq!(h.app.renderer.memory()["stageCaches"]["trimmed"], 0);
         assert!(held(&h) > before / 3, "and they are still there");
@@ -1378,7 +1378,7 @@ mod in_the_loupe {
         let (_fx, mut h, native) = detail();
         use_display_profile(&mut h);
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(rendered_long_edge(&h) < native, "the whole frame is smaller than the photo");
         let view = h.app.region_view.expect("a window render");
         assert_eq!(view.full.0.max(view.full.1), native);
@@ -1396,7 +1396,7 @@ mod in_the_loupe {
         let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         for i in 0..2u8 {
             assert!(h.app.compare_windows[i as usize].is_some(), "pane {i} asked for a window");
             let (whole, window) = (drawn(&h, Slot::Compare(i)), drawn(&h, Slot::CompareRegion(i)));
@@ -1416,7 +1416,7 @@ mod in_the_loupe {
         assert!(h.app.ui.settings.display_profile.is_empty(), "no profile chosen");
         assert!(h.app.renderer.display_id().is_some(), "the screen's profile is in use");
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         assert!(rendered_long_edge(&h) < native, "the whole frame is smaller than the photo");
         let (whole, window) = (drawn(&h, Slot::Main), drawn(&h, Slot::Region));
         assert!(!whole.is_empty(), "the whole-frame render is painted");
@@ -1440,7 +1440,7 @@ mod in_the_loupe {
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);
         h.app.ui.zoom = zoom;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         (fixture, h)
     }
 
@@ -1483,14 +1483,14 @@ mod in_the_loupe {
         let (_fx, mut h) = compare_at(crate::state::Zoom::Percent(100.0));
         assert!(h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)));
         h.app.ui.zoom = crate::state::Zoom::Fit;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         assert!(!h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)), "fit: no window");
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         assert!(h.app.renderer.textures.contains_key(&Slot::CompareRegion(0)));
         let r = h.request("ui.set", json!({"view": "detail"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.set");
         assert_eq!(h.app.compare_windows, [None, None]);
         assert!(!h.app.renderer.textures.contains_key(&Slot::CompareRegion(0)) && !h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)));
         assert!(h.app.session.media.usage().2.count <= 1, "one original in Detail");
@@ -1504,7 +1504,7 @@ mod in_the_loupe {
         h.app.renderer.keep_pixels = true;
         h.request("engine.execute", json!({"command": "view.compare"}), T);
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         h.step();
         for i in 0..2u8 {
             let view = h.app.compare_windows[i as usize].expect("a window");
@@ -1549,7 +1549,7 @@ mod in_the_loupe {
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.ui.view, crate::state::ViewMode::Reference);
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         let before = h.app.compare_windows[1].expect("the active photo's window");
         assert!(h.app.compare_windows[0].is_some(), "the reference's window");
         h.app.session.begin_interaction("Exposure").unwrap();
@@ -1560,7 +1560,7 @@ mod in_the_loupe {
         assert_eq!(h.app.compare_windows[1], Some(before), "no window per drag tick");
         assert!(!h.app.renderer.is_pending(Slot::CompareRegion(1)));
         h.app.session.end_interaction().unwrap();
-        h.settle(SETTLE);
+        h.settled(SETTLE, "the UI");
         let after = h.app.compare_windows[1].expect("a window for the new look");
         assert_ne!(after.settings, before.settings);
     }

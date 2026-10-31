@@ -18,15 +18,25 @@ fn main() {
     let mut h = Headless::new(LightcraftApp::new(s, Services::default()), [1600.0, 1000.0], 1.0);
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let cmd = |h: &mut Headless, c: &str| req(h, "engine.execute", json!({"command": c}))["result"].clone();
+    // a wait that gives up says what was still busy, and the timeline doesn't claim it settled
+    let settle = |h: &mut Headless| {
+        let limit = Duration::from_secs(60);
+        if h.settle(limit) { Ok(()) } else { Err(format!("did not settle within {limit:?}: {}", h.busy_description())) }
+    };
     cmd(&mut h, "view.photoGrid");
-    h.settle(Duration::from_secs(60));
+    if let Err(e) = settle(&mut h) {
+        eprintln!("{:9.1} grid {e}", ms());
+    }
     cmd(&mut h, "library.selectNone");
     let r = cmd(&mut h, "library.next");
     eprintln!("{:9.1} first: {r}", ms());
     let first = r["active"].as_u64().unwrap_or(1);
-    h.settle(Duration::from_secs(60));
+    let grid = settle(&mut h);
     let gpu = req(&mut h, "ui.inspect", json!({}))["result"]["perf"]["gpu"].clone();
-    eprintln!("{:9.1} grid settled, gpu {gpu}", ms());
+    match grid {
+        Ok(()) => eprintln!("{:9.1} grid settled, gpu {gpu}", ms()),
+        Err(e) => eprintln!("{:9.1} grid {e}, gpu {gpu}", ms()),
+    }
     // what the loupe shows, every frame, until `photo` is rendered for good
     let watch = |h: &mut Headless, label: &str, photo: u64| {
         let start = ms();
@@ -55,8 +65,10 @@ fn main() {
     cmd(&mut h, "view.detail");
     let open = watch(&mut h, "open", first);
     let t = ms();
-    h.settle(Duration::from_secs(60));
-    eprintln!("{:9.1} neighbours prefetched after {:.0} ms", ms(), ms() - t);
+    match settle(&mut h) {
+        Ok(()) => eprintln!("{:9.1} neighbours prefetched after {:.0} ms", ms(), ms() - t),
+        Err(e) => eprintln!("{:9.1} neighbours not all prefetched: {e}", ms()),
+    }
     // step towards the side that has photos (the sort may put the first one last)
     let mut dir = "library.next";
     let mut r = cmd(&mut h, dir);
@@ -69,6 +81,8 @@ fn main() {
     let step1 = watch(&mut h, "next (prefetched)", n1);
     let n2 = cmd(&mut h, dir)["active"].as_u64().unwrap_or(0);
     let step2 = watch(&mut h, "next at once", n2);
-    h.settle(Duration::from_secs(60));
+    if let Err(e) = settle(&mut h) {
+        eprintln!("{:9.1} {e}", ms());
+    }
     eprintln!("{:9.1} summary: open {open:.0} ms, next prefetched {step1:.0} ms, next at once {step2:.0} ms", ms());
 }
