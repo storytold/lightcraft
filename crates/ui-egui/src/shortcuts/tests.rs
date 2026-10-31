@@ -286,6 +286,61 @@ fn shift_label_targets_only_candidate_in_compare() {
 }
 
 #[test]
+fn label_keys_toggle_off_when_every_selected_photo_already_has_that_colour() {
+    use lightcraft_catalog::PhotoId;
+    let mut h = library();
+    h.app.session.execute("library.select", &json!({"ids": [1, 2]})).unwrap();
+    h.app.run("photo.label", json!({"label": "red"})).unwrap();
+    key(&mut h, "6", false);
+    assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().label, None);
+    assert_eq!(h.app.session.catalog.photo(PhotoId(2)).unwrap().label, None);
+}
+
+#[test]
+fn label_keys_use_the_active_photo_when_the_selection_ids_are_empty() {
+    use lightcraft_catalog::PhotoId;
+    let mut h = library();
+    h.app.run("photo.label", json!({"ids": [1], "label": "red"})).unwrap();
+    h.app.session.execute("library.select", &json!({"ids": [], "active": 1})).unwrap();
+    key(&mut h, "6", false);
+    assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().label, None);
+}
+
+#[test]
+fn shift_label_shortcut_toggles_off_and_still_advances() {
+    use lightcraft_catalog::PhotoId;
+    let mut h = library();
+    h.app.run("photo.label", json!({"ids": [1], "label": "red"})).unwrap();
+    key(&mut h, "6", true);
+    assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().label, None);
+    assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+}
+
+#[test]
+fn repeated_label_key_event_does_not_toggle_again() {
+    for (modifiers, shortcut_modifiers) in [(Modifiers::NONE, Modifiers::NONE), (Modifiers::SHIFT, Modifiers::SHIFT)] {
+        let mut view = crate::headless::HeadlessView::new();
+        for (repeat, expected) in [(false, true), (true, false)] {
+            let event = egui::Event::Key { key: Key::Num6, physical_key: Some(Key::Num6), pressed: true, repeat, modifiers };
+            let mut matched = false;
+            let mut observed_repeat = None;
+            let raw = crate::headless::HeadlessView::raw_input(egui::vec2(100.0, 100.0), 1.0, 0.0, vec![event]);
+            view.run(raw, |ui| {
+                ui.input(|input| {
+                    observed_repeat = input.events.iter().find_map(|event| match event {
+                        egui::Event::Key { key: Key::Num6, repeat, .. } => Some(*repeat),
+                        _ => None,
+                    });
+                    matched = matches_without_repeat(input, shortcut_modifiers, Key::Num6);
+                });
+            });
+            assert_eq!(observed_repeat, Some(repeat));
+            assert_eq!(matched, expected, "repeat={repeat}, modifiers={modifiers:?}");
+        }
+    }
+}
+
+#[test]
 fn plain_culling_keys_auto_advance_once() {
     use lightcraft_catalog::PhotoId;
     for k in ["0", "5", "6", "9", "P", "X", "U"] {
@@ -518,7 +573,7 @@ fn no_conflicting_bindings() {
         }
     }
     for (sc, id, _) in ALIASES {
-        ui.push((parse(sc).unwrap(), format!("alias {id}")));
+        ui.push((parse(sc).unwrap(), id.to_string()));
     }
     let mut engine: Vec<((Modifiers, Key), &str)> = Vec::new();
     for c in lightcraft_engine::command_specs() {
@@ -533,7 +588,7 @@ fn no_conflicting_bindings() {
     for (i, (k, a)) in ui.iter().enumerate() {
         for (k2, b) in &ui[i + 1..] {
             let contextual = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
-            assert!(k != k2 || contextual, "{a} and {b} share a key");
+            assert!(k != k2 || contextual || a == b, "{a} and {b} share a key");
         }
     }
     for (i, (k, a)) in engine.iter().enumerate() {
