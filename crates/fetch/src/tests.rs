@@ -86,6 +86,9 @@ fn handle(mut s: TcpStream, hits: &AtomicUsize) {
             b.extend_from_slice(&[7u8; 5000]);
             send(&mut s, "200 OK", "", &b)
         }
+        "signedchunk" => {
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n+5\r\nhello\r\n0\r\n\r\n");
+        }
         "chunked" => {
             let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
             for c in body.chunks(70_001) {
@@ -250,6 +253,16 @@ fn a_416_or_a_bad_complete_part_starts_over() {
 }
 
 #[test]
+fn signed_chunk_size_is_rejected() {
+    let srv = server();
+    let dir = tmp("signedchunk");
+    let f = FileSpec { name: "vocab.json", size: None, sha256: None, max: 1 << 20 };
+    let r = run(&[f], &[format!("{}/signedchunk", srv.base)], &dir, &AtomicBool::new(false)).0;
+    assert!(r.is_err(), "a chunk size of `+5` was accepted");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn chunked_bodies_and_unpinned_files() {
     let srv = server();
     let dir = tmp("chunked");
@@ -335,6 +348,10 @@ fn content_ranges() {
     assert_eq!(parse_content_range("bytes 0-0/*"), Some((0, None)));
     assert_eq!(parse_content_range("bytes 9-1/300"), None);
     assert_eq!(parse_content_range("items 1-2/3"), None);
+    assert_eq!(parse_content_range("bytes +100-+299/+300"), None);
+    assert_eq!(parse_content_range("bytes 100-+299/300"), None);
+    assert_eq!(parse_content_range("bytes 100-299/+300"), None);
+    assert_eq!(parse_content_range("bytes 1-/3"), None);
 }
 
 /// A bearer token goes only to https, only to the host the download began at, and only when there is one.
