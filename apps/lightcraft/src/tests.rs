@@ -474,12 +474,15 @@ fn ui_json_is_written_atomically() {
 #[test]
 fn the_window_opens_as_it_was() {
     use lightcraft_ui_egui::window_place::{DEFAULT_SIZE, WindowPlace};
-    let fresh = as_remembered(egui::ViewportBuilder::default(), None);
+    let fresh = as_remembered(egui::ViewportBuilder::default(), None, false);
     assert_eq!((fresh.inner_size, fresh.position, fresh.maximized), (Some(egui::Vec2::from(DEFAULT_SIZE)), None, None));
-    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }));
+    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }), false);
     assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, Some(true)));
+    // Windows: built at its size, maximized once it shows
+    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }), true);
+    assert_eq!((b.inner_size, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None));
     // (not asked to un-zoom: macOS would then resize a window that fills its screen)
-    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
+    let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }), false);
     assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, None));
 }
 

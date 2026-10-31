@@ -592,3 +592,91 @@ fn what_was_remembered_is_checked_and_never_costs_the_other_settings() {
         assert_eq!(place(size, false).checked(), None, "{size:?}");
     }
 }
+
+/// On Windows the window opens at its size and is maximized once it shows; a
+/// window that says it is maximized but covers half its screen is restored and maximized again,
+/// once; a window remembered larger than its screen is fitted to it.
+#[test]
+fn the_window_is_maximized_once_it_shows_and_again_if_it_only_says_so() {
+    use egui::ViewportCommand as C;
+    let mut s = StartPlace::new(true);
+    assert!(s.step(&Seen::default(), 0.0, 1.0).is_empty(), "not shown yet");
+    assert!(s.step(&window([1300.0, 800.0]), 0.0, 1.0).is_empty(), "a frame first");
+    assert_eq!(s.step(&window([1300.0, 800.0]), 0.2, 1.0), vec![C::Maximized(true)]);
+    assert!(s.step(&window([1300.0, 800.0]), 0.3, 1.0).is_empty(), "the system animates");
+    // maximized in name, half the screen: once more
+    let half = Seen { zoomed: true, ..window([1280.0, 1400.0]) };
+    assert_eq!(s.step(&half, 1.0, 1.0), vec![C::Maximized(false), C::Maximized(true)]);
+    let full = Seen { zoomed: true, ..window([2560.0, 1392.0]) };
+    assert!(s.step(&full, 1.2, 1.0).is_empty());
+    assert!(s.step(&full, 1.7, 1.0).is_empty() && s.done());
+    assert_eq!(s.waits(), None);
+    // it filled its screen the first time: nothing more
+    let mut s = StartPlace::new(true);
+    s.step(&window([1300.0, 800.0]), 0.0, 1.0);
+    s.step(&window([1300.0, 800.0]), 0.2, 1.0);
+    assert!(s.step(&full, 1.0, 1.0).is_empty() && s.done());
+    // never more than one retry
+    let mut s = StartPlace::new(true);
+    s.step(&window([1300.0, 800.0]), 0.0, 1.0);
+    s.step(&window([1300.0, 800.0]), 0.2, 1.0);
+    assert_eq!(s.step(&half, 1.0, 1.0).len(), 2);
+    assert!(s.step(&half, 2.0, 1.0).is_empty() && s.done());
+    // not to be maximized: a window larger than its screen is fitted to it
+    let mut s = StartPlace::new(false);
+    let big = Seen { size: Some([3000.0, 2000.0]), screen: Some([1920.0, 1080.0]), ..Default::default() };
+    assert_eq!(s.step(&big, 0.0, 1.0), vec![C::InnerSize(egui::vec2(1728.0, 972.0))]);
+    assert!(s.done() && s.step(&big, 1.0, 1.0).is_empty());
+    let mut s = StartPlace::new(false);
+    assert!(s.step(&window([1300.0, 800.0]), 0.0, 1.0).is_empty() && s.done());
+    // full screen or minimized: left alone
+    let mut s = StartPlace::new(true);
+    assert!(s.step(&Seen { full_screen: true, ..window([2560.0, 1440.0]) }, 1.0, 1.0).is_empty());
+    // ... but not for ever: it stops asking for frames
+    assert!(s.step(&Seen { full_screen: true, ..window([2560.0, 1440.0]) }, 6.5, 1.0).is_empty());
+    assert!(s.done() && s.waits().is_none());
+    // a window that never says its size or screen is given up on too
+    let mut s = StartPlace::new(true);
+    assert!(s.step(&Seen::default(), 0.0, 1.0).is_empty());
+    assert!(s.step(&Seen::default(), 5.5, 1.0).is_empty() && s.done());
+    // the interface zoomed 2×: the fitted size is asked for in its points, half the system's
+    let mut s = StartPlace::new(false);
+    assert_eq!(s.step(&big, 0.0, 2.0), vec![C::InnerSize(egui::vec2(864.0, 486.0))]);
+}
+
+/// A screen smaller than the window's minimum (800 × 600 beside a 900 pt minimum): the window is fitted within it
+/// and the minimum is lowered to it, so it never asks for more than the screen (CodeRabbit on #2974).
+#[test]
+fn a_window_on_a_screen_smaller_than_its_minimum_fits_within_the_screen() {
+    use egui::ViewportCommand as C;
+    let mut s = StartPlace::new(false);
+    let small = Seen { size: Some([900.0, 560.0]), screen: Some([800.0, 600.0]), ..Default::default() };
+    assert_eq!(s.step(&small, 0.0, 1.0), vec![C::MinInnerSize(egui::vec2(800.0, 560.0)), C::InnerSize(egui::vec2(800.0, 560.0))]);
+    // remembered maximized on that screen: the minimum is lowered before it is maximized, or it would stay wider
+    let mut s = StartPlace::new(true);
+    s.step(&small, 0.0, 1.0);
+    assert_eq!(s.step(&small, 0.2, 2.0), vec![C::MinInnerSize(egui::vec2(400.0, 280.0)), C::Maximized(true)]);
+    // a screen the minimum fits on keeps the minimum
+    let mut s = StartPlace::new(true);
+    s.step(&window([1300.0, 800.0]), 0.0, 1.0);
+    assert_eq!(s.step(&window([1300.0, 800.0]), 0.2, 1.0), vec![C::Maximized(true)]);
+    let mut s = StartPlace::new(false);
+    let big = Seen { size: Some([3000.0, 2000.0]), screen: Some([1920.0, 1080.0]), ..Default::default() };
+    assert_eq!(s.step(&big, 0.0, 1.0), vec![C::InnerSize(egui::vec2(1728.0, 972.0))]);
+}
+
+/// eframe clamps a remembered 1600 × 1000 window to a 1280 × 720 screen before it is first seen: the remembered
+/// size still has it fitted to 90 % of the screen, not left covering all of it (CodeRabbit on #2974).
+#[test]
+fn a_window_clamped_to_its_screen_before_it_shows_is_still_fitted() {
+    use egui::ViewportCommand as C;
+    let clamped = Seen { size: Some([1280.0, 720.0]), screen: Some([1280.0, 720.0]), ..Default::default() };
+    let mut s = StartPlace::new(false).remembered(Some([1600.0, 1000.0]));
+    assert_eq!(s.step(&clamped, 0.0, 1.0), vec![C::InnerSize(egui::vec2(1152.0, 648.0))]);
+    // remembered within the screen: left as it is
+    let mut s = StartPlace::new(false).remembered(Some([1200.0, 700.0]));
+    assert!(s.step(&clamped, 0.0, 1.0).is_empty() && s.done());
+    // nothing remembered: as before
+    let mut s = StartPlace::new(false);
+    assert!(s.step(&clamped, 0.0, 1.0).is_empty());
+}

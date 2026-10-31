@@ -318,5 +318,142 @@ impl WindowWatch {
     }
 }
 
+/// How long after the window first shows it is maximized (Windows): a frame or two, so that it is on
+/// its screen and the system maximizes it to that screen's work area.
+const MAXIMIZE_AFTER_SECONDS: f64 = 0.1;
+/// How long after asking the window is checked: the system animates a maximize.
+const MAXIMIZE_CHECK_SECONDS: f64 = 0.6;
+/// A maximized window this much of its screen across, and down, fills it (the taskbar, and the
+/// borders Windows keeps off screen, take the rest).
+const MAXIMIZED_ACROSS: f32 = 0.9;
+const MAXIMIZED_DOWN: f32 = 0.75;
+/// `zoom` when it is a usable interface zoom, else 1.
+fn interface_zoom(zoom: f32) -> f32 {
+    if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 }
+}
+
+/// On a `screen` (system points) smaller than [`MIN_SIZE`]: the command that lowers the window's minimum to the
+/// screen, in the interface's points (`zoom`). Nothing on a screen the minimum fits on.
+fn min_within(screen: [f32; 2], zoom: f32) -> Vec<egui::ViewportCommand> {
+    if screen[0] < MIN_SIZE[0] || screen[1] < MIN_SIZE[1] {
+        let min = [MIN_SIZE[0].min(screen[0]), MIN_SIZE[1].min(screen[1])];
+        return vec![egui::ViewportCommand::MinInnerSize(egui::vec2(min[0] / zoom, min[1] / zoom))];
+    }
+    Vec::new()
+}
+
+/// A window opened larger than its screen is fitted to this much of it.
+const FIT_TO_SCREEN: f32 = 0.9;
+/// How long after its first frame the window is placed at most: one that stays unseen, full
+/// screen or minimized that long is left as it is.
+const PLACE_WITHIN_SECONDS: f64 = 5.0;
+
+/// The window as it first shows. On Windows a window built maximized could open
+/// covering half the screen while the system took it for maximized: its maximize button then
+/// restored it, smaller. So there it opens at its remembered size and is maximized once it is on its
+/// screen ([`StartPlace::new`] with `maximize_after`); if it then says it is maximized but doesn't
+/// fill its screen, it is restored and maximized again, once. A window remembered larger than the
+/// screen it opens on (a display unplugged, a smaller one, another scale) is fitted to that screen.
+#[derive(Debug)]
+pub struct StartPlace {
+    /// Maximize once the window shows.
+    maximize: bool,
+    /// When it was asked to (seconds), and whether it has been asked again.
+    asked: Option<f64>,
+    retried: bool,
+    /// When the window first showed, and when it was first looked at.
+    shown: Option<f64>,
+    first_step: Option<f64>,
+    done: bool,
+    /// The size it was remembered at (system points), before the system or eframe fitted it to its screen.
+    remembered: Option<[f32; 2]>,
+}
+
+impl StartPlace {
+    /// `maximize_after`: the window was built at its size and should be maximized once it shows.
+    pub fn new(maximize_after: bool) -> StartPlace {
+        StartPlace { maximize: maximize_after, asked: None, retried: false, shown: None, first_step: None, done: false, remembered: None }
+    }
+
+    /// The size the window was remembered at and built with (`size`, system points): a window remembered larger
+    /// than its screen is fitted to it even when it was clamped to the whole screen before it was first seen
+    /// (eframe clamps a remembered 1600 × 1000 to a 1280 × 720 screen).
+    pub fn remembered(mut self, size: Option<[f32; 2]>) -> StartPlace {
+        self.remembered = size.filter(|s| s.iter().all(|v| v.is_finite()));
+        self
+    }
+
+    /// Whether there is nothing more to do.
+    pub fn done(&self) -> bool {
+        self.done
+    }
+
+    /// The window is `seen` at time `now` (seconds), with the interface zoomed by `zoom`: what to
+    /// tell it.
+    pub fn step(&mut self, seen: &Seen, now: f64, zoom: f32) -> Vec<egui::ViewportCommand> {
+        if self.done {
+            return Vec::new();
+        }
+        // (not shown yet, its screen unknown, full screen or minimized: wait, but not for ever)
+        let first = *self.first_step.get_or_insert(now);
+        if now - first > PLACE_WITHIN_SECONDS {
+            self.done = true;
+            return Vec::new();
+        }
+        if seen.full_screen || seen.minimized {
+            return Vec::new();
+        }
+        let (Some(size), Some(screen)) = (seen.size, seen.screen) else { return Vec::new() };
+        let shown = *self.shown.get_or_insert(now);
+        if !self.maximize {
+            self.done = true;
+            // remembered larger than this screen: fitted to it, and never larger than it (a screen smaller than
+            // the window's minimum lowers the minimum to the screen)
+            let larger = |s: [f32; 2]| s[0] > screen[0] + SAME_WITHIN || s[1] > screen[1] + SAME_WITHIN;
+            if !seen.zoomed && (larger(size) || self.remembered.is_some_and(larger)) {
+                let side = |i: usize| (screen[i] * FIT_TO_SCREEN).max(MIN_SIZE[i]).min(screen[i]);
+                let fit = [side(0), side(1)];
+                // (`seen` is in the system's points, the commands in the interface's)
+                let zoom = interface_zoom(zoom);
+                let mut told = min_within(screen, zoom);
+                told.push(egui::ViewportCommand::InnerSize(egui::vec2(fit[0] / zoom, fit[1] / zoom)));
+                return told;
+            }
+            return Vec::new();
+        }
+        let fills = size[0] >= screen[0] * MAXIMIZED_ACROSS && size[1] >= screen[1] * MAXIMIZED_DOWN;
+        match self.asked {
+            None if now - shown >= MAXIMIZE_AFTER_SECONDS => {
+                self.asked = Some(now);
+                // a screen smaller than the window's minimum lowers it first, or the maximized window would stay wider
+                let mut told = min_within(screen, interface_zoom(zoom));
+                told.push(egui::ViewportCommand::Maximized(true));
+                told
+            }
+            None => Vec::new(),
+            Some(at) if now - at < MAXIMIZE_CHECK_SECONDS => Vec::new(),
+            Some(_) if seen.zoomed && fills => {
+                self.done = true;
+                Vec::new()
+            }
+            Some(_) if !self.retried => {
+                // maximized in name only (or not at all): restore it, and maximize it again
+                self.retried = true;
+                self.asked = Some(now);
+                vec![egui::ViewportCommand::Maximized(false), egui::ViewportCommand::Maximized(true)]
+            }
+            Some(_) => {
+                self.done = true;
+                Vec::new()
+            }
+        }
+    }
+
+    /// When to look again while it waits (the app may have nothing else to draw).
+    pub fn waits(&self) -> Option<std::time::Duration> {
+        (!self.done).then(|| std::time::Duration::from_millis(100))
+    }
+}
+
 #[cfg(test)]
 mod tests;
