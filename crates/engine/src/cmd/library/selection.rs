@@ -189,6 +189,7 @@ pub(super) fn rotate(s: &mut Session, p: &Value, cw: bool) -> Result<Value> {
             let turn = lightcraft_geom::Orientation::Normal.rotated(cw);
             d.crop.geometry.rect = turn.map_norm_rect(d.crop.geometry.rect);
             d.crop.aspect = d.crop.aspect.map(|(w, h)| (h, w));
+            d.geometry.upright_transform = d.geometry.upright_transform.map(|h| lightcraft_pipeline::upright::turned(&h, turn));
             ops.extend(s.develop_op(id, d, "Rotate"));
         }
     }

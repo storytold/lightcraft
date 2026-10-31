@@ -80,6 +80,7 @@ pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
 pub mod text;
+pub mod upright_transfer;
 mod view;
 pub mod walk;
 
@@ -296,6 +297,9 @@ pub struct Session {
     pub(crate) focus_scan: focus_scan::FocusScan,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
+    /// The photo the clipboard was copied from (an Upright correction moves only between entries of
+    /// the same file: [`crate::upright_transfer`]).
+    pub clipboard_source: Option<crate::upright_transfer::UprightSource>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -382,6 +386,7 @@ pub struct Session {
     /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
     /// (see [`Session::take_folder_changes`]).
     pub folder_changes: Option<sync::FolderChanges>,
+    pub(crate) sync_frames: sync::FrameProbes,
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
@@ -483,6 +488,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
             clipboard: None,
+            clipboard_source: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,
@@ -523,6 +529,7 @@ impl Session {
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
+            sync_frames: Default::default(),
             activity: Default::default(),
             preview_build: None,
             slideshow_export: None,
@@ -1008,16 +1015,37 @@ impl Session {
                 return Vec::new();
             }
         }
+        // an Upright correction moves only between entries of the same file
+        let source = self.catalog.photo(id).map(|p| crate::upright_transfer::source_of(p, new, &self.library_identity));
         self.selection
             .ids
             .iter()
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                let synced = match self.catalog.photo(x) {
+                    Some(p) => crate::upright_transfer::transferred(p, &d, &delta, source.as_ref()),
+                    None => lightcraft_develop::apply_partial(&d, &delta, 1.0),
+                };
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
+    }
+
+    /// What `preset` at `amount` makes of photo `id`'s settings, as Apply Preset stores it (its
+    /// Upright correction settled: [`crate::upright_transfer::apply_preset`]); for previews too.
+    pub fn preset_look(&self, id: PhotoId, preset: &lightcraft_develop::Preset, amount: f64) -> Option<DevelopSettings> {
+        let p = self.catalog.photo(id)?;
+        let info = self.source_info(id);
+        let prepared = crate::cmd::prepare_photo_for_wb_partial(&p.develop, &preset.settings, &info);
+        let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+        let base = prepared.as_ref().unwrap_or(&p.develop);
+        let mut after = crate::upright_transfer::apply_preset(p, base, preset, amount);
+        if on_kelvin_scale {
+            lightcraft_pipeline::local::normalize_wb(&mut after, &info);
+        }
+        Some(after)
     }
 
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
@@ -1373,3 +1401,6 @@ mod tests;
 use tests::face_recognize as tests_face_recognize;
 #[cfg(test)]
 use tests::xmp as tests_xmp;
+
+#[cfg(test)]
+mod tests_upright;

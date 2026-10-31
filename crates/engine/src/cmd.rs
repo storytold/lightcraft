@@ -43,6 +43,8 @@ mod slideshow;
 mod sync;
 mod xmp;
 
+pub(crate) use develop::prepare_photo_for_wb_partial;
+
 use serde::Serialize;
 use serde_json::Value;
 

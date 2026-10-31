@@ -616,3 +616,36 @@ fn the_analysis_cache_tells_lenses_and_optics_apart() {
     assert!(!off.section_enabled("optics"));
     assert_ne!(key(&src, &plain, &s), key(&src, &plain, &off), "the optics section off");
 }
+
+/// Rotate Right on a photo with a stored Upright correction: the corrected scene turns with the
+/// photo (every source point lands where the turned frame puts it), from every orientation.
+#[test]
+fn a_turned_upright_correction_moves_with_the_photo() {
+    use lightcraft_develop::Upright;
+    use lightcraft_geom::{Homography, Orientation};
+    let (sw, sh) = (600usize, 400usize);
+    let h = Homography([1.02, -0.013, -0.006, 0.026, 1.021, -0.025, -0.004, -0.03, 1.0]);
+    for e in 1..=8 {
+        let o1 = Orientation::from_exif(e);
+        let o2 = o1.rotated(true);
+        let settings = |o: Orientation, t: Homography| {
+            let mut s = DevelopSettings { orientation: o, ..Default::default() };
+            s.geometry.upright = Upright::Auto;
+            s.geometry.upright_transform = Some(t);
+            s
+        };
+        let f1 = crate::geometry::Frame::new(sw, sh, &settings(o1, h), false);
+        let f2 = crate::geometry::Frame::new(sw, sh, &settings(o2, crate::upright::turned(&h, Orientation::Rotate90)), false);
+        let (w1, w2) = (f1.warp.as_ref().unwrap(), f2.warp.as_ref().unwrap());
+        for (x, y) in [(10.0, 20.0), (300.0, 200.0), (590.0, 15.0), (45.0, 390.0)] {
+            let at = |o: Orientation| {
+                let (u, v) = o.map(x, y, sw as f64, sh as f64);
+                Point::new(u, v)
+            };
+            let t1 = w1.from_corrected(at(o1));
+            let (u, v) = Orientation::Rotate90.map(t1.x, t1.y, f1.ow, f1.oh);
+            let t2 = w2.from_corrected(at(o2));
+            assert!(t2.dist(Point::new(u, v)) < 1e-6, "{o1:?}: {t2:?} vs ({u}, {v})");
+        }
+    }
+}

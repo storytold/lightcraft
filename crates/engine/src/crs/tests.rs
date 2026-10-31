@@ -79,7 +79,7 @@ fn assert_common_detail_fields(s: &DevelopSettings) {
 }
 
 fn assert_common_geometry_fields(s: &DevelopSettings) {
-    assert_eq!(s.geometry.upright, Upright::Level);
+    assert_eq!(s.geometry.upright, Upright::Full);
     assert_eq!(s.geometry.vertical, -10.0);
     assert!(s.optics.remove_ca);
     assert_eq!(s.treatment, lightcraft_develop::Treatment::Color);

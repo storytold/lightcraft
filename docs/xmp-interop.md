@@ -41,8 +41,8 @@ remains available in the raw property map, and does not prevent the next valid c
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 
 When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
-report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
-unmapped adjustments; they do not change the source packet or become catalog edits.
+report. Warnings identify unsupported profile names, saved Upright geometry that can't be kept and will be recalculated,
+and other unmapped adjustments; they do not change the source packet or become catalog edits.
 
 Manual rereading and undo leave the JPEG original unchanged. Manual rereading also leaves sidecar files unchanged,
 even with automatic XMP writing on. With automatic XMP writing off (the default), undo/redo leave sidecars unchanged;
@@ -178,12 +178,91 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
-| `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
-| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
+| `PerspectiveUpright` | `geometry.upright`, `geometry.upright_transform` | 0 off, 1 auto, 2 full, 3 level, 4 vertical, 5 guided; Lightroom's saved correction for the selected mode is kept as it is when it can be (see *Saved Upright geometry*), otherwise LightCraft works the mode out itself (Guided needs guides drawn in LightCraft: Lightroom's aren't read) and photo import says so |
+| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | Lightroom's edges are on the stored image (before its orientation) and its straighten angle turns the other way: both go into the frame the photo is shown in (through the file's orientation and the photo's Rotate Left / Right), as the Lightroom catalog import does; the current file supplies the frame on import and Read Metadata from File, and Synchronize Folder reuses a probe only while the source size and modification time match; preview-only raws use the embedded preview decoder's orientation; when the frame cannot be known, fresh imports and existing photos keep their current crop and the report names the skipped crop; catalog XMP and develop rows use the catalog's orientation and stored dimensions followed by the photo's Rotate Left / Right, even without a usable develop row for XMP; `HasCrop="False"` → no crop |
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
+Synchronize Folder probes sidecar geometry without hashing the source. Supported raw layouts read only
+header ranges; layouts whose dimensions depend on samples and other image formats retain a whole-file
+fallback. The session reuses a frame while the source size and modification time match.
+
+After an explicit synchronize reports a held crop, the same crop is not reported again in that session
+unless its coordinates or source change. Other metadata in the packet is still compared. Reopening the
+library reports a held crop again.
+
+Read Metadata from File refreshes changed source content and its cached pixels through the normal
+reload operations, including virtual copies, as part of the same undo step.
+
 `crs:CameraProfile` is kept as the selected name in the photo's import warning and the active profile is left as it is: the name carries no rendering data and never selects an Adobe profile. Import reports such a profile as not applied (colours may differ from Lightroom), except Lightroom's default profiles (`Adobe Standard`, `Adobe Color`), which every sidecar names and which LightCraft's own starting look stands in for.
+
+### Saved Upright geometry
+
+Lightroom saves its Upright analysis with the edit: `UprightVersion`, `UprightTransformCount` (6) and one 3 × 3
+matrix per mode, `UprightTransform_0` to `_5`, numbered like `PerspectiveUpright` (0 Off and 5 Guided hold the
+identity: Guided is solved from the guides when they are drawn). LightCraft keeps the selected mode's matrix, so the
+photo is framed as in Lightroom instead of being analysed again, when
+
+- the mode is Auto, Full, Level or Vertical;
+- `UprightVersion` is `151388160` (the only version seen so far; any other is solved again);
+- `UprightTransformCount` includes the mode's matrix, and the matrix is nine finite numbers that make a sensible
+  correction (no part of the photo at or beyond the horizon, no mirror, no collapse);
+- the file's orientation can be read from the file, as it is now: on import, Read Metadata from File and
+  Synchronize Folder (Lightroom catalog import doesn't read saved Upright yet: see
+  [lightroom-catalog-import.md](lightroom-catalog-import.md));
+- the crop has no straighten angle (a straightened crop on top of a saved Upright isn't measured yet).
+
+The matrix's convention was measured on Lightroom's exports, not assumed (issue #205): a forward homography (photo
+before correction to photo after it, column vectors) in coordinates normalised to the stored image (x / width,
+y / height, origin top left, y down, before the EXIF orientation), applied before the crop, with Lightroom's scale
+to fill the frame already in it. LightCraft turns it with the file's orientation into its own frame
+(`geometry.upright_transform`, centred coordinates of the oriented image, the photo's own Rotate Left / Right
+included) and applies the crop on top, as Lightroom does. Rotate Left / Right later turns the kept correction with
+the photo, as it does LightCraft's own Upright.
+
+On three public NEF raws exported by Lightroom Classic 12 with Upright Auto (one shown in portrait, one cropped
+with Constrain Crop on), LightCraft's geometry with the kept matrix matches the exports to about half a pixel on
+average and under a pixel at worst, at full size; without it, the frames differ by 22 to 36 px on average.
+
+### An Upright correction is the photo's own
+
+A saved Upright matrix, Lightroom's or the one LightCraft's own Upright found, is the analysis of one image: the
+correction for that scene, in the frame that photo is shown in. So when settings move or change:
+
+- **Paste, Paste from Previous, Sync, Auto Sync** with the Geometry group:
+  - Between a photo and its virtual copies (the same file), the correction moves, turned to each one's Rotate
+    Left / Right.
+  - Between different files, everything in the Geometry group moves except the correction itself: the Upright
+    mode, the Transform sliders, Guided Upright's guides and Constrain Crop. A target whose mode stays the same
+    keeps its own correction; one whose mode changes solves its own. Lightroom community experts report the same
+    for Lightroom's Synchronize and Copy Settings with only Upright Mode checked, which recompute each photo;
+    Adobe's documentation doesn't say, and reports about Auto Sync conflict. Lightroom recomputes even a target
+    whose mode stays the same: LightCraft keeps that target's stored correction, which goes stale if the same Sync
+    changes its lens corrections (choose the Upright mode again then). Lightroom's separate option to copy the
+    computed Upright transforms (identical geometry across brackets) isn't offered.
+  - LightCraft used to copy its own solved correction verbatim to other files, applying one scene's correction to
+    another. That is no longer done.
+- **A crop paste** carries the Rotate Left / Right with it, and the target's own correction turns with it.
+- **Presets** keep the Upright mode, the Transform sliders and the rest of the Geometry group, never a correction. A
+  preset made before this, which still holds one, has it ignored in the same way, on Apply, as an import preset and
+  in the Presets panel's preview.
+- **Rotate Left / Right** turns the correction with the photo.
+- **Settings JSON** (`develop.merge`, MCP `set_develop`, the CLI):
+  - A change of rotation turns the correction the photo keeps, as Rotate does. That holds when the settings are
+    sent back whole: a copy read once and sent again after each change, read before a turn, or with its numbers
+    rounded (to 6 decimals or more) still states the photo's own correction, in whatever frame it was read.
+  - A change of Upright mode drops the correction, to be solved again.
+  - A different correction stated in the JSON is taken as given. One within 1e-5 per element of the photo's own,
+    which makes about the same picture (within 0.2 px at 6000 px), counts as the photo's own.
+  - Settings JSON taken from one photo and sent to another file carries the first photo's correction. To copy edits
+    between photos, use Copy / Paste or Sync, which keep each photo's own.
+
+Not measured yet: the Transform sliders (Vertical, Horizontal, Rotate, Aspect, Scale, X / Y Offset) together with a
+saved Upright (LightCraft applies its own slider mapping on top, as with its own Upright), Level, Vertical and Full
+exports (their matrices have those modes' shapes, but no export of them with its raw was available), photos with
+Lightroom lens profile corrections, and a straightened crop on top of Upright (solved again, with the warning). Guided
+Upright's guides (`UprightFourSegments_*`) aren't read: import says so when the packet's mode is Guided (in other
+modes Lightroom doesn't use them).
 
 **Profiles named by presets (`Look`, issue #1001).** A preset keeps the profile it names (`crs:Look`: `Name`, `Group`,
 `UUID`, `Amount`; in `.lrtemplate` files the `Look` table) as `profile.look` in its settings. When the user has imported
