@@ -792,3 +792,44 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Settings ▸ Performance showed the disk cache's size with `size()` every frame,
+/// which waits for a write in progress (and the first write's walk of the whole folder) and walks the
+/// folder itself when the size is not known yet. `disk_size_now` never waits and never walks the folder
+/// on the caller's thread.
+#[test]
+fn the_disk_caches_size_is_read_without_waiting_for_a_write_or_a_scan() {
+    let dir = temp_dir("size-now");
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    cache.put(hash_bytes(b"one"), Arc::new(gradient(16, 16, 9)));
+    let d = cache.disk().unwrap();
+    let on_disk = d.size();
+    assert!(on_disk > 0);
+    // a writer holds the size's lock (as a write does during its first scan of the folder)
+    let held = cache.clone();
+    let (locked, wait) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let _g = held.disk().unwrap().total.lock().unwrap();
+        locked.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    });
+    wait.recv().unwrap();
+    let t = std::time::Instant::now();
+    assert_eq!(d.known_size(), Some(on_disk));
+    assert_eq!(cache.disk_size_now(), Some(on_disk));
+    let took = t.elapsed();
+    writer.join().unwrap();
+    assert!(took < std::time::Duration::from_millis(400), "the size waited {took:?} for the write");
+
+    // not known yet (a cache opened on a full folder): counted on a thread of its own
+    let reopened = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    assert_eq!(reopened.disk().unwrap().known_size(), None);
+    assert_eq!(reopened.disk_size_now(), None, "not counted on this thread");
+    let t = std::time::Instant::now();
+    while reopened.disk_size_now().is_none() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "counted in the background");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(reopened.disk_size_now(), Some(on_disk));
+    let _ = std::fs::remove_dir_all(&dir);
+}

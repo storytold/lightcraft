@@ -58,12 +58,20 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             let _ = app.run("library.preferences", json!({"cacheMb": v}));
         }
     });
-    let used = app.session.media.rendered.disk().map(|d| d.size());
+    // (never counted here: the first count walks the whole folder, on a thread of its own, and a
+    // write in progress holds the size; this dialog draws it every frame)
+    let rendered = &app.session.media.rendered;
+    let used = rendered.disk().map(|_| rendered.disk_size_now());
+    if matches!(used, Some(None)) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
     row(ui, t, crate::i18n::tr("In use"), |ui| {
-        ui.label(
-            RichText::new(used.map(|b| format!("{:.1} MB", b as f64 / 1048576.0)).unwrap_or_else(|| crate::i18n::tr("memory only").to_string()))
-                .color(t.text),
-        );
+        let text = match used {
+            Some(Some(b)) => format!("{:.1} MB", b as f64 / 1048576.0),
+            Some(None) => crate::i18n::tr("counting…").to_string(),
+            None => crate::i18n::tr("memory only").to_string(),
+        };
+        ui.label(RichText::new(text).color(t.text));
         let r = ui.button(crate::i18n::tr("Clear Cache"));
         register(ui, "button:settingsClearCache", r.rect);
         if r.clicked() {

@@ -85,6 +85,38 @@ impl PreviewCache {
         self.disk.as_ref()
     }
 
+    /// The disk cache's bytes, for the interface: never waits. `None` while they are not known yet
+    /// (without a disk cache too); the first call then counts them on a thread of its own (a walk of
+    /// the whole folder, which Settings ▸ Performance did on the interface's thread every frame).
+    pub fn disk_size_now(self: &Arc<Self>) -> Option<u64> {
+        let d = self.disk.as_ref()?;
+        if let Some(b) = d.known_size() {
+            return Some(b);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some(d.size())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !d.sizing.swap(true, Ordering::AcqRel) {
+                let cache = Arc::downgrade(self);
+                let spawned = std::thread::Builder::new().name("lc-preview-size".into()).spawn(move || {
+                    if let Some(me) = cache.upgrade()
+                        && let Some(d) = &me.disk
+                    {
+                        d.size();
+                        d.sizing.store(false, Ordering::Release);
+                    }
+                });
+                if spawned.is_err() {
+                    d.sizing.store(false, Ordering::Release);
+                }
+            }
+            None
+        }
+    }
+
     pub fn get(&self, key: Hash128) -> Option<Arc<Rgba8>> {
         self.get_at(self.generation(), key)
     }

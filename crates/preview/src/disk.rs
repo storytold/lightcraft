@@ -71,8 +71,14 @@ pub struct DiskCache {
     dir: PathBuf,
     /// Bytes the cache may hold (changed in place by [`DiskCache::set_budget`]).
     budget: AtomicU64,
-    /// Bytes on disk (`None` until first scanned).
-    total: Mutex<Option<u64>>,
+    /// Bytes on disk (`None` until first scanned). Held across the first scan of the folder and each
+    /// file's write: never taken on the interface's thread (it reads [`Self::known`]).
+    pub(crate) total: Mutex<Option<u64>>,
+    /// A copy of `total` that never waits ([`UNKNOWN`] until first scanned): the interface shows
+    /// the cache's size every frame and must not wait for a scan or a write (note 3 of 31 Oct).
+    known: AtomicU64,
+    /// A background scan for [`Self::known`] is running ([`crate::PreviewCache::disk_size_now`]).
+    pub(crate) sizing: std::sync::atomic::AtomicBool,
     pub hits: AtomicU64,
     pub misses: AtomicU64,
     pub writes: AtomicU64,
@@ -86,6 +92,8 @@ impl DiskCache {
             dir: dir.to_path_buf(),
             budget: AtomicU64::new(budget),
             total: Mutex::new(None),
+            known: AtomicU64::new(UNKNOWN),
+            sizing: Default::default(),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             writes: AtomicU64::new(0),
@@ -197,6 +205,7 @@ impl DiskCache {
         }
         self.writes.fetch_add(1, Ordering::Relaxed);
         *used = used.saturating_sub(old_len).saturating_add(bytes.len() as u64);
+        self.known.store(*used, Ordering::Relaxed);
         let over = *used > self.budget();
         drop(total);
         if over {
@@ -306,6 +315,7 @@ impl DiskCache {
     fn forget(&self, bytes: u64) {
         if let Some(total) = self.total.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             *total = total.saturating_sub(bytes);
+            self.known.store(*total, Ordering::Relaxed);
         }
     }
 
@@ -362,12 +372,21 @@ impl DiskCache {
             }
         }
         *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(total);
+        self.known.store(total, Ordering::Relaxed);
     }
 
-    /// Bytes on disk (scans if not yet known).
+    /// Bytes on disk when they are known without a scan. Never waits (a scan or a write in progress
+    /// on another thread): safe on the interface's thread.
+    pub fn known_size(&self) -> Option<u64> {
+        Some(self.known.load(Ordering::Relaxed)).filter(|b| *b != UNKNOWN)
+    }
+
+    /// Bytes on disk (scans if not yet known: a walk of the whole folder, for a background thread).
     pub fn size(&self) -> u64 {
         let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
-        *t.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum())
+        let b = *t.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum());
+        self.known.store(b, Ordering::Relaxed);
+        b
     }
 
     pub fn clear(&self) {
@@ -375,8 +394,12 @@ impl DiskCache {
             let _ = std::fs::remove_file(p);
         }
         *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(0);
+        self.known.store(0, Ordering::Relaxed);
     }
 }
+
+/// [`DiskCache::known`] before the first scan.
+const UNKNOWN: u64 = u64::MAX;
 
 /// Whether `p` is a directory itself, not a symlink or Windows reparse point to one.
 fn is_real_dir(p: &Path) -> bool {

@@ -1770,6 +1770,7 @@
   "longer just says \"duplicate skipped\": it opens the side panel on Recently Deleted with the photo selected and says": "erscheint nicht nur „Duplikat übersprungen“: Der Seitenbereich öffnet sich dort mit ausgewähltem Foto und erklärt,",
   "lost everything at quit; a temporary session shows a banner the whole time and never writes to your library.": "beim Beenden alles verlor. Eine vorübergehende Sitzung zeigt dauerhaft einen Hinweis und schreibt nie in deine Bibliothek.",
   "memory only": "nur im Arbeitsspeicher",
+  "counting…": "wird gezählt…",
   "memory, exceeds the GPU's buffer limits, hits a driver error or reset, or comes back": "überschrittenen Puffergrenzen, Treiberfehler oder Treiberneustart oder unvollständigem Ergebnis",
   "message, and the original is left byte for byte. Ordinary earlier exports are still overwritten when asked.": "Das Original bleibt bytegenau erhalten. Gewöhnliche frühere Exporte können weiterhin auf Wunsch überschrieben werden.",
   "mid-batch: the error lists them (old → new) and the library points at their new names (an undoable partial rename),": "mitten im Stapel. Der Fehler listet die Namen als alt → neu auf, und die Bibliothek verweist auf die neuen Namen. Diese teilweise Umbenennung ist rückgängig machbar,",

@@ -2548,6 +2548,7 @@
   "map); the option is per photo, so presets and Copy Settings carry it.": "რუკა აქვს); პარამეტრი ფოტოს დონისაა, ასე რომ პრესეტები და პარამეტრების კოპირება მას გადაიტანს.",
   "means no (it used to count as yes), and a value that is neither yes nor no is refused.": "ნიშნავს „არას“ (ადრე „დიახად“ ითვლებოდა), ხოლო მნიშვნელობა, რომელიც არც დიახია და არც არა, უარყოფილია.",
   "memory only": "მხოლოდ მეხსიერებაში",
+  "counting…": "ითვლება…",
   "memory, exceeds the GPU's buffer limits, hits a driver error or reset, or comes back": "მეხსიერება, აჭარბებს GPU-ის ბუფერის ლიმიტებს, დრაივერის შეცდომას ან გადატვირთვას აწყდება, ან აბრუნებს",
   "menu, and Return in the painter's box starts painting.": "მენიუ, ხოლო Return ფუნჯის ველში მინიჭებას იწყებს.",
   "message box that names the log file, instead of quitting without a trace (issue #260).": "შეტყობინების ფანჯარაში ამბობს, რომელიც ჟურნალის ფაილს ასახელებს, უკვალოდ გასვლის ნაცვლად (ხარვეზი #260).",
