@@ -240,6 +240,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
     }
 
+    /// Review finding on #1169: the fetch reads the open library's photos to skip and opens its
+    /// review there, so the library can't be switched while a camera is read.
+    #[test]
+    fn the_library_stays_while_a_camera_is_read() {
+        let mut h = demo();
+        assert!(crate::panels::settings::can_switch_library(&h.app).is_ok());
+        task(&mut h, "X100T", None);
+        let e = crate::panels::settings::can_switch_library(&h.app).unwrap_err();
+        assert!(e.contains("camera"), "{e}");
+    }
+
     #[test]
     fn an_albums_import_from_device_keeps_the_album() {
         let mut h = demo();
