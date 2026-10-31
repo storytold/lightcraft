@@ -1519,6 +1519,19 @@ mod tests {
                 assert_eq!(decoded.bits, 12, "keep the recorded bit depth");
                 assert_eq!(decoded.black.mean(), 512.0, "peak {peak}, {mode:?}");
                 assert_eq!(decoded.white, vec![16383.0], "peak {peak}, {mode:?}");
+                if matches!(mode, Mode::Full) {
+                    let dng = crate::write_dng(&decoded, &crate::DngWriteOptions::default()).unwrap();
+                    let tiff = Tiff::parse(&dng).unwrap();
+                    let bits = tiff.ifds[0].u32(t::BITS_PER_SAMPLE).unwrap();
+                    let white = tiff.ifds[0].u32(t::WHITE_LEVEL).unwrap();
+                    assert!((2..=16).contains(&bits));
+                    assert!(white < (1u32 << bits), "peak {peak}: {bits} bits cannot represent white {white}");
+                    let back = crate::decode(&dng).unwrap();
+                    assert_eq!(back.white, decoded.white);
+                    assert_eq!(back.black.mean(), decoded.black.mean());
+                    let RawData::U16(back_samples) = back.data else { panic!("integer DNG samples") };
+                    assert_eq!(back_samples, samples);
+                }
             }
         }
     }
