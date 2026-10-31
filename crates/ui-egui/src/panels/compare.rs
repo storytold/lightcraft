@@ -2,7 +2,7 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
@@ -197,6 +197,17 @@ fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
     canvas
 }
 
+/// Ask for the render of a tile (about `want` pixels on its long edge) and for the thumbnail shown meanwhile.
+fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: usize, aspect: f32) {
+    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
+    if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
+        app.renderer.request(slot, job, 60);
+    }
+    if let Some(job) = app.session.thumb_job(id, 256) {
+        app.renderer.request(Slot::Thumb(id), job, 30);
+    }
+}
+
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
 fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
@@ -230,13 +241,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
-    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
-    if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
-        app.renderer.request(slot, job, 60);
-    }
-    if let Some(job) = app.session.thumb_job(id, 256) {
-        app.renderer.request(Slot::Thumb(id), job, 30);
-    }
+    request_tile_renders(app, id, slot, want, aspect);
     // zoomed past what that render holds (1:1 to check focus): the part on screen as a window, as
     // in the loupe. Compare and Reference only; Survey tiles are fit views.
     let pane = match slot {
@@ -281,7 +286,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
-        p.rect_filled(img.intersect(img_area), 0.0, Tokens::get(ui.ctx()).skeleton);
+        p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
@@ -291,7 +296,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     }
     let active = app.session.selection.active == Some(id);
     if active {
-        p.rect_stroke(display.intersect(img_area.shrink(1.0)), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        super::grid::selection_ring(&p, &t, display.intersect(img_area.shrink(3.0)), lightcraft_engine::SelectionState::Active);
     }
     // Compare and Reference are where sharpness is judged: as in the loupe, say when what is on
     // screen isn't the render on its way (a thumbnail, the last render after an edit, a magnified

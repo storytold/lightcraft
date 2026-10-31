@@ -1,5 +1,5 @@
-use super::rows::{INDENT_STEP, row, tree_open, tree_toggle};
-use super::*;
+use super::rows::{INDENT_STEP, Row, tree_open, tree_toggle};
+use super::{Icon, LibrarySource, LightcraftApp, json};
 
 /// By Date: year → month → day; a click filters by that prefix, the triangle opens a level.
 pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -24,9 +24,10 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
     let open_id = egui::Id::unique(("date-open", key.to_string()));
     let mut open = tree_open(ui, open_id, false);
     let sel = app.session.filter.date.as_deref() == Some(key);
-    let resp = row(app, ui, &format!("date:{key}"), Icon::Clock, label, Some(count), sel, indent);
+    let resp = Row::new(&format!("date:{key}"), Icon::Clock, label).count(Some(count)).selected(sel).indent(indent).show(app, ui);
     if key.len() < 10 {
-        tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));
+        // (the name carries the year, so two Marches in different years differ in a screen reader's list of triangles)
+        tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"), &crate::i18n::date_group_label(key, false));
     }
     if resp.clicked() {
         let v = if sel { serde_json::Value::Null } else { json!(key) };

@@ -866,6 +866,15 @@ impl RawImage {
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
         let n = self.normalized()?;
+        // with no `OpcodeList3` to apply to the whole picture first, AHD demosaics just the default crop (the same
+        // pixels, without demosaicing the margin and then copying the crop out of the full picture)
+        if self.opcodes.list3.is_empty() && method == Method::Ahd {
+            let c = self.develop_crop(n.width, n.height);
+            if let Some(rgb) = demosaic::ahd_window(&n, c) {
+                drop(n);
+                return Ok(self.stretched(rgb));
+            }
+        }
         let rgb = demosaic(&n, method);
         drop(n);
         Ok(self.finish_demosaiced(rgb))
@@ -878,6 +887,11 @@ impl RawImage {
         let c = self.develop_crop(rgb.width, rgb.height);
         let rgb =
             if c.x == 0 && c.y == 0 && c.width == rgb.width && c.height == rgb.height { rgb } else { rgb.into_crop(c.x, c.y, c.width, c.height) };
+        self.stretched(rgb)
+    }
+
+    /// The cropped camera RGB with its rows stretched for non-square pixels.
+    fn stretched(&self, rgb: Rgb32f) -> Rgb32f {
         let h = stretched_height(rgb.height, self.pixel_aspect);
         if h == rgb.height {
             return rgb;

@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -53,7 +53,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Hardware | ~50% | ~40% | 40–80 h (+ tethering and printing, counted under Classic modules) | [hardware-parity.md](hardware-parity.md) |
 | Localization (12 key languages) | 8 of 12 present | ~64% (mean of the 12, measured) | 130–210 h for the target's set; +135–239 h for Hindi, Arabic, Vietnamese, Korean | [localization-parity.md](localization-parity.md) |
 | Performance | ~80% | ~70% | 30–50 h | 24 MP GPU slider 3.9 ms, export 0.3 s (measured, [gpu-pipeline.md](gpu-pipeline.md)); 85k library opens in 1.7–4.7 s; 100k test pending |
-| Stability | — | ~60% | 30–60 h | never-crash lints and guards workspace-wide, crash-tested journal, 2,561 tests; but CI runs tests only on FreeBSD, user reports keep finding bugs in ✅ areas |
+| Stability | — | ~60% | 30–60 h | never-crash lints and guards workspace-wide, crash-tested journal, 2,561 tests; but CI runs tests on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly), not on macOS or Windows, user reports keep finding bugs in ✅ areas |
 | Platforms | macOS, Windows (x64 / x86 / ARM64), Linux (AppImage, deb, rpm, Flatpak, Nix), FreeBSD, web | ~60% | 25–45 h | macOS is where it is tested; the Windows x64 installer is verified on Windows 11 (0.9.1) except for a confirmation after uninstalling from Settings → Apps (#892); web experimental (CPU only) |
 | Ecosystem / plug-ins | ~25% | ~15% | 40–80 h + owner decision | no Lightroom SDK equivalent (export, publish, metadata plug-ins); beyond the target: JSON-lines control channel, MCP server with 28 tools + one per command, CLI |
 | AI features | ~30% | ~20% | 120–220 h + model decisions | [AI](#ai) (overlaps the masking and Enhance rows; not added twice) |
@@ -68,7 +68,7 @@ from the checklist sections and the deep-dive documents.
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
 | RAW decoding and camera coverage | 15% | 81% | 77% | 120–220 h | [raw-parity.md](raw-parity.md), measured model by model: 85% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
-| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 5 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
+| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 9 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
 | Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
 | Masking | 8% | 67% | 45% | 60–110 h | checklist K 67.4%; AI masks heuristic or SAM 3 without mirror |
@@ -110,7 +110,7 @@ pure-Rust inference is proven (faces, SAM 3, denoise).
 
 ## Ready for real work, mainstream practitioner and essentials user
 
-Three readiness numbers (craftrules `standards/progress-docs.md`). The full number is a weighted
+Three readiness numbers. The full number is a weighted
 sum over the dimensions with written weights. Mainstream and essentials take the weighted depth of
 the areas their user touches, then apply written multiplicative discounts for what still stops real
 work. Each has its own hours to ~95%, calibrated as in [How hours are calibrated](#how-hours-are-calibrated)
@@ -158,7 +158,7 @@ essentials replaces its guessed 45% raw look with 84% × 0.75 (+1 point).
 | Discount | Mainstream | Essentials | Evidence |
 |---|---:|---:|---|
 | Interaction fidelity / UI clarity | ×0.95 | ×0.95 | brush live preview gaps and feathering (#517, #518); crop artefacts and limits (#731, #742, #770, #771); Compare white-balance selector (#743–#745); low-res slider previews (#330); dialogs taller than the window (#781); mouse-wheel scroll (#714) |
-| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); tests run in CI on Linux x64 and FreeBSD only (gap 9) |
+| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); tests run in CI on Linux x64 and FreeBSD (nightly), not on macOS or Windows (gap 9) |
 | File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, compressed ORF, HE NEF open as previews (#473, #485, #556), HEIC trouble (#693) |
 | **Product** | **×0.804** | **×0.830** | |
 
@@ -222,9 +222,9 @@ basic sliders, crop, apply a preset, undo, export JPEGs.
 ### Why the full number moved (55% → 46% → 59%)
 
 The first figure (~55%) was the feature depth "pulled down" by an unwritten judgement. A later pass
-applied the mainstream discounts to it (~46%). The standard defines the full number as a weighted
-sum over the dimensions, so it is now that sum with the weights written above: ~59%. Method aligned
-with the standard, no new evidence. The stage stays **alpha**.
+applied the mainstream discounts to it (~46%). The full number is a weighted
+sum over the dimensions, so it is now that sum with the weights written above: ~59%. No new
+evidence. The stage stays **alpha**.
 
 ## Stage
 
@@ -242,7 +242,7 @@ variants, compressed ORF, HE NEF as previews) degrade but don't block a workflow
 around them. Beta needs: CR3, ORF and
 HE NEF decoding from sensor data; measured colour for the popular models and a fidelity suite with
 scores; Subject / Sky / People masks; a lens profile database for the
-popular lenses; tests in CI on macOS, Windows and Linux.
+popular lenses; tests in CI on macOS and Windows, and the GPU tests in CI.
 
 ## How hours are calibrated
 
@@ -268,7 +268,7 @@ verification. Calibrated on this repository's history (git log and GitHub PR ope
 The previous estimate (2026-10-02, kept below) was ≈ 270–505 h to full parity. It counted checklist
 rows only. New evidence since: the target's own lists (≈ 1,000 dedicated camera models, 3,635 lens
 profiles, 37 AI models, 16 languages) measured from the installed bundle; per-maker verification
-counts; that CI tests only FreeBSD; and the standard's added dimensions (localization, stability,
+counts; that CI then tested only FreeBSD; and the added dimensions (localization, stability,
 platforms, ecosystem). The raw-codec package it estimated at 40–80 h took roughly that and closed
 most of its list; what remains is the data-heavy part (colour, lenses, models) it did not count.
 
@@ -278,7 +278,7 @@ most of its list; what remains is the data-heavy part (colour, lenses, models) i
 |---|---|---|---|---|
 | 2026-10-12 | 81.1% (unchanged) | ~61% full · ~51% mainstream · ~65% essentials | unchanged | 22 more CR3 bodies verified (raw-parity.md) |
 | 2026-10-10 (RAW) | 81.1% (unchanged) | ~61% full · ~49% mainstream · ~64% essentials | unchanged | RAW measured model by model against Adobe's list; RAW decode and colour as explicit rows |
-| 2026-10-10 (final) | 81.1% (unchanged) | ~59% full (weighted sum) · ~51% mainstream · ~63% essentials | full 1,000–1,800 h · mainstream 450–840 h · essentials 160–300 h | method aligned with the standard |
+| 2026-10-10 (final) | 81.1% (unchanged) | ~59% full (weighted sum) · ~51% mainstream · ~63% essentials | full 1,000–1,800 h · mainstream 450–840 h · essentials 160–300 h | no new evidence |
 | 2026-10-10 (later) | 81.1% (unchanged) | ~46% full · ~51% mainstream · ~63% essentials | 1,000–1,800 h | full × discounts (superseded) |
 | 2026-10-10 | 81.1% / 98.0% / 95.1% / 46.9% (517 rows) | ~55% | 1,000–1,800 h | this re-measure |
 | 2026-10-08 | 79.7% / 98.2% / 95.6% / 41.6% (509 rows) | 60–70% | — | ROADMAP *Where we stand* |
@@ -300,6 +300,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |
 | 2026-10-19 | patch | Platforms: the Windows installer is no longer listed as unverified (the 0.9.1 x64 MSI is tested on Windows 11; a confirmation after uninstalling from Settings → Apps, #892, remains); #790 noted as fixed in 0.9.1; percentages and hours unchanged |
@@ -314,8 +315,8 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |
-| 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; method aligned with the standard, no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |
+| 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |
 | 2026-10-10 | minor | Added mainstream practitioner (~51%) and essentials user (~63%) numbers; full ready re-derived from written weights × discounts (55% → 46%); user-issue evidence; beta hours 340–600 |
 | 2026-10-10 | minor | Stage re-checked against the core-workflow alpha gate: passes, stays alpha |
-| 2026-10-10 | major | Created per the progress-docs standard: full re-measure (checklist recount, installed Lightroom 9.6 bundle listing, code counts, catalogs, CI), feature areas with weights, dimensions, AI, stage, calibration; merged ROADMAP's *Where we stand* and *Parity estimate* |
+| 2026-10-10 | major | Created as progress docs: full re-measure (checklist recount, installed Lightroom 9.6 bundle listing, code counts, catalogs, CI), feature areas with weights, dimensions, AI, stage, calibration; merged ROADMAP's *Where we stand* and *Parity estimate* |
 | 2026-10-14 | minor | RAW: 82% of Adobe's models decode, 36% verified (integration batch 36) |

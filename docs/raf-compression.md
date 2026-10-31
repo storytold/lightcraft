@@ -17,7 +17,7 @@ Fujifilm now uses a guarded colour/tone estimate from each file’s own embedded
 - Signed prediction errors use adaptive Rice coding: a unary prefix followed by a context-dependent number of bits, with a bounded escape for large errors. Three pair phases have separate even/odd statistics. The 81 signed gradient contexts fold into 41 states.
 - Lossy quantizers change the error range and reconstruction step. Low-gradient sites retain finer precision (0, 1 or 2), with five folded contexts per precision and statistics that survive main-quantizer changes. The main context statistics reset when its quantizer changes. Their initial sum is `max(2, (range + 32) / 64)`; using 16 as the minimum breaks more heavily quantized files.
 
-Stripes decode in parallel using the existing Rayon dependency. Offsets, sizes, dimensions and entropy reads are checked; truncated data, impossible codes and inconsistent headers return errors. Unknown container compression modes, disagreements between container and stream modes, and compressed X-Trans layouts other than the supported CFA return errors. Header-only probing validates the tables and stripe ranges without decompressing the image.
+Stripes decode in parallel using the existing Rayon dependency. The entropy reader keeps up to 64 bits buffered and counts a unary prefix's zeros in one step instead of bit by bit; a property test checks it against reading bit by bit, errors included. Offsets, sizes, dimensions and entropy reads are checked; truncated data, impossible codes and inconsistent headers return errors. Unknown container compression modes, disagreements between container and stream modes, and compressed X-Trans layouts other than the supported CFA return errors. Header-only probing validates the tables and stripe ranges without decompressing the image.
 
 ## Verification
 
@@ -36,7 +36,7 @@ The 17 CC0 files live in the gitignored corpus. Their published SHA-256 identiti
 
 Unconditional procedural tests cover Bayer/X-Trans, 12/14/16 bits, partial final stripes, quantizer changes, residual signs and escapes, malformed headers and truncated/random entropy streams. Regressions also check overflowing uncompressed row strides, unsupported modes and CFA layouts, and container/stream mode mismatches.
 
-Local release decode measurements: about 0.16–0.24 seconds for 24–40 MP X-Trans files, 0.29 seconds for 50 MP Bayer, and 0.5–0.6 seconds for 100 MP Bayer. These measure sensor decoding, not the full develop/export pipeline.
+Local release decode measurements: about 0.16–0.24 seconds for 24–40 MP X-Trans files, 0.29 seconds for 50 MP Bayer, and 0.5–0.6 seconds for 100 MP Bayer. These measure sensor decoding, not the full develop/export pipeline. The buffered prefix count took 13–17 % off the decode time on an Apple M2 (8 cores, minimum of 5 runs, old and new build alternated): X-T2 178 → 152 ms, X-S10 lossless 265 → 226 ms, X-E5 442 → 385 ms, X-H2 448 → 378 ms, GFX 50S 522 → 435 ms, GFX 100 762 → 644 ms, with sensor arrays unchanged bit for bit.
 
 App verification imported all four supplied compressed files, confirmed `previewOnly: null`, applied +2 EV exposure edits and inspected headless UI screenshots. CLI JPEG exports at a 1600-pixel long edge succeeded for all four files (0.58–0.76 seconds each, including process startup).
 

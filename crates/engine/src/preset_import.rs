@@ -502,12 +502,16 @@ pub fn group_from_dir(dir: &str) -> Option<String> {
 }
 
 pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: String, group: Option<String>, from_photo: bool) -> Option<Imported> {
-    let (mut settings, unmapped) = crate::crs::to_partial_report(props, Some(values), crate::crs::Target::Any, crate::crs_masks::DEFAULT_ASPECT);
+    let (mut settings, mut unmapped) = crate::crs::to_partial_report(props, Some(values), crate::crs::Target::Any, crate::crs_masks::DEFAULT_ASPECT);
     if from_photo && let Some(o) = settings.as_object_mut() {
         // a photo's own framing and absolute white balance don't belong in a look
         o.remove("crop");
         o.remove("geometry");
-        if o.get("wb").and_then(|w| w.get("mode")).and_then(Value::as_str).is_none_or(|m| m == "custom" || m == "asShot") {
+        let mode = o.get("wb").and_then(|w| w.get("mode")).and_then(Value::as_str);
+        if mode == Some("custom") {
+            unmapped.push("Temperature, Tint (custom white balance of a photo: not kept in a look)".into());
+        }
+        if mode.is_none_or(|m| m == "custom" || m == "asShot") {
             o.remove("wb");
         }
     }
@@ -748,6 +752,23 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(p.name, "Moody");
         assert_eq!(p.settings, json!({"light": {"exposure": 0.5}, "color": {"vibrance": 20.0}}));
         assert!(read_presets("plain.jpg", b"\xff\xd8 no xmp", None).is_err());
+    }
+
+    #[test]
+    fn photo_custom_white_balance_left_out_is_reported() {
+        // issue #2938: a photo's custom Kelvin that the look leaves out is reported
+        let photo = |wb: &str| {
+            let mut file = b"\xff\xd8\xff\xe1 http://ns.adobe.com/xap/1.0/\0".to_vec();
+            file.extend_from_slice(XMP.replace(r#"crs:WhiteBalance="As Shot" crs:Temperature="5600""#, wb).as_bytes());
+            read_presets("/x/repro.jpg", &file, None).unwrap().remove(0)
+        };
+        let custom = photo(r#"crs:WhiteBalance="Custom" crs:Temperature="8000" crs:Tint="+16""#);
+        assert!(custom.unmapped.iter().any(|u| u.starts_with("Temperature, Tint (")), "{:?}", custom.unmapped);
+        // a named white balance stays, unreported; As Shot is no loss
+        let daylight = photo(r#"crs:WhiteBalance="Daylight""#);
+        assert_eq!(daylight.preset.settings["wb"]["mode"], json!("daylight"));
+        assert!(daylight.unmapped.is_empty(), "{:?}", daylight.unmapped);
+        assert!(photo(r#"crs:WhiteBalance="As Shot""#).unmapped.is_empty());
     }
 
     #[test]

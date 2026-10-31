@@ -2,7 +2,7 @@ use super::defaults::apply_import_defaults;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
-use super::*;
+use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
 #[derive(Default)]
@@ -213,7 +213,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 report.imported.push(id.0);
             }
-            PreparedItem::Duplicate { path, existing, reason, hash } => {
+            PreparedItem::Duplicate { path, existing, reason, hash, file } => {
                 let existing = existing.or_else(|| {
                     let h = hash?;
                     new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
@@ -232,7 +232,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                             report.restored.push(id.0);
                         }
                     }
-                    _ => report.duplicates.push(Duplicate { path, existing: existing.map(|i| i.0), reason, existing_deleted: trashed.is_some() }),
+                    _ => {
+                        report.duplicates.push(Duplicate { path, existing: existing.map(|i| i.0), reason, existing_deleted: trashed.is_some(), file })
+                    }
                 }
             }
             PreparedItem::Failed(path, e) => report.failed.push((path, e)),

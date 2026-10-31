@@ -1,5 +1,5 @@
 use super::task::ImportTask;
-use super::*;
+use super::{ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanProgress, Value, json, scan_with};
 
 /// A folder scan running on a worker thread (a network share can take minutes to read; the
 /// window must keep answering meanwhile).
@@ -118,12 +118,9 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
             let mut v: Vec<String> = std::fs::read_dir(&root)
                 .map(|rd| {
                     rd.flatten()
+                        .filter(|e| !lightcraft_engine::walk::is_hidden_entry(e))
                         .map(|e| e.path())
-                        .filter(|f| {
-                            f.is_file()
-                                && lightcraft_engine::import::is_supported(f)
-                                && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
-                        })
+                        .filter(|f| f.is_file() && lightcraft_engine::import::is_supported(f))
                         .map(|f| f.to_string_lossy().to_string())
                         .collect()
                 })
