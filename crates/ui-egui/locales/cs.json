@@ -2438,5 +2438,13 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "AI masks": "AI masky",
+  "Device": "Zařízení",
+  "Last photo": "Poslední fotka",
+  "Remote worker": "Vzdálený proces",
+  "Run on": "Spouštět na",
+  "Automatic (GPU when available)": "Automaticky (GPU, je-li k dispozici)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Masky Objekt a Popsat analyzují každou fotku jednou, na grafické kartě, pokud není zvoleno CPU nebo vypnuto „Použít GPU pro vykreslování“. Na procesoru to trvá mnohem déle.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automaticky spouští model na grafické kartě Macu. Pokud tam AI masky selhávají, zvolte CPU; na procesoru trvají mnohem déle."
 }

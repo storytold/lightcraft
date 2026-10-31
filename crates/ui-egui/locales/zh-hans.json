@@ -2389,5 +2389,13 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "AI masks": "AI 蒙版",
+  "Device": "设备",
+  "Last photo": "上一张照片",
+  "Remote worker": "远程工作进程",
+  "Run on": "运行位置",
+  "Automatic (GPU when available)": "自动（有 GPU 时使用）",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "“对象”和“描述”蒙版对每张照片只分析一次；除非选择了 CPU 或关闭了“使用 GPU 渲染”，否则在显卡上进行。在处理器上分析要慢得多。",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "“自动”会在 Mac 的显卡上运行模型。如果 AI 蒙版在那里失败，请选择 CPU；在处理器上会慢得多。"
 }

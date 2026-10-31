@@ -87,6 +87,59 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     );
     #[cfg(not(target_arch = "wasm32"))]
     smart_previews(app, ui, t);
+    ai_masks(app, ui, t);
+}
+
+/// Where AI masks (SAM 3) run: the choice (`segment.settings {runOn}`), what they run on, why not on
+/// the GPU, and how long the last photo took (`segment.model.status` → `backend`), as Settings ▸
+/// Faces shows its models' processor. The same lines whatever the state, so nothing moves when the
+/// model loads.
+fn ai_masks(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        return;
+    }
+    heading(ui, t, crate::i18n::tr("AI masks"));
+    let current = app.session.segmenter.run_on().name();
+    let mut run_on = current;
+    if row(ui, t, "Run on", |ui| choices(ui, "settingsAiMasksRunOn", &[("auto", "Automatic (GPU when available)"), ("cpu", "CPU")], &mut run_on))
+        && let Err(e) = app.run("segment.settings", json!({"runOn": run_on}))
+    {
+        app.toast(ui.ctx(), e);
+    }
+    let g = &app.session.segmenter;
+    let b = g.backend();
+    let device = if g.remote_endpoint().is_some() {
+        crate::i18n::tr("Remote worker").to_string()
+    } else {
+        b["device"].as_str().map_or_else(|| crate::i18n::tr("Not loaded yet").to_string(), str::to_string)
+    };
+    let text = match b["fallback"].as_str() {
+        Some(why) if g.remote_endpoint().is_none() => format!("{device} ({why})"),
+        _ => device,
+    };
+    row(ui, t, "Device", |ui| {
+        let r = ui.add(egui::Label::new(RichText::new(text.clone()).color(t.text)).truncate()).on_hover_text(text);
+        register(ui, "settings:aiMasksDevice", r.rect);
+    });
+    let took = match (b["analyzeMs"].as_u64().or(b["encodeMs"].as_u64()), b["encodeMs"].as_u64()) {
+        (Some(all), Some(encoder)) => {
+            crate::i18n::tr_format!("{all:.1} s, image encoder {encoder:.1} s", all = all as f64 / 1000.0, encoder = encoder as f64 / 1000.0)
+        }
+        _ => "—".to_string(),
+    };
+    row(ui, t, "Last photo", |ui| {
+        let r = ui.label(RichText::new(took).color(t.text));
+        register(ui, "settings:aiMasksTime", r.rect);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(if cfg!(target_os = "macos") {
+            "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer."
+        } else {
+            "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer."
+        }),
+    );
 }
 
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
