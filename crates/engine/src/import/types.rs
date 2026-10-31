@@ -171,6 +171,11 @@ pub struct FileFacts {
     /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
     /// file's modification time.
     pub captured: Option<String>,
+    /// The file's own orientation, when it states one ([`crate::media::ProbeInfo::orientation`]): it turns what its
+    /// sidecar's regions were drawn on, the photo as stored, upright (#2674).
+    pub orientation: Option<lightcraft_geom::Orientation>,
+    /// Its XMP sidecar (or a raw's embedded XMP), which a file import merges into the record.
+    pub sidecar: Option<crate::sidecar::SidecarData>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
