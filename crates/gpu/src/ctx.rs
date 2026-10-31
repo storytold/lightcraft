@@ -582,7 +582,20 @@ impl Gpu {
             if window { ", the window's device" } else { "" }
         );
         let vram = crate::vram::adapter_memory(&info);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, generation, vram, key: None, role: crate::Role::Primary })
+        Ok(Gpu {
+            device,
+            queue,
+            info,
+            kernels,
+            dummy,
+            free: Default::default(),
+            max_buffer,
+            window,
+            generation,
+            vram,
+            key: None,
+            role: crate::Role::Primary,
+        })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).

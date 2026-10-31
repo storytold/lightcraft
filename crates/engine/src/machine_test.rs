@@ -28,6 +28,8 @@ pub struct TestRun {
     pub gpu: bool,
     /// The processor rendered photos too while the GPU was busy ([`crate::export::export_mix`]).
     pub mix: bool,
+    /// The second graphics card rendered photos too (the other runs use the editing card alone).
+    pub helper: bool,
     pub photos: usize,
     pub seconds: f64,
     pub photos_per_min: f64,
@@ -59,6 +61,14 @@ pub struct MachineReport {
     pub gpu_jobs: usize,
     /// The processor renders photos too while the GPU is busy with others.
     pub mix: bool,
+    /// The second graphics card that helps with exports, its memory, and the exports it renders at
+    /// once (as many as 80 % of its memory holds at the measured peak of one).
+    pub helper: Option<String>,
+    pub helper_mb: u64,
+    pub helper_jobs: usize,
+    /// The second card made exports clearly slower here, so exports leave it alone. (Stored the
+    /// other way round so a report from before two cards keeps the second card on.)
+    pub helper_slower: bool,
     /// Photos a minute with the choice.
     pub photos_per_min: f64,
     /// What limits it, in plain words.
@@ -105,6 +115,8 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
     // (waits for the GPU device: its creation is not part of the measurements)
     let gpu = crate::gpu::available();
+    // the second card, when the app's start-up made it (never waited for here)
+    let helper = gpu && crate::gpu::helper_ready();
     let lanes = if o.lanes.is_empty() { lane_choices(cores, o.quick) } else { o.lanes.clone() };
     // a session of its own, with the photos to export
     let (mut session, ids, source) = if o.paths.is_empty() {
@@ -133,8 +145,8 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
         opts.resize = Some(crate::export::Resize::long_edge(edge));
     }
     // (+1: warming up; +2: the processor alone, and the GPU and the processor at once, at the
-    // best lanes, when there is a GPU)
-    let total = lanes.len() + 1 + 2 * usize::from(gpu);
+    // best lanes, when there is a GPU; +1: both cards, with a second one)
+    let total = lanes.len() + 1 + 2 * usize::from(gpu) + usize::from(helper);
     let mut step = 0;
     let mut tick = |what: &str| {
         step += 1;
@@ -143,22 +155,43 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     // (as many photos as lanes, so every lane works: at least 4 or 6)
     let per_run = |l: usize| l.max(if o.quick { 4 } else { 6 });
     // warm up (not counted): the decoder, the caches, the GPU's kernels; and one photo's peak on the GPU
-    let warm = export_round(&mut session, &ids[..1], &opts, 1, gpu, false)?;
+    let warm = export_round(&mut session, &ids[..1], &opts, 1, gpu, false, false)?;
     let peak = warm.gpu_peak;
     tick("Warming up")?;
     let mut runs = Vec::new();
     for &l in &lanes {
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, gpu, false)?);
+        runs.push(export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, gpu, false, false)?);
         tick(&format!("{l} photos side by side"))?;
     }
     if gpu && let Some(best) = best_run(&runs).cloned() {
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, false, false)?);
+        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, false, false, false)?);
         tick("The processor alone")?;
         // photos the GPU is too busy for render on the processor meanwhile (note 28's hybrid)
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, true, true)?);
+        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, true, true, false)?);
         tick("The graphics card and the processor together")?;
     }
-    let best = best_run(&runs).cloned().ok_or("no measurement")?;
+    let one_card = best_run(&runs).cloned().ok_or("no measurement")?;
+    let helper_vram = crate::gpu::adapter_memory_of(crate::gpu::Role::Helper).unwrap_or(0);
+    let helper_jobs = if helper { gpu_jobs_share(helper_vram, peak, 80) } else { 0 };
+    // both cards: the best lanes plus the photos the second card renders at once
+    let mut helper_run = None;
+    if helper && one_card.gpu {
+        let l = one_card.lanes.saturating_add(helper_jobs).min(crate::export::MAX_EXPORT_LANES);
+        crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, Some(helper_jobs));
+        let run = export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, true, one_card.mix, true);
+        crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, None);
+        let run = run?;
+        tick("Both graphics cards")?;
+        helper_run = Some(run.clone());
+        runs.push(run);
+    }
+    // the second card stays on unless it was clearly slower (it also keeps the editing card free
+    // for the photo being edited)
+    let helper_slower = helper_run.as_ref().is_some_and(|h| h.photos_per_min < one_card.photos_per_min * 0.97);
+    let best = match helper_run {
+        Some(h) if !helper_slower => h,
+        _ => one_card,
+    };
     let vram = crate::gpu::adapter_memory().unwrap_or(0);
     let mut r = MachineReport {
         tested: crate::import::system_clock(),
@@ -172,6 +205,10 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
         // exports sharing the GPU: as many as its memory holds at the measured peak of one
         gpu_jobs: gpu_jobs_for(vram, peak),
         mix: best.gpu && best.mix,
+        helper: helper.then(|| crate::gpu::helper_status().name).flatten(),
+        helper_mb: helper_vram >> 20,
+        helper_jobs,
+        helper_slower,
         photos_per_min: best.photos_per_min,
         limit: limit_text(&runs, &best),
         runs,
@@ -184,10 +221,16 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
 /// Exports sharing a card of `vram` bytes when one export's renders peak at `peak` bytes: what
 /// the GPU's default share for exports (55 %) holds, 1 to 4.
 pub fn gpu_jobs_for(vram: u64, peak: u64) -> usize {
+    gpu_jobs_share(vram, peak, 55)
+}
+
+/// [`gpu_jobs_for`] for a card whose exports may use `percent` of its memory (the second card,
+/// which draws no window: 80 %).
+pub fn gpu_jobs_share(vram: u64, peak: u64, percent: u64) -> usize {
     if vram == 0 || peak == 0 {
         return 1;
     }
-    ((vram / 100 * 55 / peak) as usize).clamp(1, 4)
+    ((vram / 100 * percent.min(100) / peak) as usize).clamp(1, 4)
 }
 
 /// A camera's name as people say it: "Canon Canon EOS R5 C" (make and a model that repeats it) is
@@ -204,7 +247,9 @@ fn repeat(ids: &[lightcraft_catalog::PhotoId], n: usize) -> Vec<lightcraft_catal
     ids.iter().copied().cycle().take(n.max(1)).collect()
 }
 
-/// Export `ids` with `lanes` side by side, on the GPU or not; the files are thrown away.
+/// Export `ids` with `lanes` side by side, on the GPU or not, with the second card too or on the
+/// editing card alone (`helper`); the files are thrown away.
+#[allow(clippy::too_many_arguments)]
 fn export_round(
     session: &mut crate::Session,
     ids: &[lightcraft_catalog::PhotoId],
@@ -212,15 +257,22 @@ fn export_round(
     lanes: usize,
     gpu: bool,
     mix: bool,
+    helper: bool,
 ) -> Result<TestRun, String> {
+    use crate::export::ExportCards;
     for &id in ids {
         session.media.forget(id); // every original is decoded again, as in a real export
     }
     let (mem0, _) = crate::memory::export_gate().waits();
-    let gpu0 = crate::gpu::batch_usage().waits;
+    let gpu_waits = || crate::gpu::Role::ALL.iter().map(|r| crate::gpu::batch_usage_of(*r).waits).sum::<u64>();
+    let gpu0 = gpu_waits();
     crate::gpu::reset_memory_peak();
+    let cards = crate::export::export_cards();
+    crate::export::set_export_cards(if helper { ExportCards::Both } else { ExportCards::Editing });
     let t = Instant::now();
-    let files = crate::export::export_batch_tuned(session, ids, o, lanes, gpu, mix)?;
+    let files = crate::export::export_batch_tuned(session, ids, o, lanes, gpu, mix);
+    crate::export::set_export_cards(cards);
+    let files = files?;
     let seconds = t.elapsed().as_secs_f64().max(1e-3);
     if let Some(e) = files.iter().find_map(|f| f.get("error")) {
         return Err(format!("the test export failed: {e}"));
@@ -230,11 +282,12 @@ fn export_round(
         lanes,
         gpu,
         mix: gpu && mix,
+        helper: gpu && helper,
         photos: files.len(),
         seconds,
         photos_per_min: files.len() as f64 * 60.0 / seconds,
         memory_waits: mem1.saturating_sub(mem0),
-        gpu_waits: crate::gpu::batch_usage().waits.saturating_sub(gpu0),
+        gpu_waits: gpu_waits().saturating_sub(gpu0),
         gpu_peak: crate::gpu::memory().peak,
     })
 }
@@ -271,8 +324,15 @@ fn summary(r: &MachineReport) -> String {
         ),
         (None, _) => "No graphics card is used: exports render on the processor.".into(),
     };
+    let helper_part = match (&r.helper, r.use_gpu, r.helper_slower) {
+        (Some(h), true, false) => {
+            format!(" The second graphics card ({h}) renders exports too, {} at a time, so the screen's card stays free for editing.", r.helper_jobs)
+        }
+        (Some(h), true, true) => format!(" The second graphics card ({h}) made exports slower here, so they leave it alone."),
+        _ => String::new(),
+    };
     format!(
-        "Exports about {:.0} photos a minute (full-size HDR JPEGs with a mask, from {}), {} photos side by side. {gpu_part} What limits it: {}.",
+        "Exports about {:.0} photos a minute (full-size HDR JPEGs with a mask, from {}), {} photos side by side. {gpu_part}{helper_part} What limits it: {}.",
         r.photos_per_min, r.source, r.lanes, r.limit
     )
 }
@@ -283,11 +343,14 @@ pub fn apply(r: &MachineReport) {
     crate::export::set_export_gpu(r.use_gpu);
     crate::export::set_export_mix(r.use_gpu && r.mix);
     crate::gpu::set_batch_limits(None, Some(r.gpu_jobs).filter(|j| *j > 0));
+    crate::export::set_export_cards(if r.helper_slower { crate::export::ExportCards::Editing } else { crate::export::ExportCards::Both });
+    crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, Some(r.helper_jobs).filter(|j| *j > 0));
 }
 
 /// What exports use now: `{lanes, lanesSetting, gpu, gpuJobs, gpuLimitMb, gpuMemoryMb}`.
 pub fn tuning() -> serde_json::Value {
     let b = crate::gpu::batch_usage();
+    let h = crate::gpu::batch_usage_of(crate::gpu::Role::Helper);
     serde_json::json!({
         "lanes": crate::export::export_parallelism(usize::MAX),
         "lanesSetting": crate::export::export_lanes_override(),
@@ -297,6 +360,9 @@ pub fn tuning() -> serde_json::Value {
         "gpuLimitMb": b.limit_bytes >> 20,
         "gpuMemoryMb": crate::gpu::adapter_memory().map(|m| m >> 20),
         "gpuRestarts": crate::gpu::recoveries(),
+        "helper": crate::export::export_cards() != crate::export::ExportCards::Editing,
+        "helperJobs": h.limit_jobs,
+        "helperMemoryMb": crate::gpu::adapter_memory_of(crate::gpu::Role::Helper).map(|m| m >> 20),
     })
 }
 
@@ -405,6 +471,24 @@ mod tests {
         assert_eq!(camera_name("NIKON D750"), "NIKON D750");
         assert_eq!(camera_name("  Sony   ILCE-7M3 "), "Sony ILCE-7M3");
         assert_eq!(camera_name(""), "");
+    }
+
+    /// Two graphics cards: the second card's exports use 80 % of its memory, and a report saved
+    /// before there were two cards keeps the second card on.
+    #[test]
+    fn the_second_card_gets_its_own_share_and_old_reports_keep_it() {
+        let gb = 1u64 << 30;
+        assert_eq!(gpu_jobs_for(12 * gb, 2 * gb), 3);
+        assert_eq!(gpu_jobs_share(12 * gb, 2 * gb, 80), 4);
+        assert_eq!(gpu_jobs_share(12 * gb, 4 * gb, 80), 2);
+        assert_eq!(gpu_jobs_share(0, 2 * gb, 80), 1);
+        assert_eq!(gpu_jobs_share(12 * gb, 0, 500), 1);
+        let old: MachineReport = serde_json::from_value(serde_json::json!({"lanes": 8, "useGpu": true, "gpuJobs": 2})).unwrap();
+        assert!(!old.helper_slower && old.helper_jobs == 0, "{old:?}");
+        let r = MachineReport { helper: Some("Card B".into()), helper_jobs: 3, use_gpu: true, lanes: 8, ..Default::default() };
+        assert!(summary(&r).contains("second graphics card (Card B) renders exports too, 3 at a time"), "{}", summary(&r));
+        let slower = MachineReport { helper_slower: true, ..r };
+        assert!(summary(&slower).contains("leave it alone"), "{}", summary(&slower));
     }
 
     #[test]

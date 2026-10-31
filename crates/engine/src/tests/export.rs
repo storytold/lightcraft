@@ -1627,3 +1627,40 @@ fn exports_render_on_the_gpu_and_the_processor_at_once() {
     lightcraft_gpu::set_batch_limits(None, None);
     eprintln!("8 HDR exports, 4 lanes: GPU alone {gpu:.2} s, GPU + processor {both:.2} s");
 }
+
+/// Two graphics cards (DESIGN multi-gpu §3): each exported file says which card rendered it
+/// (`gpuDevice`, the card's name) so the user can see the helper working; a photo the processor
+/// rendered says none. On one card every GPU file names that card.
+#[test]
+fn each_exported_file_names_the_card_that_rendered_it() {
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(3).collect();
+    let o = ExportOptions::from_json(&json!({"longEdge": 256, "quality": 90}));
+    // on the processor: no card named
+    let cpu = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, false, false).unwrap();
+    assert_eq!(cpu.len(), 3);
+    assert!(cpu.iter().all(|f| f.get("error").is_none() && f.get("gpuDevice").is_none()), "{cpu:?}");
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        return;
+    }
+    let name = lightcraft_gpu::adapter_name().unwrap_or_default();
+    let mut cards: Vec<String> = Vec::new();
+    for mix in [false, true] {
+        let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true, mix).unwrap();
+        assert_eq!(files.len(), 3);
+        for f in &files {
+            assert!(f.get("error").is_none(), "{f}");
+            // a file the GPU made names a card; one that fell back to the processor names none
+            match f.get("gpuDevice").and_then(serde_json::Value::as_str) {
+                Some(card) => cards.push(card.to_string()),
+                None => assert!(mix || f.get("gpuFallback").is_some(), "rendered on the GPU without a card named: {f}"),
+            }
+        }
+    }
+    assert!(!cards.is_empty(), "no file named a card");
+    let helper = lightcraft_gpu::helper_status().name;
+    for c in &cards {
+        assert!(name.starts_with(c.as_str()) || helper.as_deref() == Some(c.as_str()), "{c} is neither {name} nor the helper {helper:?}");
+    }
+}

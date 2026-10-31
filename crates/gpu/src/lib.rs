@@ -326,6 +326,24 @@ pub fn wait_batch_turn_any(src_px: usize, out_px: usize, stop: &dyn Fn() -> bool
     }
 }
 
+thread_local! {
+    /// The card that made this thread's latest GPU image ([`take_rendered_on`]).
+    static RENDERED_ON: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A GPU render on this thread made its image on card `name`.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn note_rendered_on(name: &str) {
+    let _ = RENDERED_ON.try_with(|c| *c.borrow_mut() = Some(name.to_string()));
+}
+
+/// The name of the card that made this thread's latest GPU image since the last call, and forget
+/// it; `None` when no render on this thread made a GPU image since (the processor rendered, or
+/// the GPU fell back). An export's `gpuDevice`: which of two cards took the photo.
+pub fn take_rendered_on() -> Option<String> {
+    RENDERED_ON.try_with(|c| c.borrow_mut().take()).ok().flatten()
+}
+
 /// Batch renders on the editing card don't start for `d` from now: the window needs the GPU (it
 /// resizes, a frame was slow). Renders already running finish.
 pub fn hold_batch(d: std::time::Duration) {
@@ -1826,11 +1844,7 @@ pub fn read_texture(
     height: usize,
 ) -> Result<lightcraft_raster::Rgba8, String> {
     // the device's generation when it is the renderer's (the window's adopted), for its device-lost record
-    let generation = [Role::Primary, Role::Helper]
-        .into_iter()
-        .filter_map(slot::existing)
-        .find(|g| g.device == *device)
-        .map_or(0, |g| g.generation);
+    let generation = [Role::Primary, Role::Helper].into_iter().filter_map(slot::existing).find(|g| g.device == *device).map_or(0, |g| g.generation);
     ctx::read_texture(device, generation, queue, texture, width, height)
 }
 
@@ -1950,7 +1964,11 @@ fn run(
                 }
                 format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
             }
-            (Ok(Some(r)), None) => return Ok(r),
+            (Ok(Some(r)), None) => {
+                // (an export names the card that made its file: `gpuDevice`)
+                note_rendered_on(&gpu.info.name);
+                return Ok(r);
+            }
             // every path of `render::render` that gives up records a failure first; should one
             // not, the CPU renders it rather than nothing
             (Ok(None), None) => "GPU render: no image came back".to_string(),
@@ -2007,6 +2025,16 @@ mod tests {
         assert!(t.elapsed() >= Duration::from_millis(150), "waited for the warm-up: {:?}", t.elapsed());
         warm.join().unwrap();
         assert!(super::wait_helper(Duration::ZERO), "nothing coming: at once");
+    }
+
+    // An export asks which card made its image once per photo: the name is this thread's and goes
+    #[test]
+    fn the_card_that_rendered_is_taken_once_per_thread() {
+        assert_eq!(super::take_rendered_on(), None);
+        super::note_rendered_on("Card A");
+        assert_eq!(std::thread::spawn(super::take_rendered_on).join().ok().flatten(), None, "another thread's render");
+        assert_eq!(super::take_rendered_on().as_deref(), Some("Card A"));
+        assert_eq!(super::take_rendered_on(), None);
     }
 
     // Given a request the 8-bit kernel can't draw (high bit depth, a soft proof, Visualize HDR),

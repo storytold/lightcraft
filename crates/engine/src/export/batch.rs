@@ -48,16 +48,24 @@ pub fn run_batch_cancellable(
 /// How many photos of a batch of `n` render side by side. Each render already spreads its rows
 /// over every core, but parts of it (decode, Smooth Skin, encode) run on one thread, so on a big
 /// machine more lanes keep the cores busy: half the cores, up to 12 (memory still caps them
-/// through [`crate::memory::export_gate`]). One on wasm32 (no threads).
+/// through [`crate::memory::export_gate`]). A second graphics card that helps with exports adds
+/// the photos it renders at once, so it has photos to take while the others decode and encode
+/// (memory still caps them). One on wasm32 (no threads).
 pub fn export_parallelism(n: usize) -> usize {
     if cfg!(target_arch = "wasm32") {
         return 1;
     }
     let lanes = export_lanes_override().unwrap_or_else(|| {
         let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
-        (cores / 2).clamp(1, 12)
+        auto_lanes(cores, if uses_helper() { lightcraft_gpu::batch_usage_of(lightcraft_gpu::Role::Helper).limit_jobs } else { 0 })
     });
     lanes.clamp(1, MAX_EXPORT_LANES).min(n.max(1))
+}
+
+/// The automatic lanes on a computer with `cores` threads whose helper card takes `helper_jobs`
+/// renders at once: half the cores, up to 12, plus the helper's.
+pub(super) fn auto_lanes(cores: usize, helper_jobs: usize) -> usize {
+    (cores / 2).clamp(1, 12).saturating_add(helper_jobs).min(MAX_EXPORT_LANES)
 }
 
 /// The most photos an export renders side by side, whatever is asked.
@@ -127,6 +135,89 @@ pub fn set_export_mix(on: bool) {
 /// Whether exports use the processor and the GPU at once ([`set_export_mix`]).
 pub fn export_mix() -> bool {
     EXPORT_MIX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The graphics cards an export uses when the computer has a second one ([`set_export_cards`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportCards {
+    /// The second card first, then the editing card (the default).
+    #[default]
+    Both,
+    /// The editing card only (the second card is left alone).
+    Editing,
+    /// The second card only, while it works (benchmarks; the editing card when there is none).
+    Helper,
+}
+
+impl ExportCards {
+    /// From a benchmark's `--helper on|off|only`.
+    pub fn parse(s: &str) -> Option<ExportCards> {
+        match s.trim() {
+            "on" | "both" => Some(ExportCards::Both),
+            "off" | "editing" => Some(ExportCards::Editing),
+            "only" | "helper" => Some(ExportCards::Helper),
+            _ => None,
+        }
+    }
+}
+
+static EXPORT_CARDS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Use `cards` for exports from now on (benchmarks and Test my machine compare them).
+pub fn set_export_cards(cards: ExportCards) {
+    let v = match cards {
+        ExportCards::Both => 0,
+        ExportCards::Editing => 1,
+        ExportCards::Helper => 2,
+    };
+    EXPORT_CARDS.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The cards exports use ([`set_export_cards`]).
+pub fn export_cards() -> ExportCards {
+    match EXPORT_CARDS.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => ExportCards::Editing,
+        2 => ExportCards::Helper,
+        _ => ExportCards::Both,
+    }
+}
+
+/// Exports use the second graphics card now: it works and [`export_cards`] allows it.
+pub(super) fn uses_helper() -> bool {
+    export_gpu() && export_cards() != ExportCards::Editing && lightcraft_gpu::helper_ready()
+}
+
+/// A photo's turn on a card with room now ([`export_cards`]: the second card first, then the
+/// editing one); `None`: both busy (or no GPU), the photo renders on the processor.
+pub(super) fn card_turn_now(src_px: usize, out_px: usize) -> Option<lightcraft_gpu::BatchTurn> {
+    use lightcraft_gpu::Role;
+    match export_cards() {
+        ExportCards::Both => lightcraft_gpu::batch_turn_any(src_px, out_px),
+        ExportCards::Editing => lightcraft_gpu::try_batch_turn_on(Role::Primary, src_px, out_px),
+        ExportCards::Helper if lightcraft_gpu::helper_ready() => lightcraft_gpu::try_batch_turn_on(Role::Helper, src_px, out_px),
+        ExportCards::Helper => lightcraft_gpu::try_batch_turn_on(Role::Primary, src_px, out_px),
+    }
+}
+
+/// [`card_turn_now`], waiting until a card has room. `None` when `stop()` says so (cancelled), or
+/// at once without a GPU to wait for. A second card lost while the photo waits stops being waited
+/// for: the editing card takes it.
+pub(super) fn card_turn_waiting(src_px: usize, out_px: usize, stop: &dyn Fn() -> bool) -> Option<lightcraft_gpu::BatchTurn> {
+    if export_cards() != ExportCards::Helper {
+        return lightcraft_gpu::wait_batch_turn_any(src_px, out_px, stop);
+    }
+    loop {
+        if !lightcraft_gpu::helper_ready() {
+            return lightcraft_gpu::wait_batch_turn_any(src_px, out_px, stop);
+        }
+        if let Some(t) = lightcraft_gpu::try_batch_turn_on(lightcraft_gpu::Role::Helper, src_px, out_px) {
+            return Some(t);
+        }
+        if stop() || lightcraft_gpu::shutting_down() {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
 }
 
 /// [`run_batch`] with `lanes` photos in flight. Without `cancel` the calling thread is one of the

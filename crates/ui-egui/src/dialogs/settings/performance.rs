@@ -110,7 +110,6 @@ fn gpu_card_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     );
 }
 
-
 /// The editing card among `cards`: the one chosen (`saved`, when it is there), else the screen's,
 /// else the one named `in_use`.
 pub(crate) fn editing_card_key(cards: &[lightcraft_engine::gpu::CardInfo], saved: &str, in_use: Option<&str>) -> Option<String> {
@@ -194,7 +193,6 @@ fn gpu_helper_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         crate::i18n::tr("Exports, previews and AI masks also run on this card, so the card for editing stays free for the photo you're working on."),
     );
 }
-
 
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;

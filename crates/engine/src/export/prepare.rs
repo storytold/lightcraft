@@ -1,4 +1,4 @@
-use super::batch::{export_gpu, export_mix, run_batch};
+use super::batch::{card_turn_now, card_turn_waiting, export_gpu, export_mix, run_batch, uses_helper};
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
@@ -16,6 +16,9 @@ pub struct Exported {
     /// Set when the render was tried on the GPU and fell back to the CPU: why (see
     /// `docs/gpu-pipeline.md`). The file holds the CPU render either way.
     pub gpu_fallback: Option<String>,
+    /// The graphics card that rendered it (its name), `None` when the processor did: with two
+    /// cards, which one took this photo.
+    pub gpu_device: Option<String>,
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
@@ -275,11 +278,14 @@ impl PreparedExport {
                 let RenderWork { mut job, mut hdr_job, meta, opts, src_px } = *w;
                 // A gain map's HDR rendition renders on the GPU too when the SDR one can: from the
                 // stages the SDR render left on the device, in one turn at the GPU (the memory
-                // those stages hold is never another export's to take meanwhile).
-                let hdr_on_gpu = self.gpu
-                    && hdr_job.is_some()
-                    && lightcraft_gpu::enabled()
-                    && lightcraft_gpu::handles(OutputDepth::F32Hdr, false, lightcraft_pipeline::Overlay::None);
+                // those stages hold is never another export's to take meanwhile). Asked on the
+                // photo's own card (inside its `BatchTurn`, or on the processor in `on_cpu`).
+                let (gpu, has_hdr) = (self.gpu, hdr_job.is_some());
+                let hdr_on_gpu = move || {
+                    gpu && has_hdr
+                        && lightcraft_gpu::enabled()
+                        && lightcraft_gpu::handles(OutputDepth::F32Hdr, false, lightcraft_pipeline::Overlay::None)
+                };
                 let out_px = job.request.max_w.saturating_mul(job.request.max_h);
                 let mut t = lap_clock();
                 // 1. The original is decoded (and AI-denoised when asked) before the photo's turn
@@ -296,12 +302,17 @@ impl PreparedExport {
                     lap("decode", &mut t);
                 }
                 // 2. The renders (the GPU's part): the SDR rendition, and a gain map's HDR one
-                let renders = || -> Result<(lightcraft_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
+                // (the image, a gain map's HDR rendition, why the GPU fell back, the card that rendered it)
+                type Renders = (lightcraft_pipeline::Rendered, Option<DeepImage>, Option<String>, Option<String>);
+                let renders = || -> Result<Renders, String> {
                     let mut t = lap_clock();
                     lap("waiting for the GPU", &mut t);
                     // (cancelled while it waited for its turn: give the turn back at once)
                     check()?;
                     let _turn = TurnMark::enter();
+                    let hdr_on_gpu = hdr_on_gpu();
+                    // (nothing left over from an earlier photo on this lane: `gpuDevice` is this one's)
+                    let _ = lightcraft_gpu::take_rendered_on();
                     // A gain map's HDR rendition is the same photo rendered a second time: it starts
                     // from the SDR render's decoded original and its stages (on the device, or when
                     // it renders on the CPU, the white-balanced, denoised, retouched image and
@@ -337,19 +348,35 @@ impl PreparedExport {
                         }
                         None => None,
                     };
-                    Ok((r, hdr, gpu_fallback))
+                    // the card that made the image (`None`: the processor did)
+                    let device = lightcraft_gpu::take_rendered_on();
+                    Ok((r, hdr, gpu_fallback, device))
                 };
-                let (r, hdr, gpu_fallback) = if self.gpu && self.mix {
-                    // the GPU and the processor at once: this photo takes the GPU when it is free,
-                    // else it renders on the processor rather than wait (Test my machine picks it)
-                    match lightcraft_gpu::try_batch_turn(src_px, out_px) {
+                let (r, hdr, gpu_fallback, gpu_device) = if self.gpu && self.mix {
+                    // the GPU and the processor at once: this photo takes a card that is free (the
+                    // helper first, then the screen's), else it renders on the processor rather
+                    // than wait (Test my machine picks it)
+                    // (the turn routes this thread's renders to its card while it is held)
+                    match card_turn_now(src_px, out_px) {
                         Some(_turn) => renders(),
                         None => {
                             lap("the GPU is busy: rendering on the processor", &mut t);
                             lightcraft_gpu::on_cpu(renders)
                         }
                     }
-                } else if hdr_on_gpu {
+                } else if self.gpu && uses_helper() {
+                    // two cards: the photo waits for whichever has room first (the helper first),
+                    // holding that card's turn for both its renditions
+                    match card_turn_waiting(src_px, out_px, stop) {
+                        Some(_turn) => renders(),
+                        // no GPU to wait for (the renders go to the processor by themselves), or cancelled
+                        None => {
+                            check()?;
+                            renders()
+                        }
+                    }
+                } else if hdr_on_gpu() {
+                    // one card: as before two cards, each render queues at the card after its plan
                     lightcraft_gpu::in_one_turn(src_px, out_px, renders)
                 } else {
                     renders()
@@ -362,7 +389,7 @@ impl PreparedExport {
                     None => encode_rendered(&r, &opts, meta.as_ref())?,
                 };
                 lap("encode", &mut t);
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback, gpu_device })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
@@ -400,6 +427,7 @@ impl PreparedExport {
                         height: size.1,
                         sidecars: vec![("xmp", packet.into_bytes())],
                         gpu_fallback: None,
+                        gpu_device: None,
                     });
                 };
                 if lightcraft_raw::probe(&bytes).is_none() {
@@ -418,7 +446,15 @@ impl PreparedExport {
                 };
                 let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None })
+                Ok(Exported {
+                    file_name,
+                    bytes: dng,
+                    width: raw.width,
+                    height: raw.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback: None,
+                    gpu_device: None,
+                })
             }
         }
     }

@@ -236,6 +236,17 @@ walks the drive.
   wait for device creation at startup. Six workers rendering 256 px thumbnails: 3.6 ms each on an
   RTX 5070 vs 4.3–5.2 ms on 32 CPU threads (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay
   free for raw decoding.
+- **Exports on two cards** (`export.rs`): with a second card ready (`helper_ready`), each photo of a
+  batch takes a turn on whichever card has room first, the second card first (`wait_batch_turn_any`;
+  in `mix` mode `batch_turn_any`, the processor when both are busy), and keeps that card for both of a
+  gain map's renditions; the editing card takes batch photos only while the interface is idle (§8 gate).
+  Photos are split between cards, never one render across them. The automatic export lanes grow by the
+  photos the second card renders at once (still within the export memory gate). Each file of the
+  result names its card (`gpuDevice`). The second card lost mid-batch: the photo on it renders on the
+  processor (`gpuFallback`), the rest on the editing card; no file is lost
+  (`crates/engine/tests/export_two_cards.rs`). One card: exports run exactly as before.
+  `export::set_export_cards(Both | Editing | Helper)` and `export_bench --helper on|off|only` compare
+  them; Test my machine measures a run on both cards and keeps the second card unless it was > 3 % slower.
 - 8-bit renders take the GPU path with LUT profiles (the `.cube` table rides in the kernel's
   `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
   guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft

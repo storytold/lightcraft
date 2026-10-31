@@ -1,3 +1,4 @@
+use super::batch::auto_lanes;
 use super::*;
 use serde_json::json;
 
@@ -1543,6 +1544,15 @@ fn the_linear_sdr_table_is_exact() {
 
 /// A batch's lanes come from the setting, the environment's `LIGHTCRAFT_EXPORT_LANES` aside,
 /// never more than the batch has photos.
+#[test]
+fn a_helper_card_adds_its_renders_to_the_automatic_lanes() {
+    assert_eq!(auto_lanes(16, 0), 8);
+    assert_eq!(auto_lanes(32, 0), 12);
+    assert_eq!(auto_lanes(32, 4), 16);
+    assert_eq!(auto_lanes(1, 0), 1);
+    assert_eq!(auto_lanes(usize::MAX, usize::MAX), MAX_EXPORT_LANES);
+}
+
 #[test]
 fn export_lanes_follow_the_setting() {
     if std::env::var_os("LIGHTCRAFT_EXPORT_LANES").is_some() {
