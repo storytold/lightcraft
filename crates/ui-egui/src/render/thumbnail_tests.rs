@@ -220,6 +220,55 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
     assert!(r.thumb_current(&p, 256, 10), "the recorded key's larger texture serves the smaller bucket");
 }
 
+/// Issue #2682: writes to other photos in the background (faces found, metadata read) moved
+/// the catalog revision on and sent every undecodable file back to the decoder, 37 times each
+/// in 154 s of idle. A failure is tried again only when its own photo changes, when the
+/// catalog can't say which photos did, or, at any change, when its file is known to be missing.
+#[test]
+fn a_failed_thumbnail_is_retried_only_when_its_photo_changes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut catalog = Catalog::default();
+    let p = photo();
+    let other = PhotoId(2);
+    catalog.apply(Op::AddPhoto { photo: Box::new((*p).clone()) }).unwrap();
+    let other_photo = Photo::new(other, Source::File { path: "other.jpg".into() }, "other.jpg", "JPEG", 60, 40, "2026-01-01");
+    catalog.apply(Op::AddPhoto { photo: Box::new(other_photo) }).unwrap();
+    // the files are there (an undecodable file is still a file)
+    let here = Arc::new(AtomicBool::new(true));
+    let mut files = lightcraft_engine::availability::Availability::default();
+    let h = here.clone();
+    files.set_probe(Arc::new(move |_| h.load(Ordering::SeqCst)));
+    let slot = Slot::Thumb(p.id);
+    let mut r = Renderer::default();
+    r.follow_catalog(&catalog, &files);
+    r.failed.insert(slot, (77, "unrecognised image format".into(), r.catalog_rev, p.id));
+    assert!(!r.request_needed(slot, 77, 10), "a failure stands");
+    // the other photo changes, op after op, as background work does
+    for rating in 1..=5 {
+        catalog.apply(Op::SetRating { id: other, rating }).unwrap();
+        r.follow_catalog(&catalog, &files);
+        assert!(!r.request_needed(slot, 77, 10), "another photo's change (rating {rating}) retries nothing");
+    }
+    // a change to the photo itself is a reason to try again
+    catalog.apply(Op::SetRating { id: p.id, rating: 2 }).unwrap();
+    r.follow_catalog(&catalog, &files);
+    assert!(r.request_needed(slot, 77, 10), "its own photo changed");
+    // so is a change the catalog can't attribute to photos
+    r.failed.insert(slot, (77, "unrecognised image format".into(), r.catalog_rev, p.id));
+    assert!(!r.request_needed(slot, 77, 10));
+    let album = catalog.alloc_album_id();
+    catalog.apply(Op::AddAlbum { album: lightcraft_catalog::Album::new(album, "Trip") }).unwrap();
+    r.follow_catalog(&catalog, &files);
+    assert!(r.request_needed(slot, 77, 10), "which photos changed is unknown");
+    // a file known to be missing (its drive unplugged) is tried at every change, as before, so
+    // the photo comes back with its drive
+    r.failed.insert(slot, (77, "file not found".into(), r.catalog_rev, p.id));
+    here.store(false, Ordering::SeqCst);
+    catalog.apply(Op::SetRating { id: other, rating: 1 }).unwrap();
+    r.follow_catalog(&catalog, &files);
+    assert!(r.request_needed(slot, 77, 10), "a missing file is tried again");
+}
+
 #[test]
 fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     let mut s = Session::new();
@@ -455,6 +504,39 @@ fn unchanged_queued_frames_build_no_jobs() {
     assert_eq!(app.renderer.queue.len(), 1);
 }
 
+/// Issue #2682: the grid sent each video to the image decoder for a thumbnail, which failed with
+/// "unrecognised image format", and asked again on every pass. A video is known by its kind, by
+/// the format a Lightroom catalog gives it, or by its extension; none asks for a render, so none
+/// fails and its cell keeps the plain placeholder.
+#[test]
+fn a_video_asks_the_decoders_for_no_thumbnail() {
+    use lightcraft_catalog::MediaKind;
+    let clip = |name: &str, format: &str, kind: MediaKind| {
+        let mut p = Photo::new(PhotoId(1), Source::File { path: name.into() }, name, format, 1920, 1080, "2022-11-25");
+        p.kind = kind;
+        p
+    };
+    for video in [
+        clip("VID_20221125_083409_527.mp4", "MP4", MediaKind::Video),
+        clip("clip.MOV", "VIDEO", MediaKind::Image),
+        clip("20221223_100006.mp4", "", MediaKind::Image),
+    ] {
+        let name = video.file_name.clone();
+        let (mut app, work, ctx) = fixture_with(Session::new(), video);
+        for _ in 0..30 {
+            request(&mut app);
+            app.renderer.poll(&ctx, &mut app.session);
+        }
+        assert_eq!(app.renderer.thumb_jobs_built, 0, "{name}");
+        assert!(work.borrow().jobs.is_empty() && app.renderer.queue.is_empty(), "{name}: nothing is decoded");
+        assert_eq!(app.renderer.failure(Slot::Thumb(PhotoId(1))), None, "{name}: nothing failed, so the cell has no \"!\"");
+    }
+    // a photo is still asked for
+    let (mut app, _, _) = fixture();
+    request(&mut app);
+    assert_eq!(app.renderer.thumb_jobs_built, 1);
+}
+
 #[test]
 fn resizing_the_disk_cache_keeps_textures_and_skips_rebuilds() {
     let lib = std::env::temp_dir().join(format!("lc-ui-thumb-resize-{}", std::process::id()));
@@ -516,6 +598,26 @@ fn a_panicking_render_is_a_failure_not_a_dead_worker() {
     }
     assert!(!app.renderer.is_pending(slot) && app.renderer.completed == done, "no retry loop");
     assert_eq!(app.renderer.live_workers(), workers);
+}
+
+/// An app built by this crate's tests renders on two workers, not the machine's six: several
+/// tests run at once, and each of them used to start six (issue #3067).
+#[test]
+fn a_test_app_renders_on_two_workers() {
+    let (mut app, _, ctx) = fixture_with(Session::new(), (*photo()).clone());
+    app.renderer.offload = None; // the real job pool
+    let slot = Slot::Thumb(PhotoId(1));
+    let job = app.session.thumb_job(PhotoId(1), 256).unwrap();
+    app.renderer.request(slot, job, 30);
+    // (and the workers kept for stand-ins, PERF-CULL-TIERS)
+    assert_eq!(app.renderer.live_workers(), TEST_WORKERS + STAND_IN_WORKERS, "the pool starts all its workers with its first job");
+    let t0 = std::time::Instant::now();
+    while app.renderer.is_pending(slot) {
+        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the render never answered");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.renderer.poll(&ctx, &mut app.session);
+    }
+    assert!(app.renderer.textures.contains_key(&slot), "{:?}", app.renderer.failure(slot));
 }
 
 #[test]
@@ -1557,6 +1659,19 @@ fn a_thumbnail_replacing_its_stand_in_is_not_counted_again() {
     finish(&mut app, &work, &ctx, slot, job.run());
     assert!(app.renderer.textures.contains_key(&Slot::Thumb(id)), "the render replaced the stand-in");
     assert_eq!(app.renderer.thumbs_made, 1, "still one photo");
+    // evicted and made again (scrolled away and back): the same photo (CodeRabbit on #3055)
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    assert!(!app.renderer.textures.contains_key(&Slot::Thumb(id)), "evicted");
+    crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+    // (the camera JPEG first, on the pool, then the render)
+    app.renderer.pool.run_inline(4);
+    app.renderer.poll(&ctx, &mut app.session);
+    if let Some((slot, job)) = work.borrow_mut().jobs.pop() {
+        work.borrow_mut().finished.push((slot, job.run(), 0.0));
+    }
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.thumb(id).is_some(), "made again");
+    assert_eq!(app.renderer.thumbs_made, 1, "an evicted photo made again is not counted again");
 }
 
 /// The loupe's look-ahead asks again when only the crop changes (its stand-ins' keys include the
@@ -1589,4 +1704,22 @@ fn the_look_ahead_follows_a_new_order_around_the_same_photo() {
     app.session.sort.ascending = false;
     crate::panels::detail::look_ahead(&mut app, PhotoId(3), 64, true, ALL);
     assert!(ahead_keys(&app.renderer).contains(&one), "the new neighbours are prepared");
+}
+
+/// Stepping fast (an arrow held down), the raw renders still queued for the photo left behind are
+/// dropped, the Before view's too (CodeRabbit on #3055); the whole-frame render on screen stays.
+#[test]
+fn stepping_fast_drops_the_queued_before_render() {
+    let (mut app, _work, ctx) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
+        let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+        app.renderer.request(slot, job, 100);
+    }
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.is_pending(Slot::Before), "queued behind the blocked worker");
+    crate::panels::detail::drop_unsettled(&mut app.renderer, PhotoId(2));
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
+        assert!(!app.renderer.is_pending(slot), "{slot:?} still queued");
+    }
 }
