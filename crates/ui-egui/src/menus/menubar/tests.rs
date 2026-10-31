@@ -198,6 +198,49 @@ fn file_menu_starts_with_the_import_entry_points() {
     assert!(!text.contains("Add Folder") && !text.contains("\"Add Photos"), "no add-folder wording left in the menus");
 }
 
+/// File ▸ Back Up Library is for a library that is a folder on disk: in its menu and
+/// backing it up; absent where the library has no folder (the browser's has its own backup).
+#[test]
+fn back_up_library_is_offered_for_a_library_on_disk() {
+    let all = |app: &LightcraftApp| -> Vec<MenuNode> { menu_bar(app).into_iter().flat_map(|(_, v)| v).collect() };
+    assert!(find(&all(&app()), "library.backup").is_none(), "the demo library has no folder");
+    let dir = std::env::temp_dir().join(format!("lc-menubar-backup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut session = lightcraft_engine::Session::new();
+    session.open_library(&dir, true).unwrap();
+    let mut on_disk = LightcraftApp::new(session, crate::Services::default());
+    assert!(matches!(find(&all(&on_disk), "library.backup"), Some(MenuNode::Item { enabled: true, .. })));
+    let r = run_item(&mut on_disk, "library.backup", json!({"background": false})).unwrap();
+    assert!(r["error"].is_null() && std::path::Path::new(r["report"]["dir"].as_str().unwrap()).starts_with(dir.join("Backups")), "{r}");
+    drop(on_disk);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A backup from a menu runs in the background unless it says otherwise; one asked for by a
+/// script or the control channel (not through a menu) is the engine's own: it returns when
+/// the backup is made.
+#[test]
+fn only_a_menu_backup_defaults_to_the_background() {
+    let mut p = json!({});
+    menu_defaults("library.backup", &mut p);
+    assert_eq!(p, json!({"background": true}));
+    let mut p = json!({"background": false});
+    menu_defaults("library.backup", &mut p);
+    assert_eq!(p, json!({"background": false}));
+    let mut p = json!({});
+    menu_defaults("library.restore", &mut p);
+    assert_eq!(p, json!({}));
+    let dir = std::env::temp_dir().join(format!("lc-menubar-script-backup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut session = lightcraft_engine::Session::new();
+    session.open_library(&dir, true).unwrap();
+    let mut app = LightcraftApp::new(session, crate::Services::default());
+    let r = app.run("library.backup", json!({})).unwrap();
+    assert!(r["running"] == json!(false) && r["report"]["dir"].is_string(), "{r}");
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Back Up / Restore Library are the browser build's (its library lives in browser storage):
 /// absent from the desktop's menus, present and wired to the host where it provides them.
 #[test]

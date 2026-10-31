@@ -136,6 +136,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "@Open Recent Library",
             "file.backupLibrary",
             "file.restoreLibrary",
+            "library.backup",
             "---",
             "dialog.newAlbum",
             "dialog.newFolder",
@@ -363,6 +364,8 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        // a library that is a folder on disk is backed up to a folder (the browser's has its own backup, above)
+        "library.backup" => app.session.library.as_ref().is_some_and(|l| l.on_disk),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only in an album that holds its photos (not a smart one)
@@ -914,10 +917,23 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
     bar
 }
 
+/// What a menu item asks for that the command's own default does not: from a menu a backup runs
+/// while the library stays in use (its row is in the activity stack, and a toast says how it
+/// ended). Only here: the engine's own default, which a script or the control channel gets, is to
+/// return when the backup is made.
+pub(crate) fn menu_defaults(id: &str, params: &mut Value) {
+    if id == "library.backup"
+        && let Some(p) = params.as_object_mut()
+    {
+        p.entry("background").or_insert(Value::Bool(true));
+    }
+}
+
 /// Run a menu item. Rating, flag and label items behave like their keys (the active photo only in
 /// Compare/Survey; Auto Advance moves on).
 pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Value, String> {
     let mut params = if params.is_null() { json!({}) } else { params };
+    menu_defaults(id, &mut params);
     let culling_cmd = matches!(
         id,
         "photo.rate"
