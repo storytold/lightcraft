@@ -374,3 +374,20 @@ fn a_panel_put_back_by_a_toggle_keeps_its_tool() {
         assert_eq!(h.app.ui.right, right, "Edit → I → K → K → I, after {command}");
     }
 }
+
+/// A toggle that opens a panel while the Tools column is behind another dock tab remembers the
+/// column as hidden: toggled off, it doesn't come back with the panel or the on-canvas tool it held
+/// out of sight (CodeRabbit on #3031: Remove in Heal behind another tab came back with Heal armed).
+#[test]
+fn a_toggle_over_a_hidden_tools_column_puts_back_a_hidden_column() {
+    let mut ui = crate::state::UiState { right: RightPanel::Remove, tool: "heal".into(), ..Default::default() };
+    assert!(ui.toggle_panel(RightPanel::Info, false), "Info comes up");
+    assert_eq!(ui.right, RightPanel::Info);
+    assert!(!ui.toggle_panel(RightPanel::Info, true), "and goes");
+    assert_eq!(ui.right, RightPanel::None, "the column was out of sight: it stays out of sight");
+    assert_eq!(ui.tool, "heal", "no tool put back (the command clears it)");
+    let mut ui = crate::state::UiState { right: RightPanel::Edit, ..Default::default() };
+    ui.toggle_panel(RightPanel::Info, false);
+    ui.toggle_panel(RightPanel::Info, true);
+    assert_eq!(ui.right, RightPanel::None, "Edit behind another tab isn't brought forward either");
+}
