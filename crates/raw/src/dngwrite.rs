@@ -241,12 +241,11 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if !b.delta_v.is_empty() {
         ifd.set(t::BLACK_LEVEL_DELTA_V, Value::SRational(b.delta_v.iter().map(|&v| srational(v as f64)).collect()));
     }
-    let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(0.0, u32::MAX as f32) as u32).collect();
-    if matches!(raw.data, RawData::F32(_)) {
-        ifd.set(t::WHITE_LEVEL, rat_vec(&(0..cpp).map(|s| raw.white_at(s) as f64).collect::<Vec<_>>()));
-    } else {
-        ifd.set(t::WHITE_LEVEL, Value::Long(white));
+    if !(0..cpp).all(|s| (raw.white_at(s) - raw.white_at(s).round()).abs() < 1e-4) {
+        return Err(RawError::Unsupported("fractional white level".into()));
     }
+    let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(1.0, u32::MAX as f32) as u32).collect();
+    ifd.set(t::WHITE_LEVEL, Value::Long(white));
     let a = raw.active_area;
     ifd.set(t::ACTIVE_AREA, Value::Long(vec![a.y as u32, a.x as u32, (a.y + a.height) as u32, (a.x + a.width) as u32]));
     ifd.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![raw.crop.x as u32, raw.crop.y as u32]));
