@@ -12,16 +12,16 @@ pub(crate) fn ci_jobs(available_mb: Option<u64>, cpus: usize) -> usize {
     available_mb.map_or(4, |mb| usize::try_from(mb / 1536).unwrap_or(usize::MAX)).clamp(1, cpus.max(1))
 }
 
-/// RAM the OS could hand out now (free plus reclaimable cache) in MB, if it reports it.
+/// RAM the OS could hand out now (free plus reclaimable cache) in MB, if it reports it. On Linux,
+/// held to the room left under the process's cgroup memory limit (a container, a CI runner, a
+/// systemd scope with `MemoryMax`): `lightcraft_sysmem::available`.
 pub(crate) fn available_ram_mb() -> Option<u64> {
     let output = |program: &str, args: &[&str]| {
         let out = Command::new(program).args(args).output().ok()?;
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     };
     if cfg!(target_os = "linux") {
-        let info = std::fs::read_to_string("/proc/meminfo").ok()?;
-        let kb = info.lines().find_map(|l| l.strip_prefix("MemAvailable:"))?.trim().trim_end_matches("kB").trim();
-        Some(kb.parse::<u64>().ok()? / 1024)
+        Some(lightcraft_sysmem::available()? >> 20)
     } else if cfg!(windows) {
         let cmd = "(Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory).AvailableMBytes";
         output("powershell", &["-NoProfile", "-Command", cmd])?.trim().parse().ok()
@@ -39,12 +39,11 @@ pub(crate) fn available_ram_mb() -> Option<u64> {
 }
 
 /// Installed physical memory in whole GB, if the OS reports it (the fallback when available RAM
-/// can't be read: half of it is assumed available).
+/// can't be read: half of it is assumed available). On Linux, the process's cgroup memory limit
+/// when smaller: `lightcraft_sysmem::effective_total`.
 pub(crate) fn total_ram_gb() -> Option<u64> {
     let bytes: u64 = if cfg!(target_os = "linux") {
-        let info = std::fs::read_to_string("/proc/meminfo").ok()?;
-        let kb = info.lines().find_map(|l| l.strip_prefix("MemTotal:"))?.trim().trim_end_matches("kB").trim();
-        kb.parse::<u64>().ok()?.checked_mul(1024)?
+        lightcraft_sysmem::effective_total()?
     } else {
         let (program, args): (&str, &[&str]) = if cfg!(windows) {
             ("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"])
@@ -458,5 +457,28 @@ mod ci_jobs_tests {
         assert_eq!(ci_jobs(Some(500), 8), 1, "at least one");
         assert_eq!(ci_jobs(None, 32), 4, "unknown RAM keeps the old default");
         assert_eq!(ci_jobs(None, 2), 2);
+    }
+
+    /// Inside a container or a scope with `MemoryMax`, CI sizes itself from the limit (#3072).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ram_honours_the_cgroup_limit() {
+        let info = std::fs::read_to_string("/proc/meminfo").unwrap();
+        let physical = lightcraft_sysmem::limits::meminfo_bytes(&info, "MemTotal").unwrap();
+        // the bound total_ram_gb's rounding can't exceed: the cgroup limit when there is one
+        let bound = lightcraft_sysmem::limits::cgroup_memory().limit.map_or(physical, |limit| limit.min(physical));
+        let gb = super::total_ram_gb().unwrap();
+        assert!(gb <= (bound + (1 << 29)) >> 30, "{gb} GB above the {bound} bytes this process may use");
+        let available = lightcraft_sysmem::available().unwrap();
+        assert!(available <= bound, "available {available} above the {bound} bytes this process may use");
+    }
+
+    /// What CI would size itself from here; run by hand inside and outside a limited scope.
+    #[test]
+    #[ignore = "diagnostic: prints the RAM and CI jobs this process sees"]
+    fn prints_ci_sizing() {
+        let (total, available) = (super::total_ram_gb(), super::available_ram_mb());
+        let cpus = std::thread::available_parallelism().map_or(4, |n| n.get());
+        println!("ram_total_gb {total:?}, ram_available_mb {available:?}, ci jobs {}", ci_jobs(available, cpus));
     }
 }

@@ -350,7 +350,9 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   sources and rendered previews, evicted least recently used *across* them; the photo on screen
   stays), a quarter for decodes in flight (`memory::work_gate`: grid thumbnails, neighbour
   prefetch and import probes wait for room, loupe and export loads never wait), an eighth for the
-  GPU buffer pool (reuse by best fit within 25 %; freed after 3 s idle).
+  GPU buffer pool (reuse by best fit within 25 %; freed after 3 s idle). "RAM" honours container
+  and cgroup limits: on Linux it is the smaller of `MemTotal` and the process's cgroup memory limit
+  (`memory.max`, set on its cgroup or an ancestor; v1 `memory.limit_in_bytes`), as is merge's 75 %.
 - Decodes free the file's bytes and the raw samples as soon as they are consumed and colour /
   crop / orient in place. macOS keeps freed large blocks resident ("reusable") until the system
   is short of memory, so the resident size climbed with every photo decoded; the apps install
