@@ -32,13 +32,19 @@ fn probe(name: &str) -> Option<u64> {
     use std::os::windows::process::CommandExt;
     /// No console window flashes up for the query (the app has none).
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // the display adapters' class key: each adapter has a numbered subkey with its name and memory
-    let out = std::process::Command::new("reg")
-        .args(["query", r"HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}", "/s"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-    parse_registry(&String::from_utf8_lossy(&out.stdout), name)
+    // the display adapters' class key: each adapter has a numbered subkey with its name and memory.
+    // Only the three values are asked for: listing every value of every subkey (`/s` alone) took
+    // over a minute on a machine with many virtual displays, and the first GPU render waited for it.
+    const KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    let mut text = String::new();
+    for value in ["DriverDesc", "HardwareInformation.qwMemorySize", "HardwareInformation.MemorySize"] {
+        let Ok(out) = std::process::Command::new("reg").args(["query", KEY, "/s", "/v", value]).creation_flags(CREATE_NO_WINDOW).output() else {
+            continue;
+        };
+        text.push_str(&String::from_utf8_lossy(&out.stdout));
+        text.push('\n');
+    }
+    parse_registry(&text, name)
 }
 
 #[cfg(target_os = "linux")]
@@ -60,25 +66,39 @@ fn probe(_name: &str) -> Option<u64> {
     None
 }
 
-/// The memory of adapter `name` in `reg query … /s` output: the subkey whose `DriverDesc` is the
+/// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
+/// another: a subkey's values are gathered under its path): the subkey whose `DriverDesc` is the
 /// name (else the largest any adapter reports). `HardwareInformation.qwMemorySize` is a QWORD;
 /// older drivers write `HardwareInformation.MemorySize` (a DWORD, wrong past 4 GiB: used only
 /// without the other).
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_registry(text: &str, name: &str) -> Option<u64> {
     struct Key {
+        path: String,
         desc: Option<String>,
         qword: Option<u64>,
         dword: Option<u64>,
     }
     let mut keys: Vec<Key> = Vec::new();
+    let mut at: Option<usize> = None;
     for line in text.lines() {
         if line.starts_with("HKEY_") {
-            keys.push(Key { desc: None, qword: None, dword: None });
+            let path = line.trim().to_ascii_lowercase();
+            at = Some(match keys.iter().position(|k| k.path == path) {
+                Some(i) => i,
+                None => {
+                    keys.push(Key { path, desc: None, qword: None, dword: None });
+                    keys.len() - 1
+                }
+            });
+            continue;
+        }
+        if line.trim().starts_with("End of search") {
+            at = None;
             continue;
         }
         let parts: Vec<&str> = line.split_whitespace().collect();
-        let Some(k) = keys.last_mut() else { continue };
+        let Some(k) = at.and_then(|i| keys.get_mut(i)) else { continue };
         match parts.as_slice() {
             ["DriverDesc", "REG_SZ", rest @ ..] => k.desc = Some(rest.join(" ")),
             ["HardwareInformation.qwMemorySize", "REG_QWORD", v] => k.qword = parse_hex(v),
@@ -147,6 +167,23 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         // a DWORD alone still counts
         let old = "HKEY_X\n    DriverDesc    REG_SZ    Old Card\n    HardwareInformation.MemorySize    REG_DWORD    0x40000000\n";
         assert_eq!(parse_registry(old, "Old Card"), Some(1 << 30));
+    }
+
+    /// One query a value (`reg query … /s /v …`, fast) instead of every value of every adapter
+    /// (`/s`, over a minute on a machine with many virtual displays): the outputs one after another
+    /// are gathered per adapter.
+    #[test]
+    fn the_registry_values_of_separate_queries_are_gathered_per_adapter() {
+        let k = r"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+        let text = [
+            format!("{k}\\0000\n    DriverDesc    REG_SZ    NVIDIA GeForce RTX 5070\n\n"),
+            format!("{k}\\0001\n    DriverDesc    REG_SZ    Meta Virtual Monitor\n\nEnd of search: 2 match(es) found.\n\n"),
+            format!("{k}\\0000\n    HardwareInformation.qwMemorySize    REG_QWORD    0x2fc300000\n\nEnd of search: 1 match(es) found.\n\n"),
+            format!("{k}\\0001\n    HardwareInformation.MemorySize    REG_DWORD    0x8000000\n\nEnd of search: 1 match(es) found.\n"),
+        ]
+        .concat();
+        assert_eq!(parse_registry(&text, "NVIDIA GeForce RTX 5070"), Some(0x2fc300000));
+        assert_eq!(parse_registry(&text, "Meta Virtual Monitor"), Some(128 << 20));
     }
 
     #[test]
