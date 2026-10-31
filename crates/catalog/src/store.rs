@@ -43,6 +43,13 @@ pub trait Store: Send {
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         None
     }
+    /// Whether an append writes only the new bytes (a file, a network share). A store whose append rewrites the
+    /// whole file (the browser's: IndexedDB keeps a file as one value, OPFS copies the file it extends) says
+    /// `false`: a long log costs it the log's length on every save, so the journal compacts by length alone
+    /// ([`crate::SnapshotPolicy::whole_file_appends`]).
+    fn appends_in_place(&self) -> bool {
+        true
+    }
 }
 
 /// Appends and truncates open the name's own file, so anything else at the name is the library's

@@ -168,7 +168,7 @@ fn background_snapshot_keeps_edits_made_while_it_runs() {
 fn failed_background_snapshot_loses_nothing_and_retries_later() {
     let g = Gated::new();
     let (mut j, mut live, _) = Journal::open(Box::new(g.clone())).unwrap();
-    j.policy = SnapshotPolicy { max_records: 10, max_bytes: u64::MAX };
+    j.policy = SnapshotPolicy { max_records: 10, max_bytes: u64::MAX, snapshot_share: 0, ..Default::default() };
     for k in 0..12 {
         edit(&mut j, &mut live, k);
     }

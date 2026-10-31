@@ -193,6 +193,11 @@ impl Store for FilesStore {
     fn describe(&self) -> String {
         "browser storage".into()
     }
+    /// The backend writes an append at its offset: IndexedDB reads the file's value and puts it back whole, OPFS's
+    /// `keepExistingData` writable copies the file first (`Backend::write_at`), so a save costs the log's length.
+    fn appends_in_place(&self) -> bool {
+        false
+    }
 }
 
 /// Names of the library files read at start-up.
@@ -260,6 +265,17 @@ mod tests {
         );
         f.failed(&ops);
         assert_eq!(f.take_dirty().len(), 2);
+    }
+
+    /// The browser's store rewrites a log on every append, so the journal must compact by the log's length alone
+    /// (`snapshot_share` 0), not by a share of the snapshot; opening a library over it picks that policy.
+    #[test]
+    fn the_browser_store_compacts_by_the_logs_length_alone() {
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        assert_eq!(s.library.as_ref().unwrap().journal().policy.snapshot_share, 0);
     }
 
     #[test]

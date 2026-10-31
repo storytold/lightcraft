@@ -32,6 +32,13 @@
 
 ## 2026-10-23
 
+### Large libraries
+- Saving follows what changed, not the size of the library: the catalog file is rewritten when the changes since the
+  last rewrite have grown to a quarter of its size, where it used to be rewritten every 2000 changes. Importing 100,000
+  photos rewrote it 50 times (9.4 GB written); it is now 15 times (2.1 GB). Quitting no longer rewrites a large
+  catalog for a handful of changes. In the browser, where every save rewrites the whole log, the catalog is still
+  rewritten every 2000 changes. Numbers and the measurements behind them: `docs/catalog-persistence.md`.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
