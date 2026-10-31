@@ -13,6 +13,31 @@
 
 ## 2026-10-24
 
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved by an earlier version upgrades it, and earlier versions can't open it afterwards. The library
+  as it was is now kept beside it (`catalog.snap.v<format>-<seq>`, `catalog.log.v<format>-<seq>`), and LightCraft says
+  where once: to go back, see `docs/catalog-persistence.md`.
+
+### Large libraries
+- The catalog on disk is several times smaller: a photo's record states only what was set (no empty fields, no default
+  develop settings), about 0.2 kB for a photo with no metadata where it was 3.2 kB (a photo with camera metadata also
+  stores that, as before). Edits, history steps and versions are stored as what differs from the defaults.
+- The catalog's photos are saved in segment files (JSON files in `segments/` beside `catalog.snap`), and opening a
+  library reads them on several threads: in one run, 0.08 s where it was 0.26 s for 300,000 photos (numbers:
+  `docs/catalog-persistence.md`). A damaged segment is named when the library is opened, and nothing is modified. Copy
+  or back up the whole library folder: `catalog.snap` alone no longer holds the photos. (The browser build keeps its
+  photos in `catalog.snap`.)
+- Segment files that a crash left beside a library are removed the next time it is opened, and a library folder that has
+  segment files but no `catalog.snap` (a folder copied in part, or a `catalog.snap` that was removed) is no longer
+  opened as a new, empty library: LightCraft says that the snapshot is missing and changes nothing.
+- Libraries are upgraded when first opened (catalog format 11) and can't be opened by earlier versions afterwards.
+  The photos of a library in a folder on disk are split into segments only once the segments written read back the
+  same. A library from before format 10 whose upgrade can't be written (a full disk, a folder that can't be written
+  to) or whose files can't be kept is not opened: LightCraft says why and leaves its catalog as it was, and it opens
+  once there is room. A new library that can't be created is refused in the same way. A format 10 library in that case
+  opens as it is and is upgraded by a later save, which keeps its files first; changes that could not be logged are
+  saved in format 10, in one file, so that none is lost.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
