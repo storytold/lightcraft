@@ -225,6 +225,7 @@ fn target_follows_the_file() {
     assert_eq!(Target::for_file(MediaKind::Raw, "nef", false, "NIKON CORPORATION NIKON D7500"), Target::RawRelative);
     // Lightroom's `fileFormat` name for proprietary raws
     assert_eq!(Target::for_file(MediaKind::Raw, "RAW", false, "SONY DSC-R1"), Target::RawRelative);
+    assert_eq!(Target::for_file(MediaKind::Raw, "SR2", false, "SONY DSC-R1"), Target::RawRelative);
     assert_eq!(Target::for_file(MediaKind::Raw, "DNG", false, ""), Target::RawAbsolute);
     // a raw shown from its embedded preview develops like a rendered file
     assert_eq!(Target::for_file(MediaKind::Raw, "ARW", true, "SONY ILCE-7M3"), Target::Rendered);
@@ -253,7 +254,7 @@ fn kelvin_is_direct_on_raws_whose_camera_has_matrices() {
     let p = props(x);
     let a7m3 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY ILCE-7M3");
     assert_eq!(to_partial(&p, a7m3)["wb"], json!({"mode": "custom", "temp": 4650.0, "tint": 3.0, "scale": "kelvin"}));
-    let r1 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY DSC-R1");
+    let r1 = Target::for_file(MediaKind::Raw, "SR2", false, "SONY DSC-R1");
     let shifted = to_partial(&p, r1);
     assert!(shifted["wb"]["temp"].as_f64().is_some_and(|t| t > 5000.0 && t < 6500.0), "{shifted}");
     assert_eq!(shifted["wb"]["tint"], 4.0);

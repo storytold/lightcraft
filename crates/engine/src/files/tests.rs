@@ -91,11 +91,11 @@ fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
         let (t, tint) = xy_to_temp_tint(d65);
         (t.round(), tint.round())
     });
-    // a camera without measured matrices: relative, whatever the multipliers
-    let a7m2 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "DSC-R1"));
-    assert!(a7m2.relative && !a7m2.legacy_relative && a7m2.scale_white.is_none());
-    assert_eq!(a7m2.as_shot(d65), (6500.0, 0.0));
-    assert!(lightcraft_catalog::relative_wb_camera("ARW", "SONY DSC-R1"));
+    // a camera without measured matrices: relative, whatever the multipliers (SR2 decodes as Arw)
+    let r1 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "DSC-R1"));
+    assert!(r1.relative && !r1.legacy_relative && r1.scale_white.is_none());
+    assert_eq!(r1.as_shot(d65), (6500.0, 0.0));
+    assert!(lightcraft_catalog::relative_wb_camera("SR2", "SONY DSC-R1"));
     // a camera without matrices whose presets give the scale: Kelvin through them, Sony's daylight preset as
     // 5500 K or so; without presets in the file the scale is Kelvin still, the white the tags' (D65)
     let g = |r: f32, b: f32| [r / 1024.0, 1.0, b / 1024.0];
