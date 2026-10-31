@@ -263,6 +263,25 @@ fn reading_metadata_leaves_the_sidecar_alone_with_auto_write_on() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// The open-time keyword repair runs outside a command, so it writes the repaired photos' sidecars itself
+/// when automatic XMP writing is on (CodeRabbit on #2922): another app reading the sidecar sees one keyword a line.
+#[test]
+fn the_keyword_repair_writes_the_sidecar_with_auto_write_on() {
+    let src = temp_dir("split-keywords-autowrite");
+    write_png(&src.join("frame.png"), 6);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let id = only(&s);
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords = vec!["Bride\r\nGroom".into()];
+    s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(s.split_multiline_keywords(), 1);
+    let xmp = std::fs::read_to_string(src.join("frame.xmp")).expect("the sidecar is written");
+    assert!(xmp.contains(">Bride<") && xmp.contains(">Groom<") && !xmp.contains("Bride\r") && !xmp.contains("Bride\n"), "{xmp}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Issue #934, the round trip the write-back broke: after a read with auto-write on, another app
 /// changes `crs:Exposure2012` from 0.5 to 1.2 (keeping the rest of the file), and the next read
 /// takes 1.2.

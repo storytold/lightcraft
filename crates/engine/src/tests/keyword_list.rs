@@ -484,3 +484,56 @@ fn importing_keywords_reads_a_list() {
     assert!(s.execute("keyword.import", &json!({})).is_err(), "a path or text");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A library whose photos got a whole keyword list as one keyword (line breaks inside) is
+/// repaired when it opens: one keyword a line, journaled.
+#[test]
+fn line_separated_keywords_are_split_when_the_library_opens() {
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords = vec!["Bride\r\n Groom\r\n Happy Couple".into()];
+    s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(s.split_multiline_keywords(), 1);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, vec!["Bride", "Groom", "Happy Couple"]);
+    assert_eq!(s.split_multiline_keywords(), 0, "nothing left to split");
+}
+
+/// A listed keyword with line breaks hands its options to the names it splits into, so a keyword left
+/// out of export stays out (CodeRabbit on #2922); a name listed already keeps its own options but is
+/// left out of export when either was.
+#[test]
+fn a_split_keyword_keeps_its_export_options() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let hidden = KeywordInfo { include_on_export: false, ..KeywordInfo::default() };
+    let groom = KeywordInfo { person: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Bride\nGroom".into(), info: Some(hidden) }).unwrap();
+    s.catalog.apply(Op::SetKeyword { path: "Groom".into(), info: Some(groom) }).unwrap();
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords = vec!["Bride\nGroom".into()];
+    s.catalog.apply(Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(s.split_multiline_keywords(), 1);
+    let bride = s.catalog.keyword_info("Bride").expect("Bride is listed with the options it came with");
+    assert!(!bride.include_on_export, "{bride:?}");
+    let groom = s.catalog.keyword_info("Groom").unwrap();
+    assert!(!groom.include_on_export && groom.person, "kept its own options, left out of export: {groom:?}");
+    assert!(s.catalog.keyword_info("Bride\nGroom").is_none(), "the multi-line record is gone");
+}
+
+/// A split keyword that is where new keywords go hands that to one of its names only, so there is still one
+/// default parent (CodeRabbit on #2922).
+#[test]
+fn a_split_default_parent_stays_one_keyword() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let inside = KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony\nReception".into(), info: Some(inside) }).unwrap();
+    s.split_multiline_keywords();
+    let parents: Vec<&str> = s.catalog.listed_keywords().filter(|k| k.info.new_keywords_inside).map(|k| k.path.as_str()).collect();
+    assert_eq!(parents, ["Ceremony"]);
+    assert_eq!(s.catalog.default_keyword_parent().as_deref(), Some("Ceremony"));
+}

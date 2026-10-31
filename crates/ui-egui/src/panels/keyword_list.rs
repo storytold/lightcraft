@@ -129,7 +129,7 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(at) = at else { return };
     let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    let name = keyword.rsplit('|').next().unwrap_or(&keyword).to_string();
+    let name = drag_leaf(&keyword);
     egui::Area::new(egui::Id::unique("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(
         ctx,
         |ui| {
@@ -164,12 +164,34 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
     }
 }
 
+/// The name a dragged keyword's label shows: its last level, on one line.
+fn drag_leaf(keyword: &str) -> String {
+    spoken_path(keyword.rsplit('|').next().unwrap_or(keyword))
+}
+
+/// A keyword's path as it is read out: on one line, as its name is painted.
+fn spoken_path(path: &str) -> String {
+    lightcraft_catalog::keywords::one_line(path).into_owned()
+}
+
+/// A keyword's path as its row's hover text shows it: on one line, levels joined by ›.
+fn hover_path(path: &str) -> String {
+    spoken_path(path).replace('|', " › ")
+}
+
+/// The Create Keyword Tag dialog's "Put inside …" tick box: the parent keyword on one line, levels joined by ›.
+pub(crate) fn put_inside_label(parent: &str) -> String {
+    crate::i18n::tr_format!("Put inside “{parent}”", parent = hover_path(parent))
+}
+
 /// One keyword's row: the triangle, the tick box, the name, the count, and on hover the arrow.
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
-    crate::widgets::announce(&resp, r.path.clone());
+    // what is read out and hovered shows the path on one line, as the name is painted
+    let visible_path = spoken_path(&r.path);
+    crate::widgets::announce(&resp, visible_path.clone());
     register(ui, format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
         app.ui.dragging_keyword = Some(r.path.clone());
@@ -211,7 +233,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
     let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
-    crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
+    crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), visible_path));
     register(ui, format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
     match state {
@@ -277,7 +299,8 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
     let marks = if is_default { 10.0 } else { 0.0 } + if in_shortcut { 5.0 + measure("+") } else { 0.0 };
     let room = (arrow.left() - 4.0 - (x + 34.0) - marks).max(0.0);
-    let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
+    let flat = lightcraft_catalog::keywords::one_line(&r.name);
+    let name = if measure(&flat) <= room { flat.to_string() } else { crate::widgets::elide_head(&flat, room, measure) };
     let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
     // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
     let mut after = label.right();
@@ -294,7 +317,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         ui.interact(plus, egui::Id::unique(("keyword-list-shortcut", r.path.to_lowercase())), Sense::hover())
             .on_hover_text(crate::i18n::tr("Part of the keyword shortcut"));
     }
-    let resp = resp.on_hover_text(r.path.replace('|', " › "));
+    let resp = resp.on_hover_text(hover_path(&r.path));
     if resp.clicked() {
         app.ui.keyword_list_selected = Some(r.path.clone());
     }
@@ -309,7 +332,7 @@ const INSIDE_NAMED: usize = 4;
 
 /// "Inside: Rome, Venice": the applied keywords inside a keyword, the first few by name.
 fn inside_said(inside: &[String]) -> Option<String> {
-    let named = inside.iter().take(INSIDE_NAMED).map(String::as_str).collect::<Vec<_>>().join(", ");
+    let named = inside.iter().take(INSIDE_NAMED).map(|name| spoken_path(name)).collect::<Vec<_>>().join(", ");
     let more = inside.len().saturating_sub(INSIDE_NAMED);
     let names = if more > 0 { format!("{named} {}", crate::i18n::tr_format!("+{n} more", n = more)) } else { named };
     (!inside.is_empty()).then(|| crate::i18n::tr_format!("Inside: {names}", names = names))
@@ -350,12 +373,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
             match app.run("photo.setMeta", json!({"ids": ids, "addKeywords": [path]})) {
                 Ok(_) => app.toast(
                     ui.ctx(),
-                    crate::i18n::tr_format!(
-                        "Added “{keyword}” to {n} photo{}",
-                        if n == 1 { "" } else { "s" },
-                        keyword = path.replace('|', " › "),
-                        n = n
-                    ),
+                    crate::i18n::tr_format!("Added “{keyword}” to {n} photo{}", if n == 1 { "" } else { "s" }, keyword = hover_path(path), n = n),
                 ),
                 Err(e) => app.toast(ui.ctx(), e),
             }
@@ -365,7 +383,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
 
 /// A keyword's context menu.
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
-    let name = path.replace('|', " › ");
+    let name = hover_path(path);
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(label));
         register(ui, format!("keywordMenu:{id}"), r.rect);
@@ -628,6 +646,36 @@ mod tests {
     use lightcraft_catalog::{Op, Photo, Source};
 
     use super::*;
+
+    /// A path holding line breaks (CR, LF, U+2028, U+2029) is read out and hovered on one line, as its
+    /// name is painted (CodeRabbit on #2922).
+    #[test]
+    fn a_keyword_path_with_line_breaks_is_read_and_hovered_on_one_line() {
+        let path = "Wedding|Bride\r\nGroom\u{2028}Guests\u{2029}Cake";
+        let breaks = |s: &str| s.contains(['\r', '\n', '\u{2028}', '\u{2029}']);
+        assert!(!breaks(&spoken_path(path)), "{:?}", spoken_path(path));
+        assert!(!breaks(&hover_path(path)), "{:?}", hover_path(path));
+        assert!(hover_path(path).starts_with("Wedding › Bride"), "{:?}", hover_path(path));
+    }
+
+    /// The dragged keyword's label and the tick box's "Inside: …" name keywords on one line too (CodeRabbit on
+    /// #2922).
+    #[test]
+    fn a_dragged_keyword_and_the_keywords_inside_one_are_named_on_one_line() {
+        let breaks = |s: &str| s.contains(['\r', '\n', '\u{2028}', '\u{2029}']);
+        assert_eq!(drag_leaf("Wedding|Bride\nGroom"), "Bride Groom");
+        let inside = inside_said(&["Rome\r\nCentre".to_string(), "Venice\u{2029}Lido".to_string()]).unwrap();
+        assert!(!breaks(&inside), "{inside:?}");
+        assert!(inside.contains("Rome Centre") && inside.contains("Venice Lido"), "{inside:?}");
+    }
+
+    /// The Create Keyword Tag dialog names a parent keyword holding line breaks on one line (CodeRabbit on #2922).
+    #[test]
+    fn the_put_inside_box_names_its_parent_on_one_line() {
+        let label = put_inside_label("Wedding|Bride\r\nGroom\u{2028}Guests");
+        assert!(!label.contains(['\r', '\n', '\u{2028}', '\u{2029}']), "{label:?}");
+        assert!(label.contains("Wedding › Bride Groom"), "{label:?}");
+    }
 
     fn library(keywords: &[&[&str]]) -> (Catalog, Vec<PhotoId>) {
         let mut c = Catalog::new();
