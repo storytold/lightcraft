@@ -179,6 +179,11 @@ fn hover_path(path: &str) -> String {
     spoken_path(path).replace('|', " › ")
 }
 
+/// The Create Keyword Tag dialog's "Put inside …" tick box: the parent keyword on one line, levels joined by ›.
+pub(crate) fn put_inside_label(parent: &str) -> String {
+    crate::i18n::tr_format!("Put inside “{parent}”", parent = hover_path(parent))
+}
+
 /// One keyword's row: the triangle, the tick box, the name, the count, and on hover the arrow.
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
@@ -662,6 +667,14 @@ mod tests {
         let inside = inside_said(&["Rome\r\nCentre".to_string(), "Venice\u{2029}Lido".to_string()]).unwrap();
         assert!(!breaks(&inside), "{inside:?}");
         assert!(inside.contains("Rome Centre") && inside.contains("Venice Lido"), "{inside:?}");
+    }
+
+    /// The Create Keyword Tag dialog names a parent keyword holding line breaks on one line (CodeRabbit on #2922).
+    #[test]
+    fn the_put_inside_box_names_its_parent_on_one_line() {
+        let label = put_inside_label("Wedding|Bride\r\nGroom\u{2028}Guests");
+        assert!(!label.contains(['\r', '\n', '\u{2028}', '\u{2029}']), "{label:?}");
+        assert!(label.contains("Wedding › Bride Groom"), "{label:?}");
     }
 
     fn library(keywords: &[&[&str]]) -> (Catalog, Vec<PhotoId>) {
