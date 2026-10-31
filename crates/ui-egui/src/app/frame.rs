@@ -71,6 +71,9 @@ impl LightcraftApp {
         tasks::poll(self, ctx);
         updates_ui::tick(self, ctx);
         self.preview_build_status(ctx);
+        self.backup_schedule(ctx);
+        self.backup_status(ctx);
+        panels::notices::quit_after_backup(self);
         self.save_status(ctx);
         self.ai_mask_detail(ctx, now);
         self.place_names_outcome(ctx);
@@ -152,6 +155,9 @@ impl LightcraftApp {
             self.ui.known_cards = None;
         }
         self.session.persist_if_dirty();
+        // (after it: a backup that was just moved into place is announced, and the old library's
+        // pictures forgotten, in this same frame)
+        self.restore_status(ctx);
         self.expire_gestures();
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);

@@ -59,7 +59,8 @@ fn edits_survive_restart_without_close() {
 fn threshold_compaction_runs_in_the_background() {
     let dir = temp_dir("bg-compact");
     let mut s = open(&dir, true);
-    s.library.as_mut().unwrap().journal_mut().policy = lightcraft_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX };
+    s.library.as_mut().unwrap().journal_mut().policy =
+        lightcraft_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX, ..Default::default() };
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     let mut background = 0;
     for k in 0..60usize {
@@ -73,10 +74,36 @@ fn threshold_compaction_runs_in_the_background() {
             let expect = s.catalog.to_snapshot();
             let copy = temp_dir("bg-compact-crash");
             std::fs::create_dir_all(&copy).unwrap();
-            for f in ["catalog.snap", "catalog.log"] {
-                if dir.join(f).exists() {
-                    std::fs::copy(dir.join(f), copy.join(f)).unwrap();
+            // the catalog's files as they are at one moment: copied again if the compaction in
+            // flight replaced any of them meanwhile (a crash is an instant, a copy is not)
+            let catalog_files = || -> Vec<(String, Vec<u8>)> {
+                let names = |sub: &str| -> Vec<String> {
+                    std::fs::read_dir(dir.join(sub))
+                        .map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).map(|n| format!("{sub}{n}")).collect())
+                        .unwrap_or_default()
+                };
+                // the snapshot and the log, and the snapshot's segments in their folder
+                let mut files: Vec<_> = names("")
+                    .into_iter()
+                    .filter(|n| n.starts_with("catalog.") && n != "catalog.lock")
+                    .chain(names("segments/"))
+                    .filter(|n| !n.ends_with(".tmp"))
+                    .filter_map(|n| std::fs::read(dir.join(&n)).ok().map(|b| (n, b)))
+                    .collect();
+                files.sort();
+                files
+            };
+            let mut files = catalog_files();
+            loop {
+                let again = catalog_files();
+                if again == files {
+                    break;
                 }
+                files = again;
+            }
+            std::fs::create_dir_all(copy.join("segments")).unwrap();
+            for (name, bytes) in &files {
+                std::fs::write(copy.join(name), bytes).unwrap();
             }
             let s2 = open(&copy, true);
             assert_eq!(s2.catalog.to_snapshot(), expect);
@@ -837,5 +864,36 @@ fn the_hold_of_the_view_is_kept_with_the_library_and_holds_nothing_over_from_ano
     s.execute("library.filter", &json!({"rating": 0, "flag": "none"})).unwrap();
     assert!(!s.visible_cloned().contains(&id));
     s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a library in the older one-file format whose upgrade is put off because there is no room
+/// to keep its old files (here: their names are taken by folders), when changes were made and the
+/// library is closed (switching to another one does that), then closing succeeds: every change is
+/// in the log, and the next open replays it. Only the upgrade waits; the reason is logged and kept in `last_error`.
+#[test]
+fn closing_a_library_whose_upgrade_is_put_off_succeeds_when_everything_is_logged() {
+    let dir = temp_dir("put-off-close");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("catalog.snap"), include_str!("../../../catalog/src/fixtures/v10-catalog.snap.json")).unwrap();
+    std::fs::write(dir.join("catalog.log"), include_str!("../../../catalog/src/fixtures/v10-catalog.log.jsonl")).unwrap();
+    // (the names the kept files would have, for the change the library is at when it is opened
+    // (10) and when it is closed, after an edit)
+    for seq in 10..=14 {
+        for kept in ["catalog.snap", "catalog.log"] {
+            std::fs::create_dir(dir.join(format!("{kept}.v10-{seq}"))).unwrap();
+        }
+    }
+    let mut s = open(&dir, false);
+    assert_eq!(s.library.as_ref().unwrap().report.upgraded_from, None, "put off");
+    s.execute("library.select", &json!({"ids": [8]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let expect = s.catalog.to_snapshot();
+    s.close_library().expect("everything is in the log");
+    assert!(s.library.as_ref().unwrap().last_error.is_some(), "the upgrade that could not be done is said");
+    drop(s);
+    let s = open(&dir, false);
+    assert_eq!(s.catalog.to_snapshot(), expect);
+    drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }

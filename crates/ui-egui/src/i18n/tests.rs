@@ -422,6 +422,27 @@ fn choice_values_read_as_words_in_every_language() {
     }
 }
 
+/// Why a backup or a restore is refused reads in every language: each sentence the engine
+/// lists is translated, a command that is not available says its reason without its id, and
+/// an error that names a folder is said as it is.
+#[test]
+fn refusals_of_backup_and_restore_read_in_every_language() {
+    use lightcraft_engine::cmd::backup::{BACKUP_RUNNING, REFUSALS};
+    for language in Locale::ALL.iter().filter(|l| **l != Locale::En) {
+        for refusal in REFUSALS {
+            assert!(language.catalog().contains_key(*refusal), "{} lacks {refusal:?}", language.code());
+        }
+    }
+    set_language(Locale::De);
+    let disabled = format!("command `library.restore` is not available right now: {BACKUP_RUNNING}");
+    assert_eq!(refusal_text(&disabled), "Derzeit nicht möglich: eine Sicherung dieser Bibliothek läuft gerade");
+    assert_eq!(refusal_text(BACKUP_RUNNING), "eine Sicherung dieser Bibliothek läuft gerade");
+    let named = "the backup can't be written: can't make the folder /Volumes/Gone";
+    assert_eq!(refusal_text(named), named);
+    set_language(Locale::En);
+    assert_eq!(refusal_text(&disabled), format!("Not available right now: {BACKUP_RUNNING}"));
+}
+
 /// A rule's problem reads as the field's name and the issue, in the editor's language, joined by
 /// a full-width colon in Japanese and Chinese; the sidebar's list puts the rule's position first.
 #[test]
