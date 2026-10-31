@@ -71,6 +71,7 @@ impl TextLayout {
     /// `text` (cut at [`MAX_CHARS`]) at `px` pixels a line; `None` when there is nothing to draw
     /// (empty text, a non-finite or non-positive size).
     pub fn new(text: &str, px: f32, vertical: bool, craft: &'static [crate::fonts::CraftFont]) -> Option<TextLayout> {
+        use unicode_normalization::UnicodeNormalization;
         use unicode_segmentation::UnicodeSegmentation;
         if text.is_empty() || !px.is_finite() || px <= 0.0 {
             return None;
@@ -79,6 +80,9 @@ impl TextLayout {
             Some((i, _)) => text.get(..i).unwrap_or(text),
             None => text,
         };
+        // macOS file names are often decomposed (NFD); the layout below draws one glyph per char
+        let composed: String = text.nfc().collect();
+        let text = composed.as_str();
         let fonts = faces(craft);
         let latin = fonts.first()?.clone();
         let vertical_data: Vec<_> = if vertical {
@@ -262,6 +266,32 @@ mod tests {
             let layout = TextLayout::new("مرحبا", 40.0, vertical, CRAFT_FONTS).unwrap();
             assert!(layout.glyphs.iter().all(|(face, glyph, _)| *face == 0 && glyph.id.0 == 0));
         }
+    }
+
+    fn assert_draws_composed(text: &str, craft: &'static [CraftFont]) {
+        use unicode_normalization::UnicodeNormalization;
+        let nfc: String = text.nfc().collect();
+        let nfd: String = text.nfd().collect();
+        assert_ne!(nfc, nfd);
+        let (a, b) = (TextLayout::new(&nfc, 40.0, false, craft).unwrap(), TextLayout::new(&nfd, 40.0, false, craft).unwrap());
+        let ids = |l: &TextLayout| l.glyphs.iter().map(|(face, g, _)| (*face, g.id.0)).collect::<Vec<_>>();
+        assert_eq!(ids(&b), ids(&a));
+        assert_eq!(b.width, a.width);
+        assert!(a.glyphs.iter().all(|(_, g, _)| g.id.0 != 0));
+    }
+
+    #[test]
+    fn decomposed_vietnamese_draws_its_composed_letters() {
+        assert_draws_composed("HỌC ĐỂ ỨNG DỤNG", &[]);
+    }
+
+    #[test]
+    fn decomposed_hangul_draws_whole_syllables() {
+        if !CRAFT_FONTS.iter().any(|font| font.covers("Hang")) {
+            lightcraft_testkit::skip!(Fonts, "built without a Hangul face from craft-fonts");
+            return;
+        }
+        assert_draws_composed("제주도 바다 여행.jpg", CRAFT_FONTS);
     }
 
     #[test]
