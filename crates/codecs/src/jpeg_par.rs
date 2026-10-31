@@ -2,24 +2,14 @@
 //!
 //! The image is cut into bands of MCU rows separated by restart markers (`DRI` + `RSTn`): DC
 //! prediction restarts at every marker, so bands are entropy-coded independently on all cores and
-//! concatenated. Quantization uses the example tables of T.81 Annex K scaled by the usual 1–100
-//! quality convention. Huffman tables are made for each image from its own symbol counts (T.81
+//! concatenated. Quantization uses jpegli's tables, one per component, scaled by a distance that
+//! the 1–100 quality maps to (`jpeg_quant`). Huffman tables are made for each image from its own symbol counts (T.81
 //! Annex K.2): a first pass over the bands counts the symbols, a second codes them. The file stays
 //! interleaved baseline with the tables in its `DHT` segments, readable by every decoder, and is
 //! smaller than with the Annex K example tables at the same pixels. Supports grayscale and YCbCr
 //! 4:4:4 / 4:2:0.
 
 use crate::encode::ChromaSubsampling;
-
-/// T.81 Annex K.1 / K.2 example quantization tables (natural order).
-const Q_LUMA: [u16; 64] = [
-    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56,
-    68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
-];
-const Q_CHROMA: [u16; 64] = [
-    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
-];
 
 /// Zig-zag position k → natural index.
 const ZIGZAG: [usize; 64] = [
@@ -161,12 +151,6 @@ fn optimal_table(freq: &Freq) -> ([u8; 16], Vec<u8>) {
     (out, vals)
 }
 
-fn scaled_quant(base: &[u16; 64], quality: u8) -> [u16; 64] {
-    let q = quality.clamp(1, 100) as u32;
-    let scale = if q < 50 { 5000 / q } else { 200 - 2 * q };
-    base.map(|b| ((b as u32 * scale + 50) / 100).clamp(1, 255) as u16)
-}
-
 /// Entropy-coded segment writer with 0xFF byte stuffing.
 struct Bits {
     out: Vec<u8>,
@@ -244,9 +228,14 @@ fn aan_1d(d: &mut [f32; 64], o: usize, stride: usize) {
     d[g(7)] = z11 - z4;
 }
 
-/// Forward DCT of a level-shifted 8×8 block and quantization.
+/// Per-coefficient dead zone: a quantized magnitude below `t[k]` rounds to zero (`t[0]` 0: DC rounds to nearest).
+fn dead_zone(ac: f32) -> [f32; 64] {
+    std::array::from_fn(|k| if k == 0 { 0.0 } else { ac })
+}
+
+/// Forward DCT of a level-shifted 8×8 block and quantization, with the dead zone `dead` (see [`dead_zone`]).
 #[inline]
-fn fdct_quant(block: &[f32; 64], recip: &[f32; 64], out: &mut [i16; 64]) {
+fn fdct_quant(block: &[f32; 64], recip: &[f32; 64], dead: &[f32; 64], out: &mut [i16; 64]) {
     let mut d = *block;
     for r in 0..8 {
         aan_1d(&mut d, r * 8, 1);
@@ -255,7 +244,9 @@ fn fdct_quant(block: &[f32; 64], recip: &[f32; 64], out: &mut [i16; 64]) {
         aan_1d(&mut d, c, 8);
     }
     for i in 0..64 {
-        out[i] = round_i16(d[i] * recip[i]);
+        let v = d[i] * recip[i];
+        // (a multiply, not a branch, so the loop stays vectorised)
+        out[i] = round_i16(v) * i16::from(v.abs() >= dead[i]);
     }
 }
 /// `x.round() as i16` (half away from zero, saturating, NaN to 0) for every `x` (checked for all of them), in plain
@@ -458,9 +449,10 @@ fn encode_with(
         planes
     };
 
-    let ql = scaled_quant(&Q_LUMA, quality);
-    let qc = scaled_quant(&Q_CHROMA, quality);
-    let (rl, rc) = (recip_table(&ql), recip_table(&qc));
+    // one table per component (jpegli's, see `jpeg_quant`)
+    let qt = crate::jpeg_quant::tables(crate::jpeg_quant::quality_to_distance(quality), hs == 2);
+    let recip = qt.each_ref().map(recip_table);
+    let dead = crate::jpeg_quant::AC_DEAD_ZONE.map(dead_zone);
     let (mcu_w, mcu_h) = (8 * hs, 8 * vs);
     let (mx, my) = (width.div_ceil(mcu_w), height.div_ceil(mcu_h));
     // restart interval: whole MCU rows per band, ≤ 65535 MCUs, enough bands to keep all cores busy
@@ -482,14 +474,14 @@ fn encode_with(
                 for vy in 0..vs {
                     for hx in 0..hs {
                         planes[0].block(mcu_x * hs + hx, mcu_y * vs + vy, &mut blk);
-                        fdct_quant(&blk, &rl, &mut q);
+                        fdct_quant(&blk, &recip[0], &dead[0], &mut q);
                         tokenize_block(&q, &mut pred[0], false, &mut tokens, &mut freq);
                     }
                 }
                 if !gray {
-                    for (plane, pred) in planes.iter().zip(pred.iter_mut()).take(3).skip(1) {
+                    for (c, (plane, pred)) in planes.iter().zip(pred.iter_mut()).enumerate().take(3).skip(1) {
                         plane.block(mcu_x, mcu_y, &mut blk);
-                        fdct_quant(&blk, &rc, &mut q);
+                        fdct_quant(&blk, &recip[c], &dead[c], &mut q);
                         tokenize_block(&q, pred, true, &mut tokens, &mut freq);
                     }
                 }
@@ -542,9 +534,10 @@ fn encode_with(
         p.extend(ZIGZAG.iter().map(|&i| q[i] as u8));
         p
     };
-    segment(&mut out, 0xDB, &dqt(0, &ql));
+    segment(&mut out, 0xDB, &dqt(0, &qt[0]));
     if !gray {
-        segment(&mut out, 0xDB, &dqt(1, &qc));
+        segment(&mut out, 0xDB, &dqt(1, &qt[1]));
+        segment(&mut out, 0xDB, &dqt(2, &qt[2]));
     }
     let mut sof = vec![8];
     sof.extend_from_slice(&(height as u16).to_be_bytes());
@@ -552,7 +545,7 @@ fn encode_with(
     if gray {
         sof.extend_from_slice(&[1, 1, 0x11, 0]);
     } else {
-        sof.extend_from_slice(&[3, 1, ((hs as u8) << 4) | vs as u8, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        sof.extend_from_slice(&[3, 1, ((hs as u8) << 4) | vs as u8, 0, 2, 0x11, 1, 3, 0x11, 2]);
     }
     segment(&mut out, 0xC0, &sof);
     let [(dlb, dlv), (alb, alv), (dcb, dcv), (acb, acv)] = &tables;
@@ -608,7 +601,7 @@ mod tests {
         let block: [f32; 64] = std::array::from_fn(|i| ((i * 37 % 255) as f32) - 128.0);
         let q = [1u16; 64];
         let mut out = [0i16; 64];
-        fdct_quant(&block, &recip_table(&q), &mut out);
+        fdct_quant(&block, &recip_table(&q), &[0.0; 64], &mut out);
         for v in 0..8 {
             for u in 0..8 {
                 let c = |k: usize| if k == 0 { std::f64::consts::FRAC_1_SQRT_2 } else { 1.0 };
@@ -776,7 +769,8 @@ mod tests {
             assert_eq!(round_i16(x), x.round() as i16, "{x:e}");
         }
     }
-    const PINNED: [u64; 4] = [0x52ba_772a_589c_1430, 0x013f_8364_821f_1dde, 0xb2a3_b5e5_aef3_7402, 0x08df_d6dc_aa2f_1c78];
+    /// (Last changed when quantization moved from the Annex K tables to jpegli's, `jpeg_quant`.)
+    const PINNED: [u64; 4] = [0xa2ce_3a14_ec52_f4b2, 0x8a19_d382_6a84_b54b, 0x91b8_a5f0_3098_8f59, 0x3d11_5f64_7857_3a86];
     #[test]
     fn grayscale_and_quality_monotone() {
         let (w, h) = (300, 200);
