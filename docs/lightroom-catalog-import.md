@@ -76,12 +76,25 @@ catalog changes; any saved recovery archives remain available.
 Before changing records, the importer attempts to save source image records, decoded XMP,
 verbatim develop settings, history, snapshots and collection content to compressed
 `Interop/lightroom-import-N.lca` recovery archives in the LightCraft library. Archiving is
-best-effort: a size limit or write failure produces a warning and does not prevent photo import.
+best-effort: a size limit, or a failure writing the archive itself, produces a warning (naming the
+`Interop` folder) and does not prevent photo import; an `Interop` folder that can't hold the import
+index refuses the import first (below). On a volume without hard links (exFAT, FAT, some network
+shares) an archive is published by claiming its name with an exclusive create and renaming over
+it, so it still never replaces an existing archive or one another writer claims the same way; a
+process that deletes or replaces the claimed placeholder before the rename is not guarded against.
 Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
 capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
-retained. Oldest managed archives are retired; legacy `.json` archives remain untouched.
-`Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
-never overwritten.
+retained. Oldest managed archives are retired; legacy `.json` archives remain untouched. When an
+archive is saved but cleanup afterwards fails (a temporary file or an old archive that can't be
+removed), the report still names the archive and a separate warning names what was left behind.
+`Interop/lightroom-index.json` records imported identities. Unlike the archive it is required, and
+it is written after the photos are imported, so the importer checks its folder first: when
+`Interop` is a link or a file rather than a folder, or a folder in which a file can't be created
+(read-only, no permission), the import is refused before anything changes, with an error naming
+the folder. Nothing lands outside the library. The check can't catch everything: when the index
+write itself fails after the photos are imported (the disk fills up, or the index would exceed 16 MiB),
+the import reports the error, the photos stay, and a retry may import their virtual copies again,
+because the index doesn't list them. Source catalogs and originals are never overwritten.
 
 Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
 loading the whole `.lrcat`. Database files are capped at 16 GiB and 16,777,216 pages; the WAL
