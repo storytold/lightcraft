@@ -28,7 +28,7 @@ cited here still exists. Formerly docs/parity.md.
 |---|---:|---:|---:|---:|---:|---:|
 | A. Import (IMP) | 12 | 3 | 1 | 1 | 4/6 (67%) | 5/5 (100%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
-| C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
+| C. Views & navigation (VIEW) | 16 | 2 | 0 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 43 | 3 | 3 | 1 | 27/28 (96%) | 13/14 (93%) |
@@ -140,7 +140,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
 | LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit/histogram.rs`, `crates/ui-egui/src/panels/right.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | stays at the top of the Edit panel while its sliders scroll under it (issue #2679, `the_histogram_stays_in_view_while_the_sliders_scroll`); HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; the plot's five tonal zones also drag to adjust their Basic control (LRC-DEV-HISTOGRAM-DRAG); it follows slider drags of an HDR edit live (a small render beside the drafts, `Slot::HdrHistogram`) and never drops to the SDR layout mid-drag; an edit with HDR switched off keeps its SDR histogram while it is dragged (#2819); the shadow and highlight clipping buttons at its top corners are the theme's raised fill with a chevron that stands 3:1 on it in every theme and state |
-| LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | |, `apps/lightcraft/src/hdr_display.rs` (`choose`, `preferred_hdr_format`) | SDR/HDR decision (platform, surface format, OS headroom, `LIGHTCRAFT_HDR_DISPLAY=0`) is unit-tested and logged at start; always SDR today because eframe configures an 8-bit surface; no OS headroom query yet;  |
+| LR-VIEW-HDR-DISPLAY | HDR display output | P2 | 🟡 | `crates/hdr-display/src/lib.rs`, `crates/ui-egui/src/hdr_view.rs`, `crates/engine/src/media/hdr_display.rs` (`with_hdr_display`), `apps/lightcraft/src/hdr_display.rs` (`choose`, `preferred_hdr_format`), [hdr-display.md](hdr-display.md) | on a window whose surface offers scRGB (egui-wgpu `prefer_hdr`, emilk/egui#8703, used through a git patch until released) an HDR edit's loupe shows its HDR rendition; confirmed on Linux (KDE Plasma Wayland, Intel Xe, Mesa 26), also following the system HDR switch live; macOS (EDR, headroom) and Windows untested; whole-frame loupe only (no zoomed windows, compare or second window); CPU HDR render; the SDR/HDR decision (platform, surface format, `LIGHTCRAFT_HDR_DISPLAY=0`) is unit-tested and logged at start, no OS headroom query yet; Settings ▸ Performance toggle (restart), `LIGHTCRAFT_HDR_DISPLAY=0/1`, `ui.inspect` → `hdrDisplay` |
 
 ## D. Search & filter (FILT)
 
@@ -368,7 +368,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-HDR-EDIT | HDR editing | P2 | 🟡 | `cmd:develop.hdr`, `crates/pipeline/src/tone.rs` (`ToneMap::hdr`), `crates/pipeline/src/tests_hdr.rs` | HDR tone map (SDR curve through the midtones, highlights up to the headroom limit) and float HDR render, CPU only; no on-screen HDR display yet (LR-VIEW-HDR-DISPLAY); `crs:HDREditMode` from XMP / Lightroom catalogs turns HDR editing on or off (the headroom limit and SDR rendition aren't read from crs yet) |
+| LR-HDR-EDIT | HDR editing | P2 | 🟡 | `cmd:develop.hdr`, `crates/pipeline/src/tone.rs` (`ToneMap::hdr`), `crates/pipeline/src/tests_hdr.rs` | HDR tone map (SDR curve through the midtones, highlights up to the headroom limit) and float HDR render, CPU only; on-screen HDR display on an HDR (scRGB) window, confirmed on Linux (LR-VIEW-HDR-DISPLAY); `crs:HDREditMode` from XMP / Lightroom catalogs turns HDR editing on or off (the headroom limit and SDR rendition aren't read from crs yet) |
 | LR-HDR-SDRPREVIEW | SDR preview of HDR | P2 | 🟡 | `ctl:hdr.sdr*` | SDR rendition sliders (brightness, contrast, highlights, shadows, whites, clarity) used by every SDR view and export; no separate SDR-preview toggle until HDR display lands |
 | LR-HDR-VISUALIZE | Visualize HDR range | P2 | ✅ | `cmd:view.visualizeHdr`, `crates/pipeline/src/visualize.rs` (`hdr_range`) | grey below SDR white, four colour bands by stops above it; ⇧H toggles it (⌘⇧H stays the Histogram panel), and a text field with the focus keeps the key |
 | LR-HDR-LIMIT | HDR headroom limit | P2 | ✅ | `ctl:hdr.maxEv`, `cmd:develop.hdr` | 0 to 5 stops; marked on the HDR histogram (whose scale stays at 5 stops) |

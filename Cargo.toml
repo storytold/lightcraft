@@ -38,6 +38,7 @@ lightcraft-preview = { path = "crates/preview" }
 lightcraft-merge = { path = "crates/merge" }
 lightcraft-engine = { path = "crates/engine" }
 lightcraft-ui-egui = { path = "crates/ui-egui" }
+lightcraft-hdr-display = { path = "crates/hdr-display" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
 lightcraft-heif = { path = "crates/heif" }
@@ -93,6 +94,7 @@ candle-core = { version = "=0.9.2", default-features = false }
 candle-nn = { version = "=0.9.2", default-features = false }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "wgsl"] }
 pollster = "1"
+naga = { version = "30", default-features = false, features = ["wgsl-in"] } # dev-only: validates WGSL shaders in tests (pure Rust, from wgpu)
 
 # ui
 # 0.37: `default_fonts` is no longer an egui default and the monochrome emoji faces moved behind
@@ -101,6 +103,7 @@ pollster = "1"
 egui = { version = "0.37", default-features = false, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { version = "0.37", default-features = false }
 eframe = { version = "0.37", default-features = false }
+egui-wgpu = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
 rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
@@ -180,19 +183,25 @@ png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
+# HDR display (crates/hdr-display, LR-VIEW-HDR-DISPLAY) needs egui-wgpu's `SurfaceConfig::prefer_hdr`
+# (emilk/egui#8703), which storytold/egui does not have yet. So the egui family is pinned to
+# JordyUSA/egui 6268f70 (branch egui-wgpu-hdr-surface-037): exactly ONE commit on top of the reviewed
+# storytold/egui 6d518fc, touching only crates/egui-wgpu. PENDING a maintainer decision: replacing the
+# reviewed storytold fork commit with the PR author's fork (or landing that commit on storytold/egui
+# and pinning back to it). winit stays on the reviewed storytold fork.
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+emath = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+epaint = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+epaint_default_fonts = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui-winit = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui-wgpu = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_glow = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_extras = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_kittest = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_system_font_provider = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+eframe = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_demo_lib = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+egui_inspection = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

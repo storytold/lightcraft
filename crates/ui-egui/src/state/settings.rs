@@ -138,6 +138,9 @@ pub struct AppSettings {
     pub gpu: bool,
     /// Use Windows DirectComposition to prevent VRR flicker; applies at next launch.
     pub compose_window: bool,
+    /// Show HDR edits in HDR on an HDR display (needs a restart: the window's surface is chosen
+    /// when it is created). Default: [`HDR_DISPLAY_DEFAULT`].
+    pub hdr_display: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
     /// drawn at, up to the photo's own pixels and [`LOUPE_EDGE_CEILING`]). Not the old
     /// `previewEdge` key: its 2560 px default was the soft-image bug (issue #323).
@@ -209,6 +212,13 @@ pub enum LightroomImport {
     AlwaysMerge,
 }
 
+/// Whether HDR display is on until the user says otherwise. Off on Linux and the BSDs: there it
+/// needs a native Wayland window, which takes no files dragged in from the file manager, and the
+/// window can't know before it exists whether the monitor is HDR (KDE offers an HDR surface even
+/// with the system's HDR mode off), so SDR users would lose drag-and-drop and their monitor
+/// profile for nothing. On elsewhere (macOS, Windows), where it costs nothing.
+pub const HDR_DISPLAY_DEFAULT: bool = !cfg!(all(unix, not(target_os = "macos")));
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
@@ -222,6 +232,7 @@ impl Default for AppSettings {
             close_dialogs_outside: false,
             import_dropped_directly: false,
             gpu: true,
+            hdr_display: HDR_DISPLAY_DEFAULT,
             compose_window: false,
             preview_limit: 0,
             external_editor: String::new(),

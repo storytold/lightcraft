@@ -1663,6 +1663,44 @@ fn hdr_edits_render_with_their_hdr_histogram() {
     assert!(r.deep.is_none(), "the preview itself stays the 8-bit SDR rendition");
 }
 
+#[test]
+fn hdr_display_jobs_add_the_hdr_rendition_for_hdr_edits_only() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let plain = s.loupe_job(id, 160, 160, true).unwrap();
+    let key = plain.key;
+    let same = plain.with_hdr_display(true);
+    assert_eq!(same.key, key, "an SDR edit is left alone");
+    assert!(!same.hdr_display);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    let job = s.loupe_job(id, 160, 160, true).unwrap().with_hdr_display(true);
+    assert!(job.hdr_display && job.cache.is_none(), "never the rendered-thumbnail cache");
+    let r = job.run().rendered.unwrap();
+    // the 8-bit image is still the SDR rendition; the HDR rendition rides along in `deep`
+    let sdr = s.loupe_job(id, 160, 160, true).unwrap().run().rendered.unwrap();
+    assert_eq!(r.image.data, sdr.image.data);
+    let deep = r.deep.expect("the HDR rendition");
+    let lightcraft_pipeline::DeepSamples::F32(v) = &deep.samples else { panic!("float samples") };
+    assert_eq!((deep.width, deep.height), (r.image.width, r.image.height));
+    let top = v.iter().copied().fold(0.0f32, f32::max);
+    assert!(top > 1.0, "highlights above SDR white: {top}");
+    // overlays draw on the 8-bit image: no HDR rendition then; off: unchanged
+    let viz = s.loupe_job(id, 160, 160, true).unwrap().with_overlay(lightcraft_pipeline::Overlay::HdrRange).with_hdr_display(true);
+    assert!(!viz.hdr_display);
+    let off = s.loupe_job(id, 160, 160, true).unwrap();
+    let k = off.key;
+    assert_eq!(off.with_hdr_display(false).key, k);
+    // a drag's draft: the SDR rendition only (the CPU HDR render would slow every draft 3–5×),
+    // whichever way round the job is built
+    for draft in [
+        s.loupe_job(id, 160, 160, true).unwrap().draft().with_hdr_display(true),
+        s.loupe_job(id, 160, 160, true).unwrap().with_hdr_display(true).draft(),
+    ] {
+        assert!(draft.run().rendered.unwrap().deep.is_none(), "drafts carry no HDR rendition");
+    }
+}
+
 /// Found by fuzzing catalog snapshots: an album filed under one id but naming its own folder's
 /// listed itself inside itself, and `albums.list` recursed until the stack overflowed (an abort:
 /// no guard catches it). Loading repairs such a catalog (`Catalog::repair`); one that skipped

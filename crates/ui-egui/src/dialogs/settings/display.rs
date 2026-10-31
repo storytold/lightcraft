@@ -43,6 +43,7 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     if let Some(e) = &app.display_error {
         ui.label(RichText::new(e).size(11.0).color(t.reject));
     }
+    super::hdr_display::hdr_window_note(app, ui, t);
     if let Some(d) = &current {
         let info = d.describe();
         if !screen {

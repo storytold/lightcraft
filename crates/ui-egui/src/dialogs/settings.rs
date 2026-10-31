@@ -23,6 +23,7 @@ use crate::widgets::register;
 mod appearance;
 mod display;
 mod general;
+mod hdr_display;
 mod import;
 mod libraries;
 mod performance;
