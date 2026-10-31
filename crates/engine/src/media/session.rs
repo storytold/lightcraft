@@ -52,7 +52,7 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
-        let lens = super::quick::lens_key(&p, &settings);
+        let lens = super::quick::lens_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -115,7 +115,7 @@ impl crate::Session {
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key());
-        let lens = super::quick::lens_key(p, settings);
+        let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
         }
@@ -236,7 +236,7 @@ impl crate::Session {
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key());
-        let lens = super::quick::lens_key(p, &p.develop);
+        let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
         }

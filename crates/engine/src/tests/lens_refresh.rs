@@ -226,8 +226,8 @@ fn a_decode_never_overrides_the_photos_database_profile() {
 }
 
 /// When a photo's database profile changes (a replaced database looked up again), its render key and its thumbnail
-/// and variant cache keys change, so no cached render made with the old profile is shown; with the correction off
-/// the profile changes nothing, and the keys stay.
+/// and variant cache keys change, so no cached render made with the old profile is shown. With the correction off
+/// they change too: the decode fits the raw's starting colour through the profile's vignetting either way.
 #[test]
 fn a_new_database_profile_changes_the_render_and_cache_keys() {
     let mut s = Session::new();
@@ -246,12 +246,16 @@ fn a_new_database_profile_changes_the_render_and_cache_keys() {
     assert_ne!(before.1, after.1, "thumbnail cache key");
     assert_ne!(before.2, after.2, "variant cache key");
     assert_ne!(before.3, after.3, "loupe view cache key");
-    // correction off: the profile isn't used, so changing it leaves every key (and the cached thumbnails) as they are
+    // correction off: the starting colour's fit still uses the profile, so the keys change as well
     let off = with_lens((**s.catalog.photo(id).unwrap()).clone(), Some(lens(-0.03)), false);
     s.catalog.apply(Op::SetDevelop { id, settings: off.develop.clone(), label: "Lens Corrections".into(), edited: None }).unwrap();
     let off_before = keys(&mut s);
     s.catalog.apply(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(-0.05))) }).unwrap();
-    assert_eq!(off_before, keys(&mut s));
+    let off_after = keys(&mut s);
+    assert_ne!(off_before.0, off_after.0, "render key, correction off");
+    assert_ne!(off_before.1, off_after.1, "thumbnail cache key, correction off");
+    assert_ne!(off_before.2, off_after.2, "variant cache key, correction off");
+    assert_ne!(off_before.3, off_after.3, "loupe view cache key, correction off");
 }
 
 /// `lens.downloadDatabase` selects the folder it downloads into, so the session reads the database once it is in
