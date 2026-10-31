@@ -62,6 +62,31 @@ const FULL_FRAME_CROP: &[(&str, (f64, f64))] = &[("ILCE-7RM6", (9984.0, 6656.0))
 /// The verified APS-C bodies (Exif `Model`): their knots span the file's own default crop, the last knot at its corner.
 /// Measured on the ILCE-6700 (docs/sony-ilce7rm6-lens-corrections.md → ILCE-6700).
 const APSC_BODIES: &[&str] = &["ILCE-6700"];
+
+/// A lens whose tables follow its body's convention with another knot spacing and unit, at the focal lengths up to
+/// `max_focal_mm`; measured like the body, against the camera JPEG.
+struct LensException {
+    /// Exif `Model` of the body.
+    body: &'static str,
+    /// Exif `LensModel`, as the body records it.
+    lens: &'static str,
+    max_focal_mm: f64,
+    knot_spacing: f64,
+    unit: f64,
+}
+
+/// The measured lens exceptions (docs/sony-ilce7rm6-lens-corrections.md → ILCE-6700).
+const LENS_EXCEPTIONS: &[LensException] = &[
+    // Sigma 10-18 mm F2.8 DC DN at its wide end: 97 photos at 10 mm and 2 at 10.4-10.5 mm. The body's rule leaves
+    // 1.36-1.38 px there; from 11.7 mm on the body's rule fits better
+    LensException { body: "ILCE-6700", lens: "10-18mm F2.8 DC DN | Contemporary 023", max_focal_mm: 10.5, knot_spacing: 416.0, unit: 14250.0 },
+];
+
+/// The exception for the body `model` with the lens `lens` at `focal_mm`, if one is measured.
+fn lens_exception(model: &str, lens: Option<&str>, focal_mm: Option<f64>) -> Option<&'static LensException> {
+    let (lens, focal) = (lens?.trim(), focal_mm.filter(|f| f.is_finite() && *f > 0.0)?);
+    LENS_EXCEPTIONS.iter().find(|e| e.body == model.trim() && e.lens == lens && focal <= e.max_focal_mm)
+}
 /// The distortion table's value of 1 (relative radius); a global least-squares fit over the 34 photos gives 15000.7.
 const DISTORTION_UNIT: f64 = 15000.0;
 /// The CA table's value of 1 (relative to the green source radius). Provisional: the median best unit of the 20
@@ -179,18 +204,19 @@ fn fill_zoom(source: &dyn Fn(f64) -> f64, x: f64, y: f64) -> Option<f64> {
 /// worse than 0.25 px at a 1440 px long edge at one of the fit samples within the crop (a padded active area, as in
 /// lossless files, reaches radii that are never shown).
 pub(crate) fn warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop: Rect, lateral_ca: bool) -> Option<Opcode> {
-    gated_warp_opcode(t, knot_spacing, active, crop, lateral_ca, FIT_ERROR_PX_AT_1440)
+    gated_warp_opcode(t, knot_spacing, DISTORTION_UNIT, active, crop, lateral_ca, FIT_ERROR_PX_AT_1440)
 }
 
-/// [`warp_opcode`] with the fit gate `fit_error_px` (px at a 1440 px long edge) instead of 0.25 px.
-fn gated_warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop: Rect, lateral_ca: bool, fit_error_px: f64) -> Option<Opcode> {
+/// [`warp_opcode`] with the distortion unit `unit` instead of 15000 and the fit gate `fit_error_px` (px at a 1440 px
+/// long edge) instead of 0.25 px.
+fn gated_warp_opcode(t: &LensTables, knot_spacing: f64, unit: f64, active: Rect, crop: Rect, lateral_ca: bool, fit_error_px: f64) -> Option<Opcode> {
     let v = t.distortion.as_deref().filter(|v| v.iter().any(|&x| x != 0.0))?;
     let (aw, ah) = (active.width as f64, active.height as f64);
     if aw < 2.0 || ah < 2.0 || crop.width == 0 || crop.height == 0 {
         return None;
     }
     let (cw, ch) = (crop.width as f64, crop.height as f64);
-    let source = |r: f64| r * (1.0 + interpolate(v, knot_spacing, r) / DISTORTION_UNIT);
+    let source = |r: f64| r * (1.0 + interpolate(v, knot_spacing, r) / unit);
     let z = fill_zoom(&source, cw / 2.0, ch / 2.0)?;
     // DNG's normalisation: pixel-index units, radius 1 = the farthest active-area corner
     let (cx, cy) = (crop.x as f64 + (cw - 1.0) / 2.0, crop.y as f64 + (ch - 1.0) / 2.0);
@@ -226,12 +252,16 @@ fn gated_warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop: Rect
 /// R and B by 0.84 × the table. Over the 43 verified photos with enough corner detail, the render's corner R/G and B/G
 /// CA went from rms 0.032 / max 0.125 px (off) to 0.052 / 0.219 px (on) at a 1440 px long edge; only the 16–35 mm
 /// improved. Follow-up: warp the CFA colour planes before demosaic, then turn the planes on here.
-pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, active: Rect, crop: Rect) -> Vec<Opcode> {
+///
+/// `lens` (Exif `LensModel`) and `focal_mm` (Exif `FocalLength`) select a measured lens exception's spacing and unit.
+pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, lens: Option<&str>, focal_mm: Option<f64>, active: Rect, crop: Rect) -> Vec<Opcode> {
     let tables = read_tables(raw);
     let knots = tables.distortion.as_ref().map_or(0, Vec::len);
     let Some(spacing) = knot_spacing(model, knots, crop) else { return Vec::new() };
-    let op = if APSC_BODIES.contains(&model.trim()) {
-        gated_warp_opcode(&tables, spacing, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
+    let op = if let Some(e) = lens_exception(model, lens, focal_mm) {
+        gated_warp_opcode(&tables, e.knot_spacing, e.unit, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
+    } else if APSC_BODIES.contains(&model.trim()) {
+        gated_warp_opcode(&tables, spacing, DISTORTION_UNIT, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
     } else {
         warp_opcode(&tables, spacing, active, crop, false)
     };
@@ -372,7 +402,7 @@ mod tests {
             let t = read_tables(&ifd);
             assert!(t.distortion.is_none(), "{what}");
             assert!(warp_opcode(&t, knots(), FF_ACTIVE, FF_CROP, false).is_none(), "{what}");
-            assert!(lens_opcodes(&ifd, "ILCE-7RM6", FF_ACTIVE, FF_CROP).is_empty(), "{what}");
+            assert!(lens_opcodes(&ifd, "ILCE-7RM6", None, None, FF_ACTIVE, FF_CROP).is_empty(), "{what}");
         }
         // not an integer array, or absent
         for value in [Value::Ascii("16 0 2 7".into()), Value::Double(vec![2.0, 0.0, 1.0])] {
@@ -406,7 +436,7 @@ mod tests {
             let mut table = vec![v; 17];
             table[0] = 16;
             let ifd = ifd(vec![(DISTORTION_PARAMS, Value::SLong8(table))]);
-            assert!(lens_opcodes(&ifd, "ILCE-7RM6", FF_ACTIVE, FF_CROP).is_empty(), "{v}");
+            assert!(lens_opcodes(&ifd, "ILCE-7RM6", None, None, FF_ACTIVE, FF_CROP).is_empty(), "{v}");
         }
         // degenerate geometry
         let ff = tables_with_distortion(&values(&FF_DISTORTION));
@@ -455,7 +485,7 @@ mod tests {
         let t = read_tables(&ifd);
         assert!(t.ca.is_some() && t.distortion.is_none());
         assert!(warp_opcode(&t, knots(), FF_ACTIVE, FF_CROP, true).is_none());
-        assert!(lens_opcodes(&ifd, "ILCE-7RM6", FF_ACTIVE, FF_CROP).is_empty());
+        assert!(lens_opcodes(&ifd, "ILCE-7RM6", None, None, FF_ACTIVE, FF_CROP).is_empty());
         // an all-zero distortion table counts as absent
         let zero = LensTables { ca: t.ca, ..tables_with_distortion(&[0.0; 16]) };
         assert!(warp_opcode(&zero, knots(), FF_ACTIVE, FF_CROP, true).is_none());
@@ -509,7 +539,7 @@ mod tests {
         let ifd = sony_lens_ifd(&FF_DISTORTION, &FF_VIGNETTING, &FF_HQ_CA, [1, 2, 1]);
         let with_ca = warp_opcode(&read_tables(&ifd), knots(), FF_ACTIVE, FF_CROP, true);
         assert!(matches!(with_ca, Some(Opcode::WarpRectilinear { ref planes, .. }) if planes.len() == 3), "{with_ca:?}");
-        let ops = lens_opcodes(&ifd, "ILCE-7RM6", FF_ACTIVE, FF_CROP);
+        let ops = lens_opcodes(&ifd, "ILCE-7RM6", None, None, FF_ACTIVE, FF_CROP);
         let [Opcode::WarpRectilinear { planes, .. }] = ops.as_slice() else { panic!("{ops:?}") };
         assert_eq!(planes.len(), 1);
         let green = warp_opcode(&tables_with_distortion(&values(&FF_DISTORTION)), knots(), FF_ACTIVE, FF_CROP, false);
@@ -578,12 +608,12 @@ mod tests {
         let square = Rect { width: A6700_CROP.height, ..A6700_CROP };
         assert_eq!(knot_spacing("ILCE-6700", 11, square), None);
         let ifd = sony_lens_ifd(&A6700_DISTORTION, &APSC_VIGNETTING, &APSC_CA, [1, 2, 1]);
-        let ops = lens_opcodes(&ifd, "ILCE-6700", A6700_CROP, A6700_CROP);
-        let gated = gated_warp_opcode(&read_tables(&ifd), s, A6700_CROP, A6700_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
+        let ops = lens_opcodes(&ifd, "ILCE-6700", None, None, A6700_CROP, A6700_CROP);
+        let gated = gated_warp_opcode(&read_tables(&ifd), s, DISTORTION_UNIT, A6700_CROP, A6700_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
         assert_eq!(ops, gated.into_iter().collect::<Vec<_>>());
         assert_eq!(ops.len(), 1);
         // other APS-C bodies stay unverified
-        assert!(lens_opcodes(&ifd, "ILCE-6600", A6700_CROP, A6700_CROP).is_empty());
+        assert!(lens_opcodes(&ifd, "ILCE-6600", None, None, A6700_CROP, A6700_CROP).is_empty());
     }
 
     /// The APS-C fit gate: a table the polynomial fits within 0.44 px is applied on the ILCE-6700, while the
@@ -594,17 +624,46 @@ mod tests {
         let t = read_tables(&ifd);
         let s = knot_spacing("ILCE-6700", 11, A6700_DECODED_CROP).unwrap();
         assert_eq!(warp_opcode(&t, s, A6700_ACTIVE, A6700_DECODED_CROP, false), None);
-        let ops = lens_opcodes(&ifd, "ILCE-6700", A6700_ACTIVE, A6700_DECODED_CROP);
+        let ops = lens_opcodes(&ifd, "ILCE-6700", None, None, A6700_ACTIVE, A6700_DECODED_CROP);
         assert!(matches!(ops.as_slice(), [Opcode::WarpRectilinear { planes, .. }] if planes.len() == 1), "{ops:?}");
+    }
+
+    const SIGMA_10_18: &str = "10-18mm F2.8 DC DN | Contemporary 023";
+
+    /// The Sigma 10-18 mm exception: its spacing and unit at 10-10.5 mm, the body's rule from 11.7 mm (and without a
+    /// lens or focal length, on another body or another lens).
+    #[test]
+    fn lens_exception_applies_only_to_its_lens_body_and_focal_range() {
+        let ifd = sony_lens_ifd(&A6700_DISTORTION, &APSC_VIGNETTING, &APSC_CA, [1, 2, 1]);
+        let t = read_tables(&ifd);
+        let geometry = (A6700_ACTIVE, A6700_DECODED_CROP);
+        let exception = gated_warp_opcode(&t, 416.0, 14250.0, geometry.0, geometry.1, false, APSC_FIT_ERROR_PX_AT_1440);
+        let body = lens_opcodes(&ifd, "ILCE-6700", None, None, geometry.0, geometry.1);
+        assert!(exception.is_some() && body.len() == 1);
+        assert_ne!(body.first(), exception.as_ref());
+        for focal in [10.0, 10.5] {
+            let ops = lens_opcodes(&ifd, "ILCE-6700", Some(SIGMA_10_18), Some(focal), geometry.0, geometry.1);
+            assert_eq!(ops.first(), exception.as_ref(), "{focal} mm");
+        }
+        for (lens, focal) in [(Some(SIGMA_10_18), Some(11.7)), (Some(SIGMA_10_18), None), (None, Some(10.0)), (Some("E 10-20mm F4 PZ G"), Some(10.0))]
+        {
+            let ops = lens_opcodes(&ifd, "ILCE-6700", lens, focal, geometry.0, geometry.1);
+            assert_eq!(ops, body, "{lens:?} {focal:?}");
+        }
+        // hostile focal lengths fall back to the body's rule
+        for focal in [f64::NAN, f64::INFINITY, -10.0, 0.0] {
+            assert_eq!(lens_opcodes(&ifd, "ILCE-6700", Some(SIGMA_10_18), Some(focal), geometry.0, geometry.1), body);
+        }
+        assert_eq!(lens_exception("ILCE-6600", Some(SIGMA_10_18), Some(10.0)).map(|e| e.unit), None);
     }
 
     #[test]
     fn unknown_model_gets_no_opcodes() {
         let ifd = sony_lens_ifd(&FF_DISTORTION, &FF_VIGNETTING, &FF_CA, [0, 2, 1]);
-        assert!(lens_opcodes(&ifd, "ILCE-7M4", FF_ACTIVE, FF_CROP).is_empty());
-        assert!(lens_opcodes(&ifd, "", FF_ACTIVE, FF_CROP).is_empty());
+        assert!(lens_opcodes(&ifd, "ILCE-7M4", None, None, FF_ACTIVE, FF_CROP).is_empty());
+        assert!(lens_opcodes(&ifd, "", None, None, FF_ACTIVE, FF_CROP).is_empty());
         // the camera's in-camera flag (0 = off here) doesn't matter: the table is applied
-        let ops = lens_opcodes(&ifd, " ILCE-7RM6 ", FF_ACTIVE, FF_CROP);
+        let ops = lens_opcodes(&ifd, " ILCE-7RM6 ", None, None, FF_ACTIVE, FF_CROP);
         assert_eq!(ops, warp_opcode(&read_tables(&ifd), knots(), FF_ACTIVE, FF_CROP, false).into_iter().collect::<Vec<_>>());
         assert_eq!(ops.len(), 1);
     }

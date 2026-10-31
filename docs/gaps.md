@@ -90,6 +90,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | patch | Gap 8: the Sigma 10–18 mm on the ILCE-6700 gets a measured lens exception at 10–10.5 mm (0.55 px worst over 99 photos, was about 1.4 px) |
 | 2026-10-29 | minor | Import thumbnails render when the camera JPEG is too small, retaining preview-only/error fallbacks; import review: remembered thumbnail size and density-aware previews (#2237, part of #2056); pre-import loupe/keyboard culling remains open; no ranked gap closes |
 | 2026-10-24 | minor | Gap 8: lens profile work is tracked in #329; hours unchanged |
 | 2026-10-25 | patch | Import Copy and Move report rename-sequence exhaustion per file without losing earlier transfers; no ranked gap or readiness changes |
