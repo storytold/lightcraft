@@ -263,12 +263,18 @@ fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
 
-/// The most `resync` spends re-validating the suffixes of one line whose whole bytes are not valid
-/// UTF-8 (a real fragment ends at any byte): one line of a modest malformed log that holds a start
-/// of a record in every few bytes used to re-validate the whole remaining suffix at every attempt
-/// (CWE-407). Past the budget the rest of the line stays a torn tail, which the damaged path keeps
-/// and reports, same state as before, minus the CPU.
-const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
+#[cfg(test)]
+thread_local! {
+    /// Start markers that `resync` decoded on this thread (test builds only; see the cost test).
+    pub(crate) static RESYNC_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Total bytes of candidate suffixes `resync` may decode per damaged line: every attempt reads
+/// the rest of the line, so trying every candidate of a crafted line would make
+/// [`Journal::open`] quadratic in the line length (CWE-407). The budget is far above any
+/// fragment-plus-retry a failed append can leave, but caps the stall; past it the line reads as
+/// damage, which is handled safely.
+pub(crate) const MAX_SCAN: usize = 64 << 20;
 
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
@@ -276,25 +282,52 @@ const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
-    // One record per line, so a line of valid UTF-8 holds a valid suffix at every record start and
-    // one validation covers every candidate; only a line that is not wholly valid re-checks, and
-    // then up to the budget rather than the suffix length times the candidate count.
-    let whole = std::str::from_utf8(line).ok();
-    let mut spent = 0usize;
-    (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let text = match &whole {
-            Some(t) => &t[i..],
-            None => {
-                if spent >= RESYNC_BUDGET_BYTES {
-                    return None;
-                }
-                spent = spent.saturating_add(line.len() - i);
-                std::str::from_utf8(&line[i..]).ok()?
-            }
+    // The retry record starts with the `{"seq":` marker, but that marker can also occur inside
+    // the op body (a smart-album rule value such as `{"seq":1}`); then the last occurrence is
+    // nested, not the record start, and decoding it rejects a valid retry. Scan every marker
+    // once, left to right, then try them from the end. A candidate must match the record header
+    // shape — `{"seq":<digits>,"crc":<digits>,"op":`, what `encode_record` writes — so a marker
+    // nested inside the op body (followed by `}` or `,`) or plain junk never reaches
+    // `decode_record`; only a real record start does. This imposes no fixed limit on how many
+    // nested markers a valid record may contain. Each attempt then decodes the rest of the line,
+    // so the scan budget bounds the total when a hostile line still holds many header-shaped
+    // markers, keeping the work near-linear instead of quadratic. The fragment that precedes the
+    // record stays to its left (`i > 0`).
+    let digits = |b: &[u8]| b.iter().take_while(|x| x.is_ascii_digit()).count();
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut from = 0;
+    while let Some(i) = line[from..].windows(START.len()).position(|w| w == START) {
+        let pos = from + i;
+        let Some(after) = line.get(pos + START.len()..) else { break };
+        let seq_digits = digits(after);
+        let crc_field = after.get(seq_digits..).and_then(|rest| rest.strip_prefix(b",\"crc\":"));
+        let crc_digits = crc_field.map(digits).unwrap_or(0);
+        let op_field = crc_field.and_then(|rest| rest.get(crc_digits..)).and_then(|rest| rest.strip_prefix(b",\"op\":"));
+        if seq_digits > 0 && crc_digits > 0 && op_field.is_some() {
+            candidates.push(pos);
+        }
+        from = pos + START.len();
+    }
+    let mut scanned = 0usize;
+    for &i in candidates.iter().rev() {
+        if i == 0 {
+            break; // the record must follow a fragment
+        }
+        let Some(suffix) = line.get(i..) else { continue };
+        scanned = match scanned.checked_add(suffix.len()) {
+            Some(total) if total <= MAX_SCAN => total,
+            _ => break, // the budget is spent: stop trying further candidates
         };
-        let rec = decode_record(text.trim_end_matches('\r'))?;
-        (rec.0 <= last.saturating_add(1)).then_some((i, rec))
-    })
+        let Ok(text) = std::str::from_utf8(suffix) else { continue };
+        #[cfg(test)]
+        RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
+        if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}'))
+            && seq <= last.saturating_add(1)
+        {
+            return Some((i, (seq, op)));
+        }
+    }
+    None
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
@@ -759,5 +792,30 @@ mod tests_resync {
         // a retry is still recognised past `last`: the fragment logs nothing valid, but the CRC
         // matches, so the double `Some` is only reached with `last >= 4`
         assert_eq!(resync(&line, 100).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+    }
+
+    /// A retry record whose op body holds more than eight nested `{"seq":` markers (a
+    /// `SetAlbumRules` with nine rule values of `{"seq":1}`) exhausts `resync`'s fixed
+    /// `MAX_DECODES = 8` decode budget on the nested markers, so the outer record's real
+    /// start is never decoded and the valid operation is truncated as damage.
+    #[test]
+    fn resync_recovers_retry_beyond_eight_nested_markers() {
+        let mut c = Catalog::new();
+        let album_id = c.alloc_album_id();
+        let mut rules = Vec::new();
+        for _ in 0..9 {
+            rules.push(crate::Rule::Field { field: "title".into(), op: "isEmpty".into(), value: serde_json::json!({ "seq": 1 }) });
+        }
+        let retry_op = Op::SetAlbumRules {
+            id: album_id,
+            rules: Box::new(crate::Filter { rule_set: Some(crate::RuleSet { mode: crate::Match::All, rules }), ..Default::default() }),
+        };
+        let body = serde_json::to_string(&retry_op).unwrap();
+        let crc = crc32fast::hash(body.as_bytes());
+        let record = format!("{{\"seq\":5,\"crc\":{crc},\"op\":{body}}}");
+        let mut line = Vec::from(b"torn fragment" as &[u8]);
+        let fragment = line.len();
+        line.extend_from_slice(record.as_bytes());
+        assert_eq!(resync(&line, 4).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
     }
 }
