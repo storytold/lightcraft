@@ -42,6 +42,10 @@ struct Shared<S, R> {
     live: Mutex<Vec<std::thread::ThreadId>>,
     #[cfg(not(target_arch = "wasm32"))]
     ended: Condvar,
+    /// Tests: how many times [`stop`] waited for a running job (a drop after a shutdown, or by
+    /// the pool's own job, must not wait at all).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    stop_waits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// How long dropping a pool waits for the jobs still running (see [`JobPool::shutdown`]).
@@ -87,6 +91,8 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 live: Mutex::new(Vec::new()),
                 #[cfg(not(target_arch = "wasm32"))]
                 ended: Condvar::new(),
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                stop_waits: Arc::default(),
             }),
             tx,
             rx,
@@ -164,6 +170,12 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
             close(&self.shared);
             true
         }
+    }
+
+    /// Tests: the count of [`stop`]'s waits for a running job (it outlives the pool).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn stop_waits(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        self.shared.stop_waits.clone()
     }
 
     /// Worker threads that have not ended (0 before the first job, and on wasm).
@@ -329,6 +341,8 @@ fn stop<S, R>(shared: &Shared<S, R>, workers: &mut Vec<std::thread::JoinHandle<(
     let mut live = shared.live.lock().unwrap_or_else(|e| e.into_inner());
     while live.iter().any(|id| *id != me) {
         let Some(left) = timeout.checked_sub(t0.elapsed()).filter(|d| !d.is_zero()) else { break };
+        #[cfg(test)]
+        shared.stop_waits.fetch_add(1, Ordering::SeqCst);
         live = shared.ended.wait_timeout(live, left).unwrap_or_else(|e| e.into_inner()).0;
     }
     let running: Vec<std::thread::ThreadId> = live.iter().copied().filter(|id| *id != me).collect();

@@ -6,18 +6,31 @@ use lightcraft_engine::activity::{Cancel, TaskInfo, Unit};
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::panels::activity::{WIDTH, count_text};
+use crate::panels::activity::{SHOW_AFTER_MS, WIDTH, count_text, due};
 use crate::{LightcraftApp, Services};
 
-// generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
-const T: Duration = Duration::from_secs(60);
+/// Generous: merges and renders run on worker threads that a busy machine (a full workspace test run)
+/// slows a lot. Stretched by `LIGHTCRAFT_TIME_SCALE`.
+fn t() -> Duration {
+    stretched(Duration::from_secs(60))
+}
+
+/// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the waits here sit on fixed times (the
+/// stand-in drive's 100 ms per file, the Auto Import listing every few seconds).
+fn stretched(d: Duration) -> Duration {
+    lightcraft_testkit::scaled(d).max(d)
+}
 
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // let the first renders finish: a render still running when the test binary exits can crash in the
     // GPU driver's teardown (the preview pool doesn't join its workers)
-    h.settle(T);
+    h.settle(t());
+    // and whatever the demo itself runs in the stack: on a loaded machine it outlives half a second
+    // and its row would be counted with the test's own
+    let ended = h.step_until(t(), |h| h.app.session.activity.list().is_empty());
+    assert!(ended, "the demo's own tasks never ended: {:?}", h.app.session.activity.list());
     h
 }
 
@@ -44,7 +57,7 @@ fn wait_visible(h: &mut Headless) {
 fn click(h: &mut Headless, id: &str) {
     h.step();
     h.step();
-    assert_eq!(h.request("ui.clickWidget", json!({"id": id}), T)["ok"], true, "{id}");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": id}), t())["ok"], true, "{id}");
     for _ in 0..4 {
         h.step();
     }
@@ -57,14 +70,16 @@ fn rows_appear_after_half_a_second_and_cancel_by_click() {
     g.progress(2, 5);
     h.step();
     // a frame on a loaded machine can outlast the half second: only judge a task still young after it
-    if h.app.session.activity.list()[0].age_ms < crate::panels::activity::SHOW_AFTER_MS {
+    // (`a_task_has_a_row_from_half_a_second_on` checks the threshold itself without the clock)
+    let young = h.app.session.activity.list().iter().any(|t| t.id == g.id() && !due(t));
+    if young {
         assert!(!has(&h, &format!("activity:row:{}", g.id())), "not before 0.5 s");
     }
     wait_visible(&mut h);
     assert!(has(&h, &format!("activity:row:{}", g.id())));
     click(&mut h, &format!("activity:cancel:{}", g.id()));
     assert!(g.is_cancelled());
-    let inspect = h.request("ui.inspect", json!({}), T);
+    let inspect = h.request("ui.inspect", json!({}), t());
     assert_eq!(inspect["result"]["activity"][0]["cancelling"], true, "{}", inspect["result"]["activity"]);
 }
 
@@ -97,6 +112,29 @@ fn not_cancellable_rows_have_no_cross() {
     assert!(!has(&h, &format!("activity:cancel:{}", g.id())));
 }
 
+/// The threshold the stack draws by, without the wall clock (a test that waits for real time can't tell
+/// a row shown too early from a frame that took half a second on a loaded machine).
+#[test]
+fn a_task_has_a_row_from_half_a_second_on() {
+    let task = |age_ms| TaskInfo {
+        id: 1,
+        kind: "export",
+        label: "Exporting".into(),
+        done: 0,
+        total: 0,
+        unit: Unit::Count,
+        detail: String::new(),
+        cancellable: true,
+        cancelling: false,
+        age_ms,
+    };
+    assert_eq!(SHOW_AFTER_MS, 500);
+    assert!(!due(&task(0)), "a task just started has no row");
+    assert!(!due(&task(SHOW_AFTER_MS - 1)), "nor one a moment short of half a second");
+    assert!(due(&task(SHOW_AFTER_MS)), "half a second old: a row");
+    assert!(due(&task(u64::MAX)));
+}
+
 #[test]
 fn count_text_by_unit() {
     let mut t = TaskInfo {
@@ -127,7 +165,7 @@ fn stale_cancel_is_harmless() {
     wait_visible(&mut h);
     let id = g.id();
     drop(g);
-    let r = h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T);
+    let r = h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), t());
     assert_eq!(r["ok"], false, "an error result, not a panic: {r}");
     h.step();
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
@@ -231,15 +269,15 @@ fn slow_writer(ms: u64) -> crate::SharedWrite {
 fn start_export(h: &mut Headless, n: usize) {
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(n).map(|p| p.0).collect();
     assert_eq!(ids.len(), n, "the demo library has {n} photos");
-    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), T);
-    h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), T);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), t());
+    h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t());
     h.step();
     if let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
         *full_size = false;
         *resize = lightcraft_engine::export::Resize::long_edge(64);
         *dir = "/lc-test-out".into();
     }
-    let r = h.request("ui.dialog.confirm", json!({}), T);
+    let r = h.request("ui.dialog.confirm", json!({}), t());
     assert_eq!(r["ok"], true, "{r}");
 }
 
@@ -249,12 +287,12 @@ fn export_shows_a_row_and_stops_on_activity_cancel() {
     h.app.services.write_shared = Some(slow_writer(200));
     start_export(&mut h, 5);
     assert!(h.app.export.is_some(), "running in the background");
-    let tasks = h.request("ui.inspect", json!({}), T)["result"]["activity"].clone();
+    let tasks = h.request("ui.inspect", json!({}), t())["result"]["activity"].clone();
     assert_eq!(tasks[0]["kind"], "export", "{tasks}");
     assert_eq!(tasks[0]["total"], 5, "{tasks}");
     let id = tasks[0]["id"].as_u64().unwrap();
-    assert_eq!(h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T)["ok"], true);
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert_eq!(h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), t())["ok"], true);
+    assert!(h.step_until(t(), |h| h.app.export.is_none()));
     assert!(h.app.session.activity.list().is_empty());
     assert!(h.app.last_export_result.as_ref().is_some_and(|r| r["cancelled"] == true), "{:?}", h.app.last_export_result);
     assert!(!has(&h, "button:exportCancel"), "the old window is gone");
@@ -265,7 +303,7 @@ fn dead_export_worker_leaves_no_row() {
     let mut h = demo();
     h.app.services.write_shared = Some(std::sync::Arc::new(|_: &str, _: &[u8]| -> Result<(), String> { panic!("synthetic writer panic") }));
     start_export(&mut h, 2);
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert!(h.step_until(t(), |h| h.app.export.is_none()));
     assert!(h.app.session.activity.list().is_empty());
 }
 
@@ -293,7 +331,7 @@ fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atom
             && index >= lightcraft_engine::import::batch_size()
         {
             let t0 = std::time::Instant::now();
-            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < Duration::from_secs(60) {
+            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < t() {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
@@ -306,7 +344,7 @@ fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atom
         })
     }));
     let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
-    h.settle(T);
+    h.settle(t());
     (h, dir)
 }
 
@@ -316,11 +354,11 @@ fn import_cancelled_by_command_reports_cancelled() {
     let (mut h, dir) = slow_import("cancel", n);
     let undo0 = h.app.session.undo.len();
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
+    assert!(h.step_until(t(), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
     let tasks = h.app.session.activity.list();
     assert_eq!(tasks.first().map(|t| t.kind), Some("import"), "{tasks:?}");
     h.app.session.activity.cancel(tasks[0].id).unwrap();
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
+    assert!(h.step_until(t(), |h| h.app.import.is_none()));
     assert!(h.app.session.activity.list().is_empty());
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Import cancelled")), "{:?}", h.app.ui.toast);
     assert!(h.app.session.catalog.len() < n, "stopped part-way");
@@ -335,15 +373,15 @@ fn a_photo_chosen_during_an_import_stays_selected() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (mut h, dir) = gated_import("chosen", 20, Some(gate.clone()));
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
+    assert!(h.step_until(t(), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
     // the newest photo so far, never the import's first
     let chosen = h.app.session.catalog.photos().map(|p| p.id).max().expect("photos arrived");
-    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [chosen.0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [chosen.0]}}), t());
     assert_eq!(r["ok"], true, "{r}");
     // held at the gate until now, so the import cannot have ended however slowly the frames ran
     assert!(h.app.import.is_some(), "still importing");
     gate.store(true, std::sync::atomic::Ordering::Release);
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
+    assert!(h.step_until(t(), |h| h.app.import.is_none()));
     assert_eq!(h.app.session.catalog.len(), 20, "all imported");
     assert_eq!(h.app.session.selection.active, Some(chosen));
     let _ = std::fs::remove_dir_all(&dir);
@@ -359,7 +397,7 @@ fn scan_shows_a_row_and_cancel_closes_it() {
     assert!(tasks[0].cancellable);
     h.app.session.activity.cancel(tasks[0].id).unwrap();
     // like the old Cancel: the scan is dropped at once, without waiting for the file being read
-    assert!(h.step_until(Duration::from_secs(10), |h| h.app.scan.is_none()));
+    assert!(h.step_until(stretched(Duration::from_secs(10)), |h| h.app.scan.is_none()));
     assert!(h.app.session.activity.list().is_empty());
     for _ in 0..3 {
         h.step();
@@ -385,7 +423,7 @@ fn bracket(tag: &str) -> (Headless, std::path::PathBuf) {
     session.execute("library.select", &json!({"ids": ids})).unwrap();
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    h.settle(T);
+    h.settle(t());
     (h, dir)
 }
 
@@ -401,7 +439,7 @@ fn final_merge_shows_a_row_and_cancels() {
     assert!(rows[0].cancellable);
     assert_eq!(rows[0].total, 1000);
     h.app.session.activity.cancel(rows[0].id).unwrap();
-    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    assert!(h.step_until(t(), |h| h.app.merge.final_task.is_none()));
     assert!(h.app.merge.last_result.is_none(), "nothing merged");
     assert_eq!(h.app.session.catalog.len(), before, "no photo added");
     assert!(h.app.session.activity.list().is_empty());
@@ -426,7 +464,7 @@ fn merge_dialog_remembers_the_last_settings_per_kind() {
     crate::merge::start_final(&mut h.app, &opts).unwrap();
     let row = h.app.session.activity.list()[0].id;
     h.app.session.activity.cancel(row).unwrap();
-    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    assert!(h.step_until(t(), |h| h.app.merge.final_task.is_none()));
     crate::merge::open(&mut h.app, "merge.hdr").unwrap();
     let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
     assert_eq!(shown, &opts);
@@ -500,21 +538,21 @@ fn batch_merge_runs_each_set_in_turn() {
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // the merge ordering does not need the grid's nine thumbnails; one Detail render is enough
-    let r = h.request("ui.set", json!({"view": "detail", "filmstrip": false}), T);
+    let r = h.request("ui.set", json!({"view": "detail", "filmstrip": false}), t());
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(T), "the imported photos and the active preview settle");
+    assert!(h.settle(t()), "the imported photos and the active preview settle");
     let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();
     assert_eq!(r["sets"], 3);
     assert_eq!(h.app.merge.batch.len(), 2, "one running, two queued");
     let rows = h.app.session.activity.list();
     assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
     // the first merge finishes and the second starts by itself
-    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert!(h.step_until(t(), |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
     assert_eq!(h.app.session.catalog.len(), 10);
     // cancelling the second drops the third
     let rows = h.app.session.activity.list();
     h.app.session.activity.cancel(rows[0].id).unwrap();
-    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    assert!(h.step_until(t(), |h| h.app.merge.final_task.is_none()));
     assert!(h.app.merge.batch.is_empty());
     assert_eq!(h.app.session.catalog.len(), 10, "nothing more merged");
     assert!(h.app.session.activity.list().is_empty());
@@ -534,7 +572,7 @@ fn find_missing_shows_an_indeterminate_row() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!((rows[0].kind, rows[0].label.as_str()), ("findMissing", "Find Missing Photos"));
     assert_eq!((rows[0].total, rows[0].cancellable), (0, false), "indeterminate, no ✕");
-    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    assert!(h.step_until(t(), |h| h.app.tasks.is_empty()));
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the task");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -546,7 +584,7 @@ fn auto_import_listing_has_no_row() {
     std::fs::create_dir_all(&dir).unwrap();
     h.app.session.import_defaults.auto_folder = Some(dir.to_string_lossy().to_string());
     // the watched folder is listed every few seconds, quietly
-    assert!(h.step_until(Duration::from_secs(10), |h| h.app.tasks.is_running("Auto Import")));
+    assert!(h.step_until(stretched(Duration::from_secs(10)), |h| h.app.tasks.is_running("Auto Import")));
     assert!(h.app.session.activity.list().is_empty(), "{:?}", h.app.session.activity.list());
     h.app.session.import_defaults.auto_folder = None;
     let _ = std::fs::remove_dir_all(dir);
