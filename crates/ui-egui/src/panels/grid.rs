@@ -301,13 +301,13 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
             ui.painter().rect_filled(hr, 0.0, t.canvas);
             let full = crate::i18n::source_title(&app.session);
-            let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.font(12.5), t.text_dim).size().x;
+            let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.label(), t.text_dim).size().x;
             // the title gives way to the count: a long album or folder name is trimmed, in full on hover
             let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
-            let font = t.semibold(17.0);
+            let font = t.display_strong();
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.label(), t.text_dim);
             crate::widgets::register(ui, "grid:title", title_rect);
             crate::widgets::register(ui, "grid:count", count_rect);
             if title != full {
@@ -674,7 +674,7 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
         pos2(x + gw + 10.0, r.center().y),
         Align2::LEFT_CENTER,
         crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n),
-        t.font(12.5),
+        t.label(),
         t.text_dim,
     );
     if resp.clicked() {
@@ -866,10 +866,12 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
             "date" => photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| crate::i18n::tr("No date").into()),
             _ => photo.file_name.rsplit_once('.').map(|(n, _)| n.to_string()).unwrap_or(photo.file_name.clone()),
         };
-        p.text(pos2(r.left() + 8.0, r.top() + 12.0), Align2::LEFT_CENTER, name, t.font(10.5), t.text_dim);
         let fmt = photo.format.clone();
-        let g = p.layout_no_wrap(fmt, t.semibold(9.0), t.text_label);
+        let g = p.layout_no_wrap(fmt, t.micro_strong(), t.text_label);
         let br = Rect::from_min_size(pos2(r.right() - g.size().x - 14.0, r.top() + 5.0), g.size() + vec2(8.0, 3.0));
+        // (the line ends before the format: it used to run on under it)
+        let line = crate::widgets::one_line(p, &name, t.caption(), t.text_dim, br.left() - 6.0 - (r.left() + 8.0));
+        p.galley(pos2(r.left() + 8.0, r.top() + 12.0 - line.size().y / 2.0), line, t.text_dim);
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
     }
@@ -913,7 +915,7 @@ fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: 
 
 fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, square: bool) {
     // virtual copy: a folded-corner tag at the top right
-    let g = p.layout_no_wrap(name.to_string(), t.semibold(10.5), Color32::WHITE);
+    let g = p.layout_no_wrap(name.to_string(), t.micro_strong(), Color32::WHITE);
     let tr = if square { img_rect.right_top() + vec2(-6.0, 6.0) } else { img_rect.right_top() + vec2(-5.0, 5.0) };
     let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + 20.0));
     p.rect_filled(br, 10.0, Color32::from_black_alpha(165));
@@ -932,7 +934,7 @@ fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, squ
 fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, img_rect: Rect) {
     // a raw shown from its embedded JPEG: a small amber "Preview" pill at the image's bottom
     // left, above the badge bar (always shown: it changes what editing does)
-    let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
+    let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.micro_strong(), Color32::WHITE);
     let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
     let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
     p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
@@ -1006,12 +1008,12 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             let count_w =
-                ui.painter().layout_no_wrap(cnt.to_owned(), t.font(12.5), t.text_dim).size().x.ceil().min((ui.available_width() * 0.45).floor());
+                ui.painter().layout_no_wrap(cnt.to_owned(), t.label(), t.text_dim).size().x.ceil().min((ui.available_width() * 0.45).floor());
             let path_w = (ui.available_width() - count_w - 8.0).max(0.0).floor();
             ui.allocate_ui_with_layout(vec2(path_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 folder_breadcrumbs(app, ui, &b.path);
             });
-            let count = ui.add_sized(vec2(count_w, 24.0), egui::Label::new(egui::RichText::new(cnt).size(12.5).color(t.text_dim)).truncate());
+            let count = ui.add_sized(vec2(count_w, 24.0), egui::Label::new(egui::RichText::new(cnt).font(t.label()).color(t.text_dim)).truncate());
             register(ui, "grid:count", count.rect);
             count.on_hover_text(cnt);
         });
@@ -1028,7 +1030,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             if local_n > 0 {
                 let label = crate::i18n::tr_format!("Add {local_n} to My Photos", local_n = local_n);
                 let button =
-                    ui.add(egui::Button::new(egui::RichText::new(label).font(t.semibold(11.5)).color(t.text)).wrap().min_size(vec2(37.0, 24.0)));
+                    ui.add(egui::Button::new(egui::RichText::new(label).font(t.caption_strong()).color(t.text)).wrap().min_size(vec2(37.0, 24.0)));
                 register(ui, "button:addToLibrary", button.rect);
                 if button.clicked() {
                     let local: Vec<u64> = ids.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.local)).map(|id| id.0).collect();
@@ -1090,7 +1092,7 @@ fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
         let last = remaining == 1;
         // Share the bounded row among the remaining crumbs, leaving room for every separator.
         let width = ((ui.available_width() - separator_w * (remaining - 1) as f32) / remaining as f32).max(0.0).floor();
-        let text = egui::RichText::new(*part).size(13.0).color(if last { t.text } else { t.text_label });
+        let text = egui::RichText::new(*part).font(t.body()).color(if last { t.text } else { t.text_label });
         let r = ui.add_sized(vec2(width, 24.0), egui::Label::new(if last { text.strong() } else { text }).truncate().sense(Sense::click()));
         register(ui, format!("crumb:{i}"), r.rect);
         if !last {

@@ -1032,7 +1032,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));
             } else {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't open the library at")).color(t.text_label));
-                ui.label(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text));
+                ui.label(RichText::new(&problem.path).font(t.body_strong()).color(t.text));
             }
             ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
             ui.label(
@@ -1267,7 +1267,7 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.horizontal_centered(|ui| {
                 let r = ui.label(
                     RichText::new(crate::i18n::tr("Temporary session — your library isn't open, and nothing you do here is saved."))
-                        .font(t.semibold(12.5))
+                        .font(t.body_strong())
                         .color(t.canvas),
                 );
                 register(ui, "indicator:temporarySession", r.rect);

@@ -340,7 +340,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         x += g.size().x + 10.0;
     }
     let name = photo.copy_name.as_ref().map(|c| format!("{} ({c})", photo.file_name)).unwrap_or(photo.file_name.clone());
-    let g = pt.layout_no_wrap(name, t.font(11.5), t.text_dim);
+    let g = pt.layout_no_wrap(name, t.caption(), t.text_dim);
     let name_w = g.size().x;
     if x + name_w + 110.0 < cap.right() {
         pt.galley(pos2(x, cap.center().y - g.size().y / 2.0), g, t.text_dim);
