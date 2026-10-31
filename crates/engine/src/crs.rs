@@ -445,7 +445,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Crop (normalized edges of the unrotated image + straighten angle)
-    match boolean(props, "crs:HasCrop") {
+    // Catalogs and some sidecars omit HasCrop: any crop edge or angle still supplies a crop.
+    // The full-frame rectangle with angle zero is already our identity (no crop).
+    const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
+    match boolean(props, "crs:HasCrop").or_else(|| CROP.iter().any(|k| props.contains_key(*k)).then_some(true)) {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
             let (l, t, r, b) = (e("Left", 0.0), e("Top", 0.0), e("Right", 1.0), e("Bottom", 1.0));
