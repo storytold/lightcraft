@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (test apps size their caches for their test's share of memory) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -73,6 +73,13 @@ module per file (`cargo test -p <crate> --test it <module>::`); a test that chan
 whole process (a global allocator, closing the GPU) keeps a binary of its own in `tests/`. The WASM
 build is one `cargo check --target wasm32-unknown-unknown --keep-going` over the wasm-safe crates.
 
+libtest runs several tests at once in one process, so each `ui-egui` lib test's app sizes its own
+caches (the session's cache share and the renderer's stage caches) for its test's share of the
+machine, not the whole machine: `lightcraft_testkit::memory::per_test_bytes` (`MemAvailable` ÷
+libtest's tests at once: `--test-threads`, else `RUST_TEST_THREADS`, else the CPU count; 1–16 GiB)
+taken as the app's RAM. The process-wide budget, the decode, export and GPU gates and the demo scene
+cache keep their size.
+
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
@@ -87,6 +94,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Quality gates: `ui-egui` test apps size their caches for their test's share of memory |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

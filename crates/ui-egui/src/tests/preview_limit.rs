@@ -1349,12 +1349,15 @@ mod in_the_loupe {
         assert!(before > 3, "the views hold something ({before} bytes)");
         // a third of it is the budget: over it, but inside the runaway limit (four times)
         h.app.renderer.stage_budget_override = Some(before / 3);
+        // counted from here: a test app's own stage budget (its test's share of memory, issue
+        // #3066) may already have trimmed an idle view while the photo opened
+        let trimmed = h.app.renderer.memory()["stageCaches"]["trimmed"].as_u64().unwrap();
         h.app.session.begin_interaction("Exposure").unwrap();
         for tick in 0..8 {
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
             h.settle(SETTLE);
         }
-        assert_eq!(h.app.renderer.memory()["stageCaches"]["trimmed"], 0);
+        assert_eq!(h.app.renderer.memory()["stageCaches"]["trimmed"].as_u64().unwrap(), trimmed, "nothing is trimmed during the drag");
         assert!(held(&h) > before / 3, "and they are still there");
     }
 
