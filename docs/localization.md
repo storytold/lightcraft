@@ -69,8 +69,9 @@ is used, so only the languages that need it add one. The contexts are listed in 
 - `develop presets`, `filter bar`, `rename dialog`: a preset message shared by develop presets and
   other kinds. German calls develop presets "Presets", as Lightroom does, and the others "Vorgaben":
   `"Presets": "Presets"` names the panel, `"filter bar|Presets"` and `"rename dialog|Presets"` keep
-  "Vorgaben" there, and `"develop presets|Import Presets…"` and `"develop presets|Preset name"` set
-  the panel's import and the Create Preset dialog apart from the other kinds' ones.
+  "Vorgaben" there, and the `develop presets|…` entries for `Import Presets…`, `Preset name` and
+  `Rename Preset` set the panel's import, the Create Preset dialog and the panel's rename prompt
+  apart from the other kinds' ones.
 
 Code reads a contextual message with `i18n::tr_ctx(context, "…")`. A contextual key that names no
 real message fails the i18n tests.
