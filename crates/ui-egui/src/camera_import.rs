@@ -114,13 +114,16 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(_) => Err(crate::i18n::tr("the camera stopped answering").to_string()),
     };
     let Some(task) = app.camera.take() else { return };
+    // ✕ can land after the worker sent its result and before this frame took it: the cancel still
+    // counts (no review, no message); what was fetched stays staged for the next try
+    if task.guard.is_cancelled() || task.progress.cancel.load(Ordering::Relaxed) {
+        return;
+    }
     let name = task.name;
     let fetched = match r {
         Ok(f) => f,
         Err(e) => {
-            if !task.progress.cancel.load(Ordering::Relaxed) {
-                app.toast(ctx, crate::i18n::tr_format!("Couldn't read {name}: {error}", name = name, error = e));
-            }
+            app.toast(ctx, crate::i18n::tr_format!("Couldn't read {name}: {error}", name = name, error = e));
             return;
         }
     };
@@ -211,6 +214,29 @@ mod tests {
         assert_eq!(opts.sources, [folder]);
         assert_eq!(crate::import::source_summary(&opts.sources), "Folder “X100T” (and its subfolders)");
         assert!(h.app.camera.is_none());
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
+    }
+
+    /// Review finding on #1169: ✕ pressed after the worker sent a finished fetch but before a frame
+    /// took it must still cancel: no review opens.
+    #[test]
+    fn a_cancel_that_races_a_finished_fetch_still_cancels() {
+        let mut h = demo();
+        let dir =
+            std::env::temp_dir().join(format!("lc-camui-race-{}", std::process::id())).join(lightcraft_engine::camera_import::STAGING).join("X100T");
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("A.png");
+        png(&a);
+        let folder = dir.to_string_lossy().to_string();
+        let progress =
+            task(&mut h, "X100T", Some(Ok(Fetched { staged: vec![a.to_string_lossy().to_string()], fetched: 1, folder, ..Default::default() })));
+        progress.cancel.store(true, Ordering::Relaxed);
+        h.step();
+        h.step();
+        assert!(h.app.camera.is_none(), "the task is dropped");
+        assert!(h.app.scan.is_none() && h.app.ui.dialog.is_none(), "no review after a cancel");
+        assert_eq!(toast(&h), "");
+        assert!(a.is_file(), "what was fetched stays staged for the next try");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
     }
 
