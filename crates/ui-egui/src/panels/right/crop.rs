@@ -80,7 +80,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             let cur = aspect_label(app.crop_tool_aspect(), original);
             let t = Tokens::get(ui.ctx());
-            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
+            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.body(), t.text);
 
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
@@ -255,7 +255,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     "{} of 4 guides — drag along lines that should be vertical or horizontal.",
                     d.geometry.guides.len()
                 ))
-                .size(11.0)
+                .font(Tokens::get(ui.ctx()).caption())
                 .color(Tokens::get(ui.ctx()).text_dim),
             );
         }

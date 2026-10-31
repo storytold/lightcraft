@@ -95,7 +95,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
                 ui.add_space(4.0);
                 let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
-                let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
+                let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.text_link())).sense(Sense::click()));
                 register(ui, "activity:more", r.rect);
                 toggle = r.clicked();
             }
@@ -126,7 +126,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
             ui.allocate_ui_with_layout(vec2(label_w, 18.0), Layout::left_to_right(Align::Center), |ui| {
                 // the whole width, so the cross lands at the right edge however short the name
                 ui.set_width(label_w);
-                ui.add(egui::Label::new(RichText::new(tr(&task.label)).font(t.font(12.5)).color(t.text)).truncate());
+                ui.add(egui::Label::new(RichText::new(tr(&task.label)).font(t.body()).color(t.text)).truncate());
             });
             if cross {
                 let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());

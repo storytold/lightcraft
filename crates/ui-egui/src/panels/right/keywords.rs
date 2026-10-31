@@ -310,7 +310,9 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let r = ui
                 .add_sized(
                     [bw, 22.0],
-                    egui::Button::new(egui::RichText::new(short).size(11.5).color(if on { t.text } else { t.text_label })).selected(on).truncate(),
+                    egui::Button::new(egui::RichText::new(short).font(t.label()).color(if on { t.text } else { t.text_label }))
+                        .selected(on)
+                        .truncate(),
                 )
                 .on_hover_text(format!("{} — ⌥{}", k.replace('|', " › "), i + 1));
             register(ui, format!("kwSet:{}", i + 1), r.rect);

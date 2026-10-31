@@ -612,7 +612,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
     let painter = ui.painter_at(area);
     painter.rect_filled(area, 4.0, t.canvas);
     let Ok((pw, ph)) = st.layout.page_size() else {
-        painter.text(area.center(), Align2::CENTER_CENTER, crate::i18n::tr("This page setup is not valid"), t.font(13.0), t.caution);
+        painter.text(area.center(), Align2::CENTER_CENTER, crate::i18n::tr("This page setup is not valid"), t.font(13.0), t.text_caution());
         return;
     };
     let g = &st.guides;
@@ -692,7 +692,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
         if package {
             ui.label(egui::RichText::new(format!("{} {}", st.layout.cells.len(), crate::i18n::tr("cells"))).color(t.text_dim));
             if st.layout.has_overlaps() {
-                ui.label(egui::RichText::new(crate::i18n::tr("cells overlap")).color(t.caution));
+                ui.label(egui::RichText::new(crate::i18n::tr("cells overlap")).color(t.text_caution()));
             }
         }
     });

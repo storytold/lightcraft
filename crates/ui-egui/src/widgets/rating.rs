@@ -1,11 +1,11 @@
 //! One star rating for the whole interface: the clickable row of five stars ([`Rating`]) and the
-//! painter-only helpers for stars drawn onto photos and captions ([`paint_rating`], [`paint_star`]).
+//! painter-only helpers for stars drawn onto photos and captions ([`paint_rating_spaced`], [`paint_star`]).
 //! It replaces `widgets::stars` and the private star-painting loops of the grid badge, the film
 //! badges, the compare caption and the filter bar.
 //!
 //! ```ignore
 //! if let Some(r) = Rating::new("bottom", photo.rating).show(ui) { … }
-//! paint_rating(ui.painter(), pos, 3, RatingSize::Small, color);
+//! paint_rating_spaced(ui.painter(), pos, 3, RatingSize::Small, RatingSize::Small.step(), color);
 //! ```
 //!
 //! Hovering a star previews the rating a click would set; clicking the current rating clears it.
@@ -42,7 +42,7 @@ impl RatingSize {
         }
     }
 
-    /// Distance from one painted star to the next in [`paint_rating`].
+    /// Distance from one painted star to the next in [`paint_rating_spaced`].
     pub fn step(self) -> f32 {
         match self {
             Self::Small => 9.0,
@@ -63,15 +63,17 @@ pub fn paint_star(painter: &Painter, rect: Rect, filled: bool, color: Color32) {
 }
 
 /// Paint `rating` filled stars in a row, the first one's left edge at `pos.x` and its vertical centre
-/// at `pos.y`. Returns the width the row takes (0 for no stars), so the caller can lay out what follows.
-pub fn paint_rating(painter: &Painter, pos: Pos2, rating: u8, size: RatingSize, color: Color32) -> f32 {
+/// at `pos.y`, `pitch` apart (`size.step()` for the whole row). On a photo too narrow for the whole row
+/// each star is as much smaller than `size.icon()` as the pitch is closer than the step, and never less
+/// than 1. Returns the width the row takes (0 for no stars), so the caller can lay out what follows.
+pub fn paint_rating_spaced(painter: &Painter, pos: Pos2, rating: u8, size: RatingSize, pitch: f32, color: Color32) -> f32 {
     let n = rating.min(STARS);
-    let side = size.icon();
+    let side = (size.icon() - (size.step() - pitch).max(0.0)).max(1.0);
     for i in 0..n {
-        let left = pos.x + f32::from(i) * size.step();
+        let left = pos.x + f32::from(i) * pitch;
         paint_star(painter, Rect::from_min_size(pos2(left, pos.y - side / 2.0), vec2(side, side)), true, color);
     }
-    f32::from(n) * size.step()
+    f32::from(n) * pitch
 }
 
 /// What the stars show once hovering is taken into account: the hovered star's rating previews over
