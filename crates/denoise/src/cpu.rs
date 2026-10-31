@@ -1,4 +1,4 @@
-//! Single-thread CPU execution of the checked denoise network.
+//! Single-thread CPU execution of a checked network (a denoiser, or the compact upscaler).
 //!
 //! Convolutions lower at most 256 spatial positions at a time, then use faer's safe views over pure-Rust GEMM.
 //! No inner thread pool: `run::denoise_bayer` already runs tiles on the application's Rayon pool. Tensor lifetimes
@@ -35,8 +35,12 @@ fn sources(op: &Op) -> (usize, Option<usize>) {
     match op {
         Op::Conv(c) => (c.src, c.src2),
         Op::ConvT2(c) => (c.src, None),
-        Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => (*src, None),
+        Op::Add { a, b } => (*a, Some(*b)),
+        Op::MaxPool2 { src } | Op::DepthToSpace { src, .. } | Op::PRelu { src, .. } | Op::Upsample { src, .. } | Op::Clip { src, .. } => (*src, None),
     }
+}
+fn scaled(side: usize, factor: usize) -> Result<usize> {
+    side.checked_mul(factor).ok_or_else(|| bad("size overflow"))
 }
 #[derive(Clone, Copy)]
 struct Tensor {
@@ -66,15 +70,19 @@ pub struct NetRunner {
 }
 
 impl NetRunner {
+    /// A runner for a denoiser: four Bayer planes of `tile × tile` in, RGB at twice the size out.
     pub fn new(net: &Net, tile: usize) -> Result<Self> {
-        if tile == 0
-            || tile > MAX_TILE
-            || !net.fits_tile(tile)
-            || net.in_channels != 4
-            || net.out_channels() != 3
-            || net.shape(0).is_none_or(|s| s.channels != net.in_channels)
-        {
+        if !net.fits_tile(tile) || net.in_channels != 4 || net.out_channels() != 3 {
             return Err(bad("the tile or Bayer-to-RGB contract does not fit the network"));
+        }
+        Self::for_tile(net, tile)
+    }
+
+    /// A runner for any network whose pooling divides a `tile × tile` input; what the input and output channels mean
+    /// is the caller's to check.
+    pub fn for_tile(net: &Net, tile: usize) -> Result<Self> {
+        if tile == 0 || tile > MAX_TILE || !net.pools_evenly(tile) || net.shape(0).is_none_or(|s| s.channels != net.in_channels) {
+            return Err(bad("the tile does not fit the network"));
         }
         let mut last = vec![0; net.ops().len() + 1];
         for (i, op) in net.ops().iter().enumerate() {
@@ -100,14 +108,22 @@ impl NetRunner {
                     }
                     (c.cout, a.side)
                 }
-                Op::ConvT2(c) => (c.cout, a.side.checked_mul(2).ok_or_else(|| bad("size overflow"))?),
+                Op::ConvT2(c) => (c.cout, scaled(a.side, 2)?),
                 Op::MaxPool2 { .. } => {
                     if a.side < 2 || !a.side.is_multiple_of(2) {
                         return Err(bad("pooling does not divide the tile"));
                     }
                     (a.channels, a.side / 2)
                 }
-                Op::DepthToSpace2 { .. } => (a.channels / 4, a.side.checked_mul(2).ok_or_else(|| bad("size overflow"))?),
+                Op::DepthToSpace { block, .. } => (a.channels / block.saturating_mul(*block).max(1), scaled(a.side, *block)?),
+                Op::Upsample { factor, .. } => (a.channels, scaled(a.side, *factor)?),
+                Op::Add { .. } => {
+                    if src2.and_then(|s| tensors.get(s)).is_none_or(|b| b.side != a.side || b.channels != a.channels) {
+                        return Err(bad("a sum of tensors of different shapes"));
+                    }
+                    (a.channels, a.side)
+                }
+                Op::PRelu { .. } | Op::Clip { .. } => (a.channels, a.side),
             };
             let n = count(channels, side)?;
             let slot = busy
@@ -216,7 +232,11 @@ impl NetRunner {
                     &mut w.product,
                 )?,
                 Op::MaxPool2 { .. } => pool(a, shape.side, dest)?,
-                Op::DepthToSpace2 { .. } => shuffle(a, shape.side, dest)?,
+                Op::DepthToSpace { block, .. } => shuffle(a, shape.side, *block, dest)?,
+                Op::PRelu { slope, .. } => prelu(a, shape.side, slope, dest)?,
+                Op::Upsample { factor, .. } => upsample(a, shape.side, *factor, dest)?,
+                Op::Add { .. } => add(a, b.ok_or_else(|| bad("a sum without its second tensor"))?, dest)?,
+                Op::Clip { min, max, .. } => clip(a, *min, *max, dest)?,
             }
             if dest.iter().any(|v| !v.is_finite()) {
                 return Err(bad("the model produced non-finite values"));
@@ -363,21 +383,67 @@ fn pool(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
     }
     Ok(())
 }
-fn shuffle(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
+/// Depth-to-space in CRD order: input plane `b²·c + b·dy + dx` fills the pixels `(b·y + dy, b·x + dx)` of plane `c`.
+fn shuffle(a: &[f32], side: usize, block: usize, dest: &mut [f32]) -> Result<()> {
     let pixels = side * side;
-    for (input, out) in a.chunks_exact(4 * pixels).zip(dest.chunks_exact_mut(4 * pixels)) {
-        for d in 0..4 {
+    let cells = block * block;
+    let out_side = block * side;
+    for (input, out) in a.chunks_exact(cells * pixels).zip(dest.chunks_exact_mut(cells * pixels)) {
+        for d in 0..cells {
+            let (dy, dx) = (d / block, d % block);
             let plane = input.get(d * pixels..(d + 1) * pixels).ok_or_else(|| bad("short shuffle input"))?;
             for (y, row) in plane.chunks_exact(side).enumerate() {
-                let at = (2 * y + d / 2) * 2 * side;
-                let to = out.get_mut(at..at + 2 * side).ok_or_else(|| bad("short shuffle output"))?;
-                for (to, &v) in to.as_chunks_mut::<2>().0.iter_mut().zip(row) {
-                    if let Some(t) = to.get_mut(d % 2) {
+                let at = (block * y + dy) * out_side;
+                let to = out.get_mut(at..at + out_side).ok_or_else(|| bad("short shuffle output"))?;
+                for (to, &v) in to.chunks_exact_mut(block).zip(row) {
+                    if let Some(t) = to.get_mut(dx) {
                         *t = v;
                     }
                 }
             }
         }
+    }
+    Ok(())
+}
+fn prelu(a: &[f32], side: usize, slope: &[f32], dest: &mut [f32]) -> Result<()> {
+    let pixels = side * side;
+    if a.len() != dest.len() || slope.len().checked_mul(pixels) != Some(a.len()) {
+        return Err(bad("a slope per channel does not fit the tensor"));
+    }
+    for ((input, out), &s) in a.chunks_exact(pixels).zip(dest.chunks_exact_mut(pixels)).zip(slope) {
+        for (d, &v) in out.iter_mut().zip(input) {
+            *d = if v < 0.0 { v * s } else { v };
+        }
+    }
+    Ok(())
+}
+fn upsample(a: &[f32], side: usize, factor: usize, dest: &mut [f32]) -> Result<()> {
+    let out_side = factor * side;
+    for (input, out) in a.chunks_exact(side * side).zip(dest.chunks_exact_mut(out_side * out_side)) {
+        for (y, row) in out.chunks_exact_mut(out_side).enumerate() {
+            let from = input.get(y / factor * side..(y / factor + 1) * side).ok_or_else(|| bad("short upsampling input"))?;
+            for (to, &v) in row.chunks_exact_mut(factor).zip(from) {
+                to.fill(v);
+            }
+        }
+    }
+    Ok(())
+}
+fn add(a: &[f32], b: &[f32], dest: &mut [f32]) -> Result<()> {
+    if a.len() != dest.len() || b.len() != dest.len() {
+        return Err(bad("a sum of tensors of different sizes"));
+    }
+    for ((d, &x), &y) in dest.iter_mut().zip(a).zip(b) {
+        *d = x + y;
+    }
+    Ok(())
+}
+fn clip(a: &[f32], min: f32, max: f32, dest: &mut [f32]) -> Result<()> {
+    if a.len() != dest.len() {
+        return Err(bad("a clip of a tensor of another size"));
+    }
+    for (d, &v) in dest.iter_mut().zip(a) {
+        *d = v.max(min).min(max);
     }
     Ok(())
 }

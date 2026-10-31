@@ -41,7 +41,7 @@ fn tensor(channels: usize, side: usize, total: &mut usize) -> Result<Vec<f32>, N
 
 /// Run `net` on `input` (`in_channels` planes of `tile × tile`).
 pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> {
-    if !net.fits_tile(tile) || input.len() != net.in_channels * tile * tile {
+    if !net.pools_evenly(tile) || input.len() != net.in_channels * tile * tile {
         return Err(NetError::Invalid("the tile does not fit the network".into()));
     }
     let input = input.to_vec();
@@ -118,24 +118,66 @@ pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> 
                 }
                 T { channels, side, data }
             }
-            Op::DepthToSpace2 { src } => {
+            Op::DepthToSpace { src, block } => {
                 let a = get(&tensors, *src)?;
-                let (channels, side) = (tensors[a].channels / 4, tensors[a].side);
-                let out_side = 2 * side;
+                let b = *block;
+                let (channels, side) = (tensors[a].channels / (b * b), tensors[a].side);
+                let out_side = b * side;
                 let mut data = tensor(channels, out_side, &mut total)?;
                 for ch in 0..channels {
                     for y in 0..side {
                         for x in 0..side {
-                            for dy in 0..2 {
-                                for dx in 0..2 {
-                                    data[(ch * out_side + 2 * y + dy) * out_side + 2 * x + dx] =
-                                        tensors[a].data[((4 * ch + 2 * dy + dx) * side + y) * side + x];
+                            for dy in 0..b {
+                                for dx in 0..b {
+                                    data[(ch * out_side + b * y + dy) * out_side + b * x + dx] =
+                                        tensors[a].data[((b * b * ch + b * dy + dx) * side + y) * side + x];
                                 }
                             }
                         }
                     }
                 }
                 T { channels, side: out_side, data }
+            }
+            Op::PRelu { src, slope } => {
+                let a = get(&tensors, *src)?;
+                let (channels, side) = (tensors[a].channels, tensors[a].side);
+                let mut data = tensor(channels, side, &mut total)?;
+                for (i, v) in data.iter_mut().enumerate() {
+                    *v = leaky(tensors[a].data[i], Some(slope[i / (side * side)]));
+                }
+                T { channels, side, data }
+            }
+            Op::Upsample { src, factor } => {
+                let a = get(&tensors, *src)?;
+                let (channels, side) = (tensors[a].channels, tensors[a].side);
+                let out_side = factor * side;
+                let mut data = tensor(channels, out_side, &mut total)?;
+                for ch in 0..channels {
+                    for y in 0..out_side {
+                        for x in 0..out_side {
+                            data[(ch * out_side + y) * out_side + x] = tensors[a].data[(ch * side + y / factor) * side + x / factor];
+                        }
+                    }
+                }
+                T { channels, side: out_side, data }
+            }
+            Op::Add { a, b } => {
+                let (a, b) = (get(&tensors, *a)?, get(&tensors, *b)?);
+                let (channels, side) = (tensors[a].channels, tensors[a].side);
+                let mut data = tensor(channels, side, &mut total)?;
+                for (i, v) in data.iter_mut().enumerate() {
+                    *v = tensors[a].data[i] + tensors[b].data[i];
+                }
+                T { channels, side, data }
+            }
+            Op::Clip { src, min, max } => {
+                let a = get(&tensors, *src)?;
+                let (channels, side) = (tensors[a].channels, tensors[a].side);
+                let mut data = tensor(channels, side, &mut total)?;
+                for (i, v) in data.iter_mut().enumerate() {
+                    *v = tensors[a].data[i].max(*min).min(*max);
+                }
+                T { channels, side, data }
             }
         };
         tensors.push(out);

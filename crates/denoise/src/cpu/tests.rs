@@ -58,7 +58,7 @@ fn malformed_values_fail_before_execution_and_workspace_sizes_are_bounded() {
         vec![
             Op::Conv(Conv { src: 0, src2: None, cin: 4, cout: 4096, k: 1, weight: vec![0.1; 4 * 4096], bias: vec![0.0; 4096], leaky: None }),
             Op::Conv(Conv { src: 1, src2: None, cin: 4096, cout: 12, k: 1, weight: vec![0.1; 4096 * 12], bias: vec![0.0; 12], leaky: None }),
-            Op::DepthToSpace2 { src: 2 },
+            Op::DepthToSpace { src: 2, block: 2 },
         ],
     )
     .unwrap();
@@ -77,13 +77,13 @@ fn malformed_values_fail_before_execution_and_workspace_sizes_are_bounded() {
             4 => bad.cout = usize::MAX,
             _ => bad.k = usize::MAX,
         }
-        assert!(Net::new(4, vec![Op::Conv(bad), Op::DepthToSpace2 { src: 1 }]).is_err());
+        assert!(Net::new(4, vec![Op::Conv(bad), Op::DepthToSpace { src: 1, block: 2 }]).is_err());
     }
 }
 #[test]
 fn bad_tiles_and_arithmetic_overflow_are_errors_and_do_not_poison_reuse() {
     let c = Conv { src: 0, src2: None, cin: 4, cout: 12, k: 1, weight: vec![f32::MAX; 48], bias: vec![0.0; 12], leaky: None };
-    let n = Net::new(4, vec![Op::Conv(c), Op::DepthToSpace2 { src: 1 }]).unwrap();
+    let n = Net::new(4, vec![Op::Conv(c), Op::DepthToSpace { src: 1, block: 2 }]).unwrap();
     let r = NetRunner::new(&n, 1).unwrap();
     assert!(r.run(&[]).is_err());
     assert!(r.run(&[f32::NAN; 4]).is_err());
@@ -128,6 +128,22 @@ fn join_may_read_the_same_tensor_twice_and_leaky_up_convolution_is_supported() {
     .unwrap();
     let x = random(4 * 3 * 3, 7);
     agree(&NetRunner::new(&n, 3).unwrap().run(&x).unwrap(), &reference::run(&n, 3, &x).unwrap());
+}
+
+#[test]
+fn upscalers_match_the_reference_on_odd_and_tiny_tiles() {
+    for scale in [2, 4] {
+        let n = crate::onnx::read_bytes(&synthetic::upscaler_onnx(8, 2, scale, 31)).unwrap();
+        for t in [1, 3, 7, 16] {
+            let r = NetRunner::for_tile(&n, t).unwrap();
+            // values around [0, 1], so the clip and both sides of every PRelu are exercised
+            let x: Vec<f32> = random(3 * t * t, t as u32).iter().map(|v| v + 0.5).collect();
+            let got = r.run(&x).unwrap();
+            assert_eq!(got.len(), 3 * (scale as usize * t).pow(2));
+            agree(&got, &reference::run(&n, t, &x).unwrap());
+        }
+        assert!(NetRunner::new(&n, 4).is_err(), "an upscaler is not a Bayer denoiser");
+    }
 }
 
 #[test]
