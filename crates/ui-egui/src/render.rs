@@ -45,6 +45,13 @@ pub enum Slot {
     /// Background preparation of a neighbouring photo (no texture: its decoded source and view
     /// render are cached by the engine). 0 = next, 1 = previous.
     Prefetch(u8),
+    /// The loupe's stand-in for a photo the user is likely to step to next (the camera JPEG of an
+    /// unedited raw, or a cached render), made ahead in the direction of travel so a step shows it
+    /// at once: [`Renderer::request_quick`] takes the texture over into [`Slot::Preview`].
+    QuickAhead(u8),
+    /// The loupe zoomed in on an unedited raw: its camera JPEG at full size, drawn under the window
+    /// render until that arrives (a focus check at 100 % without waiting for the raw).
+    QuickFull,
     /// A variant thumbnail (profile / preset browsers), by its job key ([`Session::variant_job`]).
     /// Kept in a bounded LRU ([`VARIANT_TEXTURES`]).
     Variant(u64),
@@ -204,6 +211,11 @@ pub const MAX_VARIANT_TEXTURES: usize = 800;
 /// Priority of variant thumbnail jobs: below on-screen grid thumbnails and the loupe.
 const VARIANT_PRIORITY: u32 = 6;
 
+/// The camera-preview edge a loupe stand-in is made at (0: one that doesn't depend on the size).
+fn quick_edge(job: &QuickJob) -> usize {
+    job.embedded.as_ref().map_or(0, |e| e.2)
+}
+
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
@@ -242,6 +254,14 @@ pub struct Renderer {
     pub completed: u64,
     /// Finished jobs thrown away because a newer request for their slot had replaced them.
     pub discarded: u64,
+    /// Photos given a grid thumbnail since start (a render replacing a stand-in isn't counted again):
+    /// unlike [`Renderer::thumb_textures`] it never goes down when old thumbnails are evicted (for
+    /// benchmarks).
+    pub thumbs_made: u64,
+    /// The photos [`Self::thumbs_made`] counted, by library (a hash of its folder) and id: a
+    /// thumbnail made again after eviction, or after going to another library and back, is the
+    /// same photo (photo ids are a library's own). Never cleared.
+    thumbs_counted: std::collections::HashSet<(u64, PhotoId)>,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
@@ -249,6 +269,10 @@ pub struct Renderer {
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
     quick_tried: HashMap<Slot, u64>,
+    /// The camera-preview edge each loupe stand-in ([`Slot::Preview`], [`Slot::QuickAhead`]) was
+    /// asked for (0: one that doesn't depend on the size): a stand-in made ahead for a smaller loupe
+    /// isn't taken over by a larger one.
+    quick_edge: HashMap<Slot, usize>,
     /// Jobs that failed (unreadable or missing file…), by slot and job key, with the error and
     /// the photo: not requested again until the key changes (an edit, another size) — the grid
     /// asks every frame.
@@ -277,6 +301,9 @@ pub struct Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
 }
+
+/// How many [`Slot::QuickAhead`] stand-ins the loupe keeps ready.
+pub const AHEAD_SLOTS: u8 = 6;
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
 #[cfg(not(target_arch = "wasm32"))]
@@ -344,9 +371,12 @@ impl Renderer {
             last_main_ms: 0.0,
             completed: 0,
             discarded: 0,
+            thumbs_made: 0,
+            thumbs_counted: Default::default(),
             keep_pixels: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
+            quick_edge: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
@@ -647,7 +677,9 @@ impl Renderer {
         }
     }
 
-    /// Request a stand-in for `slot` (once per job key).
+    /// Request a stand-in for `slot` (once per job key). The loupe's [`Slot::Preview`] takes over
+    /// a stand-in already made ahead for the same photo ([`Slot::QuickAhead`]) instead of making it
+    /// again: shown in this frame when it is ready, or as soon as that job finishes.
     pub fn request_quick(&mut self, slot: Slot, mut job: QuickJob, priority: u32) {
         if self.quick_tried.get(&slot) == Some(&job.key) {
             if self.pending.get(&slot).is_some_and(|p| p.0 == job.key && p.1 != priority) {
@@ -669,6 +701,14 @@ impl Renderer {
             return;
         }
         self.quick_tried.insert(slot, job.key);
+        if matches!(slot, Slot::Preview | Slot::QuickAhead(_)) {
+            self.quick_edge.insert(slot, quick_edge(&job));
+        }
+        if slot == Slot::Preview && self.take_ahead(job.photo, job.key, quick_edge(&job)) {
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+            return;
+        }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         let source = job
@@ -682,7 +722,84 @@ impl Renderer {
         );
         let key = job.key;
         let display = self.display.clone();
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
+        let background = matches!(slot, Slot::QuickAhead(_));
+        self.pool.submit(
+            slot,
+            key,
+            priority,
+            Box::new(move || {
+                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
+                Self::run_for(run, &display)
+            }),
+        );
+    }
+
+    /// Whether the stand-in asked for in `slot` is at least `edge` pixels (see `quick_edge`).
+    fn ahead_covers(&self, slot: Slot, edge: usize) -> bool {
+        self.quick_edge.get(&slot).copied().unwrap_or(0) >= edge
+    }
+
+    /// Move a [`Slot::QuickAhead`] texture of `photo` made for `key`, at least `edge` pixels, into
+    /// [`Slot::Preview`].
+    fn take_ahead(&mut self, photo: PhotoId, key: u64, edge: usize) -> bool {
+        let Some(slot) = self
+            .textures
+            .iter()
+            .find(|(s, t)| matches!(s, Slot::QuickAhead(_)) && t.photo == photo && t.key == key && self.ahead_covers(**s, edge))
+            .map(|(s, _)| *s)
+        else {
+            return false;
+        };
+        let Some(tex) = self.textures.remove(&slot) else { return false };
+        self.quick_tried.remove(&slot);
+        self.textures.insert(Slot::Preview, tex);
+        true
+    }
+
+    /// Make the loupe's stand-ins for the photos it is likely to be stepped to next (see
+    /// [`Slot::QuickAhead`]), most likely first: `jobs[0]` gets `priority`, each next one less.
+    /// A slot keeps a photo for as long as the photo stays wanted (made or being made, it is not
+    /// made again when the user steps and the photos shift places); slots holding photos not
+    /// wanted any more are freed for the new ones, and their queued jobs dropped.
+    pub fn look_ahead(&mut self, jobs: Vec<QuickJob>, priority: u32) {
+        let slots: Vec<Slot> = (0..AHEAD_SLOTS).map(Slot::QuickAhead).collect();
+        let held = |r: &Self, s: Slot| r.textures.get(&s).map(|t| t.key).or_else(|| r.quick_tried.get(&s).copied());
+        // (a stand-in asked for at a smaller loupe size isn't kept for a larger one)
+        let wanted: HashMap<u64, usize> = jobs.iter().map(|j| (j.key, quick_edge(j))).collect();
+        let mut free = Vec::new();
+        for &s in &slots {
+            let key = held(self, s);
+            if key.is_none_or(|k| wanted.get(&k).is_none_or(|&edge| !self.ahead_covers(s, edge))) {
+                self.textures.remove(&s);
+                // a job already running: its result is thrown away when it arrives (not left as a
+                // hidden stand-in), unless the loupe is waiting for just that one (a step to the
+                // photo): then the slot stays reserved for it until it arrives
+                let preview_edge = self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0);
+                let loupe_waits =
+                    key.is_some_and(|k| self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == k)) && self.ahead_covers(s, preview_edge);
+                if !self.drop_queued(s) && loupe_waits {
+                    continue;
+                }
+                self.quick_tried.remove(&s);
+                self.pending.remove(&s);
+                self.requests.remove(&s);
+                free.push(s);
+            }
+        }
+        let have: HashMap<u64, Slot> = slots.iter().filter_map(|&s| held(self, s).map(|k| (k, s))).collect();
+        let mut free = free.into_iter();
+        for (rank, job) in jobs.into_iter().enumerate() {
+            let priority = priority.saturating_sub(rank as u32);
+            if let Some(&s) = have.get(&job.key) {
+                // kept: a job still queued moves to its new place in the order
+                if self.quick_tried.get(&s) == Some(&job.key) {
+                    self.request_quick(s, job, priority);
+                }
+                continue;
+            }
+            let Some(slot) = free.next() else { break };
+            self.request_quick(slot, job, priority);
+        }
     }
 
     /// Render a slideshow title screen into `slot` (once per screen key, like [`Self::request`]):
@@ -1065,13 +1182,30 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // made ahead for the photo the loupe is now waiting for: it is the loupe's stand-in
+            // (the loupe's own request for it, if one was started, is dropped when it arrives)
+            // (also when the loupe's own request failed and it still wants that photo: the stand-in
+            // made ahead still shows, but never over another photo's request)
+            if matches!(slot, Slot::QuickAhead(_))
+                && r.rendered.is_ok()
+                && (self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == r.key)
+                    || (!self.pending.contains_key(&Slot::Preview)
+                        && self.quick_tried.get(&Slot::Preview) == Some(&r.key)
+                        && self.failed.get(&Slot::Preview).is_some_and(|f| f.0 == r.key && f.3 == r.photo)))
+                && self.ahead_covers(slot, self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0))
+            {
+                self.pending.remove(&Slot::Preview);
+                self.requests.remove(&Slot::Preview);
+                self.quick_tried.remove(&slot);
+                slot = Slot::Preview;
+            }
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
                     x
                 }
                 Err(e) => {
-                    if !matches!(slot, Slot::Prefetch(_)) {
+                    if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
                         let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
                         #[cfg(test)]
                         self.failure_messages.push(message.clone());
@@ -1100,6 +1234,11 @@ impl Renderer {
                     slot = Slot::Thumb(id);
                 }
             }
+            // (a photo's first thumbnail: not a render replacing its stand-in, nor one made again)
+            let first_thumb = match slot {
+                Slot::Thumb(id) | Slot::ThumbQuick(id) => self.thumbs_counted.insert((library_key(session), id)),
+                _ => false,
+            };
             if let Slot::Thumb(id) = slot {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
@@ -1136,6 +1275,9 @@ impl Renderer {
                         },
                     );
                 }
+            }
+            if first_thumb {
+                self.thumbs_made += 1;
             }
             if slot == Slot::Main {
                 self.last_main_ms = ms;
@@ -1205,6 +1347,29 @@ impl Renderer {
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
         self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+    }
+
+    /// Forget everything about `slot`: its texture, its queued job, and that its stand-in was asked
+    /// for (so asking again makes it again).
+    pub fn forget(&mut self, slot: Slot) {
+        self.drop_queued(slot);
+        self.pending.remove(&slot);
+        self.requests.remove(&slot);
+        self.quick_tried.remove(&slot);
+        self.release(slot);
+    }
+
+    /// Drop `slot`'s job if it is still queued (a running one finishes). Returns whether one was.
+    pub fn drop_queued(&mut self, slot: Slot) -> bool {
+        let dropped = self.pool.reprioritize(|s, p| if *s == slot { None } else { Some(p) });
+        let before = self.queue.len();
+        self.queue.retain(|q| q.slot != slot);
+        let any = !dropped.is_empty() || self.queue.len() != before;
+        if any {
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+        }
+        any
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -1431,4 +1596,14 @@ mod color_image_tests {
         let img = lightcraft_raster::Rgba8::new(0, 0);
         assert!(color_image(&img).pixels.is_empty());
     }
+}
+
+/// Which library `session` has open, for [`Renderer::thumbs_made`]: a hash of its folder (the same
+/// library opened again is the same), 0 with none.
+fn library_key(session: &Session) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(lib) = session.library.as_ref() else { return 0 };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lib.dir.hash(&mut h);
+    h.finish()
 }

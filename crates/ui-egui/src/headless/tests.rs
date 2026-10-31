@@ -527,6 +527,10 @@ fn demo_grid_snapshot_has_ui_pixels() {
     assert!(bright > 30, "no text in the top bar ({bright} bright px)");
     // thumbnails arrived (photo textures were drawn)
     assert!(h.app.renderer.thumb_textures() > 0);
+    // and are counted for benchmarks, a count that eviction doesn't lower
+    let r = h.request("ui.inspect", json!({}), SETTLE);
+    let made = r["result"]["perf"]["thumbsMade"].as_u64().unwrap_or(0);
+    assert!(made >= h.app.renderer.thumb_textures() as u64, "{}", r["result"]["perf"]);
 }
 
 #[test]
@@ -3416,6 +3420,15 @@ fn browsing_from_the_ui_records_the_folder() {
     assert_eq!(h.app.session.visible_cloned().len(), 1);
     assert!(h.app.session.catalog.last_browsed(&root).is_some(), "the browsed folder");
     assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "the folder its photo is in");
+    // browsed again: a subfolder with only photos the library knows (nothing to import) still
+    // counts as browsed
+    h.app.session.catalog.apply(lightcraft_catalog::Op::SetBrowsed { folder: day_s.clone(), at: None }).unwrap();
+    assert!(h.app.session.catalog.last_browsed(&day_s).is_none());
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": root, "subfolders": true}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.visible_cloned().len(), 1);
+    assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "a folder of known photos only");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

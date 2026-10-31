@@ -1,4 +1,4 @@
-use super::quick::{QuickJob, content_key, source_info};
+use super::quick::{QuickJob, content_key, embedded_thumb_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
@@ -343,10 +343,45 @@ impl crate::Session {
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
+        // (the photo too: a virtual copy shares the file and, unedited, the settings)
+        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(id.0).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
-        Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, minimum_embedded_edge: None, small: apply_crop.then(|| Box::new(small)) })
+        let embedded_cache = embedded
+            .as_ref()
+            .map(|(_, _, edge)| (self.media.rendered.clone(), Hasher128::new().str(&content_key(&p)).str("embedded").u64(*edge as u64).finish()));
+        Some(QuickJob {
+            request_id: 0,
+            photo: id,
+            key,
+            cached,
+            embedded,
+            embedded_cache,
+            embedded_on_disk: false,
+            minimum_embedded_edge: None,
+            small: apply_crop.then(|| Box::new(small)),
+        })
+    }
+
+    /// The camera's embedded JPEG of an unedited raw at up to `max_edge` pixels (its full size for
+    /// a camera that stores one), for the loupe zoomed to 100 % while LightCraft renders the window
+    /// on screen: a focus check needs the pixels at once, and a 45 MP render of the window takes
+    /// seconds. Not kept in any cache (a full-size picture is 180 MB). `None` for other photos.
+    pub fn embedded_full_job(&mut self, id: PhotoId, max_edge: usize) -> Option<QuickJob> {
+        let p = self.catalog.photo(id)?.clone();
+        let (path, l) = self.embedded_of(&p)?;
+        let key = Hasher128::new().str(&content_key(&p)).str("embedded-full").u64(id.0).u64(max_edge as u64).finish().0 as u64;
+        Some(QuickJob {
+            request_id: 0,
+            photo: id,
+            key,
+            cached: Vec::new(),
+            embedded: Some((path, l, max_edge.max(1))),
+            embedded_cache: None,
+            embedded_on_disk: false,
+            minimum_embedded_edge: None,
+            small: None,
+        })
     }
 
     /// A first grid thumbnail for an unedited raw: the cached render for `job` (the real
@@ -365,6 +400,10 @@ impl crate::Session {
             key: job.key,
             cached: job.cache.clone().into_iter().collect(),
             embedded: Some((path, l, edge)),
+            // the camera JPEG is this thumbnail (an unedited raw): kept with the rendered ones, under
+            // a key of its own, so the folder's next visit reads it from the thumbnail cache
+            embedded_cache: job.cache.as_ref().map(|(c, k)| (c.clone(), embedded_thumb_key(*k))),
+            embedded_on_disk: true,
             minimum_embedded_edge: None,
             small: Some(Box::new(job.clone())),
         })

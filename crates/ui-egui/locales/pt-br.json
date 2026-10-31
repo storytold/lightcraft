@@ -2222,6 +2222,8 @@
   "The photos are imported once it ends": "As fotos serão importadas depois",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
   "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Camera preview": "Prévia da câmera",
+  "The camera's own JPEG, shown until LightCraft has rendered the raw. Judge colour and tone on the rendered photo.": "O JPEG da própria câmera, mostrado até o LightCraft renderizar o RAW. Avalie cor e tom na foto renderizada.",
   "Thumbnail size": "Tamanho das miniaturas",
   "Import Thumbnail Size": "Tamanho das miniaturas de importação",
   "Face recognition is on": "O reconhecimento facial está ativado",
