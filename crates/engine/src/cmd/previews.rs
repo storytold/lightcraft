@@ -145,11 +145,12 @@ pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
 }
 
 /// How many photos render side by side: as many as an export batch for standard previews (each
-/// render spreads over the cores already; the others fill them while one decodes), two for 1:1
-/// previews (a full-size source each).
+/// render spreads over the cores already; the others fill them while one decodes), two per graphics
+/// card for 1:1 previews (a full-size source each; one card needs two to stay busy, and with a
+/// second card two more feed it), within the export's memory-bound count.
 fn lanes(n: usize, full: bool) -> usize {
     let l = crate::export::export_parallelism(n);
-    if full { l.min(2) } else { l }
+    if full { l.min(lightcraft_gpu::batch_lanes_hint(2)) } else { l }
 }
 
 /// A test-only rendezvous at the start of a photo's jobs, so a cancel can be delivered at a known
@@ -726,8 +727,20 @@ mod tests {
     use serde_json::json;
 
     use super::{jobs_for, run_photo};
+
     use crate::Session;
     use crate::media::SourceRef;
+
+    // 1:1 previews run two photos per graphics card (two more feed a second card), never more than
+    // the memory-bound count; standard previews keep the export's count
+    #[test]
+    fn full_size_previews_run_two_photos_per_graphics_card() {
+        let hint = lightcraft_gpu::batch_lanes_hint(2);
+        assert_eq!(hint, 2 * lightcraft_gpu::batch_cards().max(1));
+        assert_eq!(super::lanes(64, true), crate::export::export_parallelism(64).min(hint));
+        assert_eq!(super::lanes(64, false), crate::export::export_parallelism(64));
+        assert!(super::lanes(1, true) >= 1);
+    }
 
     // Given a preview-only raw, its proxy goes stale with the look version: the embedded JPEG's colour
     // space can change with it (#2654); a rendered photo's proxy does not
