@@ -89,6 +89,8 @@ struct Static {
     decimals: u8,
 }
 
+// a table row's constructor: one argument per column of the tables below
+#[allow(clippy::too_many_arguments)]
 const fn st(id: &'static str, label: &'static str, group: &'static str, min: f64, max: f64, default: f64, step: f64, decimals: u8) -> Static {
     Static { id, label, group, min, max, default, step, decimals }
 }

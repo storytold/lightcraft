@@ -661,79 +661,103 @@ pub fn import_settings(s: &mut SurfaceSettings, text: &str) -> Result<Report, St
         return Err("not a TactileBridge settings file".into());
     }
     let mut r = Report::default();
-    let line = |r: &mut Report, from: &str, to: &str, note: &str| r.mapped.push(ReportLine { from: from.into(), to: to.into(), note: note.into() });
     if let Some(c) = field(&root, "controls") {
-        if let Some(x) = num(c, "globalSpeedMultiplier") {
-            s.motion.speed = x;
-            line(&mut r, "Global speed", "Dial Feel ▸ Speed", "");
-        }
-        if let Some(x) = num(c, "globalAccelerationMultiplier") {
-            s.motion.acceleration = x;
-            line(&mut r, "Global acceleration", "Dial Feel ▸ Acceleration", "");
-        }
-        if let Some(x) = boolean(c, "invertDirection") {
-            s.motion.invert = x;
-            line(&mut r, "Invert dial direction", "Dial Feel ▸ Turn every dial the other way", "");
-        }
-        if let Some(x) = boolean(c, "enableEchoSuppression") {
-            s.transport.echo_suppression = x;
-        }
-        if let Some(x) = int(c, "echoSuppressionMs") {
-            s.transport.echo_suppression_ms = x;
-            line(&mut r, "Echo suppression", "Editing ▸ Keep the surface's readout steady while turning", "");
-        }
-        if let Some(Value::Object(profiles)) = field(c, "adjustmentProfiles") {
-            for (key, t) in profiles {
-                let from = format!("Tuning: {key}");
-                let d = Tuning::default();
-                let tuning = Tuning {
-                    speed: num(t, "speedMultiplier").unwrap_or(d.speed),
-                    acceleration: num(t, "accelerationMultiplier").unwrap_or(d.acceleration),
-                    acceleration_min: num(t, "accelerationMin").unwrap_or(d.acceleration_min),
-                    acceleration_max: num(t, "accelerationMax").unwrap_or(d.acceleration_max),
-                    fast_ms: int(t, "fastThresholdMs").unwrap_or(d.fast_ms),
-                    slow_ms: int(t, "slowThresholdMs").unwrap_or(d.slow_ms),
-                    invert: boolean(t, "invertDirection").unwrap_or(false),
-                }
-                .sanitized();
-                // an untouched (default) tuning carries nothing to bring over
-                if tuning == Tuning::default() {
-                    continue;
-                }
-                let Some(Binding::Value { target }) = binding_of(key) else {
-                    r.dropped.push(ReportLine { from, to: String::new(), note: "no LightCraft value to tune".into() });
-                    continue;
-                };
-                r.mapped.push(ReportLine { from, to: format!("Tuning: {target}"), note: String::new() });
-                s.tuning.insert(target, tuning);
-            }
-        }
+        import_controls(s, c, &mut r);
     }
     if let Some(b) = field(&root, "bridge") {
-        if let Some(x) = int(b, "flushIntervalMs") {
-            s.transport.flush_ms = x;
-            line(&mut r, "Flush interval", "Editing ▸ Apply movement every", "");
-        }
-        for k in ["idleReconcileDelayMs", "stateRetentionMs", "periodicValuePollMs", "enableCoalescingDiagnostics"] {
-            if b.get(k).is_some() {
-                r.dropped.push(ReportLine {
-                    from: format!("Bridge: {k}"),
-                    to: String::new(),
-                    note: "LightCraft pushes its values to the surface; there is nothing to poll or reconcile".into(),
-                });
+        import_bridge(s, b, &mut r);
+    }
+    import_look(s, &root, &mut r);
+    if let Some(Value::Object(ctx)) = field(&root, "toolContext").and_then(|t| field(t, "contexts")) {
+        import_tool_contexts(s, ctx, &mut r);
+    }
+    s.sanitize();
+    Ok(r)
+}
+
+/// A line of the report: what was brought over and where it went.
+fn line(r: &mut Report, from: &str, to: &str, note: &str) {
+    r.mapped.push(ReportLine { from: from.into(), to: to.into(), note: note.into() });
+}
+
+/// `controls`: dial feel, echo suppression and per-value tunings.
+fn import_controls(s: &mut SurfaceSettings, c: &Value, r: &mut Report) {
+    if let Some(x) = num(c, "globalSpeedMultiplier") {
+        s.motion.speed = x;
+        line(r, "Global speed", "Dial Feel ▸ Speed", "");
+    }
+    if let Some(x) = num(c, "globalAccelerationMultiplier") {
+        s.motion.acceleration = x;
+        line(r, "Global acceleration", "Dial Feel ▸ Acceleration", "");
+    }
+    if let Some(x) = boolean(c, "invertDirection") {
+        s.motion.invert = x;
+        line(r, "Invert dial direction", "Dial Feel ▸ Turn every dial the other way", "");
+    }
+    if let Some(x) = boolean(c, "enableEchoSuppression") {
+        s.transport.echo_suppression = x;
+    }
+    if let Some(x) = int(c, "echoSuppressionMs") {
+        s.transport.echo_suppression_ms = x;
+        line(r, "Echo suppression", "Editing ▸ Keep the surface's readout steady while turning", "");
+    }
+    if let Some(Value::Object(profiles)) = field(c, "adjustmentProfiles") {
+        for (key, t) in profiles {
+            let from = format!("Tuning: {key}");
+            let d = Tuning::default();
+            let tuning = Tuning {
+                speed: num(t, "speedMultiplier").unwrap_or(d.speed),
+                acceleration: num(t, "accelerationMultiplier").unwrap_or(d.acceleration),
+                acceleration_min: num(t, "accelerationMin").unwrap_or(d.acceleration_min),
+                acceleration_max: num(t, "accelerationMax").unwrap_or(d.acceleration_max),
+                fast_ms: int(t, "fastThresholdMs").unwrap_or(d.fast_ms),
+                slow_ms: int(t, "slowThresholdMs").unwrap_or(d.slow_ms),
+                invert: boolean(t, "invertDirection").unwrap_or(false),
             }
+            .sanitized();
+            // an untouched (default) tuning carries nothing to bring over
+            if tuning == Tuning::default() {
+                continue;
+            }
+            let Some(Binding::Value { target }) = binding_of(key) else {
+                r.dropped.push(ReportLine { from, to: String::new(), note: "no LightCraft value to tune".into() });
+                continue;
+            };
+            r.mapped.push(ReportLine { from, to: format!("Tuning: {target}"), note: String::new() });
+            s.tuning.insert(target, tuning);
         }
     }
-    if let Some(h) = field(&root, "hardware") {
+}
+
+/// `bridge`: the flush interval (the polling settings have no LightCraft counterpart).
+fn import_bridge(s: &mut SurfaceSettings, b: &Value, r: &mut Report) {
+    if let Some(x) = int(b, "flushIntervalMs") {
+        s.transport.flush_ms = x;
+        line(r, "Flush interval", "Editing ▸ Apply movement every", "");
+    }
+    for k in ["idleReconcileDelayMs", "stateRetentionMs", "periodicValuePollMs", "enableCoalescingDiagnostics"] {
+        if b.get(k).is_some() {
+            r.dropped.push(ReportLine {
+                from: format!("Bridge: {k}"),
+                to: String::new(),
+                note: "LightCraft pushes its values to the surface; there is nothing to poll or reconcile".into(),
+            });
+        }
+    }
+}
+
+/// `hardware`, `osd`, `pluginColors`, `toolSwitching` and `autoSync`.
+fn import_look(s: &mut SurfaceSettings, root: &Value, r: &mut Report) {
+    if let Some(h) = field(root, "hardware") {
         if let Some(x) = boolean(h, "enableHapticFeedback") {
             s.look.haptics = x;
         }
         if let Some(x) = boolean(h, "enableLedIndicator") {
             s.look.show_values = x;
-            line(&mut r, "LED value indicator", "Surface ▸ Show values on the keys and the dial display", "");
+            line(r, "LED value indicator", "Surface ▸ Show values on the keys and the dial display", "");
         }
     }
-    if let Some(o) = field(&root, "osd") {
+    if let Some(o) = field(root, "osd") {
         if let Some(x) = boolean(o, "enabled") {
             s.osd.enabled = x;
         }
@@ -754,29 +778,29 @@ pub fn import_settings(s: &mut SurfaceSettings, text: &str) -> Result<Report, St
                 _ => OsdPosition::Bottom,
             };
         }
-        line(&mut r, "On-screen display", "On-Screen Readout", "drawn inside the LightCraft window");
+        line(r, "On-screen display", "On-Screen Readout", "drawn inside the LightCraft window");
     }
-    if let Some(c) = field(&root, "pluginColors") {
+    if let Some(c) = field(root, "pluginColors") {
         if let Some(x) = c.get("backgroundColor").and_then(Value::as_str) {
             s.look.background = hex_color(x, "#000000");
         }
         if let Some(x) = c.get("foregroundColor").and_then(Value::as_str) {
             s.look.foreground = hex_color(x, "#FFFFFF");
         }
-        line(&mut r, "Plugin colours", "Surface ▸ Key background, Key text", "");
+        line(r, "Plugin colours", "Surface ▸ Key background, Key text", "");
     }
-    if let Some(x) = field(&root, "toolSwitching").and_then(|t| boolean(t, "enabled")) {
+    if let Some(x) = field(root, "toolSwitching").and_then(|t| boolean(t, "enabled")) {
         s.follow_context = x;
-        line(&mut r, "Automatic tool switching", "Pages That Follow the App", "");
+        line(r, "Automatic tool switching", "Pages That Follow the App", "");
     }
-    if let Some(a) = field(&root, "autoSync") {
+    if let Some(a) = field(root, "autoSync") {
         if let Some(x) = boolean(a, "enabled") {
             s.apply_to_selected = x;
         }
         if let Some(x) = int(a, "idleTimeoutMs") {
             s.transport.gesture_end_ms = x;
         }
-        line(&mut r, "Auto Sync", "Editing ▸ Dials change every selected photo", "one undo step per dial gesture");
+        line(r, "Auto Sync", "Editing ▸ Dials change every selected photo", "one undo step per dial gesture");
         if a.get("copyApplyDelayMs").is_some() {
             r.dropped.push(ReportLine {
                 from: "Auto Sync: copy-apply delay".into(),
@@ -785,64 +809,60 @@ pub fn import_settings(s: &mut SurfaceSettings, text: &str) -> Result<Report, St
             });
         }
     }
-    if let Some(Value::Object(ctx)) = field(&root, "toolContext").and_then(|t| field(t, "contexts")) {
-        let mut p = crate::defaults::profiles().into_iter().find(|p| p.name == "Default").unwrap_or_default();
-        p.name = unique_name(s, "TactileBridge");
-        p.description = "Imported from TactileBridge".into();
-        // TactileBridge's tool layouts take the contexts they cover; LightCraft's own tool pages stay
-        // for the rest (a selected mask, Masking without a tool, …)
-        let mut taken: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for (tool, m) in ctx {
-            let Some(context) = context_of(tool) else {
-                r.dropped.push(ReportLine {
-                    from: format!("Tool context: {tool}"),
-                    to: String::new(),
-                    note: "no matching LightCraft context".into(),
-                });
-                continue;
-            };
-            let mut bindings = BTreeMap::new();
-            let buttons = field(m, "buttons").and_then(Value::as_array).cloned().unwrap_or_default();
-            for (i, k) in buttons.iter().filter_map(Value::as_str).take(9).enumerate() {
-                if let Some(b) = r.note(format!("{tool}: key {} ({k})", i + 1), k) {
-                    bindings.insert(format!("key.{}", i + 1), b);
-                }
-            }
-            let encoders = field(m, "encoders").and_then(Value::as_array).cloned().unwrap_or_default();
-            // the Dialpad's encoder 0 is its roller, 1 its big dial
-            let slots = ["roller", "dial", "knob.3", "knob.4"];
-            for (slot, k) in slots.iter().zip(encoders.iter().filter_map(Value::as_str)) {
-                if let Some(b) = r.note(format!("{tool}: {slot} ({k})"), k) {
-                    bindings.insert((*slot).to_string(), b);
-                }
-            }
-            let name = if tool == "default" { "Tool: Default".to_string() } else { format!("Tool: {tool}") };
-            // TactileBridge's default and Select layouts were its everyday ones (Select is Capture
-            // One's normal cursor): ordinary pages, first, so the Keypad's own page 1 shows them; the
-            // other tools' layouts are tool pages shown by their context
-            let everyday = tool == "default" || tool == "Select";
-            let page = Page { name: name.clone(), groups: Vec::new(), bindings, auto: !everyday };
-            if everyday {
-                let at = if tool == "default" { 0 } else { usize::from(p.pages.first().is_some_and(|f| f.name == "Tool: Default")) };
-                p.pages.insert(at.min(p.pages.len()), page);
-                if tool == "default" {
-                    p.contexts.insert("default".into(), vec![name]);
-                }
-            } else {
-                p.pages.push(page);
-                if taken.insert(context.to_string()) {
-                    p.contexts.insert(context.to_string(), vec![name]);
-                } else {
-                    p.contexts.entry(context.to_string()).or_default().push(name);
-                }
+}
+
+/// `toolContext.contexts`: the tool layouts, as pages of a new "TactileBridge" profile (made active).
+fn import_tool_contexts(s: &mut SurfaceSettings, ctx: &serde_json::Map<String, Value>, r: &mut Report) {
+    let mut p = crate::defaults::profiles().into_iter().find(|p| p.name == "Default").unwrap_or_default();
+    p.name = unique_name(s, "TactileBridge");
+    p.description = "Imported from TactileBridge".into();
+    // TactileBridge's tool layouts take the contexts they cover; LightCraft's own tool pages stay
+    // for the rest (a selected mask, Masking without a tool, …)
+    let mut taken: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (tool, m) in ctx {
+        let Some(context) = context_of(tool) else {
+            r.dropped.push(ReportLine { from: format!("Tool context: {tool}"), to: String::new(), note: "no matching LightCraft context".into() });
+            continue;
+        };
+        let mut bindings = BTreeMap::new();
+        let buttons = field(m, "buttons").and_then(Value::as_array).cloned().unwrap_or_default();
+        for (i, k) in buttons.iter().filter_map(Value::as_str).take(9).enumerate() {
+            if let Some(b) = r.note(format!("{tool}: key {} ({k})", i + 1), k) {
+                bindings.insert(format!("key.{}", i + 1), b);
             }
         }
-        p.sanitize();
-        s.profile = p.name.clone();
-        s.profiles.push(p);
+        let encoders = field(m, "encoders").and_then(Value::as_array).cloned().unwrap_or_default();
+        // the Dialpad's encoder 0 is its roller, 1 its big dial
+        let slots = ["roller", "dial", "knob.3", "knob.4"];
+        for (slot, k) in slots.iter().zip(encoders.iter().filter_map(Value::as_str)) {
+            if let Some(b) = r.note(format!("{tool}: {slot} ({k})"), k) {
+                bindings.insert((*slot).to_string(), b);
+            }
+        }
+        let name = if tool == "default" { "Tool: Default".to_string() } else { format!("Tool: {tool}") };
+        // TactileBridge's default and Select layouts were its everyday ones (Select is Capture
+        // One's normal cursor): ordinary pages, first, so the Keypad's own page 1 shows them; the
+        // other tools' layouts are tool pages shown by their context
+        let everyday = tool == "default" || tool == "Select";
+        let page = Page { name: name.clone(), groups: Vec::new(), bindings, auto: !everyday };
+        if everyday {
+            let at = if tool == "default" { 0 } else { usize::from(p.pages.first().is_some_and(|f| f.name == "Tool: Default")) };
+            p.pages.insert(at.min(p.pages.len()), page);
+            if tool == "default" {
+                p.contexts.insert("default".into(), vec![name]);
+            }
+        } else {
+            p.pages.push(page);
+            if taken.insert(context.to_string()) {
+                p.contexts.insert(context.to_string(), vec![name]);
+            } else {
+                p.contexts.entry(context.to_string()).or_default().push(name);
+            }
+        }
     }
-    s.sanitize();
-    Ok(r)
+    p.sanitize();
+    s.profile = p.name.clone();
+    s.profiles.push(p);
 }
 
 fn unique_name(s: &SurfaceSettings, base: &str) -> String {
