@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Show in Folders lands on the photo
+- Photo ▸ Show in Folders, and the same item in a photo's right-click menu, now make that photo the active one in its
+  folder. From a multi-selection that is the photo you right-clicked, and the selected photos in that folder stay
+  selected (issue #3455).
+- The grid and the filmstrip scroll back to the photo, also when its folder was already shown and you had scrolled away
+  (issue #3456).
+- A photo hidden under the top of a collapsed stack is shown: its stack opens (issue #3457).
+
 ## 2026-10-30
 
 ### A keyboard shortcut for Clear Color Label

@@ -526,6 +526,15 @@ pub(crate) fn wheel_step(ui: &egui::Ui, key: egui::Id, area: Rect, span: f32, si
     if sideways { egui::vec2((notches.x + notches.y) * step, 0.0) } else { egui::vec2(0.0, notches.y * step) }
 }
 
+/// Have the grid and the filmstrip bring the active photo into view on their next pass, as if it
+/// had just changed (Show in Folders, when the photo was already active in a folder already shown).
+pub(crate) fn follow_active_again(ctx: &egui::Context) {
+    ctx.data_mut(|d| {
+        d.remove::<(Option<PhotoId>, lightcraft_engine::LibrarySource, u64)>(egui::Id::unique("grid-follow-active"));
+        d.remove::<(Option<PhotoId>, lightcraft_engine::LibrarySource, u64)>(egui::Id::unique("film-follow-active"));
+    });
+}
+
 /// Height of a date header row (points).
 pub const HEADER_H: f32 = 40.0;
 
