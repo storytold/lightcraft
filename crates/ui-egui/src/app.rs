@@ -232,8 +232,14 @@ impl LightcraftApp {
             // menu), it must not keep a search that no longer applies (issue #1648)
             self.ui.search.clear();
         }
-        if r.is_ok() && id == "mask.addComponent" && params.get("kind").and_then(Value::as_str) != Some("colorRange") && self.ui.tool == "colorRange"
+        if r.is_ok()
+            && id == "mask.addComponent"
+            && matches!(self.ui.tool.as_str(), "colorRange" | "brush")
+            && params.get("kind").and_then(Value::as_str) != Some(self.ui.tool.as_str())
         {
+            // The eyedropper and the brush take every press on the photo, so the handles of a
+            // gradient (or any other shape) added meanwhile would be dead: disarm them. A
+            // component of the tool's own kind keeps it (Pick → another colour range, Brush → Brush).
             self.ui.tool.clear();
         }
         if r.is_ok() && id == "mask.adjust" {
