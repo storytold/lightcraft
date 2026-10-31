@@ -100,7 +100,11 @@ pub(crate) fn read_image_in(mode: crate::Mode, data: &[u8], info: &ImageInfo, or
                 match info.compression {
                     7 => {
                         if dctjpeg::is_dct(src) {
-                            dctjpeg::frame_info(src)?;
+                            let (fw, fh, fc, _) = dctjpeg::frame_info(src)?;
+                            let planar = info.planar == 2 && info.samples_per_pixel > 1;
+                            let cpp = if planar { 1 } else { info.samples_per_pixel as usize };
+                            let (cw, ch, _, vh) = chunk_dims(info, &c);
+                            check_dct_frame(fw, fh, fc, cw, vh, ch, cpp)?;
                         } else {
                             ljpeg::frame_info(src)?;
                         }
@@ -228,6 +232,14 @@ fn dct_frame_fits(fw: usize, fh: usize, fc: usize, cw: usize, vh: usize, ch: usi
     fc == cpp && rows_per_frame_row > 0 && rows >= vh && rows <= ch
 }
 
+/// [`dct_frame_fits`] as the error both header and full reads give for a frame that doesn't fit.
+fn check_dct_frame(fw: usize, fh: usize, fc: usize, cw: usize, vh: usize, ch: usize, cpp: usize) -> Result<()> {
+    if dct_frame_fits(fw, fh, fc, cw, vh, ch, cpp) {
+        return Ok(());
+    }
+    Err(RawError::Corrupt(format!("DCT JPEG tile is {fw}x{fh}x{fc}, expected rows of {cw}x{cpp} samples, {vh}..{ch} of them")))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, packing: Packing, cpp: usize, bits: u32, float: bool) -> Result<ChunkPx> {
     let src = chunk_bytes(data, c).ok_or_else(|| RawError::Corrupt("chunk offset past end of file".into()))?;
@@ -251,12 +263,7 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             let limit = n.saturating_mul(2).max(1 << 16);
             let f = if dctjpeg::is_dct(src) {
                 let f = dctjpeg::decode(src, limit)?;
-                if !dct_frame_fits(f.width, f.height, f.components, cw, vh, ch, cpp) {
-                    return Err(RawError::Corrupt(format!(
-                        "DCT JPEG tile is {}x{}x{}, expected rows of {cw}x{cpp} samples, {vh}..{ch} of them",
-                        f.width, f.height, f.components
-                    )));
-                }
+                check_dct_frame(f.width, f.height, f.components, cw, vh, ch, cpp)?;
                 f
             } else {
                 ljpeg::decode(src, limit)?
@@ -743,6 +750,59 @@ mod lossy_tests {
         // refused as truncated rather than filled with the predictor's padding
         let zlib = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0u8; 500 * 1000], 6);
         assert!(matches!(read_image(&zlib, &info(zlib.len() as u64), ByteOrder::Little, Packing::Msb), Err(RawError::Corrupt(_))));
+    }
+
+    #[test]
+    fn dct_header_and_full_reads_agree_on_tile_shape() {
+        // A 16 x 8 TIFF tile, with its visible height and component layout varied below.
+        for (fw, fh, height, cpp, planar, fits) in [
+            (16, 8, 8, 1, 1, true),
+            (32, 4, 8, 1, 1, true),   // two tile rows per frame row
+            (16, 4, 4, 1, 1, true),   // edge tile coded only to its visible height
+            (32, 2, 4, 1, 1, true),   // both layouts together
+            (8, 8, 8, 1, 1, false),   // narrower than a tile row
+            (16, 4, 8, 1, 1, false),  // missing visible rows
+            (16, 16, 8, 1, 1, false), // more than the nominal rows
+            (24, 8, 8, 1, 1, false),  // partial tile rows
+            (16, 8, 8, 3, 1, false),  // one frame component for three interleaved samples
+            (16, 8, 8, 3, 2, true),   // planar chunks each need only one component
+            (32, 4, 8, 3, 2, true),
+        ] {
+            let mut jpg = Vec::new();
+            jpeg_encoder::Encoder::new(&mut jpg, 100).encode(&vec![128; fw as usize * fh as usize], fw, fh, jpeg_encoder::ColorType::Luma).unwrap();
+            let planes = if planar == 2 { cpp as usize } else { 1 };
+            let info = ImageInfo {
+                width: 16,
+                height,
+                bits_per_sample: vec![8; cpp as usize],
+                samples_per_pixel: cpp,
+                compression: comp::JPEG,
+                photometric: 32803,
+                planar,
+                predictor: 1,
+                sample_format: 1,
+                new_subfile_type: 0,
+                layout: Layout::Tiles { tile_width: 16, tile_height: 8 },
+                offsets: vec![0; planes],
+                byte_counts: vec![jpg.len() as u64; planes],
+            };
+            for mode in [crate::Mode::Header, crate::Mode::Full] {
+                let result = read_image_in(mode, &jpg, &info, ByteOrder::Little, Packing::Msb);
+                if fits {
+                    let samples = if mode == crate::Mode::Header { 0 } else { 16 * height as usize * cpp as usize };
+                    assert_eq!(
+                        result,
+                        Ok(RawData::U16(vec![128; samples])),
+                        "{mode:?}, frame {fw}x{fh}, height {height}, cpp {cpp}, planar {planar}"
+                    );
+                } else {
+                    assert!(
+                        matches!(&result, Err(RawError::Corrupt(m)) if m.starts_with("DCT JPEG tile")),
+                        "{mode:?}, frame {fw}x{fh}, height {height}, cpp {cpp}, planar {planar}: {result:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
