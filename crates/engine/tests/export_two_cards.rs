@@ -80,6 +80,18 @@ fn export(s: &mut Session, ids: &[PhotoId], o: &ExportOptions, cards: ExportCard
     let mut written = Vec::new();
     let mut helper_jobs = 0;
     let mut rows = Vec::new();
+    // (also sampled every millisecond while the batch runs: between photos alone can miss a
+    // second card whose renders are short next to their decode and encode)
+    let (sampled, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
+    let sampler = {
+        let (sampled, done) = (sampled.clone(), done.clone());
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                sampled.fetch_max(gpu::batch_usage_of(Role::Helper).jobs, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
     let files = {
         let mut write = |p: &str, b: &[u8]| {
             written.push((p.to_string(), b.to_vec()));
@@ -94,6 +106,9 @@ fn export(s: &mut Session, ids: &[PhotoId], o: &ExportOptions, cards: ExportCard
         run_batch_cancellable(items, o, &Destination::default(), &mut write, &|_| false, false, &mut progress, cancel).unwrap()
     };
     drop(row);
+    done.store(true, Ordering::Relaxed);
+    sampler.join().unwrap();
+    let helper_jobs = helper_jobs.max(sampled.load(Ordering::Relaxed));
     set_export_cards(ExportCards::Both);
     set_export_lanes(None);
     Run { files, written, helper_jobs, rows }
