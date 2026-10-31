@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (LR-PROF-CAMERACOLOR: 12 bundled camera profiles with the Nikon D780, D750 and D90; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -68,7 +68,7 @@ from the checklist sections and the deep-dive documents.
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
 | RAW decoding and camera coverage | 15% | 81% | 77% | 120–220 h | [raw-parity.md](raw-parity.md), measured model by model: 85% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
-| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 9 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
+| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 12 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
 | Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
 | Masking | 8% | 67% | 45% | 60–110 h | checklist K 67.4%; AI masks heuristic or SAM 3 without mirror |
@@ -300,6 +300,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: bundled Nikon D780, D750 and D90 profiles; the count of bundled profiles corrected to 12 with #3022's ILCE-7RM5 (it still read 5) |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |

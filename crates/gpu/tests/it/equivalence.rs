@@ -947,6 +947,34 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     assert_eq!(lightcraft_gpu::source_uploads() - start, 2);
 }
 
+/// Raw decoding keeps negative channels (near-black sensor noise through a saturating camera matrix, a NIKON D780
+/// profile's): pushed and edited, the GPU renders them as the CPU does.
+#[test]
+fn negative_channels_match_cpu() {
+    if !gpu() {
+        return;
+    }
+    let m = [[3.48f32, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]];
+    let noise = |x: usize, y: usize, c: usize| {
+        let h = ((x * 7919 + y * 104_729 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    let src = Arc::new(Rgb32f::from_fn(320, 240, |x, y| {
+        let g = 0.0005 * 1.02f32.powi(x as i32);
+        let cam: [f32; 3] = std::array::from_fn(|c| g + noise(x, y, c));
+        std::array::from_fn(|i| m[i][0] * cam[0] + m[i][1] * cam[1] + m[i][2] * cam[2])
+    }));
+    assert!(src.data.iter().flatten().any(|v| *v < 0.0));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(320, 240);
+    for (name, edit) in cases() {
+        let mut s = DevelopSettings::default();
+        edit(&mut s);
+        s.light.exposure += 4.0;
+        check(&format!("negatives +4 EV, {name}"), &src, &info, &s, &req);
+    }
+}
+
 #[test]
 fn soft_proofs_match() {
     if !gpu() {

@@ -260,8 +260,11 @@ fn calibrate(args: &[String]) -> Result<(), String> {
                         let result = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| pool.add(&bytes));
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         match result {
-                            Ok(Some(model)) => eprintln!("[{n}/{}] {} ({model})", files.len(), path.display()),
-                            Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable camera JPEG or colour)", files.len(), path.display()),
+                            Ok(Some(added)) if added.colour => eprintln!("[{n}/{}] {} ({})", files.len(), path.display(), added.model),
+                            Ok(Some(added)) => {
+                                eprintln!("[{n}/{}] {} ({}, tone only: too dark or colourless)", files.len(), path.display(), added.model)
+                            }
+                            Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable or a black-and-white camera JPEG)", files.len(), path.display()),
                             Err(e) => eprintln!("[{n}/{}] {}: {e}", files.len(), path.display()),
                         }
                     }
@@ -281,11 +284,12 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             Ok(profile) => {
                 let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
                 println!(
-                    "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
+                    "{}: {} photos, {} colour pairs, hue/saturation table {}, tone curve {} → {}",
                     profile.model,
                     profile.files,
                     profile.samples,
                     profile.hue_sat.is_some(),
+                    profile.tone.is_some(),
                     path.display()
                 );
                 written += 1;
