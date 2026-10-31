@@ -62,6 +62,8 @@ pub struct LoupeTiming {
     /// Steps finished since the app started (never lowered when old ones leave `done`): a driver's
     /// cursor for the steps made after it looked.
     total: u64,
+    /// Whether the loupe drew a photo in the frame being drawn ([`LoupeTiming::end_frame`]).
+    drawn: bool,
 }
 
 /// Sources that show the photo at full size: the camera's JPEG, a cached or a fresh render.
@@ -73,6 +75,7 @@ impl LoupeTiming {
     /// The loupe drew `photo` from `source` (what [`crate::panels::detail`] reports in
     /// `loupe_shown`) in the frame that started at `now` (s).
     pub fn observe(&mut self, photo: PhotoId, source: &'static str, now: f64) {
+        self.drawn = true;
         if self.current.as_ref().is_none_or(|(_, t)| t.photo != photo) {
             self.finish(now);
             let t = StepTiming { photo, any_ms: None, any_source: "none", full_ms: None, full_source: "none", sharp_ms: None, dwell_ms: 0.0 };
@@ -112,6 +115,15 @@ impl LoupeTiming {
     /// The loupe is not showing a photo any more (the grid is up).
     pub fn left(&mut self, now: f64) {
         self.finish(now);
+    }
+
+    /// A frame (started at `now`) was drawn: when the loupe drew no photo in it (the grid, Compare, Survey,
+    /// Reference, People or the slideshow is up), the photo it showed was left then, so time away from the
+    /// loupe never counts as time on that photo.
+    pub fn end_frame(&mut self, now: f64) {
+        if !std::mem::take(&mut self.drawn) {
+            self.left(now);
+        }
     }
 
     fn finish(&mut self, now: f64) {
@@ -183,6 +195,31 @@ mod tests {
         assert!(l.settling(PhotoId(3), 2.1));
         // …until this one has stayed long enough
         assert!(!l.settling(PhotoId(3), 2.033 + SETTLE_SECS + 0.001));
+    }
+
+    /// A frame without the loupe finishes the photo it showed: coming back to it later starts a new step, and
+    /// neither counts the time away (CodeRabbit on #3055).
+    #[test]
+    fn leaving_the_loupe_finishes_its_photo() {
+        let mut l = LoupeTiming::default();
+        l.observe(PhotoId(1), "embedded", 10.0);
+        l.end_frame(10.0);
+        l.observe(PhotoId(1), "embedded", 10.5);
+        l.end_frame(10.5);
+        assert!(l.steps().is_empty(), "frames that draw the loupe keep the step open");
+        // the grid is up from 11 s to 60 s
+        l.end_frame(11.0);
+        l.end_frame(60.0);
+        let s = l.steps();
+        assert_eq!(s.len(), 1);
+        assert!((s[0].dwell_ms - 1000.0).abs() < 0.01, "dwell ends when the loupe went: {}", s[0].dwell_ms);
+        // back in the loupe on the same photo: a new step, timed from its return
+        l.observe(PhotoId(1), "render", 60.0);
+        l.observe(PhotoId(1), "render", 60.2);
+        l.end_frame(60.2);
+        assert_eq!(l.steps().len(), 1);
+        assert_eq!(l.to_json()["current"]["sharpMs"], 0.0);
+        assert!((l.to_json()["current"]["dwellMs"].as_f64().unwrap() - 200.0).abs() < 0.01);
     }
 
     #[test]
