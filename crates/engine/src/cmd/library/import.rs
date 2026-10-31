@@ -66,6 +66,10 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         }
         None => Default::default(),
     };
+    let rename_start = match p.get("renameStart").and_then(Value::as_u64) {
+        Some(n) => usize::try_from(n).map_err(|_| bad("library.import", "renameStart is too large for this platform"))?,
+        None => 1,
+    };
     let opts = crate::import::ImportOptions {
         on_deleted,
         mode,
@@ -74,7 +78,7 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         destination: str_param(p, "destination").map(str::to_string),
         organize,
         rename: str_param(p, "rename").map(str::to_string),
-        rename_start: p.get("renameStart").and_then(Value::as_u64).unwrap_or(1) as usize,
+        rename_start,
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
