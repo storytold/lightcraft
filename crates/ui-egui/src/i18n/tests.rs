@@ -1008,15 +1008,17 @@ fn contextual_source(key: &str) -> Option<&str> {
     CONTEXTS.iter().find_map(|context| key.strip_prefix(context).and_then(|k| k.strip_prefix('|')))
 }
 
-/// A contextual entry translates a message the app shows (a typo would silently fall back to the
-/// plain message), and the call sites' contexts read their entry rather than the plain one.
+/// A contextual entry translates a message the app shows (a typo, or a message the app no longer
+/// has, would silently fall back to the plain message): its message is in the source or the UI's
+/// tables, not merely a key some catalog still holds. The call sites' contexts read their entry
+/// rather than the plain one.
 #[test]
 fn contextual_entries_name_real_messages() {
-    let plain = plain_messages();
+    let shown = app_messages();
     for language in Locale::ALL {
         for key in language.catalog().keys() {
             if let Some(source) = contextual_source(key) {
-                assert!(plain.contains(source), "{}: {key:?} names no message", language.code());
+                assert!(shown.contains(source), "{}: {key:?} names no message", language.code());
             }
         }
     }
@@ -1027,13 +1029,21 @@ fn contextual_entries_name_real_messages() {
     assert_eq!(Locale::De.tr("Import Presets…"), "Vorgaben importieren…");
     assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Preset name"), "Name des Presets");
     assert_eq!(Locale::De.tr("Preset name"), "Name der Vorgabe");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Rename Preset"), "Preset umbenennen");
     assert_eq!(tr_ctx_in(Locale::En, FILTER_BAR_CONTEXT, "Presets"), "Presets");
 }
 
 /// Every plain message: the keys of every catalog (but contextual entries, which a language adds
-/// only where it needs one), the `tr("…")` literals in the source and the labels the UI
-/// translates from tables.
+/// only where it needs one) and the [`app_messages`].
 fn plain_messages() -> std::collections::BTreeSet<String> {
+    let mut messages = app_messages();
+    messages.extend(Locale::ALL.iter().flat_map(|language| language.catalog().keys()).filter(|key| contextual_source(key).is_none()).cloned());
+    messages
+}
+
+/// The messages the app itself shows: the `tr("…")` / `tr_ctx(…, "…")` literals in the source and
+/// the labels the UI translates from tables.
+fn app_messages() -> std::collections::BTreeSet<String> {
     use lightcraft_catalog::rules;
     let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
     labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
@@ -1068,14 +1078,7 @@ fn plain_messages() -> std::collections::BTreeSet<String> {
         "Imported Photos",
     ]);
     labels.extend(crate::panels::keyword_list::VARIABLE_LABELS);
-    Locale::ALL
-        .iter()
-        .flat_map(|language| language.catalog().keys())
-        .filter(|key| contextual_source(key).is_none())
-        .cloned()
-        .chain(gaps::source_messages())
-        .chain(labels.into_iter().map(str::to_string))
-        .collect()
+    gaps::source_messages().into_iter().chain(labels.into_iter().map(str::to_string)).collect()
 }
 
 /// Help ▸ What's New, line by line as the dialog looks each one up.

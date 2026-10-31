@@ -2221,6 +2221,7 @@
   "smart album value|Yes": "Ja",
   "develop presets|Import Presets…": "Presets importieren…",
   "develop presets|Preset name": "Name des Presets",
+  "develop presets|Rename Preset": "Preset umbenennen",
   "filter bar|Presets": "Vorgaben",
   "rename dialog|Presets": "Vorgaben",
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Kein Grafikprozessor gefunden: LightCraft rendert auf der CPU, was viel langsamer ist. Details unter Hilfe → Systeminformationen.",
