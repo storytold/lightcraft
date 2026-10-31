@@ -216,6 +216,12 @@ const CHROMA_SHRINK: f64 = 2.0;
 /// train, one third held out), when that lowers the held-out error. Colourfulness is compared as
 /// the distance from neutral of luminance-normalised RGB.
 pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<CameraTone> {
+    fit_chroma_excluding(pairs, look, &[])
+}
+
+/// Fit chroma without the retry's additional holdouts. Flags retain the original pair positions;
+/// the usual chroma holdouts also remain excluded from training and own its acceptance check.
+pub(super) fn fit_chroma_excluding(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, holdouts: &[bool]) -> Option<CameraTone> {
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let scene = |x: &[f64; 3]| {
         let p = look.matrix.apply(*x);
@@ -231,7 +237,7 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
     let samples: Vec<(f64, f64, f64)> = pairs
         .iter()
         .enumerate()
-        .filter(|(i, _)| i % 3 != 0)
+        .filter(|(i, _)| i % 3 != 0 && !holdouts.get(*i).copied().unwrap_or(false))
         .filter_map(|(_, (x, y))| {
             let p = predict(x);
             let (cp, cy) = (chroma(p)?, chroma(*y)?);

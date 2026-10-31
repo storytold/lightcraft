@@ -89,7 +89,9 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 20: effective JPEG primaries for clipping in the partial look's second attempt with the bright pairs (#631's bird).
 /// 21: dark-scene colour fits use thresholds scaled by luminance (#865) and keep luminance when clipping negative colour noise.
-pub const LOOK_VERSION: u32 = 21;
+/// 22: filtered bright retry holdouts stay out of chroma training.
+/// 23: dark-scene fitting with the separated bright chroma holdouts.
+pub const LOOK_VERSION: u32 = 23;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

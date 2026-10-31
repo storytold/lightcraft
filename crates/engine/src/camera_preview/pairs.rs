@@ -1,4 +1,4 @@
-use super::hue_sat::{HueSat, fit_chroma, fit_hue_sat};
+use super::hue_sat::{HueSat, fit_chroma, fit_chroma_excluding, fit_hue_sat};
 use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
@@ -565,8 +565,22 @@ pub(super) fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f, highlights: &High
 /// and up, not clipped in the JPEG ([`jpeg_clipped`]: a clipped JPEG pixel only bounds the curve),
 /// from `bright`, which has no clipped sensor pixels when the clipped ones were left out of the
 /// proxy.
-pub(super) fn bright_tone_pairs(bright: &[Pair], jpeg_space: Option<lightcraft_codecs::NamedSpace>) -> Vec<Pair> {
-    bright.iter().filter(|(_, y)| luma(*y) >= 0.85 && !jpeg_clipped(*y, jpeg_space)).copied().collect()
+pub(super) fn bright_tone_pairs(bright: &[Pair], jpeg_space: Option<lightcraft_codecs::NamedSpace>) -> (Pairs, Vec<bool>) {
+    let mut extra = Vec::new();
+    // Keep one flag per original bright pair, even when an earlier pair was filtered out.
+    let holdouts = bright
+        .iter()
+        .map(|pair| {
+            if luma(pair.1) >= 0.85 && !jpeg_clipped(pair.1, jpeg_space) {
+                let held = extra.len() % 3 == 0;
+                extra.push(*pair);
+                held
+            } else {
+                false
+            }
+        })
+        .collect();
+    (extra, holdouts)
 }
 
 /// Whether a camera JPEG pixel (linear Rec.2020, as the reference proxy holds it) has a channel at
@@ -594,7 +608,7 @@ pub(super) fn fit_partial_on(
 ) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
-    let extra = if bright_tone { bright_tone_pairs(&bright, highlights.jpeg_space) } else { Vec::new() };
+    let (extra, chroma_holdouts) = if bright_tone { bright_tone_pairs(&bright, highlights.jpeg_space) } else { (Vec::new(), Vec::new()) };
     if bright_tone && extra.is_empty() {
         return None;
     }
@@ -615,7 +629,7 @@ pub(super) fn fit_partial_on(
     };
     let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &extra, sensor, reference, edge_limit, |x| matrix.apply(x))?;
     let mut look = CameraLook { matrix, tone, hue_sat: None, preserve_luminance: false };
-    if let Some(tone) = fit_chroma(&bright, &look) {
+    if let Some(tone) = fit_chroma_excluding(&bright, &look, &chroma_holdouts) {
         look.tone = tone;
     }
     let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));

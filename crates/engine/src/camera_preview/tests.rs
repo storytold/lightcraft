@@ -3113,9 +3113,9 @@ fn bright_pairs_use_the_effective_jpeg_colour_space() {
     let valid_adobe = to_working.apply([0.93, 0.80, 0.96]);
     assert!(luma(valid_adobe) >= 0.85);
     let bright = [([0.4; 3], valid_adobe)];
-    assert_eq!(bright_tone_pairs(&bright, Some(NamedSpace::AdobeRgb)), bright, "valid Adobe RGB tone evidence must survive");
-    assert!(bright_tone_pairs(&bright, Some(NamedSpace::Srgb)).is_empty(), "the same working pixel clips in sRGB");
-    assert!(bright_tone_pairs(&bright, None).is_empty(), "unknown primaries keep the conservative check");
+    assert_eq!(bright_tone_pairs(&bright, Some(NamedSpace::AdobeRgb)).0, bright, "valid Adobe RGB tone evidence must survive");
+    assert!(bright_tone_pairs(&bright, Some(NamedSpace::Srgb)).0.is_empty(), "the same working pixel clips in sRGB");
+    assert!(bright_tone_pairs(&bright, None).0.is_empty(), "unknown primaries keep the conservative check");
     let clipped_adobe = to_working.apply([1.0, 0.90, 0.80]);
     assert!(jpeg_clipped(clipped_adobe, Some(NamedSpace::AdobeRgb)), "a clipped Adobe RGB channel stays out");
 }
@@ -3142,4 +3142,48 @@ fn look_proxies_keep_the_decoders_effective_jpeg_primaries() {
         let (_, _, _, effective) = proxies(&raw, &tagged, &t, PROXY, 0.0, None, None).unwrap();
         assert_eq!(effective, Some(space), "the fit must use the decoded ICC primaries");
     }
+}
+
+/// Filtering the first bright pair shifts every retry holdout into the old chroma training set.
+/// Changing only those holdouts must leave the trained curve unchanged.
+#[test]
+fn filtered_bright_holdouts_cannot_train_the_chroma_curve() {
+    let knots = std::array::from_fn(|i| {
+        let x = 0.001 + 0.979 * i as f32 / 31.0;
+        [x, x]
+    });
+    let look = CameraLook { matrix: Mat3::IDENTITY, tone: CameraTone::new(knots).unwrap(), hue_sat: None, preserve_luminance: false };
+    let map = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let tint = [0.88, 1.0, 1.12];
+    let bright: Vec<Pair> = (0..600)
+        .map(|i| {
+            let y = 0.86 + 0.02 * ((i * 7919 % 601) as f64 / 601.0);
+            let x = tint.map(|v| v * y / luma(tint));
+            let p = displayed(x, &map);
+            let py = luma(p);
+            let target = if i == 0 { [0.8; 3] } else { p.map(|v| py + (v - py) * 0.25) };
+            (x, target)
+        })
+        .collect();
+    let (extra, held) = super::pairs::bright_tone_pairs(&bright, None);
+    assert_eq!(held.len(), bright.len());
+    assert_eq!(extra.len(), bright.len() - 1, "only the first pair is filtered out");
+    assert!(held[1] && !held[3], "the filtered and original holdout indices must differ");
+    let fit = |pairs: &[Pair]| super::hue_sat::fit_chroma_excluding(pairs, &look, &held).expect("enough measured chroma to fit");
+    let expected = fit(&bright);
+    let changed = |select: &dyn Fn(usize) -> bool| {
+        bright
+            .iter()
+            .enumerate()
+            .map(|(i, (x, target))| {
+                let y = luma(*target);
+                (*x, if select(i) { target.map(|v| y + (v - y) * 2.0) } else { *target })
+            })
+            .collect::<Vec<Pair>>()
+    };
+    let holdouts_changed = changed(&|i| held[i]);
+    assert_eq!(super::pairs::bright_tone_pairs(&holdouts_changed, None).1, held, "holdout edits must retain eligibility and the split");
+    assert_eq!(fit(&holdouts_changed), expected, "a retry holdout changed the trained chroma curve");
+    let training_changed = changed(&|i| i % 3 != 0 && !held[i]);
+    assert_ne!(fit(&training_changed), expected, "the remaining training samples must still train chroma");
 }
