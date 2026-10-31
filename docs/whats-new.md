@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Malformed IPTC times no longer become photo timestamps
+- IPTC Time Created values with partial offsets, extra clock digits or trailing text used to be truncated to a plausible
+  clock. They are now skipped as capture-time candidates, allowing valid embedded XMP or the file-date fallback to be
+  used. Six-digit local clocks and complete signed offsets remain supported, and unrelated IPTC metadata is retained.
+
 ## 2026-10-30
 
 ### A keyboard shortcut for Clear Color Label
