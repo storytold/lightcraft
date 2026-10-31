@@ -304,6 +304,10 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
+        // (the first library shown takes the place of none: nothing was searching another one)
+        if self.shown_library.is_some() {
+            crate::find_similar::library_changed(self);
+        }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
