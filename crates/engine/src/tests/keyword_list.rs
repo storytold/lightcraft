@@ -522,3 +522,18 @@ fn a_split_keyword_keeps_its_export_options() {
     assert!(!groom.include_on_export && groom.person, "kept its own options, left out of export: {groom:?}");
     assert!(s.catalog.keyword_info("Bride\nGroom").is_none(), "the multi-line record is gone");
 }
+
+/// A split keyword that is where new keywords go hands that to one of its names only, so there is still one
+/// default parent (CodeRabbit on #2922).
+#[test]
+fn a_split_default_parent_stays_one_keyword() {
+    use lightcraft_catalog::Op;
+    use lightcraft_catalog::keywords::KeywordInfo;
+    let mut s = Session::with_demo();
+    let inside = KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() };
+    s.catalog.apply(Op::SetKeyword { path: "Ceremony\nReception".into(), info: Some(inside) }).unwrap();
+    s.split_multiline_keywords();
+    let parents: Vec<&str> = s.catalog.listed_keywords().filter(|k| k.info.new_keywords_inside).map(|k| k.path.as_str()).collect();
+    assert_eq!(parents, ["Ceremony"]);
+    assert_eq!(s.catalog.default_keyword_parent().as_deref(), Some("Ceremony"));
+}
