@@ -56,6 +56,20 @@ pub(super) struct Placer<'a> {
     stop_on_error: bool,
 }
 
+/// Why `subfolder` would lead out of the export folder (a `..` component, or an absolute path or
+/// drive), `None` when it stays inside. Nested subfolders (`a/b`) are fine. Checked when the
+/// params come in and again before writing, since a saved preset is read without the checks.
+pub(super) fn subfolder_escapes(subfolder: &str) -> Option<&'static str> {
+    let s = subfolder.trim();
+    if s.starts_with(['/', '\\']) || (s.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) && s.as_bytes().get(1) == Some(&b':')) {
+        return Some("is an absolute path; give a folder inside the export folder");
+    }
+    if s.split(['/', '\\']).any(|c| c.trim() == "..") {
+        return Some("can't contain `..`; give a folder inside the export folder");
+    }
+    None
+}
+
 fn join_path(a: &str, b: &str) -> String {
     if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) }
 }
@@ -89,6 +103,9 @@ impl<'a> Placer<'a> {
                 d.to_string()
             }
         };
+        if let Some(why) = subfolder_escapes(&self.o.subfolder) {
+            return Err(format!("{name}: the subfolder `{}` {why}", self.o.subfolder));
+        }
         Ok(if self.o.subfolder.is_empty() { base } else { join_path(&base, &self.o.subfolder) })
     }
 
