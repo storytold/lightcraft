@@ -54,6 +54,59 @@ fn creating_a_keyword_with_attributes_and_the_selection() {
     assert!(s.execute("keyword.info", &json!({"keyword": "lisbon"})).is_err(), "no such keyword");
 }
 
+/// Every command that names a keyword refuses a new name ending in `*` at any level, and changes
+/// nothing; a name with `*` inside is allowed. A keyword the library has from a file keeps its name
+/// and can still be given to photos.
+#[test]
+fn commands_refuse_a_new_keyword_name_ending_in_an_asterisk() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.execute("keyword.create", &json!({"name": "Lagoon", "parent": null})).unwrap();
+    s.execute("keyword.saveSet", &json!({"name": "Mine", "keywords": ["Lagoon"]})).unwrap();
+    for name in ["travel*", "places|rome*"] {
+        // a metadata preset in prefs that holds the name
+        s.metadata_presets = vec![crate::cmd::metadata::MetadataPreset { name: "Old".into(), fields: json!({"keywords": [name]}) }];
+        let before = s.catalog.to_snapshot();
+        let sets = s.keyword_sets.clone();
+        let presets = s.metadata_presets.clone();
+        for (command, params) in [
+            ("keyword.create", json!({"name": name, "parent": null})),
+            ("keyword.edit", json!({"keyword": "Lagoon", "name": name.rsplit('|').next()})),
+            ("keyword.rename", json!({"from": "Lagoon", "to": name})),
+            ("keyword.merge", json!({"from": ["Lagoon"], "into": name})),
+            ("keyword.move", json!({"keyword": "Lagoon", "parent": name})),
+            ("photo.setMeta", json!({"addKeywords": [name]})),
+            ("photo.setMeta", json!({"keywords": ["Lagoon", name]})),
+            ("keyword.setShortcut", json!({"keywords": [name]})),
+            ("keyword.saveSet", json!({"name": "Mine", "keywords": [name]})),
+            ("library.import", json!({"paths": ["missing.jpg"], "keywords": [name]})),
+            ("metadata.savePreset", json!({"name": "Trip", "fields": {"keywords": ["Lagoon", name]}})),
+            ("library.import", json!({"paths": ["missing.jpg"], "metadataPreset": "Old"})),
+        ] {
+            let err = s.execute(command, &params).unwrap_err().to_string();
+            assert!(err.contains("can't end in “*”"), "{command} {params}: {err}");
+        }
+        // the import defaults' metadata preset
+        s.import_defaults.metadata_preset = Some("Old".into());
+        let err = s.execute("library.import", &json!({"paths": ["missing.jpg"]})).unwrap_err().to_string();
+        assert!(err.contains("can't end in “*”"), "import defaults: {err}");
+        s.import_defaults.metadata_preset = None;
+        assert!(s.catalog.to_snapshot() == before && s.keyword_sets == sets && s.metadata_presets == presets, "{name}: nothing changed");
+    }
+    s.execute("photo.setMeta", &json!({"addKeywords": ["a*b"]})).unwrap();
+    assert!(ids.iter().all(|id| keywords_of(&s, *id).contains(&"a*b".to_string())));
+    // a keyword read from a file (here put on the photo as a sidecar read puts it)
+    let id = lightcraft_catalog::PhotoId(ids[0]);
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords.push("travel*".into());
+    s.commit("Read Metadata", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "addKeywords": ["TRAVEL*"]})).unwrap();
+    assert!(keywords_of(&s, ids[1]).contains(&"TRAVEL*".to_string()), "{:?}", keywords_of(&s, ids[1]));
+    s.execute("keyword.edit", &json!({"keyword": "travel*", "synonyms": ["trip"]})).unwrap();
+    assert!(keywords_of(&s, ids[0]).contains(&"travel*".to_string()), "its name is kept");
+}
+
 /// "Put new keywords inside this keyword": new keywords go inside the default parent unless the
 /// command says otherwise (`parent: null` = the top level). It belongs to its keyword in the
 /// library: it follows a rename, goes with a delete, and undo and redo bring it back with them.

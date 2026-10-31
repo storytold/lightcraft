@@ -66,6 +66,15 @@ pub fn apply_to(m: &mut Meta, fields: &Value) {
     }
 }
 
+/// Refuses preset `fields` whose keywords hold a new name the library cannot take
+/// (`Catalog::check_keyword_name`).
+pub fn check_keywords(s: &Session, fields: &Value, command: &str) -> Result<()> {
+    for kw in fields.get("keywords").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+        s.catalog.check_keyword_name(kw).map_err(|e| bad(command, e.to_string()))?;
+    }
+    Ok(())
+}
+
 fn list(s: &Session) -> Value {
     json!(s.metadata_presets)
 }
@@ -113,6 +122,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
             Value::Object(o)
         }
     };
+    check_keywords(s, &fields, C)?;
     let preset = MetadataPreset { name: name.clone(), fields };
     match s.metadata_presets.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&name)) {
         Some(m) => *m = preset,
