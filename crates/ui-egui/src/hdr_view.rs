@@ -40,6 +40,18 @@ pub trait HdrPresenter {
     fn paint(&self, painter: &egui::Painter, rect: egui::Rect, pixels: &Arc<HdrPixels>);
 }
 
+/// Whether the loupe paints an HDR rendition, so it draws no 8-bit window renders over it: an HDR
+/// display, a shown After view (not the Before alone) and a view that has one (an HDR edit
+/// without an overlay or soft proof, as [`lightcraft_engine::media::view_paints_hdr`] says).
+pub(crate) fn loupe_paints_hdr(
+    app: &crate::LightcraftApp,
+    d: &lightcraft_develop::DevelopSettings,
+    overlay: lightcraft_pipeline::Overlay,
+    before_only: bool,
+) -> bool {
+    app.hdr_presenter.is_some() && !before_only && lightcraft_engine::media::view_paints_hdr(d, overlay, app.ui.soft_proof.then_some(app.ui.proof))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

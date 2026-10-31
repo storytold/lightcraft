@@ -194,6 +194,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let drawn_long = target_rect.width().max(target_rect.height()) * ppp;
     // the whole frame at about canvas size; the zoomed part of it is a window render (below)
     let look = d.hash64();
+    let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
     // Diagnostic views that need whole-frame context, or reads too far for one window, still
     // render the whole frame at the size it is drawn. Mask overlays and soft proofing (both act
     // pixel by pixel) are window-safe.
@@ -203,8 +204,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft,
-        // (an HDR edit on an HDR display: whole-frame HDR renders, not 8-bit windows)
-        windows: overlay_supports_window(overlay) && !(app.hdr_presenter.is_some() && d.hdr.enabled),
+        // (a view that paints HDR on an HDR display: whole-frame HDR renders, not 8-bit windows)
+        windows: overlay_supports_window(overlay) && !crate::hdr_view::loupe_paints_hdr(app, &d, overlay, show_before && !split),
     };
     let plan = loupe_plan(app, id, look, sizes);
     // time the full-size drafts where they are what shows: under a window the whole-frame draft
@@ -243,7 +244,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     request_stand_in(app, id, want, !crop_tool);
-    let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
     if split || show_before || split_view {
         request_before(app, &ask, [sw, sh]);
     }

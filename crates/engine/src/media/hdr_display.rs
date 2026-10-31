@@ -17,9 +17,7 @@ impl RenderJob {
     /// [draft](Self::draft) renders no HDR rendition (a drag shows SDR until it ends).
     pub fn with_hdr_display(mut self, on: bool) -> Self {
         let wanted = on
-            && self.settings.hdr.enabled
-            && self.request.overlay == lightcraft_pipeline::Overlay::None
-            && self.request.proof.is_none()
+            && view_paints_hdr(&self.settings, self.request.overlay, self.request.proof)
             && self.request.window.is_none()
             && self.request.depth == OutputDepth::U8;
         if wanted && !self.hdr_display {
@@ -29,6 +27,13 @@ impl RenderJob {
         }
         self
     }
+}
+
+/// Whether a loupe view of `settings` with this `overlay` and soft `proof` shows the HDR
+/// rendition on an HDR display ([`RenderJob::with_hdr_display`]): an HDR edit with no overlay or
+/// proof. Other views show the 8-bit image, so the loupe can draw its 8-bit windows over them.
+pub fn view_paints_hdr(settings: &DevelopSettings, overlay: lightcraft_pipeline::Overlay, proof: Option<lightcraft_pipeline::Proof>) -> bool {
+    settings.hdr.enabled && overlay == lightcraft_pipeline::Overlay::None && proof.is_none()
 }
 
 /// The HDR rendition for [`RenderJob::with_hdr_display`] (CPU) of a job's `settings`, `request`,

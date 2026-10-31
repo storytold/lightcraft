@@ -63,7 +63,9 @@ The desktop app's presenter is `lightcraft-hdr-display::HdrDisplay`:
 - when a display headroom is set (`HdrDisplay::set_headroom`, the highest value the display shows),
   it eases highlights above 80 % of it in towards it, keeping hue, instead of letting the panel clip.
 
-HDR edits on an HDR window render the whole frame (no zoomed 8-bit windows). The HDR render runs
+HDR edits on an HDR window render the whole frame (no zoomed 8-bit windows). Views of them that
+paint only the 8-bit image (a mask or another window-safe overlay, a soft proof, the Before alone) keep their
+zoomed windows (`view_paints_hdr`, `loupe_paints_hdr`). The HDR render runs
 on the CPU, so a drag's drafts skip it: while a slider moves, the photo shows its SDR rendition
 (the highlights at SDR white), and the full render at the end brings the HDR rendition back. On
 the CPU it would make each draft 3–5× slower than the GPU's SDR draft (measured 30 → 104 ms at
