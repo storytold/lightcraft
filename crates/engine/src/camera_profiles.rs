@@ -13,7 +13,7 @@
 use lightcraft_color::Mat3;
 use lightcraft_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -267,16 +267,18 @@ impl Pool {
         crate::camera_pairs::write(&self.photos())
     }
 
-    /// Add the photos of a pairs file; returns how many it held. Refuse imports that would retain more than
-    /// [`crate::camera_pairs::MAX_PHOTOS`] photos, including duplicates. Each imported photo has at most [`PAIRS_PER_FILE`] pairs.
+    /// Add the photos of a pairs file; returns how many it held. A photo already in the pool (same model and id) is
+    /// skipped, so importing a file again changes nothing. Refuse an import that would leave more than
+    /// [`crate::camera_pairs::MAX_PHOTOS`] distinct photos; each holds at most [`PAIRS_PER_FILE`] pairs.
     pub fn add_pairs_file(&mut self, bytes: &[u8], origin: &str) -> Result<usize, String> {
         let photos = crate::camera_pairs::read(bytes, origin)?;
         let n = photos.len();
-        let total = self.photos.len().saturating_add(n);
-        if total > crate::camera_pairs::MAX_PHOTOS {
-            return Err(format!("{origin}: {total} photos is more than a pairs pool may hold ({})", crate::camera_pairs::MAX_PHOTOS));
+        let mut seen: HashSet<(String, String)> = self.photos.iter().map(|p| (p.model.clone(), p.id.clone())).collect();
+        let new: Vec<PhotoPairs> = photos.into_iter().filter(|p| seen.insert((p.model.clone(), p.id.clone()))).collect();
+        if seen.len() > crate::camera_pairs::MAX_PHOTOS {
+            return Err(format!("{origin}: {} photos is more than a pairs pool may hold ({})", seen.len(), crate::camera_pairs::MAX_PHOTOS));
         }
-        self.add_photos(photos);
+        self.add_photos(new);
         Ok(n)
     }
 
@@ -450,15 +452,21 @@ mod tests {
 
     #[test]
     fn pairs_files_enforce_cumulative_photo_limit() {
-        let photo = PhotoPairs { model: "ILCE-7M4".into(), id: format!("{:032x}", 1), dro: None, pairs: vec![([0.1; 3], [0.2; 3])] };
-        let bytes = crate::camera_pairs::write(&[&photo]).unwrap();
+        let photo = |i: usize| PhotoPairs { model: "ILCE-7M4".into(), id: format!("{i:032x}"), dro: None, pairs: vec![([0.1; 3], [0.2; 3])] };
+        let file = |i: usize| crate::camera_pairs::write(&[&photo(i)]).unwrap();
+        let max = crate::camera_pairs::MAX_PHOTOS;
         let mut pool = Pool::default();
-        pool.add_photos(vec![photo; crate::camera_pairs::MAX_PHOTOS - 1]);
-        assert_eq!(pool.add_pairs_file(&bytes, "at limit").unwrap(), 1);
-        assert_eq!(pool.photos.len(), crate::camera_pairs::MAX_PHOTOS);
-        assert_eq!(pool.photos().len(), 1, "duplicates still consume the retained-photo budget");
+        pool.add_photos((0..max - 1).map(photo).collect());
+        // a photo the pool already holds is skipped, however often it's imported
+        for _ in 0..3 {
+            assert_eq!(pool.add_pairs_file(&file(0), "again").unwrap(), 1);
+        }
+        assert_eq!(pool.photos.len(), max - 1);
+        assert_eq!(pool.add_pairs_file(&file(max - 1), "at limit").unwrap(), 1);
+        assert_eq!(pool.photos.len(), max);
+        assert_eq!(pool.add_pairs_file(&file(0), "known at limit").unwrap(), 1, "a known photo still imports at the limit");
         let before = pool.photos.clone();
-        let error = pool.add_pairs_file(&bytes, "over limit").unwrap_err();
+        let error = pool.add_pairs_file(&file(max), "over limit").unwrap_err();
         assert!(error.contains("over limit: 2001 photos is more than a pairs pool may hold (2000)"), "{error}");
         assert_eq!(pool.photos, before, "rejection must leave the stored pool unchanged");
     }
