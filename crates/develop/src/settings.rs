@@ -84,17 +84,22 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Film grain as clumps of irregular particles (a filtered Boolean model, resolution
+    /// independent) with Size Variation, Clumping, Color and Response; V1 and V2 keep their value
+    /// noise.
+    V3,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
+    pub const LATEST: Process = Process::V3;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
         }
     }
 }
@@ -599,15 +604,44 @@ impl Default for Vignette {
 #[serde(default)]
 pub struct Grain {
     pub amount: f64,
+    /// Grain size, relative to the frame (0..100): mean radius 0.3–3 px on a 6000 px export
+    /// (≈ 1.8–18 µm on a 35 mm frame); finer grain is also stronger, as in Lightroom Classic.
     pub size: f64,
+    /// Camera Raw's Roughness: 0 = fine, round, regular grain; 100 = coarse, elongated, irregular
+    /// grains. Both ends are stronger than 50, as in Lightroom Classic.
     pub roughness: f64,
     /// Seed for the procedural grain (stable per photo).
     pub seed: u32,
+    /// Colour (chroma) grain, 0..100: independent dye-layer grain on top of the luminance grain.
+    /// This and the next three fields aren't written at their defaults, so settings saved before
+    /// they existed keep their JSON and `hash64` (and every cached preview stays valid).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub color: f64,
+    /// Where grain is strongest: −100 shadows (4× the highlights) … 0 equal at every tone …
+    /// +100 highlights.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub response: f64,
+    /// Spread of grain sizes, 0..100: 0 = all grains the mean size.
+    #[serde(skip_serializing_if = "Grain::is_default_size_variation")]
+    pub size_variation: f64,
+    /// Clumping, 0..100: 0 = single grains; 100 = clusters of several grains.
+    #[serde(skip_serializing_if = "Grain::is_default_clumping")]
+    pub clumping: f64,
+}
+
+impl Grain {
+    fn is_default_size_variation(v: &f64) -> bool {
+        *v == Grain::default().size_variation
+    }
+
+    fn is_default_clumping(v: &f64) -> bool {
+        *v == Grain::default().clumping
+    }
 }
 
 impl Default for Grain {
     fn default() -> Self {
-        Self { amount: 0.0, size: 25.0, roughness: 50.0, seed: 0 }
+        Self { amount: 0.0, size: 25.0, roughness: 50.0, seed: 0, color: 0.0, response: 0.0, size_variation: 40.0, clumping: 30.0 }
     }
 }
 

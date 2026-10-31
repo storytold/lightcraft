@@ -229,6 +229,23 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.grain.size = 40.0;
             s.grain.roughness = 60.0;
         }),
+        // processes V1 and V2 keep their value-noise grain
+        ("grain (V1 value noise)", |s| {
+            s.process = lightcraft_develop::ProcessVersion::V1;
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+            s.grain.seed = 7;
+        }),
+        // coarse grain: explicit Boolean-model grains even at this size, colour layers, response
+        ("grain (coarse, colour)", |s| {
+            s.grain.amount = 80.0;
+            s.grain.size = 90.0;
+            s.grain.roughness = 100.0;
+            s.grain.color = 60.0;
+            s.grain.response = -40.0;
+            s.grain.seed = 77;
+        }),
         ("dehaze -", |s| s.effects.dehaze = -50.0),
         ("dehaze +", |s| s.effects.dehaze = 60.0),
         ("clarity/texture -", |s| {
@@ -646,7 +663,7 @@ fn highlights_shadows_base_matches_on_every_process() {
             }];
             check(&format!("{p:?} local highlights {w}"), &src, &raw, &s, &req);
         }
-        for p in [Process::V1, Process::V2, Process::V1, Process::V2] {
+        for p in [Process::V1, Process::V2, Process::V3, Process::V1, Process::V2, Process::V3] {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
             s.light.highlights = -100.0;
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");

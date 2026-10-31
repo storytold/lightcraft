@@ -3096,6 +3096,82 @@ fn slider_nudge_and_pick_advance() {
     assert_ne!(h.app.session.active(), Some(first), "advanced");
 }
 
+/// A slider drag that ends just past the window's edge (the integration drops that release)
+/// doesn't keep the slider captured: back over the photo the slider stays put, and a click
+/// on the photo zooms as usual (the Grain sliders at the bottom of the panel made it easy).
+#[test]
+fn a_slider_released_outside_the_window_lets_go() {
+    let mut h = demo([1300.0, 1600.0]);
+    let t = Duration::from_secs(10);
+    h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"grain.amount": 40.0}}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.open_sections = vec!["effects".to_string()];
+    h.settle(SETTLE);
+    let amount = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().grain.amount;
+    let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:grain.amount").map(|(_, r)| *r).expect("the Grain slider");
+    let canvas = h.app.canvas_rect.expect("the photo").center();
+    assert!(matches!(h.app.ui.zoom, crate::state::Zoom::Fit));
+    // drag the slider, then off the bottom of the window, where the button goes up unseen
+    let (a, b) = (slider.center(), slider.center() + egui::vec2(40.0, 0.0));
+    let edge = egui::pos2(b.x, 1599.0);
+    let m = egui::Modifiers::NONE;
+    // (the window system's own events, one frame each: the repair works on those, before anything is injected)
+    let host = |h: &mut Headless, e: egui::Event| {
+        h.events.push(e);
+        h.step();
+    };
+    host(&mut h, egui::Event::PointerMoved(a));
+    host(&mut h, egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+    host(&mut h, egui::Event::PointerMoved(b));
+    host(&mut h, egui::Event::PointerMoved(edge));
+    host(&mut h, egui::Event::PointerGone);
+    h.settle(SETTLE);
+    let dragged = amount(&h);
+    assert!(dragged > 40.0, "the drag moved the slider ({dragged})");
+    // back over the photo, and click it
+    host(&mut h, egui::Event::PointerMoved(canvas + egui::vec2(5.0, 0.0)));
+    h.settle(SETTLE);
+    // (without the repair egui still drags the slider here: the ↔ cursor sticks and the
+    // drag's undo step stays open)
+    assert_eq!(h.view.ctx.dragged_id(), None, "nothing is dragged once the pointer is back");
+    assert!(h.app.session.interaction.is_none(), "the drag's undo step is closed");
+    assert_ne!(h.last_cursor, egui::CursorIcon::ResizeHorizontal, "the slider's cursor is gone");
+    h.app.synthetic.extend([
+        egui::Event::PointerMoved(canvas),
+        egui::Event::PointerButton { pos: canvas, button: egui::PointerButton::Primary, pressed: true, modifiers: m },
+        egui::Event::PointerButton { pos: canvas, button: egui::PointerButton::Primary, pressed: false, modifiers: m },
+    ]);
+    h.settle(SETTLE);
+    assert_eq!(amount(&h), dragged, "the slider let go");
+    assert!(!matches!(h.app.ui.zoom, crate::state::Zoom::Fit), "the click on the photo zoomed in");
+}
+
+/// The Effects panel's grain sliders include colour grain, the tone response, size variation,
+/// clumping and the seed, which drive the photo's settings like any develop control.
+#[test]
+fn grain_colour_and_response_sliders() {
+    // tall enough for the Effects panel's last slider without scrolling
+    let mut h = demo([1300.0, 1600.0]);
+    let t = Duration::from_secs(10);
+    h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"grain.amount": 40.0}}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    // only the Effects section open, so its sliders are on screen
+    h.app.ui.open_sections = vec!["effects".to_string()];
+    h.settle(SETTLE);
+    let grain = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().grain;
+    for (id, text) in [("grain.response", "-30"), ("grain.color", "25"), ("grain.sizeVariation", "70"), ("grain.clumping", "80"), ("grain.seed", "7")]
+    {
+        assert_eq!(h.request("ui.clickWidget", json!({"id": format!("sliderValue:{id}")}), t)["ok"], true, "{id} is in the panel");
+        h.request("ui.text", json!({"text": text}), t);
+        h.request("ui.key", json!({"key": "Enter"}), t);
+        h.step();
+    }
+    let g = grain(&h);
+    assert_eq!((g.amount, g.color, g.response, g.size_variation, g.clumping, g.seed), (40.0, 25.0, -30.0, 70.0, 80.0, 7));
+}
+
 /// Click a slider's value and type one (issue #322): Return sets it as one undo step, Esc
 /// keeps the old value, and the keys typed don't reach the shortcuts (1 = one star).
 #[test]

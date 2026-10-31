@@ -707,10 +707,11 @@ pub fn render(
     let rows = (BAND_PIXELS / w.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
     let y0_at = crate::params::index("Y0").unwrap_or(0);
     let mut p = p;
+    let kernel = finish_kernel(&fp);
     for y0 in (0..h).step_by(rows).filter(|_| fault != Some(crate::Fault::DropWork)) {
         p[y0_at] = y0 as u32;
         cx.run(
-            "main",
+            kernel,
             &p,
             &[
                 Some(&lin),
@@ -1124,6 +1125,12 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
     }
     let terms = list.iter().map(|m| mask_terms(&m.adjust)).collect();
     (Some(alpha), terms)
+}
+
+/// The finish kernel for `fp`: the one with film grain ([`crate::ctx::FILM_GRAIN`], built on its
+/// first use) when the particle grain is drawn, else the one built with the device.
+pub(crate) fn finish_kernel(fp: &lightcraft_pipeline::finish::FinishParams) -> &'static str {
+    if matches!(fp.grain, Some(lightcraft_pipeline::finish::GrainModel::Particles(_))) { crate::ctx::FILM_GRAIN } else { "main" }
 }
 
 #[cfg(test)]

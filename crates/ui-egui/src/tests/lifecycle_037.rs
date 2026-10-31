@@ -1494,6 +1494,24 @@ fn a_new_prompt_shields_raw_pointer_and_cancels_a_held_press() {
     assert_eq!(h.app.ui.settings.confirm_delete, before, "the press-before-prompt became a click in Settings");
 }
 
+/// A release as a prompt appears is dropped by the prompt's filter, but the pointer repair still sees it (it runs over
+/// the host's events first), so after the prompt the next press gets no extra release (CodeRabbit on #1060).
+#[test]
+fn a_release_under_a_prompt_still_reaches_the_pointer_repair() {
+    let mut h = Headless::new(app(), [1200.0, 900.0], 1.0);
+    h.step();
+    let at = egui::pos2(600.0, 450.0);
+    h.events.extend([egui::Event::PointerMoved(at), pointer_event(at, true)]);
+    h.step();
+    assert!(h.app.pointer_repair.any_down(), "the press was seen");
+    // released in the frame the prompt appears, before it is laid out: its filter drops the release
+    h.events.push(pointer_event(at, false));
+    h.app.quit_prompt = Some(crate::QuitPrompt::Tasks("1 task is still running: Import. Quitting stops it.".into()));
+    h.step();
+    assert!(h.app.quit_prompt.is_some(), "the prompt is up");
+    assert!(!h.app.pointer_repair.any_down(), "the release under the prompt was seen");
+}
+
 /// A prompt can be created after `raw_input_hook`, when eframe's `logic` runs. The prompt barrier
 /// must then drop wheel/new-touch/pointer input that egui already accepted for the pass, before
 /// any panel reads it, while a touch End still clears egui's private touch state.

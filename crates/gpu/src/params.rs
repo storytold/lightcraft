@@ -3,7 +3,8 @@
 
 use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::finish::{FinishParams, GrainModel, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::grain::GrainParams;
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
@@ -60,10 +61,44 @@ const FIELDS: &[(&str, usize)] = &[
     // the window's offset in the whole output and the whole output's size (pixels)
     ("VIG_VIEW", 4),
     ("GRAIN", 1),
+    // 0 = value noise (processes V1, V2: GRAIN_AMT, GRAIN_SC, GRAIN_ROUGH), 1 = particles (V3)
+    ("GRAIN_MODEL", 1),
     ("GRAIN_AMT", 1),
     ("GRAIN_SC", 1),
     ("GRAIN_ROUGH", 1),
+    ("GRAIN_AMP", 1),
+    ("GRAIN_INV_R", 1),
+    ("GRAIN_S", 1),
+    ("GRAIN_INV_S", 1),
+    ("GRAIN_SPREAD", 1),
+    ("GRAIN_ASPECT", 1),
+    ("GRAIN_LUMP", 1),
+    ("GRAIN_CLUMP_E", 1),
+    ("GRAIN_CLUMP_D", 1),
+    ("GRAIN_AREA", 1),
+    ("GRAIN_SUPPORT", 1),
+    ("GRAIN_SUB_REACH", 1),
+    ("GRAIN_CELL", 1),
+    ("GRAIN_KAPPA", 1),
+    ("GRAIN_K_HH", 1),
+    ("GRAIN_K_AH", 1),
+    ("GRAIN_AREA_REF", 1),
+    ("GRAIN_KAPPA_REF", 1),
+    ("GRAIN_K_HH_REF", 1),
+    ("GRAIN_K_AH_REF", 1),
+    ("GRAIN_HALO", 1),
+    ("GRAIN_HALO_IN", 1),
+    ("GRAIN_HALO_OUT", 1),
+    ("GRAIN_HALO_MEAN", 1),
+    ("GRAIN_TILT", 1),
+    ("GRAIN_WF", 1),
+    ("GRAIN_WN", 1),
+    ("GRAIN_NOISE_E", 1),
+    ("GRAIN_NOISE_N", 1),
+    ("GRAIN_COLOR", 1),
+    ("GRAIN_GAMMA", 1),
     ("GRAIN_SEED", 1),
+    ("GRAIN_PPL", 1),
     ("GRAIN_AFF", 6),
     ("REFINE_SAT", 1),
     ("CALIB", 1),
@@ -248,16 +283,62 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.b("PROOF_DEST_WARN", pp.dest_warning);
         p.b("PROOF_DISP_WARN", pp.display_warning);
     }
-    if let Some((amt, cell, rough, seed)) = fp.grain {
+    if let Some(model) = fp.grain {
         p.b("GRAIN", true);
-        p.f("GRAIN_AMT", amt);
-        p.f("GRAIN_SC", fp.px_per_long as f32 / cell);
-        p.f("GRAIN_ROUGH", rough);
-        p.u("GRAIN_SEED", seed);
+        match model {
+            GrainModel::Value(g) => {
+                p.u("GRAIN_MODEL", 0);
+                p.f("GRAIN_AMT", g.amt);
+                p.f("GRAIN_SC", fp.px_per_long as f32 / g.cell);
+                p.f("GRAIN_ROUGH", g.rough);
+                p.u("GRAIN_SEED", g.seed);
+            }
+            GrainModel::Particles(g) => {
+                p.u("GRAIN_MODEL", 1);
+                particle_grain(&mut p, &g);
+            }
+        }
         let long = fp.ow.max(fp.oh);
         let [a, b, c, d, e, f] = fp.out_to_norm.0;
         let (kx, ky) = (fp.ow / long, fp.oh / long);
         p.fs("GRAIN_AFF", &[(a * kx) as f32, (b * ky) as f32, (c * kx) as f32, (d * ky) as f32, (e * kx) as f32, (f * ky) as f32]);
     }
     (p.0, aux)
+}
+
+/// The particle grain's fields (process V3 and later).
+fn particle_grain(p: &mut Block, g: &GrainParams) {
+    p.f("GRAIN_AMP", g.amp);
+    p.f("GRAIN_INV_R", g.inv_r);
+    p.f("GRAIN_S", g.s);
+    p.f("GRAIN_INV_S", g.inv_s);
+    p.f("GRAIN_SPREAD", g.spread);
+    p.f("GRAIN_ASPECT", g.aspect);
+    p.f("GRAIN_LUMP", g.lump);
+    p.f("GRAIN_CLUMP_E", g.clump_extra);
+    p.f("GRAIN_CLUMP_D", g.clump_d);
+    p.f("GRAIN_AREA", g.area);
+    p.f("GRAIN_SUPPORT", g.support);
+    p.f("GRAIN_SUB_REACH", g.sub_reach);
+    p.f("GRAIN_CELL", g.cell);
+    p.f("GRAIN_KAPPA", g.kappa);
+    p.f("GRAIN_K_HH", g.k_hh);
+    p.f("GRAIN_K_AH", g.k_ah);
+    p.f("GRAIN_AREA_REF", g.area_ref);
+    p.f("GRAIN_KAPPA_REF", g.kappa_ref);
+    p.f("GRAIN_K_HH_REF", g.k_hh_ref);
+    p.f("GRAIN_K_AH_REF", g.k_ah_ref);
+    p.f("GRAIN_HALO", g.halo);
+    p.f("GRAIN_HALO_IN", g.halo_in);
+    p.f("GRAIN_HALO_OUT", g.halo_out);
+    p.f("GRAIN_HALO_MEAN", g.halo_mean);
+    p.f("GRAIN_TILT", g.tilt);
+    p.f("GRAIN_WF", g.w_field);
+    p.f("GRAIN_WN", g.w_noise);
+    p.f("GRAIN_NOISE_E", g.noise_e);
+    p.f("GRAIN_NOISE_N", g.noise_n);
+    p.f("GRAIN_COLOR", g.color);
+    p.f("GRAIN_GAMMA", g.gamma);
+    p.u("GRAIN_SEED", g.seed);
+    p.f("GRAIN_PPL", g.px_per_long);
 }

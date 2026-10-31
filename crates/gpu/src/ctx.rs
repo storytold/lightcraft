@@ -7,13 +7,26 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 /// parameter block `P` (binding 0), and its entry points.
 struct Module {
     src: &'static str,
+    /// Appended to `src` for the kernels built with the device (finish: film grain left out, see
+    /// [`FILM_GRAIN`]).
+    tail: &'static str,
     bindings: &'static [(&'static str, bool, &'static str)],
     entries: &'static [&'static str],
 }
 
+/// The finish kernel built with the device draws no film grain (the particle model): FXC (DX12)
+/// takes over a second to compile the grain, which every run, and every CLI call, paid at start-up.
+/// The kernel with it, [`FILM_GRAIN`], is built on the first render that draws film grain, and a
+/// render with film grain never runs the one without it (`render::finish_kernel`).
+const FILM_GRAIN_OFF: &str = "\nfn film_grain(gx: f32, gy: f32, lum: f32) -> vec3<f32> {\n    return vec3<f32>(0.0, 0.0, 0.0);\n}\n";
+const FILM_GRAIN_ON: &str = "\nfn film_grain(gx: f32, gy: f32, lum: f32) -> vec3<f32> {\n    return grain_apply(gx, gy, lum);\n}\n";
+/// The finish kernel with film grain (entry `main` of the finish module, built on first use).
+pub(crate) const FILM_GRAIN: &str = "main_grain";
+
 const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/finish.wgsl"),
+        tail: FILM_GRAIN_OFF,
         bindings: &[
             ("img", false, "f32"),
             ("log_l", false, "f32"),
@@ -29,16 +42,19 @@ const MODULES: &[Module] = &[
     },
     Module {
         src: include_str!("wgsl/blur.wgsl"),
+        tail: "",
         bindings: &[("src", false, "f32"), ("dst", true, "f32")],
         entries: &["box_h", "box_v", "median_h", "median_v"],
     },
     Module {
         src: include_str!("wgsl/resize.wgsl"),
+        tail: "",
         bindings: &[("src", false, "f32"), ("table", false, "u32"), ("dst", true, "f32")],
         entries: &["resize_h", "resize_v"],
     },
     Module {
         src: include_str!("wgsl/map.wgsl"),
+        tail: "",
         bindings: &[("a", false, "f32"), ("b", false, "f32"), ("c", false, "f32"), ("dst", true, "f32")],
         entries: &[
             "log_lum_k",
@@ -59,16 +75,19 @@ const MODULES: &[Module] = &[
     },
     Module {
         src: include_str!("wgsl/mask.wgsl"),
+        tail: "",
         bindings: &[("img", false, "f32"), ("log_l", false, "f32"), ("aux", false, "f32"), ("c", true, "f32"), ("alpha", true, "f32")],
         entries: &["shape", "combine", "finalize"],
     },
     Module {
         src: include_str!("wgsl/geom.wgsl"),
+        tail: "",
         bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32")],
         entries: &["orient", "sample_affine", "sample_warp"],
     },
 ];
 
+#[derive(Clone)]
 struct Kernel {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
@@ -332,6 +351,10 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub info: wgpu::AdapterInfo,
     kernels: HashMap<&'static str, Kernel>,
+    /// Kernels built on first use ([`FILM_GRAIN`]), or why one couldn't be (not tried again).
+    lazy: std::sync::Mutex<HashMap<&'static str, Result<Kernel, String>>>,
+    /// The WGSL constants the kernels were built with (for the ones built later).
+    consts: String,
     dummy: wgpu::Buffer,
     /// Recycled buffers (see [`Buf`]).
     free: std::sync::Mutex<Vec<Tracked>>,
@@ -341,7 +364,7 @@ pub struct Gpu {
 
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
 fn constants() -> String {
-    use lightcraft_pipeline::finish::{GRAIN_HASH, MASK_SUMS, MASK_TERMS, SRGB_LUT_N};
+    use lightcraft_pipeline::finish::{GRAIN_HASH, MASK_SUMS, MASK_TERMS, SRGB_LUT_N, VALUE_GRAIN_HASH};
     use lightcraft_pipeline::tone::{CHROMA_N, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
     let mut s = String::new();
     let [to_lms, from_lms, to_lab, from_lab] = lightcraft_color::perceptual::oklab_matrices();
@@ -367,6 +390,21 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    for (i, h) in VALUE_GRAIN_HASH.iter().enumerate() {
+        s += &format!("const GRAIN_VH{i}: u32 = {h}u;\n");
+    }
+    {
+        use lightcraft_pipeline::grain::{CHANNEL_SALT, MAX_PER_CELL, MAX_REACH, MAX_SUB, P_MAX, P_MIN};
+        s += &format!(
+            "const GRAIN_P_MIN: f32 = {P_MIN:?};\nconst GRAIN_P_MAX: f32 = {P_MAX:?};\nconst GRAIN_MAX_PER_CELL: u32 = {MAX_PER_CELL}u;\nconst GRAIN_MAX_SUB: u32 = {MAX_SUB}u;\nconst GRAIN_MAX_REACH: i32 = {MAX_REACH};\n"
+        );
+        let phases: Vec<String> = lightcraft_pipeline::grain::PHASES.iter().map(|p| format!("vec2<f32>({:?}, {:?})", p[0], p[1])).collect();
+        // a private array: indexed at run time (a const array may not be, on every backend)
+        s += &format!("var<private> GRAIN_PHASES: array<vec2<f32>, 16> = array<vec2<f32>, 16>({});\n", phases.join(", "));
+        for (name, salt) in ["R", "G", "B"].iter().zip(CHANNEL_SALT) {
+            s += &format!("const GRAIN_SALT_{name}: u32 = {salt}u;\n");
+        }
+    }
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }
@@ -374,6 +412,11 @@ fn constants() -> String {
 }
 
 fn module_source(m: &Module, consts: &str) -> String {
+    module_source_with(m, consts, m.tail)
+}
+
+/// [`module_source`] with another `tail` (the film grain kernel's).
+fn module_source_with(m: &Module, consts: &str, tail: &str) -> String {
     let mut s = String::from(consts);
     s += "@group(0) @binding(0) var<storage, read> P: array<u32>;\n";
     for (i, (name, write, ty)) in m.bindings.iter().enumerate() {
@@ -382,6 +425,7 @@ fn module_source(m: &Module, consts: &str) -> String {
     }
     s += include_str!("wgsl/common.wgsl");
     s += m.src;
+    s += tail;
     s
 }
 
@@ -450,7 +494,7 @@ impl Gpu {
         });
         let max_buffer = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
         log::info!("gpu: {} ({:?}), {} kernels in {build_ms} ms, buffers ≤ {} MiB", info.name, info.backend, kernels.len(), max_buffer >> 20);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer })
+        Ok(Gpu { device, queue, info, kernels, lazy: Default::default(), consts: constants(), dummy, free: Default::default(), max_buffer })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -662,10 +706,26 @@ impl Gpu {
         if failed() {
             return; // the render is redone on the CPU: don't spend the GPU on it
         }
-        let Some(k) = self.kernels.get(name) else {
-            // a kernel name typo: fail this render over to the CPU instead of crashing
-            fail(FailKind::Fatal, format!("unknown kernel {name}"));
-            return;
+        let built;
+        let k = match self.kernels.get(name) {
+            Some(k) => k,
+            None if name == FILM_GRAIN => match self.film_grain_kernel() {
+                Ok(k) => {
+                    built = k;
+                    &built
+                }
+                Err(e) => {
+                    // the render is redone on the CPU, with its grain; the device and its other
+                    // kernels stay in use
+                    fail(FailKind::Kernel, e);
+                    return;
+                }
+            },
+            None => {
+                // a kernel name typo: fail this render over to the CPU instead of crashing
+                fail(FailKind::Fatal, format!("unknown kernel {name}"));
+                return;
+            }
         };
         assert_eq!(bufs.len(), k.nbuf, "{name}: binding count");
         let params = self.init_buffer(bytemuck::cast_slice(if p.is_empty() { &[0u32] } else { p }), wgpu::BufferUsages::STORAGE);
@@ -679,6 +739,52 @@ impl Gpu {
         pass.set_pipeline(&k.pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.dispatch_workgroups(groups[0], groups[1], groups[2]);
+    }
+
+    /// The finish kernel with film grain ([`FILM_GRAIN`]), built on its first use (renders that
+    /// need it meanwhile wait for it; the others don't). A build that fails isn't tried again: film
+    /// grain renders on the CPU.
+    fn film_grain_kernel(&self) -> Result<Kernel, String> {
+        let mut lazy = self.lazy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(k) = lazy.get(FILM_GRAIN) {
+            return k.clone();
+        }
+        let built = self.build_film_grain();
+        if let Err(e) = &built {
+            log::error!("gpu: {e}");
+        }
+        lazy.insert(FILM_GRAIN, built.clone());
+        built
+    }
+
+    fn build_film_grain(&self) -> Result<Kernel, String> {
+        let (Some(m), Some(base)) = (MODULES.first(), self.kernels.get("main")) else {
+            return Err("film grain kernel: no finish kernel".into());
+        };
+        let t0 = std::time::Instant::now();
+        let scopes = [self.device.push_error_scope(wgpu::ErrorFilter::Validation), self.device.push_error_scope(wgpu::ErrorFilter::Internal)];
+        let src = module_source_with(m, &self.consts, FILM_GRAIN_ON);
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(src.into()) });
+        let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&base.layout)],
+            immediate_size: 0,
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(FILM_GRAIN),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let [validation, internal] = scopes;
+        let (internal, validation) = (pollster::block_on(internal.pop()), pollster::block_on(validation.pop()));
+        if let Some(e) = internal.or(validation) {
+            return Err(format!("{}: the film grain kernel failed to build ({e})", self.info.name));
+        }
+        log::info!("gpu: film grain kernel built in {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+        Ok(Kernel { pipeline, layout: base.layout.clone(), nbuf: base.nbuf })
     }
 
     /// Submit `enc`, then read back the first `len` 32-bit values of `src`.
@@ -779,6 +885,9 @@ pub(crate) enum FailKind {
     OutOfMemory,
     /// The image came back entirely black: redone on the CPU in case the GPU dropped work.
     Blank,
+    /// A kernel built on first use ([`FILM_GRAIN`]) failed to build: the renders that need it are
+    /// drawn on the CPU, the others stay on the GPU.
+    Kernel,
     /// Device error or loss, readback failure, incomplete image: the GPU is not used again.
     Fatal,
 }
@@ -887,6 +996,37 @@ pub fn groups1(n: usize) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    /// Every WGSL module, with its constants filled in, parses and validates (no adapter needed,
+    /// so it runs where the GPU tests skip).
+    #[test]
+    fn shaders_parse_and_validate() {
+        let consts = super::constants();
+        // every module as built with the device, and the finish kernel with film grain
+        let with_grain = super::MODULES.first().map(|m| super::module_source_with(m, &consts, super::FILM_GRAIN_ON));
+        for src in super::MODULES.iter().map(|m| super::module_source(m, &consts)).chain(with_grain) {
+            let module = wgpu::naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{e:?}"));
+        }
+    }
+
+    /// The finish kernel with film grain isn't built with the device (FXC on DX12 spent over a
+    /// second on it at every start-up, #1060): it is built on its first use, and kept.
+    #[test]
+    fn the_film_grain_kernel_is_built_on_first_use() {
+        let Some(shared) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let g = super::Gpu::new(wgpu::Backends::from(shared.info.backend)).expect("a second device on the same adapter");
+        assert!(!g.kernels.contains_key(super::FILM_GRAIN), "not built with the device");
+        assert!(g.lazy.lock().unwrap().is_empty());
+        assert!(g.film_grain_kernel().is_ok(), "built on first use");
+        assert_eq!(g.lazy.lock().unwrap().len(), 1);
+        assert!(g.film_grain_kernel().is_ok(), "and kept");
+    }
+
     /// Every kernel module, as it is handed to the device (the generated constants, the bindings, `common.wgsl`, the
     /// module), parses and validates without a GPU.
     #[test]
@@ -1005,6 +1145,44 @@ mod tests {
         if run_child("retired_child").is_none() {
             lightcraft_testkit::skip!(Gpu, "no GPU device");
         }
+    }
+
+    /// A film grain kernel the adapter won't build (it is built on the first grain render) sends
+    /// the grain renders to the CPU and keeps the GPU for everything else: renders without grain,
+    /// and process V1's value-noise grain, which the kernel built with the device draws.
+    #[test]
+    fn a_film_grain_kernel_that_fails_to_build_keeps_the_gpu() {
+        if run_child("failed_film_grain_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_film_grain_kernel_that_fails_to_build_keeps_the_gpu"]
+    fn failed_film_grain_child() {
+        use lightcraft_develop::{DevelopSettings, ProcessVersion};
+        use lightcraft_pipeline::{RenderRequest, SourceInfo};
+        let Some(g) = crate::device() else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        g.lazy.lock().unwrap().insert(super::FILM_GRAIN, Err("simulated: the film grain kernel failed to build".into()));
+        let (w, h) = (256, 192);
+        let src = std::sync::Arc::new(lightcraft_raster::Rgb32f::from_fn(w, h, |x, y| [x as f32 / w as f32, y as f32 / h as f32, 0.4]));
+        let (info, req) = (SourceInfo::default(), RenderRequest::fit(w, h));
+        let mut grain = DevelopSettings::default();
+        grain.grain.amount = 50.0;
+        match crate::try_render(&src, &info, &grain, &req, None) {
+            Err(crate::Fallback::Failed(why)) => assert!(why.contains("film grain"), "{why}"),
+            other => panic!("a film grain render falls back to the CPU: {:?}", other.map(|_| ())),
+        }
+        assert!(crate::available(), "the GPU stays in use: {:?}", crate::unavailable_reason());
+        assert!(crate::try_render(&src, &info, &DevelopSettings::default(), &req, None).is_ok(), "a render without grain");
+        let v1 = DevelopSettings { process: ProcessVersion::V1, ..grain.clone() };
+        assert!(crate::try_render(&src, &info, &v1, &req, None).is_ok(), "V1 grain (value noise)");
+        assert!(matches!(crate::try_render(&src, &info, &grain, &req, None), Err(crate::Fallback::Failed(_))), "film grain again");
+        assert!(crate::available());
+        println!("CHILD: survived");
     }
 
     #[test]

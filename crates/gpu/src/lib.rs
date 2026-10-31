@@ -548,7 +548,7 @@ pub fn try_render(
                         gpu.trim(0);
                         format!("{what}: {}", f.reason)
                     }
-                    ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
+                    ctx::FailKind::Limit | ctx::FailKind::Blank | ctx::FailKind::Kernel => format!("{what}: {}", f.reason),
                 };
                 log::warn!("gpu: rendering on the CPU instead: {reason}");
                 if render::profiling() {
