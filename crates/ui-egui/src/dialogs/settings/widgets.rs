@@ -51,7 +51,7 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
 
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    ui.label(RichText::new(crate::i18n::tr(text)).font(t.body_strong()).color(t.text));
 }
 
 pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -74,7 +74,7 @@ pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
 }
 
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr(text)).font(t.caption()).color(t.text_dim));
 }
 
 /// A checkbox addressable as `check:{id}`; true when toggled.

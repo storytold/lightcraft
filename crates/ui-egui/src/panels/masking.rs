@@ -9,7 +9,7 @@ use super::edit::apply_slider_out;
 use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
-use crate::theme::Tokens;
+use crate::theme::{TextSize, Tokens};
 use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
 
 const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, step: f64, decimals: u8, track: Track) -> ControlSpec {
@@ -66,7 +66,7 @@ const TILE_PAD: f32 = 3.0;
 
 /// Columns, tile width and label size of the Create New Mask grid in `width`, `label(size)` being
 /// the widest label at a font size: four tiles of up to 52 pt (at least 48), else three, else two —
-/// the first that fits the labels at 10.5 pt, or at 9.5 pt before a column is dropped. A tile grows
+/// the first that fits the labels at caption size, or at micro size before a column is dropped. A tile grows
 /// past 52 pt for a long (translated) label. In a panel too narrow even for that, two tiles whose
 /// labels are cut short.
 fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
@@ -76,14 +76,14 @@ fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
         if n == 4 && w < 48.0 {
             continue;
         }
-        for size in [10.5, 9.5] {
+        for size in [TextSize::Caption.points(), TextSize::Micro.points()] {
             let need = (label(size) + 2.0 * TILE_PAD).ceil();
             if need <= w {
                 return (n, w.min(TILE.max(need)), size);
             }
         }
     }
-    (2, room(2).max(24.0), 9.5)
+    (2, room(2).max(24.0), TextSize::Micro.points())
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -253,7 +253,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let icon = m.components.first().map(|c| kind_label(&c.shape).1).unwrap_or(Icon::Mask);
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
             // a long name is cut short (with …) before the eye, the full name on hover
-            let color = if m.visible { t.text } else { t.text_disabled };
+            // (a hidden mask's name is still read: dimmer, not the colour of what cannot be used)
+            let color = if m.visible { t.text } else { t.text_dim };
             let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - 32.0);
             let elided = g.elided;
             let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
@@ -459,7 +460,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
-        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
+        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.body(), t.text_label);
         egui::Popup::menu(&r).show(|ui| {
             for v in MaskView::ALL {
                 if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
@@ -518,7 +519,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
     };
     match shape {
         MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
-            ui.label(egui::RichText::new(crate::i18n::tr("Select Luminance Range")).color(t.text_dim).size(11.5));
+            ui.label(egui::RichText::new(crate::i18n::tr("Select Luminance Range")).color(t.text_dim).font(t.caption()));
             let (lo, hi) = (*lo, *hi);
             let w = ui.available_width().min(240.0);
             let (rect, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click_and_drag());
@@ -626,14 +627,14 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 }
                 app.run("mask.update", json!({"component": comp, "shape": s}))
             });
-            ui.label(egui::RichText::new(crate::i18n::tr("− harder border · + softer border")).color(t.text_dim).size(11.0));
+            ui.label(egui::RichText::new(crate::i18n::tr("− harder border · + softer border")).color(t.text_dim).font(t.caption()));
         }
         MaskShape::ColorRange { samples, refine } => {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr_format!("{} sample{}", samples.len(), if samples.len() == 1 { "" } else { "s" }))
                         .color(t.text_dim)
-                        .size(11.5),
+                        .font(t.caption()),
                 );
                 let picking = app.ui.tool == "colorRange";
                 if text_button(ui, &format!("colorPick{comp}"), crate::i18n::tr("Pick"), picking)
@@ -949,16 +950,16 @@ mod tests {
     /// room by dropping a column rather than drawing it past its tile.
     #[test]
     fn tile_labels_get_the_room_they_need() {
-        let short = |size: f32| size * 4.0; // "Luminance"-ish: 42 pt at 10.5
-        let long = |size: f32| size * 5.6; // "Background"/"Hintergrund": 59 pt at 10.5, 53 at 9.5
-        assert_eq!(tile_layout(224.0, short), (4, 51.0, 10.5));
+        let short = |size: f32| size * 4.0; // "Luminance"-ish: 44 pt at 11
+        let long = |size: f32| size * 5.6; // "Background"/"Hintergrund": 62 pt at 11, 56 at 10
+        assert_eq!(tile_layout(224.0, short), (4, 51.0, 11.0));
         // too wide for four at either size: three tiles, wider than 52 so the label fits
         let (n, w, size) = tile_layout(224.0, long);
-        assert_eq!((n, size), (3, 10.5));
-        assert!(w >= long(10.5) + 2.0 * TILE_PAD && w <= (224.0 - 2.0 * TILE_GAP) / 3.0, "{w}");
-        // a smaller label keeps a column: 9.5 pt fits where 10.5 doesn't
-        let mid = |size: f32| size * 4.6; // 48.3 at 10.5, 43.7 at 9.5
-        assert_eq!(tile_layout(224.0, mid), (4, 51.0, 9.5));
+        assert_eq!((n, size), (3, 11.0));
+        assert!(w >= long(11.0) + 2.0 * TILE_PAD && w <= (224.0 - 2.0 * TILE_GAP) / 3.0, "{w}");
+        // a smaller label keeps a column: 10 pt fits where 11 doesn't
+        let mid = |size: f32| size * 4.4; // 48.4 at 11, 44 at 10
+        assert_eq!(tile_layout(224.0, mid), (4, 51.0, 10.0));
         // a wide panel: tiles stay 52 pt (or as wide as the label)
         assert_eq!(tile_layout(474.0, short).0, 4);
         assert_eq!(tile_layout(474.0, short).1, TILE);

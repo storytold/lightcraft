@@ -3,7 +3,7 @@ use super::{Tokens, register};
 /// Reserve the actual translated tag button width beside a template field.
 pub(crate) fn tag_field_width(ui: &egui::Ui) -> f32 {
     let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(crate::i18n::tr("Tags").to_string(), t.semibold(11.5), t.text);
+    let galley = ui.painter().layout_no_wrap(crate::i18n::tr("Tags").to_string(), t.caption_strong(), t.text);
     (ui.available_width() - (galley.size().x + 18.0).max(37.0) - ui.spacing().item_spacing.x).max(80.0)
 }
 
@@ -32,7 +32,7 @@ pub(crate) fn unknown_tags_warning(ui: &mut egui::Ui, template: &str) {
             if unknown.len() == 1 { "s" } else { "" },
             s = s
         );
-        ui.label(egui::RichText::new(text).color(Tokens::get(ui.ctx()).caution));
+        ui.label(egui::RichText::new(text).color(Tokens::get(ui.ctx()).text_caution()));
     }
 }
 

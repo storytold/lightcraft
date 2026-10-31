@@ -14,6 +14,8 @@ use crate::widgets::register;
 pub const HEIGHT: f32 = 40.0;
 /// Bar width (points) below which the controls take two rows.
 const WIDE: f32 = 1240.0;
+/// Between two controls of a row.
+const GAP: f32 = 4.0;
 
 /// Colour-label swatches (UI colours, our own choice).
 pub use crate::theme::label_color;
@@ -62,7 +64,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
         ui,
         &format!("filter-{id}"),
         if active && matches!(id, "camera" | "lens" | "keyword") { current } else { crate::i18n::tr(current) },
-        t.font(12.5),
+        t.label(),
         if active { t.text } else { t.text_label },
     );
     if active {
@@ -95,9 +97,30 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    // one row when there is room, else the metadata pickers and actions go to a second row
-    let two_rows = ui.available_width() < WIDE;
-    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), if two_rows { 2.0 * HEIGHT - 8.0 } else { HEIGHT }), Sense::hover());
+    // How wide the three parts of the bar were when last drawn (rating, flag and label; type and
+    // edited; the metadata pickers and the buttons): their words are longer in some languages,
+    // and what a row holds follows what fits, not a width that suits English.
+    let widths_id = egui::Id::unique("filterbar:widths");
+    let seen: [f32; 3] = ui.data(|d| d.get_temp(widths_id)).unwrap_or([0.0; 3]);
+    let room = ui.available_width() - 32.0;
+    // One row when there is room, else the metadata pickers and actions go to a second row. Type
+    // and edited go down with them when they would run off the first, and stand on a row of
+    // their own between the two when they fit on neither.
+    // (Each part is measured from where it begins, so it measures the same on whichever row it
+    // stands, and parts that share a row have a gap between them: what fits is then a matter of
+    // the widths alone, and the bar comes to rest. Measured with the gap before it, a part was
+    // four points wider when it followed another, and in that band the bar changed its mind
+    // every frame.)
+    let [first, second, third] = seen;
+    let two_rows = ui.available_width() < WIDE || first + GAP + second + GAP + third > room;
+    let (second_row, third_row) = match (two_rows, first + GAP + second <= room, second + GAP + third <= room) {
+        (false, _, _) => (0, 0),
+        (true, true, _) => (0, 1),
+        (true, false, true) => (1, 1),
+        (true, false, false) => (1, 2),
+    };
+    let rows = third_row as f32 + 1.0;
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows * (HEIGHT - 8.0) + 8.0), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.chrome);
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.divider));
     register(ui, "filterbar", bar);
@@ -105,12 +128,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let row = |ui: &mut egui::Ui, i: f32| {
         let r = Rect::from_min_size(bar.min + vec2(16.0, 4.0 + i * (HEIGHT - 8.0)), vec2(bar.width() - 32.0, HEIGHT - 8.0));
         let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        c.spacing_mut().item_spacing.x = 4.0;
+        c.spacing_mut().item_spacing.x = GAP;
         c
     };
-    let mut row1 = row(ui, 0.0);
-    let mut row2 = row(ui, 1.0);
-    let ui = &mut row1;
+    let mut rows = [row(ui, 0.0), row(ui, 1.0), row(ui, 2.0)];
+    let [ui, ..] = &mut rows;
+    let began = ui.cursor().left();
 
     // rating: operator + stars
     caption(ui, "Rating");
@@ -180,8 +203,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.add_space(14.0);
+    let first_w = ui.min_rect().right() - began;
 
     // kind + edited
+    let Some(ui) = rows.get_mut(second_row) else { return };
+    let began = ui.cursor().left();
     let kind_label = match f.kind {
         None => "All types",
         Some(MediaKind::Image) => "Photos",
@@ -233,8 +259,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .collect(),
     );
 
+    let second_w = ui.min_rect().right() - began;
+
     // metadata pickers
-    let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
+    let Some(ui) = rows.get_mut(third_row) else { return };
+    let began = ui.cursor().left();
     let values = app.caches.filter_values(&app.session.catalog);
     let (cameras, lenses, keywords) = (values.cameras.clone(), values.lenses.clone(), values.keywords.clone());
     for (id, key, all_label, current, values) in [
@@ -252,20 +281,26 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // save / clear
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
-    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
+    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.label())));
     register(ui, "button:filterSave", save.rect);
     if save.clicked() {
         let _ = app.run("dialog.newSmartAlbum", json!({}));
     }
-    let clear = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Clear")).font(t.font(12.5))));
+    let clear = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Clear")).font(t.label())));
     register(ui, "button:filterClear", clear.rect);
     if clear.clicked() {
         app.ui.search.clear();
         let _ = app.run("library.clearFilter", json!({}));
     }
     // filter presets: apply one, save the current filter, delete
-    let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
+    let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.label(), t.text);
     register(ui, "button:filterPresets", presets.rect);
+    let now = [first_w, second_w, ui.min_rect().right() - began];
+    // (a number that is none would never equal itself: it is not kept, nor asked about again)
+    if now.iter().all(|w| w.is_finite()) && now.iter().zip(seen).any(|(now, seen)| (now - seen).abs() > 0.5) {
+        ui.data_mut(|d| d.insert_temp(widths_id, now));
+        ui.ctx().request_repaint();
+    }
     egui::Popup::menu(&presets).show(|ui| {
         let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
         for n in &names {

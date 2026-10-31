@@ -1,7 +1,7 @@
 use super::layers::cmd_layers;
 use super::raw_samples::RAW_SAMPLES;
 use super::wasm::{cmd_wasm, cmd_wasm_for};
-use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, run};
+use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, run, typescale};
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
 /// is unknown. With line-table debuginfo, 4 jobs measured about 3 GB of RAM in use and 2 jobs
@@ -262,6 +262,8 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         },
     };
     let mut steps: Vec<Step> = vec![
+        // (first: it reads sources only, and says in a second what a build would take minutes to)
+        ("type", Box::new(|| typescale::run(&root, false))),
         (
             "fmt",
             Box::new(|| {

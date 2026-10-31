@@ -145,6 +145,7 @@ pub fn show(ctx: &egui::Context, app: &LightcraftApp) {
         format!("GPU mem {:.0} MB (+{:.0} pooled)", mb(mem.allocated), mb(mem.pooled)),
     ];
 
+    let t = crate::theme::Tokens::get(ctx);
     let screen = ctx.content_rect();
     let width = 300.0;
     egui::Area::new(egui::Id::unique("fps-hud"))
@@ -156,13 +157,17 @@ pub fn show(ctx: &egui::Context, app: &LightcraftApp) {
                 ui.set_width(width);
                 ui.spacing_mut().item_spacing.y = 1.0;
                 for l in &lines {
-                    ui.label(egui::RichText::new(l).monospace().size(11.0).color(egui::Color32::from_gray(230)));
+                    ui.label(
+                        egui::RichText::new(l)
+                            .font(egui::FontId::new(t.caption().size, egui::FontFamily::Monospace))
+                            .color(egui::Color32::from_gray(230)),
+                    );
                 }
                 ui.add_space(4.0);
                 graph(ui, &frames, width);
                 ui.label(
                     egui::RichText::new("bars: blue = UI CPU, orange/red = waiting · ticks = a render arrived · line = 60 fps")
-                        .size(9.0)
+                        .font(t.micro())
                         .color(egui::Color32::from_gray(160)),
                 );
             });

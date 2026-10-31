@@ -401,7 +401,7 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
                 let size = vec2(ui.available_width(), row_h);
                 match row {
                     PickRow::Header(g) => {
-                        ui.add_sized(size, egui::Label::new(egui::RichText::new(g).size(10.5).weak()));
+                        ui.add_sized(size, egui::Label::new(egui::RichText::new(g).font(Tokens::get(ui.ctx()).caption()).weak()));
                     }
                     PickRow::Preset(i) => {
                         let Some(p) = presets.get(*i) else { continue };

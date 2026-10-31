@@ -258,8 +258,8 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
     }
     if let Some(name) = &f.suggestion {
         p.rect_filled(strip, 0.0, Color32::from_black_alpha(165));
-        let label = super::people::fit(p, name, t.font(11.5), r.width() - 18.0);
-        p.text(pos2(r.left() + 5.0, strip.center().y), Align2::LEFT_CENTER, format!("{label}?"), t.font(11.5), Color32::from_gray(225));
+        let label = super::people::fit(p, name, t.caption(), r.width() - 18.0);
+        p.text(pos2(r.left() + 5.0, strip.center().y), Align2::LEFT_CENTER, format!("{label}?"), t.caption(), Color32::from_gray(225));
     }
     if let (Some(a), Some(who)) = (&accept, &f.suggestion)
         && a.clone().on_hover_text(format!("Name this face {who}")).clicked()

@@ -343,7 +343,7 @@ pub(super) fn top_level_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, 
     ui.painter().rect_stroke(header.shrink2(vec2(8.0, 3.0)), 4.0, stroke, egui::StrokeKind::Inside);
     // right-aligned, left of the + button
     let edge = header.right().min(ui.clip_rect().right());
-    ui.painter().text(pos2(edge - 56.0, header.center().y), Align2::RIGHT_CENTER, crate::i18n::tr("Top Level"), t.font(12.5), t.text_dim);
+    ui.painter().text(pos2(edge - 56.0, header.center().y), Align2::RIGHT_CENTER, crate::i18n::tr("Top Level"), t.label(), t.text_dim);
     if over && ui.input(|i| i.pointer.primary_released()) {
         drop_album(app, ui, dragged, None);
     }

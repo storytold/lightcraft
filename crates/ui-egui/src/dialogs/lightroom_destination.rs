@@ -302,7 +302,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     if !*new_library {
         *dont_ask = ticked;
     }
-    ui.label(egui::RichText::new(tr("To be asked again: Settings → General → When importing a Lightroom catalog.")).size(11.0).color(t.text_dim));
+    ui.label(
+        egui::RichText::new(tr("To be asked again: Settings → General → When importing a Lightroom catalog.")).font(t.caption()).color(t.text_dim),
+    );
 }
 
 #[cfg(test)]

@@ -43,7 +43,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         d.insert_temp(search_id, search.clone());
         d.insert_temp(all_id, show_all);
     });
-    ui.label(RichText::new(crate::i18n::tr("Click a shortcut, then press the new keys (Esc cancels).")).size(11.0).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr("Click a shortcut, then press the new keys (Esc cancels).")).font(t.caption()).color(t.text_dim));
     ui.add_space(4.0);
 
     let needle = search.trim().to_lowercase();
@@ -129,7 +129,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "reset": true}));
         }
     });
-    ui.label(RichText::new(b.id).size(10.5).color(t.text_dim));
+    ui.label(RichText::new(b.id).font(t.caption()).color(t.text_dim));
     ui.end_row();
 }
 
@@ -177,7 +177,7 @@ fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, nee
         return;
     }
     ui.add_space(8.0);
-    ui.label(RichText::new(crate::i18n::tr("Fixed keys")).font(t.semibold(12.5)).color(t.text));
+    ui.label(RichText::new(crate::i18n::tr("Fixed keys")).font(t.body_strong()).color(t.text));
     // keys saved for commands this build knows: an entry for an unknown command takes no key
     let taken: Vec<_> = shortcuts::saved_keys(&app.ui.settings.keymap).map(|(_, k)| k).collect();
     egui::Grid::new("shortcuts-fixed").striped(true).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {

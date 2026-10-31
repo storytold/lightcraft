@@ -349,10 +349,10 @@ mod tests {
             dragging,
         };
         assert_eq!(active("light.exposure", 0.45, false).readout().as_deref(), Some("Exposure: +0.45 EV"));
-        assert_eq!(active("light.exposure", -2.0, true).readout().as_deref(), Some("Exposure: -2.00 EV"));
+        assert_eq!(active("light.exposure", -2.0, true).readout().as_deref(), Some("Exposure: −2.00 EV"));
         assert_eq!(active("light.shadows", 25.0, true).readout().as_deref(), Some("Shadows: +25"));
         assert_eq!(active("light.blacks", 0.0, false).readout().as_deref(), Some("Blacks: 0"));
-        assert_eq!(active("light.highlights", -100.0, false).readout().as_deref(), Some("Highlights: -100"));
+        assert_eq!(active("light.highlights", -100.0, false).readout().as_deref(), Some("Highlights: −100"));
         assert_eq!(active("light.whites", 13.0, false).readout().as_deref(), Some("Whites: +13"));
     }
 

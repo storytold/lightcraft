@@ -228,20 +228,8 @@ fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_catalog::Ph
         F::CaptureDate => pretty_date(photo.captured.as_deref().unwrap_or(&photo.imported)),
         F::Dimensions => format!("{} × {}", photo.width, photo.height),
         F::Exposure => {
-            let mut exp = Vec::new();
-            if !m.shutter.is_empty() {
-                exp.push(format!("{} s", m.shutter));
-            }
-            if let Some(a) = m.aperture {
-                exp.push(format!("f/{a:.1}"));
-            }
-            if let Some(i) = m.iso {
-                exp.push(format!("ISO {i}"));
-            }
-            if let Some(f) = m.focal_mm {
-                exp.push(format!("{f:.0} mm"));
-            }
-            if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") }
+            let exp = crate::readout::exposure(m);
+            if exp.is_empty() { "No exposure information".into() } else { exp.join(" · ") }
         }
         F::Camera => m.camera.clone(),
         F::Lens => m.lens.clone(),

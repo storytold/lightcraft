@@ -20,7 +20,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     // One line, the whole text on hover: the reason can be a long driver message (no adapter
     // among the backends …), and the GPU state is process-wide, so it may change between frames;
     // a hint that wrapped would move every control below it under the pointer.
-    ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
+    ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).font(t.caption()).color(t.text_dim)).truncate()).on_hover_text(&status);
     row(ui, t, crate::i18n::tr("Preview size"), |ui| {
         let opts: Vec<(u32, String)> =
             PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();
@@ -107,7 +107,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "settingsSmartFolder",
             &path,
             egui::TextStyle::Body.resolve(ui.style()),
-            if available { t.text } else { t.reject },
+            if available { t.text } else { t.text_error() },
             if custom { 0.0 } else { label_width(ui, "(library default)", egui::TextStyle::Body) },
         );
         if !custom {
