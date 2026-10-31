@@ -98,6 +98,17 @@ pub struct Tex {
 }
 
 impl Tex {
+    /// Draw this slot from the GPU-resident texture `id` from now on. On the switch from pixels, the egui texture
+    /// (never drawn while `native` is set) drops its full-size image for a 1 × 1 placeholder, so a view slot on the
+    /// GPU path doesn't keep a second copy of the picture until it is released (review of PR #1065).
+    fn show_native(&mut self, id: egui::TextureId) {
+        if self.native.is_none() {
+            self.tex.set(egui::ColorImage::filled([1, 1], egui::Color32::BLACK), egui::TextureOptions::LINEAR);
+        }
+        self.native = Some(id);
+        self.pixels = None;
+    }
+
     /// The texture to draw.
     pub fn id(&self) -> egui::TextureId {
         self.native.unwrap_or_else(|| egui::TextureHandle::id(&self.tex))
@@ -1171,8 +1182,7 @@ impl Renderer {
                 let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
                 match self.textures.get_mut(&slot) {
                     Some(t) => {
-                        t.native = Some(id);
-                        t.pixels = None;
+                        t.show_native(id);
                         t.look = look;
                         t.key = r.key;
                         t.photo = r.photo;
@@ -1480,6 +1490,31 @@ mod stage_budget_tests {
         assert!(!r.textures.contains_key(&Slot::Before), "its frame is gone");
         assert!(!r.textures.contains_key(&Slot::Compare(0)), "its frame is gone");
         assert!(r.textures.contains_key(&Slot::Main), "pixels stay");
+    }
+
+    /// A view slot switching from pixels to a GPU-resident texture lets go of its pixel image (it is never drawn
+    /// while the native texture is set): before, the full-size image stayed in egui's texture manager.
+    #[test]
+    fn a_view_switching_to_a_gpu_texture_drops_its_pixel_image() {
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::new([64, 48], vec![egui::Color32::GRAY; 64 * 48]);
+        let mut t = Tex {
+            look: None,
+            key: 1,
+            photo: PhotoId(1),
+            tex: ctx.load_texture("main", image, Default::default()),
+            native: None,
+            size: [64, 48],
+            histogram: None,
+            ms: 0.0,
+            quick: None,
+            pixels: Some(std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]))),
+        };
+        t.show_native(egui::TextureId::User(7));
+        assert_eq!(t.tex.size(), [1, 1], "the pixel image is released");
+        assert_eq!((t.native, t.pixels.is_none()), (Some(egui::TextureId::User(7)), true));
+        t.show_native(egui::TextureId::User(8));
+        assert_eq!((t.native, t.tex.size()), (Some(egui::TextureId::User(8)), [1, 1]));
     }
 
     // Given stage caches within the budget, nothing is cleared
