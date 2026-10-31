@@ -332,12 +332,19 @@ fn interface_zoom(zoom: f32) -> f32 {
     if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 }
 }
 
-/// On a `screen` (system points) smaller than [`MIN_SIZE`]: the command that lowers the window's minimum to the
-/// screen, in the interface's points (`zoom`). Nothing on a screen the minimum fits on.
-fn min_within(screen: [f32; 2], zoom: f32) -> Vec<egui::ViewportCommand> {
-    if screen[0] < MIN_SIZE[0] || screen[1] < MIN_SIZE[1] {
-        let min = [MIN_SIZE[0].min(screen[0]), MIN_SIZE[1].min(screen[1])];
-        return vec![egui::ViewportCommand::MinInnerSize(egui::vec2(min[0] / zoom, min[1] / zoom))];
+/// The window's minimum in the system's points: [`MIN_SIZE`] is in the interface's, which `zoom` scales (at 2× a
+/// 900 × 560 minimum holds the window to 1800 × 1120).
+fn native_min(zoom: f32) -> [f32; 2] {
+    [MIN_SIZE[0] * zoom, MIN_SIZE[1] * zoom]
+}
+
+/// When the window's minimum (at `zoom`) is larger than `room` (system points) on either side: the command that lowers
+/// it to `room`, in the interface's points. Nothing when the minimum fits.
+fn min_within(room: [f32; 2], zoom: f32) -> Vec<egui::ViewportCommand> {
+    let min = native_min(zoom);
+    if min[0] > room[0] || min[1] > room[1] {
+        let lowered = [min[0].min(room[0]), min[1].min(room[1])];
+        return vec![egui::ViewportCommand::MinInnerSize(egui::vec2(lowered[0] / zoom, lowered[1] / zoom))];
     }
     Vec::new()
 }
@@ -411,11 +418,13 @@ impl StartPlace {
             // the window's minimum lowers the minimum to the screen)
             let larger = |s: [f32; 2]| s[0] > screen[0] + SAME_WITHIN || s[1] > screen[1] + SAME_WITHIN;
             if !seen.zoomed && (larger(size) || self.remembered.is_some_and(larger)) {
-                let side = |i: usize| (screen[i] * FIT_TO_SCREEN).max(MIN_SIZE[i]).min(screen[i]);
-                let fit = [side(0), side(1)];
                 // (`seen` is in the system's points, the commands in the interface's)
                 let zoom = interface_zoom(zoom);
-                let mut told = min_within(screen, zoom);
+                let min = native_min(zoom);
+                let side = |i: usize| (screen[i] * FIT_TO_SCREEN).max(min[i]).min(screen[i]);
+                let fit = [side(0), side(1)];
+                // a minimum larger than the fitted size (a small screen, a zoomed interface) is lowered to it first
+                let mut told = min_within(fit, zoom);
                 told.push(egui::ViewportCommand::InnerSize(egui::vec2(fit[0] / zoom, fit[1] / zoom)));
                 return told;
             }

@@ -641,7 +641,8 @@ fn the_window_is_maximized_once_it_shows_and_again_if_it_only_says_so() {
     assert!(s.step(&Seen::default(), 5.5, 1.0).is_empty() && s.done());
     // the interface zoomed 2×: the fitted size is asked for in its points, half the system's
     let mut s = StartPlace::new(false);
-    assert_eq!(s.step(&big, 0.0, 2.0), vec![C::InnerSize(egui::vec2(864.0, 486.0))]);
+    // (its 900 × 560 minimum is 1800 × 1120 there, taller than the 1080 screen: lowered to the fitted size first)
+    assert_eq!(s.step(&big, 0.0, 2.0), vec![C::MinInnerSize(egui::vec2(900.0, 540.0)), C::InnerSize(egui::vec2(900.0, 540.0))]);
 }
 
 /// A screen smaller than the window's minimum (800 × 600 beside a 900 pt minimum): the window is fitted within it
@@ -655,7 +656,15 @@ fn a_window_on_a_screen_smaller_than_its_minimum_fits_within_the_screen() {
     // remembered maximized on that screen: the minimum is lowered before it is maximized, or it would stay wider
     let mut s = StartPlace::new(true);
     s.step(&small, 0.0, 1.0);
-    assert_eq!(s.step(&small, 0.2, 2.0), vec![C::MinInnerSize(egui::vec2(400.0, 280.0)), C::Maximized(true)]);
+    assert_eq!(s.step(&small, 0.2, 2.0), vec![C::MinInnerSize(egui::vec2(400.0, 300.0)), C::Maximized(true)]);
+    // a screen larger than the minimum, but not than the minimum the zoomed interface makes of it (CodeRabbit on #2974)
+    let mut s = StartPlace::new(true);
+    let laptop = Seen { size: Some([1100.0, 700.0]), screen: Some([1200.0, 800.0]), ..Default::default() };
+    s.step(&laptop, 0.0, 2.0);
+    assert_eq!(s.step(&laptop, 0.2, 2.0), vec![C::MinInnerSize(egui::vec2(600.0, 400.0)), C::Maximized(true)]);
+    let mut s = StartPlace::new(false);
+    let wide = Seen { size: Some([1600.0, 1000.0]), ..laptop };
+    assert_eq!(s.step(&wide, 0.0, 2.0), vec![C::MinInnerSize(egui::vec2(600.0, 400.0)), C::InnerSize(egui::vec2(600.0, 400.0))]);
     // a screen the minimum fits on keeps the minimum
     let mut s = StartPlace::new(true);
     s.step(&window([1300.0, 800.0]), 0.0, 1.0);
