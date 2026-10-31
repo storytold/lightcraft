@@ -258,6 +258,7 @@
   "{sel_n} selected · {counted}": "Đã chọn {sel_n} · {counted}",
   "{size} GB": "{size} GB",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{s} s of AV1 video": "{s} s of AV1 video",
   "{verb} {n} Photo{}": "{verb} {n} ảnh{:.0}",

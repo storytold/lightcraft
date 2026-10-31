@@ -262,6 +262,7 @@
   "{n} preset{}": "Ustawienia: {n}{:.0}",
   "{count} more warnings.": "Pozostałe ostrzeżenia: {count}.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Nie zaimportowano obrazów z katalogu: {skipped}. Ich rekordy w katalogu są niekompletne.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "Nie zaimportowano obrazów z katalogu: {skipped}. Ich rekordy w katalogu są sprzeczne z innymi (powtórzony identyfikator obrazu lub kopia wirtualna kopii wirtualnej).",
   "{photos} catalog records processed; {collections} collections.": "Przetworzone rekordy katalogu: {photos}; kolekcje: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Brakujące oryginały: {missing}. Ich rekordy w katalogu są dostępne; użyj polecenia Znajdź brakujące zdjęcia, aby je ponownie powiązać.",
   "Applied {name}": "Zastosowano {name}",

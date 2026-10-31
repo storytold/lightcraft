@@ -62,11 +62,31 @@ settings are imported. Missing originals remain catalogued for relinking, count 
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
-An image whose file, folder or root folder record is gone from the catalog, or whose original path
-is empty (Lightroom leaves these behind and ignores them), is skipped together with its virtual
-copies instead of failing the whole import. The result lists them as data (`skipped`: each
-image id with its reason, `missingFile`, `missingFolder`, `missingRoot`, `incompletePath` or
-`masterSkipped`), also in `library.inspectLightroom`, and the desktop result window says how many in the UI language.
+One bad record costs that record, not the import (issue #1588). An image whose file, folder or root folder
+record is gone from the catalog, or whose original path is empty, is skipped together with its virtual copies, and
+so is a virtual copy whose master is not in the catalog: these records are incomplete (Lightroom leaves them behind
+and ignores them). So are the contradictory records of a damaged catalog: a second image with an id an earlier
+image has (the first is imported), and a virtual copy whose master is itself a virtual copy. A duplicate is
+left out before anything else looks at it, so it can't take the first image's records or virtual copies with it.
+The result lists them as data (`skipped`: each image id with its reason,
+`missingFile`, `missingFolder`, `missingRoot`, `incompletePath`, `masterSkipped`, `missingMaster`,
+`masterIsCopy` or `duplicateId`), also in `library.inspectLightroom`, and the desktop result window says how many
+in the UI language (one line for incomplete records, one for contradictory ones). A keyword or collection
+hierarchy that loops, or is nested more than 64 levels deep, is cut with a warning instead of failing the import:
+a keyword keeps its path up to where the loop comes back, and a collection loop is cut at its oldest collection
+(the lowest id), which is imported at the top level. A second collection with the id of an earlier one is left out
+with a warning naming both; the photos the catalog lists under that id go to the first. A capture time that isn't a
+date (including an impossible one such as 2026-02-30) is left out with a warning naming the image, which imports
+without it. A record an earlier version stored with such a time keeps it, with a warning, rather than take
+Lightroom's (undoing the import could not restore it), and a new virtual copy of it doesn't inherit it.
+
+Only a catalog that can't be read at all still fails the import, before anything changes, with an error that
+names the file and says what is wrong, not "invalid parameters": "the Lightroom catalog … can't be read: …" (it
+is missing, not allowed, too large, or changed while it was read), "the Lightroom catalog … is damaged: …" (the
+database or its write-ahead log is broken, or a table every catalog has — `AgLibraryRootFolder`,
+`AgLibraryFolder`, `AgLibraryFile`, `Adobe_images` — can't be read), or "… is not a Lightroom Classic catalog
+(or is damaged): it has no … table". A library import index (`Interop/lightroom-index.json`) that can't be read
+is an error naming that file. These are `ErrorKind::Other`; a cancelled import stays `Cancelled`.
 Virtual copies count as added records too; reimport reports zero additions when all
 records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
@@ -76,12 +96,25 @@ catalog changes; any saved recovery archives remain available.
 Before changing records, the importer attempts to save source image records, decoded XMP,
 verbatim develop settings, history, snapshots and collection content to compressed
 `Interop/lightroom-import-N.lca` recovery archives in the LightCraft library. Archiving is
-best-effort: a size limit or write failure produces a warning and does not prevent photo import.
+best-effort: a size limit, or a failure writing the archive itself, produces a warning (naming the
+`Interop` folder) and does not prevent photo import; an `Interop` folder that can't hold the import
+index refuses the import first (below). On a volume without hard links (exFAT, FAT, some network
+shares) an archive is published by claiming its name with an exclusive create and renaming over
+it, so it still never replaces an existing archive or one another writer claims the same way; a
+process that deletes or replaces the claimed placeholder before the rename is not guarded against.
 Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
 capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
-retained. Oldest managed archives are retired; legacy `.json` archives remain untouched.
-`Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
-never overwritten.
+retained. Oldest managed archives are retired; legacy `.json` archives remain untouched. When an
+archive is saved but cleanup afterwards fails (a temporary file or an old archive that can't be
+removed), the report still names the archive and a separate warning names what was left behind.
+`Interop/lightroom-index.json` records imported identities. Unlike the archive it is required, and
+it is written after the photos are imported, so the importer checks its folder first: when
+`Interop` is a link or a file rather than a folder, or a folder in which a file can't be created
+(read-only, no permission), the import is refused before anything changes, with an error naming
+the folder. Nothing lands outside the library. The check can't catch everything: when the index
+write itself fails after the photos are imported (the disk fills up, or the index would exceed 16 MiB),
+the import reports the error, the photos stay, and a retry may import their virtual copies again,
+because the index doesn't list them. Source catalogs and originals are never overwritten.
 
 Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
 loading the whole `.lrcat`. Database files are capped at 16 GiB and 16,777,216 pages; the WAL
@@ -94,7 +127,7 @@ importing: metadata checks detect ordinary concurrent changes, but are not SQLit
 The in-tree, read-only Rust SQLite B-tree reader follows SQLite's public file-format
 specification; it introduces no dependency or C runtime.
 Optional history, keyword and collection tables that exceed limits are skipped with warnings;
-required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
+required photo tables still report errors (naming the catalog and the table). Unrelated unsupported schemas are ignored. A needed
 WITHOUT ROWID or virtual table produces an explicit error, handled as a warning when optional.
 
 Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves and supported

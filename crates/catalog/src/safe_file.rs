@@ -22,6 +22,8 @@
 //!   and sync, plus a read-back check, and the file then appears under its final name **without
 //!   replacing anything** (a hard link, which fails on a taken name; where the volume has no hard
 //!   links, an exclusive create that claims the name, then a rename over that placeholder).
+//!   [`publish_new`] is that last step on its own, for a writer with its own temp file (the
+//!   Lightroom recovery archive).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   volume serial number + file index on Windows,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
@@ -35,6 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 thread_local! {
     static FAIL_AFTER: Cell<Option<u64>> = const { Cell::new(None) };
     static SYNCS: Cell<u64> = const { Cell::new(0) };
+    static NO_HARD_LINKS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// How many file and folder syncs this module made **on the calling thread** (for tests: a
@@ -65,6 +68,28 @@ pub struct FaultGuard(());
 impl Drop for FaultGuard {
     fn drop(&mut self) {
         FAIL_AFTER.with(|c| c.set(None));
+    }
+}
+
+/// Fault injection for tests (in any crate): while the returned guard lives, [`publish_new`]
+/// **on the calling thread** acts as on a volume without hard links (FAT/exFAT, some shares), so
+/// it takes the exclusive-create + rename fallback. Product code never calls it.
+#[doc(hidden)]
+pub fn without_hard_links() -> NoHardLinksGuard {
+    NoHardLinksGuard { previous: NO_HARD_LINKS.with(|c| c.replace(true)), _same_thread: std::marker::PhantomData }
+}
+
+/// Ends a [`without_hard_links`] when dropped, putting back what was set before (so nested guards
+/// work). It stays on the thread whose flag it set (not `Send`).
+#[doc(hidden)]
+pub struct NoHardLinksGuard {
+    previous: bool,
+    _same_thread: std::marker::PhantomData<*const ()>,
+}
+
+impl Drop for NoHardLinksGuard {
+    fn drop(&mut self) {
+        NO_HARD_LINKS.with(|c| c.set(self.previous));
     }
 }
 
@@ -222,9 +247,12 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
     r
 }
 
-/// Give the complete temp file `tmp` the name `path`, unless that is taken.
-fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
-    match fs::hard_link(tmp, path) {
+/// Give the complete temp file `tmp` (in the same folder) the name `path`, unless that is taken
+/// (`AlreadyExists`): a hard link, or where the volume has none, [`publish_new_by_rename`]. After
+/// a hard link `tmp` is a second name of the file; after the fallback it is gone.
+pub fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
+    let linked = if NO_HARD_LINKS.with(Cell::get) { Err(io::Error::from(io::ErrorKind::Unsupported)) } else { fs::hard_link(tmp, path) };
+    match linked {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
         // no hard links on this volume (FAT/exFAT, some shares)
@@ -235,6 +263,10 @@ fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
 /// Fallback of [`publish_new`]: reserve the name with an exclusive create (atomic, so a file that
 /// appears at the same time is never replaced), then rename the complete temp file over our own
 /// empty placeholder. `before_claim` runs just before the name is claimed (a test hook).
+///
+/// That guarantee holds against other writers that also create names exclusively (as everything in
+/// a library folder does). A process that deletes or replaces our placeholder between the claim and
+/// the rename would have its file replaced, and a failed rename removes whatever then has the name.
 fn publish_new_by_rename(tmp: &Path, path: &Path, before_claim: &dyn Fn()) -> io::Result<()> {
     before_claim();
     OpenOptions::new().write(true).create_new(true).open(path)?;

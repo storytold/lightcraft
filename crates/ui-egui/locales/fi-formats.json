@@ -258,6 +258,7 @@
   "{sel_n} selected · {counted}": "Valittu: {sel_n} · {counted}",
   "{size} GB": "{size} Gt",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{s} s of AV1 video": "{s} s AV1-videota",
   "{verb} {n} Photo{}": "{verb} kuvia: {n}{:.0}",

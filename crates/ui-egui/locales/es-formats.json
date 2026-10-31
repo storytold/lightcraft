@@ -270,6 +270,7 @@
   "· {in_source} identical copies": "· {in_source} copias idénticas",
   "{count} more warnings.": "{count} advertencias más.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "No se importaron {skipped} imágenes del catálogo porque sus registros en el catálogo están incompletos.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "No se importaron {skipped} imágenes del catálogo porque sus registros en el catálogo contradicen a otros (un ID de imagen repetido o una copia virtual de una copia virtual).",
   "{photos} catalog records processed; {collections} collections.": "{photos} registros del catálogo procesados; {collections} colecciones.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Faltan {missing} originales. Sus registros del catálogo están disponibles; usa Buscar fotos que faltan para volver a vincularlos.",
   "Applied {name}": "Se aplicó {name}",

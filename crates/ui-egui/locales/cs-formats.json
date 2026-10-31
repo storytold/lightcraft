@@ -268,6 +268,7 @@
   "{n} preset{}": "Přednastavení: {n}{:.0}",
   "{count} more warnings.": "Další varování: {count}.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Neimportované obrázky katalogu: {skipped}. Jejich záznamy v katalogu jsou neúplné.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "Neimportované obrázky katalogu: {skipped}. Jejich záznamy v katalogu odporují jiným (opakované ID obrázku nebo virtuální kopie virtuální kopie).",
   "{photos} catalog records processed; {collections} collections.": "Zpracováno záznamů katalogu: {photos}; kolekcí: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Chybějící originály: {missing}. Jejich záznamy jsou v katalogu dostupné; použijte Najít chybějící fotografie a znovu je propojte.",
   "Applied {name}": "Použito: {name}",

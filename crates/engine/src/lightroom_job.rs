@@ -20,22 +20,72 @@ use crate::lightroom_catalog::{self, CatalogImport, ImportIndex};
 const COMMAND: &str = "library.importLightroom";
 const MAX_INDEX_BYTES: usize = 16 * 1024 * 1024;
 
-fn error(message: impl Into<String>) -> crate::EngineError {
-    crate::EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
-}
-
 /// The import was cancelled ([`crate::ErrorKind::Cancelled`]: not a failure). The message is the
 /// one it always had, so control-channel and MCP clients see the same `error` text.
 fn cancelled() -> crate::EngineError {
-    crate::EngineError::Cancelled(error("Lightroom import cancelled").to_string())
+    let message = crate::EngineError::BadParams { cmd: COMMAND.into(), msg: "Lightroom import cancelled".into() };
+    crate::EngineError::Cancelled(message.to_string())
 }
 
+/// Save the recovery archive. It is best-effort: nothing reads it back during import, so an archive
+/// that can't be saved costs the archive (with a warning naming the folder), not the import. A
+/// folder that can't be written to at all is refused first, for the import index's sake.
+/// That warning goes first: the result window lists only the first few, and catalog warnings
+/// (one per unreadable record) can be many.
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
-    let archive_path = archive_dir.map(|dir| crate::lightroom_archive::store_best_effort(dir, data).map_err(error)).transpose()?.flatten();
-    if archive_dir.is_some() && archive_path.is_none() {
-        data.warnings.push("Lightroom source archive exceeded 32 MiB; archive skipped".into());
+    let Some(dir) = archive_dir else { return Ok(None) };
+    // The import index, unlike the archive, is required, and it is written only after the photos
+    // are imported. Refuse here, before anything changes, a folder it can't be written to (a link
+    // would take it outside the library), rather than import and then fail, where a retry could
+    // duplicate virtual copies.
+    require_index_folder(dir).map_err(|e| crate::EngineError::Other(format!("cannot import into this library: {e}")))?;
+    match crate::lightroom_archive::store_best_effort(dir, data) {
+        Ok(Some(stored)) => {
+            // the archive is saved: the report names it, and the leftover is a warning of its own
+            if let Some(problem) = stored.cleanup_failed {
+                data.warnings.insert(
+                    0,
+                    format!("Lightroom source archive saved as {}, but cleaning up {} failed: {problem}", stored.path.display(), dir.display()),
+                );
+            }
+            Ok(Some(stored.path))
+        }
+        Ok(None) => {
+            data.warnings.insert(0, "Lightroom source archive exceeded 32 MiB; archive skipped".into());
+            Ok(None)
+        }
+        Err(e) => {
+            data.warnings.insert(0, format!("Lightroom source archive not saved in {}: {e}; archive skipped", dir.display()));
+            Ok(None)
+        }
     }
-    Ok(archive_path)
+}
+
+/// Check that `lightroom-index.json` can be written in `dir` (creating the folder, as the archive
+/// would): a real folder, not a link or a file, in which a file can be created and removed. The
+/// probe is a plain exclusive create, never a hard link, so volumes without them (exFAT, #3114) pass.
+fn require_index_folder(dir: &Path) -> Result<(), String> {
+    if let Err(e) = std::fs::symlink_metadata(dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("cannot read {}: {e}", dir.display()));
+        }
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create the folder {}: {e}", dir.display()))?;
+    }
+    crate::lightroom_archive::require_real_directory(dir)?;
+    let unwritable = |e: std::io::Error| format!("the Lightroom import index can't be written in {} ({e}); make the folder writable", dir.display());
+    let pid = std::process::id();
+    for slot in 0..64 {
+        let probe = dir.join(format!(".lightroom-index-probe-{pid}-{slot}.tmp"));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(file) => {
+                drop(file);
+                return std::fs::remove_file(&probe).map_err(unwritable);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(unwritable(e)),
+        }
+    }
+    Err(format!("no free name to check that {} is writable", dir.display()))
 }
 
 /// Memory identity of the library which owns a prepared completion.
@@ -115,9 +165,16 @@ impl LightroomArchiveFinalization {
     pub fn finish(self) -> crate::Result<()> {
         let (Some(path), Some(bytes)) = (self.path, self.bytes) else { return Ok(()) };
         if bytes.len() > MAX_INDEX_BYTES {
-            return Err(error("Lightroom import index exceeds 16 MiB"));
+            return Err(crate::EngineError::Other(format!("could not write the Lightroom import index {}: it exceeds 16 MiB", path.display())));
         }
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))
+        let failed =
+            |e: &dyn std::fmt::Display| crate::EngineError::Other(format!("could not write the Lightroom import index {}: {e}", path.display()));
+        // the archive refuses a linked `Interop` folder; now that its failure no longer stops the
+        // import, the index must refuse it too, or it would be written outside the library
+        if let Some(dir) = path.parent() {
+            crate::lightroom_archive::require_real_directory(dir).map_err(|e| failed(&e))?;
+        }
+        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| failed(&e))
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -240,10 +297,10 @@ impl LightroomJob {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
+        // (reading stops when `cancel` is set: the flag says it was cancelled; a catalog that can't be
+        // read is an error naming it, and a bad record is skipped, not an error)
         let mut data = lightroom_catalog::read_with_progress(&self.path, cancel, &self.progress.catalog_total, &self.progress.catalog_done)
-            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
-        lightroom_catalog::validate_for_job(&data).map_err(error)?;
+            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { e })?;
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
@@ -284,7 +341,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     }
     if !prepared.token.matches(s) {
         prepared.normal.rollback();
-        return Err(error("Lightroom import belongs to a different open library"));
+        return Err(crate::EngineError::Other("Lightroom import belongs to a different open library".into()));
     }
     // A command-scoped Lightroom import must never rewrite source XMP sidecars.  Direct depth-0
     // callers do not set this transient flag, so they cannot affect a later command.
@@ -310,7 +367,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
         },
     )?;
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
-    let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
+    let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| crate::EngineError::Other(e.to_string()))?) } else { None };
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
 }
 
@@ -478,6 +535,9 @@ mod tests {
         assert_eq!(e.to_string(), "invalid parameters for `library.importLightroom`: Lightroom import cancelled");
         let Err(e) = job.prepare(&AtomicBool::new(false)) else { panic!("no such catalog") };
         assert_ne!(e.kind(), crate::ErrorKind::Cancelled, "{e}");
+        // a catalog that can't be read is not "invalid parameters": the error names it
+        assert_eq!(e.kind(), crate::ErrorKind::Other, "{e}");
+        assert!(e.to_string().starts_with("the Lightroom catalog /nonexistent/cancelled.lrcat can't be read: "), "{e}");
     }
 
     #[test]
@@ -562,6 +622,88 @@ mod tests {
         );
         assert_eq!(session.catalog.len(), 5_000);
         std::fs::remove_dir_all(archive_dir).unwrap();
+    }
+
+    /// The archive is best-effort: a folder it can't be written to costs the archive, not the import.
+    #[test]
+    fn an_archive_that_cannot_be_written_is_a_warning_naming_its_folder() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lr-archive-unwritable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let interop = dir.join("Interop");
+        std::fs::create_dir_all(&interop).unwrap();
+        // one more entry than the archive scans (`MAX_SCAN`)
+        for i in 0..=1024 {
+            std::fs::write(interop.join(format!("other-{i}")), b"").unwrap();
+        }
+        let mut data = empty_data();
+        // more catalog warnings than the result window lists: the archive's must still be seen
+        data.warnings = (0..10).map(|i| format!("record {i}: unreadable XMP")).collect();
+        assert_eq!(stage_archive(Some(&interop), &mut data).unwrap(), None);
+        assert_eq!(data.warnings.len(), 11);
+        assert!(data.warnings[0].starts_with("Lightroom source archive not saved in "), "{}", data.warnings[0]);
+        assert!(data.warnings[0].contains(&*interop.to_string_lossy()), "{}", data.warnings[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An archive that is saved but whose cleanup fails afterwards (here an old archive can't be
+    /// retired) is still the import's archive: the report names it, and the cleanup is a warning.
+    #[test]
+    fn a_saved_archive_whose_cleanup_fails_is_reported_with_a_warning() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lr-archive-cleanup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let interop = dir.join("Interop");
+        std::fs::create_dir_all(&interop).unwrap();
+        let mut data = empty_data();
+        // an older archive, then this catalog's, then enough others to retire the older one
+        std::fs::write(interop.join("lightroom-import-0.lca"), b"older").unwrap();
+        let saved = crate::lightroom_archive::store(&interop, &data).unwrap().path;
+        assert_eq!(saved, interop.join("lightroom-import-1.lca"));
+        for i in 2..=crate::lightroom_archive::MAX_MANAGED_ARCHIVES {
+            std::fs::write(interop.join(format!("lightroom-import-{i}.lca")), format!("other {i}")).unwrap();
+        }
+        // retiring the older archive needs this name, which is taken
+        std::fs::write(interop.join(format!(".lightroom-retire-{}-0.tmp", std::process::id())), b"taken").unwrap();
+        assert_eq!(stage_archive(Some(&interop), &mut data).unwrap(), Some(saved.clone()));
+        assert!(saved.is_file());
+        assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
+        let warning = &data.warnings[0];
+        assert!(warning.starts_with(&format!("Lightroom source archive saved as {}, but cleaning up", saved.display())), "{warning}");
+        assert!(warning.contains("retention temporary path already exists"), "{warning}");
+        assert_eq!(std::fs::read(interop.join("lightroom-import-0.lca")).unwrap(), b"older", "the older archive is kept");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A failed index write is an I/O error naming the file, not "invalid parameters".
+    #[test]
+    fn an_index_write_failure_names_the_index_file() {
+        let path = std::env::temp_dir().join(format!("lightcraft-lr-index-missing-{}", std::process::id())).join("lightroom-index.json");
+        let e = LightroomArchiveFinalization { path: Some(path.clone()), bytes: Some(b"{}".to_vec()) }.finish().unwrap_err();
+        assert!(matches!(e, crate::EngineError::Other(_)), "{e:?}");
+        assert!(e.to_string().starts_with(&format!("could not write the Lightroom import index {}", path.display())), "{e}");
+    }
+
+    /// A linked `Interop` folder (which the archive already refuses) must not receive the index:
+    /// it would land outside the library and could replace a file there.
+    #[cfg(unix)]
+    #[test]
+    fn an_index_write_refuses_a_linked_interop_folder() {
+        let root = std::env::temp_dir().join(format!("lightcraft-lr-index-linked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (library, outside) = (root.join("library"), root.join("outside"));
+        std::fs::create_dir_all(&library).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("lightroom-index.json"), b"not ours").unwrap();
+        std::os::unix::fs::symlink(&outside, library.join("Interop")).unwrap();
+        let path = library.join("Interop/lightroom-index.json");
+        let e = LightroomArchiveFinalization { path: Some(path), bytes: Some(b"{}".to_vec()) }.finish().unwrap_err();
+        assert!(e.to_string().contains("is a link or a file, not a folder"), "{e}");
+        assert_eq!(std::fs::read(outside.join("lightroom-index.json")).unwrap(), b"not ours");
+        // preparation refuses the link before anything is imported
+        let mut data = empty_data();
+        let e = stage_archive(Some(&library.join("Interop")), &mut data).unwrap_err();
+        assert!(e.to_string().contains("is a link or a file, not a folder"), "{e}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

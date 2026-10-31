@@ -5,6 +5,24 @@
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
 
+### A damaged Lightroom catalog imports everything it can
+- A Lightroom catalog with a few damaged records (two images with the same id, a virtual copy whose master
+  is gone or is itself a copy, keywords or collections whose parents loop) no longer fails the whole import: those
+  images are skipped and counted in the result window, and a looping keyword or collection is imported with a
+  warning. So is a second collection with the id of another (its photos go to the first), and a capture time that
+  isn't a date is left out with a warning. A catalog that can't be read at all now says which file and what is wrong ("the Lightroom catalog … is
+  damaged: table Adobe_images can't be read: …") instead of "invalid parameters".
+
+## 2026-10-26
+
+### Lightroom catalogs import into libraries on exFAT drives
+- Importing a Lightroom catalog into a library on an exFAT or FAT drive (or a network share without hard links) no
+  longer fails with "cannot atomically publish archive: Operation not supported": the recovery archive in the
+  library's `Interop` folder is saved another way that still never replaces an existing archive. When the archive
+  can't be saved at all, the import goes on and warns, naming the folder, as documented. An `Interop` folder that can't
+  be written to at all (or is a link) is refused before any photo is imported, naming it, since the import index must
+  be saved there; a failed import-index write now names the file instead of reporting "invalid parameters".
+
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box
@@ -111,7 +129,6 @@
 ### Find the grid shortcut in View
 - Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
   shortcut changes; clicking a menu row still selects that grid (issue #2500).
-
 
 ## 2026-10-21
 

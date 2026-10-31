@@ -270,6 +270,7 @@
   "· {in_source} identical copies": "· идентичных копий: {in_source}",
   "{count} more warnings.": "Других предупреждений: {count}.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Не импортированы изображения каталога: {skipped}. Их записи в каталоге неполные.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "Не импортированы изображения каталога: {skipped}. Их записи в каталоге противоречат другим (повторяющийся идентификатор изображения или виртуальная копия виртуальной копии).",
   "{photos} catalog records processed; {collections} collections.": "Обработано записей каталога: {photos}; коллекций: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Не найдены оригиналы: {missing}. Их записи каталога доступны; используйте поиск отсутствующих фотографий, чтобы восстановить ссылки.",
   "Applied {name}": "Применено: {name}",

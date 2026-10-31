@@ -158,25 +158,261 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
 }
 #[test]
-fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
+fn preserves_existing_edits_and_rejects_unbounded_settings() {
     let mut s = crate::Session::new();
     let data = sample();
     apply(&mut s, data.clone(), false).unwrap();
     let id = s.catalog.photos().find(|p| p.copy_of.is_none()).unwrap().id;
     s.set_develop(id, lightcraft_develop::DevelopSettings::default(), "Personal edit").unwrap();
-    let r = apply(&mut s, data.clone(), false).unwrap();
+    let r = apply(&mut s, data, false).unwrap();
     assert!(r["preservedExistingEdits"].as_u64().unwrap() > 0);
     assert_eq!(s.catalog.photo(id).unwrap().develop.light.exposure, 0.0);
-    let before = s.catalog.to_snapshot();
-    let mut cyclic = data;
-    cyclic.collections[0].insert("parent".into(), json!(10));
-    assert!(apply(&mut s, cyclic, false).is_err());
-    assert_eq!(s.catalog.to_snapshot(), before);
     assert!(
         mapped_settings(&format!("{}0{}", "{".repeat(1000), "}".repeat(1000)), crate::crs::Target::RawAbsolute, 1.0, Orientation::Normal, 1.5)
             .is_err()
     );
 }
+/// A damaged catalog used to fail the whole import (#1588): a repeated image id, or a virtual copy
+/// whose master is gone or is itself a copy, now costs that image, and the rest is imported.
+#[test]
+fn contradictory_images_are_skipped_and_the_rest_imports() {
+    let mut data = sample();
+    let mut twin = data.photos[1].clone();
+    twin.uuid = "twin".into();
+    twin.path = "/missing/twin.ARW".into();
+    data.photos.push(twin);
+    for (id, master) in [(5, 99), (6, 2), (7, 7)] {
+        let mut copy = data.photos[0].clone();
+        copy.source_id = id;
+        copy.uuid = format!("copy-{id}");
+        copy.image = row(json!({"id_local": id, "masterImage": master, "copyName": "Bad"}));
+        data.photos.push(copy);
+    }
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "the master and its copy: {r}");
+    assert_eq!(
+        r["skipped"],
+        json!([
+            {"image": 1, "reason": "duplicateId"},
+            {"image": 5, "reason": "missingMaster"},
+            {"image": 6, "reason": "masterIsCopy"},
+            {"image": 7, "reason": "masterIsCopy"},
+        ])
+    );
+    assert_eq!(s.catalog.len(), 2);
+    assert!(s.catalog.photos().all(|p| source_path(p) == Some("/missing/test.ARW")), "the first image with id 1 is the one imported");
+    assert!(s.catalog.albums().any(|a| a.name == "Keepers"));
+    assert_eq!(s.undo.len(), 1);
+}
+
+/// A second image with an id already used must not take the first one, or its virtual copy, with
+/// it: refusing its original, or finding its file record gone, used to drop every image with that id.
+#[test]
+fn a_duplicate_image_id_costs_only_the_duplicate() {
+    let mut data = sample();
+    let mut planted = data.photos[1].clone();
+    planted.uuid = "planted".into();
+    planted.path = "/Users/sky/Downloads/payload.exe".into();
+    data.photos.push(planted);
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "the first image with id 1 and its copy: {r}");
+    assert_eq!(r["skipped"], json!([{"image": 1, "reason": "duplicateId"}]));
+    assert!(!r["warnings"].to_string().contains("payload.exe"), "the duplicate is skipped before its original is looked at: {r}");
+    assert!(s.catalog.photos().all(|p| source_path(p) == Some("/missing/test.ARW")));
+    assert_eq!(s.catalog.photos().filter(|p| p.copy_of.is_some()).count(), 1);
+
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    for (duplicate_file, case) in [(2, "a refused file type"), (9, "no file record")] {
+        let mut tables = one_row(photo_tables(("/catalog/", "")));
+        tables[2].2.push(vec![N, I(1), T("payload.exe".into())]);
+        tables[3] = (
+            "Adobe_images",
+            "id_local INTEGER PRIMARY KEY, id_global, rootFile, masterImage, fileFormat, fileWidth, fileHeight, rating, pick",
+            vec![
+                vec![N, T("master".into()), I(1), N, T("ARW".into()), I(20), I(10), I(5), I(1)],
+                vec![N, T("copy".into()), I(1), I(1), T("ARW".into()), I(20), I(10), I(3), I(0)],
+                vec![I(1), T("duplicate".into()), I(duplicate_file), N, T("ARW".into()), I(20), I(10), I(0), I(0)],
+            ],
+        );
+        let catalog = read_tables(&tables, &format!("duplicate-{duplicate_file}"));
+        let read: Vec<_> = catalog.photos.iter().map(|p| (p.source_id, p.uuid.as_str())).collect();
+        assert_eq!(read, [(1, "master"), (2, "copy")], "{case}");
+        assert_eq!(catalog.skipped, [SkippedImage { image: 1, reason: SkipReason::DuplicateId }], "{case}");
+        assert!(catalog.warnings.is_empty(), "{case}: {:?}", catalog.warnings);
+        let mut s = crate::Session::new();
+        let r = apply(&mut s, catalog, false).unwrap();
+        assert_eq!(r["photos"], 2, "{case}: {r}");
+        assert_eq!(s.catalog.photos().filter(|p| p.copy_of.is_some()).count(), 1, "{case}");
+    }
+}
+
+/// A capture time that isn't a date used to fail the whole metadata batch at `SetCaptured` on the
+/// first import that met the photo as a record (a reimport); it is left out with a warning.
+#[test]
+fn a_capture_time_that_is_not_a_date_is_left_out() {
+    let mut data = sample();
+    let mut other = data.photos[1].clone();
+    other.source_id = 3;
+    other.uuid = "other".into();
+    other.path = "/missing/other.ARW".into();
+    other.image = row(json!({"id_local": 3, "fileFormat": "ARW", "captureTime": "broken"}));
+    data.photos.push(other);
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    let missing_sources = HashSet::new();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        let context = ApplyPrepared {
+            update_existing: true,
+            files: Default::default(),
+            index: &mut index,
+            archive_path: None,
+            missing_sources: &missing_sources,
+            undo0,
+        };
+        apply_prepared(s, data.clone(), context).unwrap().report
+    };
+    let first = import(&mut s);
+    assert_eq!(first["photos"], 3, "{first}");
+    let warning = "image 3: capture time “broken” is not a date; imported without it";
+    assert!(first["warnings"].as_array().unwrap().iter().any(|w| w == warning), "{first}");
+    let captured = |s: &crate::Session, image: &str| s.catalog.photo(PhotoId(first["mapping"][image].as_u64().unwrap())).unwrap().captured.clone();
+    assert_eq!(captured(&s, "3"), None);
+    assert_eq!(captured(&s, "1").as_deref(), Some("2024-01-16T12:34:56"), "the rest of the batch stands");
+    assert_eq!(s.catalog.albums().count(), 2);
+    let second = import(&mut s);
+    assert_eq!(second["mapping"], first["mapping"], "the reimport updates the same records: {second}");
+    assert_eq!(second["imported"], 0);
+
+    // a record an earlier version stored with that time keeps it, and the import goes on
+    let mut s = crate::Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut old = Photo::new(id, Source::File { path: "/missing/other.ARW".into() }, "other.ARW", "ARW", 20, 10, "before");
+    old.captured = Some("broken".into());
+    s.commit("Earlier import", Op::AddPhoto { photo: Box::new(old) }).unwrap();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["mapping"]["3"], id.0, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+    assert_eq!(s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
+}
+
+/// An impossible date (2026-02-30) is not a capture time either: stored, it would roll over to
+/// another day in date grouping.
+#[test]
+fn an_impossible_capture_date_is_left_out() {
+    let mut data = sample();
+    data.photos[1].image.insert("captureTime".into(), json!("2026-02-30T10:00:00"));
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    let id = PhotoId(r["mapping"]["1"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(id).unwrap().captured, None);
+    assert_eq!(r["warnings"], json!(["image 1: capture time “2026-02-30T10:00:00” is not a date; imported without it"]));
+}
+
+/// A record an earlier version stored with a time that isn't a date: Lightroom's time doesn't
+/// replace it (undo could not put it back, `SetCaptured` refuses it), and a new virtual copy of it
+/// doesn't inherit it.
+#[test]
+fn a_stored_capture_time_that_is_not_a_date_stays_undoable_and_is_not_copied() {
+    let earlier = |captured: &str| {
+        let mut s = crate::Session::new();
+        let id = s.catalog.alloc_photo_id();
+        let mut old = Photo::new(id, Source::File { path: "/missing/test.ARW".into() }, "test.ARW", "ARW", 20, 10, "before");
+        old.captured = Some(captured.into());
+        s.commit("Earlier import", Op::AddPhoto { photo: Box::new(old) }).unwrap();
+        s.undo.clear();
+        (s, id)
+    };
+    // Lightroom has a time for the master
+    let (mut s, id) = earlier("broken");
+    let r = apply(&mut s, sample(), false).unwrap();
+    assert_eq!(r["mapping"]["1"], id.0, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "image 1: the library's capture time “broken” is not a date, so Lightroom's was not applied (undoing the import could not restore it)"
+        ])
+    );
+    let copy = PhotoId(r["mapping"]["2"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(copy).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"), "the copy gets Lightroom's time");
+    s.undo_step().unwrap();
+    assert_eq!(s.catalog.len(), 1, "the import is undone in one step");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+
+    // Lightroom has none: the master keeps its own, the new copy gets none
+    let (mut s, id) = earlier("broken");
+    let mut data = sample();
+    data.photos[1].image.remove("captureTime");
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+    let copy = PhotoId(r["mapping"]["2"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(copy).unwrap().captured, None);
+    assert_eq!(r["warnings"], json!(["image 2: inherited capture time “broken” is not a date; imported without it"]));
+    s.undo_step().unwrap();
+    assert_eq!(s.catalog.len(), 1);
+}
+
+/// Two collections with one id used to stage two albums with one id, failing the import: the first
+/// is kept, and the photos listed under the id go to it.
+#[test]
+fn a_duplicate_collection_id_costs_only_the_duplicate() {
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local": 10, "parent": 0, "name": "Rejects", "creationId": "collection"})));
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2);
+    assert_eq!(r["collections"], 2, "{r}");
+    let names: Vec<_> = s.catalog.albums().map(|a| a.name.clone()).collect();
+    assert!(names.contains(&"Keepers".to_string()) && !names.contains(&"Rejects".to_string()), "{names:?}");
+    let keepers = s.catalog.albums().find(|a| a.name == "Keepers").unwrap();
+    assert_eq!(keepers.photos.len(), 2);
+    assert!(keepers.parent.is_some(), "the first row's place is kept");
+    assert_eq!(
+        r["warnings"],
+        json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
+    );
+    assert_eq!(s.undo.len(), 1);
+}
+
+/// A looping (or too deep) collection hierarchy used to fail the whole import: it is cut at the
+/// loop's oldest collection, which goes to the top level with a warning.
+#[test]
+fn a_looping_collection_hierarchy_is_cut_not_fatal() {
+    let mut data = sample();
+    data.collections[0].insert("parent".into(), json!(10));
+    data.collections.push(row(json!({"id_local": 11, "parent": 11, "name": "Self", "creationId": "collection"})));
+    // a chain of 70 sets, each in the one before
+    data.collections.extend((100..170).map(|id| {
+        row(json!({"id_local": id, "parent": if id == 100 { 0 } else { id - 1 }, "name": format!("Set {id}"), "creationId": "collection.group"}))
+    }));
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2);
+    assert_eq!(r["collections"], 73);
+    let album = |name: &str| s.catalog.albums().find(|a| a.name == name).unwrap();
+    assert_eq!(album("Travel").parent, None, "the loop's oldest collection is at the top level");
+    assert_eq!(album("Keepers").parent, Some(album("Travel").id));
+    assert_eq!(album("Keepers").photos.len(), 2);
+    assert_eq!(album("Self").parent, None);
+    assert_eq!(album("Set 164").parent, None, "cut once, 64 below the top");
+    assert_eq!(album("Set 165").parent, Some(album("Set 164").id));
+    assert_eq!(album("Set 163").parent, Some(album("Set 162").id));
+    assert_eq!(album("Set 101").parent, Some(album("Set 100").id));
+    let warnings: Vec<_> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        warnings,
+        [
+            "collection “Travel”: its parent collections form a loop; imported at the top level",
+            "collection “Self”: its parent collections form a loop; imported at the top level",
+            "collection “Set 164”: it is nested more than 64 collections deep; imported at the top level",
+        ]
+    );
+    assert_eq!(s.undo.len(), 1);
+}
+
 #[test]
 fn compressed_xmp_is_bounded_and_settings_are_data_only() {
     let packet = b"<x:xmpmeta>example</x:xmpmeta>";
@@ -442,6 +678,121 @@ fn persistent_reimport_keeps_copy_and_collection_ids_and_capture_time() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Issue #3114: a library on exFAT (no hard links) aborted every import when saving the archive.
+#[test]
+fn imports_into_a_library_on_a_volume_without_hard_links() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-no-hard-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+    let report = import(&mut s, &source, false).unwrap();
+    assert_eq!(report["imported"], 1);
+    assert_eq!(report["warnings"], json!([]));
+    let archive = Path::new(report["archive"].as_str().unwrap());
+    assert_eq!(archive, library.join("Interop").join("lightroom-import-0.lca"));
+    assert!(std::fs::read(archive).unwrap().starts_with(b"LC-LRARCH"));
+    assert!(library.join("Interop").join("lightroom-index.json").is_file());
+    let mut names: Vec<_> = std::fs::read_dir(library.join("Interop")).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    names.sort();
+    assert_eq!(names, ["lightroom-import-0.lca", "lightroom-index.json"], "the writability probe leaves nothing behind");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The recovery archive is best-effort: when it can't be saved (here `Interop` holds more entries
+/// than the archive scans) the import still goes on, with a warning naming the folder.
+#[test]
+fn an_archive_that_cannot_be_saved_warns_and_the_import_proceeds() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-archive-refused-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let interop = library.join("Interop");
+    std::fs::create_dir_all(&interop).unwrap();
+    // one more entry than the archive scans (`MAX_SCAN`)
+    for i in 0..=1024 {
+        std::fs::write(interop.join(format!("other-{i}")), b"").unwrap();
+    }
+    let report = import(&mut s, &source, false).unwrap();
+    assert_eq!(report["imported"], 1);
+    assert_eq!(report["archive"], Value::Null);
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap().starts_with(&format!("Lightroom source archive not saved in {}", interop.display()))),
+        "{warnings:?}"
+    );
+    assert!(interop.join("lightroom-index.json").is_file(), "re-import mapping is still saved");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A linked `Interop` folder gets neither the archive nor the import index: both would land
+/// outside the library. The import is refused before any photo is imported.
+#[cfg(unix)]
+#[test]
+fn a_linked_interop_folder_gets_neither_the_archive_nor_the_index() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-interop-linked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let interop = library.join("Interop");
+    std::os::unix::fs::symlink(dir.join("elsewhere"), &interop).unwrap();
+    let e = import(&mut s, &source, false).unwrap_err();
+    assert!(e.to_string().contains(&format!("{} is a link or a file, not a folder", interop.display())), "{e}");
+    assert_eq!(s.catalog.photos().count(), 0, "refused before anything is imported, so a retry can't duplicate");
+    assert_eq!(std::fs::read_dir(dir.join("elsewhere")).unwrap().count(), 0, "nothing is written through the link");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An `Interop` folder that can't be written to would let the photos be imported and then fail
+/// at the import index, after the import was saved (a retry could duplicate virtual copies). It is
+/// refused before any photo is imported, with an error naming the folder.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_interop_folder_is_refused_before_anything_is_imported() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-interop-readonly-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let interop = library.join("Interop");
+    std::fs::create_dir_all(&interop).unwrap();
+    std::fs::set_permissions(&interop, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // root (some containers) ignores folder permissions: there is nothing to refuse
+    if std::fs::write(interop.join("root-check"), b"").is_ok() {
+        std::fs::set_permissions(&interop, std::fs::Permissions::from_mode(0o755)).unwrap();
+        s.close_library().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        lightcraft_testkit::skip!(System, "folder permissions are not enforced for this user (root)");
+        return;
+    }
+    let e = import(&mut s, &source, false).unwrap_err();
+    std::fs::set_permissions(&interop, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(e.to_string().contains(&format!("the Lightroom import index can't be written in {}", interop.display())), "{e}");
+    assert_eq!(s.catalog.photos().count(), 0, "refused before anything is imported, so a retry can't duplicate");
+    assert_eq!(std::fs::read_dir(&interop).unwrap().count(), 0, "nothing was written");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // Construct a small SQLite fixture from public file-format records, never private media.
 fn varint(mut n: u64) -> Vec<u8> {
     let mut out = vec![(n & 127) as u8];
@@ -504,7 +855,9 @@ fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], l
 /// table's root page.
 fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
     use SqlValue::{Integer as I, Text as T};
-    let mut bytes = vec![0u8; 5 * 2048];
+    // the schema page, then one page per table
+    let pages = tables.len() + 1;
+    let mut bytes = vec![0u8; pages * 2048];
     bytes[..16].copy_from_slice(b"SQLite format 3\0");
     bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
     bytes[18] = 1;
@@ -512,7 +865,7 @@ fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: O
     bytes[21] = 64;
     bytes[22] = 32;
     bytes[23] = 32;
-    bytes[28..32].copy_from_slice(&5u32.to_be_bytes());
+    bytes[28..32].copy_from_slice(&(pages as u32).to_be_bytes());
     bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
     bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
     let mut schema = Vec::new();
@@ -582,7 +935,7 @@ fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
         assert!(session.catalog.is_empty());
     }
     std::fs::write(&path, b"bad catalog").unwrap();
-    assert!(read(&path).is_err());
+    assert_eq!(read(&path).unwrap_err().kind(), crate::ErrorKind::Other);
     std::fs::remove_file(path).unwrap();
 }
 
@@ -640,7 +993,80 @@ fn a_virtual_copy_of_a_skipped_master_is_skipped_too() {
         catalog.skipped,
         [SkippedImage { image: 1, reason: SkipReason::MissingFile }, SkippedImage { image: 2, reason: SkipReason::MasterSkipped }]
     );
-    validate(&catalog).unwrap();
+    let mut again = catalog.clone();
+    skip_inconsistent_records(&mut again);
+    assert_eq!(again.skipped, catalog.skipped, "the second pass finds nothing");
+}
+
+/// A keyword whose parents loop used to fail the whole read; it is now cut where the loop comes
+/// back, with one warning however many photos have it.
+#[test]
+fn a_looping_keyword_hierarchy_is_cut_not_fatal() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let mut tables = one_row(photo_tables(("/catalog/", "")));
+    tables.push((
+        "AgLibraryKeyword",
+        "id_local INTEGER PRIMARY KEY, name, parent",
+        vec![vec![N, T("Travel".into()), I(2)], vec![N, T("Goa".into()), I(1)]],
+    ));
+    tables.push(("AgLibraryKeywordImage", "id_local INTEGER PRIMARY KEY, image, tag", vec![vec![N, I(1), I(1)], vec![N, I(1), I(1)]]));
+    let catalog = read_tables(&tables, "keyword-loop");
+    assert_eq!(catalog.photos[0].keywords, ["Goa|Travel", "Goa|Travel"]);
+    assert_eq!(catalog.warnings, ["keyword “Travel”: its parent keywords form a loop or are nested more than 64 deep; imported as “Goa|Travel”"]);
+    assert!(catalog.skipped.is_empty());
+}
+
+/// A catalog that can't be read at all is still an error, but it names the file and says what is
+/// wrong (not "invalid parameters"), and nothing is changed.
+#[test]
+fn an_unreadable_catalog_is_an_error_naming_it_and_changes_nothing() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-damaged-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    let mut no_files = photo_tables(("/catalog/", ""));
+    no_files.remove(2);
+    let cases = [
+        // the Adobe_images table points past the end of the file
+        (native_catalog_with_last_table_page(&photo_tables(("/catalog/", "")), Some(99)), "is damaged: table Adobe_images can't be read: "),
+        (native_catalog(&no_files), "is not a Lightroom Classic catalog (or is damaged): it has no AgLibraryFile table"),
+        (b"bad catalog".to_vec(), "can't be read: it is too short to be a SQLite database"),
+        (vec![b'x'; 4096], "is damaged: not a readable SQLite database: "),
+    ];
+    for (bytes, expected) in cases {
+        std::fs::write(&source, bytes).unwrap();
+        let mut s = crate::Session::new();
+        apply(&mut s, sample(), false).unwrap();
+        let before = s.catalog.to_snapshot();
+        let undo = s.undo.len();
+        let e = import(&mut s, &source, false).unwrap_err();
+        assert_eq!(e.kind(), crate::ErrorKind::Other, "{e}");
+        let message = e.to_string();
+        assert!(message.contains(&*source.to_string_lossy()) && message.contains(expected), "{message}");
+        assert_eq!(s.catalog.to_snapshot(), before);
+        assert_eq!(s.undo.len(), undo);
+    }
+    let e = import(&mut crate::Session::new(), &dir.join("gone.lrcat"), false).unwrap_err();
+    assert_eq!(e.kind(), crate::ErrorKind::Other, "{e}");
+    assert!(e.to_string().starts_with(&format!("the Lightroom catalog {} can't be read: ", dir.join("gone.lrcat").display())), "{e}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The library's import index that can't be read is an error naming it, not "invalid parameters".
+#[test]
+fn an_unreadable_import_index_is_an_error_naming_it() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lr-index-unreadable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let index = dir.join("lightroom-index.json");
+    std::fs::create_dir_all(&index).unwrap();
+    let Err(e) = load_index(Some(&index)) else { panic!("a folder is not an index") };
+    assert_eq!(e.kind(), crate::ErrorKind::Other, "{e}");
+    assert!(e.to_string().starts_with(&format!("can't read the Lightroom import index {}: ", index.display())), "{e}");
+    std::fs::remove_dir(&index).unwrap();
+    std::fs::write(&index, b"{not json").unwrap();
+    let Err(e) = load_index(Some(&index)) else { panic!("not an index") };
+    assert!(e.to_string().contains("it is damaged"), "{e}");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -804,7 +1230,7 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let db = Database::open_with_wal(main, &[]).unwrap();
     let reader = Reader { db, tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }] };
     let mut warnings = Vec::new();
-    let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
+    let rows = reader.optional_table("optional_history", &mut warnings);
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
 }

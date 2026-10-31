@@ -280,6 +280,7 @@
   "new, inside {parent}": "new, inside {parent}",
   "{count} more warnings.": "{count} more warnings.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "კატალოგის {skipped} სურათი არ დაიმპორტდა, რადგან მათი ჩანაწერები კატალოგში არასრულია.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "კატალოგის {skipped} სურათი არ დაიმპორტდა, რადგან მათი ჩანაწერები კატალოგში სხვა ჩანაწერებს ეწინააღმდეგება (გამეორებული სურათის ID ან ვირტუალური ასლის ვირტუალური ასლი).",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
   "{n} JPEG files": "{n} JPEG files",
   "{n} pages": "{n} pages",
