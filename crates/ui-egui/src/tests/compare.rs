@@ -318,3 +318,44 @@ fn info_panel_label_in_compare_labels_the_active_photo_and_shows_it() {
     assert_eq!(photo(&h, cand).rating, 3);
     assert_eq!(photo(&h, sel).rating, 0, "the select is not rated with it");
 }
+
+/// Survey frames its active tile in the theme's active ring, which must not be the white that
+/// vanishes on a light theme's canvas.
+#[test]
+fn survey_rings_the_active_tile_in_the_theme_colour() {
+    use egui::epaint::Shape;
+    let mut h = demo();
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    assert_ne!(t.ring_active, egui::Color32::WHITE);
+    // the filmstrip below rings its active cell the same way: only the tile counts here
+    let films: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("film:")).map(|(_, r)| *r).collect();
+    let rings: Vec<(f32, egui::Color32)> = h
+        .view
+        .painted_shapes()
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Rect(rs)
+                if rs.stroke_kind == egui::StrokeKind::Outside
+                    && rs.stroke.color == t.ring_active
+                    && !films.iter().any(|f| f.intersects(rs.rect)) =>
+            {
+                Some((rs.stroke.width, rs.stroke.color))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rings, vec![(3.0, t.ring_active)], "one active tile, ringed once");
+    let white = h
+        .view
+        .painted_shapes()
+        .iter()
+        .filter(|s| matches!(s, Shape::Rect(rs) if rs.stroke.width == 2.0 && rs.stroke.color == egui::Color32::WHITE))
+        .count();
+    assert_eq!(white, 0, "no white 2 pt frame");
+}

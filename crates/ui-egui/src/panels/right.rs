@@ -65,6 +65,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             return;
         };
+        // the Edit panel's histogram stays above its sliders as they scroll (#2679)
+        if app.ui.right == RightPanel::Edit && app.ui.histogram {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            super::edit::histogram(app, ui, id);
+        }
         // each panel keeps its own scroll position: Edit is where it was after Masking or Crop
         let mut area = egui::ScrollArea::vertical().id_salt(scroll_salt(app.ui.right)).auto_shrink([false, false]);
         if let Some(offset) = held {
