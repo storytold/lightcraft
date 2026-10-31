@@ -186,6 +186,19 @@ impl LightcraftApp {
         }
     }
 
+    /// End a Brush stroke being painted, if one is: what already went to the photo stays (its undo step is
+    /// closed), what didn't is dropped. The pointer still held paints nothing more until it is let go.
+    /// Other gestures are left alone.
+    pub(crate) fn cancel_brush_gesture(&mut self) {
+        let Some(crate::panels::detail::Gesture::Brush { live, .. }) = &self.gesture else { return };
+        let went_live = live.is_some();
+        self.gesture = None;
+        self.brush_live = None;
+        if went_live {
+            let _ = self.session.execute("develop.endInteraction", &serde_json::json!({}));
+        }
+    }
+
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.run_typed(id, params).map_err(|e| e.message)
@@ -194,6 +207,11 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        // a brush stroke being painted belongs to the mask and photo it started on: picking another ends it
+        // first, so its next live update or its release can't land on the one picked
+        if matches!(id, "mask.select" | "library.select") {
+            self.cancel_brush_gesture();
+        }
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }
