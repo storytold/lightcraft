@@ -605,9 +605,12 @@ pub fn hints_for(app: &mut LightcraftApp, photo: u64) -> Option<std::sync::Arc<H
         return None;
     }
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
-    if let Some((p, r, i, h)) = &app.caches.face_hints
-        && (*p, *r, *i) == (photo, rev, indexed)
+    // faces and names are no develop state: a slider tick in the loupe doesn't ask again
+    if let Some((p, r, i, h)) = &mut app.caches.face_hints
+        && (*p, *i) == (photo, indexed)
+        && crate::still_right(&app.session.catalog, *r, crate::READS_NO_DEVELOP)
     {
+        *r = rev;
         return Some(h.clone());
     }
     let answer = app.session.execute("faces.suggest", &json!({"ids": [photo], "budgetMs": 0})).ok()?;

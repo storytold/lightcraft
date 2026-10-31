@@ -132,6 +132,59 @@ fn grid_headers_selection_scrolling_stacks_and_shape_changes() {
     assert_cheap_frames(&mut h);
 }
 
+/// A develop edit (a Quick Develop click, a slider tick) leaves the list in view as it is: the grid's date runs and
+/// stack index aren't rebuilt, nor the layout while no cell's shape changes. A crop or rotation can change a photo's
+/// shape: the justified grid lays out again then, and the rotation shows in its rows without the list changing.
+#[test]
+fn develop_edits_keep_the_grid_view() {
+    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+        let mut h = grid(view);
+        let (generation, _) = h.app.session.visible_shared();
+        let before = h.app.caches.grid_stats.clone();
+        let id = h.app.session.visible()[10];
+        select(&mut h, id);
+        for v in [0.5, 1.0] {
+            let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": v}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.settle(SETTLE);
+        }
+        assert_eq!(h.app.session.visible_shared().0, generation, "{view:?}: the list was kept");
+        let s = &h.app.caches.grid_stats;
+        assert_eq!((s.view_builds, s.stack_index_builds), (before.view_builds, before.stack_index_builds), "{view:?}");
+        assert_eq!(s.layout_builds, before.layout_builds, "{view:?}: an exposure changes no cell's shape");
+        if view == ViewMode::PhotoGrid {
+            let landscape = h.app.session.visible()[12];
+            let r = h.request("engine.execute", json!({"command": "photo.rotateRight", "params": {"ids": [landscape.0]}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.settle(SETTLE);
+            assert_eq!(h.app.session.visible_shared().0, generation, "a rotation is develop state too");
+            let cell = widget(&h, &format!("thumb:{}", landscape.0)).unwrap();
+            assert!(cell.height() > cell.width(), "the rotated photo's cell is portrait: {cell:?}");
+            assert_as_made_afresh(&mut h, "after a rotation in a kept list");
+            assert!(h.app.caches.grid_stats.layout_builds > before.layout_builds, "the rotation lays the grid out again");
+        }
+        assert_cheap_frames(&mut h);
+    }
+}
+
+/// The sidebar's Missing Photos count is kept through develop edits (which files the library expects is no develop
+/// state), and what it was counted at moves on with them, as for the other caches: the change record it asks next
+/// stays short.
+#[test]
+fn develop_edits_move_the_missing_count_on() {
+    let mut h = grid(ViewMode::PhotoGrid);
+    h.app.ui.left_panel = true;
+    h.settle(SETTLE);
+    let id = h.app.session.visible()[10];
+    select(&mut h, id);
+    for v in [0.5, 1.0, 1.5] {
+        let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": v}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(crate::panels::left::missing_counted_at(&h.view.ctx), Some(h.app.session.catalog.revision), "after exposure {v}");
+    }
+}
+
 /// Selected photos whose thumbnails have not loaded (or can't) are still marked selected in the
 /// justified grid (issue #298): the active one white, the others grey.
 #[test]

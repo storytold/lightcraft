@@ -378,24 +378,43 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The Missing Photos count's check: how many it found, whether it runs, when it started and the catalog revision it
+/// counted (moved on while nothing it reads changes).
+#[derive(Clone, Default)]
+struct MissingJob {
+    n: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    at: f64,
+    rev: u64,
+}
+
+const MISSING_JOB: &str = "missing-count";
+
+/// Tests: the catalog revision the Missing Photos count is right at.
+#[cfg(test)]
+pub(crate) fn missing_counted_at(ctx: &egui::Context) -> Option<u64> {
+    ctx.data(|d| d.get_temp::<MissingJob>(egui::Id::unique(MISSING_JOB))).map(|j| j.rev)
+}
+
 /// How many library photos have no file (Local browse records are not checked; see
 /// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
 /// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
 /// at most every 5 s, and at once (after the running check) when the catalog changed.
 pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-    #[derive(Clone, Default)]
-    struct Job {
-        n: std::sync::Arc<AtomicUsize>,
-        running: std::sync::Arc<AtomicBool>,
-        at: f64,
-        rev: u64,
-    }
-    let id = egui::Id::unique("missing-count");
+    use std::sync::atomic::Ordering::Relaxed;
+    type Job = MissingJob;
+    let id = egui::Id::unique(MISSING_JOB);
     let now = ui.input(|i| i.time);
     let rev = app.session.catalog.revision;
     let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
-    let fresh = now - job.at < 5.0 && job.rev == rev;
+    // (which files the library expects is no develop state: a slider drag doesn't check them all again)
+    let still = crate::still_right(&app.session.catalog, job.rev, crate::READS_NO_DEVELOP);
+    if still && job.rev != rev {
+        // kept: what it was counted at moves on, so the change record it asks stays short (as for the other caches)
+        job.rev = rev;
+        ui.data_mut(|d| d.insert_temp(id, job.clone()));
+    }
+    let fresh = now - job.at < 5.0 && still;
     if !fresh && !job.running.load(Relaxed) {
         // the same scope as the Missing Photos view: library photos only, never Local browse records
         let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
