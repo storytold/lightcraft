@@ -117,10 +117,12 @@ imported and given its preset (or slider value), then all exported at once, give
 recognises byte-identical copies of a raw as one photo. Lightroom may refuse such copies as duplicates on import;
 this route is unverified.
 
-Status of these steps: the preset files are written from the published `crs:` field names, and LightCraft's own
-preset importer reads them; the maintainers' reference exports came from Lightroom 9.5.1, but the steps above have
-not yet been run in Lightroom with these presets. If a step differs in your version, or Lightroom won't import the
-presets, use the manual route and please tell us in an issue.
+Status of these steps: [@good-news-everyone reported an end-to-end run](https://github.com/storytold/lightcraft/pull/1181#issuecomment-6145345720)
+with Nikon Zf files, Lightroom Classic 15.5.1 for Windows under Wine on Linux, and LightCraft 0.7.1. The report says
+the generated presets imported and applied, with 95/95 pairs across six photos. This is a contributor report;
+other versions and environments remain unverified. The maintainers' reference exports came from Lightroom 9.5.1.
+If a step differs in your version, or Lightroom won't import the presets, use the manual route and please tell us
+in an issue.
 
 ## Running it
 

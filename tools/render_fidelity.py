@@ -24,7 +24,7 @@ Adobe's application files, camera profiles, presets or tables. Of the profile an
 their names, not the look's embedded parameters. The presets `plan` writes are generated here from the recipe values.
 
 Needs numpy and tifffile, nothing else: tools/requirements-render-fidelity.txt pins versions that need Python
-3.11+; the code also runs on Python 3.9 with numpy 2.0 and tifffile 2024.8.
+3.12+; Python 3.9, 3.10 and 3.11 use compatible numpy 2.0+ and tifffile 2024.8+ releases.
 """
 
 import argparse
@@ -1821,6 +1821,20 @@ def load_cases(path):
     data = json.loads(Path(path).read_text())
     if data.get("format") != CASES_FORMAT:
         sys.exit(f"{path}: not a cases file from `render_fidelity.py pair` ({data.get('format')!r})")
+    photos = data.get("photos")
+    if not isinstance(photos, dict):
+        sys.exit(f"{path}: cases must contain a photos object")
+    for photo, case in photos.items():
+        # These components become sample-directory names. `pair` uses the raw hash and an integer size.
+        if not re.fullmatch(r"[0-9a-f]{12}", photo) or not isinstance(case, dict):
+            sys.exit(f"{path}: invalid photo id {photo!r}; run pair again")
+        raw_hash = case.get("raw_sha256")
+        if not isinstance(raw_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", raw_hash) or photo != raw_hash[:12]:
+            sys.exit(f"{path}: photo id {photo!r} must match its raw hash; run pair again")
+        pairs = case.get("pairs")
+        if not isinstance(pairs, list) or any(not isinstance(p, dict) or type(p.get("long_edge")) is not int
+                                               or p["long_edge"] <= 0 for p in pairs):
+            sys.exit(f"{path}: photo {photo!r} needs a positive integer long_edge for every pair; run pair again")
     return data
 
 
@@ -2960,6 +2974,32 @@ def selftest(cli=None):
             with contextlib.redirect_stdout(io.StringIO()):
                 cmd_pair(ns)
             cases = load_cases(cases_path)
+            # A crafted cases file must not create sample folders outside --run, or start the CLI.
+            original_id = next(iter(cases["photos"]))
+            for label, bad_id, bad_edge in [
+                ("relative photo path", "../../outside-samples", None),
+                ("absolute photo path", str(tmp / "outside-samples"), None),
+                ("foreign raw hash", "0" * 12 if original_id != "0" * 12 else "1" * 12, None),
+                ("relative size path", original_id, "../../../outside-samples"),
+                ("absolute size path", original_id, str(tmp / "outside-samples")),
+                ("zero size", original_id, 0),
+                ("boolean size", original_id, True),
+            ]:
+                hostile = json.loads(json.dumps(cases))
+                hostile["photos"][bad_id] = hostile["photos"].pop(original_id)
+                if bad_edge is not None:
+                    hostile["photos"][bad_id]["pairs"][0]["long_edge"] = bad_edge
+                hostile_path, hostile_run = tmp / "hostile-cases.json", tmp / "hostile-run"
+                write_json(hostile_path, hostile)
+                refused = ""
+                try:
+                    cmd_render(argparse.Namespace(cases=str(hostile_path), run=str(hostile_run),
+                                                  cli=str(tmp / "must-not-start-cli")))
+                except SystemExit as e:
+                    refused = str(e)
+                check(f"e2e cases: refuses {label} before creating a run",
+                      bool(refused) and "run pair again" in refused and not hostile_run.exists()
+                      and not (tmp / "outside-samples").exists(), refused)
             photo = next(iter(cases["photos"].values()))
             got = {p["id"]: (session_label(p["session"]), p["reference"]["recipe"]) for p in photo["pairs"]}
             check("e2e pair: pairs", got == {"light.exposure=1@960": ("s1", "neutral"),
