@@ -132,14 +132,31 @@ fn the_top_bar_imports_in_every_library() {
 #[test]
 fn the_hint_shows_the_shortcut_as_bound() {
     let mut keymap = crate::state::AppSettings::default().keymap;
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌘⇧I");
+    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⇧⌘I");
     assert_eq!(empty_library::hint(&keymap, false), "or drop photos and folders into this window · Ctrl+Shift+I");
     // a remapped shortcut is the one shown
     crate::shortcuts::assign(&mut keymap, "file.addPhotos", Some("Cmd+Alt+I")).unwrap();
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌘⌥I");
+    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌥⌘I");
     // and none at all leaves the key out
     crate::shortcuts::assign(&mut keymap, "file.addPhotos", None).unwrap();
     assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window");
+}
+
+/// The grid's line for a view with no photos that is not the empty library names the shortcut as
+/// the menu bar lists it, in the platform's notation, and follows a rebinding.
+#[test]
+fn the_no_photos_line_lists_modifiers_in_the_menu_order() {
+    let mut keymap = crate::state::AppSettings::default().keymap;
+    let mac = empty_library::no_photos_body(&keymap, true);
+    assert!(mac.contains("⇧⌘I") && !mac.contains("⌘⇧"), "{mac}");
+    let other = empty_library::no_photos_body(&keymap, false);
+    assert!(other.contains("Ctrl+Shift+I") && !other.contains("Cmd"), "{other}");
+    crate::shortcuts::assign(&mut keymap, "file.addPhotos", Some("Cmd+Alt+Shift+I")).unwrap();
+    let rebound = empty_library::no_photos_body(&keymap, true);
+    assert!(rebound.contains("⌥⇧⌘I"), "{rebound}");
+    crate::shortcuts::assign(&mut keymap, "file.addPhotos", None).unwrap();
+    let unbound = empty_library::no_photos_body(&keymap, true);
+    assert!(!unbound.contains('⌘') && !unbound.contains("Cmd") && !unbound.starts_with("or "), "{unbound}");
 }
 
 #[test]

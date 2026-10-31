@@ -58,6 +58,22 @@ pub fn is_library(dir: &Path) -> bool {
     dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
 }
 
+/// [`is_library`] that tells "no library there" from "can't tell": `Ok(false)` only when the
+/// folder or its catalog files are definitely missing; a lookup that fails otherwise (a folder it
+/// may not read, a share that timed out) is the error, so a library that is there but can't be
+/// read isn't reported as gone (issue #3239).
+pub fn library_state(dir: &Path) -> std::io::Result<bool> {
+    for name in [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG] {
+        match std::fs::metadata(dir.join(name)) {
+            Ok(m) if m.is_file() => return Ok(true),
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
+}
+
 /// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/LightCraft Library`
 /// (`%USERPROFILE%\Pictures\LightCraft Library` on Windows).
 pub fn default_dir() -> Option<PathBuf> {
@@ -66,6 +82,37 @@ pub fn default_dir() -> Option<PathBuf> {
     }
     let home = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") }?;
     Some(PathBuf::from(home).join("Pictures").join(DEFAULT_NAME))
+}
+
+/// The user's home folder (`%USERPROFILE%` on Windows, `$HOME` elsewhere); `None` when the host has
+/// none or it is empty. The one place the home path is read for Local's built-in places, in the
+/// engine's rename/move guard and in the sidebar.
+pub fn home_folder() -> Option<PathBuf> {
+    home_folder_from(cfg!(windows), |name| std::env::var_os(name))
+}
+
+fn home_folder_from(windows: bool, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    var(if windows { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::home_folder_from;
+    use std::ffi::OsString;
+
+    #[test]
+    fn windows_reads_userprofile_and_the_rest_read_home() {
+        let env = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/example")),
+            "USERPROFILE" => Some(OsString::from("C:\\Users\\example")),
+            _ => None,
+        };
+        assert_eq!(home_folder_from(true, env).as_deref(), Some(std::path::Path::new("C:\\Users\\example")));
+        assert_eq!(home_folder_from(false, env).as_deref(), Some(std::path::Path::new("/home/example")));
+        // only the other platform's variable is set: no home, never a guess from it
+        assert_eq!(home_folder_from(true, |n| (n == "HOME").then(|| OsString::from("/home/example"))), None);
+        assert_eq!(home_folder_from(false, |_| Some(OsString::new())), None);
+    }
 }
 
 pub struct Library {
@@ -733,6 +780,16 @@ impl Session {
         result
     }
 
+    /// Let go of the open library's lock (and with it the owner note, `catalog.lock.owner`) while
+    /// the library stays open in this session. For a host that ends the process without running
+    /// destructors (`std::process::exit`), after [`Session::close_library`] has saved: the OS would
+    /// free the lock anyway, but only the lock's `Drop` removes the note. Nothing else is
+    /// protected after this, so call it only when the process is about to end. A no-op without a
+    /// library or a lock.
+    pub fn release_library_lock(&mut self) {
+        drop(self.library.as_mut().and_then(|l| l.lock.take()));
+    }
+
     fn view_json(&self) -> Vec<u8> {
         let view = ViewFile {
             source: self.source,
@@ -897,6 +954,26 @@ mod resolve_tests {
         let e = Session::new().with_fs().open_library(&other, false).err().unwrap().to_string();
         assert!(e.contains("is a file"), "{e}");
         assert!(!e.contains("File exists"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host that ends the process without destructors releases the lock by hand: the owner note
+    /// goes and another opener is let in, while the session keeps its library.
+    #[test]
+    fn release_library_lock_removes_the_owner_note() {
+        let dir = std::env::temp_dir().join(format!("lc-release-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        s.close_library().unwrap();
+        assert!(dir.join(lightcraft_catalog::lock::OWNER).exists(), "close_library keeps the lock");
+        assert!(matches!(LibraryLock::acquire(&dir, "other"), Err(lightcraft_catalog::lock::LockError::InUse(_))));
+        s.release_library_lock();
+        assert!(!dir.join(lightcraft_catalog::lock::OWNER).exists());
+        drop(LibraryLock::acquire(&dir, "other").unwrap());
+        s.release_library_lock();
+        assert!(s.library.is_some(), "the library stays open");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -28,10 +28,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         (true, true) => 16,
         (false, _) => 10,
     };
-    egui::Panel::top("top_bar")
+    // A dialog fades the disabled bar's controls, and its fill with them. A sheet leaves the title bar's
+    // color alone (the window buttons the OS draws over it stay lit), so the fill is painted unfaded
+    // beneath, in a slot reserved before the bar's own shapes.
+    let sheet = app.integrated_titlebar && !app.window_is_fullscreen && app.ui.dialog.is_some();
+    let slot = sheet.then(|| ui.ctx().layer_painter(ui.layer_id()).add(egui::Shape::Noop));
+    let fill = if sheet { egui::Color32::TRANSPARENT } else { t.chrome };
+    let panel = egui::Panel::top("top_bar")
         .exact_size(t.top_bar_h)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right: 12, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(fill).inner_margin(egui::Margin { left, right: 12, top: 0, bottom: 0 }))
         .show(ui, |ui| {
+            crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Top bar"));
             let full = ui.max_rect();
             // The whole bar, its margins included. The search field is centred on this and not on
             // `full`, which is only what the margins leave: on macOS the left margin holds the
@@ -57,6 +64,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let x = right_icons(app, ui, &t, full);
             appearance_button(app, ui, &t, full, x);
         });
+    if let Some(slot) = slot {
+        ui.ctx().layer_painter(ui.layer_id()).set(slot, egui::Shape::rect_filled(panel.response.rect, 0.0, t.chrome));
+    }
 }
 
 /// Sidebar toggle, back/forward and, without a native menu bar, the in-window menus.
@@ -180,8 +190,11 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
         ("bell", Icon::Bell, "Activity", "panel.activity"),
     ] {
         let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-        let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
-        crate::widgets::announce(&resp, crate::i18n::tr(tip));
+        let tip = crate::i18n::tr(tip);
+        let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click());
+        let name = crate::widgets::accessible_label(&resp, tip);
+        let resp = resp.on_hover_text(tip);
+        crate::widgets::announce(&resp, name);
         register(ui, format!("icon:{id}"), r);
         let warn = id == "cloud" && unsaved.is_some();
         let colour = if warn {

@@ -43,7 +43,7 @@ fn grid_menu_shortcut_hints_keep_native_toggle_dispatch() {
         assert_eq!(label, "Photo Grid");
         assert_eq!(accelerator, Some("G"));
         assert!(!native_menu_delivers(accelerator.unwrap()));
-        for (key, text) in [("Cmd+Shift+G", "⌘⇧G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
+        for (key, text) in [("Cmd+Shift+G", "⇧⌘G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
             crate::shortcuts::assign(&mut keymap, "view.gridToggle", Some(key)).unwrap();
             let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some(key));
             assert_eq!(label, format!("Photo Grid ({text})"));
@@ -767,9 +767,21 @@ fn native_menu_commands_respect_the_blocking_window_policy() {
 
 #[test]
 fn shortcut_text_per_platform() {
-    assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⌘⇧Z");
+    assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⇧⌘Z");
     assert_eq!(shortcut_text("Cmd+Shift+Z", false), "Ctrl+Shift+Z");
     assert_eq!(shortcut_text("Delete", true), "⌫");
+}
+
+/// AppKit and Apple's Human Interface Guidelines write modifiers ⌃⌥⇧⌘ whatever order the binding
+/// was spelled in, so the hint on a button matches the menu bar's own column.
+#[test]
+fn shortcut_text_orders_mac_modifiers_control_option_shift_command() {
+    assert_eq!(shortcut_text("Cmd+Alt+Shift+C", true), "⌥⇧⌘C");
+    assert_eq!(shortcut_text("Shift+Alt+Ctrl+Cmd+K", true), "⌃⌥⇧⌘K");
+    assert_eq!(shortcut_text("Cmd+Ctrl+F", true), "⌃⌘F");
+    assert_eq!(shortcut_text("Shift+Cmd+Up", true), "⇧⌘↑");
+    assert_eq!(shortcut_text("Shift+Alt+Y", true), "⌥⇧Y");
+    assert_eq!(shortcut_text("Cmd+Alt+Shift+C", false), "Ctrl+Alt+Shift+C", "other platforms keep the binding as written");
 }
 
 /// Every item of a menu, submenus included.
