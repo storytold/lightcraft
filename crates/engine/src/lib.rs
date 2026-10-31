@@ -240,6 +240,10 @@ pub struct Session {
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
     visible: Arc<[PhotoId]>,
     visible_key: Option<(u64, String)>,
+    /// The view [`Session::visible`] last worked out, told apart as a held view is: by source, filter, sort and
+    /// smart-album rules, not by the background checks of Missing Photos that fill it in. What Select All
+    /// (`Session::all_selected`) is tied to.
+    pub(crate) visible_view: Option<String>,
     /// The minute used for a cached view whose rules depend on the session clock.
     visible_clock_minute: Option<String>,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
@@ -250,6 +254,11 @@ pub struct Session {
     /// place in the order ([`Session::visible`]). It is also what a held view holds ([`Session::hold_view`]).
     /// Another source, filter or sort is another view, and so is a smart album whose rules were changed.
     base: Option<(String, u64, Vec<PhotoId>)>,
+    /// Select All (`library.selectAll`) was the last change to the selection, in the view named here: while the
+    /// selection is still exactly what the view shows, photos that join the view (an import or the finishing
+    /// queue still adding them) join the selection too (⌘A during an import had selected 312 of 569). Any other
+    /// change to the selection, and any other view, ends it.
+    pub(crate) all_selected: Option<String>,
     /// How many times the view followed an edit from the list it had, and how many times it was worked out from
     /// every photo (`ui.inspect` → `perf`): what tells a slow library from a slow edit.
     pub view_followed: u64,
@@ -456,9 +465,11 @@ impl Session {
             selection: Selection::default(),
             visible: Vec::new().into(),
             visible_key: None,
+            visible_view: None,
             visible_clock_minute: None,
             hold_view: false,
             base: None,
+            all_selected: None,
             view_followed: 0,
             view_worked_out: 0,
             #[cfg(test)]
@@ -557,6 +568,11 @@ impl Session {
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // Select All keeps up with photos that joined its view since it was last looked at (an import still
+        // running): the command, its enablement and its targets see them selected
+        if self.all_selected.is_some() {
+            self.visible();
+        }
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {
             (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
@@ -1151,7 +1167,7 @@ impl Session {
             };
             // what the view shows now is what the next edit is followed from, and what it holds until it is
             // refreshed (taken before stacks are arranged, so a photo folded into a stack is held with it)
-            self.base = (!whole || holds).then(|| (view, self.catalog.revision, visible.clone()));
+            self.base = (!whole || holds).then(|| (view.clone(), self.catalog.revision, visible.clone()));
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
                 // an empty grid under the name of a folder that is gone from the sidebar
@@ -1198,9 +1214,23 @@ impl Session {
             if self.source != LibrarySource::RecentlyDeleted {
                 visible = self.catalog.arrange_stacks(&visible);
             }
+            // another view ends Select All: coming back to its view later must not select what was deselected meanwhile
+            // (the view as a held view tells it apart: a photo the Missing Photos checks add keeps Select All)
+            // and so does a selection that is no longer every photo the view showed (an arrow key moved it on)
+            if self.all_selected.as_deref().is_some_and(|k| k != view) || self.selection.ids[..] != self.visible[..] {
+                self.all_selected = None;
+            }
+            if self.all_selected.as_deref() == Some(view.as_str()) && self.selection.ids[..] == self.visible[..] && visible[..] != self.visible[..] {
+                // still "every photo of this view": the photos that came in are selected too
+                self.selection.ids = visible.clone();
+                if self.selection.active.is_none_or(|a| !visible.contains(&a)) {
+                    self.selection.active = visible.first().copied();
+                }
+            }
             self.visible = visible.into();
             self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.visible_key = Some(key);
+            self.visible_view = Some(view);
             self.visible_clock_minute = clocked.then(|| clock_minute(&now).to_owned());
         }
         &self.visible

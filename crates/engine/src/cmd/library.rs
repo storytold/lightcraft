@@ -40,3 +40,7 @@ mod enable_filters_tests;
 #[cfg(test)]
 #[path = "library/tests_source_album_filter.rs"]
 mod source_album_filter_tests;
+
+#[cfg(test)]
+#[path = "library/tests_select.rs"]
+mod tests_select;

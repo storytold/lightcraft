@@ -87,7 +87,7 @@ fn assert_inside_right_panel(h: &Headless, what: &str) {
     for (id, r) in &h.app.widgets {
         // widgets of the photo area (pins, filmstrip cells clipped at its edge) and of the tool
         // strip are outside on purpose
-        if ["panel:", "film:", "maskPin"].iter().any(|p| id.starts_with(p))
+        if ["panel:", "film:", "filmpic:", "maskPin"].iter().any(|p| id.starts_with(p))
             || r.bottom() <= panel.top()
             || r.right() <= panel.left() + 1.5
             || r.left() >= panel.right() - 1.5

@@ -250,7 +250,12 @@ pub(super) fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let active = s.selection.active.filter(|a| ids.contains(a)).or(ids.first().copied());
     let n = ids.len();
-    s.selection = Selection { ids, active };
+    let selection = Selection { ids, active };
+    if selection != s.selection {
+        // chosen by flag, rating or label: no longer "every photo of the view"
+        s.all_selected = None;
+    }
+    s.selection = selection;
     Ok(json!({"selected": n}))
 }
 
