@@ -286,8 +286,8 @@ fn fs_store_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The streamed snapshot is byte-for-byte the format written before streaming (issue #37), so
-/// existing libraries load and older builds can read new snapshots; FsStore and MemStore agree.
+/// The streamed snapshot is byte-for-byte what was written before streaming (issue #37), with
+/// the defaults a library states; FsStore and MemStore agree.
 #[test]
 fn streamed_snapshot_keeps_the_on_disk_format() {
     let (m, _, full) = sample_catalog_with_log();
@@ -295,9 +295,10 @@ fn streamed_snapshot_keeps_the_on_disk_format() {
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     j.snapshot(&c).unwrap();
     let legacy = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n",
+        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":{},\"defaults\":{},\"catalog\":{}}}\n",
         crate::journal::VERSION,
         j.seq(),
+        crate::stored::base().0,
         c.to_snapshot()
     );
     assert_eq!(String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap(), legacy);
