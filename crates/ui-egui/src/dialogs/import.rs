@@ -22,6 +22,7 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 mod body;
+mod review;
 mod scan;
 mod tags;
 mod task;
@@ -34,6 +35,7 @@ pub(crate) use body::thumb_edge;
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
 pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
+pub(crate) use review::command as review_command;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
 pub use scan::{ScanTask, browse, open, poll_scan, running};
@@ -82,6 +84,18 @@ pub struct ImportDialog {
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
+    /// The candidate being reviewed, independent of its import checkbox and the range anchor.
+    #[serde(skip)]
+    pub active: Option<usize>,
+    /// Show the active candidate alone, without leaving the import review.
+    #[serde(skip)]
+    pub preview: bool,
+    /// Bring keyboard navigation's active candidate back into the grid viewport once.
+    #[serde(skip)]
+    pub scroll_to_active: bool,
+    /// Undo the first click's checkbox change when the same gesture becomes a double-click.
+    #[serde(skip)]
+    last_grid_click: Option<review::GridClick>,
     /// The library the scan was made in ([`lightcraft_engine::Session::library_generation`]): its duplicate
     /// decisions and album ids belong to that catalog, so the review is not shown or confirmed in another.
     #[serde(skip)]
@@ -107,7 +121,8 @@ fn file_type(c: &ImportCandidate) -> String {
 impl ImportDialog {
     pub fn new(candidates: Vec<ImportCandidate>) -> Self {
         let checked = candidates.iter().map(|c| c.duplicate.is_none() && c.error.is_none()).collect();
-        ImportDialog { candidates, checked, on_deleted: "restore".into(), ..Default::default() }
+        let active = (!candidates.is_empty()).then_some(0);
+        ImportDialog { candidates, checked, active, on_deleted: "restore".into(), ..Default::default() }
     }
 
     /// Whether the library the scan was made in is still the open one (a review that names none counts).

@@ -630,7 +630,7 @@ impl Renderer {
     /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
     pub fn import_preview(&mut self, session: &mut Session, candidate: &lightcraft_engine::import::ImportCandidate, index: u32, edge: usize) {
         let slot = Slot::Import(index);
-        let edge = edge.clamp(64, 1024);
+        let edge = edge.clamp(64, 2048);
         if candidate.error.is_some() || self.textures.get(&slot).is_some_and(|tex| tex.size.into_iter().max().unwrap_or(0) >= edge) {
             return;
         }

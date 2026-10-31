@@ -103,6 +103,164 @@ impl Drop for Review {
     }
 }
 
+/// The preview and the grid edit one set of checkboxes; navigation never changes inclusion.
+#[test]
+fn pre_import_culling_keys_preserve_checks_and_return_to_the_active_grid_cell() {
+    let mut review = Review::new(1.0);
+    let original = review.checks();
+    review.request("ui.clickWidget", json!({"id": "button:importPreview"}));
+    review.request("ui.key", json!({"key": "x"}));
+    assert!(!review.checks()[0], "X excludes the active photo after opening Preview with the mouse");
+    review.request("ui.key", json!({"key": "p"}));
+    assert_eq!(review.checks(), original);
+    review.request("ui.key", json!({"key": "Space"}));
+    assert!(!review.checks()[0]);
+    // Duplicates and unreadable files can be inspected but cannot be checked with P or Space.
+    for index in [1, 2] {
+        review.request("ui.key", json!({"key": "ArrowRight"}));
+        review.request("ui.key", json!({"key": "p"}));
+        review.request("ui.key", json!({"key": "Space"}));
+        assert!(!review.checks()[index]);
+    }
+    review.request("ui.key", json!({"key": "ArrowRight"}));
+    review.request("ui.key", json!({"key": "x"}));
+    assert!(!review.checks()[3]);
+    let checked = review.checks();
+    review.request("ui.key", json!({"key": "Escape"}));
+    assert_eq!(review.checks(), checked, "Escape returns to the grid without cancelling culling");
+    assert!(review.rect("import:3").is_positive());
+    review.request("ui.key", json!({"key": "e"}));
+    assert!(review.rect("import:preview").is_positive());
+    review.request("ui.key", json!({"key": "g"}));
+    assert_eq!(review.checks(), checked);
+    review.request("ui.key", json!({"key": "Escape"}));
+    assert!(review.h.app.ui.dialog.is_none());
+    assert!(!review.h.app.renderer.textures.keys().any(|s| matches!(s, Slot::Import(_))));
+}
+
+/// Large previews upgrade the active candidate only, and late grid navigation scrolls it into view.
+#[test]
+fn pre_import_preview_is_sharp_bounded_and_scrolls_back_to_the_active_candidate() {
+    let mut review = Review::new(2.0);
+    let checks = review.checks();
+    review.request("engine.execute", json!({"command": "import.review", "params": {"action": "preview", "index": 50}}));
+    assert!(review.h.settle(T));
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, review.h.size);
+    assert!(viewport.contains_rect(review.rect("import:preview")), "the large preview fits the window");
+    assert!(viewport.contains_rect(review.rect("button:dialogOk")), "the import button remains reachable");
+    let textures: Vec<_> = review.h.app.renderer.textures.keys().filter(|s| matches!(s, Slot::Import(_))).collect();
+    assert_eq!(textures, vec![&Slot::Import(50)], "only the active large preview remains resident");
+    assert_eq!(review.h.app.renderer.textures[&Slot::Import(50)].size, [1600, 1200], "preview exceeds the grid's 1024 px cap");
+    review.request("ui.clickWidget", json!({"id": "button:importGrid"}));
+    assert!(review.h.settle(T));
+    assert_eq!(review.checks(), checks);
+    let cell = review.rect("import:50");
+    assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, review.h.size).contains_rect(cell), "active candidate is scrolled back into view: {cell:?}");
+    assert!(review.h.app.session.catalog.is_empty(), "reviewing never imports candidates");
+}
+
+/// Import option entry owns culling letters, Space and arrows, just as the size slider does.
+#[test]
+fn pre_import_culling_leaves_text_fields_and_modified_shortcuts_alone() {
+    let mut review = Review::new(1.0);
+    let checked = review.checks();
+    review.request("ui.clickWidget", json!({"id": "field:importKeywords"}));
+    for key in ["p", "x", "Space", "e", "g", "ArrowRight"] {
+        review.request("ui.key", json!({"key": key}));
+    }
+    assert_eq!(review.checks(), checked);
+    let Some(Dialog::Import { opts }) = &review.h.app.ui.dialog else { panic!("review was dismissed") };
+    assert_eq!(opts.active, Some(0));
+    assert!(!opts.preview);
+    review.request("ui.clickWidget", json!({"id": "button:importPreview"}));
+    for key in ["x", "p", "ArrowRight"] {
+        review.request("ui.key", json!({"key": key, "cmd": true}));
+    }
+    assert_eq!(review.checks(), checked);
+}
+
+/// Scan actual files, cull before import, then confirm through the real background import path.
+#[test]
+fn pre_import_culling_imports_only_the_checked_files_and_never_changes_sources() {
+    let mut review = Review::new(1.0);
+    let original = std::fs::read(review.dir.join("original.png")).unwrap();
+    let mut sources = vec![(review.dir.join("original.png"), original)];
+    for (name, color) in [("second.png", [90, 140, 60, 255]), ("third.png", [160, 50, 100, 255])] {
+        let image = lightcraft_raster::Rgba8 { width: 64, height: 48, data: vec![color; 64 * 48] };
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+        let path = review.dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        sources.push((path, bytes));
+    }
+    review.h.app.ui.dialog = None;
+    review.h.app.renderer.forget_imports();
+    review.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": review.dir}}));
+    assert!(review.h.settle(T));
+    assert_eq!(review.checks(), vec![true; 3]);
+    review.request("ui.key", json!({"key": "e"}));
+    review.request("ui.key", json!({"key": "x"}));
+    review.request("ui.key", json!({"key": "ArrowRight"}));
+    review.request("ui.key", json!({"key": "ArrowRight"}));
+    review.request("ui.key", json!({"key": "x"}));
+    assert_eq!(review.checks(), vec![false, true, false]);
+    assert!(review.h.app.session.catalog.is_empty());
+    review.request("ui.dialog.confirm", json!({}));
+    assert!(review.h.settle(T));
+    assert_eq!(review.h.app.session.catalog.len(), 1);
+    let photo = review.h.app.session.catalog.photos().next().unwrap();
+    assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if path.ends_with("second.png")));
+    for (path, before) in sources {
+        assert_eq!(std::fs::read(path).unwrap(), before, "culling and Add in place do not change source files");
+    }
+}
+
+/// A laptop-sized window must keep both the preview and the final import controls on screen.
+#[test]
+fn pre_import_preview_fits_a_small_window_in_light_and_dark_themes() {
+    let mut review = Review::new(1.0);
+    review.request("engine.execute", json!({"command": "import.review", "params": {"action": "preview"}}));
+    review.request("ui.resize", json!({"width": 960, "height": 720}));
+    for theme in ["paper", "charcoal"] {
+        review.request("engine.execute", json!({"command": "view.theme", "params": {"theme": theme}}));
+        assert!(review.h.settle(T));
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, review.h.size);
+        for id in ["import:preview", "button:dialogOk", "button:importGrid", "button:importExclude"] {
+            assert!(viewport.contains_rect(review.rect(id)), "{theme}: {id} stays in the window: {:?}", review.rect(id));
+        }
+        assert!(review.rect("import:preview").height() >= 300.0, "preview uses the available height");
+    }
+}
+
+#[test]
+fn pre_import_double_click_opens_preview_without_changing_checks() {
+    let mut review = Review::new(1.0);
+    let checks = review.checks();
+    review.request("ui.clickWidget", json!({"id": "import:3", "count": 2}));
+    assert!(review.rect("import:preview").is_positive());
+    assert_eq!(review.checks(), checks, "opening a large preview must not exclude a photo");
+    review.request("ui.key", json!({"key": "Escape"}));
+    assert_eq!(review.checks(), checks);
+}
+
+/// Rapid culling can deliver several key presses in one frame, including repeated arrows.
+#[test]
+fn pre_import_culling_preserves_the_order_of_keys_received_in_one_frame() {
+    let mut review = Review::new(1.0);
+    review.request("engine.execute", json!({"command": "import.review", "params": {"action": "preview", "index": 3}}));
+    for key in [egui::Key::X, egui::Key::ArrowRight, egui::Key::ArrowRight, egui::Key::Escape] {
+        for pressed in [true, false] {
+            review.h.app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+    }
+    review.h.step();
+    assert!(review.h.settle(T));
+    assert!(!review.checks()[3], "X applies to the photo being left");
+    assert!(review.checks()[4] && review.checks()[5], "navigation leaves the next photos' inclusion alone");
+    let Some(Dialog::Import { opts }) = &review.h.app.ui.dialog else { panic!("review was dismissed") };
+    assert_eq!(opts.active, Some(5), "both arrow presses navigate, even within one frame");
+    assert!(!opts.preview, "Escape returns to the grid after the preceding culling keys");
+}
+
 /// Pointer input must resize and reflow tiles without changing culling, badges or saved size.
 #[test]
 fn import_thumbnail_slider_reflows_without_changing_selection_or_badges() {
