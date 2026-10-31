@@ -571,10 +571,11 @@ impl Session {
         let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
         lut_groups.sort_unstable();
         lut_groups.dedup();
+        // the camera profiles' group once, last (a LUT group of the same name joins it rather than showing twice)
+        lut_groups.retain(|g| *g != crate::cmd::dcp_profiles::DCP_GROUP);
         if imported.iter().any(|p| p.2 == crate::cmd::dcp_profiles::DCP_GROUP) {
             lut_groups.push(crate::cmd::dcp_profiles::DCP_GROUP);
         }
-        lut_groups.dedup();
         for g in lut_groups {
             let profiles: Vec<Value> = imported.iter().filter(|p| p.2 == g).map(imported_item).collect();
             groups.push(json!({"name": g, "profiles": profiles, "imported": true}));

@@ -519,3 +519,28 @@ fn a_damaged_camera_profile_is_not_offered_until_its_file_is_back() {
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// CodeRabbit on #1063: a LUT profile group named like the camera profiles' ("Camera Profiles") that doesn't sort last
+/// made the profile menu list that group twice, each with the same profiles. It is one group, last.
+#[test]
+fn a_lut_group_named_camera_profiles_joins_the_camera_profiles_group() {
+    let dir = temp_dir("group");
+    let (mut s, _id, dcp_id) = library_with_profile(&dir);
+    for (id, group) in [("lut:a", crate::cmd::dcp_profiles::DCP_GROUP), ("lut:z", "Zebra")] {
+        s.lut_profiles.push(crate::cmd::lut_profiles::LutProfile { id: id.into(), name: id.into(), group: group.into(), file: String::new() });
+    }
+    let menu = s.profile_menu();
+    let groups: Vec<&str> = menu["groups"].as_array().unwrap().iter().filter_map(|g| g["name"].as_str()).collect();
+    assert_eq!(groups.iter().filter(|g| **g == crate::cmd::dcp_profiles::DCP_GROUP).count(), 1, "{groups:?}");
+    assert_eq!(groups.last(), Some(&crate::cmd::dcp_profiles::DCP_GROUP), "{groups:?}");
+    let ids: Vec<&str> = menu["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["name"] == crate::cmd::dcp_profiles::DCP_GROUP)
+        .flat_map(|g| g["profiles"].as_array().unwrap().iter().filter_map(|p| p["id"].as_str()))
+        .collect();
+    assert!(ids.contains(&"lut:a") && ids.contains(&dcp_id.as_str()), "{ids:?}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
