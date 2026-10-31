@@ -85,7 +85,7 @@ impl Files {
 }
 
 /// The renderer for this start: see the module docs.
-pub fn choose(files: &Files) -> Chosen {
+pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let forced =
         backend::forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
     let failed = files.take_failed();
@@ -95,7 +95,7 @@ pub fn choose(files: &Files) -> Chosen {
     let order = backend::window_renderer_order(forced, remembered, failed, os, compiled, true);
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
-        pick_probed(&order, &mut problems)
+        pick_probed(&order, &mut problems, compose_window)
     } else if forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow)) {
         // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start
         Some((WindowRenderer::Glow, None))
@@ -142,8 +142,13 @@ fn user_notice(failed: Option<WindowRenderer>, forced: Option<WindowRenderer>, p
 }
 
 /// eframe's defaults with the app's backends and DX12 shader compiler (issues #136, #471).
+///
+/// Taken from `NativeOptions::default()`, whose surface is egui-wgpu's `LOW_LATENCY` (one frame in
+/// flight; two drawables on Metal). `WgpuConfiguration::default()` is `HIGH_THROUGHPUT` instead (two
+/// frames queued, three drawables): every drag, slider and crop handle reached the screen a frame
+/// later than eframe's default. Live window resizing still gets three drawables from egui-wgpu.
 pub fn base_options() -> WgpuConfiguration {
-    let mut c = WgpuConfiguration::default();
+    let mut c = eframe::NativeOptions::default().wgpu_options;
     if let WgpuSetup::CreateNew(n) = &mut c.wgpu_setup {
         n.instance_descriptor.backends = backend::window_backends();
         n.instance_descriptor.backend_options = backend::backend_options();
@@ -154,12 +159,12 @@ pub fn base_options() -> WgpuConfiguration {
 }
 
 /// The first renderer of `order` that probes cleanly (glow is taken without a probe).
-fn pick_probed(order: &[WindowRenderer], problems: &mut Vec<String>) -> Option<(WindowRenderer, Option<WgpuSetupExisting>)> {
+fn pick_probed(order: &[WindowRenderer], problems: &mut Vec<String>, compose_window: bool) -> Option<(WindowRenderer, Option<WgpuSetupExisting>)> {
     for &r in order {
         match r {
             WindowRenderer::Glow => return Some((r, None)),
             WindowRenderer::Wgpu(b) => {
-                let probed = std::panic::catch_unwind(|| probe(b)).unwrap_or_else(|_| Err("panicked".into()));
+                let probed = std::panic::catch_unwind(|| probe(b, compose_window)).unwrap_or_else(|_| Err("panicked".into()));
                 match probed {
                     Ok(e) => return Some((r, Some(e))),
                     Err(e) => {
@@ -174,11 +179,11 @@ fn pick_probed(order: &[WindowRenderer], problems: &mut Vec<String>) -> Option<(
 }
 
 /// Create a device on `backends` and build egui's pipeline on it; any wgpu error is returned.
-fn probe(backends: Backends) -> Result<WgpuSetupExisting, String> {
+fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends,
         flags: backend::instance_flags_from_env(wgpu::InstanceFlags::from_build_config().with_env()),
-        backend_options: backend::backend_options(),
+        backend_options: presentation_options(backends, compose_window),
         memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
         display: None,
     });
@@ -242,6 +247,22 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
         .is_ok()
 }
 
+/// Only DX12 windows use the compositor; fallback renderers retain their normal presentation.
+/// Adapted from kmnkv1's PhotoCraft PR: https://github.com/storytold/photocraft/pull/7035.
+pub fn composes_window(enabled: bool, renderer: WindowRenderer) -> bool {
+    cfg!(target_os = "windows") && enabled && renderer == WindowRenderer::Wgpu(Backends::DX12)
+}
+
+/// Select DirectComposition for opted-in Windows DX12 windows, preserving
+/// the default presentation options for other renderers.
+fn presentation_options(backends: Backends, enabled: bool) -> wgpu::BackendOptions {
+    let mut options = backend::backend_options();
+    if composes_window(enabled, WindowRenderer::Wgpu(backends)) {
+        options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+    }
+    options
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -290,6 +311,23 @@ mod tests {
         assert!(died.contains("last time") && !died.contains("Validation Error"), "{died}");
     }
 
+    /// The window keeps eframe's low-latency surface: one frame queued (two Metal drawables), not
+    /// the high-throughput `WgpuConfiguration::default()`, which held input a frame longer. The
+    /// probed (Windows) and forced-backend configurations are built on the same options.
+    #[test]
+    fn window_surface_keeps_one_frame_in_flight() {
+        let surface = base_options().surface;
+        assert_eq!(surface, eframe::NativeOptions::default().wgpu_options.surface);
+        assert_eq!(surface, eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY);
+        assert_eq!(surface.desired_maximum_frame_latency, Some(1));
+        assert_eq!(surface.present_mode, wgpu::PresentMode::AutoVsync);
+        assert_ne!(surface, WgpuConfiguration::default().surface, "egui-wgpu's own default is the high-throughput one");
+        // what `main` hands eframe (on Windows `choose` probes the adapters first; not here)
+        if !cfg!(windows) {
+            assert_eq!(choose(&Files::new(None), false).wgpu_options.surface, surface);
+        }
+    }
+
     /// The crash report: a pipeline that fails validation must come back as an error, never as
     /// wgpu's default panic. Needs an adapter; skipped where there is none (CI without a GPU).
     #[test]
@@ -333,5 +371,23 @@ mod tests {
         .unwrap();
         // outside a scope: logged by our handler, not a panic
         let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl("not wgsl".into()) });
+    }
+
+    /// The workaround is opt-in and changes presentation only for Windows DX12.
+    #[test]
+    fn composition_only_changes_windows_dx12_presentation() {
+        let legacy: lightcraft_ui_egui::state::AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.compose_window, "existing settings keep the workaround off until opted in");
+        assert!(!lightcraft_ui_egui::state::AppSettings::default().compose_window);
+        let enabled: lightcraft_ui_egui::state::AppSettings = serde_json::from_str(r#"{"composeWindow":true}"#).unwrap();
+        let saved = serde_json::to_value(&enabled).unwrap();
+        assert_eq!(saved["composeWindow"], true);
+        for backend in [Backends::DX12, Backends::VULKAN, Backends::GL] {
+            let wanted = cfg!(target_os = "windows") && backend == Backends::DX12;
+            assert_eq!(composes_window(true, WindowRenderer::Wgpu(backend)), wanted);
+            assert_eq!(presentation_options(backend, true).dx12.presentation_system == wgpu::Dx12SwapchainKind::DxgiFromVisual, wanted);
+            assert!(!composes_window(false, WindowRenderer::Wgpu(backend)));
+        }
+        assert!(!composes_window(true, WindowRenderer::Glow));
     }
 }
