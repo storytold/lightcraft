@@ -144,7 +144,10 @@ fn first<'a>(props: &'a Props, k: &str) -> Option<&'a str> {
 }
 
 fn num(props: &Props, k: &str) -> Option<f64> {
-    let s = first(props, k)?;
+    parse_num(first(props, k)?)
+}
+
+fn parse_num(s: &str) -> Option<f64> {
     let s = s.strip_prefix('+').unwrap_or(s);
     if let Some((n, d)) = s.split_once('/') {
         let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
@@ -445,23 +448,31 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Crop (normalized edges of the unrotated image + straighten angle)
-    // Catalogs and some sidecars omit HasCrop: any crop edge or angle still supplies a crop.
+    // Catalogs and some sidecars omit HasCrop: a valid crop edge or angle still supplies a crop.
     // The full-frame rectangle with angle zero is already our identity (no crop).
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
-    match boolean(props, "crs:HasCrop").or_else(|| CROP.iter().any(|k| props.contains_key(*k)).then_some(true)) {
-        Some(true) => {
-            let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
-            let (l, t, r, b) = (e("Left", 0.0), e("Top", 0.0), e("Right", 1.0), e("Bottom", 1.0));
+    // Validate before marking fields read or applying defaults. A supplied invalid value (including
+    // Lightroom's deferred sentinel) must not replace an existing crop, even with HasCrop=True.
+    let crop = CROP.map(|k| props.get(k).and_then(|v| v.first()).and_then(|s| parse_num(s.trim())).filter(|v| *v != -999999.0));
+    let valid_crop = CROP.iter().zip(crop).all(|(k, v)| !props.contains_key(*k) || v.is_some());
+    match boolean(props, "crs:HasCrop").or_else(|| crop.iter().any(Option::is_some).then_some(true)) {
+        Some(true) if valid_crop => {
+            let [l, t, r, b, angle] = crop;
+            let (l, t, r, b) = (
+                l.unwrap_or(0.0).clamp(0.0, 1.0),
+                t.unwrap_or(0.0).clamp(0.0, 1.0),
+                r.unwrap_or(1.0).clamp(0.0, 1.0),
+                b.unwrap_or(1.0).clamp(0.0, 1.0),
+            );
             if r > l && b > t {
-                put(
-                    o,
-                    "crop.geometry",
-                    json!({"rect": {"x0": l, "y0": t, "x1": r, "y1": b}, "angle": num(props, "crs:CropAngle").unwrap_or(0.0).clamp(-45.0, 45.0)}),
-                );
+                for k in CROP {
+                    note(k);
+                }
+                put(o, "crop.geometry", json!({"rect": {"x0": l, "y0": t, "x1": r, "y1": b}, "angle": angle.unwrap_or(0.0).clamp(-45.0, 45.0)}));
             }
         }
         Some(false) => put(o, "crop.geometry", json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "angle": 0.0})),
-        None => {}
+        _ => {}
     }
     out
 }

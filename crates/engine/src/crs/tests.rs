@@ -56,6 +56,48 @@ fn nontrivial_crop_without_has_crop_is_imported() {
 }
 
 #[test]
+fn empty_crop_field_preserves_existing_crop() {
+    for value in ["", "NaN", "inf", "invalid"] {
+        for has_crop in [false, true] {
+            assert_invalid_crop_preserves_existing("CropLeft", value, has_crop);
+        }
+    }
+}
+
+#[test]
+fn deferred_crop_angle_without_has_crop_preserves_existing_crop() {
+    assert_invalid_crop_preserves_existing("CropAngle", "-999999", false);
+}
+
+#[test]
+fn deferred_crop_angle_with_has_crop_preserves_existing_crop() {
+    assert_invalid_crop_preserves_existing("CropAngle", "-999999", true);
+}
+
+fn assert_invalid_crop_preserves_existing(field: &str, value: &str, has_crop: bool) {
+    let x = format!(
+        r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:{field}="{value}" {}/>"#,
+        if has_crop { r#"crs:HasCrop="True""# } else { "" }
+    );
+    let existing = apply_partial(&DevelopSettings::default(), &to_partial(&props(SIDECAR), Target::RawAbsolute), 1.0);
+    // A valid companion field must not make an invalid crop safe to apply either.
+    for extra in ["", r#"crs:CropBottom="0.9""#] {
+        let p = props(&x.replace("/>", &format!("{extra}/>")));
+        let (partial, skipped) = to_partial_report(&p, None, Target::RawAbsolute, 1.5);
+        let merged = apply_partial(&existing, &partial, 1.0);
+        assert_eq!(merged.crop.geometry, existing.crop.geometry, "{partial}");
+        assert!(partial.get("crop").is_none(), "{partial}");
+        let mut expected = vec![field];
+        if !extra.is_empty() {
+            expected.push("CropBottom");
+        }
+        expected.sort_unstable();
+        assert_eq!(skipped, expected);
+    }
+}
+
+#[test]
 fn maps_common_fields() {
     let p = props(SIDECAR);
     let partial = to_partial(&p, Target::RawAbsolute);
