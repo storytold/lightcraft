@@ -557,7 +557,7 @@ fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
 }
 
 /// Part 4 of 12 of the UI commands; `None` means the id is not one of this part's.
-fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
@@ -573,6 +573,24 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         "app.recentLibraries" => crate::panels::settings::recent_libraries(app, p),
         "app.clearRecentLibraries" => crate::panels::settings::recent_libraries(app, &json!({"clear": true})),
         "app.displayProfile" => crate::panels::settings::display_profile(app, p),
+        "file.saveLibrary" | "file.saveLibraryAs" => {
+            let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or("No file provider is registered");
+            host.and_then(|host| {
+                let name = host.filename(app.file_provider_document).unwrap_or_else(|| "LightCraft library.zip".into());
+                host.choose(app.file_provider_document, app.file_provider_revision, name, id == "file.saveLibraryAs")?;
+                ctx.request_repaint();
+                Ok(json!({"pending":true}))
+            })
+        }
+        "file.providerRecent" => {
+            let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or("No file provider is registered");
+            host.and_then(|host| {
+                let resource = p.get("resourceId").and_then(Value::as_str).ok_or("Missing provider resource ID")?;
+                let request = host.request_open(resource)?;
+                ctx.request_repaint();
+                Ok(json!({"requestId":request}))
+            })
+        }
         "file.backupLibrary" | "file.restoreLibrary" => {
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {

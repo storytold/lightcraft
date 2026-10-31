@@ -30,6 +30,9 @@ impl LightcraftApp {
             session,
             ui: UiState::default(),
             services,
+            file_provider: None,
+            file_provider_document: 0,
+            file_provider_revision: 0,
             renderer: render::Renderer::default(),
             perf: Perf::default(),
             caches: Caches::default(),
@@ -666,5 +669,86 @@ pub(crate) fn sam_download_ended(download: &lightcraft_engine::segment::Download
         Some(e) => Some((crate::i18n::tr_format!("The SAM 3 download failed: {e}", e = e), true)),
         None if download.finished => Some((crate::i18n::tr("The SAM 3 model is installed: Object and Describe masks are ready.").to_string(), true)),
         None => None,
+    }
+}
+
+impl LightcraftApp {
+    /// A platform's asynchronous provider read cannot replace a library with pending input.
+    pub fn can_replace_provider_library(&self) -> Result<(), String> {
+        panels::settings::can_switch_library(self)?;
+        if self.export.is_some() || self.ui.dialog.is_some() || self.session.unsaved().is_some() {
+            return Err("Finish the current dialog/export and save pending library changes before opening a provider library".into());
+        }
+        Ok(())
+    }
+
+    /// Admit an already validated catalog using the same per-library view resets as Open Library.
+    /// The web host owns the asynchronous store and never manufactures a local filesystem path.
+    pub fn replace_provider_library(&mut self, mut session: Session) {
+        session.segmenter.background = true;
+        self.session = session;
+        self.caches = Caches::default();
+        self.renderer.forget_all();
+        self.shown_library = None;
+        self.lightroom_last = None;
+        self.lightroom_result = None;
+        self.ui.reference = None;
+        self.ui.compare = None;
+        self.ui.brief_info = Default::default();
+        self.ui.keyword_list_selected = None;
+        self.ui.search = self.session.filter.text.clone();
+        if self.ui.view == state::ViewMode::Reference {
+            self.ui.view = state::ViewMode::PhotoGrid;
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod provider_library_tests {
+    use super::{LightcraftApp, Services, Session};
+    use crate::file_providers::{Host, Resource};
+    use serde_json::json;
+
+    #[test]
+    fn provider_commands_are_hidden_by_default_and_each_save_asks_for_a_destination() {
+        let mut app = LightcraftApp::new(Session::new(), Services::default());
+        assert!(app.file_provider.is_none());
+        assert!(!crate::menus::menu_entries(&app).iter().any(|item| item.id == "file.saveLibrary"));
+        let host = Host::default();
+        host.set_session("light-library-test-0001".into()).unwrap();
+        host.connect("storage".into(), "Storage".into(), "account-1".into()).unwrap();
+        app.file_provider = Some(host.clone());
+        app.file_provider_document = 17;
+        app.file_provider_revision = 42;
+        assert!(crate::menus::menu_entries(&app).iter().any(|item| item.id == "file.saveLibrary"));
+        for command in ["file.saveLibrary", "file.saveLibraryAs"] {
+            app.run(command, json!({})).unwrap();
+            let events = host.take_events();
+            assert_eq!(events.len(), 1);
+            let dialog = &events[0].metadata;
+            assert_eq!(dialog["documentId"], "17");
+            assert_eq!(dialog["revision"], 42);
+            assert_eq!(dialog["saveAs"], command == "file.saveLibraryAs");
+            host.resolve_dialog(dialog["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+        }
+        assert!(app.session.library.as_ref().is_none_or(|library| !library.on_disk));
+    }
+
+    #[test]
+    fn provider_recents_are_opaque_resources_separate_from_local_libraries() {
+        let mut app = LightcraftApp::new(Session::new(), Services::default());
+        let host = Host::default();
+        host.set_session("light-recents-test-0001".into()).unwrap();
+        let connection = host.connect("storage".into(), "Storage".into(), "account-1".into()).unwrap();
+        host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.zip".into(), updated_at: String::new() }]).unwrap();
+        app.file_provider = Some(host.clone());
+        let before = app.ui.settings.recent_libraries.clone();
+        app.run("file.providerRecent", json!({"resourceId":"one"})).unwrap();
+        assert_eq!(app.ui.settings.recent_libraries, before);
+        assert!(host.take_events().iter().any(|e| e.metadata["type"] == "openRequest" && e.metadata["resourceId"] == "one"));
+        let menus = serde_json::to_string(&crate::menus::menubar::menu_bar(&app)).unwrap();
+        assert!(menus.contains("Recent — Storage"));
+        assert!(menus.contains("Recent on this device"));
     }
 }

@@ -51,9 +51,26 @@ struct Mirror {
     dirty: Vec<(String, Dirty)>,
     /// Why the last flush to browser storage failed (quota, eviction…), until one succeeds.
     error: Option<String>,
+    generation: u64,
+    generation_exhausted: bool,
 }
 
 impl Mirror {
+    fn changed(&mut self) {
+        match self.generation.checked_add(1) {
+            Some(next) if !self.generation_exhausted => self.generation = next,
+            _ => self.generation_exhausted = true,
+        }
+    }
+
+    fn generation(&self) -> Result<u64, String> {
+        if self.generation_exhausted {
+            Err("library generation counter exhausted; reload before saving to a provider".into())
+        } else {
+            Ok(self.generation)
+        }
+    }
+
     fn mark(&mut self, name: &str, d: Dirty) {
         let prev = self.dirty.iter().position(|(n, _)| n == name).map(|i| self.dirty.remove(i).1);
         let d = match (prev, d) {
@@ -70,6 +87,13 @@ impl Mirror {
 #[derive(Clone, Default)]
 pub struct Files(Arc<Mutex<Mirror>>);
 
+/// One immutable point-in-time capture. Generation belongs to this `Files` instance.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub generation: u64,
+    pub entries: Vec<(String, Vec<u8>)>,
+}
+
 impl Files {
     fn lock(&self) -> std::sync::MutexGuard<'_, Mirror> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
@@ -77,7 +101,11 @@ impl Files {
 
     /// Set a file's stored content (start-up; not dirty).
     pub fn preload(&self, name: &str, data: Vec<u8>) {
-        self.lock().files.insert(name.to_string(), data);
+        let mut m = self.lock();
+        if m.files.get(name) != Some(&data) {
+            m.files.insert(name.to_string(), data);
+            m.changed();
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<Vec<u8>> {
@@ -87,24 +115,63 @@ impl Files {
     /// Replace a file.
     pub fn write(&self, name: &str, data: &[u8]) {
         let mut m = self.lock();
-        m.files.insert(name.to_string(), data.to_vec());
+        if m.files.get(name).map(Vec::as_slice) != Some(data) {
+            m.files.insert(name.to_string(), data.to_vec());
+            m.changed();
+        }
         m.mark(name, Dirty::Rewrite);
     }
 
     pub fn append(&self, name: &str, data: &[u8]) {
         let mut m = self.lock();
+        let changed = !data.is_empty() || !m.files.contains_key(name);
         let f = m.files.entry(name.to_string()).or_default();
         let from = f.len();
         f.extend_from_slice(data);
+        if changed {
+            m.changed();
+        }
         m.mark(name, Dirty::Append { from });
     }
 
     pub fn truncate(&self, name: &str, len: usize) {
         let mut m = self.lock();
         if let Some(f) = m.files.get_mut(name) {
+            let changed = f.len() > len;
             f.truncate(len);
+            if changed {
+                m.changed();
+            }
             m.mark(name, Dirty::Rewrite);
         }
+    }
+
+    pub fn generation(&self) -> Result<u64, String> {
+        self.lock().generation()
+    }
+
+    /// Copy all library files while holding one lock. No mixed catalog/log generation can escape.
+    pub fn snapshot(&self) -> Result<Snapshot, String> {
+        let m = self.lock();
+        let generation = m.generation()?;
+        let size = LIBRARY_FILES
+            .iter()
+            .filter_map(|name| m.files.get(*name))
+            .try_fold(0usize, |size, data| size.checked_add(data.len()).ok_or("library capture is too large"))?;
+        if size > crate::backup::PROVIDER_MAX_BYTES {
+            return Err("library capture exceeds the 80 MiB provider limit".into());
+        }
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(LIBRARY_FILES.len()).map_err(|_| "not enough memory for a library capture")?;
+        for name in LIBRARY_FILES {
+            if let Some(data) = m.files.get(name) {
+                let mut copy = Vec::new();
+                copy.try_reserve_exact(data.len()).map_err(|_| "not enough memory for a library capture")?;
+                copy.extend_from_slice(data);
+                entries.push((name.into(), copy));
+            }
+        }
+        Ok(Snapshot { generation, entries })
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -225,6 +292,52 @@ mod tests {
     use lightcraft_engine::Session;
     use lightcraft_engine::library::LibraryStores;
     use serde_json::json;
+
+    #[test]
+    fn snapshots_are_owned_and_content_generations_ignore_no_op_writes() {
+        let files = Files::default();
+        assert_eq!(files.generation().unwrap(), 0);
+        files.preload("catalog.snap", b"before".to_vec());
+        let snapshot = files.snapshot().unwrap();
+        let initial = snapshot.generation;
+        files.preload("catalog.snap", b"before".to_vec());
+        files.write("catalog.snap", b"before");
+        files.append("catalog.snap", b"");
+        files.truncate("catalog.snap", 100);
+        assert_eq!(files.generation().unwrap(), initial);
+        files.write("catalog.snap", b"after");
+        assert_eq!(files.generation().unwrap(), initial + 1);
+        assert_eq!(snapshot.entries, vec![("catalog.snap".into(), b"before".to_vec())]);
+        files.append("catalog.snap", b"!");
+        files.truncate("catalog.snap", 2);
+        assert_eq!(files.generation().unwrap(), initial + 3);
+    }
+
+    #[test]
+    fn snapshot_only_captures_library_files_and_does_not_consume_dirty_flushes() {
+        let files = Files::default();
+        files.write("catalog.log", b"journal");
+        files.write("unrelated.bin", b"not a library file");
+        let snapshot = files.snapshot().unwrap();
+        assert_eq!(snapshot.entries, vec![("catalog.log".into(), b"journal".to_vec())]);
+        assert!(files.is_dirty());
+        assert_eq!(files.take_dirty().len(), 2);
+        assert!(!files.is_dirty());
+    }
+
+    #[test]
+    fn exhausted_cloud_generation_never_wraps_and_does_not_break_local_saves() {
+        let files = Files::default();
+        files.lock().generation = u64::MAX;
+        files.write("catalog.log", b"still stored locally");
+        assert_eq!(files.get("catalog.log").as_deref(), Some(b"still stored locally".as_slice()));
+        assert!(files.generation().is_err());
+        assert!(files.snapshot().is_err());
+        assert_eq!(files.take_dirty().len(), 1);
+        files.write("catalog.log", b"another local write");
+        assert!(files.snapshot().is_err());
+        assert_eq!(files.lock().generation, u64::MAX);
+    }
 
     /// Apply flush ops to a "disk" map, as the backend would.
     fn flush(files: &Files, disk: &mut BTreeMap<String, Vec<u8>>) {

@@ -72,6 +72,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),
         "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
+        "file.saveLibrary" | "file.saveLibraryAs" | "file.providerRecent" => app.file_provider.as_ref().is_some_and(|h| h.enabled()),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
@@ -98,6 +99,7 @@ pub struct MenuEntry {
 pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
     let mut v: Vec<MenuEntry> = ui_commands()
         .filter(|c| !c.3.is_empty())
+        .filter(|c| !matches!(c.0, "file.saveLibrary" | "file.saveLibraryAs") || app.file_provider.as_ref().is_some_and(|h| h.enabled()))
         .map(|(id, label, sc, m)| MenuEntry {
             id: id.to_string(),
             label: label.to_string(),

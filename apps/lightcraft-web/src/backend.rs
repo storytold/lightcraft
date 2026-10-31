@@ -185,6 +185,46 @@ impl Backend {
         }
     }
 
+    /// Read an original for a provider capture, refusing oversized browser data before copying
+    /// it into the WASM heap. A File is an immutable OPFS snapshot; IDB already returns a clone.
+    pub async fn read_capped(&self, path: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
+        let bytes = match self {
+            Backend::Opfs(root) => {
+                let Some(handle) = Self::opfs_file(root, path, false).await? else { return Ok(None) };
+                let file: web_sys::File = JsFuture::from(handle.get_file()).await.map_err(err)?.unchecked_into();
+                let size = file.size();
+                if !size.is_finite() || size < 0.0 || size > max_bytes as f64 {
+                    return Err(format!("{path}: file exceeds the remaining provider backup limit"));
+                }
+                let buffer = JsFuture::from(file.array_buffer()).await.map_err(err)?;
+                Uint8Array::new(&buffer)
+            }
+            Backend::Idb(db) => {
+                let (_tx, store) = Self::idb_store(db, false)?;
+                let value = idb_req(&store.get(&path.into()).map_err(err)?).await?;
+                if value.is_undefined() || value.is_null() {
+                    return Ok(None);
+                }
+                if let Some(array) = value.dyn_ref::<Uint8Array>() {
+                    // Wrapping an existing typed array is cheap; constructing Uint8Array(array)
+                    // would copy it before we had checked its size.
+                    array.clone()
+                } else if let Some(buffer) = value.dyn_ref::<js_sys::ArrayBuffer>() {
+                    if u64::from(buffer.byte_length()) > max_bytes as u64 {
+                        return Err(format!("{path}: file exceeds the remaining provider backup limit"));
+                    }
+                    Uint8Array::new(buffer)
+                } else {
+                    return Err(format!("{path}: stored original is not a byte buffer"));
+                }
+            }
+        };
+        if u64::from(bytes.length()) > max_bytes as u64 {
+            return Err(format!("{path}: file exceeds the remaining provider backup limit"));
+        }
+        Ok(Some(bytes.to_vec()))
+    }
+
     /// Replace a file atomically (OPFS: the writable's swap file is committed on close).
     pub async fn write(&self, path: &str, data: &[u8]) -> Result<(), String> {
         self.write_at(path, None, data).await

@@ -26,6 +26,9 @@ pub const DEFAULT_LIBRARY_DIR: &str = "library";
 /// Largest backup (offsets are 32-bit without zip64).
 pub const MAX_BYTES: u64 = 0xFFFF_FFFF - (64 << 20);
 
+/// Optional provider transport cap, including local headers and the complete ZIP directory.
+pub const PROVIDER_MAX_BYTES: usize = 80 * 1024 * 1024;
+
 const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
 const END_SIG: u32 = 0x0605_4b50;
@@ -102,6 +105,63 @@ struct Central {
 pub struct ZipWriter {
     entries: Vec<Central>,
     offset: u64,
+}
+
+/// A native backup assembled within the provider's byte cap. Checks include the future tail,
+/// so rejecting an entry never needs to grow or partially append the output buffer.
+pub struct ProviderZip {
+    zip: ZipWriter,
+    data: Vec<u8>,
+    central_bytes: usize,
+    entries: usize,
+    limit: usize,
+}
+
+impl Default for ProviderZip {
+    fn default() -> Self {
+        Self { zip: ZipWriter::default(), data: Vec::new(), central_bytes: 0, entries: 0, limit: PROVIDER_MAX_BYTES }
+    }
+}
+
+impl ProviderZip {
+    /// Maximum payload for one more entry, after reserving every header and end record.
+    pub fn remaining_for(&self, name: &str) -> Result<usize, String> {
+        if name.len() > usize::from(u16::MAX) || self.entries >= usize::from(u16::MAX) {
+            return Err("too many files or an overlong filename in provider backup".into());
+        }
+        let overhead = name
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(30 + 46 + 22))
+            .and_then(|n| n.checked_add(self.central_bytes))
+            .and_then(|n| n.checked_add(self.data.len()))
+            .ok_or("provider backup size overflow")?;
+        self.limit.checked_sub(overhead).ok_or_else(|| "library backup exceeds the 80 MiB provider limit".into())
+    }
+
+    pub fn entry(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+        if data.len() > self.remaining_for(name)? {
+            return Err("library backup exceeds the 80 MiB provider limit".into());
+        }
+        let additional = 30usize.checked_add(name.len()).and_then(|n| n.checked_add(data.len())).ok_or("provider backup size overflow")?;
+        self.data.try_reserve_exact(additional).map_err(|_| "not enough memory for a provider backup")?;
+        let header = self.zip.entry(name, data)?;
+        self.data.extend_from_slice(&header);
+        self.data.extend_from_slice(data);
+        self.central_bytes = self.central_bytes.checked_add(46).and_then(|n| n.checked_add(name.len())).ok_or("provider backup size overflow")?;
+        self.entries += 1;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<Vec<u8>, String> {
+        let tail = self.zip.finish()?;
+        if self.data.len().checked_add(tail.len()).is_none_or(|n| n > self.limit) {
+            return Err("library backup exceeds the 80 MiB provider limit".into());
+        }
+        self.data.try_reserve_exact(tail.len()).map_err(|_| "not enough memory for a provider backup")?;
+        self.data.extend_from_slice(&tail);
+        Ok(self.data)
+    }
 }
 
 impl ZipWriter {
@@ -258,8 +318,13 @@ pub fn verify(entry: &ZipEntry, data: &[u8]) -> Result<(), String> {
 /// under their content hash, and a restore that kept bytes under another photo's hash would
 /// give that photo's catalog record a different image (the zip checksum can't tell).
 pub fn verify_original(entry: &ZipEntry, hash: &str, data: &[u8]) -> Result<(), String> {
+    verify_original_bytes(&entry.name, hash, data)
+}
+
+/// Verify a referenced original before it is packaged or admitted to browser storage.
+pub fn verify_original_bytes(name: &str, hash: &str, data: &[u8]) -> Result<(), String> {
     if crate::store::content_hash(data) != hash {
-        return Err(format!("{}: the file doesn't match its content hash (damaged or altered backup)", entry.name));
+        return Err(format!("{name}: the file doesn't match its content hash (damaged or altered backup)"));
     }
     Ok(())
 }
@@ -272,6 +337,33 @@ pub fn restored_dir_name(now_ms: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_zip_reserves_the_complete_directory_before_accepting_payload() {
+        let mut zip = ProviderZip { limit: 104, ..Default::default() };
+        // A one-byte name costs 30+1 local + 46+1 central + 22 end bytes.
+        assert_eq!(zip.remaining_for("a").unwrap(), 4);
+        assert!(zip.entry("a", &[0; 5]).is_err());
+        assert!(zip.data.is_empty());
+        zip.entry("a", &[1, 2, 3, 4]).unwrap();
+        let data = zip.finish().unwrap();
+        assert_eq!(data.len(), 104);
+        let (offset, size) = find_central(&data).unwrap();
+        let entries = parse_central(&data[offset as usize..(offset + size) as usize]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a");
+        verify(&entries[0], &[1, 2, 3, 4]).unwrap();
+    }
+
+    #[test]
+    fn provider_zip_rejects_later_headers_before_growing_a_full_buffer() {
+        let mut zip = ProviderZip { limit: 104, ..Default::default() };
+        zip.entry("a", &[1, 2, 3, 4]).unwrap();
+        let bytes = zip.data.clone();
+        assert!(zip.entry("b", &[]).is_err());
+        assert_eq!(zip.data, bytes);
+        assert_eq!(zip.finish().unwrap().len(), 104);
+    }
 
     fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = ZipWriter::default();

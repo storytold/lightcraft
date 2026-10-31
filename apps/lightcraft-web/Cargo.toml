@@ -32,6 +32,8 @@ js-sys = { workspace = true }
 web-sys = { workspace = true, features = [
     "Blob",
     "BlobPropertyBag",
+    "CustomEvent",
+    "CustomEventInit",
     "DedicatedWorkerGlobalScope",
     "Document",
     "DomStringList",
