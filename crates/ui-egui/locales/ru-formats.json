@@ -269,6 +269,7 @@
   "{n} originals opened in the other editor": "Открыто оригиналов в другом редакторе: {n}",
   "· {in_source} identical copies": "· идентичных копий: {in_source}",
   "{count} more warnings.": "Других предупреждений: {count}.",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "Фото каталога в «Недавно удалённых» этой библиотеки: {in_trash}. Они остаются там; чтобы увидеть их, восстановите их из «Недавно удалённых».",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Не импортированы изображения каталога: {skipped}. Их записи в каталоге неполные.",
   "{photos} catalog records processed; {collections} collections.": "Обработано записей каталога: {photos}; коллекций: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Не найдены оригиналы: {missing}. Их записи каталога доступны; используйте поиск отсутствующих фотографий, чтобы восстановить ссылки.",

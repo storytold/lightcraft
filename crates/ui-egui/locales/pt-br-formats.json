@@ -273,6 +273,7 @@
   "{n} originals opened in the other editor": "{n} originais abertos no outro editor",
   "· {in_source} identical copies": "· {in_source} cópias idênticas",
   "{count} more warnings.": "Mais {count} avisos.",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} fotos do catálogo estão em Excluídos recentemente desta biblioteca e continuam lá; restaure-as de Excluídos recentemente para vê-las.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} imagens do catálogo não foram importadas porque seus registros no catálogo estão incompletos.",
   "{photos} catalog records processed; {collections} collections.": "{photos} registros do catálogo processados; {collections} coleções.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originais estão ausentes. Seus registros no catálogo estão disponíveis; use Encontrar fotos ausentes para vinculá-los novamente.",

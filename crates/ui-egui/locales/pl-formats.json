@@ -261,6 +261,7 @@
   "Update “{name}” with Current Settings": "Zaktualizuj „{name}” bieżącymi ustawieniami",
   "{n} preset{}": "Ustawienia: {n}{:.0}",
   "{count} more warnings.": "Pozostałe ostrzeżenia: {count}.",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "Zdjęcia katalogu w Ostatnio usuniętych tej biblioteki: {in_trash}. Pozostają tam; przywróć je z Ostatnio usuniętych, aby je zobaczyć.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Nie zaimportowano obrazów z katalogu: {skipped}. Ich rekordy w katalogu są niekompletne.",
   "{photos} catalog records processed; {collections} collections.": "Przetworzone rekordy katalogu: {photos}; kolekcje: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Brakujące oryginały: {missing}. Ich rekordy w katalogu są dostępne; użyj polecenia Znajdź brakujące zdjęcia, aby je ponownie powiązać.",

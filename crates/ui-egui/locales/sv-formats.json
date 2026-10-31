@@ -296,6 +296,7 @@
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} katalogfoton finns i Nyligen raderade i det här biblioteket och ligger kvar där; återställ dem från Nyligen raderade för att se dem.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
   "Added {n} photo{}": "{n} foto tillagda{:.0}",

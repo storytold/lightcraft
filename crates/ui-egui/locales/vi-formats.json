@@ -257,6 +257,7 @@
   "{pid} (missing)": "{pid} (thiếu)",
   "{sel_n} selected · {counted}": "Đã chọn {sel_n} · {counted}",
   "{size} GB": "{size} GB",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} ảnh của danh mục nằm trong Đã xóa gần đây của thư viện này và vẫn ở đó; hãy khôi phục chúng từ Đã xóa gần đây để xem.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{s} s of AV1 video": "{s} s of AV1 video",

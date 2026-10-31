@@ -273,6 +273,7 @@
   "{n} originals opened in the other editor": "{n}個の元ファイルを別のエディタで開きました",
   "· {in_source} identical copies": "・同一のコピー {in_source} 件",
   "{count} more warnings.": "ほかに{count}件の警告があります。",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "カタログの写真 {in_trash} 枚は、このライブラリの「最近削除した写真」にあり、そのまま残ります。表示するには「最近削除した写真」から復元してください。",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "カタログ内のレコードが不完全なため、{skipped}件の画像を読み込めませんでした。",
   "{photos} catalog records processed; {collections} collections.": "カタログの{photos}件のレコードを処理しました。コレクションは{collections}件です。",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing}件のオリジナルが見つかりません。カタログのレコードは利用できます。「見つからない写真を検索」で再リンクしてください。",

@@ -279,6 +279,7 @@
   "Updated {name}": "Updated {name}",
   "new, inside {parent}": "new, inside {parent}",
   "{count} more warnings.": "{count} more warnings.",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "კატალოგის ფოტოები ამ ბიბლიოთეკის ახლახან წაშლილებში: {in_trash}. ისინი იქ რჩება; სანახავად აღადგინეთ ისინი ახლახან წაშლილებიდან.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "კატალოგის {skipped} სურათი არ დაიმპორტდა, რადგან მათი ჩანაწერები კატალოგში არასრულია.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
   "{n} JPEG files": "{n} JPEG files",

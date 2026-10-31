@@ -1,7 +1,7 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
-use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
+use super::types::{Duplicate, FileFacts, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
@@ -180,6 +180,19 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
         }
 }
 
+/// What a new record takes from its file, as a file import gives it: the file's metadata and
+/// capture time, the import defaults, then its XMP sidecar. Returns the sidecar when it said
+/// anything (labels read through the library's label names).
+pub(crate) fn start_from_file(s: &Session, p: &mut Photo, file: FileFacts, now: &str) -> Option<crate::sidecar::SidecarData> {
+    let FileFacts { meta, captured, sidecar } = file;
+    p.meta = meta;
+    p.captured = captured;
+    apply_import_defaults(s, p);
+    let sc = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default())?;
+    crate::sidecar::merge_into(p, &sc, now);
+    Some(sc)
+}
+
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
@@ -213,7 +226,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 report.imported.push(id.0);
             }
-            PreparedItem::Duplicate { path, existing, reason, hash } => {
+            PreparedItem::Duplicate { path, existing, reason, hash, file } => {
                 let existing = existing.or_else(|| {
                     let h = hash?;
                     new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
@@ -232,7 +245,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                             report.restored.push(id.0);
                         }
                     }
-                    _ => report.duplicates.push(Duplicate { path, existing: existing.map(|i| i.0), reason, existing_deleted: trashed.is_some() }),
+                    _ => {
+                        report.duplicates.push(Duplicate { path, existing: existing.map(|i| i.0), reason, existing_deleted: trashed.is_some(), file })
+                    }
                 }
             }
             PreparedItem::Failed(path, e) => report.failed.push((path, e)),
@@ -249,23 +264,18 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                         purge.push(*old);
                     }
                 }
-                let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
                 p.kind = info.kind;
                 p.file_size = info.file_size;
-                p.captured = info.captured;
-                p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
-                apply_import_defaults(s, &mut p);
-                if let Some(sc) = &sidecar {
-                    crate::sidecar::merge_into(&mut p, sc, &now);
+                if let Some(sc) = start_from_file(s, &mut p, FileFacts { meta: info.meta, captured: info.captured, sidecar }, &now) {
                     report.sidecars += 1;
-                    report.warnings.extend(sc.warnings.iter().cloned().map(|mut warning| {
+                    report.warnings.extend(sc.warnings.into_iter().map(|mut warning| {
                         warning.path = path.clone();
                         warning
                     }));

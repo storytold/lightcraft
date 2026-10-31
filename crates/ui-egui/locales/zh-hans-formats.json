@@ -273,6 +273,7 @@
   "{n} originals opened in the other editor": "已在其他编辑器中打开 {n} 个原始文件",
   "· {in_source} identical copies": "· {in_source} 个相同副本",
   "{count} more warnings.": "另有 {count} 条警告。",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "目录中有 {in_trash} 张照片位于此图库的“最近删除”中，并将保留在那里；如需查看，请从“最近删除”中恢复。",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "有 {skipped} 张图像未导入，因为它们在目录中的记录不完整。",
   "{photos} catalog records processed; {collections} collections.": "已处理 {photos} 条目录记录；{collections} 个收藏集。",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "有 {missing} 个原始文件缺失。其目录记录可用；请使用“查找缺失照片”重新链接文件。",

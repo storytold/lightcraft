@@ -267,6 +267,7 @@
   "Update “{name}” with Current Settings": "Aktualizovat „{name}“ podle aktuálního nastavení",
   "{n} preset{}": "Přednastavení: {n}{:.0}",
   "{count} more warnings.": "Další varování: {count}.",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "Fotografie katalogu v nedávno odstraněných této knihovny: {in_trash}. Zůstávají tam; chcete-li je vidět, obnovte je z nedávno odstraněných.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Neimportované obrázky katalogu: {skipped}. Jejich záznamy v katalogu jsou neúplné.",
   "{photos} catalog records processed; {collections} collections.": "Zpracováno záznamů katalogu: {photos}; kolekcí: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Chybějící originály: {missing}. Jejich záznamy jsou v katalogu dostupné; použijte Najít chybějící fotografie a znovu je propojte.",
