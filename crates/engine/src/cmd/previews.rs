@@ -48,6 +48,9 @@ impl PreviewBuild {
             "what": if self.what.is_empty() { "previews" } else { self.what },
             "repaired": self.repaired.load(Ordering::Relaxed),
             "error": self.error(),
+            // (the process's renders by who they were for: a build's are background work, the
+            // loupe's never; `media::background_gpu`)
+            "renders": crate::media::render_counts(),
         })
     }
 
@@ -84,7 +87,36 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
 /// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
-fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
+/// Previews are made ahead, never for the photo on screen: background GPU work, on the second
+/// graphics card first and behind the photo on screen ([`crate::media::background_photo`]). The
+/// source is decoded first, outside the photo's turn at a card (a raw's decode is a second or more
+/// of processor work; the card's turn is for the renders).
+fn run_photo_cancellable(mut jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
+    let Some(first) = jobs.first() else { return Some(true) };
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return None;
+    }
+    let decoded = match &first.source {
+        crate::media::SourceRef::Loaded(d) => (**d).clone(),
+        // (an unreadable photo fails here, as its jobs would)
+        source => match source.load_source() {
+            Ok(d) => d,
+            Err(e) => {
+                log::info!("building previews: {e}");
+                return Some(false);
+            }
+        },
+    };
+    let src_px = decoded.image.width.saturating_mul(decoded.image.height);
+    let out_px = jobs.iter().map(|j| j.request.max_w.saturating_mul(j.request.max_h)).max().unwrap_or(0).min(src_px.max(1));
+    for j in &mut jobs {
+        j.source = crate::media::SourceRef::Loaded(Box::new(decoded.clone()));
+    }
+    crate::media::background_photo("building previews", src_px, out_px, || run_photo_jobs(jobs, cancel)).unwrap_or(Some(false))
+}
+
+/// [`run_photo_cancellable`]'s work.
+fn run_photo_jobs(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
@@ -413,12 +445,14 @@ fn smart_run(
                 // a stale proxy is rebuilt from the original only: never from itself (the file
                 // fallback or a source decoded from a proxy would stamp the old look as current)
                 let source = if stale { source.and_then(original_only) } else { source };
+                // (the original is read as work done ahead: any GPU work in it, an AI Denoise
+                // picture made first, is background work like Build Previews', `media::background_gpu`)
                 // atomic: a failed write leaves no partial proxy that would pass for a built one;
                 // and synced (issue #134): built so the photo can be edited while its original
                 // is offline, when it is the only copy — the sync is small next to the decode
                 let r = source
                     .ok_or_else(|| "nothing to build from".to_string())
-                    .and_then(|s| s.load_source())
+                    .and_then(|s| crate::media::background_gpu("building smart previews", || s.load_source()).and_then(|r| r))
                     .and_then(|src| {
                         let info = src.info_or(Default::default());
                         crate::smart::encode(&src.image, Some(&info))
@@ -675,7 +709,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             build
         ),
-        cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, running, cancelled, what, error} | null", always, |s, _| {
+        cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, running, cancelled, what, error, renders: {interactive, background, interactiveGpu, backgroundGpu} (the process's renders so far: for what is on screen, and work done ahead such as this build, which goes to the second graphics card first)} | null", always, |s, _| {
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
         cmd!("library.cancelPreviews", "Cancel Preview Build", [], None, "{}", always, |s, _| {
@@ -735,5 +769,63 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+
+    // Given a photo, its preview build renders as background work (the second graphics card's,
+    // design §8 of 2026-10-31) and its loupe render as interactive work (the screen's card only)
+    #[test]
+    fn preview_builds_are_background_work_and_the_loupe_is_not() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let jobs = jobs_for(&mut s, id, Some(256));
+        let n = jobs.len() as u64;
+        let c = crate::media::thread_render_counts();
+        let (i0, b0) = (c[0], c[1]);
+        assert!(run_photo(jobs));
+        let c = crate::media::thread_render_counts();
+        let (i1, b1) = (c[0], c[1]);
+        assert_eq!((i1 - i0, b1 - b0), (0, n), "every render of the build is background work");
+        assert!(!crate::media::rendering_in_background(), "the thread is back to interactive work");
+        // (not served from the preview just built)
+        let mut loupe = s.loupe_job(id, 256, 256, true).unwrap();
+        (loupe.view_cache, loupe.cache) = (None, None);
+        loupe.run().rendered.unwrap();
+        let c = crate::media::thread_render_counts();
+        let (i2, b2) = (c[0], c[1]);
+        assert_eq!(c[4], 0, "nothing on screen renders on the second card");
+        assert_eq!((i2 - i1, b2 - b1), (1, 0), "the loupe's render is interactive");
+        let counts = s.execute("library.buildPreviews", &json!({"ids": [id.0], "edge": 256, "wait": true, "force": true})).unwrap();
+        assert!(counts["renders"]["background"].as_u64().unwrap() >= n, "{counts}");
+    }
+
+    // Given a panic inside background work, it is that work's error and the thread's renders
+    // are interactive again (a loupe render on it must never count as, or route to, background work)
+    #[test]
+    fn background_work_that_panics_leaves_the_thread_interactive() {
+        let r: Result<(), String> = crate::media::background_gpu("a test", || panic!("boom"));
+        assert!(r.unwrap_err().contains("a test"));
+        assert!(!crate::media::rendering_in_background());
+    }
+
+    // Given a photo, the view preview a build puts in the cache (background work: on the second
+    // graphics card when there is one) equals the loupe's own render of it (the screen's card)
+    // within 1 LSB (design §7.6), so a built preview never shows a different photo
+    #[test]
+    fn a_built_preview_equals_the_loupes_render() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let jobs = jobs_for(&mut s, id, Some(512));
+        let (cache, key) = jobs[0].view_cache.clone().expect("the view job keeps its render");
+        assert!(run_photo(jobs));
+        let built = cache.get(key).expect("the build kept the view preview");
+        let mut job = s.loupe_job(id, 512, 512, true).unwrap();
+        (job.view_cache, job.cache) = (None, None);
+        let r = job.run();
+        assert!(r.quick.is_none(), "rendered, not the built preview served again");
+        let shown = r.rendered.unwrap().image;
+        assert_eq!((built.width, built.height), (shown.width, shown.height));
+        let worst = built.data.iter().zip(&shown.data).flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y))).max().unwrap_or(0);
+        println!("built preview vs loupe render: max |Δ| = {worst} LSB");
+        assert!(worst <= 1, "max |Δ| = {worst} LSB");
     }
 }
