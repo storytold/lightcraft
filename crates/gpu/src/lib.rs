@@ -63,6 +63,77 @@ pub use wgpu;
 #[cfg(not(target_arch = "wasm32"))]
 pub use slot::{EventKind, GpuEvent, MAX_RECOVERIES};
 
+// --------------------------------------------------------------- two cards: roles and routing
+
+/// Which graphics card a render runs on. On a machine with one card there is only `Primary`; with
+/// a second card (Settings ▸ Performance ▸ Second graphics card) background work also goes to the
+/// `Helper` (design §3, §8). Interactive work (the loupe, compare, visible thumbnails, display
+/// textures) is always `Primary`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// The editing card: the one the photo you're working on renders on (the screen's, unless
+    /// another is chosen). Batch work yields to the interface on it.
+    #[default]
+    Primary,
+    /// The second card: batch work only, never a view; its results come back as pixels.
+    Helper,
+}
+
+impl Role {
+    pub const ALL: [Role; 2] = [Role::Primary, Role::Helper];
+
+    /// `editing`, `helper` (logs, the crash marker, `app.gpu`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Role::Primary => "editing",
+            Role::Helper => "helper",
+        }
+    }
+}
+
+thread_local! {
+    /// The card this thread's renders go to ([`with_role`]).
+    static ROLE: std::cell::Cell<Role> = const { std::cell::Cell::new(Role::Primary) };
+}
+
+/// The card this thread's GPU renders go to ([`with_role`]; `Primary` unless set).
+pub fn current_role() -> Role {
+    ROLE.try_with(|r| r.get()).unwrap_or_default()
+}
+
+/// Sets this thread's role until dropped (restored on unwind too).
+struct RoleGuard(Role);
+
+impl RoleGuard {
+    fn set(role: Role) -> RoleGuard {
+        RoleGuard(ROLE.try_with(|r| r.replace(role)).unwrap_or_default())
+    }
+}
+
+impl Drop for RoleGuard {
+    fn drop(&mut self) {
+        let was = self.0;
+        let _ = ROLE.try_with(|r| r.set(was));
+    }
+}
+
+/// Run `f` with this thread's GPU renders on card `role` — strictly: when that card has no device
+/// ready (the second card not made yet, turned off, lost) they render on the CPU. Every call here
+/// that acts on "the device" ([`render`], [`try_render`], [`in_one_turn`], [`enabled`],
+/// [`available`], [`unavailable_reason`], [`adapter_memory`] …) acts on this card inside `f`.
+/// Batch work normally takes [`batch_turn_any`] instead, which picks the card and routes for it.
+pub fn with_role<R>(role: Role, f: impl FnOnce() -> R) -> R {
+    let _role = RoleGuard::set(role);
+    f()
+}
+
+/// Run `f` on the second card when it is ready ([`helper_ready`]), else as without it (the
+/// editing card). For background work that doesn't take turns ([`batch_turn_any`] does this per
+/// photo).
+pub fn on_helper<R>(f: impl FnOnce() -> R) -> R {
+    if helper_ready() { with_role(Role::Helper, f) } else { f() }
+}
+
 /// Run `f` with this thread's GPU renders counted as batch work (an export's photos): they take
 /// turns at the GPU sized by its memory, behind the window's own renders (see `gate.rs`).
 pub fn as_batch<R>(f: impl FnOnce() -> R) -> R {
@@ -76,17 +147,29 @@ pub fn as_batch<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// Device bytes a batch photo of `src_px` source and `out_px` output pixels holds in its turn:
+/// its renders' own, plus an HDR rendition's float output.
+#[cfg(not(target_arch = "wasm32"))]
+fn turn_bytes(src_px: usize, out_px: usize) -> u64 {
+    gate::job_bytes(src_px, out_px).saturating_add((out_px as u64).saturating_mul(16))
+}
+
+/// The card's memory for its gate (what the system says, else an assumption by kind).
+#[cfg(not(target_arch = "wasm32"))]
+fn gate_vram(g: &ctx::Gpu) -> u64 {
+    g.vram.unwrap_or_else(|| vram::assumed(&g.info))
+}
+
 /// Run `f`, several batch renders of one photo (an export's SDR and HDR renditions, `src_px`
-/// source and `out_px` output pixels), in one turn at the GPU: the stages the first leaves on the
-/// device for the second stay its own. Outside batch work, or without a device, it is just `f`.
+/// source and `out_px` output pixels), in one turn at this thread's card: the stages the first
+/// leaves on the device for the second stay its own. Outside batch work, inside a [`BatchTurn`],
+/// or without a device, it is just `f`.
 pub fn in_one_turn<R>(src_px: usize, out_px: usize, f: impl FnOnce() -> R) -> R {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let role = current_role();
         let Some(g) = existing_device().filter(|_| enabled()) else { return f() };
-        let vram = g.vram.unwrap_or_else(|| vram::assumed(&g.info));
-        // (the HDR rendition's float output on top of the renders' own memory)
-        let bytes = gate::job_bytes(src_px, out_px).saturating_add((out_px as u64).saturating_mul(16));
-        gate::in_one_turn(bytes, vram, &shutting_down, f)
+        gate::in_one_turn(role, turn_bytes(src_px, out_px), gate_vram(&g), &shutting_down, f)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -95,34 +178,110 @@ pub fn in_one_turn<R>(src_px: usize, out_px: usize, f: impl FnOnce() -> R) -> R 
     }
 }
 
-/// A photo's turn at the GPU taken by [`try_batch_turn`], held until dropped.
+/// A photo's turn at a card ([`batch_turn_any`], [`try_batch_turn`] …), held until dropped. While
+/// it is held, this thread's renders go to that card ([`BatchTurn::role`]) and run in the turn.
 pub struct BatchTurn {
+    // (dropped in this order: the gate's turn, then the thread's role back)
     #[cfg(not(target_arch = "wasm32"))]
     _turn: Option<gate::Turn>,
+    _route: Option<RoleGuard>,
+    role: Role,
 }
 
-/// [`in_one_turn`]'s turn for a photo of `src_px` source and `out_px` output pixels, if it is free
-/// now: its renders then run in it until the result is dropped. `None` when it would have to
-/// wait for other exports: the caller renders the photo on the CPU instead ([`on_cpu`]), so
-/// the processor and the GPU export photos at once. Without a device (or outside batch work)
-/// there is nothing to wait for: always a turn.
+impl BatchTurn {
+    /// The card the photo renders on.
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// The name of that card (`None` without a device: the photo renders on the CPU).
+    pub fn card_name(&self) -> Option<String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            slot::current(self.role).map(|g| g.info.name.clone())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
+        }
+    }
+}
+
+/// [`in_one_turn`]'s turn for a photo of `src_px` source and `out_px` output pixels on this
+/// thread's card, if it is free now: its renders then run in it until the result is dropped.
+/// `None` when it would have to wait for other exports: the caller renders the photo on the CPU
+/// instead ([`on_cpu`]), so the processor and the GPU export photos at once. Without a device (or
+/// outside batch work) there is nothing to wait for: always a turn.
 pub fn try_batch_turn(src_px: usize, out_px: usize) -> Option<BatchTurn> {
+    let role = current_role();
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(g) = existing_device().filter(|_| enabled()) else { return Some(BatchTurn { _turn: None }) };
-        let vram = g.vram.unwrap_or_else(|| vram::assumed(&g.info));
-        let bytes = gate::job_bytes(src_px, out_px).saturating_add((out_px as u64).saturating_mul(16));
-        gate::try_turn(bytes, vram).map(|t| BatchTurn { _turn: Some(t) })
+        let Some(g) = existing_device().filter(|_| enabled()) else { return Some(BatchTurn { _turn: None, _route: None, role }) };
+        gate::try_turn(role, turn_bytes(src_px, out_px), gate_vram(&g)).map(|t| BatchTurn { _turn: Some(t), _route: None, role })
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (src_px, out_px);
-        Some(BatchTurn {})
+        Some(BatchTurn { _route: None, role })
     }
 }
 
-/// Batch renders don't start for `d` from now: the window needs the GPU (it resizes, a frame was
-/// slow). Renders already running finish.
+/// A turn for the photo on card `role` alone, if that card has a device and room now: this
+/// thread's renders go to it while the turn is held. `None`: no device there, or it is busy (or,
+/// on the editing card, the interface is: §8).
+pub fn try_batch_turn_on(role: Role, src_px: usize, out_px: usize) -> Option<BatchTurn> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if !allowed() {
+            return None;
+        }
+        let g = slot::current(role)?;
+        let route = RoleGuard::set(role);
+        let turn = gate::try_turn(role, turn_bytes(src_px, out_px), gate_vram(&g))?;
+        Some(BatchTurn { _turn: Some(turn), _route: Some(route), role })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (role, src_px, out_px);
+        None
+    }
+}
+
+/// A turn for a batch photo on whichever card has room now: the second card first (it keeps the
+/// screen's card free for the interface), then the editing card (whose gate hands out batch turns
+/// only while the interface is idle, §8). `None`: both are busy, or there is no GPU — the caller
+/// renders the photo on the CPU (an export's `mix` mode), as [`try_batch_turn`]'s `None` did. Take
+/// it inside [`as_batch`]; this thread's renders go to the card while the turn is held.
+pub fn batch_turn_any(src_px: usize, out_px: usize) -> Option<BatchTurn> {
+    if helper_ready()
+        && let Some(t) = try_batch_turn_on(Role::Helper, src_px, out_px)
+    {
+        return Some(t);
+    }
+    try_batch_turn_on(Role::Primary, src_px, out_px)
+}
+
+/// [`batch_turn_any`], waiting until one card has room (a GPU-only export, a preview build).
+/// `None` only when `stop()` says to give up (cancelled, the app closing) — or at once when there
+/// is no GPU to wait for (render on the CPU).
+pub fn wait_batch_turn_any(src_px: usize, out_px: usize, stop: &dyn Fn() -> bool) -> Option<BatchTurn> {
+    loop {
+        if let Some(t) = batch_turn_any(src_px, out_px) {
+            return Some(t);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu = allowed() && (slot::current(Role::Primary).is_some() || helper_ready());
+        #[cfg(target_arch = "wasm32")]
+        let gpu = false;
+        if !gpu || stop() || shutting_down() {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+/// Batch renders on the editing card don't start for `d` from now: the window needs the GPU (it
+/// resizes, a frame was slow). Renders already running finish.
 pub fn hold_batch(d: std::time::Duration) {
     #[cfg(not(target_arch = "wasm32"))]
     gate::hold(d);
@@ -130,20 +289,67 @@ pub fn hold_batch(d: std::time::Duration) {
     let _ = d;
 }
 
-/// How much batch work may be on the GPU at once: device `bytes` (`None`: a share of the card's
-/// memory) and at most `jobs` renders (`None`: up to 4). From the install settings ("Test my
-/// machine" measures them).
-pub fn set_batch_limits(bytes: Option<u64>, jobs: Option<usize>) {
+/// The interface was touched (input, a slider, a brush, a pan, a photo change): batch work leaves
+/// the editing card to it for about a second (§8; only once [`track_interaction`] is on). The
+/// desktop app calls it on every frame with input.
+pub fn note_interaction() {
     #[cfg(not(target_arch = "wasm32"))]
-    gate::set_limits(bytes, jobs);
-    #[cfg(target_arch = "wasm32")]
-    let _ = (bytes, jobs);
+    gate::note_interaction();
 }
 
-/// Batch work on the GPU now and so far.
+/// Let batch work on the editing card yield to the interface (§8): turns there only after ~1 s
+/// with no input and no view render, one job at a time while the second card works, and a running
+/// batch render pauses between submissions the moment interaction starts. Off by default (the CLI,
+/// MCP, tests behave as before); the desktop app turns it on.
+pub fn track_interaction(on: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    gate::track(on);
+    #[cfg(target_arch = "wasm32")]
+    let _ = on;
+}
+
+/// Whether batch work would have to leave the editing card to the interface now (a view renders,
+/// or with [`track_interaction`] on, input or a view render within the last ~1 s).
+pub fn interface_busy() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        gate::interface_busy()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// How long the interface must be untouched before batch work uses the editing card (tests).
+#[doc(hidden)]
+pub fn set_interaction_idle(d: std::time::Duration) {
+    #[cfg(not(target_arch = "wasm32"))]
+    gate::set_idle(d);
+    #[cfg(target_arch = "wasm32")]
+    let _ = d;
+}
+
+/// How much batch work may be on the editing card at once: device `bytes` (`None`: a share of the
+/// card's memory) and at most `jobs` renders (`None`: up to 4). From the install settings ("Test
+/// my machine" measures them). [`set_batch_limits_for`] sets the second card's.
+pub fn set_batch_limits(bytes: Option<u64>, jobs: Option<usize>) {
+    set_batch_limits_for(Role::Primary, bytes, jobs);
+}
+
+/// [`set_batch_limits`] for card `role` (the second card's default share is 80 % of its memory:
+/// it draws no window).
+pub fn set_batch_limits_for(role: Role, bytes: Option<u64>, jobs: Option<usize>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    gate::set_limits(role, bytes, jobs);
+    #[cfg(target_arch = "wasm32")]
+    let _ = (role, bytes, jobs);
+}
+
+/// Batch work on a card now and so far.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BatchUsage {
-    /// Batch renders on the GPU now, and the device bytes they hold.
+    /// Batch renders on the card now, and the device bytes they hold.
     pub jobs: usize,
     pub bytes: u64,
     /// Batch renders waiting for their turn now.
@@ -154,32 +360,48 @@ pub struct BatchUsage {
     /// Batch renders that had to wait so far, and their total wait (ms).
     pub waits: u64,
     pub waited_ms: u64,
+    /// Running batch renders that paused for the interface so far, and their total pause (ms; the
+    /// editing card only, §8).
+    pub pauses: u64,
+    pub paused_ms: u64,
 }
 
-/// See [`BatchUsage`] (zero without a device).
+/// The editing card's [`BatchUsage`] (zero without a device).
 pub fn batch_usage() -> BatchUsage {
+    batch_usage_of(Role::Primary)
+}
+
+/// Card `role`'s [`BatchUsage`].
+pub fn batch_usage_of(role: Role) -> BatchUsage {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let (jobs, bytes, waiting, waits, waited_ms) = gate::usage();
-        let vram = adapter_memory().unwrap_or(0);
-        let (limit_bytes, limit_jobs) = gate::limits(vram);
-        BatchUsage { jobs, bytes, waiting, limit_bytes, limit_jobs, waits, waited_ms }
+        let (jobs, bytes, waiting, waits, waited_ms, pauses, paused_ms) = gate::usage(role);
+        let vram = adapter_memory_of(role).unwrap_or(0);
+        let (limit_bytes, limit_jobs) = gate::limits(role, vram);
+        BatchUsage { jobs, bytes, waiting, limit_bytes, limit_jobs, waits, waited_ms, pauses, paused_ms }
     }
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = role;
         BatchUsage::default()
     }
 }
 
-/// The graphics card's memory (bytes): what the system reports, else an assumption by kind of
+/// This thread's card's memory (bytes): what the system reports, else an assumption by kind of
 /// adapter; `None` before the device exists or without one.
 pub fn adapter_memory() -> Option<u64> {
+    adapter_memory_of(current_role())
+}
+
+/// [`adapter_memory`] of card `role`.
+pub fn adapter_memory_of(role: Role) -> Option<u64> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        existing_device().map(|g| g.vram.unwrap_or_else(|| vram::assumed(&g.info)))
+        slot::existing(role).map(|g| gate_vram(&g))
     }
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = role;
         None
     }
 }
@@ -204,11 +426,11 @@ pub fn last_loss() -> Option<String> {
     }
 }
 
-/// Lost devices replaced so far in this session.
+/// Lost devices of this thread's card replaced so far in this session.
 pub fn recoveries() -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        slot::recoveries()
+        slot::recoveries(current_role())
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -216,19 +438,20 @@ pub fn recoveries() -> u32 {
     }
 }
 
-/// Treat the device in use as lost, as a driver reset would (tests of the recovery): renders go to
-/// the CPU, and a new device replaces it after the pause.
+/// Treat this thread's card's device as lost, as a driver reset would (tests of the recovery):
+/// renders go elsewhere, and a new device replaces it after the pause.
 #[doc(hidden)]
 pub fn simulate_device_loss(reason: &str) {
     mark_broken(0, reason);
 }
 
-/// Which device renders now (each one created gets the next number); `None` without one (tests).
+/// Which device renders on this thread's card now (each one created gets the next number); `None`
+/// without one (tests).
 #[doc(hidden)]
 pub fn device_generation() -> Option<u64> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        slot::current().map(|g| g.generation)
+        slot::current(current_role()).map(|g| g.generation)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -284,14 +507,20 @@ pub fn unavailable_reason() -> Option<String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(r) = slot::lost_reason() {
-            return Some(if slot::recoveries() >= slot::MAX_RECOVERIES {
+        let role = current_role();
+        if let Some(r) = slot::lost_reason(role) {
+            return Some(if slot::recoveries(role) >= slot::MAX_RECOVERIES {
                 format!("stopped after a GPU failure: {r}")
             } else {
                 format!("paused after a GPU failure, restarting the graphics card: {r}")
             });
         }
-        slot::creation_error()
+        match role {
+            Role::Primary => slot::creation_error(role),
+            Role::Helper => slot::creation_error(role)
+                .or_else(|| slot::absent_reason(role))
+                .or_else(|| (!slot::tried(role)).then(|| "the second graphics card isn't ready yet".to_string())),
+        }
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -419,11 +648,12 @@ pub fn on_cpu<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// Why the device in use failed, while it waits to be replaced (`None`: it works, or there is none).
+/// Why this thread's card's device failed, while it waits to be replaced (`None`: it works, or
+/// there is none).
 pub fn lost() -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        slot::lost_reason()
+        slot::lost_reason(current_role())
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -516,15 +746,23 @@ pub fn set_window_device_pending(pending: bool) {
     let _ = pending;
 }
 
-/// The render device: created on first use; after a failure, replaced once a short pause is over
-/// (`None` meanwhile, and while GPU rendering is turned off: render on the CPU). See [`slot`].
+/// This thread's card's render device ([`current_role`]): the editing card's is created on first
+/// use, the second card's only by its warm-up ([`warm_up`]); after a failure, each is replaced once
+/// a short pause is over (`None` meanwhile, and while GPU rendering is turned off: render on the
+/// CPU). See [`slot`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn device() -> Option<Arc<ctx::Gpu>> {
+    device_for(current_role())
+}
+
+/// [`device`] of card `role`.
+#[cfg(not(target_arch = "wasm32"))]
+fn device_for(role: Role) -> Option<Arc<ctx::Gpu>> {
     // turned off (preference, environment): don't even load the driver (issue #136)
     if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
-        return slot::current();
+        return slot::current(role);
     }
-    if let Some(g) = slot::current() {
+    if let Some(g) = slot::current(role) {
         return Some(g);
     }
     // the window's device is being adopted: render on the CPU until it is, rather than create a
@@ -534,7 +772,16 @@ pub(crate) fn device() -> Option<Arc<ctx::Gpu>> {
     }
     // creating the device is a long call into the driver: not once the process is ending
     let _work = exit::enter()?;
-    slot::get(new_device)
+    slot::get(role, new_device_for_role, role == Role::Primary)
+}
+
+/// A new device for card `role` (its first, or one replacing a lost one).
+#[cfg(not(target_arch = "wasm32"))]
+fn new_device_for_role(role: Role) -> Result<ctx::Gpu, String> {
+    match role {
+        Role::Primary => new_device(),
+        Role::Helper => new_helper_device().and_then(|g| g.ok_or_else(|| "no second graphics card to use".to_string())),
+    }
 }
 
 /// A device of our own on the editing card ([`cards::resolve_card`]), under the crash sentinel
@@ -549,6 +796,7 @@ fn new_device() -> Result<ctx::Gpu, String> {
             let auto = new_device_on(backends, true).map_err(|(e, _)| e);
             if let Ok(g) = &auto {
                 slot::event(
+                    Role::Primary,
                     EventKind::CardMissing,
                     format!("LightCraft couldn't use the graphics card chosen in Settings ({why}), so it uses Automatic ({}).", g.info.name),
                 );
@@ -577,32 +825,36 @@ fn new_device_on(backends: wgpu::Backends, automatic: bool) -> Result<ctx::Gpu, 
     let chosen = p.resolution.how == cards::How::Chosen;
     let (adapter, key) = (p.adapter, p.key);
     backend::with_init_marker_for(backends, key.as_ref(), "editing", || {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::on_adapter(adapter, key.clone())))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::on_adapter(adapter, key.clone(), Role::Primary)))
             .unwrap_or_else(|_| Err("device creation panicked".into()))
     })
     .map_err(|e| (e, chosen))
 }
 
-/// The device if it has been created, even one that failed (never creates one).
+/// This thread's card's device if it has been created, even one that failed (never creates one).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn existing_device() -> Option<Arc<ctx::Gpu>> {
-    slot::existing()
+    slot::existing(current_role())
 }
 
 /// Create the device and compile the kernels on a background thread now (once the window is up),
-/// so the first render doesn't wait ~0.3–0.4 s for it and the UI thread never does. Does nothing
-/// while GPU rendering is turned off. Repeated calls start one thread at most.
+/// so the first render doesn't wait ~0.3–0.4 s for it and the UI thread never does; then the second
+/// card's ([`set_helper`]: Automatic uses one when there is another card). Does nothing while GPU
+/// rendering is turned off. Repeated calls start one thread at most.
 pub fn warm_up() {
     #[cfg(not(target_arch = "wasm32"))]
-    if !env_disabled() && ENABLED.load(Ordering::SeqCst) && !slot::tried() && !WINDOW_PENDING.load(Ordering::Acquire) {
+    if !env_disabled() && ENABLED.load(Ordering::SeqCst) && slot::tried(Role::Primary) {
+        // the editing card is set up: only the second card may still need its warm-up
+        sync_helper();
+    } else if !env_disabled() && ENABLED.load(Ordering::SeqCst) && !WINDOW_PENDING.load(Ordering::Acquire) {
         static STARTED: AtomicBool = AtomicBool::new(false);
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
         let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
             loop {
-                let _ = device();
-                if slot::tried() || shutting_down() || env_disabled() {
+                let _ = device_for(Role::Primary);
+                if slot::tried(Role::Primary) || shutting_down() || env_disabled() {
                     break;
                 }
                 // turned off before the thread ran (nothing created): a later call may start
@@ -615,6 +867,7 @@ pub fn warm_up() {
                     break;
                 }
             }
+            sync_helper();
         });
         if spawned.is_err() {
             STARTED.store(false, Ordering::SeqCst);
@@ -622,11 +875,12 @@ pub fn warm_up() {
     }
 }
 
-/// Has device creation finished (successfully or not)? Never blocks — for status displays.
+/// Has the editing card's device creation finished (successfully or not)? Never blocks — for status
+/// displays.
 pub fn ready() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        env_disabled() || slot::tried()
+        env_disabled() || slot::tried(Role::Primary)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -673,7 +927,7 @@ pub struct GpuMemory {
     pub peak: u64,
 }
 
-/// Device memory held by the renderer's buffers (zero without a device).
+/// Device memory held by the renderer's buffers, both cards together (zero without a device).
 pub fn memory() -> GpuMemory {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -681,6 +935,19 @@ pub fn memory() -> GpuMemory {
     }
     #[cfg(target_arch = "wasm32")]
     {
+        GpuMemory::default()
+    }
+}
+
+/// [`memory`] of card `role` alone (`peak`: its own since [`reset_memory_peak`]).
+pub fn memory_of(role: Role) -> GpuMemory {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ctx::memory_of(role)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = role;
         GpuMemory::default()
     }
 }
@@ -696,16 +963,19 @@ pub fn set_pool_limit(bytes: u64) {
     let _ = bytes;
 }
 
-/// Free recycled buffers until at most `keep` bytes stay pooled (e.g. when the app goes idle).
+/// Free recycled buffers until at most `keep` bytes stay pooled on each card (e.g. when the app
+/// goes idle).
 pub fn trim_pool(keep: u64) {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(g) = existing_device()
-        && let Some(_work) = exit::enter()
-    {
+    if let Some(_work) = exit::enter() {
         if keep == 0 {
             render::release_shared_source();
         }
-        g.trim(keep);
+        for role in Role::ALL {
+            if let Some(g) = slot::existing(role) {
+                g.trim(keep);
+            }
+        }
     }
     #[cfg(target_arch = "wasm32")]
     let _ = keep;
@@ -800,11 +1070,12 @@ pub fn render_display(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings,
     run(src, info, s, req, stages, true).ok()
 }
 
-/// Whether renders run on the window's device (and so can be handed over as textures).
+/// Whether the editing card's renders run on the window's device (and so can be handed over as
+/// textures).
 pub fn on_window_device() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        existing_device().is_some_and(|g| g.window)
+        slot::existing(Role::Primary).is_some_and(|g| g.window)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -852,6 +1123,7 @@ pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu:
             new_device()
         })
     });
+    sync_helper();
     match (g, declined) {
         (Ok(g), None) if g.window => Ok(()),
         (_, Some(e)) => Err(e),
@@ -1002,7 +1274,7 @@ pub fn card_name(key: &str) -> Option<String> {
 pub fn card_in_use() -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        existing_device().map(|g| g.info.name.clone())
+        slot::existing(Role::Primary).map(|g| g.info.name.clone())
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1086,6 +1358,7 @@ fn report_missing(r: &cards::Resolution, entries: &[cards::AdapterEntry]) {
     let auto = r.index.and_then(|i| entries.get(i)).map_or_else(|| "the default graphics card".to_string(), |e| e.name.clone());
     log::warn!("gpu: the card chosen in the settings ({k}) isn't there; using {auto}");
     slot::event(
+        Role::Primary,
         EventKind::CardMissing,
         format!("The graphics card chosen in Settings ({}) isn't available, so LightCraft uses Automatic ({auto}).", k.name),
     );
@@ -1096,14 +1369,18 @@ fn report_missing(r: &cards::Resolution, entries: &[cards::AdapterEntry]) {
 /// the device exists (the choice applies when it is made) or while GPU rendering is off.
 #[cfg(not(target_arch = "wasm32"))]
 fn switch_editing_card() {
-    if env_disabled() || !ENABLED.load(Ordering::Relaxed) || !slot::tried() {
+    if env_disabled() || !ENABLED.load(Ordering::Relaxed) || !slot::tried(Role::Primary) {
         return;
     }
     SWITCHES.fetch_add(1, Ordering::Relaxed);
     let spawned = std::thread::Builder::new().name("lc-gpu-switch".into()).spawn(|| {
         if let Some(_work) = exit::enter() {
-            let _one = slot::creating();
-            switch_now();
+            {
+                let _one = slot::creating(Role::Primary);
+                switch_now();
+            }
+            // the second card may be the new editing card, or the old one free to help now
+            sync_helper();
         }
         SWITCHES.fetch_sub(1, Ordering::Relaxed);
     });
@@ -1117,9 +1394,9 @@ fn switch_editing_card() {
 fn switch_now() {
     let Some(backends) = backend::compute_backends() else { return };
     let target = editing_target(backends);
-    let current = slot::existing();
+    let current = slot::existing(Role::Primary);
     let there = current.as_ref().is_some_and(|g| g.window == target.window && (target.window || g.key == target.key));
-    if there && slot::lost_reason().is_none() {
+    if there && slot::lost_reason(Role::Primary).is_none() {
         return;
     }
     let from = current.as_ref().map_or_else(|| "the processor".to_string(), |g| format!("the {}", g.info.name));
@@ -1129,12 +1406,13 @@ fn switch_now() {
         Ok(g) => {
             let name = g.info.name.clone();
             log::info!("gpu: editing renders move to {name}{}", if g.window { " (the window's device)" } else { "" });
-            slot::put(g);
-            slot::event(EventKind::CardSwitched, format!("Photos now render on the {name}."));
+            slot::put(Role::Primary, g);
+            slot::event(Role::Primary, EventKind::CardSwitched, format!("Photos now render on the {name}."));
         }
         Err(why) => {
             log::warn!("gpu: switching to {} failed: {why}", target.name);
             slot::event(
+                Role::Primary,
                 EventKind::CardSwitched,
                 format!("LightCraft couldn't switch to the {} ({why}); photos keep rendering on {from}.", target.name),
             );
@@ -1175,6 +1453,276 @@ fn adopt_on(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo, k
     })
 }
 
+// ------------------------------------------------------------------------- the second card
+
+/// The second graphics card (Settings ▸ Performance ▸ Second graphics card): `""`, `auto` or
+/// `automatic` for Automatic (another usable card than the editing one, dedicated first; none
+/// while `LIGHTCRAFT_GPU_ADAPTER` keeps the work on one card), `off` for none, a card's key
+/// ([`CardInfo::key`]), part of the name of a card found, or `same` (a second device on the editing
+/// card: tests and benchmarks of the two-device logic on one card). Applied at once on a thread of
+/// its own: batch work uses the new card once its kernels are built. `LIGHTCRAFT_GPU_HELPER`
+/// overrides it. `Err`: text that names no card.
+pub fn set_helper(setting: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let t = setting.trim();
+        let choice = match t.to_ascii_lowercase().as_str() {
+            "same" => cards::HelperChoice::Same,
+            _ => match cards::HelperChoice::parse_setting(t) {
+                cards::HelperChoice::Auto if !matches!(t.to_ascii_lowercase().as_str(), "" | "auto" | "automatic") => {
+                    let listed = cards::listed().unwrap_or_default();
+                    let e = listed.iter().find(|e| e.usable && backend::adapter_name_matches(t, &e.name));
+                    cards::HelperChoice::Card(
+                        e.map(|e| e.key.clone())
+                            .ok_or_else(|| format!("no graphics card found is called like \"{t}\" (app.gpu lists them under adapters)"))?,
+                    )
+                }
+                c => c,
+            },
+        };
+        if cards::set_helper(choice) {
+            sync_helper();
+        }
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = setting;
+        Ok(())
+    }
+}
+
+/// The second card's setting in force (`""` Automatic, `off`, `same` or a card's key).
+pub fn helper_setting() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cards::helper_setting().setting()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+/// Whether batch work can go to the second card now: its device is made and not lost, and GPU
+/// rendering is allowed on this thread. Never blocks.
+pub fn helper_ready() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        allowed() && slot::current(Role::Helper).is_some()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// What the second card is doing, for Settings and `app.gpu`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HelperStatus {
+    /// `off` (turned off, or GPU rendering is), `none` (no other card to use), `notStarted` (made
+    /// after the editing card's device: the app's warm-up), `starting`, `ready`, `lost` (stopped
+    /// responding: restarted after a pause), `failed` (its device couldn't be made).
+    pub state: &'static str,
+    /// The card's name (ready, lost).
+    pub name: Option<String>,
+    /// Why it is not ready, in plain words.
+    pub reason: Option<String>,
+}
+
+/// The second card's [`HelperStatus`]. Never blocks.
+pub fn helper_status() -> HelperStatus {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let st = |state, name: Option<String>, reason: Option<String>| HelperStatus { state, name, reason };
+        if let Some(why) = env_off_reason() {
+            return st("off", None, Some(why.into()));
+        }
+        if !ENABLED.load(Ordering::Relaxed) {
+            return st("off", None, Some("GPU rendering is turned off".into()));
+        }
+        let name = slot::existing(Role::Helper).map(|g| g.info.name.clone());
+        if let Some(r) = slot::lost_reason(Role::Helper) {
+            return st("lost", name, Some(r));
+        }
+        if slot::current(Role::Helper).is_some() {
+            return st("ready", name, None);
+        }
+        if let Some(r) = slot::absent_reason(Role::Helper) {
+            let off = cards::helper_choice() == cards::HelperChoice::Off;
+            return st(if off { "off" } else { "none" }, None, Some(r));
+        }
+        if let Some(r) = slot::creation_error(Role::Helper) {
+            return st("failed", None, Some(r));
+        }
+        if helper_syncing() {
+            return st("starting", None, None);
+        }
+        st("notStarted", None, None)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        HelperStatus { state: "off", name: None, reason: Some("the browser build has no GPU path yet".into()) }
+    }
+}
+
+/// The second card's sync: (one is running, another was asked for meanwhile).
+#[cfg(not(target_arch = "wasm32"))]
+static HELPER_SYNC: Mutex<(bool, bool)> = Mutex::new((false, false));
+
+#[cfg(not(target_arch = "wasm32"))]
+fn helper_syncing() -> bool {
+    HELPER_SYNC.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0
+}
+
+/// Make the second card's device match the settings now, on a thread of its own (`lc-gpu-helper`):
+/// made, replaced by another card's, or released. Once at a time; asked again meanwhile, it runs
+/// once more after. Nothing before the editing card's device was tried ([`warm_up`] and
+/// [`adopt_window_device`] call it after).
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_helper() {
+    {
+        let mut s = HELPER_SYNC.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if s.0 {
+            s.1 = true;
+            return;
+        }
+        *s = (true, false);
+    }
+    let spawned = std::thread::Builder::new().name("lc-gpu-helper".into()).spawn(|| {
+        loop {
+            if let Some(_work) = exit::enter() {
+                sync_helper_now();
+            }
+            let mut s = HELPER_SYNC.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if s.1 {
+                s.1 = false;
+            } else {
+                s.0 = false;
+                break;
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("gpu: can't set up the second graphics card: {e}");
+        *HELPER_SYNC.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = (false, false);
+    }
+}
+
+/// Wait (at most `timeout`) until the second card's device matches the settings ([`set_helper`],
+/// the warm-up): `true` when no sync runs any more (tests, `app.gpu {wait}`).
+pub fn wait_helper(timeout: std::time::Duration) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let end = std::time::Instant::now() + timeout;
+        while helper_syncing() {
+            if std::time::Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        true
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
+        true
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_helper_now() {
+    if env_disabled() || !ENABLED.load(Ordering::Relaxed) || !slot::tried(Role::Primary) {
+        return;
+    }
+    let Some(backends) = backend::compute_backends() else { return };
+    let _one = slot::creating(Role::Helper);
+    match helper_pick(backends) {
+        Err(why) => {
+            if slot::existing(Role::Helper).is_some() || slot::absent_reason(Role::Helper).as_deref() != Some(why.as_str()) {
+                log::info!("gpu: no second graphics card: {why}");
+                slot::clear(Role::Helper, false, why);
+            }
+        }
+        Ok((adapter, key, instance)) => {
+            let current = slot::existing(Role::Helper);
+            if current.as_ref().is_some_and(|g| g.key == key) && slot::lost_reason(Role::Helper).is_none() {
+                return;
+            }
+            drop(current);
+            match make_helper(backends, adapter, key) {
+                Ok(g) => {
+                    log::info!("gpu: the second graphics card ({}) helps with batch work", g.info.name);
+                    slot::put(Role::Helper, g);
+                }
+                Err(why) => {
+                    log::warn!("gpu: the second graphics card can't render: {why}");
+                    slot::clear(Role::Helper, true, why);
+                }
+            }
+            drop(instance);
+        }
+    }
+}
+
+/// The second card's adapter now ([`cards::resolve_helper`]), with its key and the instance it
+/// lives on; `Err`: there is none to use, and why.
+#[cfg(not(target_arch = "wasm32"))]
+fn helper_pick(backends: wgpu::Backends) -> Result<(wgpu::Adapter, Option<cards::AdapterKey>, wgpu::Instance), String> {
+    let choice = cards::helper_choice();
+    let pins = backend::wanted_adapter().is_some();
+    match &choice {
+        cards::HelperChoice::Off => {
+            return Err(if cards::helper_variable().is_some() { "turned off by LIGHTCRAFT_GPU_HELPER" } else { "turned off in Settings" }.into());
+        }
+        cards::HelperChoice::Auto if pins => return Err("LIGHTCRAFT_GPU_ADAPTER keeps the work on one graphics card".into()),
+        _ => {}
+    }
+    let (instance, all, entries) = backend::with_marker("graphics card listing", || {
+        std::panic::catch_unwind(|| {
+            let instance = backend::compute_instance(backends);
+            let (all, entries) = backend::enumerate(&instance, backends);
+            (instance, all, entries)
+        })
+        .map_err(|_| "listing the graphics cards panicked".to_string())
+    })?;
+    let primary = slot::existing(Role::Primary).and_then(|g| {
+        let key = g.key.clone().unwrap_or_else(|| cards::AdapterKey::of(&g.info, 1));
+        entries.iter().position(|e| e.key == key).or_else(|| entries.iter().position(|e| e.key.same_model(&key)))
+    });
+    let Some(i) = cards::resolve_helper(&entries, primary, &choice, pins) else {
+        return Err(match &choice {
+            cards::HelperChoice::Card(k) => format!("the {} isn't available", k.name),
+            cards::HelperChoice::Same => "there is no graphics card for editing".into(),
+            _ => "no other graphics card found".into(),
+        });
+    };
+    let key = entries.get(i).map(|e| e.key.clone());
+    let adapter = all.into_iter().nth(i).ok_or("the graphics card went away")?;
+    Ok((adapter, key, instance))
+}
+
+/// A device of the second card's on `adapter`, under the crash sentinel (`role=helper`: a crash
+/// there costs the next launch only the second card).
+#[cfg(not(target_arch = "wasm32"))]
+fn make_helper(backends: wgpu::Backends, adapter: wgpu::Adapter, key: Option<cards::AdapterKey>) -> Result<ctx::Gpu, String> {
+    backend::with_init_marker_for(backends, key.as_ref(), Role::Helper.id(), || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::on_adapter(adapter, key.clone(), Role::Helper)))
+            .unwrap_or_else(|_| Err("device creation panicked".into()))
+    })
+}
+
+/// A new second-card device (replacing a lost one): `Ok(None)` when the settings no longer name
+/// one.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_helper_device() -> Result<Option<ctx::Gpu>, String> {
+    let Some(backends) = backend::compute_backends() else { return Ok(None) };
+    match helper_pick(backends) {
+        Err(_) => Ok(None),
+        Ok((adapter, key, _instance)) => make_helper(backends, adapter, key).map(Some),
+    }
+}
+
 /// The pixels of a texture on `device` (a [`DisplayFrame`]'s, or any `Rgba8Unorm` texture with
 /// `COPY_SRC`): for a headless screenshot of a view drawn straight from the GPU, and for tests. The
 /// app never needs them to draw. Waits for the GPU (at most a few seconds); `Err` when the copy or
@@ -1188,7 +1736,11 @@ pub fn read_texture(
     height: usize,
 ) -> Result<lightcraft_raster::Rgba8, String> {
     // the device's generation when it is the renderer's (the window's adopted), for its device-lost record
-    let generation = slot::existing().filter(|g| g.device == *device).map_or(0, |g| g.generation);
+    let generation = [Role::Primary, Role::Helper]
+        .into_iter()
+        .filter_map(slot::existing)
+        .find(|g| g.device == *device)
+        .map_or(0, |g| g.generation);
     ctx::read_texture(device, generation, queue, texture, width, height)
 }
 
@@ -1234,7 +1786,8 @@ fn run(
         if let Some(t) = t {
             eprintln!("  gpu plan (before the turn): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
         }
-        let _turn = gate::enter(gate::job_bytes(src.width.saturating_mul(src.height), out_px), vram, &shutting_down).ok_or(Fallback::NotTried)?;
+        let _turn =
+            gate::enter(gpu.role, gate::job_bytes(src.width.saturating_mul(src.height), out_px), vram, &shutting_down).ok_or(Fallback::NotTried)?;
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
@@ -1301,7 +1854,7 @@ fn run(
             }
             // a device error on another thread or a lost device during the render: its result
             // can't be trusted
-            (Ok(Some(_)), None) if !slot::is_current(gpu.generation) || slot::lost_reason().is_some() => {
+            (Ok(Some(_)), None) if !slot::is_current(gpu.generation) || slot::lost_reason(gpu.role).is_some() => {
                 if let Some(e) = &ext {
                     e.clear();
                 }

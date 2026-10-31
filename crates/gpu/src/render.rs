@@ -183,7 +183,7 @@ impl<'a> Cx<'a> {
         self.pending = 0;
         if let Some(enc) = self.enc.take() {
             // an export keeps one submission queued at a time: the window's frames slot in between
-            if !crate::gate::throttle(&self.gpu.device, self.last.take()) {
+            if !crate::gate::throttle(&self.gpu.device, self.last.take(), self.gpu.role) {
                 fail(FailKind::Busy, "the GPU did not finish an earlier step in time (busy)".into());
                 return;
             }
@@ -700,7 +700,7 @@ pub fn render(
             let src_buf = match stages {
                 Some(c) if src.data.len() * 12 <= RETAIN_SOURCE_BYTES => c.source(src, upload),
                 // (an export keeps its own: photos side by side would take the one copy from each other)
-                Some(_) if !crate::gate::is_batch() => shared_source(src, gpu.generation, upload),
+                Some(_) if !crate::gate::is_batch() && gpu.role == crate::Role::Primary => shared_source(src, gpu.generation, upload),
                 Some(_) => Arc::new(upload()),
                 None => Arc::new(upload()),
             };

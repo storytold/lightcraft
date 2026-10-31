@@ -285,11 +285,12 @@ impl HelperChoice {
         })
     }
 
-    /// The setting's text for this choice (`Same` and `Named` are the variable's only: Automatic).
+    /// The setting's text for this choice (`Named` is the variable's only: Automatic).
     pub fn setting(&self) -> String {
         match self {
             HelperChoice::Off => "off".into(),
             HelperChoice::Card(k) => k.to_string(),
+            HelperChoice::Same => "same".into(),
             _ => String::new(),
         }
     }
@@ -328,7 +329,6 @@ pub fn resolve_helper(entries: &[AdapterEntry], primary: Option<usize>, choice: 
 struct State {
     /// Graphics card for editing (`None`: Automatic).
     card: Option<AdapterKey>,
-    #[allow(dead_code)] // the second card's (DUAL-GPU-2)
     helper: HelperChoice,
     /// The card the window draws on, once the app told ([`set_screen_card`]).
     screen: Option<ScreenCard>,
@@ -358,13 +358,11 @@ pub(crate) fn set_card(key: Option<AdapterKey>) -> bool {
 }
 
 /// The helper as the settings say, before `LIGHTCRAFT_GPU_HELPER`.
-#[allow(dead_code)] // the second card's (DUAL-GPU-2)
 pub(crate) fn helper_setting() -> HelperChoice {
     state().helper.clone()
 }
 
 /// Set the helper's choice; `true` when it changed.
-#[allow(dead_code)] // the second card's (DUAL-GPU-2)
 pub(crate) fn set_helper(choice: HelperChoice) -> bool {
     let mut s = state();
     let changed = s.helper != choice;
@@ -373,13 +371,11 @@ pub(crate) fn set_helper(choice: HelperChoice) -> bool {
 }
 
 /// The helper in force: `LIGHTCRAFT_GPU_HELPER` when set, else the settings'.
-#[allow(dead_code)] // the second card's (DUAL-GPU-2)
 pub(crate) fn helper_choice() -> HelperChoice {
     helper_variable().unwrap_or_else(helper_setting)
 }
 
 /// `LIGHTCRAFT_GPU_HELPER`, parsed.
-#[allow(dead_code)] // the second card's (DUAL-GPU-2)
 pub(crate) fn helper_variable() -> Option<HelperChoice> {
     std::env::var("LIGHTCRAFT_GPU_HELPER").ok().as_deref().and_then(HelperChoice::parse_variable)
 }

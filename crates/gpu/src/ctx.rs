@@ -221,12 +221,12 @@ impl Drop for Buf {
             std::mem::forget(b);
             return;
         };
-        if !in_render && let Some(g) = crate::existing_device() {
+        if !in_render && let Some(g) = crate::slot::with_generation(b.1) {
             g.pool([b]);
             return;
         }
         // during thread teardown the list may already be gone: then the buffer leaks
-        let size = b.0.size();
+        let (size, role) = (b.0.size(), b.2);
         let mut b = Some(b);
         let _ = RETIRED.try_with(|r| r.0.borrow_mut().extend(b.take()));
         match b {
@@ -234,7 +234,7 @@ impl Drop for Buf {
             // thread-locals have already gone can abort the process. The device owns it.
             Some(b) => std::mem::forget(b), // NOSONAR
             None => {
-                RETIRED_BYTES.fetch_add(size, Ordering::Relaxed);
+                RETIRED_BYTES[role].fetch_add(size, Ordering::Relaxed);
             }
         }
     }
@@ -248,7 +248,7 @@ impl Drop for Retired {
     /// then aborts the process: leak the few buffers left instead (the device owns their memory).
     fn drop(&mut self) {
         for b in self.0.get_mut().drain(..) {
-            RETIRED_BYTES.fetch_sub(b.0.size(), Ordering::Relaxed);
+            RETIRED_BYTES[b.2].fetch_sub(b.0.size(), Ordering::Relaxed);
             std::mem::forget(b);
         }
     }
@@ -257,7 +257,9 @@ impl Drop for Retired {
 /// This thread's retired buffers (empty during thread teardown).
 fn take_retired() -> Vec<Tracked> {
     let retired = RETIRED.try_with(|r| std::mem::take(&mut *r.0.borrow_mut())).unwrap_or_default();
-    RETIRED_BYTES.fetch_sub(retired.iter().map(|b| b.0.size()).sum(), Ordering::Relaxed);
+    for b in &retired {
+        RETIRED_BYTES[b.2].fetch_sub(b.0.size(), Ordering::Relaxed);
+    }
     retired
 }
 
@@ -292,21 +294,36 @@ impl Drop for RenderScope<'_> {
 /// A device buffer, counted in [`ALLOCATED`] while it exists, and the generation of the device it
 /// was made on: a buffer of a device that was replaced ([`crate::device`] recovers from a lost one)
 /// is never pooled for, or bound on, the new one.
-pub(crate) struct Tracked(wgpu::Buffer, u64);
+/// The third field is the index of the card's role ([`ix`]): each card's memory is counted apart.
+pub(crate) struct Tracked(wgpu::Buffer, u64, usize);
 
 impl Tracked {
-    fn new(b: wgpu::Buffer, generation: u64) -> Tracked {
+    fn new(b: wgpu::Buffer, generation: u64, role: crate::Role) -> Tracked {
         let size = b.size();
-        let now = ALLOCATED.fetch_add(size, Ordering::Relaxed).saturating_add(size);
-        PEAK.fetch_max(now, Ordering::Relaxed);
-        Tracked(b, generation)
+        let role = ix(role);
+        let now = ALLOCATED[role].fetch_add(size, Ordering::Relaxed).saturating_add(size);
+        PEAK_OF[role].fetch_max(now, Ordering::Relaxed);
+        PEAK.fetch_max(total(&ALLOCATED), Ordering::Relaxed);
+        Tracked(b, generation, role)
     }
 }
 
 impl Drop for Tracked {
     fn drop(&mut self) {
-        ALLOCATED.fetch_sub(self.0.size(), Ordering::Relaxed);
+        ALLOCATED[self.2].fetch_sub(self.0.size(), Ordering::Relaxed);
     }
+}
+
+/// The counters' index of `role`.
+pub(crate) fn ix(role: crate::Role) -> usize {
+    match role {
+        crate::Role::Primary => 0,
+        crate::Role::Helper => 1,
+    }
+}
+
+fn total(c: &[AtomicU64; 2]) -> u64 {
+    c.iter().map(|a| a.load(Ordering::Relaxed)).fold(0u64, u64::saturating_add)
 }
 
 #[cfg(test)]
@@ -320,9 +337,11 @@ thread_local! {
 }
 
 /// Bytes of device buffers that exist (in use, retired or pooled).
-static ALLOCATED: AtomicU64 = AtomicU64::new(0);
-/// The most [`ALLOCATED`] has been since [`reset_peak`].
+static ALLOCATED: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+/// The most [`ALLOCATED`] has been, both cards together, since [`reset_peak`].
 static PEAK: AtomicU64 = AtomicU64::new(0);
+/// The most each card's [`ALLOCATED`] has been since [`reset_peak`].
+static PEAK_OF: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 /// Errors that reached a device's uncaptured-error handler (diagnostics).
 pub(crate) static UNCAPTURED: AtomicU64 = AtomicU64::new(0);
 /// The generation the next device gets ([`Gpu::generation`]).
@@ -330,10 +349,13 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Measure [`GpuMemory::peak`] again from what exists now.
 pub(crate) fn reset_peak() {
-    PEAK.store(ALLOCATED.load(Ordering::Relaxed), Ordering::Relaxed);
+    PEAK.store(total(&ALLOCATED), Ordering::Relaxed);
+    for (p, a) in PEAK_OF.iter().zip(&ALLOCATED) {
+        p.store(a.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
 }
 /// Bytes waiting in per-thread retired lists.
-static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
+static RETIRED_BYTES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 /// The generations of devices that are lost ([`Gpu::generation`]): wgpu's `poll` panics on one
 /// from then on, so [`Gpu::poll`] stops calling it. Other failures that retire a device leave it
 /// usable for releasing its buffers, and the device that replaces a lost one is polled as usual.
@@ -352,7 +374,7 @@ fn is_lost(generation: u64) -> bool {
     generation != 0 && LOST_DEVICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&generation)
 }
 /// Bytes in the free pool.
-static POOLED: AtomicU64 = AtomicU64::new(0);
+static POOLED: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 /// Most bytes kept in the free pool (see [`crate::set_pool_limit`]).
 pub(crate) static POOL_LIMIT: AtomicU64 = AtomicU64::new(DEFAULT_POOL_BYTES);
 
@@ -372,12 +394,19 @@ pub struct GpuMemory {
     pub peak: u64,
 }
 
+/// Both cards' buffers together.
 pub(crate) fn memory() -> GpuMemory {
+    GpuMemory { allocated: total(&ALLOCATED), pooled: total(&POOLED), retired: total(&RETIRED_BYTES), peak: PEAK.load(Ordering::Relaxed) }
+}
+
+/// Card `role`'s buffers.
+pub(crate) fn memory_of(role: crate::Role) -> GpuMemory {
+    let r = ix(role);
     GpuMemory {
-        allocated: ALLOCATED.load(Ordering::Relaxed),
-        pooled: POOLED.load(Ordering::Relaxed),
-        retired: RETIRED_BYTES.load(Ordering::Relaxed),
-        peak: PEAK.load(Ordering::Relaxed),
+        allocated: ALLOCATED[r].load(Ordering::Relaxed),
+        pooled: POOLED[r].load(Ordering::Relaxed),
+        retired: RETIRED_BYTES[r].load(Ordering::Relaxed),
+        peak: PEAK_OF[r].load(Ordering::Relaxed),
     }
 }
 
@@ -393,6 +422,9 @@ pub struct Gpu {
     pub max_buffer: u64,
     /// The device is the window's (eframe's): renders can hand it textures to draw directly.
     pub window: bool,
+    /// Which card it serves: the editing card's (views, and batch work) or the second card's
+    /// (batch work only).
+    pub role: crate::Role,
     /// Which device this is: each one created in the process gets the next number, so buffers and
     /// cached stages of a device that was replaced are told apart.
     pub generation: u64,
@@ -456,7 +488,7 @@ fn module_source(m: &Module, consts: &str) -> String {
 
 impl Gpu {
     /// Create a device on `adapter` (card `key`, when the listing knows it), or why not.
-    pub fn on_adapter(adapter: wgpu::Adapter, key: Option<crate::cards::AdapterKey>) -> Result<Gpu, String> {
+    pub fn on_adapter(adapter: wgpu::Adapter, key: Option<crate::cards::AdapterKey>, role: crate::Role) -> Result<Gpu, String> {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::Cpu {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
@@ -476,6 +508,7 @@ impl Gpu {
         .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
         let mut g = Gpu::with_device(device, queue, info, limits, false)?;
         g.key = key;
+        g.role = role;
         Ok(g)
     }
 
@@ -549,7 +582,7 @@ impl Gpu {
             if window { ", the window's device" } else { "" }
         );
         let vram = crate::vram::adapter_memory(&info);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, generation, vram, key: None })
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, generation, vram, key: None, role: crate::Role::Primary })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -560,7 +593,7 @@ impl Gpu {
         let size = (len.max(1) * 4) as u64;
         if size > self.limit() {
             self.over_limit(size);
-            return Buf { buf: Some(Tracked::new(self.placeholder(), self.generation)), len };
+            return Buf { buf: Some(Tracked::new(self.placeholder(), self.generation, self.role)), len };
         }
         let recycled = {
             let mut f = self.free.lock().unwrap_or_else(|e| e.into_inner());
@@ -574,7 +607,7 @@ impl Gpu {
                 .map(|(i, _)| i)
                 .map(|i| f.swap_remove(i));
             if let Some(b) = &b {
-                POOLED.fetch_sub(b.0.size(), Ordering::Relaxed);
+                POOLED[ix(self.role)].fetch_sub(b.0.size(), Ordering::Relaxed);
             }
             b
         };
@@ -587,6 +620,7 @@ impl Gpu {
                     mapped_at_creation: false,
                 }),
                 self.generation,
+                self.role,
             )
         });
         Buf { buf: Some(buf), len }
@@ -608,7 +642,7 @@ impl Gpu {
         {
             let mut f = self.free.lock().unwrap_or_else(|e| e.into_inner());
             for b in bufs.into_iter().filter(|b| b.1 == self.generation) {
-                POOLED.fetch_add(b.0.size(), Ordering::Relaxed);
+                POOLED[ix(self.role)].fetch_add(b.0.size(), Ordering::Relaxed);
                 f.push(b);
                 added = true;
             }
@@ -626,7 +660,7 @@ impl Gpu {
         while total > keep && !f.is_empty() {
             let b = f.remove(0);
             total -= b.0.size();
-            POOLED.fetch_sub(b.0.size(), Ordering::Relaxed);
+            POOLED[ix(self.role)].fetch_sub(b.0.size(), Ordering::Relaxed);
             dropped.push(b);
         }
         drop(f);
@@ -655,7 +689,7 @@ impl Gpu {
         }
         if bytes.len() as u64 > self.limit() {
             self.over_limit(bytes.len() as u64);
-            return Buf { buf: Some(Tracked::new(self.placeholder(), self.generation)), len };
+            return Buf { buf: Some(Tracked::new(self.placeholder(), self.generation, self.role)), len };
         }
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
         if let Some(size) = wgpu::BufferSize::new(bytes.len() as u64).filter(|s| s.get() % wgpu::COPY_BUFFER_ALIGNMENT == 0) {
@@ -685,10 +719,10 @@ impl Gpu {
             }
             // no view: the buffer couldn't be allocated (out of device memory). The error scope has recorded why and
             // the render fails over to the CPU; allocating it again would only fail again (issue #1764)
-            return Buf { buf: Some(Tracked::new(buf, self.generation)), len };
+            return Buf { buf: Some(Tracked::new(buf, self.generation, self.role)), len };
         }
         let buf = self.init_buffer(bytes, usage);
-        Buf { buf: Some(Tracked::new(buf, self.generation)), len }
+        Buf { buf: Some(Tracked::new(buf, self.generation, self.role)), len }
     }
 
     /// A buffer holding `contents` (zero-padded to the copy alignment), written through the queue. Not
