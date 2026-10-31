@@ -82,6 +82,7 @@ pub use widgets::text_field;
 mod app;
 mod caches;
 mod clock;
+mod readout;
 mod services;
 
 #[cfg(test)]

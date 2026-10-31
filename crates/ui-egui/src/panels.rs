@@ -31,7 +31,7 @@ pub mod strip;
 pub mod topbar;
 pub mod unnamed;
 
-use egui::{Align2, Rect, pos2, vec2};
+use egui::{Rect, pos2, vec2};
 
 use crate::LightcraftApp;
 pub use crate::dialogs;
@@ -100,7 +100,7 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("toast")));
     // long messages (a save warning, the web build's notices) wrap within the canvas
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
-    let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
+    let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((Tokens::photo_shade(), Tokens::on_photo()));
     let foreground = foreground.gamma_multiply(fade);
     let galley = painter.layout(text, t.font(14.0), foreground, wrap);
     let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
@@ -116,8 +116,20 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
-    p.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, crate::i18n::tr(title), t.semibold(18.0), t.text_label);
-    p.text(rect.center() + vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(body), t.font(13.0), t.text_dim);
+    // Both wrap inside the view (a sentence used to run out of a narrow one), centred line by
+    // line, the two as one block about the middle.
+    let wrap = (rect.width() - 48.0).max(80.0);
+    let centred = |text: &str, font: egui::FontId, color: egui::Color32| {
+        let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, wrap);
+        job.halign = egui::Align::Center;
+        p.layout_job(job)
+    };
+    let title = centred(crate::i18n::tr(title), t.display_strong(), t.text_label);
+    let body = centred(crate::i18n::tr(body), t.body(), t.text_dim);
+    let top = rect.center().y - (title.size().y + 6.0 + body.size().y) / 2.0;
+    let below = top + title.size().y + 6.0;
+    p.galley(pos2(rect.center().x, top), title, t.text_label);
+    p.galley(pos2(rect.center().x, below), body, t.text_dim);
 }
 
 /// A button under an empty state's message: the command it runs, its label, and the id it is

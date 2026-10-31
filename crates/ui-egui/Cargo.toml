@@ -20,6 +20,8 @@ lightcraft-develop = { workspace = true }
 lightcraft-pipeline = { workspace = true }
 lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
+# file names are shortened between letters, not inside one (readout::elide_middle); the engine has it already
+unicode-segmentation = "1.13"
 lightcraft-engine = { workspace = true }
 lightcraft-slideshow = { workspace = true }
 lightcraft-preview = { workspace = true }

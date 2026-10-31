@@ -304,7 +304,7 @@ pub(super) fn rotate_cursor_turn(pts: &[Pos2], q: Pos2, inside: bool) -> f32 {
 fn angle_readout(ui: &egui::Ui, at: Pos2, angle: f64, bounds: Rect) {
     let t = Tokens::get(ui.ctx());
     let p = top_painter(ui, "crop-angle-readout");
-    let galley = p.layout_no_wrap(crop_angle_label(angle), t.font(12.5), Color32::WHITE);
+    let galley = p.layout_no_wrap(crop_angle_label(angle), t.body(), Color32::WHITE);
     let rect = readout_rect(at, galley.size() + vec2(12.0, 6.0), bounds);
     p.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
     p.galley(rect.min + vec2(6.0, 3.0), galley, Color32::WHITE);
