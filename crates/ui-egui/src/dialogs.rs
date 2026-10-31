@@ -694,6 +694,7 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
         ))
         .color(t.text_label),
     );
+    ui.label(egui::RichText::new(crate::i18n::tr("Focus is measured on the faces (or pets) of a photo where they are known, else on the camera's focus point, else on the whole frame. Run Detect Faces first to score the subject.")).color(t.text_dim));
     ui.add_space(6.0);
     let r = ui.add(egui::Slider::new(reject_below, 0.0..=80.0).text(crate::i18n::tr("Reject below focus")).step_by(1.0));
     crate::widgets::register(ui, "field:cullReject", r.rect);

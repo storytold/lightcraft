@@ -23,7 +23,7 @@ pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
 #[cfg(test)]
 use fs::quick_image_srgb;
-pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};
+pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader, gate_weight};
 pub(crate) use load::{DngWhite, WbScaleOf, dng_tone_curve};
 pub use load::{load_bytes, load_vec, load_vec_pair, load_vec_reduced};
 #[cfg(test)]
