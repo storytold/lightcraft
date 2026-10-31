@@ -303,6 +303,44 @@ fn score(reference: &Image, jpg: &[u8]) -> Result<f64, String> {
     ssimulacra2::compute_frame_ssimulacra2(a, b).map_err(|e| format!("ssimulacra2: {e:?}"))
 }
 
+/// The directory for references and encodes: `--keep DIR` (created if needed, kept), or a new private directory in
+/// the system temp folder, created exclusively (never one that already exists, mode 0700 on Unix) and removed when
+/// this is dropped, also when a step fails. (An interrupted run leaves it behind.)
+struct Scratch {
+    path: PathBuf,
+    remove: bool,
+}
+
+impl Scratch {
+    fn new(keep: Option<&Path>) -> Result<Scratch, String> {
+        if let Some(dir) = keep {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            return Ok(Scratch { path: dir.to_path_buf(), remove: false });
+        }
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        for attempt in 0..100u32 {
+            let path = std::env::temp_dir().join(format!("lightcraft-jpeg-quality-{}-{nanos:08x}-{attempt}", std::process::id()));
+            match builder.create(&path) {
+                Ok(()) => return Ok(Scratch { path, remove: true }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("{}: {e}", path.display())),
+            }
+        }
+        Err("no free scratch directory name in the temp folder".into())
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if self.remove {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 /// ln(bytes) at `score`, interpolated linearly between the sweep's points (None outside them).
 fn log_rate_at(points: &[Point], s: f64) -> Option<f64> {
     let mut p: Vec<(f64, f64)> = points.iter().map(|p| (p.score, (p.bytes as f64).ln())).collect();
@@ -334,7 +372,8 @@ fn bd_rate(base: &[Point], test: &[Point], range: (f64, f64)) -> Option<f64> {
     let n = 200;
     let mut sum = 0.0;
     for k in 0..=n {
-        let s = lo + (hi - lo) * k as f64 / n as f64;
+        // (rounding can put the last sample an ulp above `hi`, outside both curves, when `hi - lo` is inexact)
+        let s = (lo + (hi - lo) * k as f64 / n as f64).min(hi);
         sum += log_rate_at(test, s)? - log_rate_at(base, s)?;
     }
     Some((sum / (n + 1) as f64).exp() - 1.0)
@@ -368,8 +407,8 @@ fn run() -> Result<(), String> {
         names.join(", "),
         o.qualities
     );
-    let tmp = o.keep.clone().unwrap_or_else(|| std::env::temp_dir().join(format!("lightcraft-jpeg-quality-{}", std::process::id())));
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let scratch = Scratch::new(o.keep.as_deref())?;
+    let tmp = &scratch.path;
 
     // results[image][encoder] = sweep
     let t = Instant::now();
@@ -399,9 +438,7 @@ fn run() -> Result<(), String> {
             Ok(per_enc)
         })
         .collect::<Result<_, _>>()?;
-    if o.keep.is_none() {
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
+    drop(scratch);
     eprintln!("encoded and scored in {:.1} s", t.elapsed().as_secs_f64());
 
     if let Some(path) = &o.csv {
@@ -531,6 +568,19 @@ mod tests {
         assert!((r + 0.2).abs() < 1e-3, "{r}");
         let r = bd_rate(&sweep(1000.0), &sweep(1000.0), (60.0, 90.0)).expect("overlap");
         assert!(r.abs() < 1e-3, "{r}");
+    }
+
+    /// Over a wide score span `lo + (hi - lo)` rounds above `hi`; the last sample must still land on both curves
+    /// when `hi` is their top score (review of #3450).
+    #[test]
+    fn bd_rate_samples_stay_inside_a_wide_span() {
+        let (lo, hi): (f64, f64) = (15.803_672_619_522_928, 57.287_717_255_928_19);
+        assert!(lo + (hi - lo) * 200.0 / 200.0 > hi, "the case this test needs");
+        let curve = |scale: f64| -> Vec<Point> {
+            [lo, 30.0, 45.0, hi].iter().map(|&s| Point { quality: 0, bytes: (scale * (s / 10.0).exp()) as usize, score: s, ms: 0.0 }).collect()
+        };
+        let r = bd_rate(&curve(1000.0), &curve(1000.0), (0.0, 100.0)).expect("the curves overlap from lo to hi");
+        assert!(r.abs() < 1e-2, "{r}");
     }
 
     #[test]
