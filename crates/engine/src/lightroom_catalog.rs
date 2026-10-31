@@ -773,17 +773,11 @@ fn mapped_settings(
 ) -> Result<(Value, Vec<String>), String> {
     let mut root = crate::preset_import::parse_lua(text)?;
     let deferred = strip_lua_sentinels(&mut root);
-    let (mut props, mut values) = crate::preset_import::lua_settings_props(&root)?;
+    let (props, mut values) = crate::preset_import::lua_settings_props(&root)?;
     // Catalog Lua names the component inversion `Inverted` while XMP's is `MaskInverted`;
     // rename it so an inverted mask keeps its inversion instead of importing as normal.
     for v in values.values_mut() {
         alias_catalog_inverted(v);
-    }
-    // A catalog's develop settings carry the crop edges and angle but no `HasCrop` (XMP has it):
-    // any crop field means the photo is cropped.
-    const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
-    if !props.contains_key("crs:HasCrop") && CROP.iter().any(|k| props.contains_key(*k)) {
-        props.insert("crs:HasCrop".into(), vec!["True".into()]);
     }
     // Mask edges are fractions of the stored image, like the crop's, so radii go to long-edge units
     // with its aspect: `aspect` is the photo's in LightCraft, which is the shown one for a photo

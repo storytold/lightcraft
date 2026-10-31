@@ -35,6 +35,27 @@ fn props(x: &str) -> Props {
 }
 
 #[test]
+fn identity_crop_without_has_crop_is_read() {
+    let x = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        crs:CropLeft="0" crs:CropTop="0" crs:CropRight="1" crs:CropBottom="1" crs:CropAngle="0"/></rdf:RDF>"#;
+    let (partial, skipped) = to_partial_report(&props(x), None, Target::RawAbsolute, 1.5);
+    assert!(skipped.is_empty(), "{skipped:?}");
+    let s = apply_partial(&DevelopSettings::default(), &partial, 1.0);
+    assert_eq!(s.crop.geometry, lightcraft_geom::CropGeometry::default());
+}
+
+#[test]
+fn nontrivial_crop_without_has_crop_is_imported() {
+    let x = SIDECAR.replace("crs:HasCrop=\"True\"", "");
+    let (partial, skipped) = to_partial_report(&props(&x), None, Target::RawAbsolute, 1.5);
+    let s = apply_partial(&DevelopSettings::for_raw(5000.0, 0.0), &partial, 1.0);
+    let c = s.crop.geometry;
+    assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, 1.5));
+    assert!(!skipped.iter().any(|k| k.starts_with("Crop")), "{skipped:?}");
+}
+
+#[test]
 fn maps_common_fields() {
     let p = props(SIDECAR);
     let partial = to_partial(&p, Target::RawAbsolute);
