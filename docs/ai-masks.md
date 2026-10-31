@@ -46,6 +46,45 @@ The result is stored with the mask: the model's 288 × 288 mask logits over the 
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
 
+## The Neural Engine (Apple silicon)
+
+The image encoder (the 32-layer ViT, once per photo) is the slow step, and the Apple Neural Engine sat idle while
+candle ran it on the GPU: Core ML is the only way to reach it. On Apple silicon LightCraft writes the encoder's
+layers as a Core ML program (`crates/segment/src/coreml_vit.rs` on `lightcraft_coreml::mil`, pure Rust, about 2 s;
+the patch embedding stays on the GPU), has Core ML compile and load it, and uses it when it is better:
+
+- The set-up runs on its own thread when the model loads, and photos are analyzed on the GPU as before meanwhile.
+  The first time, compiling for the Neural Engine takes a minute or two (an activity row, "Preparing AI masks for the
+  Neural Engine", says so); the compiled model (about 850 MB) is kept in `<model folder>/neural-engine/` and loads in
+  about 20 s later.
+- The Neural Engine computes in 16-bit numbers, so it is checked before it is trusted: the first photo analyzed after
+  the set-up goes through both, and it is used from then on only when its features agree with the GPU's (cosine
+  similarity of 0.995 or more; measured 0.9994 to 0.9999) and it is at most 25 % slower (it draws about a third of
+  the energy for a photo). The verdict is kept beside the model (`verdict.json`); delete the folder to check again.
+  A photo it fails on, or answers with numbers that are not finite, is analyzed on the GPU, and after three of them it
+  is left alone.
+- A set-up that closes LightCraft leaves a marker (`setup.marker`, with the version): the same version does not try
+  again, a newer one does. `LIGHTCRAFT_SAM3_NEURAL_ENGINE=0`, `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off`
+  keep it off. The activity row and the status come from `Segmenter::preparing_neural_engine` and
+  `lightcraft_segment::Sam3::neural_engine`.
+
+Measured on an Apple A18 Pro (8 GB, macOS 26.7): the backbone takes 2.4–3.4 s on the Neural Engine (3.7–4.6 s for
+a photo in the app's path, with the embedding and the transfers around it) against 16–24 s on candle's Metal path.
+A loop of an equivalent model converted with coremltools drew about 9 J a photo on the Neural Engine against about
+28 J on the GPU through Core ML (`powermetrics`, 1 s samples). In the app, photo
+to photo (`segment.prepare`, three photos after another, `powermetrics` at 1 s, CPU + GPU + Neural Engine summed over the busy
+seconds, one run each): 9.3–10.3 s and about 57 J a photo with the Neural Engine against 22–25 s and about 116 J on candle alone.
+The model is unloaded after 10 minutes without use, and the next load starts the Neural Engine's set-up again (the
+kept model loads in 20–50 s): photos in that time are analyzed on the GPU as before, and the first set-up took about 3.5 minutes
+with the first photo being analyzed at the same time. Masks
+made from the two backbones agree: on 24 clicks and 8 descriptions over two photos (one with three ibex against lichen
+rock) the mean IoU is 0.998, the lowest 0.988, and the confidence scores match to about 0.01; the one weaker mask was a
+`grass` description scoring 0.56, near the 0.5 cut-off, at 0.945. Clicks and descriptions (the heads) still run on
+candle, and on this 8 GB computer (peak memory about 7.9 GB) they stay slow, about 6 s and 10 s, as before.
+`cargo run --release -p lightcraft-segment --example sam3_bench -- <model dir> <cache dir>` shows the whole sequence
+(photo 1 on candle while it is set up, photo 2 checked, photos 3 on the Neural Engine) and
+`--example sam3_agree` compares the masks of the two backbones on a photo.
+
 ## Remote Metal inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while

@@ -130,6 +130,9 @@ pub struct Segmenter {
     messages: Vec<String>,
     #[cfg(feature = "sam")]
     worker: worker::Worker,
+    /// The activity row while the Neural Engine's model is being made (see [`Session::segment_poll`]).
+    #[cfg(feature = "sam")]
+    neural_engine_task: Option<crate::activity::TaskGuard>,
     #[cfg(feature = "sam")]
     download: download::Downloader,
     #[cfg(feature = "sam")]
@@ -148,6 +151,8 @@ impl Default for Segmenter {
             messages: Vec::new(),
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
+            #[cfg(feature = "sam")]
+            neural_engine_task: None,
             #[cfg(feature = "sam")]
             download: download::Downloader::default(),
             #[cfg(feature = "sam")]
@@ -180,6 +185,22 @@ impl Segmenter {
     pub fn busy(&self) -> bool {
         #[cfg(feature = "sam")]
         return self.worker.pending() > 0;
+        #[cfg(not(feature = "sam"))]
+        false
+    }
+
+    /// Whether the Neural Engine's model is being made or loaded (the first time takes a minute or two; photos are
+    /// analyzed meanwhile on the graphics card as before).
+    pub fn preparing_neural_engine(&self) -> bool {
+        #[cfg(feature = "sam")]
+        return self
+            .worker
+            .shared
+            .neural_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|ne| ne.status() == lightcraft_segment::ane::Status::Building);
         #[cfg(not(feature = "sam"))]
         false
     }
@@ -614,6 +635,15 @@ impl Session {
             if idle {
                 self.segmenter.pending = None;
             }
+            // the Neural Engine's model is made in the background: a row says so while it is
+            match (self.segmenter.preparing_neural_engine(), self.segmenter.neural_engine_task.is_some()) {
+                (true, false) => {
+                    self.segmenter.neural_engine_task =
+                        Some(self.activity.start("sam3", "Preparing AI masks for the Neural Engine", crate::activity::Cancel::No));
+                }
+                (false, true) => self.segmenter.neural_engine_task = None,
+                _ => {}
+            }
         }
         polled
     }
@@ -727,6 +757,29 @@ mod tests {
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn preparing_the_neural_engine_shows_a_row_in_the_activity_stack_while_it_lasts() {
+        use lightcraft_segment::ane::{NeuralEngine, Status};
+        let mut s = Session::with_demo();
+        let ne = std::sync::Arc::new(NeuralEngine::default());
+        *s.segmenter.worker.shared.neural_engine.lock().unwrap() = Some(ne.clone());
+        let rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "sam3").collect::<Vec<_>>();
+        s.segment_poll();
+        assert!(rows(&s).is_empty(), "nothing is being made");
+        ne.pretend(Status::Building);
+        s.segment_poll();
+        let row = rows(&s);
+        assert_eq!(row.len(), 1);
+        assert_eq!(row[0].label, "Preparing AI masks for the Neural Engine");
+        assert!(!row[0].cancellable);
+        s.segment_poll();
+        assert_eq!(rows(&s).len(), 1, "one row, not one per frame");
+        ne.pretend(Status::Off("done".into()));
+        s.segment_poll();
+        assert!(rows(&s).is_empty(), "the row goes when it is ready or given up");
     }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {

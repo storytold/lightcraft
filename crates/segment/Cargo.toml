@@ -19,6 +19,8 @@ log = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 lightcraft-fetch = { workspace = true }
+# the backbone can run on Apple's Neural Engine through Core ML (macOS; elsewhere the crate says it is unsupported)
+lightcraft-coreml = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { workspace = true, features = ["metal"] }

@@ -26,6 +26,8 @@ pub struct Weights {
     file: Mutex<File>,
     entries: HashMap<String, Entry>,
     data_start: u64,
+    /// The file's length: it identifies a checkpoint release (the Neural Engine's kept model is named after it).
+    len: u64,
 }
 
 impl Weights {
@@ -69,7 +71,12 @@ impl Weights {
             }
             entries.insert(name, Entry { shape, start, end });
         }
-        Ok(Arc::new(Self { file: Mutex::new(file), entries, data_start: 8 + n }))
+        Ok(Arc::new(Self { file: Mutex::new(file), entries, data_start: 8 + n, len: file_len }))
+    }
+
+    /// The checkpoint file's length in bytes.
+    pub fn file_len(&self) -> u64 {
+        self.len
     }
 
     pub fn contains(&self, name: &str) -> bool {

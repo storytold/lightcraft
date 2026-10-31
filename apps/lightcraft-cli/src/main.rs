@@ -7,7 +7,7 @@
 //! lightcraft-cli snapshot [--library DIR | --demo] [--script FILE.jsonl] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
 //! lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [OPTIONS] FILES…
 //! lightcraft-cli synth-merge hdr|panorama -o DIR
-//! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
+//! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|ane|cpu]
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
@@ -100,7 +100,7 @@ USAGE:
         --listen ADDR     address:port to listen on (default 127.0.0.1:7990)
         --token-env VAR   environment variable holding the shared token, ≥ 16 characters
                           (default LIGHTCRAFT_DENOISE_TOKEN)
-        --run-on WHERE    auto (default), gpu or cpu
+        --run-on WHERE    auto (default), gpu, ane or cpu
         --max-connections N   concurrent clients (default 8)
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
@@ -1004,7 +1004,7 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
             "--token-env" => token_env = take_value(args, &mut i, "--token-env")?.to_string(),
             "--run-on" => {
                 let v = take_value(args, &mut i, "--run-on")?;
-                run_on = RunOn::parse(v).ok_or_else(|| format!("--run-on expects auto, gpu or cpu, not `{v}`"))?;
+                run_on = RunOn::parse(v).ok_or_else(|| format!("--run-on expects auto, gpu, ane or cpu, not `{v}`"))?;
             }
             "--max-connections" => {
                 max_connections = take_value(args, &mut i, "--max-connections")?.parse().map_err(|_| "--max-connections expects a number")?
