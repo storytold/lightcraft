@@ -44,6 +44,7 @@ impl LightcraftApp {
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
+        self.background_prep(ctx);
         panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
@@ -415,7 +416,6 @@ impl LightcraftApp {
         self.library_changed(&ctx);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
-        self.background_prep(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
