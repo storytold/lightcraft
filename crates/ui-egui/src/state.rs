@@ -463,7 +463,8 @@ impl UiState {
         } else {
             // (a column hidden behind another dock tab comes back hidden, with no on-canvas tool: what it held
             // wasn't on show)
-            let saved = if exposed { (p, self.right, self.tool_return, Some(self.tool.clone())) } else { (p, RightPanel::None, self.tool_return, None) };
+            let saved =
+                if exposed { (p, self.right, self.tool_return, Some(self.tool.clone())) } else { (p, RightPanel::None, self.tool_return, None) };
             if self.toggle_return.len() >= TOGGLE_HISTORY {
                 self.toggle_return.remove(0);
             }
