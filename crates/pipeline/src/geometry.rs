@@ -33,6 +33,9 @@ pub struct Frame {
     pub warp: Option<Warp>,
     /// Set when this frame draws only a window of a larger output (see [`Frame::window`]).
     pub view: Option<ViewWindow>,
+    /// Filter of the area downscale ahead of the bilinear resample ([`Frame::sample`]); see
+    /// [`crate::Downscale`].
+    pub downscale: Filter,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -77,6 +80,7 @@ impl Frame {
             flip_v: s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
+            downscale: Filter::Mitchell,
         };
         if apply_crop && s.geometry.constrain_crop {
             f.constrain_to_image();
@@ -254,7 +258,7 @@ impl Frame {
         let o = oriented.as_ref().unwrap_or(src);
         let plan = self.sample_plan(src.width, src.height, w, h);
         let base = match plan.prefilter {
-            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
+            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, self.downscale)),
             None => std::borrow::Cow::Borrowed(o),
         };
         let affine = |xf: Affine| {
@@ -293,7 +297,7 @@ pub struct SamplePlan {
     /// Oriented source size.
     pub ow: usize,
     pub oh: usize,
-    /// Size of the Mitchell prefilter (area downscale before the bilinear resample), if any.
+    /// Size of the prefilter ([`Frame::downscale`]: area downscale before the bilinear resample), if any.
     pub prefilter: Option<(usize, usize)>,
     /// Oriented-source px → prefiltered px.
     pub sx: f64,

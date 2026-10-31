@@ -468,7 +468,10 @@ impl crate::Session {
         }
         job.request.space = space;
         job.request.depth = depth;
-        job.key ^= (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db);
+        // an export shrinks with a sharp filter: a preview's soft one leaves a small export blurred (#2970)
+        job.request.downscale = lightcraft_pipeline::Downscale::Sharp;
+        job.key ^=
+            (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db) ^ 0x9e37_79b9_7f4a_7c15;
         Ok(job)
     }
 

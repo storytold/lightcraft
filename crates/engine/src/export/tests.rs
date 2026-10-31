@@ -209,7 +209,7 @@ fn sharpen_increases_edge_contrast() {
     assert!(img.data[3][0] < 80 && img.data[4][0] > 170);
 }
 
-/// Output sharpening's pixels for every target and amount, pinned (its box blurs run row-parallel, which must not
+/// Output sharpening's pixels for every target and amount, pinned (its separable passes run row-parallel, which must not
 /// change a bit), on 8- and 16-bit images; with no target the image is left as it is.
 #[test]
 fn sharpened_pixels_are_pinned() {
@@ -234,16 +234,65 @@ fn sharpened_pixels_are_pinned() {
     assert_eq!(img, test_image());
 }
 const SHARPENED: [u64; 9] = [
-    0x1494_273e_0bdc_a61c,
-    0x3fbb_40c4_74f4_b0c3,
-    0xa27f_8ff5_82a0_99f9,
-    0x6550_6571_a38d_4d9f,
-    0x5e28_f4f3_fc8a_9685,
-    0xdc2b_6f65_9138_3b1d,
-    0x8ce6_f0b8_d8ed_8026,
-    0x92d8_12e7_4b2e_81fe,
-    0x139f_6d78_b1f2_a910,
+    0x1a04_82d5_edaa_37c8,
+    0xcb78_18b7_938e_beda,
+    0x0490_bb9e_2b64_3d00,
+    0x1662_0293_b8a2_2538,
+    0xa3f7_7957_1af3_1b39,
+    0x30b0_919c_7c6a_705b,
+    0x27ef_4e5b_42e6_d1ed,
+    0x1dc3_3b96_b2f9_c1b6,
+    0xdab7_1280_a47a_ffeb,
 ];
+
+/// Output sharpening (#2970): each step crisper than the one before, Screen / Standard roughly a
+/// typical web export's, and no wide light or dark rim along a strong edge (overshoot stays
+/// within a tenth of the edge's contrast). Colour is left alone: a grey edge stays grey.
+#[test]
+fn sharpen_steps_are_crisper_without_halos() {
+    let edge = || {
+        let mut img = Rgba8::new(32, 8);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            let v = if i % 32 < 16 { 40 } else { 220 };
+            *p = [v, v, v, 255];
+        }
+        img
+    };
+    let mut last = 0u8;
+    for amount in [SharpenAmount::Low, SharpenAmount::Standard, SharpenAmount::High] {
+        let mut img = edge();
+        output_sharpen(&mut img, SharpenFor::Screen, amount);
+        let (dark, light) = (img.data[15], img.data[16]);
+        let spread = (40 - dark[0]).max(light[0] - 220);
+        assert!(spread >= last && spread > 0, "{amount:?}: {dark:?} {light:?}");
+        assert!(dark[0] >= 40 - 18 && light[0] <= 220 + 18, "{amount:?}: {dark:?} {light:?}");
+        assert!(dark[0] == dark[1] && dark[1] == dark[2] && light[0] == light[2], "grey stays grey");
+        assert_eq!(img.data[0][0], 40, "{amount:?}: flat areas untouched");
+        last = spread;
+    }
+    let mut none = edge();
+    output_sharpen(&mut none, SharpenFor::None, SharpenAmount::High);
+    assert_eq!(none.data, edge().data);
+}
+
+/// Output sharpening of a float image with NaN and infinite samples does not panic (#2970 review):
+/// they are sharpened as black and every result is finite.
+#[test]
+fn sharpen_deep_survives_non_finite_samples() {
+    let (nan, inf) = (f32::NAN, f32::INFINITY);
+    let mut samples = vec![0.5f32; 27];
+    samples[..9].copy_from_slice(&[nan, nan, nan, inf, inf, inf, -inf, nan, inf]);
+    samples[12] = nan;
+    samples[20] = inf;
+    for target in [SharpenFor::Screen, SharpenFor::Glossy, SharpenFor::Matte] {
+        let mut img = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(samples.clone()) };
+        output_sharpen_deep(&mut img, target, SharpenAmount::High);
+        let DeepSamples::F32(out) = &img.samples else { unreachable!() };
+        assert!(out.iter().all(|v| v.is_finite() && *v >= 0.0), "{target:?}: {out:?}");
+    }
+    let mut all_nan = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(vec![nan; 27]) };
+    output_sharpen_deep(&mut all_nan, SharpenFor::Screen, SharpenAmount::Standard);
+}
 
 /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
 /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
