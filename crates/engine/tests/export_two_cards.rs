@@ -27,9 +27,10 @@ fn helper_on() -> bool {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", gpu::unavailable_reason().unwrap_or_default());
         return false;
     }
-    if std::env::var_os("LIGHTCRAFT_GPU_HELPER").is_none() {
-        gpu::set_helper("same").expect("same");
-    }
+    // (asking for it starts its set-up: tests have no app warm-up)
+    let want = std::env::var("LIGHTCRAFT_GPU_HELPER").unwrap_or_else(|_| "same".into());
+    let _ = gpu::list_adapters();
+    gpu::set_helper(&want).expect("the second card");
     assert!(gpu::wait_helper(Duration::from_secs(240)), "the second device's set-up didn't finish");
     if !gpu::helper_ready() {
         lightcraft_testkit::skip!(Gpu, "no second device: {:?}", gpu::helper_status());
