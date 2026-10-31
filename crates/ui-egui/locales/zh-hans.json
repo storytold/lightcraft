@@ -2425,5 +2425,10 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 启动应用，lightcraft-cli mcp --connect 即可将一个智能体接入其中。",
   "Welcome": "欢迎",
   "Next": "下一步",
-  "Get Started": "开始使用"
+  "Get Started": "开始使用",
+  "Click to name this face": "点击命名此面孔",
+  "Already installed. Installing again is harmless.": "已安装。再次安装无害。",
+  "Enter to confirm, Esc to cancel": "按 Enter 确认，按 Esc 取消",
+  "Show photos": "显示照片",
+  "Their photos in the grid": "网格中他们的照片"
 }
