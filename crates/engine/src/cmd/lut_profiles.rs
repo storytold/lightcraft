@@ -25,10 +25,31 @@ fn profiles_dir(s: &Session) -> Option<PathBuf> {
     s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Profiles"))
 }
 
-/// Register every imported profile's LUT with the pipeline (missing files are skipped).
-pub fn register_all(s: &Session) {
+/// Largest `.cube` read back from `Profiles/` (a 256³ LUT is about 450 MB of text).
+const MAX_CUBE: u64 = 512 << 20;
+
+/// The library's own copy of an imported profile: the file of that name directly in
+/// `Profiles/`, when it is a regular file. Paths in prefs.json that point elsewhere (`..`,
+/// devices, other folders) never resolve outside it.
+fn own_copy(profiles: &Path, file: &str) -> Option<PathBuf> {
+    let name = Path::new(file).file_name()?;
+    let f = profiles.join(name);
+    std::fs::symlink_metadata(&f).ok().filter(std::fs::Metadata::is_file).map(|_| f)
+}
+
+fn read_cube(f: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut t = String::new();
+    std::fs::File::open(f).ok()?.take(MAX_CUBE + 1).read_to_string(&mut t).ok()?;
+    (t.len() as u64 <= MAX_CUBE).then_some(t)
+}
+
+/// Register every imported profile's LUT with the pipeline, reading the copies in the library's
+/// `profiles` folder (missing files are skipped).
+pub fn register_all(s: &Session, profiles: &Path) {
     for p in &s.lut_profiles {
-        if let Some(l) = std::fs::read_to_string(&p.file).ok().and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok()) {
+        let text = own_copy(profiles, &p.file).and_then(|f| read_cube(&f));
+        if let Some(l) = text.and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok()) {
             lightcraft_pipeline::lut::register(&p.id, l);
         }
     }
@@ -154,8 +175,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad("profile.deleteImported", format!("no imported profile `{id}`")));
             };
             let gone = s.lut_profiles.remove(i);
-            if profiles_dir(s).is_some_and(|d| Path::new(&gone.file).starts_with(d)) {
-                let _ = std::fs::remove_file(&gone.file);
+            if let Some(f) = profiles_dir(s).and_then(|d| own_copy(&d, &gone.file)) {
+                let _ = std::fs::remove_file(f);
             }
             lightcraft_pipeline::lut::unregister(&id);
             s.save_prefs()?;

@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Imported profiles stay in the library's Profiles folder
+- An imported .cube profile is read from, and deleted from, only the library's own copy in its `Profiles` folder.
+  Before, the path saved in the library's preferences was trusted: a path with `..` or one pointing at a device was
+  read when the library opened, and Delete Imported Profile could remove a file outside `Profiles`. Copies larger than
+  512 MB are skipped too.
+
 ## 2026-10-30
 
 ### A keyboard shortcut for Clear Color Label
