@@ -260,7 +260,7 @@ pub(super) fn fit_dng_tone(
     let fine = std::cell::OnceCell::new();
     let fine_proxies = || {
         fine.get_or_init(|| {
-            let (mut fine_sensor, fine_reference, fine_clipped) = proxies(raw, bytes, transform, FINE_PROXY, MIN_PREVIEW_FRACTION, None)?;
+            let (mut fine_sensor, fine_reference, fine_clipped) = proxies(raw, bytes, transform, FINE_PROXY, MIN_PREVIEW_FRACTION, None, None)?;
             if let Some(tables) =
                 lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy))
             {
