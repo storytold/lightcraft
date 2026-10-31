@@ -127,12 +127,20 @@ fn load_bytes_now(
         };
         // An imported camera profile replaces the file's colour model (its matrices and look; the shot's white stays), so
         // the starting colour and the white balance scale below come from it, not from a fitted or built-in look.
+        // (the white balance stays on the scale the file and its camera give, the one the catalog's
+        // `Photo::relative_wb` and the quick previews use: a profile's matrices must not turn a relative white balance
+        // into Kelvin, which would read existing edits as absolute temperatures)
+        let own_scale = dcp.map(|_| WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata));
         if let Some(p) = dcp {
             raw.color = p.applied_to(&raw.color);
         }
         // Which scale white balance is edited on, and the as-shot white on it, from the file's own colour tags or
         // the camera's measured matrices (`Photo::relative_wb` decides the same from the catalog's camera)
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
+        let scale = match &own_scale {
+            Some(own) => scale.keeping_classification_of(own),
+            None => scale,
+        };
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let ((xy, t, camera_look), mattes) = rayon::join(
             || {
@@ -216,8 +224,12 @@ fn load_bytes_now(
                 let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
                 Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
             });
-        let camera_tone =
-            camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve)).or(kept_tone);
+        let camera_tone = camera_tone_of(
+            dcp.is_some(),
+            camera_look.as_ref().map(|p| p.tone),
+            raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve),
+            kept_tone,
+        );
         let local_tone = local_tone(&raw);
         let (temp, tint) = scale.as_shot(xy);
         return Ok((
@@ -294,6 +306,13 @@ impl WbScaleOf {
         };
         let covered = camera.is_some() || presets;
         WbScaleOf { own_matrix, relative: fitted && !covered, legacy_relative: fitted && covered, scale_white, camera }
+    }
+
+    /// This scale (a raw's, with an imported camera profile's colour model) on the white-balance scale `own` (the
+    /// same raw's with its own colour) gives: relative, or Kelvin edited on the relative scale before. The matrices,
+    /// and so the colour and the as-shot reading, stay this scale's.
+    pub(super) fn keeping_classification_of(self, own: &WbScaleOf) -> Self {
+        WbScaleOf { relative: own.relative, legacy_relative: own.legacy_relative, ..self }
     }
 
     /// What a DNG of this raw's camera RGB declares so that it shows the white balance as this scale does: the
@@ -405,6 +424,57 @@ fn with_dng_lens_ops<R, L, T>(
         *list3(raw) = ops;
     }
     out
+}
+
+/// The tone a raw's starting look gets from its camera: `look` (the tone of the look fitted to the camera JPEG),
+/// `curve` (the colour model's own tone curve: the file's, or with an imported camera profile, the profile's) and
+/// `kept` (the photo's own tone, kept for a profile without a curve). With a camera profile (`profile`), its curve
+/// comes first, then the kept tone, and the fitted look's only last: the look was fitted without the profile, so it
+/// must not replace the profile's curve or the contrast kept for it. Without one, the fitted look leads as before.
+fn camera_tone_of<T>(profile: bool, look: Option<T>, curve: Option<T>, kept: Option<T>) -> Option<T> {
+    if profile { curve.or(kept).or(look) } else { look.or(curve).or(kept) }
+}
+
+#[cfg(test)]
+mod camera_tone_tests {
+    use super::camera_tone_of;
+
+    /// CodeRabbit on #1063: with an imported camera profile, a fitted camera look's tone replaced the profile's own
+    /// tone curve and the tone kept for a profile without one. Without a profile the order is unchanged.
+    #[test]
+    fn a_camera_profiles_curve_and_kept_tone_come_before_the_fitted_look() {
+        assert_eq!(camera_tone_of(true, Some("look"), Some("profile"), Some("kept")), Some("profile"));
+        assert_eq!(camera_tone_of(true, Some("look"), None, Some("kept")), Some("kept"));
+        assert_eq!(camera_tone_of(true, Some("look"), None, None), Some("look"));
+        assert_eq!(camera_tone_of(false, Some("look"), Some("file"), Some("kept")), Some("look"));
+        assert_eq!(camera_tone_of(false, None, Some("file"), Some("kept")), Some("file"));
+        assert_eq!(camera_tone_of::<&str>(false, None, None, None), None);
+    }
+}
+
+#[cfg(test)]
+mod wb_scale_tests {
+    use super::WbScaleOf;
+
+    /// CodeRabbit on #1063: a raw edited on the relative white-balance scale (no colour matrices, none measured for
+    /// its camera) turned to Kelvin once an imported camera profile's matrices replaced its colour, so its existing
+    /// edits (6500 K / 0 = as shot) were read as absolute temperatures, and the catalog and quick previews still
+    /// used the relative scale. The profile's matrices stay; the scale is the file's.
+    #[test]
+    fn a_camera_profile_keeps_a_relative_white_balance_relative() {
+        let format = lightcraft_raw::RawFormat::Cr3;
+        let meta = lightcraft_meta::Metadata::default();
+        let own_color = lightcraft_raw::ColorData::default();
+        let own = WbScaleOf::new(format, &own_color, Some([2.0, 1.0, 1.5]), &meta);
+        assert!(own.relative && !own.own_matrix, "a matrix-less raw of an unmeasured camera is relative");
+        let m = lightcraft_color::Mat3([[0.9, 0.1, 0.0], [0.1, 0.8, 0.1], [0.0, 0.2, 0.8]]);
+        let profiled = lightcraft_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(m), None], ..Default::default() };
+        let with = WbScaleOf::new(format, &profiled, Some([2.0, 1.0, 1.5]), &meta);
+        assert!(!with.relative, "the profile's matrices alone would make it Kelvin");
+        let kept = with.keeping_classification_of(&own);
+        assert!(kept.relative && !kept.legacy_relative && kept.own_matrix, "relative, with the profile's matrices");
+        assert_eq!(kept.as_shot(lightcraft_color::Xy { x: 0.3127, y: 0.329 }), (6500.0, 0.0));
+    }
 }
 
 #[cfg(test)]

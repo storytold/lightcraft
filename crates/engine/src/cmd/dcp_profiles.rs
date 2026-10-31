@@ -45,7 +45,8 @@ fn profiles_dir(s: &Session) -> Option<PathBuf> {
 }
 
 /// Parse every imported camera profile again and hand them to the decoder (missing or damaged
-/// files are skipped: photos using them develop with the file's own colour).
+/// files are skipped: photos using them develop with the file's own colour, and the profile is not offered or
+/// accepted by `develop.profile` until its file is back; the entry is kept).
 ///
 /// A library's own copies are found in `profiles`, the `Profiles/` folder of the library being opened (`None`: not on
 /// disk), wherever the saved path points: a library moved or restored elsewhere keeps its profiles (the saved path is

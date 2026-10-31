@@ -529,10 +529,16 @@ impl Session {
         self.dcp_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), crate::cmd::dcp_profiles::DCP_GROUP))
     }
 
-    /// The imported profiles as (id, name, group): LUT profiles, then camera profiles (`.dcp`).
+    /// The imported profiles as (id, name, group): LUT profiles, then camera profiles (`.dcp`). A camera profile
+    /// whose file is missing or damaged (not loaded when the library opened) is left out, so it can't be chosen; its
+    /// entry stays and it is offered again once the file is back.
     pub fn imported_profiles(&self) -> Vec<(String, String, String)> {
         let luts = self.lut_profiles.iter().map(|p| (p.id.clone(), p.name.clone(), p.group.clone()));
-        let dcps = self.dcp_profiles.iter().map(|p| (p.id.clone(), p.name.clone(), crate::cmd::dcp_profiles::DCP_GROUP.to_string()));
+        let dcps = self
+            .dcp_profiles
+            .iter()
+            .filter(|p| self.media.camera_profiles.contains_key(&p.id))
+            .map(|p| (p.id.clone(), p.name.clone(), crate::cmd::dcp_profiles::DCP_GROUP.to_string()));
         luts.chain(dcps).collect()
     }
 
@@ -565,7 +571,7 @@ impl Session {
         let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
         lut_groups.sort_unstable();
         lut_groups.dedup();
-        if !self.dcp_profiles.is_empty() {
+        if imported.iter().any(|p| p.2 == crate::cmd::dcp_profiles::DCP_GROUP) {
             lut_groups.push(crate::cmd::dcp_profiles::DCP_GROUP);
         }
         lut_groups.dedup();

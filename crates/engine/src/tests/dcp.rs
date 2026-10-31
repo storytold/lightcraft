@@ -488,3 +488,34 @@ fn deleting_a_profile_never_follows_dot_dot_out_of_the_profiles_folder() {
     assert!(outside.exists(), "the file outside the profiles folder stays");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// CodeRabbit on #1063: a camera profile whose library copy is missing or damaged when the library opens stayed in the
+/// profile browser and `develop.profile` accepted it, and the photo then silently developed with the raw's own
+/// colour. It is no longer offered or accepted; its entry stays, and once the file is back it is offered again.
+#[test]
+fn a_damaged_camera_profile_is_not_offered_until_its_file_is_back() {
+    let dir = temp_dir("damaged");
+    let (mut s, _id, dcp_id) = library_with_profile(&dir);
+    let file = std::path::PathBuf::from(&s.dcp_profiles[0].file);
+    s.persist().unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let good = std::fs::read(&file).unwrap();
+    std::fs::write(&file, b"not a profile").unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    assert_eq!(s.dcp_profiles.len(), 1, "the entry stays");
+    assert!(!s.imported_profiles().iter().any(|p| p.0 == dcp_id), "not offered");
+    let menu = s.profile_menu().to_string();
+    assert!(!menu.contains(&dcp_id), "not in the profile menu: {menu}");
+    assert!(s.execute("develop.profile", &json!({"id": dcp_id})).is_err(), "not accepted");
+    s.close_library().unwrap();
+    drop(s);
+    std::fs::write(&file, good).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    assert!(s.imported_profiles().iter().any(|p| p.0 == dcp_id), "offered again");
+    s.execute("develop.profile", &json!({"id": dcp_id})).unwrap();
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
