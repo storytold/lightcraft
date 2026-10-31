@@ -2556,5 +2556,13 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "AI masks": "Maschere IA",
+  "Device": "Dispositivo",
+  "Last photo": "Ultima foto",
+  "Remote worker": "Processo remoto",
+  "Run on": "Esegui su",
+  "Automatic (GPU when available)": "Automatico (GPU se disponibile)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Le maschere Oggetto e Descrivi analizzano ogni foto una volta, sulla scheda grafica a meno che sia scelta la CPU o «Usa la GPU per il rendering» sia disattivato. Sul processore richiede molto più tempo.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatico esegue il modello sulla scheda grafica del Mac. Scegli CPU se lì le maschere IA non funzionano; sul processore richiedono molto più tempo."
 }

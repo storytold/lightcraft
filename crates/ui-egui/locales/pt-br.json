@@ -2234,5 +2234,13 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "AI masks": "Máscaras de IA",
+  "Device": "Dispositivo",
+  "Last photo": "Última foto",
+  "Remote worker": "Processo remoto",
+  "Run on": "Executar em",
+  "Automatic (GPU when available)": "Automático (GPU quando houver)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "As máscaras Objeto e Descrever analisam cada foto uma vez, na placa de vídeo, a menos que CPU esteja escolhida ou “Usar a GPU para renderização” esteja desligado. No processador isso demora muito mais.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automático executa o modelo na placa de vídeo do Mac. Escolha CPU se as máscaras de IA falharem nela; no processador elas demoram muito mais."
 }
