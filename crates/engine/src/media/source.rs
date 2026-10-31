@@ -183,11 +183,31 @@ impl DecodedSource {
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
     /// with any stored camera tone curve. The original's size comes from `header` either way: the
     /// decoder only sees the level it decoded.
+    ///
+    /// A lens profile from the lens database is the catalog's too ([`pinned_lens`]): the decoder looks the lens up in
+    /// the database in use when it reads the file, which may be newer than the one the photo's profile came from.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
         match &self.info {
-            Some(info) => SourceInfo { native_long: info.native_long.or(header.native_long), ..info.clone() },
+            Some(info) => {
+                SourceInfo { native_long: info.native_long.or(header.native_long), lens: pinned_lens(info.lens, header.lens), ..info.clone() }
+            }
             None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
         }
+    }
+}
+
+/// The lens profile a render uses: the file's own correction as decoded (`decoded`, it is part of the file), else the
+/// catalog's (`catalog`, [`lightcraft_catalog::Photo::embedded_lens`]). A database profile is never taken from the
+/// decode, so a cached render, a fresh decode and the Optics panel all use the one profile the photo holds, and a
+/// change to it (a database update looked up again, `cmd::lens_refresh`) changes the render keys
+/// ([`super::quick::lens_key`]).
+pub(crate) fn pinned_lens(
+    decoded: Option<lightcraft_develop::EmbeddedLens>,
+    catalog: Option<lightcraft_develop::EmbeddedLens>,
+) -> Option<lightcraft_develop::EmbeddedLens> {
+    match decoded {
+        Some(l) if l.source == lightcraft_develop::LensSource::File => Some(l),
+        _ => catalog,
     }
 }
 

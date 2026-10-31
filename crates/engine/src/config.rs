@@ -146,6 +146,26 @@ impl Session {
         self
     }
 
+    /// Read lens profiles from the app's own copy of the lens database ([`crate::lensfun_download::default_dir`],
+    /// unless `LIGHTCRAFT_LENSFUN_DIR` names another) when it is there. Every host with a file system selects it
+    /// (desktop, CLI, headless MCP), so the same raw gets the same profile everywhere; it never fetches anything
+    /// ([`Self::with_lens_auto_download`] is that permission).
+    pub fn with_default_lens_database(self) -> Self {
+        let dir = crate::lensfun_download::default_dir();
+        if let Some(d) = &dir {
+            crate::lensfun_download::recover(d);
+        }
+        crate::lens_profiles::use_dir(dir);
+        self
+    }
+
+    /// Let the host offer the lens database at its start, and fetch it there once the user said yes
+    /// ([`crate::lensfun_download::fetch_on_start`] decides). Separate from selecting a database that is already there ([`Self::with_default_lens_database`]).
+    pub fn with_lens_auto_download(mut self) -> Self {
+        self.lens_auto_download = true;
+        self
+    }
+
     /// Keep denoise models in the shared default folder ([`default_denoise_models_dir`]).
     pub fn with_default_denoise_models(mut self) -> Self {
         self.set_denoise_models_dir(default_denoise_models_dir());

@@ -1,6 +1,8 @@
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, SourceLevel};
-use super::{Arc, Deserialize, Hash128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
+use super::{
+    Arc, Deserialize, DevelopSettings, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo,
+};
 
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +106,20 @@ pub fn content_key(p: &Photo) -> String {
         (Some(h), _) => h.clone(),
         (None, Source::Demo { scene }) => format!("demo:{scene}"),
         (None, Source::File { path }) => format!("file:{path}:{}", p.file_size),
+    }
+}
+
+/// What a photo's lens profile adds to its render and thumbnail keys: a database profile (0 without one, or with the
+/// correction off, where it changes nothing). When a database update gives the photo another profile, its cached
+/// renders and thumbnails no longer match. (The file's own correction changes only with the file, which the content
+/// key covers, so it adds nothing and existing thumbnails stay valid.)
+pub fn lens_key(p: &Photo, settings: &DevelopSettings) -> u64 {
+    match &p.embedded_lens {
+        Some(l) if settings.optics.lens_profile && l.source == lightcraft_develop::LensSource::Database => {
+            let k = Hasher128::new().str("lens").str(&format!("{l:?}")).finish();
+            (k.0 as u64) ^ ((k.0 >> 64) as u64) | 1
+        }
+        _ => 0,
     }
 }
 
