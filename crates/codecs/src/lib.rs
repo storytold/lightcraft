@@ -207,7 +207,8 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::WebP => webp::header(bytes)?,
         Format::Psd => psd::header(bytes)?,
         Format::Heif => heif::header(bytes)?,
-        // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
+        Format::Gif | Format::Bmp => other::header(bytes, format)?,
+        // JPEG XL has no header reader yet: a small decode, as before
         _ => {
             let d = decode_unguarded(bytes, format, &DecodeOptions::fit(64, 64))?;
             (d.source_width, d.source_height, d.orientation)
