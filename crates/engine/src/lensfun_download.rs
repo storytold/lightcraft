@@ -38,9 +38,6 @@ const PREVIOUS: &str = "previous";
 /// app may be the one downloading).
 #[cfg(not(target_arch = "wasm32"))]
 const LOCK: &str = "lock";
-/// A lock this old is left over from an app that quit mid-download, not a download still running.
-#[cfg(not(target_arch = "wasm32"))]
-const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// Largest database file accepted (the biggest is under 1 MB).
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FILE: u64 = 8 << 20;
@@ -135,12 +132,27 @@ fn beside(dir: &Path, suffix: &str) -> PathBuf {
 }
 
 /// Put back the previous database when a swap ([`publish`]) was interrupted between its two moves (the app quit or
-/// the machine stopped): `dir` is missing and the previous folder is whole. Best effort; says why it couldn't.
+/// the machine stopped): `dir` is missing and the previous folder is whole. Best effort; says why it couldn't. Done
+/// under the folder's download lock (`DirLock`) and skipped while a download, in this or another LightCraft, holds
+/// it: that download is between its own two moves, not interrupted, and puts the folder right itself.
 pub fn recover(dir: &Path) {
-    let previous = beside(dir, PREVIOUS);
-    if !dir.exists()
-        && complete(&previous)
-        && let Err(e) = std::fs::rename(&previous, dir)
+    if !needs_recovery(dir) {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let Ok(_lock) = DirLock::take(dir) else { return };
+    recover_locked(dir);
+}
+
+/// What a swap interrupted between its two moves leaves: no database folder, and a whole previous one.
+fn needs_recovery(dir: &Path) -> bool {
+    !dir.exists() && complete(&beside(dir, PREVIOUS))
+}
+
+/// [`recover`] by a caller that already holds the folder's lock (a download).
+fn recover_locked(dir: &Path) {
+    if needs_recovery(dir)
+        && let Err(e) = std::fs::rename(beside(dir, PREVIOUS), dir)
     {
         log::warn!("lens database: could not put back the previous database: {e}");
     }
@@ -336,10 +348,16 @@ fn run(dir: &Path, mirrors: &[String], files: &[Pin], shared: &Shared) {
     }
 }
 
-/// Held while one download uses a folder's staging and previous folders, across sessions and processes: a file
-/// beside the folder, made only if it isn't there, removed when the download ends.
+/// Held while one download (or a [`recover`]) uses a folder's staging and previous folders, across sessions and
+/// processes: an exclusive operating-system lock on a file beside the folder (`File::try_lock`: `flock` on Unix,
+/// `LockFileEx` on Windows), held by the open file. The system lets go of it when the file closes, on drop or when the
+/// process ends however it ends, so an app that crashed never leaves the folder locked and no age guess is needed.
+/// The file itself stays (empty): removing it would let a second app lock a new file of the same name while the first
+/// still holds the old one.
 #[cfg(not(target_arch = "wasm32"))]
-struct DirLock(PathBuf);
+struct DirLock {
+    _file: std::fs::File,
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 impl DirLock {
@@ -348,29 +366,18 @@ impl DirLock {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
         }
-        for _ in 0..2 {
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(DirLock(path)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale =
-                        std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > STALE_LOCK);
-                    if !stale {
-                        return Err("the lens database is already downloading (in another LightCraft window)".into());
-                    }
-                    // left by an app that quit mid-download: taken over
-                    let _ = std::fs::remove_file(&path);
-                }
-                Err(e) => return Err(format!("could not create {}: {e}", path.display())),
-            }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| format!("could not create {}: {e}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(DirLock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err("the lens database is already downloading (in another LightCraft window)".into()),
+            Err(std::fs::TryLockError::Error(e)) => Err(format!("could not lock {}: {e}", path.display())),
         }
-        Err("the lens database is already downloading (in another LightCraft window)".into())
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for DirLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -378,7 +385,7 @@ impl Drop for DirLock {
 fn fetch_all(dir: &Path, mirrors: &[String], files: &[Pin], shared: &Shared) -> Result<usize, String> {
     // (from before the recovery through the swap: another download of this folder would move the same folders)
     let _lock = DirLock::take(dir)?;
-    recover(dir);
+    recover_locked(dir);
     let staging = beside(dir, STAGING);
     std::fs::create_dir_all(&staging).map_err(|e| format!("could not create {}: {e}", staging.display()))?;
     let specs: Vec<lightcraft_fetch::FileSpec<'_>> =
@@ -472,24 +479,45 @@ mod tests {
     use std::time::Duration;
 
     /// Two downloads into one folder (two windows, or two sessions of one app) never share its staging and previous
-    /// folders: the second is refused while the first holds the folder, and may go once it ends; a lock left by an
-    /// app that quit mid-download is taken over.
+    /// folders: the second is refused while the first holds the folder, however old the first's lock file is, and
+    /// may go once it ends; the file an app that quit mid-download leaves holds nothing (the system let go of it).
     #[test]
     fn one_download_at_a_time_holds_a_folder() {
         let d = scratch("lock");
         let _ = std::fs::remove_file(beside(&d, LOCK));
         let first = DirLock::take(&d).unwrap();
-        let second = DirLock::take(&d);
-        assert!(second.as_ref().is_err_and(|e| e.contains("already downloading")), "{:?}", second.as_ref().err());
-        drop(first);
-        let again = DirLock::take(&d).unwrap();
-        std::mem::forget(again);
-        // (the app quit with the lock in place an hour and more ago)
-        let old = std::time::SystemTime::now() - STALE_LOCK - Duration::from_secs(60);
+        // (a download running for a week on a slow line: its lock file is old, and it still holds the folder)
+        let old = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 60 * 60);
         std::fs::OpenOptions::new().write(true).open(beside(&d, LOCK)).unwrap().set_modified(old).unwrap();
-        let taken = DirLock::take(&d).unwrap();
-        drop(taken);
-        assert!(!beside(&d, LOCK).exists(), "removed when the download ends");
+        for _ in 0..3 {
+            let second = DirLock::take(&d);
+            assert!(second.as_ref().is_err_and(|e| e.contains("already downloading")), "{:?}", second.as_ref().err());
+        }
+        drop(first);
+        drop(DirLock::take(&d).unwrap());
+        // (what an app that quit mid-download leaves: the file, unlocked)
+        assert!(beside(&d, LOCK).exists());
+        drop(DirLock::take(&d).unwrap());
+        let _ = std::fs::remove_file(beside(&d, LOCK));
+    }
+
+    /// The start's recovery moves nothing while a download holds the folder: between that download's two moves the
+    /// folder is missing and the previous one whole, which is not an interrupted swap.
+    #[test]
+    fn recovery_leaves_a_folder_a_download_holds() {
+        let dir = scratch("recover-locked");
+        std::fs::remove_dir_all(&dir).unwrap();
+        let previous = beside(&dir, PREVIOUS);
+        std::fs::create_dir_all(&previous).unwrap();
+        std::fs::write(previous.join(MARKER), "older").unwrap();
+        let held = DirLock::take(&dir).unwrap();
+        recover(&dir);
+        assert!(!dir.exists() && complete(&previous), "a download's swap is left alone");
+        drop(held);
+        recover(&dir);
+        assert!(complete(&dir) && !previous.exists(), "an interrupted swap is put back");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(beside(&dir, LOCK));
     }
 
     fn scratch(name: &str) -> PathBuf {

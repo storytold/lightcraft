@@ -118,6 +118,13 @@ fn a_hover_preview_key_follows_the_lens_profile() {
     s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(lens)) }).unwrap();
     let after = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
     assert_ne!(before, after);
+    // one database profile looked up again as another (a newer database): the key follows the profile's contents,
+    // not only whether there is one
+    let vignette = lightcraft_develop::EmbeddedVignette { k: [-0.3, 0.0, 0.0, 0.0, 0.0], radius: 1.0, ..Default::default() };
+    let other = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, vignette: Some(vignette), ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(other)) }).unwrap();
+    let again = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
+    assert_ne!(after, again, "a different database profile");
 }
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
