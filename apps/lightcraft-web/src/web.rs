@@ -513,6 +513,9 @@ impl WebApp {
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
         if let Some(fields) = saved.as_object_mut() {
             lightcraft_ui_egui::docking::drop_outdated(fields);
+            // a stored ui.json means an installation that has been run: due What's New, never
+            // the first-run tour (the same migration the desktop settings loader runs)
+            lightcraft_ui_egui::startup::migrate_legacy_seen_version(fields);
         }
         if let Ok(ui) = serde_json::from_value::<UiState>(saved) {
             app.ui = ui;

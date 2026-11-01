@@ -320,5 +320,8 @@
   "{name} is installed and in use: face recognition is on": "{name} är installerad och används: ansiktsigenkänning är på",
   "Creates {stacks} stack{} from {photos} of {scope}": "Skapar staplar: {stacks} · foton: {photos} av {scope}{:.0}",
   "{n} selected photo{} · {pages} page{}": "Markerade foton: {n} · sidor: {pages}{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importera foton via Fil › Importera foton… ({keys}).",
+  "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys})."
 }

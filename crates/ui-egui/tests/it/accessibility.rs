@@ -11,6 +11,8 @@ use lightcraft_ui_egui::{
 
 fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    // a headless host never gains the first-run tour: its modal would take the Tab focus under test
+    app.headless_host = true;
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
