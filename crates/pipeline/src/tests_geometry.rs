@@ -853,13 +853,14 @@ fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
     assert_eq!(shortfall(Upright::Level, &Analysis::default()), Some(Reject::TooFew.message()));
 }
 
-/// The Guided hint names the lines to draw: Full needs both families (Guided uses only the guides drawn), the
-/// other modes vertical ones.
+/// The Guided hint says what to draw: Full needs two guides of each family (Guided uses only the guides drawn, and
+/// one of a kind only levels), Vertical two vertical ones, and Level a single line.
 #[test]
 fn upright_hint_asks_for_the_lines_guided_needs() {
-    use crate::upright::missing_family;
+    use crate::upright::guided_hint;
     use lightcraft_develop::Upright;
-    assert_eq!(missing_family(Upright::Full), "vertical and what should be horizontal");
-    assert_eq!(missing_family(Upright::Vertical), "vertical");
-    assert_eq!(missing_family(Upright::Level), "vertical");
+    assert_eq!(guided_hint(Upright::Full), "two lines along what should be vertical and two along what should be horizontal");
+    assert_eq!(guided_hint(Upright::Vertical), "two lines along what should be vertical");
+    assert_eq!(guided_hint(Upright::Level), "a line along what should be level or upright");
+    assert_eq!(guided_hint(Upright::Auto), "two lines along what should be vertical");
 }

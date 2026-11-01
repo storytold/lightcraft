@@ -698,10 +698,15 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
     }
 }
 
-/// The lines Guided needs drawn when `mode` falls short: Full needs both families drawn (Guided works from the
-/// guides alone, not from lines Full found), the others vertical ones.
-pub fn missing_family(mode: Upright) -> &'static str {
-    if mode == Upright::Full { "vertical and what should be horizontal" } else { "vertical" }
+/// What to draw in Guided when `mode` falls short ("Try Guided: draw …"). Guided works from the guides alone, not
+/// from lines the mode found, and one guide of a kind only levels ([`solve_guided`]): Full needs two of each
+/// family, Vertical two vertical ones, and levelling one line.
+pub fn guided_hint(mode: Upright) -> &'static str {
+    match mode {
+        Upright::Full => "two lines along what should be vertical and two along what should be horizontal",
+        Upright::Level => "a line along what should be level or upright",
+        _ => "two lines along what should be vertical",
+    }
 }
 
 /// The Upright correction for `mode` from an analysis (lens-corrected → transformed, centred coordinates).
