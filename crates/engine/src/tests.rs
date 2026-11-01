@@ -2024,3 +2024,26 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         assert!(s.auto_sync, "Auto Sync must remain enabled");
     }
 }
+
+/// Upright that finds nothing to correct says why instead of silently doing nothing.
+#[test]
+fn upright_says_why_it_found_nothing_to_correct() {
+    let mut s = demo();
+    let mut noted = 0;
+    for id in s.visible().iter().copied().take(4).collect::<Vec<_>>() {
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        let r = s.execute("geometry.upright", &json!({"mode": "vertical"})).unwrap();
+        let identity = r["transform"] == serde_json::to_value(lightcraft_geom::Homography::IDENTITY).unwrap();
+        match r["note"].as_str() {
+            Some(note) => {
+                noted += 1;
+                assert!(identity, "a note was returned with a correction: {r}");
+                assert!(note.starts_with("No vertical correction: "), "{note}");
+            }
+            None => assert!(!identity, "a vertical correction was found: {r}"),
+        }
+    }
+    assert!(noted > 0, "the demo's natural scenes have no verticals to correct");
+    let r = s.execute("geometry.upright", &json!({"mode": "off"})).unwrap();
+    assert!(r["note"].is_null());
+}

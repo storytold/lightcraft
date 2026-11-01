@@ -216,7 +216,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 )
 | LR-EDIT-OPTICS-DEFRINGE | Defringe | P1 | ✅ | `ctl:optics.defringe*` | no fringe eyedropper |
 | LR-EDIT-OPTICS-MANUAL | Manual distortion / vignetting | P1 | ✅ | `ctl:optics.distortion`, `ctl:optics.vignetting`, `ctl:optics.vignettingMidpoint` | |
-| LR-EDIT-GEOM-UPRIGHT | Upright | P1 | ✅ | `cmd:geometry.upright`, `cmd:geometry.guides` | |
+| LR-EDIT-GEOM-UPRIGHT | Upright | P1 | 🟡 | `cmd:geometry.upright`, `cmd:geometry.guides`, `crates/pipeline/src/upright.rs` | a vertical family is accepted when most of it agrees, or when the lines that disagree (people, folds, foliage) gather at no rival point half as strong, so two long posts flanking a crowd decide (`upright_corrects_converging_posts_among_people`); a mode that finds nothing to correct says why (`note`, shown over the photo: too few / too short lines, one object, lines that disagree, lines meeting inside the photo) and suggests Guided. Downgraded from ✅: a user's real pavilion shots (thick posts, thin poles) were not corrected and the tuning is so far proven on synthetic scenes only; thin poles below a pixel at the 1024 px analysis size are still lost |
 | LR-EDIT-GEOM-MANUAL | Manual transform | P1 | ✅ | `ctl:geometry.*` | |
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`), `crates/engine/src/lib.rs` (`fit_constrained_crop`) | Ticking it, or changing Geometry, Upright or lens corrections while it is ticked, shrinks the stored crop about its centre until no blank corner is left, so the Crop tool shows it (it used to apply at render time only, outside the Crop tool: issue #1927; tests in `crates/engine/src/tests/constrain_crop.rs`). A crop drawn by hand is kept as drawn; unticking keeps the tighter crop |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
@@ -799,6 +799,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | LR-EDIT-GEOM-UPRIGHT: ✅ → 🟡 (real shots of posts among people were not corrected; tuned on synthetic scenes only): a vertical family wins over a crowd of disagreeing lines unless they gather at a rival point, Vertical follows long posts rather than decks, drapes or gown folds; a mode that finds nothing says why |
 | 2026-10-30 | patch | LR-BEHAV-ACCESS: the Flatpak manifests grant `--talk-name=org.a11y.Bus`, so AccessKit can find out whether a screen reader is running and publish the window inside the sandbox; packaging lint requires it in both manifests; status unchanged (🟡), not tried with Orca |
 | 2026-10-27 | patch | LR-LIB-LABEL, MENU-PHOTO-LABEL, KEY-LABELS: Clear Color Label (`photo.clearLabel`) is a command of its own, so Help → Keyboard Shortcuts can give it a key (#2980); the Photo ▸ Set Color Label ▸ None row runs it; status unchanged |
 | 2026-10-25 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌘⌥⇧K / Ctrl+Alt+Shift+K (`dialog.keywordShortcut`, Set Keyword Shortcut) and ⇧K (`keyword.toggleShortcut`) add and remove the keyword shortcut's keywords; Keyword Shortcut leaves LRC-LIB-KEYWORDS' Not yet list; status counts unchanged (KEYC-METADATA stays 🟡) |

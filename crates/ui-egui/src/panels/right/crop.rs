@@ -226,7 +226,8 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
             if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
                 let (_, mode, key) = modes[i];
-                let _ = app.run("geometry.upright", json!({"mode": key}));
+                let r = app.run("geometry.upright", json!({"mode": key}));
+                upright_note(app, ui.ctx(), r.as_ref().ok());
                 app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
             }
         }
@@ -237,7 +238,8 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
             {
                 let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();
-                let _ = app.run("geometry.upright", json!({"mode": mode}));
+                let r = app.run("geometry.upright", json!({"mode": mode}));
+                upright_note(app, ui.ctx(), r.as_ref().ok());
             }
             if guided {
                 let drawing = app.ui.tool == "guidedUpright";
@@ -480,4 +482,11 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     });
+}
+
+/// Upright that found nothing to correct says why, as a note over the photo.
+fn upright_note(app: &mut LightcraftApp, ctx: &egui::Context, result: Option<&serde_json::Value>) {
+    if let Some(note) = result.and_then(|r| r.get("note")).and_then(serde_json::Value::as_str) {
+        app.toast_for(ctx, note.to_string(), 8.0);
+    }
 }
