@@ -1,6 +1,6 @@
-//! A small ONNX U-Net built in memory, for tests of the layers that read and run denoise networks (here, in the GPU
-//! runner and in the engine): the same layer kinds and wiring as the real denoisers, with deterministic random weights.
-//! Nothing here is a model anyone would use.
+//! A small ONNX U-Net and a small upscaler built in memory, for tests of the layers that read and run networks (here,
+//! in the GPU runner and in the engine): the same layer kinds and wiring as the real denoisers and the compact
+//! Real-ESRGAN upscaler, with deterministic random weights. Nothing here is a model anyone would use.
 
 use crate::synthetic_proto::{len_field, value_info_bytes};
 
@@ -26,6 +26,7 @@ enum A<'a> {
     Ints(&'a [i64]),
     Float(f32),
     Str(&'a str),
+    Tensor(Vec<u8>),
 }
 
 fn node(op: &str, inputs: &[&str], output: &str, attrs: &[(&str, A)]) -> Vec<u8> {
@@ -57,6 +58,10 @@ fn node(op: &str, inputs: &[&str], output: &str, attrs: &[(&str, A)]) -> Vec<u8>
             A::Str(s) => {
                 len_field(4, s.as_bytes(), &mut a);
                 varint_field(20, 3, &mut a);
+            }
+            A::Tensor(t) => {
+                len_field(5, t, &mut a);
+                varint_field(20, 4, &mut a);
             }
         }
         len_field(5, &a, &mut n);
@@ -159,6 +164,29 @@ impl Builder {
         out
     }
 
+    /// A `Constant` node holding `values`, as exporters write weights; gives its name.
+    fn constant(&mut self, dims: &[u64], values: &[f32]) -> String {
+        let out = self.name("const");
+        self.nodes.push(node("Constant", &[], &out, &[("value", A::Tensor(tensor("", dims, values)))]));
+        out
+    }
+
+    /// `Conv` with its weights in `Constant` nodes, then `PRelu` with a random slope per channel when `prelu`.
+    fn conv_prelu(&mut self, src: &str, cin: u64, cout: u64, prelu: bool) -> String {
+        let scale = (3.0 / (cin * 9) as f32).sqrt();
+        let w: Vec<f32> = (0..cout * cin * 9).map(|_| self.rng.next() * scale).collect();
+        let b: Vec<f32> = (0..cout).map(|_| self.rng.next() * 0.1).collect();
+        let (w, b, out) = (self.constant(&[cout, cin, 3, 3], &w), self.constant(&[cout], &b), self.name("conv"));
+        self.nodes.push(node("Conv", &[src, &w, &b], &out, &[("kernel_shape", A::Ints(&[3, 3])), ("pads", A::Ints(&[1; 4]))]));
+        if !prelu {
+            return out;
+        }
+        let slope: Vec<f32> = (0..cout).map(|_| self.rng.next() * 0.5).collect();
+        let (slope, act) = (self.constant(&[cout, 1, 1], &slope), self.name("prelu"));
+        self.nodes.push(node("PRelu", &[&out, &slope], &act, &[]));
+        act
+    }
+
     fn concat(&mut self, a: &str, b: &str) -> String {
         let out = self.name("cat");
         self.nodes.push(node("Concat", &[a, b], &out, &[("axis", A::Int(1))]));
@@ -208,6 +236,44 @@ pub fn unet_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
     let mut ops = Vec::new();
     len_field(1, b"", &mut ops);
     varint_field(2, 13, &mut ops);
+    let mut model = Vec::new();
+    varint_field(1, 8, &mut model);
+    len_field(7, &graph, &mut model);
+    len_field(8, &ops, &mut model);
+    model
+}
+
+/// An upscaler shaped like Real-ESRGAN's compact `realesr-general-x4v3` (SRVGGNetCompact), as its ONNX export writes
+/// it: `[1, 3, h, w]` → `[1, 3, scale·h, scale·w]` through `convs` 3 × 3 convolutions of `ch` channels,
+/// each with a `PRelu`, a last one to `3·scale²` channels, depth-to-space by `scale`, the input resized by `scale`
+/// (nearest) added back, and `Clip` to `[0, 1]`. Every weight is a `Constant` node.
+pub fn upscaler_onnx(ch: u64, convs: usize, scale: u64, seed: u64) -> Vec<u8> {
+    let mut b = Builder { nodes: Vec::new(), inits: Vec::new(), rng: Rng(seed | 1), n: 0 };
+    let mut cur = b.conv_prelu("data", 3, ch, true);
+    for _ in 0..convs {
+        cur = b.conv_prelu(&cur, ch, ch, true);
+    }
+    let cells = b.conv_prelu(&cur, ch, 3 * scale * scale, false);
+    b.nodes.push(node("DepthToSpace", &[&cells], "detail", &[("blocksize", A::Int(scale as i64)), ("mode", A::Str("CRD"))]));
+    let factors = b.constant(&[4], &[1.0, 1.0, scale as f32, scale as f32]);
+    b.nodes.push(node(
+        "Resize",
+        &["data", "", &factors],
+        "base",
+        &[("mode", A::Str("nearest")), ("coordinate_transformation_mode", A::Str("asymmetric")), ("nearest_mode", A::Str("floor"))],
+    ));
+    b.nodes.push(node("Add", &["detail", "base"], "sum", &[]));
+    let (lo, hi) = (b.constant(&[], &[0.0]), b.constant(&[], &[1.0]));
+    b.nodes.push(node("Clip", &["sum", &lo, &hi], "rgb", &[]));
+
+    let mut graph = Vec::new();
+    for n in &b.nodes {
+        len_field(1, n, &mut graph);
+    }
+    len_field(11, &value_info_bytes("data", 1, &[Err("batch"), Ok(3), Err("height"), Err("width")]), &mut graph);
+    len_field(12, &value_info_bytes("rgb", 1, &[Err("batch"), Ok(3), Err("height"), Err("width")]), &mut graph);
+    let mut ops = Vec::new();
+    varint_field(2, 14, &mut ops);
     let mut model = Vec::new();
     varint_field(1, 8, &mut model);
     len_field(7, &graph, &mut model);

@@ -2,8 +2,11 @@
 //!
 //! Only what the denoise U-Nets are made of is understood: `Conv` (3 × 3 "same" or 1 × 1, stride 1, no groups, no
 //! dilation) optionally followed by `LeakyRelu`, `ConvTranspose` (2 × 2, stride 2) likewise, `MaxPool` (2 × 2, stride 2),
-//! a two-input `Concat` on the channels that feeds a convolution, and a final `DepthToSpace` (2, `CRD`). Any other
-//! operator or attribute is [`NetError::Unsupported`], which is reported to the user by both runners.
+//! a two-input `Concat` on the channels that feeds a convolution, and a final `DepthToSpace` (2, `CRD`). For the
+//! compact Real-ESRGAN upscaler also `PRelu` (a slope per channel), `DepthToSpace` by 4, `Resize` (nearest, by 2 or 4,
+//! `asymmetric` with `floor`, which repeats every pixel), `Add` of two tensors and `Clip` by constant bounds; weights,
+//! slopes, scales and bounds may be initialisers or `Constant` nodes. Any other operator or attribute is
+//! [`NetError::Unsupported`], which is reported to the user by both runners.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,7 +14,7 @@ use std::path::Path;
 use crate::onnx_proto::{self, AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 use std::io::Read;
 
-use crate::net::{Conv, ConvT2, MAX_WEIGHTS, Net, NetError, Op, TensorId};
+use crate::net::{Conv, ConvT2, MAX_WEIGHTS, Net, NetError, Op, SCALES, TensorId};
 
 fn unsupported<T>(why: impl Into<String>) -> Result<T, NetError> {
     Err(NetError::Unsupported(why.into()))
@@ -34,12 +37,24 @@ pub fn read(path: &Path) -> Result<Net, NetError> {
     read_bytes(&bytes)
 }
 
-fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
+pub(crate) fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
     let graph = onnx_proto::decode(bytes)?;
 
-    let initialisers: HashMap<&str, &TensorProto> = graph.initializer.iter().map(|t| (t.name.as_str(), t)).collect();
+    // the values stored in the file: the initialisers and the `Constant` nodes' tensors
+    let mut initialisers: HashMap<&str, &TensorProto> = graph.initializer.iter().map(|t| (t.name.as_str(), t)).collect();
     if initialisers.len() != graph.initializer.len() {
         return invalid("duplicate initializer names");
+    }
+    for n in graph.node.iter().filter(|n| n.op_type == "Constant") {
+        let ([out], [AttributeProto { name, t: Some(value), .. }]) = (n.output.as_slice(), n.attribute.as_slice()) else {
+            return unsupported("a Constant that is not one tensor value");
+        };
+        if name != "value" || !n.input.is_empty() {
+            return unsupported("a Constant that is not one tensor value");
+        }
+        if initialisers.insert(out.as_str(), value).is_some() {
+            return invalid("a Constant with the name of another stored value");
+        }
     }
     let inputs: Vec<_> = graph.input.iter().filter(|i| !initialisers.contains_key(i.name.as_str())).collect();
     let ([input], [output]) = (inputs.as_slice(), graph.output.as_slice()) else { return unsupported("not one input and one output") };
@@ -69,6 +84,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
     while i < nodes.len() {
         let Some(node) = nodes.get(i) else { break };
         i += 1;
+        if node.op_type == "Constant" {
+            continue;
+        }
         if node.output.len() != 1 || node.output.first().is_none_or(|n| n.is_empty() || ids.contains_key(n) || joins.contains_key(n)) {
             return invalid("a layer has missing, repeated or multiple outputs");
         }
@@ -78,6 +96,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
             "MaxPool" => &["kernel_shape", "pads", "strides", "dilations", "ceil_mode", "storage_order", "auto_pad"],
             "Concat" => &["axis"],
             "DepthToSpace" => &["blocksize", "mode"],
+            "Resize" => &["mode", "coordinate_transformation_mode", "nearest_mode", "cubic_coeff_a", "exclude_outside", "extrapolation_value"],
             _ => &[],
         };
         if node.attribute.iter().any(|a| !allowed.contains(&a.name.as_str())) {
@@ -193,13 +212,53 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 ops.push(Op::MaxPool2 { src });
             }
             "DepthToSpace" => {
-                if attr(node, "blocksize").map(|a| a.i) != Some(2) || attr(node, "mode").map(|a| a.s.as_slice()) != Some(&b"CRD"[..]) {
-                    return unsupported("depth-to-space other than block size 2 in CRD order");
-                }
+                let block = attr(node, "blocksize").and_then(|a| usize::try_from(a.i).ok()).filter(|b| SCALES.contains(b));
+                let Some(block) = block.filter(|_| attr(node, "mode").map(|a| a.s.as_slice()) == Some(&b"CRD"[..])) else {
+                    return unsupported("depth-to-space other than block size 2 or 4 in CRD order");
+                };
                 let src = lookup(node.input.first().map_or("", String::as_str))?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("DepthToSpace without an output".into()))?;
                 ids.insert(out.clone(), this);
-                ops.push(Op::DepthToSpace2 { src });
+                ops.push(Op::DepthToSpace { src, block });
+            }
+            "PRelu" => {
+                let [src, slope] = node.input.as_slice() else { return invalid("PRelu without its input and slope") };
+                let slope = stored(slope, &initialisers, &mut weights_total)?;
+                if !matches!(slope.0.as_slice(), [_] | [_, 1, 1] | [1, _, 1, 1]) {
+                    return unsupported("a PRelu slope that is not one per channel");
+                }
+                let src = lookup(src)?;
+                let out = node.output.first().ok_or_else(|| NetError::Invalid("PRelu without an output".into()))?;
+                ids.insert(out.clone(), this);
+                ops.push(Op::PRelu { src, slope: slope.1 });
+            }
+            "Resize" => {
+                let factor = resize_factor(node, &initialisers)?;
+                let src = lookup(node.input.first().map_or("", String::as_str))?;
+                let out = node.output.first().ok_or_else(|| NetError::Invalid("Resize without an output".into()))?;
+                ids.insert(out.clone(), this);
+                ops.push(Op::Upsample { src, factor });
+            }
+            "Add" => {
+                let [a, b] = node.input.as_slice() else { return invalid("Add of other than two tensors") };
+                let (a, b) = (lookup(a)?, lookup(b)?);
+                let out = node.output.first().ok_or_else(|| NetError::Invalid("Add without an output".into()))?;
+                ids.insert(out.clone(), this);
+                ops.push(Op::Add { a, b });
+            }
+            "Clip" => {
+                let [src, min, max] = node.input.as_slice() else { return unsupported("a Clip without both bounds") };
+                let bound = |name: &str| -> Result<f32, NetError> {
+                    match stored(name, &initialisers, &mut 0)?.1.as_slice() {
+                        [v] => Ok(*v),
+                        _ => invalid("a Clip bound that is not one number"),
+                    }
+                };
+                let (min, max) = (bound(min)?, bound(max)?);
+                let src = lookup(src)?;
+                let out = node.output.first().ok_or_else(|| NetError::Invalid("Clip without an output".into()))?;
+                ids.insert(out.clone(), this);
+                ops.push(Op::Clip { src, min, max });
             }
             other => return unsupported(format!("the `{other}` operator")),
         }
@@ -213,7 +272,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
     Net::new(in_channels, ops)
 }
 
-fn attr<'a>(n: &'a NodeProto, name: &str) -> Option<&'a AttributeProto> {
+fn attr<'a, 'b>(n: &'a NodeProto<'b>, name: &str) -> Option<&'a AttributeProto<'b>> {
     n.attribute.iter().find(|a| a.name == name)
 }
 
@@ -231,17 +290,44 @@ fn four(dims: &[i64]) -> Result<(usize, usize, usize, usize), NetError> {
 
 type Weights = ((Vec<i64>, Vec<f32>), Vec<f32>);
 
+/// The dimensions and numbers of the stored value `name`, counted into the network's `total`.
+fn stored(name: &str, initialisers: &HashMap<&str, &TensorProto>, total: &mut usize) -> Result<(Vec<i64>, Vec<f32>), NetError> {
+    let t = initialisers.get(name).ok_or_else(|| NetError::Unsupported(format!("values that are computed (`{name}`)")))?;
+    let values = floats(t)?;
+    *total = total.saturating_add(values.len());
+    if *total > MAX_WEIGHTS {
+        return invalid("the network has too many weights");
+    }
+    Ok((t.dims.clone(), values))
+}
+
+/// The factor of a `Resize` that repeats every pixel: nearest, `asymmetric` with `floor`, the same factor from
+/// [`SCALES`] on both sides and none on the batch and channels, and no region of interest.
+fn resize_factor(node: &NodeProto, initialisers: &HashMap<&str, &TensorProto>) -> Result<usize, NetError> {
+    let text = |name: &str| attr(node, name).map(|a| a.s.as_slice());
+    if text("mode") != Some(b"nearest") || text("coordinate_transformation_mode") != Some(b"asymmetric") || text("nearest_mode") != Some(b"floor") {
+        return unsupported("a Resize other than nearest, asymmetric and floor");
+    }
+    if attr(node, "exclude_outside").is_some_and(|a| a.i != 0) {
+        return unsupported("a Resize that excludes the outside");
+    }
+    let scales = match node.input.as_slice() {
+        [_, scales] => scales,
+        [_, roi, scales] if roi.is_empty() => scales,
+        _ => return unsupported("a Resize by a region of interest or to sizes"),
+    };
+    let (dims, values) = stored(scales, initialisers, &mut 0)?;
+    match (dims.as_slice(), values.as_slice()) {
+        ([4], [n, c, h, w]) if *n == 1.0 && *c == 1.0 && h == w && SCALES.iter().any(|&s| s as f32 == *h) => Ok(*h as usize),
+        _ => unsupported("a Resize by other than 2 or 4 on both sides"),
+    }
+}
+
 /// The weight and bias initialisers of a convolution node.
 fn weights_of(node: &NodeProto, initialisers: &HashMap<&str, &TensorProto>, total: &mut usize) -> Result<Weights, NetError> {
     let mut get = |idx: usize| -> Result<(Vec<i64>, Vec<f32>), NetError> {
         let name = node.input.get(idx).ok_or_else(|| NetError::Invalid(format!("`{}` without its weights", node.op_type)))?;
-        let t = initialisers.get(name.as_str()).ok_or_else(|| NetError::Unsupported(format!("weights that are computed (`{name}`)")))?;
-        let values = floats(t)?;
-        *total = total.saturating_add(values.len());
-        if *total > MAX_WEIGHTS {
-            return invalid("the network has too many weights");
-        }
-        Ok((t.dims.clone(), values))
+        stored(name, initialisers, total)
     };
     let w = get(1)?;
     let b = if node.input.len() > 2 {
@@ -312,7 +398,7 @@ mod tests {
         // per level two convolutions; a pool per level but the last; going up a transposed convolution and two convolutions
         // per level (the join is part of the first); then the 1 × 1 convolution and depth-to-space
         assert_eq!(net.ops().len(), 2 * (depth + 1) + depth + depth * 3 + 2);
-        assert!(matches!(net.ops().last(), Some(crate::net::Op::DepthToSpace2 { .. })));
+        assert!(matches!(net.ops().last(), Some(crate::net::Op::DepthToSpace { block: 2, .. })));
         assert!(net.ops().iter().any(|o| matches!(o, crate::net::Op::Conv(c) if c.src2.is_some())), "the joins became two-source convolutions");
         assert!(
             net.ops().iter().all(|o| !matches!(o, crate::net::Op::Conv(c) if c.leaky.is_none() && c.k == 3)),
@@ -322,6 +408,97 @@ mod tests {
         assert!(net.fits_tile(tile) && !net.fits_tile(30));
 
         let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn an_upscaler_is_read_from_constant_nodes() {
+        use crate::net::Op;
+        let net = read_bytes(&crate::synthetic::upscaler_onnx(8, 2, 4, 5)).unwrap();
+        let kinds: Vec<&str> = net
+            .ops()
+            .iter()
+            .map(|o| match o {
+                Op::Conv(_) => "conv",
+                Op::PRelu { .. } => "prelu",
+                Op::DepthToSpace { block: 4, .. } => "d2s4",
+                Op::Upsample { src: 0, factor: 4 } => "up4(input)",
+                Op::Add { .. } => "add",
+                Op::Clip { min, max, .. } if (*min, *max) == (0.0, 1.0) => "clip01",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["conv", "prelu", "conv", "prelu", "conv", "prelu", "conv", "d2s4", "up4(input)", "add", "clip01"]);
+        assert_eq!((net.in_channels, net.out_channels(), net.shape(net.output()).map(|s| s.level)), (3, 3, Some(-2)));
+    }
+
+    #[test]
+    fn only_a_resize_that_repeats_pixels_is_supported() {
+        let text = |name: &str, value: &str| AttributeProto { name: name.into(), s: value.as_bytes().to_vec(), kind: 3, ..Default::default() };
+        let resize = |mode: &str, transform: &str, inputs: &[&str]| NodeProto {
+            op_type: "Resize".into(),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: vec!["out".into()],
+            attribute: vec![text("mode", mode), text("coordinate_transformation_mode", transform), text("nearest_mode", "floor")],
+        };
+        let scales = |values: &[f32]| TensorProto {
+            name: "s".into(),
+            dims: vec![values.len() as i64],
+            data_type: 1,
+            float_data: values.to_vec(),
+            ..Default::default()
+        };
+        let (by4, by2, by3, uneven, channels) =
+            (scales(&[1., 1., 4., 4.]), scales(&[1., 1., 2., 2.]), scales(&[1., 1., 3., 3.]), scales(&[1., 1., 2., 4.]), scales(&[1., 2., 2., 2.]));
+        let factor = |node: &NodeProto, t: &TensorProto| resize_factor(node, &HashMap::from([("s", t), ("roi", t)]));
+        let good = resize("nearest", "asymmetric", &["x", "", "s"]);
+        assert_eq!(factor(&good, &by4), Ok(4));
+        assert_eq!(factor(&good, &by2), Ok(2));
+        assert_eq!(factor(&resize("nearest", "asymmetric", &["x", "s"]), &by2), Ok(2), "opset 10 has no region of interest");
+        for t in [&by3, &uneven, &channels] {
+            assert!(matches!(factor(&good, t), Err(NetError::Unsupported(_))));
+        }
+        for node in [
+            resize("linear", "asymmetric", &["x", "", "s"]),
+            resize("nearest", "half_pixel", &["x", "", "s"]),
+            resize("nearest", "asymmetric", &["x", "roi", "s"]),
+            resize("nearest", "asymmetric", &["x", "", "", "s"]),
+        ] {
+            assert!(matches!(factor(&node, &by2), Err(NetError::Unsupported(_))));
+        }
+        let mut no_floor = good;
+        no_floor.attribute.pop();
+        assert!(matches!(factor(&no_floor, &by2), Err(NetError::Unsupported(_))), "the default nearest mode rounds");
+    }
+
+    #[test]
+    fn a_constant_that_is_not_one_tensor_value_is_unsupported() {
+        let good = crate::synthetic::upscaler_onnx(4, 0, 2, 1);
+        assert!(read_bytes(&good).is_ok());
+        // the first Constant's attribute name `value` becomes `vblue`
+        let at = good.windows(5).position(|w| w == b"value").unwrap();
+        let mut renamed = good.clone();
+        renamed[at + 1] = b'b';
+        assert!(matches!(read_bytes(&renamed), Err(NetError::Unsupported(_))));
+    }
+
+    /// Reads and runs the real `realesr-general-x4v3.onnx` export (sha256 `09b757ac…`) at `LC_SR_MODEL`.
+    #[cfg(feature = "runtime")]
+    #[test]
+    #[ignore = "needs LC_SR_MODEL: the realesr-general-x4v3 ONNX export"]
+    fn the_real_compact_upscaler_is_read_and_its_cpu_run_matches_the_reference() {
+        let model = std::env::var_os("LC_SR_MODEL").expect("set LC_SR_MODEL");
+        let net = read(Path::new(&model)).unwrap();
+        assert_eq!((net.in_channels, net.out_channels(), net.shape(net.output()).map(|s| s.level)), (3, 3, Some(-2)));
+        let tile = 16;
+        // a soft gradient with an edge, in [0, 1]
+        let input: Vec<f32> =
+            (0..3 * tile * tile).map(|i| ((i % tile) as f32 / tile as f32 + if (i / tile) % tile > 8 { 0.3 } else { 0.0 }).min(1.0)).collect();
+        let cpu = crate::run::TileRunner::run(&crate::cpu::NetRunner::for_tile(&net, tile).unwrap(), &input).unwrap();
+        let want = crate::reference::run(&net, tile, &input).unwrap();
+        assert_eq!(cpu.len(), 3 * 16 * tile * tile);
+        let worst = cpu.iter().zip(&want).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst < 1e-3, "CPU and reference differ by {worst}");
+        assert!(cpu.iter().all(|v| (0.0..=1.0).contains(v)));
     }
 
     #[test]

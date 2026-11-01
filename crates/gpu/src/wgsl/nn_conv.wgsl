@@ -6,14 +6,16 @@
 // Tensors are NHWC, channels innermost, read four at a time (every channel count is a multiple of 4). A workgroup of
 // 256 threads makes a BM x BN block of the output, 4 x 4 values per thread, and walks K in steps of BK through
 // workgroup memory. The source can be two tensors whose channels follow each other (a skip connection's join, so it
-// is never made), and a leaky ReLU is applied on the way out. Specialised by the host: BM, BN, BK (BM * BN = 4096).
+// is never made), and a leaky ReLU (one slope, or one per channel stored after the bias) is applied on the way out.
+// Specialised by the host: BM, BN, BK (BM * BN = 4096).
 //
 // Output modes:
 //   0  NHWC at the input's size.
 //   1  a 2x2 stride-2 transposed convolution: the columns are (dy, dx, co) and each lands in the output pixel
 //      (2y + dy, 2x + dx) of an output twice the size.
-//   2  the last 1x1 convolution followed by depth-to-space (CRD): columns 4c + 2dy + dx land in plane c at
-//      (2y + dy, 2x + dx) of a planar (CHW) output twice the size.
+//   2  the network's last convolution followed by depth-to-space (CRD) by `block` = b: columns b²c + b·dy + dx land
+//      in plane c at (b·y + dy, b·x + dx) of a planar (CHW) output b times the size. With `skip_c4`, the input
+//      (NHWC in src1, upsampled by b: its pixel (y, x)) is added; with `clip`, the result is clamped to [lo, hi].
 
 struct P {
     h: u32,
@@ -29,6 +31,14 @@ struct P {
     alpha: f32,
     // always 0: the output stores step by 1u + zero, see the end of main
     zero: u32,
+    block: u32,
+    skip_c4: u32,
+    clip: u32,
+    lo: f32,
+    hi: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> p: P;
@@ -135,8 +145,10 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
         }
         var v = bv;
         if (i == 0u) { v += acc0; } else if (i == 1u) { v += acc1; } else if (i == 2u) { v += acc2; } else { v += acc3; }
-        if (p.leaky != 0u) {
+        if (p.leaky == 1u) {
             v = select(v * p.alpha, v, v >= vec4<f32>(0.0));
+        } else if (p.leaky == 2u) {
+            v = select(v * bias[p.npad / 4u + n / 4u], v, v >= vec4<f32>(0.0));
         }
         if (p.mode == 0u) {
             let o = m * p.n + n;
@@ -156,16 +168,24 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             dst[o + 2u * one] = v.z;
             dst[o + 3u * one] = v.w;
         } else {
-            let c = n / 4u;
+            let b = p.block;
+            let cells = b * b;
             let y = m / p.w;
             let x = m % p.w;
-            let ow = 2u * p.w;
-            let plane = c * (2u * p.h) * ow;
-            let o = plane + (2u * y) * ow + 2u * x;
-            dst[o] = v.x;
-            dst[o + 1u] = v.y;
-            dst[o + ow] = v.z;
-            dst[o + ow + 1u] = v.w;
+            let ow = b * p.w;
+            for (var j = 0u; j < 4u; j++) {
+                let col = n + j;
+                let c = col / cells;
+                let d = col % cells;
+                var out = v[j];
+                if (p.skip_c4 != 0u) {
+                    out += src1[m * p.skip_c4 + c / 4u][c % 4u];
+                }
+                if (p.clip != 0u) {
+                    out = clamp(out, p.lo, p.hi);
+                }
+                dst[c * (b * p.h) * ow + (b * y + d / b) * ow + b * x + d % b] = out;
+            }
         }
     }
 }

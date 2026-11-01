@@ -1,4 +1,5 @@
-//! A denoise network as plain data: the handful of layer kinds a U-Net denoiser is made of, with their weights.
+//! A network as plain data: the handful of layer kinds the U-Net denoisers and the compact Real-ESRGAN upscaler
+//! (`realesr-general-x4v3`, SRVGGNetCompact) are made of, with their weights.
 //!
 //! [`onnx`](crate::onnx) reads the file into this description, shared by the pure-Rust CPU and GPU runners.
 //! Unsupported operators, groups, dilation or activations are reported as errors when loading the model.
@@ -25,6 +26,15 @@ pub enum NetError {
 
 fn invalid<T>(why: impl Into<String>) -> Result<T, NetError> {
     Err(NetError::Invalid(why.into()))
+}
+
+/// The scale factors depth-to-space and upsampling may have: powers of two, so every tensor stays on a resolution
+/// level (see [`Shape`]).
+pub const SCALES: [usize; 2] = [2, 4];
+
+/// How many resolution levels a scale factor from [`SCALES`] moves a tensor up.
+fn scale_levels(factor: usize) -> Option<i32> {
+    SCALES.contains(&factor).then(|| factor.trailing_zeros() as i32)
 }
 
 /// A tensor is named by its number: 0 is the network's input, and layer `i` makes tensor `i + 1`.
@@ -67,10 +77,32 @@ pub enum Op {
     MaxPool2 {
         src: TensorId,
     },
-    /// Depth-to-space with block size 2 in "CRD" order: output channel `c` at `(2y + dy, 2x + dx)` is input channel
-    /// `4c + 2dy + dx` at `(y, x)`.
-    DepthToSpace2 {
+    /// Depth-to-space in "CRD" order with a block size `b` from [`SCALES`]: output channel `c` at `(b·y + dy, b·x + dx)`
+    /// is input channel `b²·c + b·dy + dx` at `(y, x)`.
+    DepthToSpace {
         src: TensorId,
+        block: usize,
+    },
+    /// A leaky ReLU with a slope per channel: channel `c`'s negative values are multiplied by `slope[c]`.
+    PRelu {
+        src: TensorId,
+        slope: Vec<f32>,
+    },
+    /// Nearest-neighbour upsampling by a factor from [`SCALES`]: every pixel becomes a `factor × factor` block.
+    Upsample {
+        src: TensorId,
+        factor: usize,
+    },
+    /// The sum of two tensors of the same shape (a residual connection).
+    Add {
+        a: TensorId,
+        b: TensorId,
+    },
+    /// Every value clamped into `[min, max]`.
+    Clip {
+        src: TensorId,
+        min: f32,
+        max: f32,
     },
 }
 
@@ -150,12 +182,47 @@ impl Net {
                     let a = shape_of(*src)?;
                     Shape { channels: a.channels, level: a.level + 1 }
                 }
-                Op::DepthToSpace2 { src } => {
+                Op::DepthToSpace { src, block } => {
                     let a = shape_of(*src)?;
-                    if !a.channels.is_multiple_of(4) {
-                        return invalid(format!("layer {i}: depth-to-space needs a multiple of 4 channels"));
+                    let levels = scale_levels(*block).ok_or_else(|| NetError::Invalid(format!("layer {i}: depth-to-space by {block}")))?;
+                    let cells = block * block;
+                    if !a.channels.is_multiple_of(cells) {
+                        return invalid(format!("layer {i}: depth-to-space by {block} needs a multiple of {cells} channels"));
                     }
-                    Shape { channels: a.channels / 4, level: a.level - 1 }
+                    Shape { channels: a.channels / cells, level: a.level - levels }
+                }
+                Op::PRelu { src, slope } => {
+                    let a = shape_of(*src)?;
+                    if slope.len() != a.channels {
+                        return invalid(format!("layer {i}: {} slopes for {} channels", slope.len(), a.channels));
+                    }
+                    if slope.iter().any(|v| !v.is_finite()) {
+                        return invalid(format!("layer {i}: a slope is not a finite number"));
+                    }
+                    weights = weights.saturating_add(slope.len());
+                    if weights > MAX_WEIGHTS {
+                        return invalid("the network has too many weights");
+                    }
+                    a
+                }
+                Op::Upsample { src, factor } => {
+                    let a = shape_of(*src)?;
+                    let levels = scale_levels(*factor).ok_or_else(|| NetError::Invalid(format!("layer {i}: upsampling by {factor}")))?;
+                    Shape { channels: a.channels, level: a.level - levels }
+                }
+                Op::Add { a, b } => {
+                    let (a, b) = (shape_of(*a)?, shape_of(*b)?);
+                    if a != b {
+                        return invalid(format!("layer {i} adds tensors of different shapes"));
+                    }
+                    a
+                }
+                Op::Clip { src, min, max } => {
+                    let a = shape_of(*src)?;
+                    if !(min.is_finite() && max.is_finite() && min <= max) {
+                        return invalid(format!("layer {i}: a clip range that is not two ordered finite numbers"));
+                    }
+                    a
                 }
             };
             shapes.push(out);
@@ -187,11 +254,16 @@ impl Net {
         self.shapes.iter().map(|s| s.level.max(0) as u32).max().unwrap_or(0)
     }
 
+    /// Does pooling divide a `tile × tile` input evenly, down to the deepest level?
+    pub fn pools_evenly(&self, tile: usize) -> bool {
+        let Some(multiple) = 1usize.checked_shl(self.depth()) else { return false };
+        tile > 0 && tile.is_multiple_of(multiple)
+    }
+
     /// Can the network run on a `tile × tile` input and give `[out_channels, 2·tile, 2·tile]`? (Pooling must divide
     /// the tile, and the output must be one level above the input.)
     pub fn fits_tile(&self, tile: usize) -> bool {
-        let Some(multiple) = 1usize.checked_shl(self.depth()) else { return false };
-        tile > 0 && tile.is_multiple_of(multiple) && self.shapes.last().is_some_and(|s| s.level == -1)
+        self.pools_evenly(tile) && self.shapes.last().is_some_and(|s| s.level == -1)
     }
 
     /// Multiply-adds for one tile, for estimating time.
@@ -258,13 +330,13 @@ mod tests {
     /// 1 × 1 convolution to the colours.
     fn unet() -> Vec<Op> {
         vec![
-            conv(0, None, 4, 8, 3),       // 1: 8 ch, level 0
-            Op::MaxPool2 { src: 1 },      // 2: level 1
-            conv(2, None, 8, 16, 3),      // 3: 16 ch, level 1
-            convt(3, 16, 8),              // 4: 8 ch, level 0
-            conv(4, Some(1), 16, 8, 3),   // 5: join [up, skip]
-            conv(5, None, 8, 12, 1),      // 6: 12 ch
-            Op::DepthToSpace2 { src: 6 }, // 7: 3 ch, level -1
+            conv(0, None, 4, 8, 3),                // 1: 8 ch, level 0
+            Op::MaxPool2 { src: 1 },               // 2: level 1
+            conv(2, None, 8, 16, 3),               // 3: 16 ch, level 1
+            convt(3, 16, 8),                       // 4: 8 ch, level 0
+            conv(4, Some(1), 16, 8, 3),            // 5: join [up, skip]
+            conv(5, None, 8, 12, 1),               // 6: 12 ch
+            Op::DepthToSpace { src: 6, block: 2 }, // 7: 3 ch, level -1
         ]
     }
 
@@ -281,7 +353,7 @@ mod tests {
             ops.push(convt(i, 4, 4));
         }
         ops.push(conv(42, None, 4, 12, 1));
-        ops.push(Op::DepthToSpace2 { src: 43 });
+        ops.push(Op::DepthToSpace { src: 43, block: 2 });
         let n = Net::new(4, ops).unwrap();
         assert!(!n.fits_tile(1 << 20));
         assert!(n.fits_tile(1 << 21));
@@ -332,9 +404,51 @@ mod tests {
         }
         assert!(Net::new(4, ops).is_err());
         assert!(Net::new(4, vec![]).is_err());
-        assert!(Net::new(4, vec![Op::DepthToSpace2 { src: 0 }]).is_ok());
-        assert!(Net::new(4, vec![Op::DepthToSpace2 { src: 0 }, Op::DepthToSpace2 { src: 1 }]).is_err());
-        assert!(Net::new(2, vec![Op::DepthToSpace2 { src: 0 }]).is_err());
+        assert!(Net::new(4, vec![Op::DepthToSpace { src: 0, block: 2 }]).is_ok());
+        assert!(Net::new(4, vec![Op::DepthToSpace { src: 0, block: 2 }, Op::DepthToSpace { src: 1, block: 2 }]).is_err());
+        assert!(Net::new(2, vec![Op::DepthToSpace { src: 0, block: 2 }]).is_err());
+        assert!(Net::new(4, vec![Op::DepthToSpace { src: 0, block: 4 }]).is_err());
+        assert!(Net::new(4, vec![Op::DepthToSpace { src: 0, block: 3 }]).is_err());
+    }
+
+    /// The compact upscaler's shape: convolutions with a per-channel slope, depth-to-space by 4, and the input
+    /// upsampled by 4 added back and clipped.
+    fn upscaler() -> Vec<Op> {
+        vec![
+            conv(0, None, 3, 8, 3),                    // 1: 8 ch
+            Op::PRelu { src: 1, slope: vec![0.1; 8] }, // 2
+            conv(2, None, 8, 48, 3),                   // 3: 48 ch
+            Op::DepthToSpace { src: 3, block: 4 },     // 4: 3 ch, level -2
+            Op::Upsample { src: 0, factor: 4 },        // 5: 3 ch, level -2
+            Op::Add { a: 4, b: 5 },                    // 6
+            Op::Clip { src: 6, min: 0.0, max: 1.0 },   // 7
+        ]
+    }
+
+    #[test]
+    fn an_upscaler_is_described_four_times_the_input_size() {
+        let net = Net::new(3, upscaler()).unwrap();
+        assert_eq!(net.shape(4), Some(Shape { channels: 3, level: -2 }));
+        assert_eq!(net.shape(7), Some(Shape { channels: 3, level: -2 }));
+        assert_eq!((net.out_channels(), net.depth()), (3, 0));
+        assert!(net.pools_evenly(5) && !net.fits_tile(5), "pools evenly, but it is not a denoiser's 2× output");
+    }
+
+    #[test]
+    fn upscaler_layers_that_do_not_fit_are_refused() {
+        let with = |at: usize, op: Op| {
+            let mut ops = upscaler();
+            ops[at] = op;
+            Net::new(3, ops)
+        };
+        assert!(with(1, Op::PRelu { src: 1, slope: vec![0.1; 7] }).is_err(), "a slope per channel");
+        assert!(with(1, Op::PRelu { src: 1, slope: vec![f32::NAN; 8] }).is_err());
+        assert!(with(4, Op::Upsample { src: 0, factor: 3 }).is_err());
+        assert!(with(4, Op::Upsample { src: 0, factor: 2 }).is_err(), "adding tensors of different resolutions");
+        assert!(with(5, Op::Add { a: 4, b: 3 }).is_err(), "adding tensors of different channel counts");
+        assert!(with(5, Op::Add { a: 4, b: 9 }).is_err(), "a tensor that does not exist yet");
+        assert!(with(6, Op::Clip { src: 6, min: 1.0, max: 0.0 }).is_err());
+        assert!(with(6, Op::Clip { src: 6, min: f32::NEG_INFINITY, max: 1.0 }).is_err());
     }
 
     #[test]
