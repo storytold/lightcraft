@@ -317,5 +317,6 @@
   "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
-  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "Copied {n} file paths": "已复制 {n} 个文件路径"
 }

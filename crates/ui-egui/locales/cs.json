@@ -2438,5 +2438,20 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "Open in Compare": "Otevřít v porovnání",
+  "Open in Survey": "Otevřít v přehledu",
+  "Edit Settings": "Nastavení úprav",
+  "Rotate & Flip": "Otočit a převrátit",
+  "Copy File Path": "Kopírovat cestu k souboru",
+  "Copied the file path": "Cesta k souboru zkopírována",
+  "The selected photos have no file on disk": "Vybrané fotografie nemají soubor na disku",
+  "Select 2 or more photos": "Vyberte 2 nebo více fotografií",
+  "Copy edit settings first": "Nejprve zkopírujte nastavení úprav",
+  "Copy metadata first": "Nejprve zkopírujte metadata",
+  "This version of LightCraft can't open the file manager": "Tato verze LightCraftu neumí otevřít správce souborů",
+  "This photo has no file on disk": "Tato fotografie nemá soubor na disku",
+  "This photo is not in a folder of the library": "Tato fotografie není ve složce knihovny",
+  "Opening other programs needs the desktop app": "Otevírání jiných programů vyžaduje desktopovou aplikaci",
+  "Only a photo file LightCraft reads can be opened this way": "Takto lze otevřít jen soubor fotografie, který LightCraft umí načíst"
 }

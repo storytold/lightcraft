@@ -2390,5 +2390,20 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Open in Compare": "Abrir en Comparar",
+  "Open in Survey": "Abrir en Encuesta",
+  "Edit Settings": "Ajustes de edición",
+  "Rotate & Flip": "Rotar y voltear",
+  "Copy File Path": "Copiar ruta del archivo",
+  "Copied the file path": "Ruta del archivo copiada",
+  "The selected photos have no file on disk": "Las fotos seleccionadas no tienen archivo en el disco",
+  "Select 2 or more photos": "Selecciona 2 o más fotos",
+  "Copy edit settings first": "Copia primero los ajustes de edición",
+  "Copy metadata first": "Copia primero los metadatos",
+  "This version of LightCraft can't open the file manager": "Esta versión de LightCraft no puede abrir el gestor de archivos",
+  "This photo has no file on disk": "Esta foto no tiene archivo en el disco",
+  "This photo is not in a folder of the library": "Esta foto no está en una carpeta de la biblioteca",
+  "Opening other programs needs the desktop app": "Abrir otros programas requiere la aplicación de escritorio",
+  "Only a photo file LightCraft reads can be opened this way": "Solo se puede abrir así un archivo de foto que LightCraft lea"
 }

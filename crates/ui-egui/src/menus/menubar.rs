@@ -45,7 +45,7 @@ impl MenuNode {
 
 /// User-defined names in parameterized menus are data, not message keys.
 pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a str {
-    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet")
+    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet" | "preset.apply")
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
         || (id == "app.recentLibraries" && params.get("remove").is_some())
@@ -383,7 +383,7 @@ pub(crate) fn in_normal_album(app: &LightcraftApp) -> bool {
     }
 }
 
-fn item(id: &str, params: Value, label: impl Into<String>, shortcut: Option<&str>, enabled: bool, checked: Option<bool>) -> MenuNode {
+pub(crate) fn item(id: &str, params: Value, label: impl Into<String>, shortcut: Option<&str>, enabled: bool, checked: Option<bool>) -> MenuNode {
     MenuNode::Item { id: id.into(), params, label: label.into(), shortcut: shortcut.map(str::to_string), enabled, checked }
 }
 
@@ -814,7 +814,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
 }
 
 /// Resolve a live menu row, including contextual keys and borrowed grid-cycle hints.
-fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
+pub(crate) fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     // Shift+P picks and advances in Library; don't advertise it on Presets in those views.
     let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
     // in an album the Delete key removes from the album (issue #1805): the menu says so
@@ -829,7 +829,7 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
 }
 
 /// Drop leading, trailing and doubled separators (also inside submenus) and empty submenus.
-fn tidy(v: Vec<MenuNode>) -> Vec<MenuNode> {
+pub(crate) fn tidy(v: Vec<MenuNode>) -> Vec<MenuNode> {
     let mut out: Vec<MenuNode> = Vec::with_capacity(v.len());
     for n in v {
         let n = match n {
