@@ -97,3 +97,5 @@ mod zoom_keys;
 
 pub(super) mod fixtures;
 pub(super) mod render_fixtures;
+
+mod pair_switch;

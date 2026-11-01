@@ -23,6 +23,7 @@ mod filesystem_history;
 mod focus_scan;
 mod folders;
 mod forget_local;
+mod fuji;
 mod history_cursor;
 mod hold_view;
 mod ids_params;
@@ -2024,3 +2025,5 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         assert!(s.auto_sync, "Auto Sync must remain enabled");
     }
 }
+
+mod pairs;

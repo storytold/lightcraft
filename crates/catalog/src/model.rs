@@ -17,6 +17,10 @@ pub struct AlbumId(pub u64);
 #[serde(transparent)]
 pub struct StackId(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PairId(pub u64);
+
 /// A stack: photos grouped under a top photo (bursts, brackets, merge results with their sources).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Stack {
@@ -26,6 +30,21 @@ pub struct Stack {
     /// Collapsed stacks show only their top photo in the grid.
     #[serde(default)]
     pub collapsed: bool,
+}
+
+/// A camera RAW file and the JPEG shot beside it. Both stay independent photos.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawJpegPair {
+    pub id: PairId,
+    pub raw: PhotoId,
+    pub jpeg: PhotoId,
+}
+
+/// A directory and stem the user split, so a later scan does not join them again.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PairRejection {
+    pub directory: String,
+    pub stem: String,
 }
 
 impl Stack {
@@ -204,6 +223,15 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+    /// In-camera Fujifilm film settings, learned when the file was imported or reloaded.
+    /// Not written to XMP. Left out of the catalog JSON when the file had none, so older
+    /// catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuji_recipe: Option<lightcraft_meta::FujiRecipe>,
+    /// Import or reload has already looked for a film recipe, including looking and finding none.
+    /// Older catalogs leave this false, and the Info panel may then read the file off the UI thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fuji_recipe_known: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -430,6 +430,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if let Some((sid, pos)) = stacks.get(&id) {
                     stack_badge(app, ui, id, *sid, *pos, r, square);
                 }
+                pair_badge(app, ui, id, r, square);
             }
         }
         // date headers (top to bottom); the current group's header sticks to the top while its
@@ -1273,6 +1274,36 @@ pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid:
 pub fn toggle_stack(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     if let Err(e) = app.run("stack.toggle", json!({"ids": [id.0]})) {
         app.toast(ctx, e);
+    }
+}
+
+/// RAW+JPEG badge. Click switches which file of the pair is shown and edited.
+pub fn pair_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool) {
+    let Some(pair) = app.session.catalog.pair_of(id).cloned() else { return };
+    let t = Tokens::get(ui.ctx());
+    let raw_name = app.session.catalog.photo(pair.raw).map(|p| p.file_name.clone()).unwrap_or_default();
+    let jpeg_name = app.session.catalog.photo(pair.jpeg).map(|p| p.file_name.clone()).unwrap_or_default();
+    let showing_jpeg = id == pair.jpeg;
+    let text = "RAW+JPEG".to_string();
+    let p = ui.painter();
+    let g = p.layout_no_wrap(text, t.semibold(11.0), Color32::WHITE);
+    let width = g.size().x + 16.0;
+    let origin = if square { r.right_top() + vec2(-width - 8.0, 26.0) } else { r.right_top() + vec2(-width - 4.0, 4.0) };
+    let br = Rect::from_min_size(origin, vec2(width, 20.0));
+    let hover = if showing_jpeg {
+        format!("Editing the JPEG ({jpeg_name}). Click to edit the raw ({raw_name}).")
+    } else {
+        format!("Editing the raw ({raw_name}). Click to edit the JPEG ({jpeg_name}).")
+    };
+    let resp = ui.interact(br, egui::Id::unique(("pair-badge", id.0)), Sense::click()).on_hover_text(hover);
+    crate::widgets::announce_selected(&resp, format!("RAW+JPEG: {raw_name}, {jpeg_name}"), !showing_jpeg);
+    register(ui, format!("pair:{}", id.0), br);
+    let fill = if resp.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(165) };
+    p.rect_filled(br, 10.0, fill);
+    p.galley(pos2(br.min.x + 8.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    if resp.clicked() {
+        let which = if showing_jpeg { "raw" } else { "jpeg" };
+        let _ = app.run("photo.pairFocus", json!({"ids": [id.0], "which": which}));
     }
 }
 

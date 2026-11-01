@@ -33,6 +33,14 @@ pub fn photo_summary(p: &Photo) -> Value {
     })
 }
 
+fn fuji_recipe_value(recipe: Option<&lightcraft_meta::FujiRecipe>) -> Value {
+    let Some(recipe) = recipe.filter(|recipe| !recipe.rows.is_empty()) else {
+        return json!({"present": false});
+    };
+    let lines: Vec<Value> = recipe.rows.iter().map(|row| json!({"tag": row.tag, "label": row.label, "value": row.value})).collect();
+    json!({"present": true, "text": recipe.text(), "lines": lines})
+}
+
 /// How deep [`album_json`] lists folders inside folders: a catalog that loops (an album inside
 /// itself, which [`lightcraft_catalog::Catalog::repair`] puts right on load) lists no further
 /// instead of overflowing the stack.
@@ -151,6 +159,27 @@ pub fn specs() -> Vec<CommandSpec> {
                 .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
                 .unwrap_or_default();
             Ok(json!({"exif": exif, "xmp": xmp}))
+        }),
+        cmd!(query "photo.fujiRecipe", "Fujifilm Recipe", [], None, "{id?} → {present, text, lines: [{tag, label, value}]} — in-camera film settings from a Fujifilm MakerNote, or present: false", always, |s, p| {
+            let id = photo_arg(s, p, "photo.fujiRecipe")?;
+            let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.fujiRecipe", "no such photo"))?.clone();
+            // import and reload already stored this; don't open the file again
+            if ph.meta.fuji_recipe_known || ph.meta.fuji_recipe.as_ref().is_some_and(|r| !r.rows.is_empty()) {
+                return Ok(fuji_recipe_value(ph.meta.fuji_recipe.as_ref()));
+            }
+            let lightcraft_catalog::Source::File { path } = &ph.source else {
+                return Ok(json!({"present": false}));
+            };
+            if !lightcraft_meta::might_hold_fuji_recipe(&ph.meta.camera, &ph.format, &ph.file_name) {
+                return Ok(json!({"present": false}));
+            }
+            let recipe = if let Some(read) = &s.media.file_bytes {
+                let bytes = read(path).map_err(|e| super::bad("photo.fujiRecipe", e))?;
+                lightcraft_meta::recipe_from_bytes(&bytes)
+            } else {
+                lightcraft_meta::read_recipe_file(std::path::Path::new(path)).map_err(|e| super::bad("photo.fujiRecipe", e))?
+            };
+            Ok(fuji_recipe_value(recipe.as_ref()))
         }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();

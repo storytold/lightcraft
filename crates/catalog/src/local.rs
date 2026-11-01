@@ -341,6 +341,10 @@ impl Op {
             | Op::SetContent { id, .. }
             | Op::SetEmbeddedLens { id, .. }
             | Op::SetAsShotWb { id, .. } => out(*id),
+            Op::AddPair { pair } => {
+                out(pair.raw);
+                out(pair.jpeg);
+            }
             Op::AddAlbum { album } => {
                 album.photos.iter().for_each(|p| out(*p));
                 album.cover.into_iter().for_each(&mut *out);
@@ -355,6 +359,8 @@ impl Op {
             | Op::SetAlbumOrder { .. }
             | Op::SetAlbumRules { .. }
             | Op::RemoveStack { .. }
+            | Op::RejectPair { .. }
+            | Op::RemovePair { .. }
             | Op::SetLabelName { .. }
             | Op::SetKeyword { .. }
             | Op::SetBrowsed { .. }

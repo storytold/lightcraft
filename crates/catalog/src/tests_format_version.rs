@@ -29,6 +29,27 @@ fn snapshot_version(m: &MemStore) -> u64 {
 }
 
 #[test]
+fn v10_fujifilm_recipe_survives_the_pairing_upgrade() {
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    c.apply(op).unwrap();
+    let id = c.photos().next().unwrap().id;
+    let mut meta = c.photo(id).unwrap().meta.clone();
+    meta.fuji_recipe = Some(lightcraft_meta::FujiRecipe {
+        rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Velvia/Vivid".into() }],
+    });
+    meta.fuji_recipe_known = true;
+    c.apply(Op::SetMeta { id, meta: Box::new(meta.clone()) }).unwrap();
+    let store = MemStore::new();
+    store.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    let (_, loaded, report) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!(report.upgraded_from, Some(10));
+    assert_eq!(snapshot_version(&store), 11);
+    assert_eq!(loaded.photo(id).unwrap().meta, meta);
+    assert!(loaded.pair_of(id).is_none());
+}
+
+#[test]
 fn v1_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
     let m = MemStore::new();
@@ -236,10 +257,12 @@ fn op_variants_are_versioned() {
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
             Op::SetHistoryCursor { .. } => 8,
+            Op::AddPair { .. } | Op::RemovePair { .. } | Op::RejectPair { .. } => 11,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
-    let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
+    /// v10: Fujifilm recipes on `Meta` (v9 added `preview_checked`).
+    const NEWEST_FIELDS: u32 = 10;
+    let newest = since(&Op::AddPair { pair: RawJpegPair { id: PairId(1), raw: PhotoId(1), jpeg: PhotoId(2) } });
+
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -17,12 +17,42 @@ impl crate::Session {
             return None;
         }
         let b = thumb_bucket(long_edge);
+        if let Some(jpeg) = self.pair_preview_jpeg(id) {
+            let mut job = self.build_job(jpeg, b, b, false, true, Some(b))?;
+            job.photo = id;
+            job.key ^= 0xA5A5_5A5A_0000_0001;
+            return Some(job);
+        }
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
         // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
         if let SourceRef::File { reduced, .. } = &mut job.source {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)
+    }
+
+    /// The JPEG of an unedited raw's pair, when paired culling wants that file as the grid preview.
+    pub(super) fn pair_preview_jpeg(&self, id: PhotoId) -> Option<PhotoId> {
+        if !self.paired_culling {
+            return None;
+        }
+        let pair = self.catalog.pair_of(id)?;
+        if pair.raw != id || !self.pair_show_raw.contains(&pair.id) {
+            return None;
+        }
+        let raw = self.catalog.photo(pair.raw)?;
+        if !crate::import::has_import_look(raw) {
+            return None;
+        }
+        let jpeg = self.catalog.photo(pair.jpeg)?;
+        let path = match &jpeg.source {
+            lightcraft_catalog::Source::File { path } => path,
+            lightcraft_catalog::Source::Demo { .. } => return None,
+        };
+        if self.media.availability.exists(path) == Some(false) {
+            return None;
+        }
+        Some(pair.jpeg)
     }
 
     fn build_job(
@@ -356,6 +386,9 @@ impl crate::Session {
     /// ([`Self::embedded_thumb_is_final`]), so a preview that can't be read must not leave the
     /// cell empty (issue #1448). `None` for other photos (render them directly).
     pub fn quick_thumb_job(&mut self, job: &RenderJob) -> Option<QuickJob> {
+        if self.pair_preview_jpeg(job.photo).is_some() {
+            return None;
+        }
         let p = self.catalog.photo(job.photo)?.clone();
         let (path, l) = self.embedded_of(&p)?;
         let edge = job.request.max_w.max(job.request.max_h);

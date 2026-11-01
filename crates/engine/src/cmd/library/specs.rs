@@ -2,7 +2,7 @@ use super::filters::{covers_other_disks, merge_rules, view_rules};
 use super::gps::parse_gps;
 use super::import::{import_batch_done, import_params, list_auto_import_folder};
 use super::selection::{
-    album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_targets, has_library, mark_deleted,
+    album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_cull, for_targets, has_library, mark_deleted,
     opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
 };
 use super::{
@@ -463,7 +463,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     .ok()
                     .filter(|r| *r <= 5)
                     .ok_or_else(|| bad("photo.rate", "rating must be a whole number 0..5"))?;
-                cull(s, p, |s| for_targets(s, p, "Set Rating", |id| Some(Op::SetRating { id, rating: r as u8 })))
+                cull(s, p, |s| for_cull(s, p, "Set Rating", false, |id| Some(Op::SetRating { id, rating: r as u8 })))
             }
         ),
         cmd!(
@@ -493,7 +493,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             |s, p| {
                 let f = str_param(p, "flag").and_then(Flag::parse).ok_or_else(|| bad("photo.flag", "flag must be pick|reject|none"))?;
-                cull(s, p, |s| for_targets(s, p, "Set Flag", |id| Some(Op::SetFlag { id, flag: f })))
+                cull(s, p, |s| for_cull(s, p, "Set Flag", false, |id| Some(Op::SetFlag { id, flag: f })))
             }
         ),
         // Classic: ` cycles the flag; Cmd+Up / Cmd+Down raise / lower it (Ctrl on Windows and Linux)
@@ -539,7 +539,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Some("P"),
             "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Flag as Pick", |id| Some(Op::SetFlag { id, flag: Flag::Pick }))) }
+            |s, p| { cull(s, p, |s| for_cull(s, p, "Flag as Pick", false, |id| Some(Op::SetFlag { id, flag: Flag::Pick }))) }
         ),
         cmd!(
             "photo.reject",
@@ -548,7 +548,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Some("X"),
             "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Flag as Reject", |id| Some(Op::SetFlag { id, flag: Flag::Reject }))) }
+            |s, p| { cull(s, p, |s| for_cull(s, p, "Flag as Reject", false, |id| Some(Op::SetFlag { id, flag: Flag::Reject }))) }
         ),
         cmd!(
             "photo.unflag",
@@ -557,7 +557,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Some("U"),
             "{ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))) }
+            |s, p| { cull(s, p, |s| for_cull(s, p, "Unflag", false, |id| Some(Op::SetFlag { id, flag: Flag::None }))) }
         ),
         cmd!(
             "photo.label",
@@ -575,7 +575,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
                     Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
                 };
-                cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l })))
+                cull(s, p, |s| for_cull(s, p, "Set Color Label", true, |id| Some(Op::SetLabel { id, label: l })))
             }
         ),
         // `photo.label` takes the colour as a parameter, so a key can't be given to "none" alone
@@ -586,7 +586,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{ids?, advance?: bool} — `photo.label` with `none`; without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: None }))) }
+            |s, p| { cull(s, p, |s| for_cull(s, p, "Set Color Label", true, |id| Some(Op::SetLabel { id, label: None }))) }
         ),
         // ---- orientation
         cmd!("photo.rotateLeft", "Rotate Left", ["Photo"], Some("Cmd+["), "{ids?}", has_selection, |s, p| rotate(s, p, false)),
