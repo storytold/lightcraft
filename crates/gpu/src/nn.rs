@@ -771,8 +771,9 @@ impl NetRunner {
     /// A free workspace, a new one when fewer than [`WORKSPACES`] exist, else wait for one to come back.
     fn take(&self) -> Result<Workspace, Error> {
         self.workspaces.take(|| {
-            // a caller woken by the last tiles failing on a lost device makes nothing on it
-            if let Some(why) = broken_reason() {
+            // a caller woken by the last tiles failing on a lost device makes nothing on it (this
+            // runner's own card: the other card failing leaves it working)
+            if let Some(why) = self.shared.dev.broken.reason() {
                 return Err(Error::Runtime(format!("the GPU is not used any more: {why}")));
             }
             let d = self.shared.dev;

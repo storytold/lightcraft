@@ -224,7 +224,10 @@ pub fn matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dy
     // wgpu panics in `Device::poll` once the device is lost (see `ctx::Gpu::poll`): the GPU is
     // then given up on and the CPU computes this product
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_matmul(a, rows, k, n, key, weights))).unwrap_or_else(|_| {
-        mark_broken("a matrix product on the GPU panicked");
+        // (the card this thread's products went to)
+        if let Ok(d) = dev_for_work() {
+            d.broken.mark("a matrix product on the GPU panicked");
+        }
         Err("the GPU gave up".into())
     });
     match r {
