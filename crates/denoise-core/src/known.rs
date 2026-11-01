@@ -76,9 +76,14 @@ pub fn lightcraft_bayer_urls() -> Vec<String> {
     urls_or_default(std::env::var(LIGHTCRAFT_BAYER_URL_ENV).ok().as_deref())
 }
 
+/// (An address with a `user:password@` is not taken: the download refuses one, and the address replaces both sources.)
 fn urls_or_default(set: Option<&str>) -> Vec<String> {
+    let usable = |u: &str| {
+        let authority = u.strip_prefix("https://").and_then(|r| r.split(['/', '?', '#']).next()).unwrap_or("");
+        !authority.is_empty() && !authority.contains('@') && !u.contains(char::is_whitespace)
+    };
     match set.map(str::trim) {
-        Some(u) if u.starts_with("https://") && u.len() > "https://".len() && !u.contains(char::is_whitespace) => vec![u.to_string()],
+        Some(u) if usable(u) => vec![u.to_string()],
         _ => vec![LIGHTCRAFT_BAYER_URL.to_string(), LIGHTCRAFT_BAYER_FALLBACK_URL.to_string()],
     }
 }
@@ -219,6 +224,7 @@ mod tests {
         assert_eq!(urls_or_default(Some("http://example.org/m.onnx")), both, "only https");
         assert_eq!(urls_or_default(Some("https://")), both);
         assert_eq!(urls_or_default(Some("https://a b")), both);
+        assert_eq!(urls_or_default(Some("https://user:secret@example.org/m.onnx")), both, "no credentials in the address");
         // (not `lightcraft_bayer()`: it reads LIGHTCRAFT_DENOISE_MODEL_URL, which a maintainer testing a copy of
         // their own may have set)
         let k = lightcraft_bayer_from(urls_or_default(None));
