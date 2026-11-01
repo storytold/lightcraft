@@ -6,7 +6,10 @@
 /// `LIGHTCRAFT_GPU_MEMORY_MB`, else what the system reports for this adapter.
 pub(crate) fn adapter_memory(info: &wgpu::AdapterInfo) -> Option<u64> {
     if let Some(mb) = std::env::var("LIGHTCRAFT_GPU_MEMORY_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|m| *m >= 64) {
-        return Some(mb << 20);
+        // (a size too large for bytes falls back to the system's answer: review of PR #3544)
+        if let Some(b) = mb.checked_mul(1 << 20) {
+            return Some(b);
+        }
     }
     if info.device_type != wgpu::DeviceType::DiscreteGpu {
         return None;
@@ -107,11 +110,12 @@ fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> 
     };
     // read on a thread of its own, so a full pipe can't stop the query from exiting; its result
     // is waited for within the same deadline (a grandchild holding the pipe open can't hold us:
-    // review of PR #3499). At most MAX_QUERY_OUTPUT is kept; the rest is drained and dropped.
+    // review of PR #3499). Output longer than MAX_QUERY_OUTPUT is drained and the answer is
+    // `None`: a cut listing could name another card's size (review of PR #3499/#3506).
     let (otx, orx) = std::sync::mpsc::channel();
     let reader = std::thread::Builder::new().name("lc-gpu-query".into()).spawn(move || {
         let mut b = Vec::new();
-        let _ = (&mut stdout).take(MAX_QUERY_OUTPUT).read_to_end(&mut b);
+        let _ = (&mut stdout).take(MAX_QUERY_OUTPUT.saturating_add(1)).read_to_end(&mut b);
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
         let _ = otx.send(b);
     });
@@ -137,7 +141,7 @@ fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> 
     };
     let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(200));
     let out = orx.recv_timeout(left).ok()?;
-    status.success().then_some(out)
+    (status.success() && out.len() as u64 <= MAX_QUERY_OUTPUT).then_some(out)
 }
 
 /// Whether a `/sys/class/drm` entry is a card (`card0`, `card12`), not a connector (`card0-DP-1`).
@@ -388,13 +392,14 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
         let out = output_within(cmd(&["echo 8192"]), std::time::Duration::from_secs(10)).unwrap();
         assert!(String::from_utf8_lossy(&out).contains("8192"));
-        // a flood of output is cut at MAX_QUERY_OUTPUT, and the query still finishes
+        // a flood of output past MAX_QUERY_OUTPUT is no answer, and the query still finishes
         #[cfg(windows)]
         let flood = cmd(&["for /L %i in (1,1,40000) do @echo 0123456789012345678901234567890123456789"]);
         #[cfg(not(windows))]
         let flood = cmd(&["yes 0123456789012345678901234567890123456789 | head -n 40000"]);
-        let out = output_within(flood, std::time::Duration::from_secs(60)).unwrap();
-        assert_eq!(out.len() as u64, MAX_QUERY_OUTPUT);
+        let t = std::time::Instant::now();
+        assert_eq!(output_within(flood, std::time::Duration::from_secs(60)), None);
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "{:?}", t.elapsed());
     }
 
     #[test]

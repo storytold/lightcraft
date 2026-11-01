@@ -259,8 +259,9 @@ walks the drive.
   `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
   guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
   proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
-  space or a display). These render on the CPU: high-bit-depth exports and Visualize HDR (both
-  need float output), soft proofs to an output device's profile (a printer or paper profile), and
+  space or a display). These render on the CPU: 16-bit and linear-float exports and Visualize HDR
+  (the float outputs the GPU doesn't make; a gain map export's HDR rendition, `OutputDepth::F32Hdr`, renders
+  on the GPU, below), soft proofs to an output device's profile (a printer or paper profile), and
   photos with a content-aware Fill spot (no GPU kernel for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole

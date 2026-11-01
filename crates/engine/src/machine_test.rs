@@ -38,8 +38,9 @@ pub struct TestRun {
     pub gpu_waits: u64,
     /// The most device memory held at once (bytes).
     pub gpu_peak: u64,
-    /// Photos of a GPU run that fell back to the processor (`gpuFallback`): such a run is not
-    /// counted as the GPU's (review of PR #3506).
+    /// Photos of a GPU run that fell back to the processor (`gpuFallback`): such a run measured
+    /// neither setting, so [`best_run`] never picks it while a clean run exists (review of PR
+    /// #3506 / #3511).
     pub gpu_fallbacks: usize,
 }
 
@@ -111,8 +112,12 @@ pub fn lane_choices(cores: usize, quick: bool) -> Vec<usize> {
 
 /// The fastest run, preferring fewer lanes (less memory) when within 3 % of it.
 pub fn best_run(runs: &[TestRun]) -> Option<&TestRun> {
-    let top = runs.iter().map(|r| r.photos_per_min).fold(0.0f64, f64::max);
-    runs.iter().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu, r.mix))
+    // runs whose photos fell back to the processor measured a mix of both: left out while
+    // another run is clean
+    let clean = runs.iter().any(|r| r.gpu_fallbacks == 0);
+    let counted = || runs.iter().filter(move |r| !clean || r.gpu_fallbacks == 0);
+    let top = counted().map(|r| r.photos_per_min).fold(0.0f64, f64::max);
+    counted().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu, r.mix))
 }
 
 /// Lane counts a caller gave, each held to 1..=[`crate::export::MAX_EXPORT_LANES`], once each in
@@ -310,8 +315,8 @@ fn export_round(
     let gpu_fallbacks = gpu_fallbacks(&files);
     Ok(TestRun {
         lanes,
-        // (a run whose photos fell back to the processor measured the processor)
-        gpu: gpu && gpu_fallbacks == 0,
+        // (as asked; a run whose photos fell back counts them, and best_run leaves it out)
+        gpu,
         mix: gpu && mix,
         helper: gpu && helper,
         photos: files.len(),
@@ -533,12 +538,20 @@ mod tests {
         drop(other);
     }
 
-    /// Review of PR #3506: a run whose photos fell back to the processor is not the GPU's.
+    /// Review of PR #3506 / #3511: a run whose photos fell back to the processor is counted, and
+    /// never chosen while a clean run exists (it would apply a setting it didn't measure).
     #[test]
     fn a_run_whose_photos_fell_back_is_not_the_gpus() {
         let files = [serde_json::json!({"file": "a.jpg"}), serde_json::json!({"file": "b.jpg", "gpuFallback": "device lost"})];
         assert_eq!(gpu_fallbacks(&files), 1);
         assert_eq!(gpu_fallbacks(&files[..1]), 0);
+        let run = |gpu, ppm, gpu_fallbacks| TestRun { lanes: 4, gpu, photos_per_min: ppm, gpu_fallbacks, ..Default::default() };
+        // the fastest run fell back: the clean GPU run is chosen, GPU exports stay on
+        let runs = [run(true, 10.0, 0), run(true, 14.0, 2), run(false, 9.0, 0)];
+        assert_eq!(best_run(&runs).map(|r| (r.gpu, r.photos_per_min)), Some((true, 10.0)));
+        // every run fell back: the fastest of them
+        let runs = [run(true, 10.0, 1), run(true, 14.0, 2)];
+        assert_eq!(best_run(&runs).map(|r| r.photos_per_min), Some(14.0));
     }
 
     /// Review of PR #3499: a flag that isn't true or false is refused before anything runs
