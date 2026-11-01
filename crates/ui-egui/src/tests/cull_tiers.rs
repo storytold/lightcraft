@@ -99,7 +99,7 @@ fn every_cell_on_screen_has_a_picture_before_any_raw_is_rendered() {
 
 #[test]
 fn the_loupe_shows_the_camera_preview_at_once_while_the_raw_renders() {
-    let (mut h, _decodes) = culling(30);
+    let (mut h, decodes) = culling(30);
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [5]}}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.set", json!({"view": "detail"}), T);
@@ -111,12 +111,25 @@ fn the_loupe_shows_the_camera_preview_at_once_while_the_raw_renders() {
         });
         assert!(shown.is_some(), "step {step}: the loupe showed {:?} for {id:?}, not the camera preview", h.app.loupe_shown);
         assert_eq!(h.app.loupe_shown.map(|(_, s)| s), Some("embedded"), "the raw itself is still being decoded");
+        // and the loupe says so (FredApps on #3080: the camera's JPEG differs from the developed
+        // photo in colour and sharpness), with what that means for its accessible name
+        h.step();
+        let w = h.request("ui.widgets", json!({"filter": "loupe:cameraPreview"}), T);
+        let badge = w["result"].as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+        assert_eq!(badge["id"], "loupe:cameraPreview", "step {step}: no Camera preview badge over the camera JPEG: {w}");
         // the filmstrip under it has its pictures too
         let film = frames_until(&mut h, Duration::from_secs(3), |h| h.app.thumb_first.summary().empty_now == 0);
         assert!(film.is_some(), "step {step}: filmstrip cells empty: {:?}", h.app.thumb_first.summary());
         let r = h.request("engine.execute", json!({"command": "library.next"}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
+    // once the raw's own render is on screen, the badge goes
+    drop(decodes);
+    let rendered = frames_until(&mut h, Duration::from_secs(10), |h| h.app.loupe_shown.is_some_and(|(_, s)| matches!(s, "render" | "cached")));
+    assert!(rendered.is_some(), "the render replaced the camera JPEG: {:?}", h.app.loupe_shown);
+    h.step();
+    let w = h.request("ui.widgets", json!({"filter": "loupe:cameraPreview"}), T);
+    assert_eq!(w["result"].as_array().map(Vec::len), Some(0), "the badge stays only while the camera JPEG is shown: {w}");
 }
 
 /// The filmstrip counts only its cells on screen as seen (CodeRabbit on #3080): the cells it

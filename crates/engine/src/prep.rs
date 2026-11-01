@@ -263,7 +263,40 @@ fn clock_ms() -> u64 {
 /// The frontend says the photo on screen is being made (a render it waits for is on its way):
 /// background preparation waits until it has been quiet for a moment.
 pub fn foreground() {
-    FOREGROUND_UNTIL.store(clock_ms().saturating_add(FOREGROUND_HOLD_MS), Ordering::Relaxed);
+    hold_until(&FOREGROUND_UNTIL);
+}
+
+/// The longest background work waits in one go (ms): a view whose cells keep asking for pictures
+/// (scrolling a grid of raws on a slow share without end) must not hold it back for good.
+const MAX_HOLD_MS: u64 = 2000;
+
+/// After [`MAX_HOLD_MS`] of holding, background work runs this long (ms) before the hold resumes:
+/// at least a fifth of the time goes to it however long the screen keeps asking (FredApps on #3080:
+/// a rule that cannot starve the background).
+const RELEASE_MS: u64 = 500;
+
+/// When the current unbroken hold began (ms on [`clock_ms`], plus one; 0: no hold).
+static HOLD_SINCE: AtomicU64 = AtomicU64::new(0);
+
+/// Hold background work for a moment from now (`until`: the foreground's or the pictures' end),
+/// starting a new unbroken hold when none was on.
+fn hold_until(until: &AtomicU64) {
+    let now = clock_ms();
+    if !held_at(now, FOREGROUND_UNTIL.load(Ordering::Relaxed), PICTURES_UNTIL.load(Ordering::Relaxed), 0) {
+        HOLD_SINCE.store(now.saturating_add(1), Ordering::Relaxed);
+    }
+    until.store(now.saturating_add(FOREGROUND_HOLD_MS), Ordering::Relaxed);
+}
+
+/// Whether background work waits at `now` (ms), given until when the foreground and the pictures
+/// hold it and when the unbroken hold began (`since`: its [`HOLD_SINCE`] value, 0 for none): held
+/// while either says so, except for a [`RELEASE_MS`] window after every [`MAX_HOLD_MS`] of holding.
+fn held_at(now: u64, foreground_until: u64, pictures_until: u64, since: u64) -> bool {
+    if now >= foreground_until && now >= pictures_until {
+        return false;
+    }
+    let Some(start) = since.checked_sub(1) else { return true };
+    now.saturating_sub(start) % (MAX_HOLD_MS + RELEASE_MS) < MAX_HOLD_MS
 }
 
 /// Until when (ms on [`clock_ms`]) something on screen has no picture at all yet.
@@ -274,12 +307,13 @@ static PICTURES_UNTIL: AtomicU64 = AtomicU64::new(0);
 /// has one (the cheapest picture first for the whole view, then the bigger ones). Say it every frame it is
 /// so; it holds for a moment.
 pub fn pictures_missing() {
-    PICTURES_UNTIL.store(clock_ms().saturating_add(FOREGROUND_HOLD_MS), Ordering::Relaxed);
+    hold_until(&PICTURES_UNTIL);
 }
 
-/// Whether something on screen still lacks its first picture ([`pictures_missing`]).
+/// Whether something on screen still lacks its first picture ([`pictures_missing`]) and background
+/// work waits for it (not in a [`RELEASE_MS`] window of a long hold).
 pub fn pictures_busy() -> bool {
-    clock_ms() < PICTURES_UNTIL.load(Ordering::Relaxed)
+    held_at(clock_ms(), 0, PICTURES_UNTIL.load(Ordering::Relaxed), HOLD_SINCE.load(Ordering::Relaxed))
 }
 
 /// Wait while something on screen lacks its first picture (for background work that doesn't render:
@@ -307,8 +341,7 @@ pub fn foreground_busy() -> bool {
     if TEST_HOLD.load(Ordering::Relaxed) > 0 {
         return true;
     }
-    let now = clock_ms();
-    now < FOREGROUND_UNTIL.load(Ordering::Relaxed) || now < PICTURES_UNTIL.load(Ordering::Relaxed)
+    held_at(clock_ms(), FOREGROUND_UNTIL.load(Ordering::Relaxed), PICTURES_UNTIL.load(Ordering::Relaxed), HOLD_SINCE.load(Ordering::Relaxed))
 }
 
 /// Tests: hold every background build at its foreground wait until released (a synchronization
@@ -554,6 +587,31 @@ mod tests {
         assert!(!wait_for_pictures(&|| false, std::time::Duration::from_secs(5)), "work that doesn't render waits for it");
         assert!(t.elapsed().as_millis() >= 100);
         assert!(!pictures_busy());
+    }
+
+    /// Background work never waits for good (FredApps on #3080): however long the screen keeps
+    /// asking, every [`MAX_HOLD_MS`] of holding is followed by a [`RELEASE_MS`] window in which it
+    /// runs, then the hold resumes; once nothing asks any more it runs at once.
+    #[test]
+    fn a_hold_that_never_ends_still_lets_background_work_run() {
+        let start = 10_000;
+        let since = start + 1;
+        // the screen says a picture is missing every frame from `start` on
+        let held = |now: u64| held_at(now, 0, now + FOREGROUND_HOLD_MS, since);
+        assert!(held(start) && held(start + MAX_HOLD_MS - 1), "held for the first {MAX_HOLD_MS} ms");
+        assert!(!held(start + MAX_HOLD_MS) && !held(start + MAX_HOLD_MS + RELEASE_MS - 1), "then released");
+        assert!(held(start + MAX_HOLD_MS + RELEASE_MS), "then held again");
+        let cycle = MAX_HOLD_MS + RELEASE_MS;
+        let free = (start..start + 60 * cycle).step_by(10).filter(|&t| !held(t)).count() as u64;
+        assert_eq!(free, 60 * RELEASE_MS / 10, "a fifth of every minute of holding goes to the background");
+        // the foreground signal is capped the same way
+        assert!(!held_at(start + MAX_HOLD_MS, start + MAX_HOLD_MS + 100, 0, since));
+        // nothing asks: not held, whatever the streak said
+        assert!(!held_at(start + 5, start, start, since));
+        // a hold with no recorded start (before the first signal) holds
+        assert!(held_at(5, 100, 0, 0));
+        // hostile clocks: a start after now never underflows
+        assert!(held_at(5, 100, 0, u64::MAX));
     }
 
     /// The view's signature is kept while nothing it is made of changes (CodeRabbit on #3080: it was
