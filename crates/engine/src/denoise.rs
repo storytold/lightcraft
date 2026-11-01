@@ -36,6 +36,7 @@ use crate::merge::ByteReader;
 use crate::model_download::Downloads;
 use crate::{Selection, Session};
 
+mod builtin;
 mod gpu;
 mod model;
 mod products;

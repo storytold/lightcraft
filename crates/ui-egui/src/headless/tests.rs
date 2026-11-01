@@ -1,5 +1,7 @@
+/// A raw photo is offered the AI Denoise switch with no set-up and one click turns it on with the built-in
+/// denoiser; Settings still offers installing a model, and a photo that is not raw is not offered it.
 #[test]
-fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
+fn detail_offers_ai_denoise_for_raw_photos_without_any_set_up() {
     use crate::state::Dialog;
     use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
     let mut h = demo([1400.0, 900.0]);
@@ -29,13 +31,17 @@ fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
     h.step();
     h.step();
     let w = widgets(&mut h);
-    assert!(w.contains("\"denoise:setup\""), "a raw photo with no model is offered the setup: {w}");
-    // One click lands in Settings, with local installation available even without a download offer.
-    let r = h.request("ui.clickWidget", json!({"id": "denoise:setup"}), t);
+    assert!(w.contains("\"denoise:enabled\"") && !w.contains("\"denoise:setup\""), "a raw photo is offered the switch, with no set-up: {w}");
+    // One click turns it on with the built-in denoiser: nothing to install first.
+    let r = h.request("ui.clickWidget", json!({"id": "denoise:enabled"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "denoise".into() }));
+    assert_eq!(h.app.ui.dialog, None);
+    assert!(h.app.session.develop_of(id).is_some_and(|d| d.enhance.denoise_enabled()));
+    assert_eq!(h.app.session.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
+    // Settings still offers installing a model of one's own.
+    h.app.ui.dialog = Some(Dialog::Settings { tab: "denoise".into() });
     h.settle(SETTLE);
     let listed = h.app.session.execute("denoise.models.list", &json!({})).unwrap();
     assert_eq!(listed["models"].as_array().unwrap().len(), lightcraft_denoise::known::all().len(), "{listed}");
@@ -50,7 +56,7 @@ fn detail_offers_ai_denoise_for_raw_photos_and_leads_to_its_settings() {
     h.settle(SETTLE);
     h.step();
     h.step();
-    assert!(!widgets(&mut h).contains("\"denoise:setup\""), "nothing is offered for a photo denoise does not apply to");
+    assert_eq!(h.app.session.denoise_photo_state(h.app.session.active().unwrap()), lightcraft_engine::denoise::PhotoState::NotApplicable);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

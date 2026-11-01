@@ -14,7 +14,7 @@ const GPU_AGREE: f32 = 1e-3;
 /// Longest the card may take to set up (build its kernels, run the check tile, time it) before the processor does the
 /// work instead.
 #[cfg(feature = "denoise")]
-const GPU_SETUP_LIMIT: Duration = Duration::from_secs(30);
+pub(super) const GPU_SETUP_LIMIT: Duration = Duration::from_secs(30);
 
 /// Tiles the card may get wrong (an error, numbers that are not finite) before it stops being used for the model.
 #[cfg(feature = "denoise")]
@@ -80,7 +80,10 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
             return Err(GPU_CRASHED.into());
         }
         let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        // a marker that cannot be written only loses the crash guard
+        // the models folder may not exist yet; a marker that cannot be written only loses the crash guard
+        if let Some(parent) = marker.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let _ = std::fs::write(marker, format!("setting up the graphics card for AI Denoise (unix time {secs})\n"));
         running.push(marker.to_path_buf());
         SetUpEnded(marker.to_path_buf())
@@ -107,7 +110,7 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
 /// The card's time for one tile once it is warm: the fastest of up to three runs, stopping after about two seconds (a
 /// slow card is slow enough to tell at once).
 #[cfg(feature = "denoise")]
-fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
+pub(super) fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
     if runner.run(input).is_err() {
         return f64::INFINITY;
     }

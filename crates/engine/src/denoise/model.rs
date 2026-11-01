@@ -51,6 +51,8 @@ pub(crate) trait Model: Send + Sync {
     /// What runs a photo's tiles, and how many to run at once, when `threads` may be used and the setting is `run_on`
     /// (a graphics card is kept busy by a few). The first time the card may be used it is set up and checked here.
     fn runner(&self, run_on: RunOn, threads: usize) -> (&dyn TileRunner, usize);
+    /// Called once per photo with its whole mosaic before the tiles run, for a model that adapts to the photo.
+    fn prepare(&self, _mosaic: &[f32], _width: usize, _height: usize) {}
     /// Check it does something sensible: the test's result, or why not. Unless `run_on` is the processor the graphics
     /// card is set up and checked too, and the result says where the work will run.
     fn self_test(&self, run_on: RunOn) -> Result<Value, String>;

@@ -279,6 +279,26 @@ fn a_set_up_runs_beside_the_cpu_and_removes_its_marker() {
 }
 
 #[test]
+fn a_set_up_makes_the_folder_of_its_marker() {
+    let dir = folder("setup-folder").join("not").join("yet");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    let (m, seen) = (marker.clone(), Arc::new(AtomicBool::new(false)));
+    let s = seen.clone();
+    let r = set_up_card(
+        &marker,
+        Duration::from_secs(10),
+        move || {
+            s.store(m.exists(), Ordering::Relaxed);
+            Ok(())
+        },
+        || (),
+    );
+    assert_eq!(r, Ok(((), ())));
+    assert!(seen.load(Ordering::Relaxed), "the crash guard is written even when the models folder was missing");
+    let _ = std::fs::remove_dir_all(dir.ancestors().nth(2).unwrap_or(&dir));
+}
+
+#[test]
 fn a_set_up_that_takes_too_long_is_given_up_on() {
     let dir = folder("slowsetup");
     let marker = dir.join(GPU_SETUP_MARKER);
