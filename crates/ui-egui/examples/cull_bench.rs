@@ -39,6 +39,11 @@ fn main() {
             .map_err(|e| e.to_string())
             .and_then(|v| s.execute("prefs.setBackgroundPrep", &json!({"settings": {"culling": v}})).map_err(|e| e.to_string()));
         match set {
+            // (the library's own settings would win over the app-wide ones set here: CodeRabbit on #3080)
+            Ok(v) if v["own"].as_bool() == Some(true) => {
+                eprintln!("CULL_PREP={patch}: this library has its own preparation settings, which take precedence");
+                std::process::exit(1);
+            }
             Ok(v) => eprintln!("prep {patch}: {}", v["settings"]["culling"]),
             Err(e) => {
                 eprintln!("CULL_PREP={patch}: {e}");
