@@ -1525,12 +1525,13 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
 
-/// Review of PR #3499: twelve large photos exported side by side never hold more than the export
-/// share of the computer's memory ([`crate::memory::export_gate`]): on a 16 GB machine, twelve
-/// full-size 45 MP exports (~2 GB of working memory each) run at most three at once, the others
-/// wait their turn, and all of them finish.
+/// Review of PR #3499: the export share's sizing and the gate's waiting, together. Twelve full-size
+/// 45 MP photos (~2 GB of working memory each, [`render_weight`]) acquire a `WorkGate` sized like
+/// [`crate::memory::export_gate`] on a 16 GB machine: at most three hold memory at once, the others
+/// wait their turn, and all of them finish. (It uses its own gate, not the shared one, which other
+/// tests running at the same time also use; `run_gated` is the one place that acquires that.)
 #[test]
-fn twelve_large_photos_wait_for_the_export_memory() {
+fn twelve_large_photos_wait_for_a_gate_sized_like_the_export_share() {
     use crate::media::SourceLevel;
     use std::sync::{Arc, Mutex};
     let gb = 1usize << 30;

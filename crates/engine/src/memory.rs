@@ -224,17 +224,62 @@ pub fn export_gate() -> &'static WorkGate {
 }
 
 fn export_share(budget: usize) -> usize {
-    export_share_of(budget, total_ram())
+    export_share_of(budget, memory_limit())
 }
 
-/// Twice the budget, or (when the computer's memory `ram` is known) [`EXPORT_RAM_PERCENT`] of it
-/// if that is more: the budget is the caches' (at most 1.5 GiB by default), and an export's photos
-/// are transient. With only 3 GiB, a 45 MP gain map export (~4 GB of working memory each) ran one
-/// photo at a time however many lanes there were.
-pub(crate) fn export_share_of(budget: usize, ram: Option<usize>) -> usize {
-    let by_ram = ram.map_or(0, |r| r / 100 * EXPORT_RAM_PERCENT);
-    budget.saturating_mul(2).max(by_ram)
+/// The memory this process may use: the computer's ([`total_ram`]), or a container's or cgroup's
+/// limit when that is smaller (Linux: cgroup v2 `memory.max`, else v1 `memory.limit_in_bytes`, as
+/// the process sees them); `None` when unknown.
+pub fn memory_limit() -> Option<usize> {
+    static LIMIT: OnceLock<Option<usize>> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        let cgroup = cgroup_limit(
+            std::fs::read_to_string("/sys/fs/cgroup/memory.max").ok().as_deref(),
+            std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes").ok().as_deref(),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let cgroup = None;
+        effective_limit(total_ram(), cgroup)
+    })
 }
+
+/// A cgroup's memory limit from its v2 `memory.max` or v1 `memory.limit_in_bytes` text: `None`
+/// for no limit (`max`, or v1's huge "unlimited" number) or text that isn't a number.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn cgroup_limit(v2: Option<&str>, v1: Option<&str>) -> Option<usize> {
+    let parse = |s: &str| s.trim().parse::<u64>().ok();
+    let bytes = match v2.map(str::trim) {
+        Some("max") => None,
+        Some(t) => parse(t),
+        None => v1.and_then(parse),
+    };
+    // (v1 says "no limit" with a number near 2^63)
+    bytes.filter(|b| *b > 0 && *b < 1 << 60).and_then(|b| usize::try_from(b).ok())
+}
+
+/// The smaller of the computer's memory and a cgroup's limit, whichever is known.
+pub(crate) fn effective_limit(ram: Option<usize>, cgroup: Option<usize>) -> Option<usize> {
+    match (ram, cgroup) {
+        (Some(r), Some(c)) => Some(r.min(c)),
+        (r, c) => r.or(c),
+    }
+}
+
+/// Twice the budget, or (when the memory this process may use, `limit`, is known)
+/// [`EXPORT_RAM_PERCENT`] of it if that is more, never more than [`EXPORT_LIMIT_PERCENT`] of
+/// `limit`: the budget is the caches' (at most 1.5 GiB by default), and an export's photos are
+/// transient. With only 3 GiB, a 45 MP gain map export (~4 GB of working memory each) ran one
+/// photo at a time however many lanes there were; in a 4 GiB container, twelve lanes must not
+/// reserve more than the container has.
+pub(crate) fn export_share_of(budget: usize, limit: Option<usize>) -> usize {
+    let by_ram = limit.map_or(0, |r| r / 100 * EXPORT_RAM_PERCENT);
+    let share = budget.saturating_mul(2).max(by_ram);
+    limit.map_or(share, |r| share.min(r / 100 * EXPORT_LIMIT_PERCENT))
+}
+
+/// The most of the process's memory limit an export batch may reserve, whatever the budget.
+const EXPORT_LIMIT_PERCENT: usize = 80;
 
 /// Share of the computer's memory an export batch may hold in photos side by side.
 const EXPORT_RAM_PERCENT: usize = 45;
@@ -380,6 +425,29 @@ mod export_share_tests {
         assert_eq!(export_share_of(20 * gb, Some(64 * gb)), 40 * gb);
         // memory unknown: twice the budget, as before
         assert_eq!(export_share_of(gb, None), 2 * gb);
-        assert_eq!(export_share_of(usize::MAX, Some(usize::MAX)), usize::MAX, "no overflow");
+        assert!(export_share_of(usize::MAX, Some(usize::MAX)) > 0, "no overflow");
+        assert_eq!(export_share_of(usize::MAX, None), usize::MAX, "no overflow");
+    }
+
+    /// Review of PR #3499 / #3506: a container's memory limit, not the host's RAM, sizes the
+    /// export gate. A 4 GiB limit on a 16 GiB host admits one 2 GiB photo at a time (fewer than
+    /// three), and a budget set high by hand never reserves more than 80 % of the limit.
+    #[test]
+    fn a_container_limit_sizes_the_export_gate() {
+        use super::{cgroup_limit, effective_limit};
+        let gb = 1usize << 30;
+        assert_eq!(cgroup_limit(Some("4294967296\n"), None), Some(4 * gb));
+        assert_eq!(cgroup_limit(Some("max\n"), Some("4294967296")), None, "v2 without a limit");
+        assert_eq!(cgroup_limit(None, Some("9223372036854771712")), None, "v1's unlimited");
+        assert_eq!(cgroup_limit(None, Some("2147483648")), Some(2 * gb));
+        assert_eq!(cgroup_limit(Some("garbage"), None), None);
+        assert_eq!(cgroup_limit(None, None), None);
+        let limit = effective_limit(Some(16 * gb), Some(4 * gb));
+        assert_eq!(limit, Some(4 * gb));
+        assert_eq!(effective_limit(Some(16 * gb), None), Some(16 * gb));
+        assert_eq!(effective_limit(None, Some(4 * gb)), Some(4 * gb));
+        let share = export_share_of(3 * gb / 2, limit);
+        assert!(share / (2 * gb) < 3, "{share}");
+        assert!(export_share_of(20 * gb, limit) <= 4 * gb / 100 * 80);
     }
 }
