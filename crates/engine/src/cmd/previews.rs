@@ -400,8 +400,9 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
             if !force && already_built(&photo_jobs) {
                 state.skipped.fetch_add(1, Ordering::Relaxed);
             } else if let Some((held, shared)) = Building::wait(id, &photo_jobs, &state.cancel) {
-                // another build was rendering this photo: what it made counts, if it made it
-                if shared && (held.is_none() || already_built(&photo_jobs)) {
+                // another build was rendering this photo: what it made counts, if it made it (not
+                // for a forced build, which renders every photo itself)
+                if !force && shared && (held.is_none() || already_built(&photo_jobs)) {
                     state.shared.fetch_add(1, Ordering::Relaxed);
                     let done = state.done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
                     if let Some(task) = task {
