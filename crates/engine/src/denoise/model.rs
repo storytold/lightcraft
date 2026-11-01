@@ -410,7 +410,7 @@ pub fn serving(dir: Option<&Path>, id: Option<&str>, run_on: RunOn) -> Result<Se
     let want = match id {
         Some(i) => i.to_string(),
         None => read_settings(&dir).model.ok_or_else(|| {
-            format!("no denoise model is selected in {} (install one in Settings → AI Denoise, or name it with --model)", dir.display())
+            format!("no denoise model is selected in {} (install one in Settings ▸ AI Denoise, or name it with --model)", dir.display())
         })?,
     };
     let installed = installed_models(&dir)

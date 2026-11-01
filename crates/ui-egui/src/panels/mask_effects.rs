@@ -708,7 +708,7 @@ pub fn import_toast(v: &Value) -> String {
 }
 
 fn imported_effects_message(n: usize) -> String {
-    crate::i18n::tr_format!("Imported {e} mask effect{} (Masking → Effect)", crate::i18n::plural_s(n), e = n)
+    crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", crate::i18n::plural_s(n), e = n)
 }
 
 fn in_groups_message(groups: usize) -> String {

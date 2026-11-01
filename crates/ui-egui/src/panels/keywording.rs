@@ -134,7 +134,7 @@ fn remove(app: &mut LightcraftApp, ctx: &egui::Context, chip: &Chip) {
             let name = chip.path.replace('|', " › ");
             app.toast_for(
                 ctx,
-                crate::i18n::tr_format!("Removed “{name}” from {n} photos. Edit → Undo puts it back.", name = name, n = chip.have),
+                crate::i18n::tr_format!("Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.", name = name, n = chip.have),
                 6.0,
             );
         }

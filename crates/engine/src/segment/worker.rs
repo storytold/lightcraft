@@ -379,7 +379,7 @@ fn render(job: &mut Job) -> Result<Input, String> {
         Err(e) => {
             return Err(match &job.missing {
                 Some(path) => format!(
-                    "This photo's file is missing (moved or deleted), so it can't be analyzed for AI masks: {path}. Library → Find Missing Photos can relink it."
+                    "This photo's file is missing (moved or deleted), so it can't be analyzed for AI masks: {path}. Library ▸ Find Missing Photos can relink it."
                 ),
                 None => format!("couldn't render the photo for AI masks: {e}"),
             });

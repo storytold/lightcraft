@@ -1,6 +1,6 @@
 use super::colour::{PROFILE_PROXY, PROXY, file_local_look};
 use super::hue_sat::fit_hue_sat;
-use super::look_fit::{FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, clip_mask, without_clipped};
+use super::look_fit::{FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, clip_mask, correct_vignetting, without_clipped};
 use super::pairs::{collect_pairs, fit_matrix};
 use super::{CameraTransform, Filter, HsvTable, Mat3, RawFormat, RawImage, Rgb32f, fit, luminance_2020, resize};
 
@@ -82,8 +82,9 @@ pub(super) fn structure_agrees(sensor: &Rgb32f, reference: &Rgb32f) -> bool {
 
 /// Same-size proxies of the sensor (white-balanced, baseline exposure, through `transform`'s
 /// matrix: the generic camera ≈ sRGB model) and of the file's embedded camera JPEG (linear Rec.2020),
-/// and per proxy pixel whether any sensor sample it covers is clipped. `correction` proposes CR3
-/// correspondence geometry; it must pass the independent geometry gates without worsening the framing fallback.
+/// and per proxy pixel whether any sensor sample it covers is clipped. `embedded`'s vignetting correction is applied to
+/// the sensor ([`correct_vignetting`]) before any `lens` warp, at the source position, as the render applies it.
+/// Its warp may propose CR3 correspondence geometry, subject to independent gates against the framing fallback.
 pub(super) fn proxies(
     raw: &RawImage,
     bytes: &[u8],
@@ -91,7 +92,7 @@ pub(super) fn proxies(
     size: usize,
     min_fraction: f64,
     lens: Option<&LensGeometry>,
-    correction: Option<&lightcraft_develop::EmbeddedLens>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(
@@ -127,6 +128,7 @@ pub(super) fn proxies(
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut clipped = clip_mask(&sensor);
+    correct_vignetting(&mut sensor, embedded, raw.orientation);
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
     // zoom; other cameras when their correction setting is on): the sensor moved into that geometry is a candidate,
     // kept below when it lines up with the JPEG better than the uncorrected one.
@@ -145,7 +147,7 @@ pub(super) fn proxies(
         // against unregistered sensor pixels. This preserves an already better fit.
         let (fallback, fallback_mask) = align_cr3_framing(sensor.clone(), clipped.clone(), &reference);
         let proposed =
-            correction.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some()).and_then(|correction| {
+            embedded.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some()).and_then(|correction| {
                 align_profile_geometry_against(&sensor, &clipped, &reference, correction, lightcraft_geom::Orientation::Normal, Some(&fallback))
             });
         (sensor, clipped) = proposed.unwrap_or((fallback, fallback_mask));
@@ -516,7 +518,10 @@ pub(super) fn alignment(a: &Rgb32f, b: &Rgb32f) -> f64 {
     if (b.width, b.height) != (w, h) || w < 3 || h < 3 {
         return -1.0;
     }
-    let lum = |img: &Rgb32f| img.data.iter().map(|p| (luminance_2020(*p).max(1e-4) as f64).ln()).collect::<Vec<f64>>();
+    // NaN (outside a lens-warped proxy) stays NaN: `max` would turn it into a black border and a false edge
+    let lum = |img: &Rgb32f| {
+        img.data.iter().map(|p| luminance_2020(*p)).map(|y| if y.is_nan() { f64::NAN } else { (y.max(1e-4) as f64).ln() }).collect::<Vec<f64>>()
+    };
     let high = |l: &[f64]| -> Vec<f64> {
         (0..w * h)
             .map(|i| {

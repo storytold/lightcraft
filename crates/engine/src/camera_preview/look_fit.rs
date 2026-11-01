@@ -5,19 +5,19 @@ use super::proxy::{CLIP_TOLERANCE, LensGeometry, MIN_PREVIEW_FRACTION, proxies, 
 use super::tone::{HighlightCheck, highlights};
 use super::{CameraLook, CameraTone, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
 
-/// Fit the camera JPEG's look, using `correction` to align CR3 sensor/JPEG geometry when eligible;
-/// also report whether the JPEG is black and white ([`monochrome`]).
+/// The look fitted to the file's camera JPEG, and whether that JPEG is black and white ([`monochrome`]).
+/// `embedded`: the file's embedded lens correction, whose vignetting the render applies ([`look_proxies`]).
 pub(crate) fn fit_preview(
     raw: &RawImage,
     bytes: &[u8],
     transform: &CameraTransform,
     lens: Option<&LensGeometry>,
-    correction: Option<&lightcraft_develop::EmbeddedLens>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Option<CameraLook>, bool) {
     if !transform.matrix_is_fallback || !file_local_look(raw.format) {
         return (None, false);
     }
-    let Some((sensor, reference, clipped)) = proxies(raw, bytes, transform, PROXY, 0.0, lens, correction) else { return (None, false) };
+    let Some((sensor, reference, clipped)) = look_proxies(raw, bytes, transform, lens, embedded) else { return (None, false) };
     let black_and_white = monochrome(&reference);
     // A camera profile pooled from many photos knows colours this photo shows too little of;
     // try its colour first and fit tone/chroma per photo (picture styles vary).
@@ -264,6 +264,20 @@ pub(super) fn clips_more(sensor: &Rgb32f, reference: &Rgb32f, fitted: &ToneMap, 
     };
     let preview = reference.data.iter().filter(|p| luminance_2020(**p) >= 0.98).count() as f64 / reference.data.len().max(1) as f64;
     near_white(fitted) > near_white(plain).max(preview) + CLIP_TOLERANCE
+}
+
+/// The proxies a photo's look is fitted on ([`proxies`] at [`PROXY`]), the sensor's with the embedded vignetting
+/// correction the render applies. Without it the tone curve learns the camera JPEG's corrected
+/// brightness from the uncorrected sensor, and the render then corrects it again: 21 X-S10 RAFs rendered up to 0.3 EV
+/// brighter in their midtones and 0.6 EV in their shadows than their camera JPEGs, about 0.05 EV once corrected.
+pub(super) fn look_proxies(
+    raw: &RawImage,
+    bytes: &[u8],
+    transform: &CameraTransform,
+    lens: Option<&LensGeometry>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
+    proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded)
 }
 
 /// Multiply the sensor proxy (sensor orientation, default crop) by the embedded vignetting correction, the gain the

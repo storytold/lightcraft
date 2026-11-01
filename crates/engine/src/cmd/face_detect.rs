@@ -297,7 +297,6 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"detector": LABEL, "applied": applied, "photos": results, "ms": started.elapsed().as_secs_f64() * 1000.0}))
 }
 
-/// Describe the face detection and face-model device query commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -314,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Face Models on the GPU",
             [],
             None,
-            "{cpuOnly?: bool} → {cpuOnly, detection, recognition}: where the face models run, each as {checking, device, why} (null until it is loaded). The GPU is used only after a background check shows it gives the CPU's results faster; `cpuOnly: true` keeps every face model on the CPU (Settings → Faces), `false` checks the GPU again",
+            "{cpuOnly?: bool} → {cpuOnly, detection, recognition}: where the face models run, each as {checking, device, why} (null until it is loaded). The GPU is used only after a background check shows it gives the CPU's results faster; `cpuOnly: true` keeps every face model on the CPU (Settings ▸ Faces), `false` checks the GPU again",
             always,
             gpu
         ),

@@ -1,9 +1,8 @@
-use super::widgets::{check, choices, heading, hint, path_label, row};
+use super::widgets::{check, choices, field, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 // ------------------------------------------------------------------------------------- General
 
-/// Draw the General settings tab, including language and library-location controls.
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
         let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
@@ -78,24 +77,28 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
-        crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
-            .hint(crate::i18n::tr("Found automatically"))
-            .width(220.0)
-            .show(ui);
+        field(
+            ui,
+            crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
+                .hint(crate::i18n::tr("Found automatically"))
+                .width(220.0),
+        );
     });
     edit_file_rows(ui, t, "photocraftFile", &mut app.ui.settings.photocraft_file);
     hint(
         ui,
         t,
         crate::i18n::tr(
-            "Photo → Edit In → Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
+            "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
         ),
     );
     row(ui, t, crate::i18n::tr("Other editor"), |ui| {
-        crate::text_field::TextField::singleline("field:externalEditor", &mut app.ui.settings.external_editor)
-            .hint(crate::i18n::tr("System default"))
-            .width(220.0)
-            .show(ui);
+        field(
+            ui,
+            crate::text_field::TextField::singleline("field:externalEditor", &mut app.ui.settings.external_editor)
+                .hint(crate::i18n::tr("System default"))
+                .width(220.0),
+        );
     });
     edit_file_rows(ui, t, "externalFile", &mut app.ui.settings.external_file);
     hint(ui, t, crate::i18n::tr("Edit in Other Editor (⌥⌘E) opens the copy in this application (an app name on macOS, a program path elsewhere)."));

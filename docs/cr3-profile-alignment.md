@@ -21,7 +21,8 @@ is retained separately; the fallback comparison adds no extra improvement thresh
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
 The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags
-for merge/DNG conversion. Cache versions advance to look 14 and render 71. No camera allowlist,
+for merge/DNG conversion. Cache versions advance from upstream look 13/render 72 to look 14/render 73.
+The upstream source-position vignetting correction remains before geometry, including CR3. No camera allowlist,
 new profile matching rules, or weaker acceptance gate is introduced. Other RAW formats
 retain their existing correspondence behaviour. The non-CR3 and fixed-mount changes
 proposed by #2675 are separate work.
@@ -31,6 +32,7 @@ rejection, crop-relative profile orientation at multiple resolutions, clip-mask 
 and the complete CR3 correspondence route for EXIF orientations 1–8 with non-unity white balance.
 The opt-in `corpus_cr3_profile_geometry_diagnostics` test exports `geometry.tsv` and plain,
 selected, and JPEG proxy PNGs when `LIGHTCRAFT_CR3_DIAGNOSTICS` names an output directory.
+Both diagnostic routes retain identical vignetting; the plain route removes only the proposed profile warp.
 It reads CR3 files from `$LIGHTCRAFT_CORPUS/raw` and the normal configured lens database.
 The TSV appends `status` and `reason` columns. `measured` means both proxy calls returned
 images; acceptance or rejection is recorded separately in the existing measurement columns.
@@ -44,10 +46,10 @@ inspection aids, not developed image fidelity comparisons. Real-sample assessmen
 fallback controls are required before any publication. This experiment does not establish
 camera-wide colour parity or validate arbitrary Canon lenses, picture styles, or CRX modes.
 
-## Public-sample assessment
+## Historical public-sample assessment
 
-On 22 SHA-256-verified, individually CC0-listed raw.pixls.us CR3 files using lensfun
-XML data at `43f9e001`, the R100 RAW/C-RAW pair with RF-S18–45 at 18 mm accepts the
+The pre-synchronization assessment used 22 SHA-256-verified, individually CC0-listed raw.pixls.us CR3 files using lensfun
+XML data at `43f9e001`. In that assessment, the R100 RAW/C-RAW pair with RF-S18–45 at 18 mm accepts the
 new geometry. The other 20 files retain pixel-identical 1600-pixel renders with optics
 on/off, including eight R6 Mark II full-frame/crop, RAW/C-RAW and Dual-Pixel variants
 of one scene. All 22 retain identical renders without a lens database.
