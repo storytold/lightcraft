@@ -100,6 +100,7 @@ if "--skip-browse" not in args:
     ex("library.browse", {"path": FOLDER})
     first = thumbs12 = thumb1 = allp = None
     thumb_times = {}  # thumbnails drawn → when that many first were
+    empty_since = None  # since when the folder has stood loaded with no photo in it
     shown = 0
     while time.perf_counter() - t0 < 1800:
         st = inspect()
@@ -112,8 +113,16 @@ if "--skip-browse" not in args:
             first = el
         if tt >= 1 and thumb1 is None:
             thumb1 = el
-        if first is not None and st.get("import") is None and st.get("scan") is None and allp is None:
+        idle = st.get("import") is None and st.get("scan") is None
+        if first is not None and idle and allp is None:
             allp = el
+        # a folder with no supported photo: nothing will show, so stop a few seconds after loading
+        if not shown and idle:
+            empty_since = el if empty_since is None else empty_since
+            if el - empty_since > 3:
+                break
+        else:
+            empty_since = None
         # twelve thumbnails, or every photo's in a smaller folder: known once the folder has loaded
         if allp is not None and thumbs12 is None:
             thumbs12 = thumb_times.get(min(12, shown))
@@ -137,6 +146,8 @@ if "--skip-browse" not in args:
 # --- loupe on the first photo ----------------------------------------------------------------------
 ex("library.selectAll")
 ids = inspect().get("selection") or []
+if not ids:
+    sys.exit(f"{FOLDER}: no supported photos to open in the loupe")
 ex("library.select", {"ids": [ids[0]]})
 n0 = steps_total()
 ex("view.detail")
@@ -208,6 +219,7 @@ t0 = time.perf_counter()
 ex("view.zoom100")
 cam = None
 settled_whole = None  # since when the whole-frame render has stood settled with no region asked for
+zoom_end = None  # when the zoom was done: the region's arrival, or the settled whole frame
 while time.perf_counter() - t0 < 60:
     st = inspect()
     now = time.perf_counter() - t0
@@ -216,17 +228,20 @@ while time.perf_counter() - t0 < 60:
     region = loupe(st).get("region")
     settled = not loupe(st).get("pending") and loupe(st).get("source") in ("render", "cached")
     if settled and region is not None and region.get("pending") is False:
+        zoom_end = now
         break
     # the whole-frame render already holds 100 %: no region is asked for (the app asks within a
     # frame of the zoom, so half a second without one means none is coming)
     if settled and region is None:
         settled_whole = now if settled_whole is None else settled_whole
         if now - settled_whole >= 0.5:
+            zoom_end = settled_whole
             break
     else:
         settled_whole = None
-# (with no region, the zoom was done when the whole-frame render stood settled, not half a second on)
-t = settled_whole if settled_whole is not None else time.perf_counter() - t0
+# (with no region, the zoom was done when the whole-frame render stood settled, not half a second on;
+# a region that came after a settled whole frame ends it when the region is ready)
+t = zoom_end if zoom_end is not None else time.perf_counter() - t0
 out["zoom100_camera_s_client"] = cam
 out["zoom100_s_client"] = t
 out["zoom100_region"] = loupe(st).get("region")
