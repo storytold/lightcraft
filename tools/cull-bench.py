@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Drive a running LightCraft over its control channel and time the cull-before-import flow.
 
-usage: tools/cull-bench.py PORT FOLDER [--steps N] [--hold-ms 33] [--label NAME] [--size WxH] [--skip-browse]
+usage: tools/cull-bench.py PORT FOLDER [--steps N] [--hold-ms 33] [--label NAME] [--size WxH] [--skip-browse] [--overwrite]
 
 Start the app with its own library and settings first, e.g.
   LIGHTCRAFT_CONFIG_DIR=/tmp/lc-cfg lightcraft --control 18520 --library /tmp/lc-lib --no-demo
 It browses FOLDER into the Local view (with XMP auto-write off, the default, nothing is written
 next to the photos), opens the first photo, steps, holds the arrow key, zooms to 100 % and rates,
-and writes LABEL.json. The headless counterpart is `lightcraft-cli bench-cull FOLDER`.
+and writes LABEL.json (an existing LABEL.json is kept unless --overwrite is given). The headless counterpart is `lightcraft-cli bench-cull FOLDER`.
 
 Browse times are wall clock from this client (polling; each control call costs ~85 ms on this
 machine, so they are good to ~0.1 s). Loupe times come from the app itself (`perf.loupeSteps`,
 measured on the frames it draws), so they exclude the control channel's round trip.
 """
-import json, socket, statistics, sys, threading, time
+import json, os, socket, statistics, sys, threading, time
 
 PORT = int(sys.argv[1])
 FOLDER = sys.argv[2]
@@ -23,6 +23,10 @@ def opt(name, default):
 STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
 LABEL = opt("--label", "run")
+OVERWRITE = "--overwrite" in args
+# a run takes minutes: refuse an existing result before it starts, not after
+if not OVERWRITE and os.path.exists(LABEL + ".json"):
+    sys.exit(f"{LABEL}.json exists: pass --label NAME for a new one, or --overwrite to replace it")
 
 class Conn:
     def __init__(self):
@@ -149,7 +153,7 @@ if "--skip-browse" not in args:
 ex("library.selectAll")
 ids = inspect().get("selection") or []
 if not ids:
-    sys.exit(f"{FOLDER}: no supported photos to open in the loupe")
+    sys.exit(f"{FOLDER}: no photos visible to open in the loupe; check the filters")
 ex("library.select", {"ids": [ids[0]]})
 n0 = steps_cursor()
 ex("view.detail")
@@ -243,7 +247,7 @@ while time.perf_counter() - t0 < 60:
         settled_whole = None
 # (with no region, the zoom was done when the whole-frame render stood settled, not half a second on;
 # a region that came after a settled whole frame ends it when the region is ready)
-t = zoom_end if zoom_end is not None else time.perf_counter() - t0
+t = zoom_end  # None: the zoom did not finish within 60 s (missing data, not a 60 s zoom)
 out["zoom100_camera_s_client"] = cam
 out["zoom100_s_client"] = t
 out["zoom100_region"] = loupe(st).get("region")
@@ -268,7 +272,7 @@ out["persistence"] = {k: v for k, v in (info.get("persistence") or {}).items() i
 p = inspect()["perf"]
 out["perf"] = {k: p.get(k) for k in ("fps", "maxUpdateMs", "gpu", "rendersDone", "thumbTextures")}
 print(json.dumps(out, indent=1, default=str))
-open(LABEL + ".json", "w", encoding="utf-8").write(json.dumps(out, indent=1, default=str))
+open(LABEL + ".json", "w" if OVERWRITE else "x", encoding="utf-8").write(json.dumps(out, indent=1, default=str))
 
 
 
