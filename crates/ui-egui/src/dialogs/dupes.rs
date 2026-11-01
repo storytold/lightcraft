@@ -153,8 +153,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
         .color(t.text_dim),
     );
     ui.add_space(6.0);
-    let height = super::list_height(ui, (ui.ctx().content_rect().height() - 340.0).clamp(300.0, 720.0));
-    egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+    let height = super::list_height(ui, (ui.ctx().content_rect().height() - 320.0).clamp(300.0, 1200.0));
+    // rows of a known number of cards: the layout's own wrapping trusted the window's width, which the window
+    // takes from its content, so nothing ever wrapped and the cards ran off the screen
+    let per_row = ((width - 24.0) / (THUMB_W + 8.0 + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
+    egui::ScrollArea::vertical().max_height(height).max_width(width).auto_shrink([false, true]).show(ui, |ui| {
         for (n, g) in groups.iter_mut().enumerate() {
             // (how far apart the hashes are says how sure a visual match is: 0–2 bits is the same picture
             // at another size or compression, the top of the range deserves a look)
@@ -168,11 +171,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
                     .font(t.semibold(12.5))
                     .color(t.text),
             );
-            ui.horizontal_wrapped(|ui| {
-                for p in &mut g.photos {
-                    card(app, ui, t, p);
-                }
-            });
+            for row in g.photos.chunks_mut(per_row) {
+                ui.horizontal(|ui| {
+                    for p in row {
+                        card(app, ui, t, p);
+                    }
+                });
+            }
             ui.add_space(8.0);
         }
     });
