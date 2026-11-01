@@ -9,8 +9,10 @@ PyTorch are used only to train, and the result is an ONNX file that LightCraft's
 - **Pictures:** clean, low-ISO (≤ 400) Bayer raws from [raw.pixls.us](https://raw.pixls.us/) whose licence on the site
   is **CC0** (public domain). `fetch_rpu.py` checks every file's SHA-256 and records it in `sources.csv`
   (URL, camera, ISO, licence), which is the model's data credit.
-- **Noise:** synthetic Poisson-Gaussian sensor noise. Its parameters can be calibrated from your own photos with
-  `calibrate_noise.py`, which stores numbers only (per ISO: `variance = a · mean + b`), never pictures.
+- **Noise:** synthetic Poisson-Gaussian sensor noise. Its parameters can be measured from your own photos with
+  `calibrate_noise.py`, which stores numbers only (per ISO: `variance = a · mean + b`), never pictures. `train.py`
+  does not read that file: its read-noise relation (`read_noise`) was set by hand from such a measurement, so a new
+  camera's numbers are a check of it (and a reason to edit it), not an input to the next run.
 - Not used: RawNIND (the dataset is CC BY-SA 4.0 and its published weights GPL-3.0), SIDD, FiveK, DIV2K and other
   research-only sets.
 

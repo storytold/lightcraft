@@ -6,7 +6,9 @@ Offline training tooling for AI Denoise; not part of LightCraft.
 brightness bin, low percentiles of the variance. Flat areas give the lowest variances, so the 10th percentile,
 corrected for the spread of a 64-sample variance estimate, follows the sensor's noise curve. Per ISO we fit the
 Poisson-Gaussian model `variance = a * mean + b` (white = 1). No picture data is stored: the output is the fitted
-`a`, `b` per ISO and camera, which the trainer uses to make its synthetic noise realistic.
+`a`, `b` per ISO and camera. `train.py` does not read this file: its read-noise relation (`read_noise`, the EOS R5 C
+fit `b = 1.25e-6 (a / 6.6e-4)^2`) was set by hand from these numbers, so a new camera's calibration is a check of
+that relation, and a reason to edit it, not an input to the next run.
 
     python calibrate_noise.py --rawdump <exe> --out noise-<camera>.json --sample 200 <folder> [<folder> ...]
 
@@ -88,6 +90,10 @@ def main():
             continue
         aa, bb = fit(points)
         result[cam].setdefault(str(iso), {"photos": counts[(cam, iso)]})[plane] = {"a": aa, "b": bb}
+    if not result:
+        # (a mistyped folder, or raws the helper can't read): keep any earlier calibration rather than empty it
+        print(f"no noise could be fitted from {len(files)} files; {a.out} is left as it was", file=sys.stderr)
+        return 1
     out = {"model": "variance = a * mean + b, white = 1, black subtracted, per Bayer plane",
            "cameras": result}
     # the documented `<scratch>/noise/camera.json` needs its folder: made here, not after the photos are measured and lost
