@@ -16,7 +16,7 @@
 //! `dim` `f32`.
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,8 +24,6 @@ use lightcraft_geom::Rect;
 
 const MAGIC: &[u8; 4] = b"LCFE";
 const VERSION: u8 = 2;
-/// Largest cache file we read.
-const MAX_FILE: u64 = 1 << 30;
 
 pub(crate) type Key = (u64, [i32; 4]);
 
@@ -134,30 +132,38 @@ impl Index {
         }
     }
 
+    /// Reads the file record by record, not all at once: at about 2 KiB per face a cache passes 1 GiB at roughly half
+    /// a million faces.
     fn load(&mut self, path: &Path) {
-        let Ok(meta) = std::fs::metadata(path) else { return };
-        if meta.len() > MAX_FILE {
+        let Ok(file) = std::fs::File::open(path) else { return };
+        let Ok(file_len) = file.metadata().map(|m| m.len()) else { return };
+        let mut r = std::io::BufReader::new(file);
+        let mut head = [0u8; 7];
+        if r.read_exact(&mut head).is_err() || head[..4] != MAGIC[..] || head[4] != VERSION {
             return;
         }
-        let Ok(bytes) = std::fs::read(path) else { return };
-        let Some((tag_len, rest)) = bytes
-            .strip_prefix(MAGIC)
-            .and_then(|r| r.split_first())
-            .filter(|(v, _)| **v == VERSION)
-            .and_then(|(_, r)| r.split_at_checked(2))
-            .map(|(l, r)| (usize::from(u16::from_le_bytes([l[0], l[1]])), r))
-        else {
+        let tag_len = usize::from(u16::from_le_bytes([head[5], head[6]]));
+        let mut tag = vec![0u8; tag_len];
+        let mut dim = [0u8; 4];
+        if r.read_exact(&mut tag).is_err() || r.read_exact(&mut dim).is_err() {
             return;
-        };
-        let Some((tag, rest)) = rest.split_at_checked(tag_len) else { return };
-        let Some((dim, mut rest)) = rest.split_at_checked(4).map(|(d, r)| (u32::from_le_bytes([d[0], d[1], d[2], d[3]]) as usize, r)) else { return };
+        }
+        let dim = u32::from_le_bytes(dim) as usize;
         if tag != self.tag.as_bytes() || dim != self.dim || dim == 0 {
             return;
         }
         self.file_matches = true;
         let record = 8 + 16 + 16 + dim * 4;
-        while let Some((rec, tail)) = rest.split_at_checked(record) {
-            rest = tail;
+        let body = file_len.saturating_sub(7 + tag_len as u64 + 4);
+        let records = body / record as u64;
+        let mut rec = vec![0u8; record];
+        for _ in 0..records {
+            if r.read_exact(&mut rec).is_err() {
+                // the file changed or could not be read: what was read is kept and written fresh at the next save, the
+                // rest is embedded again
+                self.rewrite = true;
+                return;
+            }
             let photo = u64::from_le_bytes([rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7]]);
             let int = |at: usize| i32::from_le_bytes([rec[at], rec[at + 1], rec[at + 2], rec[at + 3]]);
             let key = [int(8), int(12), int(16), int(20)];
@@ -169,7 +175,7 @@ impl Index {
         }
         // a half-written last record (a crash while appending): written fresh at the next save, so later records are
         // not appended after it and shifted
-        self.rewrite = !rest.is_empty();
+        self.rewrite = body % record as u64 != 0;
     }
 
     fn header(&self) -> Vec<u8> {
@@ -468,6 +474,35 @@ mod tests {
         let mut b = Index::default();
         b.reset("m@abc", 2, Some(path.clone()));
         assert_eq!(b.len(), 0, "a non-finite vector is not loaded back");
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// A cache past 1 GiB (about half a million faces of a 512-number model) is still read, and later saves append to
+    /// it instead of starting it over with only this session's faces (issue #2997).
+    #[test]
+    fn a_cache_larger_than_a_gibibyte_is_still_loaded_and_appended_to() {
+        let path = temp("large");
+        let _ = std::fs::remove_file(&path);
+        let dim = 512;
+        let mut a = Index::default();
+        a.reset("m@abc", dim, Some(path.clone()));
+        a.insert(7, &rect(0.1), vec![0.5; dim]);
+        a.save().unwrap();
+        drop(a);
+        // grow the file (sparsely) by whole zero records to just past 1 GiB
+        let record = 8 + 16 + 16 + dim as u64 * 4;
+        let len = std::fs::metadata(&path).unwrap().len();
+        let records = ((1u64 << 30) - len) / record + 2;
+        let grown = len + records * record;
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(grown).unwrap();
+        let mut b = Index::default();
+        b.reset("m@abc", dim, Some(path.clone()));
+        assert!(b.contains(7, &rect(0.1)), "photo 7's embedding is loaded");
+        assert!(!b.needs(7, &rect(0.1)));
+        b.insert(8, &rect(0.3), vec![0.25; dim]);
+        b.save().unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), grown + record, "the new face is appended");
+        drop(b);
         let _ = std::fs::remove_file(path);
     }
 
