@@ -223,12 +223,12 @@ struct Cache {
 pub fn matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dyn Fn() -> Option<Vec<f32>>) -> Option<Vec<f32>> {
     // wgpu panics in `Device::poll` once the device is lost (see `ctx::Gpu::poll`): the GPU is
     // then given up on and the CPU computes this product
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_matmul(a, rows, k, n, key, weights))).unwrap_or_else(|_| {
-        // (the card this thread's products went to)
-        if let Ok(d) = dev_for_work() {
+    let r = dev_for_work().and_then(|d| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_matmul(d, a, rows, k, n, key, weights))).unwrap_or_else(|_| {
+            // (the device that ran it: looking one up again could give the other card's)
             d.broken.mark("a matrix product on the GPU panicked");
-        }
-        Err("the GPU gave up".into())
+            Err("the GPU gave up".into())
+        })
     });
     match r {
         Ok(c) => Some(c),
@@ -297,8 +297,8 @@ fn upload(d: &Dev, label: &'static str, contents: &[u8], usage: wgpu::BufferUsag
     buf
 }
 
-fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dyn Fn() -> Option<Vec<f32>>) -> Result<Vec<f32>, String> {
-    let d = dev_for_work()?;
+#[allow(clippy::too_many_arguments)]
+fn try_matmul(d: &Dev, a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dyn Fn() -> Option<Vec<f32>>) -> Result<Vec<f32>, String> {
     let _work = crate::exit::enter().ok_or("LightCraft is closing")?;
     if rows == 0 || k == 0 || n == 0 || Some(a.len()) != rows.checked_mul(k) {
         return Err("bad shape".into());
