@@ -799,6 +799,7 @@
   "Find Duplicate Photos…": "დუბლიკატი ფოტოების მოძებნა…",
   "Keep": "დატოვება",
   "Looking for duplicate photos…": "დუბლიკატი ფოტოები იძებნება…",
+  "Finding duplicate photos was stopped before it finished.": "დუბლიკატი ფოტოების ძებნა დასრულებამდე შეჩერდა.",
   "byte-identical": "ბაიტობრივად იდენტური",
   "visually identical": "ვიზუალურად იდენტური",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "თითოეულ ჯგუფში მონიშნულია საუკეთესო ასლი: raw დარენდერებულ ფაილზე წინ, უდანაკარგო დანაკარგიანზე წინ, მეტი პიქსელი, უფრო დიდი ფაილი. მოხსენით მონიშვნა ფოტოს წასაშლელად, ან მონიშნეთ სხვებიც მათ დასატოვებლად.",

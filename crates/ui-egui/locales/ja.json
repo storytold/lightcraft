@@ -754,6 +754,7 @@
   "Find Duplicate Photos…": "重複した写真を検索…",
   "Keep": "残す",
   "Looking for duplicate photos…": "重複した写真を検索中…",
+  "Finding duplicate photos was stopped before it finished.": "重複した写真の検索は完了前に停止されました。",
   "byte-identical": "バイト単位で同一",
   "visually identical": "見た目が同一",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "各グループで最良のコピーにチェックが付いています（レンダリング済みファイルより raw、非可逆より可逆、画素数が多いもの、ファイルが大きいもの）。チェックを外すとその写真を削除し、さらにチェックを付けるとそれらも残します。",

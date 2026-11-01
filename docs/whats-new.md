@@ -8,7 +8,8 @@
   photo, the best copy ticked (a raw over a rendered file, lossless over lossy, more pixels, a larger file, then edits
   and rating) and the others unticked with why they lose. Change any tick, then "Delete N Photos" moves the unticked
   ones to Recently Deleted (Edit ▸ Undo brings them back). The search runs in the background with a row in the
-  activity stack and only matches the same picture, never the next frame of a burst. Agents and scripts call
+  activity stack and matches with a tight threshold meant to catch the same picture at another size or compression
+  and leave the next frame of a burst out; look before you delete, as always. Agents and scripts call
   `library.findDuplicates`, which filters the view to the groups and selects the copies to remove (`wait: true`
   returns the groups with the reason each copy loses).
 

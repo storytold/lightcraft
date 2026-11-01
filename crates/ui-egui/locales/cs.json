@@ -747,6 +747,7 @@
   "Find Duplicate Photos…": "Najít duplicitní fotografie…",
   "Keep": "Ponechat",
   "Looking for duplicate photos…": "Hledání duplicitních fotografií…",
+  "Finding duplicate photos was stopped before it finished.": "Hledání duplicitních fotografií bylo zastaveno před dokončením.",
   "byte-identical": "bajtově shodné",
   "visually identical": "vizuálně shodné",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "V každé skupině je zaškrtnuta nejlepší kopie: raw před vykresleným souborem, bezztrátový před ztrátovým, více pixelů, větší soubor. Odškrtnutím fotografii smažete, zaškrtnutím dalších je také ponecháte.",

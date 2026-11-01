@@ -40,7 +40,12 @@ pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
 
 /// Fill the window from a finished run's result (`last` of `library.findDuplicates` / `duplicates.pump`).
 pub fn take_result(dlg: &mut Dialog, last: &Value) {
-    let Dialog::Duplicates { groups, done, photos, .. } = dlg else { return };
+    let Dialog::Duplicates { groups, done, photos, error } = dlg else { return };
+    // a run stopped early (✕ in the activity stack, a cancel from the control channel) found nothing because it
+    // never looked: not the same as "no duplicates"
+    if last["cancelled"].as_bool() == Some(true) {
+        *error = Some(crate::i18n::tr("Finding duplicate photos was stopped before it finished.").to_string());
+    }
     let group_of = |g: &Value| DuplicateGroup {
         exact: g["exact"].as_bool().unwrap_or(false),
         photos: g["photos"]
@@ -293,6 +298,23 @@ mod tests {
             assert!(left.contains(&ids[name]), "{name} stays: {left:?}");
         }
         assert_eq!(h.app.session.visible_cloned().len(), 3, "the view was never filtered by the window");
+    }
+
+    /// A run that was stopped says so instead of "no duplicates", and offers nothing to delete.
+    #[test]
+    fn a_stopped_run_is_reported_not_taken_for_no_duplicates() {
+        let mut dlg = Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None };
+        super::take_result(&mut dlg, &json!({"groups": [], "photos": 12, "cancelled": true}));
+        match &dlg {
+            Dialog::Duplicates { done: true, error: Some(e), groups, .. } => {
+                assert!(e.contains("stopped"), "{e}");
+                assert!(groups.is_empty());
+            }
+            d => panic!("{d:?}"),
+        }
+        let mut dlg = Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None };
+        super::take_result(&mut dlg, &json!({"groups": [], "photos": 12, "cancelled": false}));
+        assert!(matches!(&dlg, Dialog::Duplicates { done: true, error: None, .. }), "{dlg:?}");
     }
 
     /// Without duplicates the window says so and its confirm deletes nothing.

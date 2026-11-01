@@ -638,6 +638,7 @@
   "Find Duplicate Photos…": "Найти дубликаты фото…",
   "Keep": "Оставить",
   "Looking for duplicate photos…": "Поиск дубликатов фото…",
+  "Finding duplicate photos was stopped before it finished.": "Поиск дубликатов фото был остановлен до завершения.",
   "byte-identical": "побайтово одинаковые",
   "visually identical": "визуально одинаковые",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "В каждой группе отмечена лучшая копия: raw важнее готового файла, без потерь важнее сжатия с потерями, больше пикселей, больший файл. Снимите отметку, чтобы удалить фото, или отметьте другие, чтобы оставить и их.",

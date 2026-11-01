@@ -740,6 +740,7 @@
   "Find Duplicate Photos…": "Cari foto duplikat…",
   "Keep": "Simpan",
   "Looking for duplicate photos…": "Mencari foto duplikat…",
+  "Finding duplicate photos was stopped before it finished.": "Pencarian foto duplikat dihentikan sebelum selesai.",
   "byte-identical": "identik byte per byte",
   "visually identical": "identik secara visual",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "Salinan terbaik di tiap grup sudah dicentang: raw di atas file hasil render, lossless di atas lossy, piksel lebih banyak, file lebih besar. Hapus centang untuk menghapus foto itu, atau centang lebih banyak untuk menyimpannya juga.",
