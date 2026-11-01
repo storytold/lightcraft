@@ -320,5 +320,10 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "· {n} copies of library photos": "· {n} salinan foto pustaka",
+  "· {n} repeated in this import": "· {n} berulang dalam impor ini",
+  "Same content as {path} in the library": "Konten sama dengan {path} di pustaka",
+  "Same file as {path} earlier in this import": "File sama dengan {path} sebelumnya dalam impor ini",
+  " · {n} imported although another photo has the same content": " · {n} diimpor meskipun foto lain memiliki konten yang sama"
 }

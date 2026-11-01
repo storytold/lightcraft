@@ -317,5 +317,10 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  " · {n} imported although another photo has the same content": " · importate {n} anche se un’altra foto ha lo stesso contenuto",
+  "Same content as {path} in the library": "Stesso contenuto di {path} nella libreria",
+  "Same file as {path} earlier in this import": "Stesso file di {path} già presente in questa importazione",
+  "· {n} copies of library photos": "· copie di foto nella libreria: {n}",
+  "· {n} repeated in this import": "· ripetizioni in questa importazione: {n}"
 }

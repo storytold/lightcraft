@@ -320,5 +320,10 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  " · {n} imported although another photo has the same content": " · იმპორტირებულია {n}, მიუხედავად იმისა, რომ სხვა ფოტოს იგივე შიგთავსი აქვს",
+  "Same content as {path} in the library": "იგივე შიგთავსი, რაც ბიბლიოთეკაში არსებულ {path}-ს",
+  "Same file as {path} earlier in this import": "იგივე ფაილი, რაც ამ იმპორტში ადრე არსებულ {path}-ს",
+  "· {n} copies of library photos": "· ბიბლიოთეკის ფოტოების ასლები: {n}",
+  "· {n} repeated in this import": "· გამეორებები ამ იმპორტში: {n}"
 }
