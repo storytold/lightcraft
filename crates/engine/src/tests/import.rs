@@ -348,7 +348,101 @@ fn find_missing_matches_renamed_files_by_content() {
     );
     assert_eq!(r["missing"], 1);
     assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
+    assert!(found.iter().all(|f| f["sameBytes"] == true), "a content match is the same file: {r}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A renamed file with the same bytes keeps its film recipe. A same-name file whose bytes differ
+/// does not: that match is only a guess, and the Info panel must not show the previous recipe.
+#[test]
+fn find_missing_keeps_a_recipe_only_when_the_bytes_match() {
+    let dir = temp_dir("fuji-missing");
+    let old = dir.join("old");
+    let moved = dir.join("moved");
+    write_png(&old.join("same.png"), 1);
+    write_png(&old.join("guess.png"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [old.to_string_lossy()]})).unwrap();
+    let recipe = lightcraft_meta::FujiRecipe {
+        rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Classic Chrome".into() }],
+    };
+    for name in ["same.png", "guess.png"] {
+        let id = s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.fuji_recipe = Some(recipe.clone());
+        meta.fuji_recipe_known = true;
+        s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    }
+    std::fs::create_dir_all(&moved).unwrap();
+    std::fs::rename(old.join("same.png"), moved.join("renamed.png")).unwrap();
+    let mut other = std::fs::read(old.join("guess.png")).unwrap();
+    let n = other.len();
+    other[n - 20] ^= 0xff;
+    std::fs::write(moved.join("guess.png"), &other).unwrap();
+    std::fs::remove_file(old.join("guess.png")).unwrap();
+
+    let r = s.execute("library.findMissing", &json!({"folder": moved.to_string_lossy()})).unwrap();
+    let same = s.catalog.photos().find(|p| p.file_name == "renamed.png").unwrap();
+    assert_eq!(same.meta.fuji_recipe.as_ref().map(|r| r.rows[0].value.as_str()), Some("Classic Chrome"));
+    assert!(same.meta.fuji_recipe_known);
+    let guess = s.catalog.photos().find(|p| p.file_name == "guess.png").unwrap();
+    assert!(guess.meta.fuji_recipe.is_none() && !guess.meta.fuji_recipe_known, "a guessed file is read again");
+    let guessed = r["found"].as_array().unwrap().iter().find(|f| f["to"].as_str().unwrap().ends_with("guess.png")).unwrap();
+    assert_eq!(guessed["sameBytes"], false, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Submitted plans are only hints: invalidate recipes without blocking the UI on file reads.
+#[test]
+fn find_missing_submitted_plans_invalidate_recipes_without_io() {
+    use crate::cmd::missing::{find_candidates, plan_find_missing};
+
+    for case in ["changed", "missing", "no-hash", "same"] {
+        let dir = temp_dir(&format!("fuji-plan-{case}"));
+        let old = dir.join("old.png");
+        let moved = dir.join("moved");
+        write_png(&old, 1);
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [old.to_string_lossy()]})).unwrap();
+        let id = s.catalog.photos().next().unwrap().id;
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.fuji_recipe = Some(lightcraft_meta::FujiRecipe {
+            rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Classic Chrome".into() }],
+        });
+        meta.fuji_recipe_known = true;
+        s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta.clone()) }).unwrap();
+        std::fs::create_dir_all(&moved).unwrap();
+        let dest = moved.join("new.png");
+        std::fs::rename(&old, &dest).unwrap();
+        let plan = plan_find_missing(&find_candidates(&s.catalog), &moved.to_string_lossy()).unwrap().to_json();
+        assert_eq!(plan["found"][0]["sameBytes"], true);
+        match case {
+            "changed" => std::fs::write(&dest, b"replacement bytes").unwrap(),
+            "missing" => std::fs::remove_file(&dest).unwrap(),
+            "no-hash" => {
+                let ph = s.catalog.photo(id).unwrap();
+                let op = lightcraft_catalog::Op::SetContent {
+                    id,
+                    width: ph.width,
+                    height: ph.height,
+                    file_size: ph.file_size,
+                    content_hash: None,
+                    preview_only: ph.preview_only.clone(),
+                    preview_checked: ph.preview_checked.clone(),
+                };
+                s.catalog.apply(op).unwrap();
+            }
+            _ => {}
+        }
+        let result = s.execute("library.findMissing", &plan).unwrap();
+        let photo = s.catalog.photo(id).unwrap();
+        assert!(photo.meta.fuji_recipe.is_none(), "{case}");
+        assert!(!photo.meta.fuji_recipe_known, "{case}");
+        assert_eq!(result["found"][0]["sameBytes"], true, "the planning hint is not current proof: {case}");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().meta.fuji_recipe, meta.fuji_recipe);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// Issue #104: the app plans Find Missing on a worker thread (no session) and relinks the plan

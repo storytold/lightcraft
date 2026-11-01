@@ -14,6 +14,9 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
 | `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
 | `try_extract(&[u8]) -> Result<Metadata, ExtractError>` | Like `extract`, but reports malformed PSD/PSB headers, image-resource sections, or embedded EXIF/XMP structure (including duplicate EXIF/XMP resources) so callers can fail closed when location absence cannot be established. Other formats remain best-effort. |
+| `recipe_from_exif(&[u8])` | Fujifilm in-camera recipe from a TIFF-structured EXIF block, with or without the `Exif\0\0` prefix. |
+| `recipe_from_bytes(&[u8])` | Fujifilm in-camera recipe from a TIFF/DNG file, camera JPEG, or RAF. |
+| `read_recipe_file(&Path)` | Bounded header/EXIF read for a recipe, without reading RAF sensor data; returns an error for failed I/O. |
 
 `Metadata` carries camera (make, model, serial, software), lens (make, model, serial, specification), capture
 (date-time with UTC offset and milliseconds, exposure time, f-number, ISO incl. extended ISO, focal length and

@@ -23,6 +23,7 @@ mod filesystem_history;
 mod focus_scan;
 mod folders;
 mod forget_local;
+mod fuji;
 mod history_cursor;
 mod hold_view;
 mod ids_params;
