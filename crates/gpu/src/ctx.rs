@@ -1048,6 +1048,12 @@ mod tests {
     /// `for_resource_creation` threshold, DX12 and Vulkan), and holds at most [`OOM_HELD_CAP`]: filling the device
     /// itself took 58 GB of system memory on an RTX 4070 SUPER under Windows, where the driver backs device
     /// allocations with shared system memory once the card's own is full.
+    ///
+    /// Backends without budget thresholds (Metal, GL; wgpu ignores `for_resource_creation` there)
+    /// rely on the held-memory cap alone: the child holds at most [`OOM_HELD_CAP`] whatever the
+    /// driver does, so it never fills system memory, and a device with more than that free never runs
+    /// out and the test skips (`skip!`, listed by `cargo xtask ci`) instead of proving the fallback
+    /// (FredApps on #3514).
     #[test]
     fn running_out_of_device_memory_falls_back_without_stopping_the_gpu() {
         if run_child_with("out_of_memory_child", &[("LIGHTCRAFT_TEST_GPU_MEMORY_BUDGET", "10")]).is_none() {
