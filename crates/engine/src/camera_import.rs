@@ -25,8 +25,10 @@
 //!
 //! Every file is written as `<name>.part`, flushed to disk, checked against the size the camera
 //! reported, and only then renamed; a failed file leaves nothing behind and the others carry on.
-//! Names and folders come from the device, so they are made safe path components first. Nothing
-//! on the camera is ever changed (the session is read-only).
+//! Names and folders come from the device, so they are made safe path components first. The
+//! staging folders must be real folders no other user can write to (the temp folder can be shared),
+//! and nothing is written or removed through a link. Nothing on the camera is ever changed (the
+//! session is read-only).
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -273,6 +275,7 @@ pub fn staged_path(dir: &Path, f: &CameraFile) -> PathBuf {
 /// docs).
 pub fn fetch(source: &dyn Source, camera: &str, known: &Known, dir: &Path, progress: &Progress) -> Result<Fetched, Error> {
     let cancel = progress.cancel.clone();
+    own_staging(dir)?;
     let files = source.files(&cancel, &mut |n| progress.listed.store(n as u64, Ordering::Relaxed))?;
     let mut out = Fetched { folder: dir.to_string_lossy().to_string(), ..Default::default() };
     let mut wanted: Vec<(CameraFile, PathBuf)> = Vec::new();
@@ -345,6 +348,34 @@ fn already_staged(f: &CameraFile, path: &Path) -> bool {
     f.size.is_some_and(|size| std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == size))
 }
 
+/// Make sure `dir` and its parent (`lightcraft-camera-import`) are real folders, made when missing,
+/// that no other user can write to (on Unix new ones are the user's alone): the temp folder can be
+/// shared, and a link or folder someone else put there must not have the fetch write or delete
+/// through it.
+fn own_staging(dir: &Path) -> Result<(), Error> {
+    for d in [dir.parent(), Some(dir)].into_iter().flatten() {
+        match std::fs::symlink_metadata(d) {
+            Ok(m) if !m.file_type().is_dir() => return Err(Error::Write(format!("{}: not a folder", d.display()))),
+            Ok(m) => {
+                #[cfg(unix)]
+                if std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o022 != 0 {
+                    return Err(Error::Write(format!("{}: other users can write to it", d.display())));
+                }
+                let _ = m;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut b = std::fs::DirBuilder::new();
+                b.recursive(true);
+                #[cfg(unix)]
+                std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+                b.create(d).map_err(|e| Error::Write(e.to_string()))?;
+            }
+            Err(e) => return Err(Error::Write(e.to_string())),
+        }
+    }
+    Ok(())
+}
+
 /// Copy one file: into `<path>.part`, synced, size-checked, then renamed into place.
 fn fetch_one(source: &dyn Source, f: &CameraFile, path: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<u64, Error> {
     let write = |e: std::io::Error| Error::Write(e.to_string());
@@ -355,7 +386,9 @@ fn fetch_one(source: &dyn Source, f: &CameraFile, path: &Path, cancel: &AtomicBo
     part.push(".part");
     let part = PathBuf::from(part);
     let r = (|| {
-        let mut file = std::fs::File::create(&part).map_err(write)?;
+        // a leftover is removed, and the new one made afresh: never written through a link
+        let _ = std::fs::remove_file(&part);
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&part).map_err(write)?;
         let n = {
             let mut buf = std::io::BufWriter::with_capacity(1 << 20, &mut file);
             let n = source.copy_to(f, &mut buf, cancel, progress)?;
@@ -385,17 +418,33 @@ fn fetch_one(source: &dyn Source, f: &CameraFile, path: &Path, cancel: &AtomicBo
 /// library photo uses (added in place) stays.
 fn clean_staging(dir: &Path, keep: &HashSet<PathBuf>, known: &Known) {
     let ours = dir.parent().and_then(|p| p.file_name()).is_some_and(|n| n == STAGING);
-    if !ours || !dir.is_dir() {
+    let real_dir = |p: &Path| p.symlink_metadata().is_ok_and(|m| m.file_type().is_dir());
+    if !ours || !real_dir(dir) || !dir.parent().is_some_and(real_dir) {
         return;
     }
     let files = crate::import::expand_within(&[dir.to_string_lossy().to_string()], None, crate::walk::Limits::default()).0;
     let parts = walk_parts(dir);
     for f in files.into_iter().map(PathBuf::from).chain(parts) {
-        if f.starts_with(dir) && !keep.contains(&f) && !known.in_use(&f) && f.symlink_metadata().is_ok_and(|m| m.is_file()) {
+        if f.starts_with(dir)
+            && reached_without_links(dir, &f)
+            && !keep.contains(&f)
+            && !known.in_use(&f)
+            && f.symlink_metadata().is_ok_and(|m| m.is_file())
+        {
             let _ = std::fs::remove_file(&f);
         }
     }
     remove_empty_dirs(dir, 0);
+}
+
+/// Every folder between `dir` and `file` is a real folder, not a link (which could lead out of it).
+fn reached_without_links(dir: &Path, file: &Path) -> bool {
+    let Some(folders) = file.strip_prefix(dir).ok().and_then(Path::parent) else { return false };
+    let mut at = dir.to_path_buf();
+    folders.components().all(|c| {
+        at.push(c);
+        at.symlink_metadata().is_ok_and(|m| m.file_type().is_dir())
+    })
 }
 
 /// `.part` files under `dir` (the photo walk skips them: not a supported extension).
@@ -560,6 +609,51 @@ mod tests {
         assert_eq!(r.failed[0].error, "a library photo uses the file staged under this name");
         assert_eq!(std::fs::read(&a).unwrap(), before, "the library's original is unchanged");
         assert!(cam.reads.lock().unwrap().is_empty(), "nothing read for it");
+        done(&dir);
+    }
+
+    /// CodeRabbit on #1635: the temp folder can be shared, so the fetch never writes or deletes
+    /// through a link someone put where its folders go, or into a folder others can write to.
+    #[cfg(unix)]
+    #[test]
+    fn the_fetch_writes_and_deletes_only_in_folders_of_its_own() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = temp("links");
+        let victim = dir.parent().unwrap().parent().unwrap().join("victim");
+        std::fs::create_dir_all(victim.join("X100T")).unwrap();
+        std::fs::write(victim.join("old.jpg"), b"keep").unwrap();
+        std::fs::write(victim.join("X100T/old.jpg"), b"keep").unwrap();
+        let cam = fake(vec![file("DCIM/100", "A.JPG", 16, Some("2026-10-11T09:17:08"))]);
+        let fetch_into = |d: &Path| fetch(&cam, "cam-1", &Known::default(), d, &Progress::default());
+        // the camera's folder is a link
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        symlink(&victim, &dir).unwrap();
+        assert!(matches!(fetch_into(&dir), Err(Error::Write(_))));
+        std::fs::remove_file(&dir).unwrap();
+        // `lightcraft-camera-import` is a link
+        std::fs::remove_dir(dir.parent().unwrap()).unwrap();
+        symlink(&victim, dir.parent().unwrap()).unwrap();
+        assert!(matches!(fetch_into(&dir), Err(Error::Write(_))));
+        std::fs::remove_file(dir.parent().unwrap()).unwrap();
+        // a folder others can write to
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(matches!(fetch_into(&dir), Err(Error::Write(_))));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // a link inside the folder: cleaning up doesn't follow it
+        symlink(&victim, dir.join("DCIM")).unwrap();
+        let r = fetch(&fake(Vec::new()), "cam-1", &Known::default(), &dir, &Progress::default()).unwrap();
+        assert!(r.staged.is_empty());
+        std::fs::remove_file(dir.join("DCIM")).unwrap();
+        // a leftover `.part` that is a link: the file is written afresh, not through it
+        std::fs::create_dir_all(dir.join("DCIM/100")).unwrap();
+        symlink(victim.join("old.jpg"), dir.join("DCIM/100/A.JPG.part")).unwrap();
+        let r = fetch_into(&dir).unwrap();
+        assert_eq!(r.fetched, 1, "{r:?}");
+        assert!(dir.join("DCIM/100/A.JPG").symlink_metadata().unwrap().is_file(), "a file of its own, not the link");
+        assert_eq!(std::fs::read(victim.join("old.jpg")).unwrap(), b"keep");
+        assert_eq!(std::fs::read(victim.join("X100T/old.jpg")).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 2, "nothing written there");
         done(&dir);
     }
 
