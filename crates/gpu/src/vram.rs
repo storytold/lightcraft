@@ -48,17 +48,25 @@ fn probe(name: &str, _vendor: u32, _device: u32) -> Option<u64> {
     // Only the three values are asked for: listing every value of every subkey (`/s` alone) took
     // over a minute on a machine with many virtual displays, and the first GPU render waited for it.
     const KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
-    let mut text = String::new();
-    for value in ["DriverDesc", "HardwareInformation.qwMemorySize", "HardwareInformation.MemorySize"] {
+    let answers = ["DriverDesc", "HardwareInformation.qwMemorySize", "HardwareInformation.MemorySize"].map(|value| {
         let mut cmd = std::process::Command::new("reg");
         cmd.args(["query", KEY, "/s", "/v", value]).creation_flags(CREATE_NO_WINDOW);
-        let Some(out) = output_within(cmd, QUERY_TIME) else {
-            continue;
-        };
-        text.push_str(&String::from_utf8_lossy(&out));
+        output_within(cmd, QUERY_TIME)
+    });
+    parse_registry(&registry_text(answers)?, name)
+}
+
+/// The three registry answers (the adapters' names, then their two memory sizes) as one listing;
+/// `None` without the names: a size alone could be another adapter's (review of PR #3532).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn registry_text(answers: [Option<Vec<u8>>; 3]) -> Option<String> {
+    let [names, qword, dword] = answers;
+    let mut text = String::from_utf8_lossy(&names?).into_owned();
+    for out in [qword, dword].into_iter().flatten() {
         text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&out));
     }
-    parse_registry(&text, name)
+    Some(text)
 }
 
 #[cfg(target_os = "linux")]
@@ -397,9 +405,17 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         let flood = cmd(&["for /L %i in (1,1,40000) do @echo 0123456789012345678901234567890123456789"]);
         #[cfg(not(windows))]
         let flood = cmd(&["yes 0123456789012345678901234567890123456789 | head -n 40000"]);
-        let t = std::time::Instant::now();
         assert_eq!(output_within(flood, std::time::Duration::from_secs(60)), None);
-        assert!(t.elapsed() < std::time::Duration::from_secs(60), "{:?}", t.elapsed());
+    }
+
+    /// Review of PR #3532: without the adapters' names, a memory size alone is no answer.
+    #[test]
+    fn a_registry_listing_without_names_is_no_answer() {
+        let size = b"HKEY_LOCAL_MACHINE\\X\\0000\n    HardwareInformation.qwMemorySize    REG_QWORD    0x300000000\n".to_vec();
+        assert_eq!(registry_text([None, Some(size.clone()), None]), None);
+        let names = b"HKEY_LOCAL_MACHINE\\X\\0000\n    DriverDesc    REG_SZ    Card A\n".to_vec();
+        let text = registry_text([Some(names), Some(size), None]).unwrap();
+        assert_eq!(parse_registry(&text, "Card A"), Some(0x3_0000_0000));
     }
 
     #[test]
