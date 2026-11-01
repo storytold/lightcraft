@@ -17,7 +17,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 /// A folder that looks installed but holds no usable model.
-fn damaged_model(name: &str) -> std::path::PathBuf {
+pub(super) fn damaged_model(name: &str) -> std::path::PathBuf {
     let d = tmp(name);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{not json at all}").unwrap();

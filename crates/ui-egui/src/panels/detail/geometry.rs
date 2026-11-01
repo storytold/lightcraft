@@ -3,12 +3,17 @@ use super::info::label_badge_rect;
 use super::{Affine, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json, pos2, vec2};
 
 /// Screen ↔ normalized-image mapping for the displayed frame.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct CanvasMap {
     pub(super) rect: Rect,
     to_norm: Affine,
     from_norm: Affine,
     k: f32,
+    /// The frame's lens / perspective warp (with the oriented size it works in), when it moves
+    /// pixels: a mask on the photo (`Mask::on_photo`) has its coordinates before it.
+    warp: Option<std::sync::Arc<(lightcraft_pipeline::optics::Warp, f64, f64)>>,
+    /// Whether `norm` / `screen` speak a mask's coordinates on the photo ([`CanvasMap::for_mask`]).
+    on_photo: bool,
 }
 
 impl CanvasMap {
@@ -16,12 +21,47 @@ impl CanvasMap {
         let k = 8.0f32;
         let (w, h) = ((rect.width() * k).round().max(1.0) as usize, (rect.height() * k).round().max(1.0) as usize);
         let to_norm = frame.out_to_norm(w, h);
-        CanvasMap { rect, to_norm, from_norm: to_norm.inverse().unwrap_or(Affine::IDENTITY), k }
+        let warp = frame.warp.as_ref().filter(|w| w.moves_pixels()).map(|w| std::sync::Arc::new((w.clone(), frame.ow, frame.oh)));
+        CanvasMap { rect, to_norm, from_norm: to_norm.inverse().unwrap_or(Affine::IDENTITY), k, warp, on_photo: false }
+    }
+    /// The mapping for a mask's coordinates: on the photo before lens corrections, Upright and
+    /// Transform (`on_photo`, every mask made now), or an old mask's on the corrected frame.
+    pub(crate) fn for_mask(&self, on_photo: bool) -> CanvasMap {
+        CanvasMap { on_photo, ..self.clone() }
+    }
+    /// Whether `norm` / `screen` go through a lens or perspective warp (a mask's coordinates on a
+    /// warped photo).
+    pub(crate) fn warped(&self) -> bool {
+        self.on_photo && self.warp.is_some()
+    }
+    /// [`Self::for_mask`] for the mask `id` of `d` (none, or a new mask: on the photo).
+    pub(crate) fn for_mask_id(&self, d: &lightcraft_develop::DevelopSettings, id: Option<u32>) -> CanvasMap {
+        self.for_mask(id.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.on_photo))
     }
     pub fn norm(&self, p: Pos2) -> Point {
-        self.to_norm.apply(Point::new(((p.x - self.rect.left()) * self.k) as f64, ((p.y - self.rect.top()) * self.k) as f64))
+        let n = self.to_norm.apply(Point::new(((p.x - self.rect.left()) * self.k) as f64, ((p.y - self.rect.top()) * self.k) as f64));
+        match self.warp.as_deref().filter(|_| self.on_photo) {
+            Some((w, ow, oh)) => {
+                let s = w.to_source(Point::new(n.x * ow, n.y * oh), 1);
+                Point::new(s.x / ow, s.y / oh)
+            }
+            None => n,
+        }
     }
     pub fn screen(&self, n: Point) -> Pos2 {
+        self.try_screen(n).unwrap_or_else(|| self.place(n))
+    }
+    /// [`Self::screen`], or `None` where the warp can't be undone at `n` (a point a strong
+    /// warp folds away), for drawing that must not join such a point to its neighbours.
+    pub(crate) fn try_screen(&self, n: Point) -> Option<Pos2> {
+        let n = match self.warp.as_deref().filter(|_| self.on_photo) {
+            Some((w, ow, oh)) => w.from_source(Point::new(n.x * ow, n.y * oh)).map(|t| Point::new(t.x / ow, t.y / oh))?,
+            None => n,
+        };
+        Some(self.place(n))
+    }
+    /// A point on the displayed frame (normalized) on screen.
+    fn place(&self, n: Point) -> Pos2 {
         let q = self.from_norm.apply(n);
         pos2(self.rect.left() + q.x as f32 / self.k, self.rect.top() + q.y as f32 / self.k)
     }
@@ -381,5 +421,98 @@ mod snap_tests {
         assert_eq!(other, r);
         let bad = snap_fit_rect(r, [1088, 720], f32::NAN);
         assert_eq!((bad.width(), bad.height()), (1088.0, 720.0));
+    }
+}
+
+#[cfg(test)]
+mod mask_map_tests {
+    use super::*;
+    use lightcraft_develop::DevelopSettings;
+
+    fn close(a: Point, b: Point) -> bool {
+        (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4
+    }
+
+    /// Under a perspective warp, a mask's on-screen place goes into its coordinates on the photo
+    /// (`Mask::on_photo`) and back: the point clicked is the point the render puts the mask on, and
+    /// its handle draws where it was clicked.
+    #[test]
+    fn a_mask_drawn_on_a_warped_photo_lands_on_the_content_under_the_pointer() {
+        let mut d = DevelopSettings::default();
+        d.geometry.vertical = 30.0;
+        d.geometry.rotate = 5.0;
+        let frame = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&frame, Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 300.0)));
+        let q = pos2(220.0, 140.0);
+        let on = m.for_mask(true).norm(q);
+        let plain = m.for_mask(false).norm(q);
+        assert!(!close(on, plain), "the warp moves the photo under the frame: {on:?} {plain:?}");
+        // the render maps the mask's coordinates through the warp to the same frame point
+        assert!(close(frame.for_mask(true).mask_to_norm(on), plain));
+        assert!((m.for_mask(true).screen(on) - q).length() < 0.01, "and its handle draws there");
+        // a new mask (no id) and a mask of today are on the photo; an old one isn't
+        let mut d = d.clone();
+        d.masks.push(lightcraft_develop::Mask { id: 7, on_photo: false, ..Default::default() });
+        assert!(close(m.for_mask_id(&d, None).norm(q), on));
+        assert!(close(m.for_mask_id(&d, Some(7)).norm(q), plain));
+    }
+
+    /// A linear gradient's guides on a warped photo follow its bands through the warp: every
+    /// point drawn is on the band through the gradient's start or end (review of #3550).
+    #[test]
+    fn a_linear_gradients_guides_follow_the_warp() {
+        let mut d = DevelopSettings::default();
+        d.geometry.vertical = 35.0;
+        d.optics.distortion = 50.0;
+        let frame = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&frame, Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 300.0))).for_mask(true);
+        assert!(m.warped());
+        let (start, end) = (Point::new(0.3, 0.3), Point::new(0.5, 0.6));
+        // (long-edge units: the frame is 400 × 300)
+        let (sx, sy) = (1.0, 0.75);
+        let dd = ((end.x - start.x) * sx, (end.y - start.y) * sy);
+        let t = |q: Point| ((q.x - start.x) * sx * dd.0 + (q.y - start.y) * sy * dd.1) / (dd.0 * dd.0 + dd.1 * dd.1);
+        for (at, want) in [(start, 0.0), (end, 1.0)] {
+            let guide: Vec<Pos2> = super::super::masks::linear_guide(&m, start, end, at).concat();
+            assert!(guide.len() > 2, "drawn in steps");
+            let inside: Vec<&Pos2> = guide.iter().filter(|g| m.rect.expand(-2.0).contains(**g)).collect();
+            assert!(inside.len() > 2, "the guide crosses the canvas: {}", inside.len());
+            for g in inside {
+                let got = t(m.norm(*g));
+                assert!((got - want).abs() < 1e-3, "{g:?}: band {got}, want {want}");
+            }
+        }
+    }
+
+    /// A guide is cut where a sample can't go through the warp, so no line joins a warped point
+    /// to an unwarped one (review of #3550).
+    #[test]
+    fn a_guide_breaks_where_the_warp_cant_be_undone() {
+        let (a, b, c) = (pos2(1.0, 1.0), pos2(2.0, 2.0), pos2(3.0, 3.0));
+        let runs = super::super::masks::runs([Some(a), Some(b), None, Some(c), None, None, Some(a), Some(b)]);
+        assert_eq!(runs, vec![vec![a, b], vec![a, b]], "single points are dropped, the rest split");
+        assert!(super::super::masks::runs([None, Some(a), None]).is_empty());
+        // a chord far longer than the usual step (across a fold) cuts the run too
+        let line: Vec<Pos2> = (0..10).map(|i| pos2(i as f32, 0.0)).chain((0..10).map(|i| pos2(200.0 + i as f32, 0.0))).collect();
+        let cut = super::super::masks::split_jumps(vec![line]);
+        assert_eq!(cut.len(), 2, "{cut:?}");
+        assert!(cut.iter().all(|r| r.len() == 10));
+    }
+
+    /// A guide through an end far off the photo still crosses the canvas (review of #3550).
+    #[test]
+    fn a_guide_through_an_end_off_the_photo_still_crosses_it() {
+        let mut d = DevelopSettings::default();
+        d.geometry.vertical = 35.0;
+        d.optics.distortion = 50.0;
+        let frame = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&frame, Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 300.0))).for_mask(true);
+        // a gradient drawn off the photo's right side (start and end both there): its guides are
+        // horizontal and cross the photo from 2.5 photo widths away
+        let (start, end) = (Point::new(3.5, 0.4), Point::new(3.5, 0.6));
+        for at in [start, end] {
+            let guide: Vec<Pos2> = super::super::masks::linear_guide(&m, start, end, at).concat();
+            assert!(guide.iter().filter(|g| m.rect.expand(-2.0).contains(**g)).count() > 2, "{at:?}: the guide crosses the canvas");
+        }
     }
 }
