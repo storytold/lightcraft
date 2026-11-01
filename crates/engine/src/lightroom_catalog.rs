@@ -1339,20 +1339,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             _ => Flag::None,
         };
         p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
-        // A capture time the catalog can't hold would fail the whole batch at `SetCaptured`, and an
-        // impossible date (2026-02-30) would roll over to another day in date grouping.
-        let captured = text(&src.image, "captureTime");
-        if lightcraft_catalog::dates::normalize_iso(captured).is_some() {
-            p.captured = Some(captured.into());
-        } else if !captured.is_empty() {
-            warnings.push(format!("image {}: capture time “{captured}” is not a date; imported without it", src.source_id));
-        }
-        // a new record (a virtual copy, a duplicate) doesn't inherit a time an earlier import stored unchecked
-        if s.catalog.photo(p.id).is_none()
-            && let Some(inherited) = p.captured.take_if(|c| lightcraft_catalog::dates::normalize_iso(c).is_none())
-        {
-            warnings.push(format!("image {}: inherited capture time “{inherited}” is not a date; imported without it", src.source_id));
-        }
+        catalog_capture_time(s, &mut p, src, &mut warnings);
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
         }
@@ -1433,6 +1420,24 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// Gives `p` the catalog's capture time when it is a date. A capture time the catalog can't hold
+/// would fail the whole batch at `SetCaptured`, and an impossible date (2026-02-30) would roll over
+/// to another day in date grouping.
+fn catalog_capture_time(s: &crate::Session, p: &mut Photo, src: &CatalogPhoto, warnings: &mut Vec<String>) {
+    let captured = text(&src.image, "captureTime");
+    if lightcraft_catalog::dates::normalize_iso(captured).is_some() {
+        p.captured = Some(captured.into());
+    } else if !captured.is_empty() {
+        warnings.push(format!("image {}: capture time “{captured}” is not a date; imported without it", src.source_id));
+    }
+    // a new record (a virtual copy, a duplicate) doesn't inherit a time an earlier import stored unchecked
+    if s.catalog.photo(p.id).is_none()
+        && let Some(inherited) = p.captured.take_if(|c| lightcraft_catalog::dates::normalize_iso(c).is_none())
+    {
+        warnings.push(format!("image {}: inherited capture time “{inherited}” is not a date; imported without it", src.source_id));
+    }
 }
 
 #[cfg(test)]
