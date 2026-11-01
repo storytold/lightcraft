@@ -180,6 +180,11 @@ pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     preview_covering(bytes, None)
 }
 
+/// Width and height from the frame header of [`embedded_preview`], when that is a DCT JPEG.
+pub(crate) fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    embedded_preview(bytes).and_then(|j| jpeg_frame(&j)).map(|(w, h, _)| (w, h))
+}
+
 /// The smallest embedded JPEG whose long edge is at least `min_edge` and that looks like a copy of the largest preview
 /// (its aspect ratio within 1 %, so not a letterboxed or cropped thumbnail, and as many colour components, so not a
 /// grey mask or depth map), else [`embedded_preview`]. Only TIFF-based raws keep several: an A7R VI's 1616 × 1080
@@ -203,6 +208,7 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
         .map(|(s, _)| s)
 }
 
+/// What [`embedded_preview`] (`min_edge` `None`) and [`embedded_preview_covering`] return.
 fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         let j = crate::vendor::raf::header(bytes).ok()?.jpeg?;
@@ -227,8 +233,8 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         let make = tiff.find(t::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default();
         if let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make) {
             candidates(bytes, &mn.ifd, mn.base, &mut found);
-            if let Some(off) = mn.ifd.u64(0x0011)
-                && let Ok((pifd, _)) = lightcraft_tiff::parse_ifd_at(bytes, mn.base + off, mn.order, mn.base, false, &Default::default())
+            if let Some(at) = mn.ifd.u64(0x0011).and_then(|off| mn.base.checked_add(off))
+                && let Ok((pifd, _)) = lightcraft_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &Default::default())
             {
                 candidates(bytes, &pifd, mn.base, &mut found);
             }
