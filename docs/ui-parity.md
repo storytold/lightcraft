@@ -150,6 +150,14 @@ unnamed was in the way.
 Not done: brush strokes and red-eye ellipses still need a pointer. Nobody has tried the app with
 a real screen reader on any platform yet.
 
+## Theme contrast
+
+`crates/ui-egui/src/theme/contrast.rs` checks, in all four themes (Charcoal, Midnight, Silver, Paper), the colour pairs the widgets paint together, as WCAG 2.x relative luminance. Text on its surface must stand 4.5:1. A mark that says something (the outline of a control, a focus ring, a selection ring, an icon, a star or flag, a slider's track and thumb, a progress bar) must stand 3:1. The table is written from the widgets, not from the token list: each pair has a name ("text: dim on grid cell") and says where it is painted. The button pairs come from `button::look`, so a change to the button's colours is checked too, and egui's own colours (a `.weak()` label, a hyperlink, a selected row) are read from the visuals `apply_kind` sets.
+
+Not checked: disabled controls (WCAG leaves them out), the dividers between panels (decorative), and text over a picture, whose colour the picture decides.
+
+The pairs that fail today are in `crates/ui-egui/tests/theme-contrast-gaps.json` (theme, then the pairs). Only a pair that is not listed fails, with its measured ratio and where it is painted. A pair that stands now is tolerated and printed as a hint. To fix one, change the token (`Tokens::for_kind` in `theme.rs`) or the colour the widget paints, then run `LIGHTCRAFT_CONTRAST_BASELINE=shrink cargo test -p lightcraft-ui-egui theme::contrast` to remove the entry. `=write` lists a theme that is not in the file yet with its failures (a new theme) and never adds a failure to a theme the file has. When a widget paints a new pair, add it to `measure`.
+
 ## Reference view lifecycle
 
 Escape leaves Reference for Detail, preserving the active photo and its edits; a second Escape
