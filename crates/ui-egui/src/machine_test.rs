@@ -228,6 +228,25 @@ mod tests {
         assert_ne!(tuning(&st), lanes, "another report's second-card choice");
     }
 
+    /// Review of PR #3506: choosing another card after startup drops the last test's report (it
+    /// measured the cards before); the report survives startup itself.
+    #[test]
+    fn another_card_drops_the_last_tests_report() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let ctx = egui::Context::default();
+        app.ui.settings.machine_test = Some(MachineReport { lanes: 3, helper_slower: true, ..Default::default() });
+        app.logic(&ctx);
+        assert!(app.ui.settings.machine_test.is_some(), "kept at startup");
+        app.ui.settings.gpu_helper = "off".into();
+        app.logic(&ctx);
+        assert!(app.ui.settings.machine_test.is_none(), "another second card");
+        app.ui.settings.machine_test = Some(MachineReport { lanes: 3, ..Default::default() });
+        app.logic(&ctx);
+        app.ui.settings.gpu_card = "some-card".into();
+        app.logic(&ctx);
+        assert!(app.ui.settings.machine_test.is_none(), "another editing card");
+    }
+
     /// Review of PR #3506: the second card's choice from the last test is applied (the test puts
     /// its own temporary routing back when it ends).
     #[test]

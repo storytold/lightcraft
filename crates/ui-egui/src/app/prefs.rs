@@ -58,6 +58,12 @@ impl LightcraftApp {
 
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
+        // another card chosen after startup: the last Test my machine measured the cards before
+        // (its second-card choice and numbers no longer hold), so Automatic goes back to the defaults
+        let changed = |applied: &Option<String>, now: &str| applied.as_deref().is_some_and(|a| a != now);
+        if changed(&self.gpu_helper_applied, &self.ui.settings.gpu_helper) || changed(&self.gpu_card_applied, &self.ui.settings.gpu_card) {
+            self.ui.settings.machine_test = None;
+        }
         // the second graphics card (Settings ▸ Performance), before the warm-up below sets it up
         if self.gpu_helper_applied.as_deref() != Some(self.ui.settings.gpu_helper.as_str()) {
             self.gpu_helper_applied = Some(self.ui.settings.gpu_helper.clone());
