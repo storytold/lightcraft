@@ -1008,10 +1008,16 @@ fn contextual_source(key: &str) -> Option<&str> {
     CONTEXTS.iter().find_map(|context| key.strip_prefix(context).and_then(|k| k.strip_prefix('|')))
 }
 
+/// Whether `key` reads as `"<context>|<source>"`: lowercase words before its first `|`. Plain
+/// messages with a `|` in them (`Use | for levels, e.g. Travel|Italy`) don't.
+fn looks_contextual(key: &str) -> bool {
+    key.split_once('|').is_some_and(|(prefix, _)| !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_lowercase() || c == ' '))
+}
+
 /// A contextual entry translates a message the app shows (a typo, or a message the app no longer
-/// has, would silently fall back to the plain message): its message is in the source or the UI's
-/// tables, not merely a key some catalog still holds. The call sites' contexts read their entry
-/// rather than the plain one.
+/// has, would silently fall back to the plain message): its context is one of [`CONTEXTS`], and
+/// its message is in the source or the UI's tables, not merely a key some catalog still holds.
+/// The German lookups through each context read their entry rather than the plain one.
 #[test]
 fn contextual_entries_name_real_messages() {
     let shown = app_messages();
@@ -1019,9 +1025,14 @@ fn contextual_entries_name_real_messages() {
         for key in language.catalog().keys() {
             if let Some(source) = contextual_source(key) {
                 assert!(shown.contains(source), "{}: {key:?} names no message", language.code());
+            } else {
+                assert!(!looks_contextual(key), "{}: {key:?} names no context (one of {CONTEXTS:?})", language.code());
             }
         }
     }
+    assert!(looks_contextual("develop preset|Rename Preset"), "a misspelt context is caught");
+    assert!(!looks_contextual("Characters not allowed in file names (/ \\ : * ? \" < > |) become -"));
+    assert!(!looks_contextual("Use | for levels, e.g. Travel|Italy"));
     assert_eq!(tr_ctx_in(Locale::De, FILTER_BAR_CONTEXT, "Presets"), "Vorgaben");
     assert_eq!(tr_ctx_in(Locale::De, RENAME_DIALOG_CONTEXT, "Presets"), "Vorgaben");
     assert_eq!(Locale::De.tr("Presets"), "Presets");
