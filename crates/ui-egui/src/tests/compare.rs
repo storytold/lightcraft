@@ -380,16 +380,27 @@ fn click_with(h: &mut Headless, pos: egui::Pos2, modifiers: egui::Modifiers) {
     h.settle(SETTLE);
 }
 
-/// ⌘/Ctrl-click on a survey tile takes it out of the survey, as in Lightroom Classic; a plain
-/// click only makes it active.
+/// Click the centre of photo `id`'s survey tile with `modifiers`.
+fn click_tile(h: &mut Headless, id: u64, modifiers: egui::Modifiers) {
+    let name = format!("cull:{id}");
+    let pos = h.app.widgets.iter().find(|(w, _)| *w == name).map(|(_, r)| r.center()).expect("the tile is laid out");
+    click_with(h, pos, modifiers);
+}
+
+/// ⌘/Ctrl-click on a survey tile takes that photo out of the survey, as in Lightroom Classic,
+/// whether or not it is the active one; a plain click only makes it active, and the last photo stays.
 #[test]
 fn survey_command_click_takes_the_photo_out() {
     let mut h = demo();
     let [a, b, c] = survey_of_three(&mut h);
-    let img = h.app.image_rect.expect("the active tile is laid out");
-    click_with(&mut h, img.center(), egui::Modifiers::NONE);
-    assert_eq!(h.app.session.selection.ids.len(), 3, "a plain click keeps the photo");
-    click_with(&mut h, img.center(), egui::Modifiers::COMMAND);
-    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
-    assert_eq!(sel, vec![a, c], "the ⌘/Ctrl-clicked photo left the survey (was {b})");
+    let sel = |h: &Headless| h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<u64>>();
+    let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
+    click_tile(&mut h, a, egui::Modifiers::NONE);
+    assert_eq!((sel(&h), active(&h)), (vec![a, b, c], Some(a)), "a plain click keeps the photo and makes it active");
+    click_tile(&mut h, c, egui::Modifiers::COMMAND);
+    assert_eq!((sel(&h), active(&h)), (vec![a, b], Some(a)), "the ⌘/Ctrl-clicked photo (not the active one) left");
+    click_tile(&mut h, b, egui::Modifiers::COMMAND);
+    assert_eq!(sel(&h), vec![a]);
+    click_tile(&mut h, a, egui::Modifiers::COMMAND);
+    assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
