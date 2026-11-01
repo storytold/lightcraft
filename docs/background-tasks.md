@@ -62,7 +62,7 @@ guard.detail(&file_name);
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
-| Find Duplicate Photos | `crates/engine/src/dupes.rs` | the same pacing (`duplicates.pump {pace}`); the UI thread snapshots the catalog's facts before the run, the worker decodes, hashes and groups (looking at the cancel flag between batches of pairs), and the pump that sees it end applies the result (filter, selection) |
+| Find Duplicate Photos | `crates/engine/src/dupes.rs` | the same pacing (`duplicates.pump {pace}`) over several workers: the UI thread snapshots the catalog's facts and builds the thumbnail jobs, a coordinator runs them on up to half the cores (one worker at light pace, none while paused), then groups (looking at the cancel flag between batches of pairs), and the pump that sees it end applies the result (filter, selection) |
 
 ## Testing
 

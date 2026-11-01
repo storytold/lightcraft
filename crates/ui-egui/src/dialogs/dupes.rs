@@ -1,7 +1,8 @@
 //! Photo ▸ Find Duplicate Photos…: the review window. It starts the engine's finder (`library.findDuplicates`, with
 //! the view and selection left alone), shows the run's progress, then every group with a thumbnail per photo, the
-//! finder's keeper ticked and the others unticked with why they lose. The confirm, "Delete N Photos", moves the
-//! unticked photos to Recently Deleted through `photo.delete` (one undo step); any tick can be changed first.
+//! finder's keeper ticked and the others unticked with why they lose. Strict / Normal / Loose and "same moment only"
+//! run the finder again (the hashes are kept, so that is quick). The confirm, "Delete N Photos", moves the unticked
+//! photos to Recently Deleted through `photo.delete` (one undo step); any tick can be changed first.
 
 use egui::{Color32, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -18,31 +19,45 @@ const THUMB_H: f32 = 100.0;
 const CARD_H: f32 = 190.0;
 /// Thumbnail requests from the window come before the grid's off-screen prefetch.
 const THUMB_PRIORITY: u32 = 20;
+/// The window's width: what the screen leaves, up to this.
+const MAX_WIDTH: f32 = 1180.0;
+/// The strictness choices: bits of hash distance.
+const STRICTNESS: [(&str, u32); 3] = [("Strict", 2), ("Normal", 6), ("Loose", 10)];
 
 /// `dialog.findDuplicates`: open the window and start the finder.
 pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
-    let mut dlg = Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None };
-    match app.run("library.findDuplicates", json!({"filter": false, "selectExtras": false})) {
-        // (nothing to decode and no worker: the result came at once)
+    let mut dlg =
+        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: crate::state::default_distance(), same_moment: true };
+    search(app, &mut dlg);
+    app.ui.dialog = Some(dlg);
+    Ok(Value::Null)
+}
+
+/// Run the finder with the window's strictness; the window shows progress until it ends.
+fn search(app: &mut LightcraftApp, dlg: &mut Dialog) {
+    let Dialog::Duplicates { groups, done, error, distance, same_moment, .. } = dlg else { return };
+    groups.clear();
+    *done = false;
+    *error = None;
+    match app.run("library.findDuplicates", json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false})) {
+        // (nothing to render and no worker: the result came at once)
         Ok(r) => {
             if let Some(last) = r.get("last").filter(|l| !l.is_null()) {
-                take_result(&mut dlg, last);
+                take_result(dlg, last);
             }
         }
         Err(e) => {
-            if let Dialog::Duplicates { done, error, .. } = &mut dlg {
+            if let Dialog::Duplicates { done, error, .. } = dlg {
                 *done = true;
                 *error = Some(e);
             }
         }
     }
-    app.ui.dialog = Some(dlg);
-    Ok(Value::Null)
 }
 
 /// Fill the window from a finished run's result (`last` of `library.findDuplicates` / `duplicates.pump`).
 pub fn take_result(dlg: &mut Dialog, last: &Value) {
-    let Dialog::Duplicates { groups, done, photos, error } = dlg else { return };
+    let Dialog::Duplicates { groups, done, photos, error, .. } = dlg else { return };
     // a run stopped early (✕ in the activity stack, a cancel from the control channel) found nothing because it
     // never looked: not the same as "no duplicates"
     if last["cancelled"].as_bool() == Some(true) {
@@ -87,7 +102,14 @@ pub fn confirm(app: &mut LightcraftApp, groups: &[DuplicateGroup]) -> Result<Val
 
 /// The window's body.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    ui.set_min_width(720.0);
+    // as wide as the screen allows, so the cards wrap instead of running off it
+    let width = (ui.ctx().content_rect().width() - 160.0).clamp(560.0, MAX_WIDTH);
+    ui.set_min_width(width);
+    ui.set_max_width(width);
+    if controls(app, ui, t, dlg) {
+        search(app, dlg);
+    }
+    ui.add_space(6.0);
     if matches!(dlg, Dialog::Duplicates { done: false, .. }) {
         progress(app, ui, t, dlg);
         return;
@@ -120,7 +142,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
         .color(t.text_dim),
     );
     ui.add_space(6.0);
-    egui::ScrollArea::vertical().max_height(super::list_height(ui, 520.0)).auto_shrink([false, true]).show(ui, |ui| {
+    let height = super::list_height(ui, (ui.ctx().content_rect().height() - 340.0).clamp(300.0, 720.0));
+    egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, |ui| {
         for (n, g) in groups.iter_mut().enumerate() {
             // (how far apart the hashes are says how sure a visual match is: 0–2 bits is the same picture
             // at another size or compression, the top of the range deserves a look)
@@ -142,6 +165,33 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
             ui.add_space(8.0);
         }
     });
+}
+
+/// The strictness and same-moment controls, and Search Again. `true` when a new search is asked for.
+fn controls(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
+    let Dialog::Duplicates { done, distance, same_moment, .. } = dlg else { return false };
+    let running = !*done;
+    let mut again = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr("Match")).color(t.text_label));
+        for (label, bits) in STRICTNESS {
+            // (`text_button` translates the label itself)
+            let r = crate::widgets::text_button(ui, &format!("dupes:{}", label.to_ascii_lowercase()), label, *distance == bits);
+            if r.clicked() && *distance != bits && !running {
+                *distance = bits;
+                again = true;
+            }
+        }
+        ui.add_space(12.0);
+        let r = ui.add_enabled(!running, egui::Checkbox::new(same_moment, crate::i18n::tr("Same moment only")));
+        crate::widgets::register(ui, "check:dupesSameMoment", r.rect);
+        if r.changed() {
+            again = true;
+        }
+        r.on_hover_text(crate::i18n::tr("Copies keep the original's capture time; the next frame of a burst has its own."));
+        let _ = app;
+    });
+    again
 }
 
 /// While the finder runs: its progress, from the engine's pump (the frame loop drives the job at full pace while
@@ -239,6 +289,10 @@ mod tests {
     const T: Duration = Duration::from_secs(20);
     const SETTLE: Duration = Duration::from_secs(120);
 
+    fn fresh() -> Dialog {
+        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: 6, same_moment: true }
+    }
+
     /// A smooth procedural picture of `seed`, drawn in normalized coordinates so every size shows the same picture.
     fn write_jpeg(path: &Path, w: usize, h: usize, seed: u32, quality: u8) {
         let s = f64::from(seed);
@@ -286,11 +340,15 @@ mod tests {
         }
     }
 
-    fn open_and_wait(h: &mut Headless) {
-        h.app.run("dialog.findDuplicates", json!({})).expect("opens");
+    fn wait_done(h: &mut Headless) {
         assert!(h.step_until(SETTLE, |h| matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { done: true, .. }))), "{:?}", h.app.ui.dialog);
         h.step();
         h.step();
+    }
+
+    fn open_and_wait(h: &mut Headless) {
+        h.app.run("dialog.findDuplicates", json!({})).expect("opens");
+        wait_done(h);
     }
 
     /// The window lists the group with the finder's keeper ticked, the confirm counts the unticked photos, a tick
@@ -325,10 +383,30 @@ mod tests {
         assert_eq!(h.app.session.visible_cloned().len(), 3, "the view was never filtered by the window");
     }
 
+    /// Strict (2 bits) and Normal (6) search again from the kept hashes; the strictness buttons and the same-moment
+    /// box are on screen and change the window's state.
+    #[test]
+    fn the_strictness_controls_search_again() {
+        let (mut h, _) = app_with_duplicates("strict");
+        open_and_wait(&mut h);
+        assert_eq!(groups(&h).len(), 1);
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupes:strict"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        wait_done(&mut h);
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { distance: 2, .. })), "{:?}", h.app.ui.dialog);
+        // the planted copies are 0–2 bits apart, so Strict still finds them, and nothing was rendered again
+        assert_eq!(groups(&h).len(), 1);
+        let r = h.request("ui.clickWidget", json!({"id": "check:dupesSameMoment"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        wait_done(&mut h);
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { same_moment: false, .. })), "{:?}", h.app.ui.dialog);
+        assert_eq!(groups(&h).len(), 1);
+    }
+
     /// A run that was stopped says so instead of "no duplicates", and offers nothing to delete.
     #[test]
     fn a_stopped_run_is_reported_not_taken_for_no_duplicates() {
-        let mut dlg = Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None };
+        let mut dlg = fresh();
         super::take_result(&mut dlg, &json!({"groups": [], "photos": 12, "cancelled": true}));
         match &dlg {
             Dialog::Duplicates { done: true, error: Some(e), groups, .. } => {
@@ -337,7 +415,7 @@ mod tests {
             }
             d => panic!("{d:?}"),
         }
-        let mut dlg = Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None };
+        let mut dlg = fresh();
         super::take_result(&mut dlg, &json!({"groups": [], "photos": 12, "cancelled": false}));
         assert!(matches!(&dlg, Dialog::Duplicates { done: true, error: None, .. }), "{dlg:?}");
     }
@@ -349,7 +427,7 @@ mod tests {
         let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
         let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
         h.step();
-        h.app.ui.dialog = Some(Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None });
+        h.app.ui.dialog = Some(fresh());
         h.step();
         h.step();
         match &h.app.ui.dialog {

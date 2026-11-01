@@ -6,7 +6,7 @@ mod dialog;
 mod settings;
 mod view;
 
-pub use dialog::{Dialog, DuplicateGroup, DuplicatePhoto, NameEdit, SyncCounts, default_preset_groups};
+pub use dialog::{Dialog, DuplicateGroup, DuplicatePhoto, NameEdit, SyncCounts, default_distance, default_preset_groups};
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,
     LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES, STANDARD_PREVIEW_EDGE, StartupView,

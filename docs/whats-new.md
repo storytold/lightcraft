@@ -7,9 +7,11 @@
   two places, a JPEG kept beside its raw, a resized or re-saved copy. A window shows each group with a thumbnail per
   photo, the best copy ticked (a raw over a rendered file, lossless over lossy, more pixels, a larger file, then edits
   and rating) and the others unticked with why they lose. Change any tick, then "Delete N Photos" moves the unticked
-  ones to Recently Deleted (Edit ▸ Undo brings them back). The search runs in the background with a row in the
-  activity stack and matches with a tight threshold meant to catch the same picture at another size or compression
-  and leave the next frame of a burst out; look before you delete, as always. Agents and scripts call
+  ones to Recently Deleted (Edit ▸ Undo brings them back). Strict / Normal / Loose sets how alike photos must be, and
+  "Same moment only" (on to start with) asks for the same capture time too, which copies keep and the next frame of a
+  burst doesn't; both search again at once from the hashes already made. The search runs in the background on half
+  the machine's cores, from the grid's thumbnails, with a row in the activity stack; look before you delete, as
+  always. View ▸ Grid Info ▸ Dimensions & File Size puts the pixels and bytes on every grid cell. Agents and scripts call
   `library.findDuplicates`, which filters the view to the groups and selects the copies to remove (`wait: true`
   returns the groups with the reason each copy loses).
 
