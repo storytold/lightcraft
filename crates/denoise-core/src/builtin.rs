@@ -164,6 +164,13 @@ pub fn estimate_noise(mosaic: &[f32], width: usize, height: usize) -> (f32, f32)
     estimate_noise_with(mosaic, width, height, &NoiseProbe::default())
 }
 
+/// [`estimate_noise`], or `None` when the mosaic could not be measured (too small, the wrong size, or no unclipped
+/// block): the runner then measures each tile's own noise instead of being told a made-up one.
+pub fn measure_noise(mosaic: &[f32], width: usize, height: usize) -> Option<(f32, f32)> {
+    let noise = estimate_noise(mosaic, width, height);
+    (noise != (0.0, MIN_VARIANCE)).then_some(noise)
+}
+
 /// What [`estimate_noise_with`] may be tuned by.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoiseProbe {
@@ -561,6 +568,9 @@ mod tests {
         assert_eq!(estimate_noise(&mosaic, 10, 10).1, MIN_VARIANCE);
         assert_eq!(estimate_noise(&mosaic, s, s - 1).1, MIN_VARIANCE);
         assert_eq!(estimate_noise(&[], 0, 0).1, MIN_VARIANCE);
+        assert_eq!(measure_noise(&[], 0, 0), None, "a mosaic that cannot be measured has no noise to tell the runner");
+        assert_eq!(measure_noise(&mosaic, 10, 10), None);
+        assert!(measure_noise(&mosaic, s, s).is_some());
         assert_eq!(estimate_noise(&mosaic, usize::MAX, usize::MAX).1, MIN_VARIANCE);
     }
 

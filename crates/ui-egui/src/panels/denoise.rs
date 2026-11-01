@@ -240,11 +240,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     heading(ui, t, "AI Denoise");
     if list["dir"].is_null() {
-        hint(
-            ui,
-            t,
-            "AI Denoise runs automatically with the built-in denoiser. This build has nowhere to keep your own denoise models. (The desktop app has.)",
-        );
+        hint(ui, t, "This build has nowhere to keep your own denoise models, so it cannot use one. (The desktop app has.)");
         return;
     }
     hint(

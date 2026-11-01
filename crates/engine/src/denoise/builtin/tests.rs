@@ -144,3 +144,12 @@ fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card_fo
     forget_builtin_card(&dir.join(GPU_SETUP_MARKER));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A photo whose noise cannot be measured is not told a made-up noise (which would leave it undenoised): the runner
+/// keeps measuring each tile's own.
+#[test]
+fn a_photo_whose_noise_cannot_be_measured_leaves_the_runner_to_measure_each_tile() {
+    let m = BuiltinModel::new(&std::env::temp_dir().join("lc-engine-builtin-unmeasured"));
+    m.prepare(&[0.5; 100], 10, 10);
+    assert!(m.runner.get().is_none(), "nothing was measured, so nothing is set");
+}

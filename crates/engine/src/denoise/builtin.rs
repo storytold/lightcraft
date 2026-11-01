@@ -1,14 +1,14 @@
+use super::gpu::GPU_SETUP_MARKER;
 #[cfg(feature = "denoise")]
 use super::gpu::{GPU_MAX_FALLBACKS, GPU_PARALLEL, GPU_SETUP_LIMIT, card_is_faster, card_tile_ms, set_up_card};
-use super::gpu::GPU_SETUP_MARKER;
-use super::model::{Model, RunOn};
 #[cfg(feature = "denoise")]
 use super::model::worth_retrying;
+use super::model::{Model, RunOn};
 #[cfg(feature = "denoise")]
 use super::state::Pace;
-use super::{OnceLock, Path, PathBuf, TileRunner, Value, json};
 #[cfg(feature = "denoise")]
 use super::{Arc, AtomicUsize, Mutex, Ordering, PoisonError, RunError};
+use super::{OnceLock, Path, PathBuf, TileRunner, Value, json};
 
 /// The built-in denoiser (`lightcraft_denoise::builtin`): nothing to load, so it is what runs until a model is chosen. Its
 /// filter runs on the graphics card when there is one that agrees with the CPU on a check tile and is faster, else on
@@ -54,9 +54,12 @@ impl Model for BuiltinModel {
         (cpu, threads)
     }
 
-    /// Measure the whole photo's noise once, so every tile is cleaned by the photo's noise instead of its own.
+    /// Measure the whole photo's noise once, so every tile is cleaned by the photo's noise instead of its own. A photo
+    /// that cannot be measured is told nothing: each tile then measures its own.
     fn prepare(&self, mosaic: &[f32], width: usize, height: usize) {
-        let _ = self.runner.set(lightcraft_denoise::builtin::Builtin::with_noise(lightcraft_denoise::builtin::estimate_noise(mosaic, width, height)));
+        if let Some(noise) = lightcraft_denoise::builtin::measure_noise(mosaic, width, height) {
+            let _ = self.runner.set(lightcraft_denoise::builtin::Builtin::with_noise(noise));
+        }
     }
 
     fn self_test(&self, _run_on: RunOn) -> Result<Value, String> {

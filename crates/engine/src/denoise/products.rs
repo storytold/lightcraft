@@ -194,13 +194,16 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     }
     let decoded = began.elapsed();
     let model = loaded(spec)?;
-    model.prepare(&mosaic.data, mosaic.width, mosaic.height);
     // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
     let scratch =
         model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
     let (_, budget) = crate::memory::work_gate().usage();
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
     let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
+    model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
     let (runner, parallel) = model.runner(spec.run_on, parallel);
     let params = Params {
         tile: spec.manifest.tile as usize,
