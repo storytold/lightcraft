@@ -352,10 +352,14 @@ fn paint_track(ui: &Ui, rect: Rect, track: &Track, shade: Shade, t: &Tokens, ena
         p.rect_filled(Rect::from_min_max(pos2(rect.left(), y - h), pos2(rect.right(), y + h)), 1.0, dim(t.track));
     }
     if matches!(track, Track::Centered) {
-        // where the slider has no effect: lighter than a shaded track around it, so it shows on it
-        let tick = if shade == Shade::Plain { t.track } else { t.text_label };
-        p.rect_filled(Rect::from_center_size(pos2(rect.center().x, y), vec2(1.0, 6.0)), 0.0, dim(tick));
+        p.rect_filled(Rect::from_center_size(pos2(rect.center().x, y), vec2(1.0, 6.0)), 0.0, dim(centre_tick(t)));
     }
+}
+
+/// The mark where a centred slider has no effect: the label colour, which stands out on a plain
+/// track and on a shaded one (a plain track's own colour would hide it).
+pub(crate) fn centre_tick(t: &Tokens) -> Color32 {
+    t.text_label
 }
 
 /// The colour of a grey track shaded `shade` at `x` (0 = left end, 1 = right end), or `None` for

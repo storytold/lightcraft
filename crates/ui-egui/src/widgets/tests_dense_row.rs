@@ -265,6 +265,9 @@ fn shaded_tracks_run_the_way_their_spec_says() {
         let red = shade_color(Shade::Tinted, &t, 1.0).unwrap();
         assert!(red.r() > red.g() + 20, "{kind:?}: the tinted end is red: {red:?}");
         assert!(shade_color(Shade::Plain, &t, 0.3).is_none(), "{kind:?}: a plain track is flat");
+        // the centre mark shows on a plain track too (CodeRabbit on #3164: it was the track's colour)
+        let tick = lum(super::centre_tick(&t));
+        assert!(tick.abs_diff(lum(t.track)) > 60, "{kind:?}: the centre mark stands out on a plain track");
         for x in [f32::NAN, f32::INFINITY, -1.0, 2.0] {
             assert!(shade_color(Shade::Ramp, &t, x).is_some());
         }
