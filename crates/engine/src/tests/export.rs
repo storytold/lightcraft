@@ -256,6 +256,75 @@ fn a_user_export_preset_is_duplicated_with_its_saved_settings() {
     assert_eq!(user(&s).len(), 4, "a refused copy adds nothing");
 }
 
+/// With every "<name> copy" name taken, Duplicate says so instead of adding a preset; one that
+/// already holds a free name still gets it.
+#[test]
+fn duplicating_a_preset_with_no_free_name_left_is_refused() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png"}})).unwrap();
+    s.export_presets.push(ExportPreset { name: "Web copy".into(), params: json!({}) });
+    s.export_presets.extend((2..10_000).map(|n| ExportPreset { name: format!("Web copy {n}"), params: json!({}) }));
+    let before = s.export_presets.len();
+    let e = s.execute("export.duplicatePreset", &json!({"name": "Web"})).unwrap_err().to_string();
+    assert!(e.contains("no free name for a copy of `Web`"), "{e}");
+    assert_eq!(s.export_presets.len(), before, "nothing is added");
+    assert_eq!(s.execute("export.duplicatePreset", &json!({"name": "Web", "to": "Web 2"})).unwrap()["name"], "Web 2");
+}
+
+/// The library's preferences can't be written: a rename or a copy is refused and not kept in
+/// memory either, where the next save of anything else would write it.
+#[test]
+fn a_rename_or_copy_that_cant_be_saved_is_not_kept() {
+    use lightcraft_catalog::{MemStore, Store};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Clone, Default)]
+    struct Failing {
+        files: MemStore,
+        fail: Arc<AtomicBool>,
+    }
+    impl Store for Failing {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.files.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            if self.fail.load(Ordering::Relaxed) && name == "prefs.json" {
+                return Err(std::io::Error::other("disk full"));
+            }
+            self.files.write_atomic(name, data)
+        }
+        fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.files.append(name, data)
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.files.truncate(name, len)
+        }
+        fn describe(&self) -> String {
+            "failing".into()
+        }
+    }
+    let files = Failing::default();
+    let mut s = Session::new();
+    let stores =
+        crate::library::LibraryStores { dir: "failing".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png"}})).unwrap();
+    files.fail.store(true, Ordering::Relaxed);
+    let names = |s: &Session| s.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let e = s.execute("export.renamePreset", &json!({"name": "Web", "to": "Web Small"})).unwrap_err().to_string();
+    assert!(e.contains("disk full"), "{e}");
+    assert_eq!(names(&s), ["Web"], "the rename isn't kept");
+    let e = s.execute("export.duplicatePreset", &json!({"name": "Web"})).unwrap_err().to_string();
+    assert!(e.contains("disk full"), "{e}");
+    assert_eq!(names(&s), ["Web"], "the copy isn't kept");
+    // once it can be written, both work
+    files.fail.store(false, Ordering::Relaxed);
+    s.execute("export.renamePreset", &json!({"name": "Web", "to": "Web Small"})).unwrap();
+    s.execute("export.duplicatePreset", &json!({"name": "Web Small"})).unwrap();
+    assert_eq!(names(&s), ["Web Small", "Web Small copy"]);
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}

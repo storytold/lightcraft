@@ -117,10 +117,16 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     if s.export_presets.iter().enumerate().any(|(j, x)| j != i && x.name.eq_ignore_ascii_case(to)) {
         return Err(bad(ID, format!("an export preset named `{to}` exists already")));
     }
-    if let Some(x) = s.export_presets.get_mut(i) {
-        x.name = to.to_string();
+    let Some(was) = s.export_presets.get_mut(i).map(|x| std::mem::replace(&mut x.name, to.to_string())) else {
+        return Err(bad(ID, format!("no user export preset `{name}`")));
+    };
+    // a rename that can't be saved isn't kept, or the next save of anything would write it
+    if let Err(e) = s.save_prefs() {
+        if let Some(x) = s.export_presets.get_mut(i) {
+            x.name = was;
+        }
+        return Err(e);
     }
-    s.save_prefs()?;
     Ok(list(s))
 }
 
@@ -155,7 +161,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         None => free_name(s, &format!("{} copy", from.name)).ok_or_else(|| bad(ID, format!("no free name for a copy of `{}`", from.name)))?,
     };
     s.export_presets.push(ExportPreset { name: to.clone(), params: from.params });
-    s.save_prefs()?;
+    // as a rename: a copy that can't be saved isn't kept
+    if let Err(e) = s.save_prefs() {
+        s.export_presets.pop();
+        return Err(e);
+    }
     Ok(json!({"name": to, "presets": list(s)}))
 }
 
