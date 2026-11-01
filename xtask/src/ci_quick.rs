@@ -10,7 +10,9 @@
 //! - heif when `lightcraft-codecs` / `lightcraft-heif` changed;
 //! - parity when the tracker docs, a command/control crate, or a file's path changed (renames and
 //!   deletions: the tracker cites paths);
-//! - the wasm check of the changed packages that must build for wasm32.
+//! - the wasm check of the changed packages that must build for wasm32;
+//! - gpu-software (the GPU tests on a software adapter, when it is the only one) when
+//!   `lightcraft-gpu` changed.
 //!
 //! A file outside any package that a crate compiles in (`include_str!` of `docs/whats-new.md`,
 //! fonts and camera profiles under `assets/`, ...) counts as a change to that crate (`EMBEDDED`).
@@ -29,6 +31,8 @@ const WORKSPACE_WIDE_DIRS: &[&str] = &[".cargo/"];
 const PARITY_PACKAGES: &[&str] = &["lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egui", "lightcraft-cli"];
 const PARITY_DOCS: &[&str] = &["docs/parity-checklist.md", "docs/gaps.md"];
 const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs", "lightcraft-heif"];
+/// The package whose tests the `gpu-software` step runs.
+pub const GPU_PACKAGE: &str = "lightcraft-gpu";
 /// Files outside a package's directory that it compiles in (`include_str!` / `include_bytes!`,
 /// a build script's `rerun-if-changed`): a change to one counts as a change to those packages.
 /// An entry ending in `/` covers the directory. `embedded_files_are_mapped` keeps this complete.
@@ -75,6 +79,12 @@ impl Plan {
     /// Whether anything compiled changed (otherwise clippy and the tests are skipped).
     pub fn rust(&self) -> bool {
         self.workspace_wide || !self.packages.is_empty()
+    }
+
+    /// Whether the `gpu-software` step applies: [`GPU_PACKAGE`] changed (not one it depends on:
+    /// like the test step, `--quick` leaves dependents to the full `ci`), or everything is tested.
+    pub fn gpu(&self) -> bool {
+        self.workspace_wide || self.packages.contains(GPU_PACKAGE)
     }
 }
 
@@ -193,6 +203,8 @@ mod tests {
             ("lightcraft-codecs", "crates/codecs"),
             ("lightcraft-engine", "crates/engine"),
             ("lightcraft-cli", "apps/lightcraft-cli"),
+            ("lightcraft-gpu", "crates/gpu"),
+            ("lightcraft-pipeline", "crates/pipeline"),
             ("xtask", "xtask"),
             ("lightcraft-raw-nested", "crates/raw/nested"),
         ]
@@ -226,6 +238,15 @@ mod tests {
         assert!(p.parity && !p.heif);
         let p = plan(&[Changed { path: "crates/raw/src/old.rs".into(), gone: true }], &pkgs(), "b".into());
         assert!(p.parity, "a removed path may be cited by the tracker");
+    }
+
+    #[test]
+    fn the_gpu_software_run_follows_the_gpu_crate_only() {
+        assert!(plan(&[ch("crates/gpu/src/ctx.rs")], &pkgs(), "b".into()).gpu());
+        assert!(plan(&[ch("Cargo.lock")], &pkgs(), "b".into()).gpu(), "workspace-wide");
+        assert!(!plan(&[ch("crates/engine/src/lib.rs")], &pkgs(), "b".into()).gpu(), "a dependent is not tested");
+        assert!(!plan(&[ch("crates/pipeline/src/lib.rs")], &pkgs(), "b".into()).gpu(), "nor a dependency");
+        assert!(!plan(&[ch("docs/gpu-pipeline.md")], &pkgs(), "b".into()).gpu());
     }
 
     #[test]
