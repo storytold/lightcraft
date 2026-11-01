@@ -105,6 +105,8 @@ fn port_ok(authority: &str) -> bool {
             None => return false,
         },
         None => match authority.rsplit_once(':') {
+            // (an unbracketed host has no `:` of its own: `example.org:443:444` is no address)
+            Some((h, _)) if h.contains(':') => return false,
             Some((h, p)) => (h, Some(p)),
             None => (authority, None),
         },
@@ -262,6 +264,7 @@ mod tests {
             "https://[::1]:x/m.onnx",
             "https://:443/m.onnx",
             "https://[not-ipv6]/m.onnx",
+            "https://example.org:443:444/m.onnx",
             "https://[]/m.onnx",
         ] {
             assert_eq!(urls_or_default(Some(bad)), both, "{bad}");

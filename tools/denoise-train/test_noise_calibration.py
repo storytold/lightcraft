@@ -159,6 +159,8 @@ class LoadCalibration(unittest.TestCase):
         self.bad(self.entry(R={"a": 1e40, "b": 0}), "outside the float32 range")
         self.bad(self.entry(R={"a": 1e-3, "b": 1e40}), "outside the float32 range")
         self.bad(self.entry(R={"a": 1e-50, "b": 0}), "outside the float32 range")
+        # a JSON integer too large for a float: an error message, not a traceback (CodeRabbit on #2929)
+        self.bad(self.entry(R={"a": 10**400, "b": 0}), "outside the float32 range")
 
     def test_a_plane_the_calibration_left_out_takes_the_others_mean_and_says_so(self):
         doc = self.entry()
@@ -244,11 +246,11 @@ class NoiseFromCalibration(unittest.TestCase):
 
 class TrainCommandLine(unittest.TestCase):
     def test_zero_checkpoint_validation_or_log_intervals_are_refused_at_start(self):
-        # (CodeRabbit on #2929: `step % 0` stopped the run after its first step)
+        # (CodeRabbit on #2929: `step % 0` stopped the run after its first step; --steps 0 saved untrained weights)
         tmp = Tmp()
         try:
             out = os.path.join(tmp.dir.name, "run")
-            for flag in ("--ckpt", "--val-every", "--log-every"):
+            for flag in ("--steps", "--ckpt", "--val-every", "--log-every"):
                 argv = ["train.py", "--data", tmp.dir.name, "--out", out, "--device", "cpu", flag, "0"]
                 err = io.StringIO()
                 with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err), \

@@ -142,7 +142,11 @@ class CalibrationError(ValueError):
 def _number(v, where, positive):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise CalibrationError(f"{where} is {v!r}, not a number")
-    v = float(v)
+    try:
+        v = float(v)
+    except OverflowError:
+        # (a JSON integer too large for a float)
+        raise CalibrationError(f"{where} is outside the float32 range training uses") from None
     if not math.isfinite(v):
         raise CalibrationError(f"{where} is {v}, not a finite number")
     if v < 0 or (positive and v == 0):
@@ -427,7 +431,7 @@ def main():
     ap.add_argument("--device", default="cuda", help="cuda (default) or cpu (slow; for a smoke test)")
     ap.add_argument("--log-every", type=int, default=200, help="steps between loss lines")
     a = ap.parse_args()
-    for flag, v in (("--log-every", a.log_every), ("--ckpt", a.ckpt), ("--val-every", a.val_every)):
+    for flag, v in (("--steps", a.steps), ("--log-every", a.log_every), ("--ckpt", a.ckpt), ("--val-every", a.val_every)):
         if v < 1:
             ap.error(f"{flag} must be at least 1")
     # a bad calibration stops the run here, before any training, with what is wrong in it
