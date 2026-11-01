@@ -19,11 +19,11 @@ pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
 /// Lightroom's ceiling too, and the same cap the export path applies (`MAX_ENLARGED_PIXELS` in
 /// `crates/engine/src/export/options.rs`; that path was already bounded — this bounds the pipeline
 /// itself, so every caller of [`Frame::fit`] is covered). An output at or under the photo's own
-/// pixel count is never held to the ceiling, so a full-size render of a photo larger than this is
-/// unaffected. [`Frame::fit`] scales an over-ceiling output down to it instead of allocating it: a
-/// request box far beyond the photo aborted the process on allocation, which `catch_unwind` cannot
-/// catch (issue #3320). The size `fit` returns is held to the ceiling in whole pixels: never more
-/// pixels than it allows, never smaller than 1 × 1.
+/// (cropped) pixel count is never held to the ceiling, so a full-size render of a photo larger
+/// than this is unaffected. [`Frame::fit`] scales an over-ceiling output down to it instead of
+/// allocating it: a request box far beyond the photo aborted the process on allocation, which
+/// `catch_unwind` cannot catch (issue #3320). The size `fit` returns is held to the ceiling in
+/// whole pixels: never more pixels than it allows, never smaller than 1 × 1.
 pub const MAX_RENDER_PIXELS: f64 = 512e6;
 
 /// The geometric frame of a render.
@@ -197,12 +197,12 @@ impl Frame {
     /// already matches up to rounding (an export size), otherwise the largest aspect-true size
     /// inside it. A result of more pixels than the ceiling ([`MAX_RENDER_PIXELS`], or this frame's
     /// own pixel count when larger) is scaled down to it, both sides by the same factor, so the
-    /// aspect survives: every size the ceiling allows is returned exactly as before the ceiling
-    /// existed, and a request box far beyond the photo comes back at the ceiling instead of being
-    /// allocated, which aborted the process (issue #3320). For an aspect more extreme than the
-    /// ceiling's own (a side would sit at a single pixel) the limit wins and the aspect gives way,
-    /// as in the export path: the whole-pixel size returned is never more pixels than the ceiling
-    /// allows and never smaller than 1 × 1.
+    /// aspect survives: every request box of at most the ceiling's pixels is fitted exactly as
+    /// before the ceiling existed, and a request box far beyond the photo comes back at the
+    /// ceiling instead of being allocated, which aborted the process (issue #3320). For an aspect
+    /// more extreme than the ceiling's own (a side would sit at a single pixel) the limit wins
+    /// and the aspect gives way, as in the export path: the whole-pixel size returned is never
+    /// more pixels than the ceiling allows and never smaller than 1 × 1.
     pub fn fit(&self, max_w: usize, max_h: usize) -> (usize, usize) {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
