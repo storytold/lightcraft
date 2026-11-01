@@ -78,6 +78,15 @@ impl Reader {
             .collect())
     }
 
+    /// The catalog's `Adobe_storeProviderID` (a UUID), kept by Lightroom in its backups; `None`
+    /// when the table or the value is missing or doesn't look like an id.
+    fn catalog_id(&self) -> Option<String> {
+        let rows = self.table("Adobe_variablesTable", false).ok()?;
+        let row = rows.iter().find(|r| text(r, "name") == "Adobe_storeProviderID")?;
+        let id = text(row, "value").trim();
+        (!id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
+    }
+
     fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         match self.table(name, false) {
             Ok(rows) => Ok(rows),
@@ -176,6 +185,16 @@ impl CatalogPhoto {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CatalogImport {
     pub source: String,
+    /// The catalog's own id (`Adobe_storeProviderID` in `Adobe_variablesTable`), the same in the
+    /// catalog and in every backup of it, so a backup's collections match those of an earlier import
+    /// of the catalog (issue #2592). `None` when the catalog has none.
+    #[serde(default)]
+    pub catalog_id: Option<String>,
+    /// Where the catalog was when it isn't `source`: for a backup zip, the `.lrcat` it was backed up
+    /// from. Collections imported by earlier releases are keyed on that path, so a backup still finds
+    /// them. `None` when the catalog was read where it is.
+    #[serde(default)]
+    pub catalog_path: Option<String>,
     pub photos: Vec<CatalogPhoto>,
     pub collections: Vec<Row>,
     pub members: Vec<Row>,
@@ -215,6 +234,11 @@ pub enum SkipReason {
 pub(crate) struct ImportIndex {
     pub(crate) photos: BTreeMap<String, u64>,
     pub(crate) collections: BTreeMap<String, u64>,
+    /// The catalog id (`Adobe_storeProviderID`) each collection key was recorded for, when the
+    /// import had one: a path key of one catalog never matches another catalog that later sits at
+    /// the same path. Keys without an owner (earlier releases, catalogs without an id) match any.
+    #[serde(default)]
+    pub(crate) collection_owners: BTreeMap<String, String>,
 }
 
 pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
@@ -246,7 +270,12 @@ pub(crate) struct AppliedImport {
 }
 
 fn identity(data: &CatalogImport, photo: &CatalogPhoto) -> String {
-    if photo.uuid.is_empty() { format!("{}:{}", key(&data.source), photo.source_id) } else { photo.uuid.clone() }
+    // (a backup's photos are recognised by the catalog it was made from, as the catalog's own are)
+    if photo.uuid.is_empty() {
+        format!("{}:{}", key(data.catalog_path.as_deref().unwrap_or(&data.source)), photo.source_id)
+    } else {
+        photo.uuid.clone()
+    }
 }
 
 fn validate(data: &CatalogImport) -> Result<(), String> {
@@ -440,10 +469,47 @@ pub fn read(path: &Path) -> Result<CatalogImport, String> {
 /// stopping when `cancel` is set. Images whose catalog records are incomplete are left out and
 /// listed in [`CatalogImport::skipped`] instead of failing the read.
 pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize, done: &AtomicUsize) -> Result<CatalogImport, String> {
+    read_source(path, None, cancel, total, done)
+}
+
+/// Where a Lightroom backup's catalog is unpacked while it is read: the open library's `Interop/`
+/// folder (on the library's disk), or `None` for the system's temporary folder.
+pub fn backup_temp_root(s: &crate::Session) -> Option<PathBuf> {
+    s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"))
+}
+
+/// [`read_with_progress`] of a catalog or of a Lightroom catalog backup (`.zip`, issue #2592): a
+/// backup's catalog is unpacked into a private folder under `temp_root` (else the system's temporary
+/// folder), read, and removed again ([`crate::lightroom_backup`]). Paths the catalog records
+/// relative to itself are taken from where the catalog was before it was backed up.
+pub fn read_source(
+    path: &Path,
+    temp_root: Option<&Path>,
+    cancel: &AtomicBool,
+    total: &AtomicUsize,
+    done: &AtomicUsize,
+) -> Result<CatalogImport, String> {
     // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
+    if crate::lightroom_backup::is_backup(path) {
+        let root = temp_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
+        let extracted = crate::lightroom_backup::extract(path, &root, cancel)?;
+        let (document, known) = crate::lightroom_backup::original_catalog(path, &extracted.entry);
+        let mut data = read_file(&extracted.catalog, &document, path, cancel, done)?;
+        if !known {
+            // only a guess: it resolves relative paths, but never names the catalog
+            data.catalog_path = None;
+        }
+        return Ok(data);
+    }
+    read_file(path, path, path, cancel, done)
+}
+
+/// Read the catalog file `path`, resolving the paths it records with `document` as the catalog's
+/// place and reporting `source` as where it came from.
+fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
@@ -529,7 +595,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     root_ids.sort_unstable();
     for (id, root) in root_ids.iter().filter_map(|id| Some((*id, roots.get(id)?))) {
         let absolute = text(root, "absolutePath");
-        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), path) {
+        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), document) {
             Some(found) => {
                 let found = found.to_string_lossy().to_string();
                 warnings.push(format!("root folder {}: {absolute} not found; using {found} (relative to the catalog)", text(root, "name")));
@@ -537,7 +603,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
             }
             None => absolute.to_string(),
         };
-        if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(path)) {
+        if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(document)) {
             warnings
                 .push(format!("root folder {}: {resolved} is not opened: {why}; its photos are listed as missing and not added", text(root, "name")));
             refused_roots.insert(id);
@@ -547,7 +613,9 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
     let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
     let mut out = CatalogImport {
-        source: path.to_string_lossy().into(),
+        source: source.to_string_lossy().into(),
+        catalog_id: reader.catalog_id(),
+        catalog_path: (document != source).then(|| document.to_string_lossy().into()),
         photos: Vec::new(),
         collections: optional_table("AgLibraryCollection", &mut warnings)?,
         members: optional_table("AgLibraryCollectionImage", &mut warnings)?,
@@ -584,7 +652,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
             orphans.insert(id);
             continue;
         }
-        let (photo_path, original) = original_path(root_path, folder_path, name, path);
+        let (photo_path, original) = original_path(root_path, folder_path, name, document);
         if let Original::Refused(why) = &original
             && !refused_roots.contains(&root_id)
         {
@@ -950,15 +1018,35 @@ fn stage_collections(
         if number(collection, "systemOnly") != 0 {
             continue;
         }
-        let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
-        let id = index
-            .collections
-            .get(&collection_key)
-            .copied()
+        // keyed on the catalog's own id (the same in its backups); imports made before that was
+        // read are keyed on the catalog's path, and are still found by it, also from a backup (the
+        // path of the catalog it was backed up from)
+        let path_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
+        let original_key = data.catalog_path.as_ref().map(|p| format!("{}:{}", key(p), number(collection, "id_local")));
+        let collection_key = data.catalog_id.as_ref().map_or_else(|| path_key.clone(), |c| format!("lrcat:{c}:{}", number(collection, "id_local")));
+        // a key recorded for another catalog (by its id) is not this one, whatever its path
+        let mine = |k: &String| match (data.catalog_id.as_ref(), index.collection_owners.get(k)) {
+            (Some(c), Some(owner)) => owner == c,
+            _ => true,
+        };
+        let id = [Some(&collection_key), Some(&path_key), original_key.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|k| mine(k))
+            .filter_map(|k| index.collections.get(k).copied())
             .map(lightcraft_catalog::AlbumId)
-            .filter(|id| s.catalog.album(*id).is_some())
+            .find(|id| s.catalog.album(*id).is_some())
             .unwrap_or_else(|| s.catalog.alloc_album_id());
-        index.collections.insert(collection_key, id.0);
+        // recorded under its id and the live catalog's path (a backup's: the catalog it was made
+        // from), so a later import of the same catalog finds it in either order; a zip's own path
+        // is not kept when the catalog's is known (every dated backup has a new one)
+        let path_kept = if data.catalog_path.is_some() { None } else { Some(path_key) };
+        for k in [Some(collection_key), path_kept, original_key].into_iter().flatten() {
+            if let Some(c) = &data.catalog_id {
+                index.collection_owners.insert(k.clone(), c.clone());
+            }
+            index.collections.insert(k, id.0);
+        }
         albums.insert(number(collection, "id_local"), id);
     }
     let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();

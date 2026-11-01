@@ -24,6 +24,8 @@ fn sample() -> CatalogImport {
     photo.image.insert("captureTime".into(), json!("2024-01-16T12:34:56"));
     CatalogImport {
         source: "test.lrcat".into(),
+        catalog_id: None,
+        catalog_path: None,
         photos: vec![copy, photo],
         collections: vec![
             row(json!({"id_local":9,"name":"Travel","creationId":"collection.group"})),
@@ -823,6 +825,177 @@ fn wal_checksums_cover_commits_without_materializing_historical_databases() {
     }
 }
 
+/// Issue #2592: a catalog in Lightroom's backup layout (`Backups/<date>/<name>.zip`), with one
+/// collection and the catalog's own id.
+fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let mut tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> = one_row(photo_tables(("/catalog/", "")));
+    tables.push((
+        "AgLibraryCollection",
+        "id_local INTEGER PRIMARY KEY, creationId, name, parent, systemOnly",
+        vec![vec![N, T("com.adobe.ag.library.collection".into()), T("Keepers".into()), N, I(0)]],
+    ));
+    tables.push(("AgLibraryCollectionImage", "id_local INTEGER PRIMARY KEY, collection, image", vec![vec![N, I(1), I(1)]]));
+    tables.push((
+        "Adobe_variablesTable",
+        "id_local INTEGER PRIMARY KEY, id_global, name, type, value",
+        vec![vec![N, T("v1".into()), T("Adobe_storeProviderID".into()), N, T(catalog_id.into())]],
+    ));
+    let bytes = native_catalog_rows(&tables, None);
+    let folder = root.join("Lightroom");
+    let dated = folder.join("Backups").join("2023-11-07 0900");
+    std::fs::create_dir_all(&dated).unwrap();
+    let live = folder.join("Cat.lrcat");
+    std::fs::write(&live, &bytes).unwrap();
+    let zip = dated.join("Cat.zip");
+    let files: [(&str, &[u8]); 2] = [("Cat.lrcat", &bytes), ("Cat.lrcat-data/CURRENT", b"MANIFEST-000005\n")];
+    std::fs::write(&zip, crate::lightroom_backup::tests::zip(&files, true, false)).unwrap();
+    (live, zip)
+}
+
+/// How many albums the library has.
+fn albums(s: &crate::Session) -> usize {
+    s.catalog.albums().count()
+}
+
+/// The zip imports the same photos and collections as its catalog, with the zip as source, no temp files and the zip unchanged.
+#[test]
+fn a_backup_zip_imports_like_its_catalog_and_leaves_no_temporary_files() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-zip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let zip_before = std::fs::read(&zip).unwrap();
+    let from_zip = read(&zip).unwrap();
+    let from_live = read(&live).unwrap();
+    assert_eq!(from_zip.source, zip.to_string_lossy(), "the zip is the import's source");
+    assert_eq!(from_zip.catalog_id.as_deref(), Some("968AF29B-EEE2-481E-8AF9-55DD82965F49"));
+    assert_eq!((from_zip.photos.len(), from_zip.collections.len()), (from_live.photos.len(), from_live.collections.len()));
+    assert_eq!(from_zip.photos[0].path, from_live.photos[0].path);
+    // the live catalog is gone (Lightroom uninstalled): the backup alone imports into a library
+    std::fs::remove_file(&live).unwrap();
+    let lib = root.join("Library");
+    let mut s = crate::Session::new();
+    s.open_library(&lib, false).unwrap();
+    let report = import(&mut s, &zip, false).unwrap();
+    assert_eq!((report["photos"].as_u64(), report["collections"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(report["source"], json!(zip.to_string_lossy()));
+    assert_eq!(albums(&s), 1);
+    let interop: Vec<_> = std::fs::read_dir(lib.join("Interop")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(!interop.iter().any(|n| n.starts_with("lc-lrbackup-")), "the unpacked catalog is removed: {interop:?}");
+    assert_eq!(std::fs::read(&zip).unwrap(), zip_before, "the backup is only read");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Issue #2606: the backup of an imported catalog matches its collections by the catalog id.
+#[test]
+fn importing_a_backup_after_its_catalog_adds_no_album_twice() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-twice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    import(&mut s, &live, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let again = import(&mut s, &zip, false).unwrap();
+    assert_eq!(again["imported"], 0, "the photos are matched by their Lightroom id");
+    assert_eq!(albums(&s), 1, "the collections are matched by the catalog's id, not its path");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A backup of a catalog that an earlier release imported (collections keyed on the live
+/// `.lrcat` path, no catalog id) finds those albums through the path it was backed up from.
+#[test]
+fn a_backup_finds_collections_an_earlier_release_keyed_on_the_live_catalog_path() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-legacy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    // an earlier release: the live catalog imported without its id (path keys only)
+    let mut old = read(&live).unwrap();
+    old.catalog_id = None;
+    apply(&mut s, old, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let backup = read(&zip).unwrap();
+    assert_eq!(backup.catalog_path.as_deref(), Some(live.to_string_lossy().as_ref()), "where the zip's catalog was");
+    apply(&mut s, backup, false).unwrap();
+    assert_eq!(albums(&s), 1, "the backup finds the albums keyed on the live catalog's path");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Issue #2606, the other order: a backup without a catalog id imported first, then the live
+/// catalog (no id either) finds the same albums through the live path the backup recorded.
+#[test]
+fn the_live_catalog_after_a_backup_without_an_id_adds_no_album_twice() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-noid-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    let mut backup = read(&zip).unwrap();
+    backup.catalog_id = None;
+    apply(&mut s, backup, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let mut current = read(&live).unwrap();
+    current.catalog_id = None;
+    apply(&mut s, current, false).unwrap();
+    assert_eq!(albums(&s), 1, "the live catalog finds the albums the backup imported");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Issue #2606, the reviewer's second order: a backup with an id, then the live catalog read
+/// without one, finds the albums through the live path the backup recorded.
+#[test]
+fn the_live_catalog_without_an_id_after_a_backup_with_one_adds_no_album_twice() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-idthennone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    apply(&mut s, read(&zip).unwrap(), false).unwrap();
+    let mut current = read(&live).unwrap();
+    current.catalog_id = None;
+    apply(&mut s, current, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Two different catalogs (different ids) that sat at the same path, one after the other (a
+/// new computer's default location, a catalog recreated), keep their own albums even with the
+/// same collection `id_local`.
+#[test]
+fn two_catalogs_at_the_same_path_keep_their_own_albums() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrcat-samepath-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, _) = backup_fixture(&root, "AAAAAAAA-0000-0000-0000-000000000001");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    apply(&mut s, read(&live).unwrap(), false).unwrap();
+    // another catalog, now at the same path
+    let (live2, _) = backup_fixture(&root, "BBBBBBBB-0000-0000-0000-000000000002");
+    assert_eq!(live, live2);
+    apply(&mut s, read(&live2).unwrap(), false).unwrap();
+    assert_eq!(albums(&s), 2, "the second catalog's collection is its own album");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Libraries imported by earlier releases (path keys) still find their albums.
+#[test]
+fn collections_imported_before_the_catalog_id_was_read_are_still_matched_by_path() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-pathkey-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = crate::Session::new();
+    s.open_library(&dir, false).unwrap();
+    // an import made by an earlier release: no catalog id, keys on the path
+    apply(&mut s, sample(), false).unwrap();
+    let before = albums(&s);
+    let mut data = sample();
+    data.catalog_id = Some("A-B".into());
+    apply(&mut s, data, false).unwrap();
+    assert_eq!(albums(&s), before, "the old path keys still find the albums");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn persistent_reimport_keeps_copy_and_collection_ids_and_capture_time() {
     let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-reimport-{}", std::process::id()));
@@ -910,7 +1083,9 @@ fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], l
 /// table's root page.
 fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
     use SqlValue::{Integer as I, Text as T};
-    let mut bytes = vec![0u8; 5 * 2048];
+    // the schema page, then one page per table (at least four: the photo tables)
+    let pages = (tables.len() + 1).max(5);
+    let mut bytes = vec![0u8; pages * 2048];
     bytes[..16].copy_from_slice(b"SQLite format 3\0");
     bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
     bytes[18] = 1;
@@ -918,7 +1093,7 @@ fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: O
     bytes[21] = 64;
     bytes[22] = 32;
     bytes[23] = 32;
-    bytes[28..32].copy_from_slice(&5u32.to_be_bytes());
+    bytes[28..32].copy_from_slice(&(pages as u32).to_be_bytes());
     bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
     bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
     let mut schema = Vec::new();

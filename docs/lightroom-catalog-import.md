@@ -42,6 +42,9 @@ being the choice the window opens with) or merges when the setting says so. A ca
 refused before a new library is made. The engine command `library.importLightroom` always imports into the library
 open now.
 
+A Lightroom Classic catalog backup is imported the same way, as the `.zip` Lightroom writes
+(`Backups/YYYY-MM-DD HHMM/<name>.zip`; see *Catalog backups* below).
+
 Equivalent commands:
 
 ```text
@@ -156,6 +159,38 @@ an absolute path is not looked at: the import lists it as missing with a warning
 photo and its virtual copies out of the library. To import originals on a share, open the catalog
 from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
+
+## Catalog backups
+
+Lightroom Classic backs a catalog up as `<catalog folder>/Backups/YYYY-MM-DD HHMM/<name>.zip`: one `.lrcat` (plus,
+since Classic 12, a small `<name>.lrcat-data/` folder the import does not need). Someone who has removed Lightroom
+and its catalog may have nothing else, so `library.importLightroom` / `library.inspectLightroom` and File ▸ Import
+Lightroom Catalog… take the zip directly (issue #2592, `crates/engine/src/lightroom_backup.rs`):
+
+- The `.lrcat` entry is inflated by streaming (stored or deflated, ZIP64 included) into a private folder,
+  `Interop/lc-lrbackup-<pid>-<time>/` in the open library (the system's temporary folder when the library is not
+  on disk), checked against the zip's size and CRC-32, read like any catalog, and removed after the read, on an
+  error and on cancel alike. A folder left by a crash is removed by the next backup import once it is a day old.
+  The zip is only read. A zip with no `.lrcat`, more than one, a damaged or cut-short entry, or a catalog over
+  16 GiB is refused with a message; a full disk is a write error, not a crash.
+- The import's `source` is the zip. Paths the catalog records relative to itself (`relativePathFromCatalog`) are
+  taken from where the catalog was: two folders above a dated backup folder, else next to the zip.
+- Open Library given `Backups/` without its catalog, or a dated folder in it, makes no library there and offers the
+  import: of the dated folder's zip, of the only backup in `Backups/`, or, when `Backups/` holds several, of the zip
+  the person picks (the file dialog asks).
+- Collections are matched across imports by the catalog's own id (`Adobe_storeProviderID` in
+  `Adobe_variablesTable`), which every backup of the catalog keeps, so importing a backup of a catalog already
+  imported adds no collection twice. Collections imported by earlier releases, keyed on the catalog's path, are
+  still found by that key. Each key records the id it was written for, so two catalogs with different ids that sat
+  at the same path keep their own albums. A catalog without `Adobe_storeProviderID` (every Lightroom Classic
+  catalog checked, from Lightroom 7 to Classic 13, has one; only a damaged or foreign file lacks it) is known by its
+  path alone: it matches whatever was imported from that path, the one identity it has. Photos are matched as
+  before, by Lightroom's image id and path: a backup whose photos were at another place (an older backup from
+  before a move) adds them as other records.
+
+Checked on 2026-10-22 on a real catalog (2,740 photos, 96 collections) and its four backups from Lightroom 7
+(2018) to Classic 13 (2023), 88 MB zips holding 138 MB catalogs: each zip imports the same photos and collections
+as its unpacked catalog in about 2.4 s on an Apple M4, leaves no file behind and is not changed.
 
 ## Historical local validation
 
