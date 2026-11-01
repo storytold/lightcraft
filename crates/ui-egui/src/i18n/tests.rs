@@ -1008,10 +1008,13 @@ fn contextual_source(key: &str) -> Option<&str> {
     CONTEXTS.iter().find_map(|context| key.strip_prefix(context).and_then(|k| k.strip_prefix('|')))
 }
 
-/// Whether `key` reads as `"<context>|<source>"`: lowercase words before its first `|`. Plain
-/// messages with a `|` in them (`Use | for levels, e.g. Travel|Italy`) don't.
+/// Whether `key` reads as `"<context>|<source>"`: words right before its first `|` (letters,
+/// spaces, `-`, `_`, so `develop-presets|` and `Develop Presets|` count too). Plain messages with
+/// a `|` in them have punctuation or a space before it (`Use | for levels, e.g. Travel|Italy`).
 fn looks_contextual(key: &str) -> bool {
-    key.split_once('|').is_some_and(|(prefix, _)| !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_lowercase() || c == ' '))
+    key.split_once('|').is_some_and(|(prefix, _)| {
+        !prefix.is_empty() && prefix.trim() == prefix && prefix.chars().all(|c| c.is_ascii_alphabetic() || matches!(c, ' ' | '-' | '_'))
+    })
 }
 
 /// A contextual entry translates a message the app shows (a typo, or a message the app no longer
@@ -1030,9 +1033,12 @@ fn contextual_entries_name_real_messages() {
             }
         }
     }
-    assert!(looks_contextual("develop preset|Rename Preset"), "a misspelt context is caught");
+    for misspelt in ["develop preset|Rename Preset", "develop-presets|Rename Preset", "develop_presets|Rename Preset", "Develop Presets|Rename Preset"] {
+        assert!(looks_contextual(misspelt), "{misspelt:?}: a misspelt context is caught");
+    }
     assert!(!looks_contextual("Characters not allowed in file names (/ \\ : * ? \" < > |) become -"));
     assert!(!looks_contextual("Use | for levels, e.g. Travel|Italy"));
+    assert!(!looks_contextual("use | to separate levels"), "a plain message in lowercase words isn't one");
     assert_eq!(tr_ctx_in(Locale::De, FILTER_BAR_CONTEXT, "Presets"), "Vorgaben");
     assert_eq!(tr_ctx_in(Locale::De, RENAME_DIALOG_CONTEXT, "Presets"), "Vorgaben");
     assert_eq!(Locale::De.tr("Presets"), "Presets");
