@@ -10,6 +10,8 @@ pub(super) fn nodes(cat: &lightcraft_catalog::Catalog, enabled: bool) -> Vec<Men
     level(&entries, &mut 0, 0, enabled)
 }
 
+/// Consume one depth of the bounded, depth-first picker list; the cursor then points at the
+/// next sibling level. Empty folders are pruned only after processing their descendants.
 fn level(entries: &[AlbumEntry], at: &mut usize, depth: usize, enabled: bool) -> Vec<MenuNode> {
     if depth > 64 {
         return Vec::new();

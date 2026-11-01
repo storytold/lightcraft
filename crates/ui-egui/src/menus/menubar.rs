@@ -112,6 +112,7 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
                 MenuNode::Submenu { id, label, children } => {
                     out.push('[');
                     out.push_str(id.as_deref().unwrap_or(""));
+                    out.push('|');
                     out.push_str(label);
                     walk(children, out, keymap);
                     out.push(']');

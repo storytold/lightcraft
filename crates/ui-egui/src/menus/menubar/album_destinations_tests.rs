@@ -1,11 +1,13 @@
 use super::*;
 
+/// Create an empty ordinary album or folder without changing the fixture's photo selection.
 fn create(app: &mut LightcraftApp, name: &str, parent: Option<u64>, folder: bool) -> u64 {
     app.session.execute("album.create", &json!({"name": name, "parent": parent, "folder": folder, "addSelected": false})).unwrap()["id"]
         .as_u64()
         .unwrap()
 }
 
+/// Find a folder at one menu level, failing with its siblings when the hierarchy is absent.
 fn children<'a>(nodes: &'a [MenuNode], name: &str) -> &'a [MenuNode] {
     nodes
         .iter()
@@ -14,6 +16,26 @@ fn children<'a>(nodes: &'a [MenuNode], name: &str) -> &'a [MenuNode] {
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing folder {name}: {nodes:?}"))
+}
+
+/// A folder replacement must invalidate the native cache even with the same children. The ID
+/// alone matters, and its boundary with a numeric user label must not disappear in the key.
+#[test]
+fn native_album_folder_cache_keys_disambiguate_ids_and_labels() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+    let bar = |id: &str, label: &str| {
+        vec![(
+            "Photo".to_string(),
+            vec![MenuNode::Submenu {
+                id: Some(id.to_string()),
+                label: label.to_string(),
+                children: vec![item("album.addPhotos", json!({"id": 40}), "Favorites", None, true, None)],
+            }],
+        )]
+    };
+    let key = |id, label| native_menu_structure(&bar(id, label), &app.ui.settings.keymap);
+    assert_ne!(key("albumFolder:1", "File"), key("albumFolder:12", "File"), "identity matters even if the label is the same");
+    assert_ne!(key("albumFolder:1", "23"), key("albumFolder:12", "3"), "an ID suffix cannot become a label prefix");
 }
 
 /// #3525: destinations follow folder structure and sidebar order; duplicate leaf names keep

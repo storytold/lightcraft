@@ -1368,6 +1368,8 @@ fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Show shared album destinations for library photos, then the actions specific to the open
+/// album. Local-only selections keep their disabled Add to Album hint.
 fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if local_only(app, &app.session.selected()) {
         // albums hold library photos (issue #684): nothing here to add until they join My Photos
