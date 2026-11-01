@@ -352,6 +352,9 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
         "{lanes?: number (0 = automatic), gpu?: bool, gpuJobs?: number (0 = automatic)} — photos exported side by side, the GPU for exports, exports sharing the GPU at once; returns what is in use",
         always, |_, p| {
             const C: &str = "app.exportTuning";
+            if !(p.is_object() || p.is_null()) {
+                return Err(bad(C, "parameters must be an object"));
+            }
             if let Some(v) = p.get("lanes") {
                 let n = v.as_u64().ok_or_else(|| bad(C, "lanes must be a number"))?;
                 crate::export::set_export_lanes(Some(n as usize).filter(|n| *n > 0));
@@ -440,7 +443,11 @@ mod tests {
         for p in [serde_json::json!([true]), serde_json::json!(false), serde_json::json!("apply")] {
             let e = s.execute("app.testMachine", &p).unwrap_err().to_string();
             assert!(e.contains("parameters must be an object"), "{p}: {e}");
+            // and app.exportTuning (CodeRabbit on PR #3506): nothing applied, an error instead
+            let e = s.execute("app.exportTuning", &p).unwrap_err().to_string();
+            assert!(e.contains("parameters must be an object"), "exportTuning {p}: {e}");
         }
+        assert!(s.execute("app.exportTuning", &serde_json::Value::Null).is_ok(), "no parameters: what is in use");
         assert!(s.activity.list().iter().all(|t| t.kind != "benchmark"), "no test ran");
     }
 

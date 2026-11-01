@@ -151,6 +151,8 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
 thread_local! {
     /// Full-size JPEG encodes [`fit_jpeg`] made on this thread so far (tests: at most two per photo).
     pub(crate) static FIT_ENCODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The quality of each of those encodes, in order.
+    pub(crate) static FIT_QUALITIES: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The JPEG of `img` at the highest quality up to `quality` whose file (`encode(q)`: the whole
@@ -173,7 +175,10 @@ fn fit_jpeg(
     let limit = (kb as usize).saturating_mul(1024);
     let mut full = |q: u8| {
         #[cfg(test)]
-        FIT_ENCODES.with(|c| c.set(c.get() + 1));
+        {
+            FIT_ENCODES.with(|c| c.set(c.get() + 1));
+            FIT_QUALITIES.with(|v| v.borrow_mut().push(q));
+        }
         encode(q)
     };
     let quality = quality.clamp(1, 100);
