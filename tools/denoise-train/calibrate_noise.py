@@ -55,7 +55,14 @@ def fit(points):
 
 
 def build_calibration(measurements):
-    """`rawdump noise` outputs (dicts; None for a skipped file) -> {camera: {iso: {"photos": n, plane: {a, b}}}}.
+    """`rawdump noise` outputs (any iterable of dicts, read once; None for a skipped file) ->
+    {camera: {iso: {"photos": n, plane: {a, b}}}}.
+
+    Per brightness bin the lowest photo's value is kept: the flattest content, which rejects texture. The minimum of
+    several noisy estimates sits a little below their common value, so with many photos per ISO the fit can read a
+    few per cent low (a stand-in run with 3 photos per ISO and 3 % scatter: G1's a 1.6-3.4 % low). Photos of flat,
+    evenly lit subjects keep that small. A pooled percentile would need each block's variance, which `rawdump noise`
+    doesn't output, and would let textured photos raise the estimate.
 
     A plane whose fit gives no positive, finite shot-noise slope is left out (with a message), so every number
     written is one `train.py` can use."""
@@ -112,13 +119,15 @@ def main():
             print(f"skipped {f}: {e}", file=sys.stderr, flush=True)
             return None
 
-    with ThreadPoolExecutor(a.jobs) as ex:
-        measurements = []
+    def measured(ex):
+        # each photo's statistics are folded in as it arrives and then dropped: memory follows --jobs, not --sample
         for i, d in enumerate(ex.map(one, files)):
-            measurements.append(d)
             if i % 20 == 0:
                 print(f"{i} done", flush=True)
-    result = build_calibration(measurements)
+            yield d
+
+    with ThreadPoolExecutor(a.jobs) as ex:
+        result = build_calibration(measured(ex))
     if not result:
         # (a mistyped folder, or raws the helper can't read): keep any earlier calibration rather than empty it
         print(f"no noise could be fitted from {len(files)} files; {a.out} is left as it was", file=sys.stderr)
