@@ -16,9 +16,13 @@ measured on the frames it draws), so they exclude the control channel's round tr
 import json, os, socket, statistics, sys, threading, time
 
 USAGE = __doc__.strip().splitlines()[2]
-if len(sys.argv) < 3 or not sys.argv[1].isdigit() or not 0 < int(sys.argv[1]) < 65536:
+# (isdecimal, not isdigit: "²" is a digit int() refuses; a decimal string too long for int() too)
+try:
+    PORT = int(sys.argv[1]) if len(sys.argv) >= 3 and sys.argv[1].isdecimal() else 0
+except ValueError:
+    PORT = 0
+if not 0 < PORT < 65536 or sys.argv[2].startswith("--"):
     sys.exit(USAGE)
-PORT = int(sys.argv[1])
 FOLDER = sys.argv[2]
 args = sys.argv[3:]
 # a run takes minutes: a misspelt option, or an option where a value belongs, stops it now
@@ -51,11 +55,11 @@ STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
 if STEPS < 1 or HOLD_MS < 1:
     sys.exit(f"--steps and --hold-ms must be 1 or more; {USAGE}")
-# the app keeps its last 256 loupe steps; a run uses 1 (first open) + 11 (stepping) + STEPS + 1
-# (the hold): more than that would lose the run's own first steps
+# the app keeps its last 256 loupe steps; each phase reads only its own, and the hold needs STEPS + 1
+# of them with one to spare (a full history is how a phase tells that steps were dropped)
 KEPT_STEPS = 256
-if 1 + 11 + STEPS + 1 > KEPT_STEPS:
-    sys.exit(f"--steps {STEPS}: the app keeps {KEPT_STEPS} loupe steps, so at most {KEPT_STEPS - 13}; {USAGE}")
+if STEPS + 1 >= KEPT_STEPS:
+    sys.exit(f"--steps {STEPS}: the app keeps {KEPT_STEPS} loupe steps, so at most {KEPT_STEPS - 2}; {USAGE}")
 LABEL = opt("--label", "run")
 OVERWRITE = "--overwrite" in args
 # a run takes minutes: refuse an existing result (or a link there, even a dangling one) before it
@@ -110,12 +114,16 @@ def steps_cursor(room):
     app's history (it keeps the last KEPT_STEPS) would drop some of them, so a partial phase is
     never reported."""
     n = len(inspect()["perf"]["loupeSteps"]["steps"])
-    if n + room > KEPT_STEPS:
+    if n + room >= KEPT_STEPS:
         sys.exit(f"the app has kept {n} loupe steps already and this needs {room} more of its {KEPT_STEPS}: restart it, or use fewer --steps")
     return n
 
 def steps_since(n0):
     s = inspect()["perf"]["loupeSteps"]
+    # each phase starts with room to spare, so a full history means steps came from elsewhere (other
+    # navigation) and the oldest were dropped: the phase's window would be shifted
+    if len(s["steps"]) >= KEPT_STEPS:
+        sys.exit(f"the app's loupe history filled up during the run ({KEPT_STEPS} steps): something else stepped the loupe; restart the app and run again")
     return s["steps"][n0:], s
 
 out = {"label": LABEL, "folder": FOLDER, "holdMs": HOLD_MS}
