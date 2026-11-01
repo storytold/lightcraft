@@ -25,6 +25,7 @@ pub mod config;
 pub mod contact_sheet;
 pub mod crs;
 pub mod crs_masks;
+pub(crate) mod decode_share;
 pub mod demo;
 pub mod denoise;
 pub mod devices;

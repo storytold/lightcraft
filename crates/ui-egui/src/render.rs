@@ -218,6 +218,9 @@ pub struct Renderer {
     /// finishes after a newer request was made still replaces older pixels, so a long slider drag
     /// keeps updating the loupe instead of waiting for the drag to pause.
     shown_ids: HashMap<Slot, u64>,
+    /// The loupe's last full-quality request per view ([`Slot::Main`], [`Slot::Region`]): its photo
+    /// and the flag that tells it a draft replaced it ([`lightcraft_engine::media::RenderJob::superseded`]).
+    full_requests: HashMap<Slot, (PhotoId, Arc<std::sync::atomic::AtomicBool>)>,
     /// Requests made before this id belong to a library or preview cache that is gone.
     epoch: u64,
     preview_generation: Option<(std::sync::Weak<lightcraft_preview::PreviewCache>, u64)>,
@@ -330,6 +333,7 @@ impl Renderer {
             #[cfg(test)]
             failure_messages: Vec::new(),
             shown_ids: HashMap::new(),
+            full_requests: HashMap::new(),
             epoch: 0,
             preview_generation: None,
             pool: JobPool::new(threads),
@@ -599,6 +603,25 @@ impl Renderer {
         }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
+        // The loupe's drafts never wait for its full render (on a photo just landed on, a slider
+        // did nothing for 2–5 s while the first full render decoded and rendered): a draft starts
+        // beside it, and the full render it replaces stops once its source is decoded (the draft
+        // takes that decode over instead of decoding again). So does a full render of a photo the
+        // view has left.
+        let draft = job.request.quality == lightcraft_pipeline::Quality::Draft;
+        let overtakes = draft && matches!(slot, Slot::Main | Slot::Region);
+        if matches!(slot, Slot::Main | Slot::Region) {
+            if let Some((photo, flag)) = self.full_requests.get(&slot)
+                && (draft || *photo != job.photo)
+            {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            if !draft {
+                let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                job.superseded = Some(flag.clone());
+                self.full_requests.insert(slot, (job.photo, flag));
+            }
+        }
         self.requests.insert(
             slot,
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
@@ -615,16 +638,16 @@ impl Renderer {
         let key = job.key;
         let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
         let display = self.display.clone();
-        self.pool.submit(
-            slot,
-            key,
-            priority,
-            Box::new(move || {
-                let look = Some((geometry_look(&job.settings), job.request.apply_crop));
-                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
-                Finished { look, ..Self::run_for(run, &display) }
-            }),
-        );
+        let run: lightcraft_preview::pool::Job<Finished> = Box::new(move || {
+            let look = Some((geometry_look(&job.settings), job.request.apply_crop));
+            let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
+            Finished { look, ..Self::run_for(run, &display) }
+        });
+        if overtakes {
+            self.pool.submit_overtaking(slot, key, priority, run);
+        } else {
+            self.pool.submit(slot, key, priority, run);
+        }
     }
 
     /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
@@ -1040,6 +1063,12 @@ impl Renderer {
                     && r.rendered.is_ok();
                 if !newer_draft {
                     self.discarded += 1;
+                    // (the source a view's render decoded before a draft replaced it is still the
+                    // photo's: kept, or the next render decodes it again)
+                    let replaced = matches!(&r.rendered, Err(e) if e == lightcraft_engine::media::SUPERSEDED);
+                    if replaced && slot.is_view() && r.loaded.is_some() && r.request_id >= self.epoch {
+                        session.accept(&r);
+                    }
                     continue;
                 }
                 session.accept(&r);

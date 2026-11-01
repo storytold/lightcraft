@@ -755,6 +755,48 @@ fn a_slot_runs_one_job_at_a_time() {
     assert_eq!(most.load(Ordering::SeqCst), 1, "slot 1 ran two jobs at once");
 }
 
+/// A slider draft waited seconds behind the view's first full render (the
+/// slot ran one job at a time). An overtaking job starts beside the slot's running ordinary job;
+/// a second overtaking job still waits for the first, and an ordinary job waits for both kinds.
+#[test]
+fn an_overtaking_job_starts_beside_the_slots_running_job() {
+    let mut p: JobPool<u8, u32> = JobPool::new(4);
+    let (started, has_started) = std::sync::mpsc::channel();
+    let gate = |n: u32| {
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let started = started.clone();
+        let job: crate::pool::Job<u32> = Box::new(move || {
+            let _ = started.send(n);
+            let _ = released.recv_timeout(std::time::Duration::from_secs(30));
+            n
+        });
+        (release, job)
+    };
+    let (release_full, full) = gate(1);
+    p.submit(1, 1, 9, full);
+    assert_eq!(has_started.recv().unwrap(), 1);
+    // the draft starts at once, beside the full render
+    let (release_draft, draft) = gate(2);
+    p.submit_overtaking(1, 2, 9, draft);
+    assert_eq!(has_started.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), 2);
+    // the next draft waits for the first; an ordinary job for the slot replaces it and waits for both
+    let (_r3, draft2) = gate(3);
+    p.submit_overtaking(1, 3, 9, draft2);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(has_started.try_recv().is_err(), "two overtaking jobs of a slot ran at once");
+    p.submit(1, 4, 9, Box::new(|| 4));
+    drop(release_draft);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(p.is_queued(1), "an ordinary job waits for the slot's ordinary job too");
+    drop(release_full);
+    let mut done = Vec::new();
+    assert!(eventually(10, || {
+        done.extend(std::iter::from_fn(|| p.try_recv()).map(|d| d.result));
+        done.contains(&4)
+    }));
+    assert_eq!(done, vec![2, 1, 4], "the replaced draft never runs");
+}
+
 /// A job that panics still frees its slot: the slot's next job runs (on another worker).
 #[test]
 fn a_panicking_job_frees_its_slot() {

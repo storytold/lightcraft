@@ -1306,3 +1306,66 @@ fn undo_to_embedded_thumb_rejects_late_full_render() {
     assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
     assert!(!app.renderer.is_pending(full_slot));
 }
+
+/// On a photo just landed on, a slider did nothing for 2–5 s: its drafts waited behind the loupe's
+/// first full render (raw decode + render). Now a draft starts beside it, takes over the decode
+/// already running instead of decoding the file again, and the full render it replaced stops once
+/// the source is decoded (the source is kept all the same).
+#[test]
+fn a_draft_does_not_wait_for_the_first_full_render_and_shares_its_decode() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let decodes = Arc::new(AtomicUsize::new(0));
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Arc::new(std::sync::Mutex::new(released));
+    let mut s = Session::new();
+    let (d, gate) = (decodes.clone(), released.clone());
+    s.media.file_loader = Some(Arc::new(move |_, _| {
+        d.fetch_add(1, Ordering::SeqCst);
+        // the raw decode takes as long as the test says
+        let _ = gate.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30));
+        let mut image = lightcraft_raster::Rgb32f::new(16, 16);
+        image.data.fill([0.2, 0.2, 0.2]);
+        Ok((image, Default::default()))
+    }));
+    let p = Photo::new(PhotoId(1), Source::File { path: "draft-overtakes.nef".into() }, "draft-overtakes.nef", "NEF", 6000, 4000, "2026-01-01");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.execute("library.select", &serde_json::json!({"ids": [1], "active": 1})).unwrap();
+    let mut r = Renderer::with_worker_threads(2);
+    let ctx = egui::Context::default();
+    // the photo is landed on: its first full render starts decoding
+    let full = s.loupe_job(PhotoId(1), 64, 64, true).unwrap();
+    let full_key = full.key;
+    r.request(Slot::Main, full, 100);
+    let started = std::time::Instant::now();
+    while decodes.load(Ordering::SeqCst) == 0 && started.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(decodes.load(Ordering::SeqCst), 1);
+    // a slider moves: the draft (built before anything is decoded) starts beside the full render
+    s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 0.5})).unwrap();
+    let draft = s.loupe_job(PhotoId(1), 48, 48, true).unwrap().draft();
+    let want = draft.key;
+    r.request(Slot::Main, draft, 100);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(decodes.load(Ordering::SeqCst), 1, "the draft waits for the decode running, it does not decode again");
+    drop(release);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut shown = Vec::new();
+    while r.completed < 2 && std::time::Instant::now() < deadline {
+        r.pool.wait(std::time::Duration::from_millis(50));
+        r.poll(&ctx, &mut s);
+        if let Some(t) = r.textures.get(&Slot::Main)
+            && shown.last() != Some(&t.key)
+        {
+            shown.push(t.key);
+        }
+    }
+    assert_eq!(r.completed, 2);
+    assert_eq!(shown, vec![want], "the draft is on screen; the replaced full render (old settings) never was");
+    assert_eq!(decodes.load(Ordering::SeqCst), 1, "one decode for both");
+    assert!(!shown.contains(&full_key));
+    assert!(r.failure(Slot::Main).is_none(), "a replaced render is no failure");
+    // the decoded source is the session's: the next render does not decode again
+    let next = s.loupe_job(PhotoId(1), 64, 64, true).unwrap();
+    assert!(matches!(next.source, lightcraft_engine::media::SourceRef::Loaded(_)), "the decode was kept");
+}

@@ -42,7 +42,15 @@ pub struct RenderJob {
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
     /// small ratios and aliases it at large ones. The caches keep the full render.
     pub display_fit: Option<(usize, usize)>,
+    /// Set by the frontend when a newer request for the same view replaced this one while it ran
+    /// (an interactive draft on a photo whose first full render is decoding). Checked once the
+    /// source is decoded: the render is then skipped (the decoded source still comes back for the
+    /// session to keep), so the draft gets the processor and the GPU.
+    pub superseded: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
+
+/// The error of a render skipped because a newer request replaced it ([`RenderJob::superseded`]).
+pub const SUPERSEDED: &str = "replaced by a newer render";
 
 /// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
 pub fn fit_for_display(img: &Rgba8, max_w: usize, max_h: usize) -> Rgba8 {
@@ -263,6 +271,9 @@ impl RenderJob {
             None => self.source.load_source().and_then(|s| closing().map_or(Ok(s), Err)),
         };
         match source {
+            Ok(source) if self.superseded.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) => {
+                RenderResult { loaded: (!was_loaded).then_some(source), ..self.failed(SUPERSEDED.into()) }
+            }
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
