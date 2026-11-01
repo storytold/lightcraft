@@ -164,6 +164,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         .min_width(widest)
         .default_width(match dlg {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
+            Dialog::Duplicates { .. } => (screen.width() - 160.0).clamp(560.0, 1400.0),
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
