@@ -132,6 +132,10 @@ pub(crate) fn get(create: fn() -> Result<Gpu, String>) -> Option<Arc<Gpu>> {
         Ok(g) => {
             let g = Arc::new(g);
             s.state = State::Ready(g.clone());
+            drop(s);
+            if lost_while_made(g.generation) {
+                return None;
+            }
             Some(g)
         }
         Err(why) => {
@@ -140,6 +144,16 @@ pub(crate) fn get(create: fn() -> Result<Gpu, String>) -> Option<Arc<Gpu>> {
             None
         }
     }
+}
+
+/// A device lost between its callbacks being set and its being put in place (the loss found no
+/// device in use to mark) is marked lost now, so it isn't used (review of PR #3565). `true`: it was.
+fn lost_while_made(generation: u64) -> bool {
+    if !crate::ctx::is_lost(generation) {
+        return false;
+    }
+    lose(generation, "the device was lost while it was being made");
+    true
 }
 
 /// A replacement is being made ([`start_recovery`]).
@@ -175,13 +189,17 @@ fn replace(made: Result<Gpu, String>) {
     let mut s = slot();
     match made {
         Ok(g) => {
+            let generation = g.generation;
             s.state = State::Ready(Arc::new(g));
             if let Some(l) = s.lost.take() {
                 s.recoveries += 1;
                 drop(s);
                 log::warn!("gpu: a new device replaces the lost one ({})", l.reason);
                 event(EventKind::Recovered, "LightCraft restarted the graphics card and uses it again.".into());
+            } else {
+                drop(s);
             }
+            lost_while_made(generation);
         }
         Err(why) => {
             if let Some(l) = s.lost.as_mut() {
