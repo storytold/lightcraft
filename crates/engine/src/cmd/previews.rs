@@ -468,11 +468,14 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
     // (`row: false`: the job that asked shows the progress in its own row)
     let row = p.get("row").and_then(Value::as_bool).unwrap_or(true);
+    // the background preparation gives way to a build that was asked for; nothing replaces a build
+    // that was asked for (it carries on, and the photos it built are skipped by the next). The
+    // background one is stopped only once this request is known to be good (below): a request
+    // with bad ids leaves it running (CodeRabbit on #3544)
+    let mut gives_way = None;
     if let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
-        // the background preparation gives way to a build that was asked for; nothing replaces a
-        // build that was asked for (it carries on, and the photos it built are skipped by the next)
         if b.background && !background {
-            b.cancel.store(true, Ordering::Relaxed);
+            gives_way = Some(b.cancel.clone());
         } else {
             return Err(bad(C, "a preview build is already running"));
         }
@@ -486,6 +489,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         s.visible_cloned()
     };
     let jobs: Vec<PhotoJobs> = ids.iter().map(|id| (id.0, jobs_for(s, *id, edge))).filter(|j| !j.1.is_empty()).collect();
+    if let Some(cancel) = gives_way {
+        cancel.store(true, Ordering::Relaxed);
+    }
     let order = jobs.iter().map(|j| j.0).collect();
     #[cfg_attr(not(test), allow(unused_mut))]
     let mut build_state = PreviewBuild { total: jobs.len(), background, order, ..Default::default() };
@@ -510,10 +516,12 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     {
         // the row stays while the worker runs (it is dropped with the closure, however that ends)
         let st = state.clone();
-        std::thread::Builder::new()
-            .name("lc-build-previews".into())
-            .spawn(move || run_all(jobs, &st, task.as_ref(), lanes, force))
-            .map_err(|e| bad(C, format!("could not start: {e}")))?;
+        let started = std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &st, task.as_ref(), lanes, force));
+        if let Err(e) = started {
+            // never started: not left "running", which would hold every later build back
+            state.finished.store(true, Ordering::Relaxed);
+            return Err(bad(C, format!("could not start: {e}")));
+        }
     }
     Ok(state.json())
 }
