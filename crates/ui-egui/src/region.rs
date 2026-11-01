@@ -446,21 +446,19 @@ pub fn window_for(full_w: usize, full_h: usize, visible: (f32, f32, f32, f32), m
 
 /// The part of `win` (a window of a `full` frame) that is drawn when it is one of several windows
 /// of the view ([`crate::render::PanTile`]): its pixels away from the frame's edges, where the
-/// spatial stages had their context ([`margin_for`]). The window itself when that leaves nothing.
+/// spatial stages had their context ([`margin_for`]). An axis its margins leave nothing of stays
+/// whole.
 pub fn inner(win: PixelWindow, full: (usize, usize)) -> PixelWindow {
     let m = margin_for(full.0.max(full.1));
     let axis = |a: usize, len: usize, full: usize| -> (usize, usize) {
         let lo = if a == 0 { 0 } else { a.saturating_add(m) };
         let end = a.saturating_add(len);
         let hi = if end >= full { end } else { end.saturating_sub(m) };
-        (lo, hi)
+        if hi > lo { (lo, hi - lo) } else { (a, len) }
     };
-    let (x0, x1) = axis(win.x, win.w, full.0);
-    let (y0, y1) = axis(win.y, win.h, full.1);
-    if x1 <= x0 || y1 <= y0 {
-        return win;
-    }
-    PixelWindow { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+    let (x, w) = axis(win.x, win.w, full.0);
+    let (y, h) = axis(win.y, win.h, full.1);
+    PixelWindow { x, y, w, h }
 }
 
 /// Whether `rects` together cover all of `area` (`(x0, y0, x1, y1)`, frame pixels): exact, on the

@@ -61,7 +61,10 @@ fn main() {
     let sharp_ok = |h: &Headless| h.app.loupe_sharp.is_some_and(|f| f >= 0.999);
     // `START=now`: the drag starts as soon as the view is sharp, before the windows around it are made
     let wait_ahead = env("START", "still") != "now";
-    h.step_until(t, |h| sharp_ok(h) && (!wait_ahead || !h.busy()));
+    if !h.step_until(t, |h| sharp_ok(h) && (!wait_ahead || !h.busy())) {
+        eprintln!("the view never got sharp at {zoom} % ({:?}): no window to pan over (a photo that fits the view?)", h.app.loupe_sharp);
+        std::process::exit(2);
+    }
     eprintln!("zoomed to {zoom} % and sharp in {:.0} ms (gpu {gpu}, {:?})", t_zoom.elapsed().as_secs_f64() * 1e3, h.app.loupe_sharp);
     let renders_before = h.app.renderer.window_renders();
     let pan0 = h.app.ui.pan;

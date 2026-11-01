@@ -685,6 +685,8 @@ fn a_window_draws_its_inner_part_except_at_the_frame_edges() {
     assert_eq!(inner(W(4000, 3000, 4000, 3000), full), W(4000 + m, 3000 + m, 4000 - m, 3000 - m));
     // a window narrower than its margins stays whole
     assert_eq!(inner(W(1000, 1000, m, m), full), W(1000, 1000, m, m));
+    // ...on that axis only: the other one still drops its margin band
+    assert_eq!(inner(W(1000, 1000, m, 3072), full), W(1000, 1000 + m, m, 3072 - 2 * m));
 }
 
 #[test]

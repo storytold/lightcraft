@@ -322,7 +322,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         sharp_rects.extend(draw_pan_tiles(&p.with_clip_rect(clip), app, &window_ctx, v, view));
         sharp_rects.extend(draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view));
     }
-    app.loupe_sharp = (!windows.is_empty()).then(|| crate::region::covered_share(img_rect.intersect(canvas), &sharp_rects));
+    app.loupe_sharp = sharp_share(&windows, canvas, &sharp_rects);
     if let Some((bg, g)) = before_badge {
         paint_badge(&p, bg, g);
         register(ui, "canvas:beforeLabel", bg);
@@ -593,6 +593,21 @@ fn status_pill(
 }
 
 /// Soft proofing: a paper-white surround and the proof's name, as Lightroom shows it.
+/// The share (0..1) of the photo on screen in the window views that `sharp` (screen rects) cover:
+/// each view's own visible part of the photo, weighted by its area (the gap between the panes of
+/// a Before/After shows no photo). `None` without windows.
+fn sharp_share(windows: &[(WindowView, crate::region::RegionView)], canvas: Rect, sharp: &[Rect]) -> Option<f32> {
+    if windows.is_empty() {
+        return None;
+    }
+    let areas: Vec<Rect> = windows.iter().map(|(v, _)| v.visible.intersect(v.img).intersect(canvas)).filter(|r| r.is_positive()).collect();
+    if areas.is_empty() {
+        return Some(1.0);
+    }
+    let total: f32 = areas.iter().map(|r| r.area()).sum();
+    Some(areas.iter().map(|r| crate::region::covered_share(*r, sharp) * r.area()).sum::<f32>() / total)
+}
+
 fn proof_surround(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, canvas: Rect) {
     p.rect_filled(canvas, 0.0, Color32::from_gray(238));
     let label = crate::i18n::tr_format!("Proof Preview · {}", app.ui.proof.space.label());
@@ -617,6 +632,10 @@ fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowVi
         if shown.is_none() {
             app.region_tiles.retain(|(b, _), _| *b != before);
             app.renderer.release(slot);
+            if !before {
+                // (a pan measured from where a view of long ago began would ask far ahead)
+                app.pan_seen = None;
+            }
         }
     }
     windows

@@ -79,7 +79,9 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         app.pan_seen = Some((c.id, (fw, fh), (visible.0, visible.1)));
     }
     let ask = if moved == (0.0, 0.0) { visible } else { crate::region::lead(visible, moved) };
-    let win = crate::region::window_for(fw, fh, ask, max_span).or_else(|| crate::region::window_for(fw, fh, visible, max_span))?;
+    // (a lead too wide for one window is cut down around its middle: it must still hold the view)
+    let holds_view = |w: &lightcraft_engine::pipeline::PixelWindow| crate::region::covers(std::slice::from_ref(w), clamp_visible(visible, (fw, fh)));
+    let win = crate::region::window_for(fw, fh, ask, max_span).filter(holds_view).or_else(|| crate::region::window_for(fw, fh, visible, max_span))?;
     // a window waits for the original another window job is decoding (see `defer_window`)
     let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
     let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
@@ -160,7 +162,10 @@ fn forget_unused_tiles(app: &mut LightcraftApp) {
         return;
     }
     let r = &app.renderer;
-    let used = |key: u64| r.wanted(Slot::Region) == Some(key) || r.wanted(Slot::RegionNear) == Some(key) || r.pan_tiles().any(|t| t.key == key);
+    let shown = r.textures.get(&Slot::Region).map(|t| t.key);
+    let used = |key: u64| {
+        shown == Some(key) || r.wanted(Slot::Region) == Some(key) || r.wanted(Slot::RegionNear) == Some(key) || r.pan_tiles().any(|t| t.key == key)
+    };
     app.region_tiles.retain(|(before, key), _| *before || used(*key));
 }
 
@@ -181,7 +186,11 @@ fn sharp_windows(app: &LightcraftApp, c: &WindowCtx, view: &crate::region::Regio
 /// hold up the view's own renders (background work, below [`super::PREFETCH_PRIORITY`]).
 pub(super) fn prefetch_near(app: &mut LightcraftApp, c: &WindowCtx, windows: &[(WindowView, crate::region::RegionView)]) {
     let Some((v, view)) = windows.iter().find(|(v, _)| !v.before) else { return };
+    // (a window made ahead for a view since left: given up, its view is gone from `region_tiles`)
+    let tiles = &app.region_tiles;
+    app.renderer.drop_near_unless(|key| tiles.contains_key(&(false, key)));
     if c.interacting
+        || c.holding
         || app.renderer.is_pending(Slot::Region)
         || app.renderer.is_pending(Slot::RegionNear)
         || app.renderer.pan_tile_count() + 1 >= crate::render::PAN_TILES
@@ -201,7 +210,8 @@ pub(super) fn prefetch_near(app: &mut LightcraftApp, c: &WindowCtx, windows: &[(
             continue;
         }
         let Some(win) = crate::region::window_for(fw, fh, area, max_span) else { continue };
-        let Some(job) = app.session.region_job(c.id, fw, fh, win, !c.crop_tool) else { return };
+        // (refused: what that window reads is too far for one render; another may still be made)
+        let Some(job) = app.session.region_job(c.id, fw, fh, win, !c.crop_tool) else { continue };
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(c.id)).with_overlay(c.overlay).with_proof(proof);
         let job = app.renderer.job_for(Slot::Region, job);
         let proof_key = proof.map_or(0, |p| p.key());

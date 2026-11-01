@@ -74,6 +74,10 @@ pub enum Slot {
 /// margin (~26 MB at 1920 x 1200 points), so this many hold the view and the eight around it.
 pub const PAN_TILES: usize = 10;
 
+/// The pan tiles' texture bytes together at most: the oldest go first past it (a huge view's
+/// windows can be ~150 MB each).
+pub const PAN_TILE_BYTES: usize = 512 << 20;
+
 /// Keys of full-quality windows remembered past this many are let go unless a pan tile or the
 /// view still shows them ([`Renderer::is_full_window`]).
 const FULL_WINDOW_KEYS: usize = 256;
@@ -295,7 +299,8 @@ pub struct Renderer {
     pan_tiles: std::collections::VecDeque<Tex>,
     /// Keys of the window renders asked for at full quality (a drag's drafts are not sharp).
     full_windows: std::collections::HashSet<u64>,
-    /// Window renders of the zoomed view ([`Slot::Region`]) started so far (a pan's cost).
+    /// Window renders of the zoomed view ([`Slot::Region`]) asked for so far (a pan's cost; one a
+    /// newer request replaced before it started counts too).
     window_renders: u64,
 }
 
@@ -626,7 +631,7 @@ impl Renderer {
         self.full_windows.contains(&key)
     }
 
-    /// Window renders of the zoomed view started so far.
+    /// Window renders of the zoomed view asked for so far (see the field).
     pub fn window_renders(&self) -> u64 {
         self.window_renders
     }
@@ -637,8 +642,19 @@ impl Renderer {
         let Some(tex) = self.textures.remove(&slot) else { return };
         self.pan_tiles.retain(|t| !(t.key == tex.key && t.photo == tex.photo));
         self.pan_tiles.push_back(tex);
-        while self.pan_tiles.len() > PAN_TILES {
+        let bytes = |tiles: &std::collections::VecDeque<Tex>| {
+            tiles.iter().map(|t| t.size[0].saturating_mul(t.size[1]).saturating_mul(4)).fold(0usize, usize::saturating_add)
+        };
+        while self.pan_tiles.len() > PAN_TILES || (self.pan_tiles.len() > 1 && bytes(&self.pan_tiles) > PAN_TILE_BYTES) {
             self.pan_tiles.pop_front();
+        }
+    }
+
+    /// Drop the window being made ahead next to the view ([`Slot::RegionNear`]), if it is `key`'s
+    /// no more: `still_wanted` says whether its key still belongs to the view.
+    pub fn drop_near_unless(&mut self, still_wanted: impl Fn(u64) -> bool) {
+        if self.pending.get(&Slot::RegionNear).is_some_and(|p| !still_wanted(p.0)) {
+            self.drop_queued(Slot::RegionNear);
         }
     }
 
@@ -1323,11 +1339,11 @@ impl Renderer {
     pub fn memory(&self) -> serde_json::Value {
         let cpu: usize = self.stages.values().map(|s| s.bytes()).sum();
         let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
-        let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
-        let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
+        let tex: usize = self.textures.values().chain(self.pan_tiles.iter()).map(|t| t.size[0] * t.size[1] * 4).sum();
+        let copies: usize = self.textures.values().chain(self.pan_tiles.iter()).filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
-            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "textures": {"count": self.textures.len() + self.pan_tiles.len(), "panTiles": self.pan_tiles.len(), "bytes": tex, "cpuCopyBytes": copies},
         })
     }
 

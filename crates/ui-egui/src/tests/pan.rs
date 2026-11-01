@@ -76,6 +76,8 @@ fn median(mut v: Vec<f64>) -> f64 {
 fn a_pan_into_the_windows_made_ahead_is_sharp_all_the_way() {
     let mut h = zoomed(true);
     assert!(h.app.renderer.pan_tile_count() >= 3, "the windows around the view were made ahead: {}", h.app.renderer.pan_tile_count());
+    let kept = h.app.renderer.memory()["textures"]["panTiles"].as_u64();
+    assert_eq!(kept, Some(h.app.renderer.pan_tile_count() as u64), "the kept windows count in the renderer's memory");
     let pan = h.app.ui.pan;
     let renders = h.app.renderer.window_renders();
     // dragging the photo left brings in what lies to the right of the view
@@ -130,4 +132,14 @@ fn an_edit_lets_the_kept_windows_go() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(h.app.renderer.pan_tile_count(), 0, "a view at Fit keeps no zoom windows");
+}
+
+/// Side by side and zoomed in, the share drawn sharp counts each pane's photo only: the gap between
+/// the panes shows no photo, so a still view whose windows are all there is wholly sharp.
+#[test]
+fn side_by_side_and_still_is_wholly_sharp() {
+    let mut h = zoomed(true);
+    h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+    h.step();
+    assert!(h.step_until(SETTLE, |h| h.app.loupe_sharp == Some(1.0)), "both panes get sharp: {:?}", h.app.loupe_sharp);
 }
