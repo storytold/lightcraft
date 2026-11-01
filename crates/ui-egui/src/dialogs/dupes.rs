@@ -39,7 +39,11 @@ fn search(app: &mut LightcraftApp, dlg: &mut Dialog) {
     groups.clear();
     *done = false;
     *error = None;
-    match app.run("library.findDuplicates", json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false})) {
+    // (`replace`: a run still going starts over with these settings; the hashes it made are kept, so little is lost)
+    match app.run(
+        "library.findDuplicates",
+        json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false, "replace": true}),
+    ) {
         // (nothing to render and no worker: the result came at once)
         Ok(r) => {
             if let Some(last) = r.get("last").filter(|l| !l.is_null()) {
@@ -167,23 +171,23 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     });
 }
 
-/// The strictness and same-moment controls, and Search Again. `true` when a new search is asked for.
+/// The strictness and same-moment controls, live at any time (a change while the finder runs starts it over with the
+/// new settings, keeping the hashes made so far). `true` when a new search is asked for.
 fn controls(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
-    let Dialog::Duplicates { done, distance, same_moment, .. } = dlg else { return false };
-    let running = !*done;
+    let Dialog::Duplicates { distance, same_moment, .. } = dlg else { return false };
     let mut again = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Match")).color(t.text_label));
         for (label, bits) in STRICTNESS {
             // (`text_button` translates the label itself)
             let r = crate::widgets::text_button(ui, &format!("dupes:{}", label.to_ascii_lowercase()), label, *distance == bits);
-            if r.clicked() && *distance != bits && !running {
+            if r.clicked() && *distance != bits {
                 *distance = bits;
                 again = true;
             }
         }
         ui.add_space(12.0);
-        let r = ui.add_enabled(!running, egui::Checkbox::new(same_moment, crate::i18n::tr("Same moment only")));
+        let r = ui.checkbox(same_moment, crate::i18n::tr("Same moment only"));
         crate::widgets::register(ui, "check:dupesSameMoment", r.rect);
         if r.changed() {
             again = true;
