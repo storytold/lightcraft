@@ -32,7 +32,9 @@ What we write (standard namespaces, so other tools can read the metadata):
 
 Reading merges into the catalog with the **sidecar winning** for every field it states; fields it doesn't state are
 kept. The one exception is the **capture time**: a valid time embedded in the file (EXIF/IPTC) wins. Invalid EXIF
-clock values are skipped, allowing DateTimeDigitized, IFD0 DateTime or embedded XMP to supply the time. If the file
+clock values are skipped, allowing DateTimeDigitized, IFD0 DateTime or embedded XMP to supply the time. An IPTC
+`Time Created` value is used only when its entire decoded value is a supported six-digit clock or complete signed
+`HHMMSS±HHMM` time; partial offsets and trailing text are skipped so embedded XMP can supply the time instead. If the file
 has no valid capture time, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, else `xmp:CreateDate`
 (ISO 8601) is used — on import (it then also files a copied photo in its date folder) and by
 `photo.readMetadataFromFile` (undoable). An incomplete or malformed XMP timestamp is not projected as a capture time,
