@@ -382,11 +382,32 @@ pub(crate) fn shade_color(shade: Shade, t: &Tokens, x: f32) -> Option<Color32> {
 
 /// A slider's handle: a small dot on the track, a little larger while hovered or dragged, ringed
 /// in the panel colour so it stands off a colour track.
-fn paint_handle(ui: &Ui, at: egui::Pos2, hot: bool, color: Color32, t: &Tokens) {
+fn paint_handle(ui: &Ui, at: egui::Pos2, hot: bool, color: Color32, under: Option<Color32>, t: &Tokens) {
     let r = if hot { HANDLE_R_HOT } else { HANDLE_R };
     let p = ui.painter();
-    p.circle_filled(at, r + 1.0, t.chrome);
+    p.circle_filled(at, r + 1.0, handle_ring(t, under));
     p.circle_filled(at, r, color);
+}
+
+/// WCAG contrast ratio of two colours (1 to 21).
+pub(crate) fn contrast(a: Color32, b: Color32) -> f32 {
+    let lin = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = |c: Color32| 0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b());
+    let (x, y) = (l(a), l(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// The ring round a slider handle: the theme's chrome, unless neither it nor the handle reaches 3:1 against the
+/// shaded track under it (mid-ramp in a light theme), where it turns black or white, whichever stands out more.
+pub(crate) fn handle_ring(t: &Tokens, under: Option<Color32>) -> Color32 {
+    let Some(under) = under else { return t.chrome };
+    if contrast(t.thumb, under).max(contrast(t.chrome, under)) >= 3.0 {
+        return t.chrome;
+    }
+    if contrast(Color32::BLACK, under) >= contrast(Color32::WHITE, under) { Color32::BLACK } else { Color32::WHITE }
 }
 
 /// Result of a slider interaction this frame.
@@ -750,7 +771,10 @@ fn paint_slider(ui: &Ui, t: &Tokens, g: &SliderLayout, l: &SliderLooks, v: f64) 
     } else {
         t.thumb
     };
-    paint_handle(ui, pos2(g.to_x(v), g.track_rect.center().y), l.hovered || l.scrubbing, handle_c, t);
+    let at = pos2(g.to_x(v), g.track_rect.center().y);
+    let along = if g.track_rect.width() > 0.0 { (at.x - g.track_rect.left()) / g.track_rect.width() } else { 0.5 };
+    let under = if enabled { shade_color(g.spec.shade, t, along) } else { None };
+    paint_handle(ui, at, l.hovered || l.scrubbing, handle_c, under, t);
     if l.hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }

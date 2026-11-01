@@ -657,4 +657,47 @@ mod tests {
         let narrow = ControlSpec { min: 7000.0, max: 9000.0, ..*temp };
         assert_eq!((narrow.position(8000.0), narrow.value_at(0.5)), (0.5, 8000.0));
     }
+
+    /// FredApps on #3164: which way each grey track is shaded is data, reviewed here once. Every
+    /// control not listed is a flat track, and a colour track (white balance, mixer bands,
+    /// gradients) is never shaded: its colours already say which way it goes.
+    #[test]
+    fn every_control_has_the_shade_this_table_gives_it() {
+        use Shade::{CentreLight, Ramp, ReverseRamp, Tinted};
+        let table: &[(&str, Shade)] = &[
+            ("light.exposure", Ramp),
+            ("light.contrast", ReverseRamp),
+            ("light.highlights", Ramp),
+            ("light.shadows", Ramp),
+            ("light.whites", Ramp),
+            ("light.blacks", Ramp),
+            ("effects.clarity", ReverseRamp),
+            ("vignette.amount", CentreLight),
+            ("vignette.midpoint", Ramp),
+            ("vignette.roundness", CentreLight),
+            ("vignette.feather", Ramp),
+            ("vignette.highlights", Ramp),
+            ("grain.amount", Ramp),
+            ("detail.sharpenAmount", Tinted),
+            ("detail.sharpenRadius", Ramp),
+            ("detail.sharpenDetail", Ramp),
+            ("detail.sharpenMasking", ReverseRamp),
+            ("detail.nrLuminance", Ramp),
+            ("detail.nrDetail", Ramp),
+            ("detail.nrContrast", Ramp),
+            ("detail.nrColor", Ramp),
+            ("detail.nrColorDetail", Ramp),
+            ("detail.nrColorSmoothness", Ramp),
+        ];
+        for (id, _) in table {
+            assert!(find(id).is_some(), "{id}: listed but not a control");
+        }
+        for c in CONTROLS.iter().chain(INDEXED) {
+            let want = table.iter().find(|(id, _)| *id == c.id).map_or(Shade::Plain, |(_, s)| *s);
+            assert_eq!(c.shade, want, "{}: shade", c.id);
+            if !matches!(c.track, Track::Plain | Track::Centered) {
+                assert_eq!(c.shade, Shade::Plain, "{}: a colour track is not shaded", c.id);
+            }
+        }
+    }
 }

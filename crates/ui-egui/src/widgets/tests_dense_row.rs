@@ -379,3 +379,54 @@ fn a_name_too_long_for_its_column_ends_in_an_ellipsis_and_shows_whole_on_hover()
     assert!(elided && drawn_w <= label.width() + 0.5, "the name is cut with an ellipsis to its column: {drawn_w} in {label:?}");
     assert!(texts.iter().any(|t| t != long && t.contains(long)), "hovering shows the whole name (with the reset hint): {texts:?}");
 }
+
+/// FredApps on #3164: the handle stays visible on every shaded track in every theme (light ones
+/// included): at least 3:1 against the track under it (WCAG 1.4.11's non-text contrast), from its
+/// fill or from the ring in the panel's colour drawn round it. The shade is never the only cue:
+/// the value is still written at the row's right.
+#[test]
+fn the_handle_stands_out_on_every_shaded_track_in_every_theme() {
+    use super::{contrast, handle_ring, shade_color};
+    use crate::theme::{ThemeKind, Tokens};
+    use lightcraft_develop::Shade;
+    let mut worst = (f32::INFINITY, String::new());
+    for kind in ThemeKind::ALL {
+        let t = Tokens::for_kind(kind);
+        for shade in [Shade::Ramp, Shade::ReverseRamp, Shade::CentreLight, Shade::Tinted] {
+            for i in 0..=20 {
+                let x = i as f32 / 20.0;
+                let under = shade_color(shade, &t, x).unwrap();
+                let best = contrast(t.thumb, under).max(contrast(handle_ring(&t, Some(under)), under));
+                if best < worst.0 {
+                    worst = (best, format!("{kind:?} {shade:?} at {x}"));
+                }
+            }
+        }
+    }
+    assert!(worst.0 >= 3.0, "the handle against its track: {:.2}:1 at {}", worst.0, worst.1);
+}
+
+#[test]
+fn the_handle_ring_keeps_the_theme_colour_where_it_already_stands_out() {
+    use super::{contrast, handle_ring, shade_color};
+    use crate::theme::{ThemeKind, Tokens};
+    use lightcraft_develop::Shade;
+    let mut changed = 0;
+    for kind in ThemeKind::ALL {
+        let t = Tokens::for_kind(kind);
+        // a plain track has no shade under the handle: the theme ring, as before
+        assert_eq!(handle_ring(&t, shade_color(Shade::Plain, &t, 0.5)), t.chrome, "{kind:?}: a plain track keeps the theme ring");
+        for shade in [Shade::Ramp, Shade::ReverseRamp, Shade::CentreLight, Shade::Tinted] {
+            for i in 0..=20 {
+                let under = shade_color(shade, &t, i as f32 / 20.0).unwrap();
+                if contrast(t.thumb, under).max(contrast(t.chrome, under)) >= 3.0 {
+                    assert_eq!(handle_ring(&t, Some(under)), t.chrome, "{kind:?} {shade:?} at {i}/20 already stands out");
+                } else {
+                    changed += 1;
+                }
+            }
+        }
+    }
+    // (only the stretches that failed 3:1 change, the mid-ramp of a light theme)
+    assert!(changed > 0, "the light themes' mid-ramp is where the ring changes");
+}
