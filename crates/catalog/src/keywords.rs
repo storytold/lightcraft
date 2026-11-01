@@ -24,6 +24,13 @@ pub fn clean(k: &str) -> String {
     k.split(SEP).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("|")
 }
 
+/// No level of `k` ends in `*` (after trimming): a name a user gives can't end in an asterisk,
+/// which marks a keyword only some of the selected photos have. An asterisk inside a name (`a*b`)
+/// is allowed.
+pub fn valid_name(k: &str) -> bool {
+    !k.split(SEP).any(|level| level.trim().ends_with('*'))
+}
+
 /// The same name, whatever the case of any of its letters (not only ASCII ones).
 pub fn same(a: &str, b: &str) -> bool {
     a == b || a.to_lowercase() == b.to_lowercase()
@@ -653,6 +660,19 @@ impl Catalog {
         self.keyword_path(path).is_some()
     }
 
+    /// Refuse a keyword a user gives (a new keyword, a new name, a keyword typed for photos) when a
+    /// level the library doesn't have yet ends in `*` ([`valid_name`]). Levels the library has,
+    /// such as those read from sidecars and catalogs, are accepted as they are.
+    pub fn check_keyword_name(&self, path: &str) -> Result<()> {
+        let levels: Vec<&str> = path.split(SEP).map(str::trim).filter(|s| !s.is_empty()).collect();
+        for (i, level) in levels.iter().enumerate() {
+            if !valid_name(level) && !self.has_keyword(&levels.get(..=i).map(|l| l.join("|")).unwrap_or_default()) {
+                return Err(CatalogError::Invalid(format!("keyword names can't end in “*”: “{level}”")));
+            }
+        }
+        Ok(())
+    }
+
     /// Where a keyword typed for a photo goes: inside the default parent when it is a new name (Put
     /// New Keywords Inside This Keyword); a keyword the library has, or a path typed whole, as
     /// typed (cleaned).
@@ -757,6 +777,7 @@ impl Catalog {
         if self.has_keyword(&path) {
             return Err(CatalogError::KeywordExists(path));
         }
+        self.check_keyword_name(&path)?;
         let path = self.spelled(&path);
         let mut ops = vec![Op::SetKeyword { path: path.clone(), info: Some(info) }];
         for id in photos {
@@ -811,6 +832,7 @@ impl Catalog {
             if !same(&to, &from) && self.has_keyword(&to) {
                 return Err(CatalogError::KeywordExists(to));
             }
+            self.check_keyword_name(&to)?;
             if let Op::Batch { ops: renamed } = self.rename_keyword_ops(&from, &to)? {
                 ops = renamed;
             }

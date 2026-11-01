@@ -249,6 +249,46 @@ fn creating_a_keyword_that_exists_keeps_the_dialog() {
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("already")), "{:?}", h.app.ui.toast);
 }
 
+/// Create Keyword Tag and Edit Keyword Tag refuse a name ending in `*` (at any level) and stay
+/// open with what was typed; nothing is created or renamed.
+#[test]
+fn keyword_tag_dialogs_refuse_a_name_ending_in_an_asterisk() {
+    let (mut h, _) = keywords_panel();
+    for typed in ["travel*", "places|rome*"] {
+        ask(&mut h, "ui.clickWidget", json!({"id": "keywordList:create"}));
+        ask(&mut h, "ui.text", json!({"text": typed}));
+        ask(&mut h, "ui.key", json!({"key": "Enter"}));
+        assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::KeywordTag { name, .. }) if name == typed), "{typed}: {:?}", h.app.ui.dialog);
+        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("can't end in “*”")), "{typed}: {:?}", h.app.ui.toast);
+        assert!(!h.app.session.catalog.has_keyword(typed), "{typed}");
+        ask(&mut h, "ui.dialog.cancel", json!({}));
+    }
+    find(&mut h, "mountains");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordRow:mountains", "count": 2}));
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::KeywordTag { editing: Some(_), .. })), "{:?}", h.app.ui.dialog);
+    ask(&mut h, "ui.text", json!({"text": "mountains*"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("“mountains*”")), "{:?}", h.app.ui.toast);
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::KeywordTag { editing: Some(_), .. })), "still open: {:?}", h.app.ui.dialog);
+    assert!(h.app.session.catalog.has_keyword("mountains") && !h.app.session.catalog.has_keyword("mountains*"));
+}
+
+/// The keyword painter refuses a new keyword ending in `*` and says why, without starting to paint;
+/// a keyword the library has paints as before.
+#[test]
+fn the_keyword_painter_refuses_a_name_ending_in_an_asterisk() {
+    let (mut h, _) = keywords_panel();
+    for typed in ["travel*", "places|rome*"] {
+        let r = h.request("engine.execute", json!({"command": "tool.keywordPainter", "params": {"keyword": typed}}), T);
+        h.settle(SETTLE);
+        assert!(r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("can't end in “*”")), "{typed}: {r}");
+        assert_eq!(h.app.ui.keyword_painter, None, "{typed}: not painting");
+        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("can't end in “*”")), "{typed}: {:?}", h.app.ui.toast);
+    }
+    run(&mut h, "tool.keywordPainter", json!({"keyword": "mountains"}));
+    assert_eq!(h.app.ui.keyword_painter.as_deref(), Some("mountains"));
+}
+
 /// A keyword's context menu: create a keyword inside it, edit it, make it where new keywords go
 /// (marked in the list), and purge the keywords no photo has.
 #[test]

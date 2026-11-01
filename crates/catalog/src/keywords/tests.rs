@@ -209,6 +209,33 @@ fn creating_a_keyword_lists_it_and_can_tag_photos() {
     assert!(c.create_keyword_ops(" | ", KeywordInfo::default(), &[]).is_err());
 }
 
+/// A new keyword's name can't end in `*` at any level, which marks a keyword only some of the
+/// selected photos have; an asterisk inside a name is allowed. Levels the library already has,
+/// as a sidecar or catalog wrote them, are accepted as they are.
+#[test]
+fn a_new_keyword_name_cannot_end_in_an_asterisk() {
+    assert!(!valid_name("travel*") && !valid_name("places | rome* ") && valid_name("a*b"));
+    let (mut c, ids) = lib(&[&["places|italy"], &[]]);
+    for name in ["travel*", "places|rome*", "travel *|rome"] {
+        let err = c.create_keyword_ops(name, KeywordInfo::default(), &[ids[1]]).unwrap_err();
+        assert!(err.to_string().contains("can't end in “*”"), "{name}: {err}");
+    }
+    assert!(c.edit_keyword_ops("places|italy", "Italy*", KeywordInfo::default()).is_err());
+    let op = c.create_keyword_ops("a*b", KeywordInfo::default(), &[]).unwrap();
+    c.apply(op).unwrap();
+    assert!(c.has_keyword("a*b"));
+    // read from a file: kept, and it can be named again
+    assert_eq!(from_file(&["travel*".to_string()], &["old*|rome".to_string()]), ["old*|rome", "travel*"]);
+    let (mut c, ids) = lib(&[&["travel*", "old*|rome"], &[]]);
+    assert!(c.check_keyword_name("travel*").is_ok() && c.check_keyword_name("old*|rome").is_ok());
+    let op = c.create_keyword_ops("old*|milan", KeywordInfo::default(), &[ids[1]]).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(kws(&c, ids[1]), ["old*|milan"]);
+    let op = c.edit_keyword_ops("travel*", "TRAVEL*", KeywordInfo::default()).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(kws(&c, ids[0]), ["TRAVEL*", "old*|rome"]);
+}
+
 /// Moving a keyword nests it inside another (or takes it to the top level), with its children,
 /// on photos and in the list. It can't go inside itself or one of its children, and moving it
 /// where it already is changes nothing.

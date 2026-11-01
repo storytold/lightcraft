@@ -214,11 +214,6 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         return Err("no photos selected".into());
     }
     let undo0 = app.session.undo.len();
-    let mut album = d.album;
-    if album.is_none() && !d.new_album.trim().is_empty() {
-        let r = app.session.execute("album.create", &json!({"name": d.new_album.trim()})).map_err(|e| e.to_string())?;
-        album = r["id"].as_u64();
-    }
     let mode = match (d.copy, d.move_files) {
         (false, _) => "add",
         (true, false) => "copy",
@@ -228,7 +223,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }
-    if let Some(a) = album {
+    if let Some(a) = d.album {
         params["album"] = json!(a);
     }
     if !d.preset.is_empty() {
@@ -250,6 +245,16 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         }
         if d.dng && !d.move_files {
             params["dng"] = json!(true);
+        }
+    }
+    // the params are checked before a new album is created, so a refused import leaves no album
+    let mut check = params.clone();
+    check["paths"] = json!(queue);
+    lightcraft_engine::cmd::library::import_params(&app.session, &check).map_err(|e| e.to_string())?;
+    if d.album.is_none() && !d.new_album.trim().is_empty() {
+        let r = app.session.execute("album.create", &json!({"name": d.new_album.trim()})).map_err(|e| e.to_string())?;
+        if let Some(a) = r["id"].as_u64() {
+            params["album"] = json!(a);
         }
     }
     let total = queue.len();

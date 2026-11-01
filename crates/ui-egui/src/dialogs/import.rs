@@ -259,6 +259,20 @@ mod tests {
         ImportDialog::new(candidates)
     }
 
+    /// An import the engine refuses creates no new album: its params are checked first.
+    #[test]
+    fn a_refused_import_creates_no_new_album() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let mut d = dialog();
+        d.new_album = "Card 1".into();
+        d.keywords = "travel*".into();
+        let albums = app.session.catalog.albums().count();
+        let err = start(&mut app, &d).unwrap_err();
+        assert!(err.contains("can't end in “*”"), "{err}");
+        assert_eq!(app.session.catalog.albums().count(), albums, "no album was created");
+        assert!(app.import.is_none());
+    }
+
     /// Identical copies inside the source folder are not "already in the library" (a fresh library
     /// said "8 already in the library").
     #[test]
