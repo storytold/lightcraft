@@ -309,7 +309,7 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
     use serde_json::Value;
     vec![
         cmd!(query "app.testMachine", "Test My Machine", [], None,
-        "{paths?: [file], quick?: bool, apply?: bool = true} — export a few photos (yours, else the demo's) at several numbers side by side, with and without the GPU, and use the fastest; returns the report {summary, lanes, useGpu, gpuJobs, photosPerMin, limit, runs}",
+        "{paths?: [file], quick?: bool, apply?: bool = true} — export a few photos (yours, else the demo's) at several numbers side by side, with and without the GPU, and use the fastest; returns the report {summary, lanes, useGpu, gpuJobs, photosPerMin, limit, runs}; in the desktop app it runs in the background (its row in the activity stack, ✕ stops it) and answers {started} at once, the report then in ui.inspect → ui.settings.machineTest",
         always, |s, p| {
             const C: &str = "app.testMachine";
             let paths: Vec<String> = match p.get("paths") {

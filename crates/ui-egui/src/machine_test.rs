@@ -18,6 +18,9 @@ pub struct MachineTask {
     rx: Receiver<Result<MachineReport, String>>,
     /// Its row in the activity stack (its ✕ stops the test).
     _guard: TaskGuard,
+    /// Its choice goes into the settings when it ends (`app.testMachine {apply: false}`: it is only
+    /// reported).
+    apply: bool,
 }
 
 /// Make the export settings take effect (lanes, the GPU for exports, the GPU's share).
@@ -89,20 +92,44 @@ pub fn running(app: &LightcraftApp) -> bool {
 /// Start the test (nothing when it already runs or an export is running: it would measure the
 /// export too).
 pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
+    start_with(app, None, false, true)
+}
+
+/// `app.testMachine {paths?, quick?, apply?}` in the desktop app: the test of the Settings button,
+/// on its thread with its row (✕ stops it), never on the UI thread, which would hold the window
+/// for minutes. It answers at once; the report goes into `settings.machineTest` (unless `apply` is
+/// false) and the toast, and `ui.inspect` → `activity` shows the test running.
+pub fn command(app: &mut LightcraftApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    const C: &str = "app.testMachine";
+    let paths: Option<Vec<String>> = match p.get("paths") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Array(a)) => {
+            Some(a.iter().map(|v| v.as_str().map(str::to_string).ok_or(format!("{C}: paths must be file paths"))).collect::<Result<_, _>>()?)
+        }
+        Some(_) => return Err(format!("{C}: paths must be a list of file paths")),
+    };
+    let flag = |k: &str, d: bool| p.get(k).and_then(serde_json::Value::as_bool).unwrap_or(d);
+    start_with(app, paths, flag("quick", false), flag("apply", true)).map_err(|e| format!("{C}: {e}"))?;
+    Ok(
+        serde_json::json!({"started": true, "note": "the test runs in the background: ui.inspect → activity shows it, ui.settings.machineTest holds its report"}),
+    )
+}
+
+fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, apply: bool) -> Result<(), String> {
     if running(app) {
         return Err(crate::i18n::tr("The test is already running").to_string());
     }
     if app.export.is_some() {
         return Err(crate::i18n::tr("Wait for the export to finish, then test this computer").to_string());
     }
-    let paths = sample_paths(app, 4);
+    let paths = paths.unwrap_or_else(|| sample_paths(app, 4));
     let guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
     let cancel = guard.cancel_flag();
     let row = guard.handle();
     let (tx, rx) = channel();
     let stop = cancel.clone();
     let work = move || {
-        let r = run(paths, stop, &mut |done, total, what| {
+        let r = run(paths, quick, stop, &mut |done, total, what| {
             row.progress(done as u64, total as u64);
             row.detail(what);
             !cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
@@ -119,18 +146,19 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
         Err(crate::i18n::tr("Test my machine runs in the desktop app").to_string())
     };
     started?;
-    app.machine = Some(MachineTask { rx, _guard: guard });
+    app.machine = Some(MachineTask { rx, _guard: guard, apply });
     Ok(())
 }
 
 fn run(
     paths: Vec<String>,
+    quick: bool,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     progress: &mut dyn FnMut(usize, usize, &str) -> bool,
 ) -> Result<MachineReport, String> {
     let what = || "the test".to_string();
     lightcraft_engine::guard::catch(&what(), || {
-        lightcraft_engine::machine_test::run_test(&TestOptions { paths, cancel, ..Default::default() }, progress)
+        lightcraft_engine::machine_test::run_test(&TestOptions { paths, quick, cancel, ..Default::default() }, progress)
     })
     .and_then(|r| r)
 }
@@ -138,6 +166,7 @@ fn run(
 /// When the test has ended: keep and use its choice, and say what it found.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.machine else { return };
+    let apply_it = task.apply;
     let r = match task.rx.try_recv() {
         Ok(r) => r,
         Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -149,8 +178,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.machine = None;
     match r {
         Ok(report) => {
-            adopt(&mut app.ui.settings, &report);
-            apply(&app.ui.settings);
+            if apply_it {
+                adopt(&mut app.ui.settings, &report);
+                apply(&app.ui.settings);
+            }
             app.toast_for(ctx, crate::i18n::tr(&report.summary).to_string(), 12.0);
         }
         Err(e) if e == "cancelled" => app.toast(ctx, crate::i18n::tr("Test stopped: the settings are as they were.").to_string()),
@@ -219,7 +250,7 @@ mod tests {
         let (tx, rx) = channel();
         let _guard = h.app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
         let _ = tx.send(Ok(MachineReport { lanes: 3, summary: "Exports about 9 photos a minute".into(), ..Default::default() }));
-        h.app.machine = Some(MachineTask { rx, _guard });
+        h.app.machine = Some(MachineTask { rx, _guard, apply: true });
         // (the first frames load the fonts and draw nothing)
         let taken = h.step_until(std::time::Duration::from_secs(20), |h| h.app.machine.is_none());
         assert!(taken && h.app.ui.fullscreen, "the finished test was taken in full screen");
@@ -236,7 +267,7 @@ mod tests {
         let (tx, rx) = channel();
         let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
         let _ = tx.send(Ok(MachineReport { lanes: 3, ..Default::default() }));
-        app.machine = Some(MachineTask { rx, _guard });
+        app.machine = Some(MachineTask { rx, _guard, apply: true });
         app.logic(&ctx);
         assert!(app.machine.is_none() && !running(&app), "taken without a drawn frame");
         assert_eq!(app.ui.settings.machine_test.as_ref().map(|m| m.lanes), Some(3));
@@ -246,6 +277,33 @@ mod tests {
         drop(other);
     }
 
+    /// Review of PR #3506: `app.testMachine` in the desktop app runs the test on its own thread
+    /// and answers at once (the window keeps working, ✕ stops it); bad parameters are refused
+    /// before anything starts.
+    #[test]
+    fn a_control_request_tests_off_the_ui_thread() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let ctx = egui::Context::default();
+        assert!(command(&mut app, &serde_json::json!({"paths": "x"})).is_err());
+        assert!(!running(&app), "nothing started");
+        let t = std::time::Instant::now();
+        let r = crate::menus::run_ui_command(&mut app, "app.testMachine", &serde_json::json!({"quick": true, "apply": false}))
+            .expect("a UI command")
+            .unwrap();
+        assert_eq!(r["started"], true, "{r}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "answered at once");
+        assert!(running(&app) && command(&mut app, &serde_json::json!({})).is_err(), "one test at a time");
+        let row = app.session.activity.list().into_iter().find(|t| t.kind == "benchmark").expect("its row");
+        let _ = app.session.activity.cancel(row.id);
+        let t = std::time::Instant::now();
+        while app.machine.is_some() && t.elapsed() < std::time::Duration::from_secs(120) {
+            app.logic(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(app.machine.is_none(), "stopped");
+        assert!(app.ui.settings.machine_test.is_none(), "a stopped test changes nothing");
+    }
+
     /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would
     /// use the test's temporary settings and skew what the test measures).
     #[test]
@@ -253,7 +311,7 @@ mod tests {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
         let (_tx, rx) = channel();
         let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
-        app.machine = Some(MachineTask { rx, _guard });
+        app.machine = Some(MachineTask { rx, _guard, apply: true });
         let dir = std::env::temp_dir().join(format!("lc-machine-export-{}", std::process::id()));
         let out = dir.join("out.jpg").to_string_lossy().to_string();
         let pdf = dir.join("out.pdf").to_string_lossy().to_string();
