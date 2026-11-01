@@ -57,15 +57,22 @@ pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
     if format == Format::Bmp && bmp_pixels_cut_short(bytes, w, h) {
         return Err(Error::Malformed(format, "file ends inside the pixel data".into()));
     }
+    // a first frame cut short mid-descriptor fails the decode, so it fails here too
+    if format == Format::Gif && first_descriptor(bytes).is_some_and(|p| bytes.get(p + 1..p + 10).is_none()) {
+        return Err(Error::Malformed(format, "file ends inside the first image descriptor".into()));
+    }
     Ok((w, h, 1))
 }
 
-/// Whether an uncompressed BMP ends before its last row, as a decode would find: its rows (padded
-/// to 4 bytes) start at the pixel data offset. Compressed (RLE) data has no size to check here.
+/// Whether a BMP's pixel data starts past the file's end, or an uncompressed one ends before its last row, as a decode would find: its rows (padded
+/// to 4 bytes) start at the pixel data offset. Compressed (RLE) data has no row size to check.
 fn bmp_pixels_cut_short(bytes: &[u8], w: u32, h: u32) -> bool {
     let u16_at = |i: usize| bytes.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
     let u32_at = |i: usize| bytes.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let (Some(offset), Some(info)) = (u32_at(10), u32_at(14)) else { return false };
+    if u64::from(offset) > bytes.len() as u64 {
+        return true; // whatever the compression, the pixel data starts past the end
+    }
     // BITMAPCOREHEADER (12 bytes) keeps 16-bit edges, so its bit depth sits earlier
     let (bpp, compression) = if info == 12 { (u16_at(24), Some(0)) } else { (u16_at(28), u32_at(30)) };
     let (Some(bpp), Some(0 | 3 | 6)) = (bpp, compression) else { return false }; // RGB or bit fields
@@ -79,34 +86,36 @@ fn bmp_pixels_cut_short(bytes: &[u8], w: u32, h: u32) -> bool {
 /// declared size, which a small file can inflate far past the canvas. The canvas check cannot
 /// see that size, so it is read from the block headers here.
 fn gated_first_frame(bytes: &[u8], opts: &DecodeOptions) -> Result<()> {
-    // The constants of the header grammar: signature, logical screen descriptor (with its global
-    // colour table), extension blocks (0x21, skipped by their sub-block chains) and image
-    // descriptors (0x2C).
+    let Some(p) = first_descriptor(bytes) else {
+        return Ok(()); // no frame before the data ends: the decoder reports the damage itself
+    };
+    // Image descriptor: two LE coordinates then two LE edges, after the separator.
+    let Some(d) = bytes.get(p + 1..p + 10) else {
+        return Ok(()); // cut short mid-descriptor: the decoder reports that
+    };
+    let (w, h) = (u16::from_le_bytes([d[4], d[5]]) as u64, u16::from_le_bytes([d[6], d[7]]) as u64);
+    check_size(Format::Gif, w, h, opts)
+}
+
+/// Where a GIF's first image descriptor (its 0x2C separator) starts, past the logical screen
+/// descriptor, its global colour table and any extension blocks (0x21, skipped by their
+/// sub-block chains). `None` when the data ends first.
+fn first_descriptor(bytes: &[u8]) -> Option<usize> {
     const SCREEN: usize = 13;
     if bytes.len() < SCREEN {
-        return Ok(()); // too broken for a frame; the decoder reports the damage itself
+        return None;
     }
     let gct_entries = 1usize << (u32::from(bytes[10] & 0x07) + 1); // at most 256
     let gct_bytes = if (bytes[10] & 0x80) != 0 { gct_entries * 3 } else { 0 };
     let mut p = SCREEN.saturating_add(gct_bytes);
     while let Some(&kind) = bytes.get(p) {
         match kind {
-            0x2C => {
-                // Image descriptor: two LE coordinates then two LE edges, after the separator.
-                let end = p.checked_add(10).filter(|&e| e <= bytes.len());
-                let Some(d) = end.and_then(|e| bytes.get(p + 1..e)) else {
-                    break; // cut short mid-descriptor: the decoder reports that
-                };
-                let (w, h) = (u16::from_le_bytes([d[4], d[5]]) as u64, u16::from_le_bytes([d[6], d[7]]) as u64);
-                return check_size(Format::Gif, w, h, opts);
-            }
+            0x2C => return Some(p),
             0x21 => {
                 // Extension: a label byte, then <len,data> sub-blocks ended by a zero length.
                 p = p.saturating_add(2);
                 loop {
-                    let Some(&len) = bytes.get(p) else {
-                        return Ok(()); // ran past the data: decode reports the truncation
-                    };
+                    let len = *bytes.get(p)?;
                     p = p.saturating_add(1);
                     if len == 0 {
                         break;
@@ -117,7 +126,7 @@ fn gated_first_frame(bytes: &[u8], opts: &DecodeOptions) -> Result<()> {
             _ => p = p.saturating_add(1),
         }
     }
-    Ok(())
+    None
 }
 
 #[cfg(test)]
@@ -180,6 +189,34 @@ mod tests {
         b.extend_from_slice(&[0; 8]); // important colours, the palette
         let h = crate::read_header(&b).unwrap();
         assert_eq!((h.format, h.width, h.height), (crate::Format::Bmp, 30000, 30000));
+    }
+
+    /// The probe refuses what a decode refuses: a GIF cut inside its first image descriptor,
+    /// and a BMP (compressed or not) whose pixel data would start past the file's end.
+    #[test]
+    fn headers_cut_short_where_a_decode_fails_are_malformed() {
+        let mut g = b"GIF89a".to_vec();
+        g.extend_from_slice(&[2, 0, 2, 0, 0x00, 0, 0]);
+        let whole = [g.as_slice(), ONE_PIXEL_FRAME].concat();
+        assert!(crate::read_header(&whole).is_ok());
+        for cut in [g.len() + 2, g.len() + 9] {
+            let r = crate::read_header(&whole[..cut]);
+            assert!(matches!(r, Err(Error::Malformed(..))), "cut at {cut}: {r:?}");
+        }
+
+        let mut b = b"BM".to_vec();
+        b.extend_from_slice(&[0; 8]);
+        b.extend_from_slice(&4096u32.to_le_bytes()); // pixel data offset, past the end
+        b.extend_from_slice(&40u32.to_le_bytes());
+        b.extend_from_slice(&2i32.to_le_bytes());
+        b.extend_from_slice(&2i32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&8u16.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes()); // RLE8
+        b.extend_from_slice(&[0; 12]);
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&[0; 8]);
+        assert!(matches!(crate::read_header(&b), Err(Error::Malformed(..))), "{:?}", crate::read_header(&b));
     }
 
     /// A header without a size is damage the probe reports, not a 0×0 photo.
