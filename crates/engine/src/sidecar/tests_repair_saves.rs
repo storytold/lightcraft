@@ -58,118 +58,122 @@ fn autowrite_repairs_partial_rename_before_merging_foreign_xmp_across_library_sw
         for save_naming in [SidecarNaming::Stem, SidecarNaming::Full] {
             for upper in [false, true] {
                 for switch in [false, true] {
-                    let root = crate::tests_xmp::temp_dir(&format!("repair-save-{naming:?}-{save_naming:?}-{upper}-{switch}"));
-                    let a = root.join("a.png");
-                    let b = root.join("Trip.png");
-                    png(&a);
-                    let mut old = sidecar_path(&a.to_string_lossy(), naming);
-                    if upper {
-                        old = old.with_extension("XMP");
-                    }
-                    std::fs::write(&old, FOREIGN).unwrap();
-                    let mut s = Session::new().with_fs();
-                    s.open_library(root.join("library-a"), false).unwrap();
-                    s.execute("library.import", &json!({"paths": [a]})).unwrap();
-                    let mut id = s.catalog.photos().next().unwrap().id;
-                    s.selection = crate::Selection::single(id);
-                    s.undo.clear();
-                    let fs = PartialRename { sidecar: old.clone(), photo: b.clone() };
-                    let plans = s.plan_rename_with(&fs, &[id], "Trip", 1);
-                    assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&fs, &plans)?}))).is_err());
-                    assert_eq!(queued(&s).len(), 1);
-                    assert_eq!(s.catalog.photo(id).unwrap().source, Source::File { path: b.to_string_lossy().into_owned() });
-                    let pending = queued(&s);
-                    let held = root.join("temporarily-unavailable.xmp");
-                    std::fs::rename(&old, &held).unwrap();
-                    if switch {
-                        s.close_library().unwrap();
-                        s.open_library(root.join("library-b"), false).unwrap();
-                        assert_eq!(s.pending_sidecar_repairs, pending);
-                        s.execute("library.import", &json!({"paths": [b]})).unwrap();
-                        id = s.catalog.photos().next().unwrap().id;
-                        s.selection = crate::Selection::single(id);
-                    }
-                    s.xmp.naming = save_naming;
-                    s.xmp.auto_write = true;
-                    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
-                    let preferred = sidecar_path(&b.to_string_lossy(), save_naming);
-                    assert!(!preferred.exists() && !preferred.with_extension("XMP").exists());
-                    assert!(!pending[0].to.exists());
-                    assert_eq!(queued(&s), pending, "unavailable repair stays queued after AutoWrite");
-                    let saved = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
-                    assert!(saved["written"].as_array().unwrap().is_empty());
-                    assert!(saved["failed"][0]["error"].as_str().unwrap().contains("unfinished XMP repair"));
-                    assert_eq!(std::fs::read(&held).unwrap(), FOREIGN);
-                    assert_eq!(queued(&s), pending);
-
-                    // A missing sidecar for another photo does not prevent this healthy save.
-                    let healthy = root.join("healthy.png");
-                    png(&healthy);
-                    let healthy_id = PhotoId(999);
-                    s.commit(
-                        "Healthy Photo",
-                        Op::AddPhoto {
-                            photo: Box::new(Photo::new(
-                                healthy_id,
-                                Source::File { path: healthy.to_string_lossy().into_owned() },
-                                "healthy.png",
-                                "PNG",
-                                4,
-                                3,
-                                "",
-                            )),
-                        },
-                    )
-                    .unwrap();
-                    s.execute("photo.setMeta", &json!({"ids": [healthy_id.0], "title": "Healthy save"})).unwrap();
-                    let packet = std::fs::read_to_string(sidecar_path(&healthy.to_string_lossy(), save_naming)).unwrap();
-                    assert_eq!(parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().title.as_deref(), Some("Healthy save"));
-                    assert_eq!(queued(&s), pending);
-
-                    // An existing destination is never overwritten and the original packet remains.
-                    std::fs::rename(&held, &old).unwrap();
-                    let destination = pending[0].to.clone();
-                    let collision = String::from_utf8(FOREIGN.to_vec()).unwrap().replace("Rating=\"2\"", "Rating=\"5\"").into_bytes();
-                    let collision_path = if upper { preferred.clone() } else { destination.clone() };
-                    std::fs::write(&collision_path, &collision).unwrap();
-                    s.execute("photo.setMeta", &json!({"ids": [id.0], "title": "Fresh title", "addKeywords": ["café"]})).unwrap();
-                    assert_eq!(std::fs::read(&old).unwrap(), FOREIGN);
-                    assert_eq!(std::fs::read(&collision_path).unwrap(), collision);
-                    assert_eq!(queued(&s), pending);
-                    s.selection = crate::Selection::single(id);
-                    assert_eq!(s.execute("photo.saveMetadataToFile", &json!({})).unwrap()["failed"].as_array().unwrap().len(), 1);
-                    assert_eq!(std::fs::read(&collision_path).unwrap(), collision);
-                    std::fs::remove_file(&collision_path).unwrap(); // remove only this test's collision
-
-                    // The next successful AutoWrite runs the real repair and production XMP merge.
-                    s.execute("photo.setMeta", &json!({"title": "Final title"})).unwrap();
-                    assert!(queued(&s).is_empty());
-                    assert!(!old.exists());
-                    let packet = std::fs::read_to_string(&destination).unwrap();
-                    assert!(packet.contains("fixture:Marker=\"keep-me\""));
-                    let parsed = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
-                    assert_eq!(parsed.rating, Some(4));
-                    assert_eq!(parsed.title.as_deref(), Some("Final title"));
-                    assert!(parsed.keywords.as_ref().unwrap().contains(&"café".to_string()));
-                    if upper {
-                        // by listing: on a case-insensitive volume `preferred` answers for the upper-case packet
-                        let listed = std::fs::read_dir(&root).unwrap().any(|e| Some(e.unwrap().file_name().as_os_str()) == preferred.file_name());
-                        assert!(!listed, "merge uses the repaired uppercase packet");
-                    }
-                    for (step, title) in [("edit.undo", "Fresh title"), ("edit.redo", "Final title")] {
-                        s.execute(step, &json!({})).unwrap();
-                        let packet = std::fs::read_to_string(&destination).unwrap();
-                        assert!(packet.contains("fixture:Marker=\"keep-me\""));
-                        assert_eq!(parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().title.as_deref(), Some(title));
-                    }
-                    drop(s);
-                    std::fs::remove_dir_all(root).unwrap();
+                    check_autowrite_repair_scenario(naming, save_naming, upper, switch);
                 }
             }
         }
     }
 }
 
+fn check_autowrite_repair_scenario(naming: SidecarNaming, save_naming: SidecarNaming, upper: bool, switch: bool) {
+    let root = crate::tests_xmp::temp_dir(&format!("repair-save-{naming:?}-{save_naming:?}-{upper}-{switch}"));
+    let a = root.join("a.png");
+    let b = root.join("Trip.png");
+    png(&a);
+    let mut old = sidecar_path(&a.to_string_lossy(), naming);
+    if upper {
+        old = old.with_extension("XMP");
+    }
+    std::fs::write(&old, FOREIGN).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(root.join("library-a"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [a]})).unwrap();
+    let mut id = s.catalog.photos().next().unwrap().id;
+    s.selection = crate::Selection::single(id);
+    s.undo.clear();
+    let fs = PartialRename { sidecar: old.clone(), photo: b.clone() };
+    let plans = s.plan_rename_with(&fs, &[id], "Trip", 1);
+    assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&fs, &plans)?}))).is_err());
+    assert_eq!(queued(&s).len(), 1);
+    assert_eq!(s.catalog.photo(id).unwrap().source, Source::File { path: b.to_string_lossy().into_owned() });
+    let pending = queued(&s);
+    let held = root.join("temporarily-unavailable.xmp");
+    std::fs::rename(&old, &held).unwrap();
+    if switch {
+        s.close_library().unwrap();
+        s.open_library(root.join("library-b"), false).unwrap();
+        assert_eq!(s.pending_sidecar_repairs, pending);
+        s.execute("library.import", &json!({"paths": [b]})).unwrap();
+        id = s.catalog.photos().next().unwrap().id;
+        s.selection = crate::Selection::single(id);
+    }
+    s.xmp.naming = save_naming;
+    s.xmp.auto_write = true;
+    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    let preferred = sidecar_path(&b.to_string_lossy(), save_naming);
+    assert!(!preferred.exists() && !preferred.with_extension("XMP").exists());
+    assert!(!pending[0].to.exists());
+    assert_eq!(queued(&s), pending, "unavailable repair stays queued after AutoWrite");
+    let saved = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+    assert!(saved["written"].as_array().unwrap().is_empty());
+    assert!(saved["failed"][0]["error"].as_str().unwrap().contains("unfinished XMP repair"));
+    assert_eq!(std::fs::read(&held).unwrap(), FOREIGN);
+    assert_eq!(queued(&s), pending);
+
+    // A missing sidecar for another photo does not prevent this healthy save.
+    let healthy = root.join("healthy.png");
+    png(&healthy);
+    let healthy_id = PhotoId(999);
+    s.commit(
+        "Healthy Photo",
+        Op::AddPhoto {
+            photo: Box::new(Photo::new(healthy_id, Source::File { path: healthy.to_string_lossy().into_owned() }, "healthy.png", "PNG", 4, 3, "")),
+        },
+    )
+    .unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [healthy_id.0], "title": "Healthy save"})).unwrap();
+    let packet = std::fs::read_to_string(sidecar_path(&healthy.to_string_lossy(), save_naming)).unwrap();
+    assert_eq!(parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().title.as_deref(), Some("Healthy save"));
+    assert_eq!(queued(&s), pending);
+
+    // An existing destination is never overwritten and the original packet remains.
+    std::fs::rename(&held, &old).unwrap();
+    let destination = pending[0].to.clone();
+    let collision = String::from_utf8(FOREIGN.to_vec()).unwrap().replace("Rating=\"2\"", "Rating=\"5\"").into_bytes();
+    let collision_path = if upper { preferred.clone() } else { destination.clone() };
+    std::fs::write(&collision_path, &collision).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "title": "Fresh title", "addKeywords": ["café"]})).unwrap();
+    assert_eq!(std::fs::read(&old).unwrap(), FOREIGN);
+    assert_eq!(std::fs::read(&collision_path).unwrap(), collision);
+    assert_eq!(queued(&s), pending);
+    s.selection = crate::Selection::single(id);
+    assert_eq!(s.execute("photo.saveMetadataToFile", &json!({})).unwrap()["failed"].as_array().unwrap().len(), 1);
+    assert_eq!(std::fs::read(&collision_path).unwrap(), collision);
+    std::fs::remove_file(&collision_path).unwrap(); // remove only this test's collision
+
+    // The next successful AutoWrite runs the real repair and production XMP merge.
+    s.execute("photo.setMeta", &json!({"title": "Final title"})).unwrap();
+    assert!(queued(&s).is_empty());
+    assert!(!old.exists());
+    let packet = std::fs::read_to_string(&destination).unwrap();
+    assert!(packet.contains("fixture:Marker=\"keep-me\""));
+    let parsed = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
+    assert_eq!(parsed.rating, Some(4));
+    assert_eq!(parsed.title.as_deref(), Some("Final title"));
+    assert!(parsed.keywords.as_ref().unwrap().contains(&"café".to_string()));
+    assert_repaired_case_spelling(&root, &preferred, upper);
+    assert_undo_redo_preserve_foreign_packet(&mut s, &destination);
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn assert_repaired_case_spelling(root: &Path, preferred: &Path, upper: bool) {
+    if !upper {
+        return;
+    }
+    // By listing, a case-insensitive volume answers for the uppercase packet.
+    let listed = std::fs::read_dir(root).unwrap().any(|e| Some(e.unwrap().file_name().as_os_str()) == preferred.file_name());
+    assert!(!listed, "merge uses the repaired uppercase packet");
+}
+
+fn assert_undo_redo_preserve_foreign_packet(s: &mut Session, destination: &Path) {
+    for (step, title) in [("edit.undo", "Fresh title"), ("edit.redo", "Final title")] {
+        s.execute(step, &json!({})).unwrap();
+        let packet = std::fs::read_to_string(destination).unwrap();
+        assert!(packet.contains("fixture:Marker=\"keep-me\""));
+        assert_eq!(parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().title.as_deref(), Some(title));
+    }
+}
 #[test]
 fn unowned_shared_stem_repair_does_not_block_healthy_jpeg_full_sidecar_save() {
     let root = crate::tests_xmp::temp_dir("repair-save-shared-stem");
