@@ -2,7 +2,7 @@
 //! scores compare across photos): focus, clipping, and a tiny signature for finding similar
 //! shots (bursts). Classical image statistics — no learned models.
 
-use lightcraft_raster::Rgb32f;
+use lightcraft_raster::{Rgb32f, Rgba8};
 
 /// Long edge the measurements run at.
 const EDGE: usize = 512;
@@ -123,6 +123,32 @@ fn small_luma(img: &Rgb32f, ow: usize, oh: usize) -> Vec<f32> {
     out
 }
 
+/// Luminance of a display-encoded (sRGB, 8-bit) picture box-resampled to `ow × oh`, 0..1: the same
+/// input [`small_luma`] makes from a linear picture, for a rendered thumbnail.
+fn small_luma_srgb8(img: &Rgba8, ow: usize, oh: usize) -> Vec<f32> {
+    let (w, h) = (img.width.max(1), img.height.max(1));
+    let mut out = vec![0f32; ow * oh];
+    for (y, row) in out.chunks_mut(ow).enumerate() {
+        let (y0, y1) = (y * h / oh, ((y + 1) * h / oh).max(y * h / oh + 1).min(h));
+        for (x, v) in row.iter_mut().enumerate() {
+            let (x0, x1) = (x * w / ow, ((x + 1) * w / ow).max(x * w / ow + 1).min(w));
+            // decoded to linear light, averaged and encoded again: the same numbers `small_luma` makes
+            // from the linear picture (up to the 8-bit rounding)
+            let mut acc = 0.0f32;
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let c = img.data.get(yy * w + xx).copied().unwrap_or([0; 4]);
+                    let d = lightcraft_color::transfer::decode_srgb8;
+                    acc += 0.2627 * d(c[0]) + 0.678 * d(c[1]) + 0.0593 * d(c[2]);
+                }
+            }
+            let l = acc / ((y1 - y0) * (x1 - x0)).max(1) as f32;
+            *v = lightcraft_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
+        }
+    }
+    out
+}
+
 /// Side of the luminance square the DCT hash starts from.
 const DCT_SIDE: usize = 32;
 /// Low frequencies the DCT hash keeps along each axis (`DCT_LOW × DCT_LOW` coefficients).
@@ -134,7 +160,16 @@ const DCT_LOW: usize = 8;
 /// differs in a few bits; another picture of the same scene in many; unrelated pictures in about
 /// half. Compare with [`hamming`].
 pub fn dct_hash(img: &Rgb32f) -> u64 {
-    let l = small_luma(img, DCT_SIDE, DCT_SIDE);
+    dct_bits(&small_luma(img, DCT_SIDE, DCT_SIDE))
+}
+
+/// [`dct_hash`] of a rendered, display-encoded picture (a grid thumbnail).
+pub fn dct_hash_srgb8(img: &Rgba8) -> u64 {
+    dct_bits(&small_luma_srgb8(img, DCT_SIDE, DCT_SIDE))
+}
+
+/// The DCT hash of a `DCT_SIDE × DCT_SIDE` luminance square.
+fn dct_bits(l: &[f32]) -> u64 {
     // cos(π (2 i + 1) k / (2 N)) for the frequencies kept
     let mut cos = [[0f32; DCT_SIDE]; DCT_LOW];
     for (k, row) in cos.iter_mut().enumerate() {
@@ -166,7 +201,16 @@ pub fn dct_hash(img: &Rgb32f) -> u64 {
 /// is brighter than its right-hand neighbour. Cheap and robust to tone changes; used beside
 /// [`dct_hash`] so a match needs two unrelated hashes to agree.
 pub fn diff_hash(img: &Rgb32f) -> u64 {
-    let l = small_luma(img, 9, 8);
+    diff_bits(&small_luma(img, 9, 8))
+}
+
+/// [`diff_hash`] of a rendered, display-encoded picture (a grid thumbnail).
+pub fn diff_hash_srgb8(img: &Rgba8) -> u64 {
+    diff_bits(&small_luma_srgb8(img, 9, 8))
+}
+
+/// The difference hash of a 9 × 8 luminance block.
+fn diff_bits(l: &[f32]) -> u64 {
     let mut bits = 0u64;
     for y in 0..8 {
         for x in 0..8 {
@@ -236,6 +280,31 @@ mod tests {
             nearest = nearest.min(hamming(dct_hash(&img), dct_hash(&other)));
         }
         assert!(nearest > 12, "another scene must be well apart from a duplicate: nearest {nearest} bits");
+    }
+
+    /// A display-encoded 8-bit copy of a picture (what a grid thumbnail is) hashes like the linear
+    /// picture: the two paths may be mixed in one run.
+    #[test]
+    fn the_srgb8_hashes_agree_with_the_linear_ones() {
+        let img = lightcraft_scenes::demo_library()[0].render(480, 320);
+        let encoded = Rgba8 {
+            width: img.width,
+            height: img.height,
+            data: img
+                .data
+                .iter()
+                .map(|c| {
+                    let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                    [e(c[0]), e(c[1]), e(c[2]), 255]
+                })
+                .collect(),
+        };
+        // (a smooth synthetic scene has many coefficients and neighbour pairs all but equal, where 8-bit rounding
+        // decides the bit: within the distance a duplicate is allowed, and a run hashes every photo the same way)
+        assert!(hamming(dct_hash(&img), dct_hash_srgb8(&encoded)) <= 8, "{}", hamming(dct_hash(&img), dct_hash_srgb8(&encoded)));
+        assert!(hamming(diff_hash(&img), diff_hash_srgb8(&encoded)) <= 8, "{}", hamming(diff_hash(&img), diff_hash_srgb8(&encoded)));
+        let none = Rgba8 { width: 0, height: 0, data: Vec::new() };
+        let _ = (dct_hash_srgb8(&none), diff_hash_srgb8(&none));
     }
 
     /// A degenerate picture (one pixel, or empty) hashes without panicking.

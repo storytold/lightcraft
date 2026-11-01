@@ -206,6 +206,12 @@ pub enum Dialog {
         photos: u64,
         #[serde(default)]
         error: Option<String>,
+        /// How alike photos must be (bits of hash distance: 2 strict, 6 normal, 10 loose) and whether they must share
+        /// a capture time; Search Again runs the finder with them.
+        #[serde(default = "default_distance")]
+        distance: u32,
+        #[serde(default = "yes")]
+        same_moment: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -377,6 +383,11 @@ pub enum Dialog {
     /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
     /// as they are made.
     ViewOptions,
+}
+
+/// The Find Duplicate Photos window's normal strictness (bits of hash distance).
+pub fn default_distance() -> u32 {
+    6
 }
 
 fn yes() -> bool {
