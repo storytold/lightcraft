@@ -49,6 +49,41 @@ fn ids_json(ids: &[PhotoId]) -> Vec<u64> {
     ids.iter().map(|i| i.0).collect()
 }
 
+/// FredApps on #3077: building previews (asked for, and the background preparation while culling)
+/// writes only into the library's own cache, never next to the photos: the shoot folder holds the
+/// same files afterwards, byte for byte.
+#[test]
+fn building_previews_writes_nothing_next_to_the_photos() {
+    let (mut s, root, ids) = library("prep-beside", 4);
+    let shoot = root.join("shoot");
+    let listing = |dir: &std::path::Path| {
+        let mut v: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .map(|p| (p.file_name().unwrap().to_string_lossy().to_string(), std::fs::read(&p).unwrap()))
+            .collect();
+        v.sort();
+        v
+    };
+    let before = listing(&shoot);
+    assert_eq!(before.len(), 4);
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "edge": 300, "wait": true})).unwrap();
+    assert_eq!(r["done"], 4, "{r}");
+    for id in &ids {
+        s.prep_tick(crate::prep::Mode::Library, Some(*id), false);
+    }
+    if let Some(b) = s.preview_build.clone() {
+        for _ in 0..500 {
+            if !b.running() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    assert_eq!(listing(&shoot), before, "nothing was written next to the photos");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Note 47: a built preview at least as big as the loupe's size is what the loupe shows (fitted
 /// down, no render); a smaller one is not (the photo renders).
 #[test]
