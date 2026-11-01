@@ -398,32 +398,48 @@ impl LightcraftApp {
         panels::slideshow::tick(self, ctx, now);
     }
 
-    /// Announce the end of a Build Previews run.
+    /// A task waiting in line whose lane freed while nothing was asked starts now (commands start them too); then the
+    /// run in progress is looked at, so that one started here is polled for its end from this frame on.
+    pub(crate) fn tick_preview_builds(&mut self, ctx: &egui::Context) {
+        self.session.start_waiting();
+        self.preview_build_status(ctx);
+    }
+
+    /// Announce the end of a Build Previews run, and of those a build waiting in line replaced before it was announced
+    /// (in one toast, oldest first). A build is announced once: its `reported` flag says so, not where it lives.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
-        let Some(b) = self.session.preview_build.clone() else { return };
-        let key = std::sync::Arc::as_ptr(&b) as usize;
-        if b.finished.load(Ordering::Relaxed) {
-            if self.ui.preview_build_seen != Some((key, true)) {
-                self.ui.preview_build_seen = Some((key, true));
-                let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
-                let plural = if done == 1 { "" } else { "s" };
-                let mut msg = match (b.error(), b.what) {
-                    (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
-                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
-                    (None, what) => {
-                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
-                    }
-                };
-                if failed > 0 {
-                    msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
-                }
-                self.toast(ctx, msg);
+        let mut ended = self.session.take_unreported_builds();
+        match self.session.preview_build.clone() {
+            Some(b) if b.finished.load(Ordering::Relaxed) => ended.push(b),
+            Some(_) => {
+                // The activity stack shows the run while it works; poll for the end.
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
-        } else {
-            // The activity stack shows the run while it works; poll for the end.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            None => {}
         }
+        let msgs: Vec<String> = ended.iter().filter(|b| !b.reported.swap(true, Ordering::Relaxed)).map(|b| Self::build_message(b)).collect();
+        if !msgs.is_empty() {
+            self.toast(ctx, msgs.join("; "));
+        }
+    }
+
+    /// How a finished Build Previews run ended, as the toast words it.
+    fn build_message(b: &lightcraft_engine::cmd::previews::PreviewBuild) -> String {
+        use std::sync::atomic::Ordering;
+        let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
+        let plural = if done == 1 { "" } else { "s" };
+        let mut msg = match (b.error(), b.what) {
+            (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
+            (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
+            (None, what) => {
+                crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
+            }
+        };
+        if failed > 0 {
+            msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
+        }
+        msg
     }
 
     /// Announce when saving the library starts failing (changes then live only in memory and are
