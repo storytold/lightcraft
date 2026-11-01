@@ -232,6 +232,7 @@
   "Added “{keyword}” to {n} photo{}": "„{keyword}“ zu {n} Foto{} hinzugefügt",
   "Add Keyword “{keywords}”": "Stichwort „{keywords}“ hinzufügen",
   "On {have} of {of} selected photos": "Bei {have} von {of} ausgewählten Fotos",
+  "A keyword name can't end with an asterisk: “{name}”": "Ein Stichwortname darf nicht mit einem Sternchen enden: „{name}“",
   "Remove “{name}”": "„{name}“ entfernen",
   "There is a keyword set “{name}” already": "Es gibt bereits einen Stichwortsatz „{name}“",
   "Added {n} keyword{}": "Stichwörter hinzugefügt: {n}{:.0}",

@@ -237,6 +237,7 @@
   "Added “{keyword}” to {n} photo{}": "已將「{keyword}」加入 {n} 張照片{:.0}",
   "Add Keyword “{keywords}”": "加入關鍵字「{keywords}」",
   "On {have} of {of} selected photos": "選取的 {of} 張照片中的 {have} 張",
+  "A keyword name can't end with an asterisk: “{name}”": "關鍵字名稱不能以星號結尾：「{name}」",
   "Remove “{name}”": "移除「{name}」",
   "There is a keyword set “{name}” already": "已有關鍵字集「{name}」",
   "Added {n} keyword{}": "已加入 {n} 個關鍵字{:.0}",
