@@ -139,7 +139,7 @@ an agent testing on one card never touches the other.
 - **Status**: `helper_status()` (`off`, `none`, `notStarted`, `starting`, `ready`, `lost`, `failed`, with
   the name and why); `app.gpu` → `helper`, `batchUsage {editing, helper}`; `ui.inspect` →
   `perf.gpuHelper`, `perf.batchUsage`. Measured: the same render on the RTX 4070 SUPER and the RTX 5070
-  differs by at most 1 level (mean 0.0000; `crates/gpu/tests/devices.rs`).
+  differs by at most 2 levels (`crates/gpu/tests/devices.rs` asserts at most 2; one measured pair showed 2).
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
 default, `Auto`, loads whichever `dxcompiler.dll` the DLL search path finds first. LightCraft ships

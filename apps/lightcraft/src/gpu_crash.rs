@@ -65,6 +65,21 @@ impl GpuCrash {
     pub(crate) fn gpu_off(notice: String) -> GpuCrash {
         GpuCrash { notice, gpu_off: true, reset_card: false, helper_off: false }
     }
+
+    /// The start-up crash check's result and the lost-device check's together: both are read on
+    /// every launch, a lost device turns GPU rendering off, and both notices are shown (review of
+    /// PR #3506).
+    pub(crate) fn with_lost(crash: Option<GpuCrash>, lost: Option<String>) -> Option<GpuCrash> {
+        match (crash, lost) {
+            (Some(mut c), Some(l)) => {
+                c.gpu_off = true;
+                c.notice = format!("{}\n\n{l}", c.notice);
+                Some(c)
+            }
+            (c, None) => c,
+            (None, Some(l)) => Some(GpuCrash::gpu_off(l)),
+        }
+    }
 }
 
 /// [`GpuCrash`] from what the crash marker recorded: when every scope it names was a device of a

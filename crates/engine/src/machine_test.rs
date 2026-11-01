@@ -209,6 +209,9 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
         tick("Both graphics cards")?;
         helper_run = Some(run.clone());
         runs.push(run);
+    } else if helper {
+        // not tried when the processor alone won, but still a step of the total (review of PR #3506)
+        tick("Both graphics cards")?;
     }
     // the second card stays on unless it was clearly slower (it also keeps the editing card free
     // for the photo being edited)
