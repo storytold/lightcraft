@@ -2,7 +2,7 @@ use super::colour::{PROXY, file_local_look};
 use super::mono::{fit_tone_only_with, monochrome};
 use super::pairs::{Attempt, TONE_FITS, fit_attempt, fit_partial, search_ordered};
 use super::proxy::{CLIP_TOLERANCE, LensGeometry, MIN_PREVIEW_FRACTION, proxies, structure_agrees};
-use super::tone::{HighlightCheck, highlights};
+use super::tone::{HighlightCheck, clipped_highlights, highlights};
 use super::{CameraLook, CameraTone, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
 
 /// The look fitted to the file's camera JPEG, and whether that JPEG is black and white ([`monochrome`]).
@@ -17,7 +17,7 @@ pub(crate) fn fit_preview(
     if !transform.matrix_is_fallback || !file_local_look(raw.format) {
         return (None, false);
     }
-    let Some((sensor, reference, clipped)) = look_proxies(raw, bytes, transform, lens, embedded) else { return (None, false) };
+    let Some((sensor, reference, clipped, jpeg_space)) = look_proxies(raw, bytes, transform, lens, embedded) else { return (None, false) };
     let black_and_white = monochrome(&reference);
     // A camera profile pooled from many photos knows colours this photo shows too little of;
     // try its colour first and fit tone/chroma per photo (picture styles vary).
@@ -26,13 +26,19 @@ pub(crate) fn fit_preview(
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
-    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro) {
+    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro, jpeg_space) {
         Some(look) => look,
         // A black-and-white JPEG has no colour to fit: the profile's colour and the JPEG's tone curve
         // (`monochrome_look` does it without a profile).
         None if colour.is_some() && black_and_white => {
             let unclipped = without_clipped(&sensor, &clipped);
-            let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro, grey: true };
+            let bright = HighlightCheck {
+                jpeg_space,
+                pairs: highlights(&sensor, &reference),
+                clipped: clipped_highlights(&sensor, &reference, &clipped),
+                dro,
+                grey: true,
+            };
             let Some(look) = fit_tone_only_with(unclipped.as_ref().unwrap_or(&sensor), &reference, colour, &bright) else { return (None, true) };
             look
         }
@@ -59,7 +65,7 @@ pub(super) const SENSOR_CLIP: f32 = 0.99;
 /// [`fit_look_with`] for a photo without Sony's DRO.
 #[cfg(test)]
 pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
-    fit_look_with(sensor, reference, clipped, colour, false)
+    fit_look_with(sensor, reference, clipped, colour, false, None)
 }
 
 /// The photo's look, refitted without the proxy pixels whose sensor values are clipped.
@@ -80,25 +86,45 @@ pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], co
 /// replace a look fitted away from edges). A photo that had no look gets one when the search
 /// without the clipped pixels finds it, and otherwise the [`fit_partial`] look when that is clearly
 /// closer to the camera JPEG than the neutral fallback.
+///
+/// The colour a photo's own matrix needs is asked of darker pixels in proportion to their luminance
+/// ([`super::pairs::matrix_spread`], issue #865) only after the fixed spread finds nothing, and only where the fit
+/// sees no clipped pixels. Every search with the fixed spread, and the refit, run as before, so a
+/// photo that had a look keeps it. A photo that learns its colour only through the scaled spread
+/// had no such look to keep, and gets one fitted on what the sensor measured: on all pixels when
+/// none is clipped, else without the clipped ones. On a dark DMC-G10 scene the search on all pixels
+/// with the scaled spread passed the gates only through its 56 clipped pairs (its conditional-median
+/// curve cut the held-out RMS from the neutral fallback's 0.066 to 0.021; refitted without them,
+/// 0.0220 to 0.0192, and the quantile curve 0.0220 to 0.0201, both short of the 30% cut) and
+/// rendered 1.0 ΔE76 further from the camera JPEG than its partial look; the search without them
+/// finds a look away from edges that renders it 0.5 closer than the partial look.
 pub(super) fn fit_look_with(
     sensor: &Rgb32f,
     reference: &Rgb32f,
     clipped: &[bool],
     colour: Option<(Mat3, Option<HsvTable>)>,
     dro: bool,
+    jpeg_space: Option<lightcraft_codecs::NamedSpace>,
 ) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);
     // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
-    let bright = HighlightCheck { pairs: highlights(sensor, reference), dro, grey: false };
-    let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) else {
-        return unclipped
-            .as_ref()
-            .and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright))
-            .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright));
+    let bright = HighlightCheck {
+        jpeg_space,
+        pairs: highlights(sensor, reference),
+        clipped: clipped_highlights(sensor, reference, clipped),
+        dro,
+        grey: false,
+    };
+    let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright, false) else {
+        let found = match &unclipped {
+            None => search_ordered(sensor, reference, colour, TONE_FITS, &bright, true),
+            Some(u) => search_ordered(u, reference, colour.clone(), TONE_FITS, &bright, false)
+                .or_else(|| search_ordered(u, reference, colour, TONE_FITS, &bright, true)),
+        };
+        return found.map(|(look, _)| look).or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright));
     };
     let Some(unclipped) = unclipped else { return Some(look) };
-    let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright);
+    let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright, false);
     if refit.is_none() && lightcraft_pipeline::profiling() {
         eprintln!("[profile] camera look: no fit without the clipped pixels on the accepted attempt, keeping the fit on all pixels");
     }
@@ -214,7 +240,7 @@ pub(super) fn fit_dng_tone(
         }
         None
     };
-    let Some((mut sensor, reference, clipped)) = proxies(raw, bytes, transform, PROXY, MIN_PREVIEW_FRACTION, None, None) else {
+    let Some((mut sensor, reference, clipped, jpeg_space)) = proxies(raw, bytes, transform, PROXY, MIN_PREVIEW_FRACTION, None, None) else {
         return refuse("preview");
     };
     // As the loader renders it: the profile's tables around the baseline exposure.
@@ -233,10 +259,16 @@ pub(super) fn fit_dng_tone(
     let unclipped = without_clipped(&sensor, &clipped);
     let fit_on = unclipped.as_ref().unwrap_or(&sensor);
     let colour = Some((Mat3::IDENTITY, None));
-    let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+    let bright = HighlightCheck {
+        jpeg_space,
+        pairs: highlights(&sensor, &reference),
+        clipped: clipped_highlights(&sensor, &reference, &clipped),
+        dro: false,
+        grey: false,
+    };
     let look = TONE_FITS.iter().find_map(|&tone| {
         [false, true].into_iter().find_map(|away_from_edges| {
-            fit_attempt(fit_on, &reference, &colour, Attempt { tone, profile: true, away_from_edges, dark: true }, &bright)
+            fit_attempt(fit_on, &reference, &colour, Attempt { tone, profile: true, away_from_edges, dark: true }, &bright, false)
         })
     });
     let Some(look) = look else { return refuse("fit") };
@@ -276,7 +308,7 @@ pub(super) fn look_proxies(
     transform: &CameraTransform,
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
-) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>, Option<lightcraft_codecs::NamedSpace>)> {
     proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded)
 }
 

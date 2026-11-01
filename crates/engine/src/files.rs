@@ -49,6 +49,8 @@ pub(crate) struct CameraColourModel<'a> {
     pub tables: Option<&'a lightcraft_raw::profile::ProfileTables>,
     /// A fitted camera look's hue/saturation table.
     pub hue_sat: Option<&'a crate::camera_preview::HueSat<'a>>,
+    /// Keep luminance when clipping negative channels of a scaled-spread camera look.
+    pub preserve_luminance: bool,
 }
 
 impl CameraColourModel<'_> {
@@ -81,7 +83,7 @@ impl CameraColourModel<'_> {
                     }
                     let out = hue_sat.apply_lanes(rgb);
                     for (l, p) in chunk.iter_mut().enumerate() {
-                        *p = [out[0][l], out[1][l], out[2][l]].map(|v| v.max(0.0));
+                        *p = crate::camera_preview::clip_colour([out[0][l], out[1][l], out[2][l]], self.preserve_luminance);
                     }
                 }
             });
@@ -103,7 +105,7 @@ impl CameraColourModel<'_> {
             Some(tables) => tables.apply(rgb, gain),
             None => rgb.map(|v| v * gain),
         };
-        self.hue_sat.map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        crate::camera_preview::clip_colour(self.hue_sat.map_or(rgb, |h| h.apply(rgb)), self.preserve_luminance)
     }
 }
 
