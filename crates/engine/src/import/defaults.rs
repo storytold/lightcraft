@@ -60,9 +60,11 @@ impl ImportDefaults {
     }
 
     /// A browsed photo being imported now (its record was made while browsing, without import defaults): its
-    /// settings with AI Denoise switched on, when the ISO chosen asks for it and it isn't on already.
+    /// settings with AI Denoise switched on, when the ISO chosen asks for it and it isn't on already. A switch the
+    /// user turned off while browsing (`denoise_on: Some(false)`) stays off.
     pub(crate) fn denoise_for_promoted(&self, p: &Photo) -> Option<lightcraft_develop::DevelopSettings> {
-        (p.local && self.denoise_above(p) && !p.develop.enhance.denoise_enabled()).then(|| with_denoise(&p.develop))
+        let unset = p.develop.enhance.denoise_on.is_none();
+        (p.local && unset && self.denoise_above(p) && !p.develop.enhance.denoise_enabled()).then(|| with_denoise(&p.develop))
     }
 }
 

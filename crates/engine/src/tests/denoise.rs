@@ -1021,6 +1021,34 @@ fn browsing_a_folder_makes_no_ai_denoise_pictures() {
     let _ = std::fs::remove_dir_all(x.dir);
 }
 
+/// A browsed photo whose AI Denoise the user switched off keeps it off when it is imported, even at an ISO the
+/// import setting would switch it on for (CodeRabbit on #2932).
+#[test]
+fn ai_denoise_switched_off_while_browsing_stays_off_at_import() {
+    let mut x = setup("browsedenoiseoff", true);
+    x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
+    let folder = x.dir.join("browsed");
+    std::fs::create_dir_all(&folder).unwrap();
+    let data: Vec<u16> = (0..192 * 160).map(|i| 600 + (i % 192) as u16 * 30).collect();
+    let meta = lightcraft_meta::Metadata { iso: Some(6400), ..Default::default() };
+    for name in ["off.dng", "unset.dng"] {
+        std::fs::write(folder.join(name), synthetic_dng_of(192, 160, "RGGB", data.clone(), None, meta.clone())).unwrap();
+    }
+    x.s.execute("library.browse", &json!({"path": folder.to_string_lossy()})).unwrap();
+    let id_of = |s: &Session, name: &str| s.catalog.photos().find(|p| p.local && p.file_name == name).map(|p| p.id).unwrap();
+    let (off, unset) = (id_of(&x.s, "off.dng"), id_of(&x.s, "unset.dng"));
+    x.s.execute("library.select", &json!({"ids": [off.0]})).unwrap();
+    x.s.execute("denoise.toggle", &json!({"enabled": false})).unwrap();
+    assert_eq!(x.s.develop_of(off).unwrap().enhance.denoise_on, Some(false), "switched off while browsing");
+    let paths: Vec<String> = ["off.dng", "unset.dng"].iter().map(|n| folder.join(n).to_string_lossy().into_owned()).collect();
+    x.s.execute("library.import", &json!({"paths": paths})).unwrap();
+    assert!(x.s.catalog.photo(off).is_some_and(|p| !p.local), "imported");
+    assert_eq!(x.s.develop_of(off).unwrap().enhance.denoise_on, Some(false), "the user's off is kept");
+    assert_eq!(x.s.develop_of(unset).unwrap().enhance.denoise_on, Some(true), "no choice stored: the ISO default applies");
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
 /// An import that switches AI Denoise on for more photos than the queue holds loses none: the rest
 /// wait and are queued as it drains.
 #[test]
