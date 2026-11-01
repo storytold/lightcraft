@@ -241,8 +241,12 @@ impl Session {
             if hr.is_err() {
                 return Err(dev(hr.into()));
             }
-            if hr == S_FALSE || n == 0 || out.len() >= MAX_OBJECTS {
+            if hr == S_FALSE || n == 0 {
                 return Ok(out);
+            }
+            // not a partial listing passed off as the whole
+            if out.len() >= MAX_OBJECTS {
+                return Err(Error::Device(format!("more than {MAX_OBJECTS} objects")));
             }
         }
     }
@@ -337,7 +341,8 @@ impl Session {
                 return Err(Error::Cancelled);
             }
             if o.folder || o.storage {
-                if depth < MAX_DEPTH {
+                // its files are `depth` folders deep
+                if depth <= MAX_DEPTH {
                     let path = if folder.is_empty() { o.name.clone() } else { format!("{folder}/{}", o.name) };
                     let inner = self.listing(&o.id, cancel, seen)?;
                     self.walk(inner, &path, depth + 1, cancel, seen, out, found)?;
