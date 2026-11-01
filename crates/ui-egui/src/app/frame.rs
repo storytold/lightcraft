@@ -50,6 +50,11 @@ impl LightcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let now = self.tick_now();
+        // finished exports and machine tests first, also while the window is hidden or the
+        // full-screen preview is up: a control request below must not be refused for a job that
+        // has ended
+        export_task::poll(self, ctx);
+        crate::machine_test::poll(self, ctx);
         self.drain_control(ctx);
         self.apply_settings(ctx);
         if self.queued_input_needs_repaint() {
@@ -413,8 +418,6 @@ impl LightcraftApp {
         self.library_changed(&ctx);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
-        // (before the full-screen preview returns early: a test that ends there is applied)
-        crate::machine_test::poll(self, &ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
@@ -462,7 +465,6 @@ impl LightcraftApp {
         panels::dialogs::show(self, &ctx, notice_blocks);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
-        export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);

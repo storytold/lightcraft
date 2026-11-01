@@ -95,15 +95,15 @@ fn sample_paths(app: &LightcraftApp, n: usize) -> Vec<String> {
     v
 }
 
-/// Whether the test is running.
+/// Whether a test is running: the app's, or one a control request (`app.testMachine`) started.
 pub fn running(app: &LightcraftApp) -> bool {
-    app.machine.is_some()
+    app.machine.is_some() || app.session.activity.list().iter().any(|t| t.kind == "benchmark")
 }
 
 /// Start the test (nothing when it already runs or an export is running: it would measure the
 /// export too).
 pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
-    if app.machine.is_some() {
+    if running(app) {
         return Err(crate::i18n::tr("The test is already running").to_string());
     }
     if app.export.is_some() {
@@ -256,6 +256,26 @@ mod tests {
         let taken = h.step_until(std::time::Duration::from_secs(20), |h| h.app.machine.is_none());
         assert!(taken && h.app.ui.fullscreen, "the finished test was taken in full screen");
         assert_eq!(h.app.ui.settings.machine_test.as_ref().map(|m| m.lanes), Some(3));
+    }
+
+    /// Review of PR #3499: a test that ends while the window is hidden (logic ticks, no drawing)
+    /// is taken then, so exports aren't refused for a test that has ended; a test a control
+    /// request started counts as running too.
+    #[test]
+    fn a_test_that_ends_while_hidden_is_taken_by_the_logic_tick() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let ctx = egui::Context::default();
+        let (tx, rx) = channel();
+        let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        let _ = tx.send(Ok(MachineReport { lanes: 3, ..Default::default() }));
+        app.machine = Some(MachineTask { rx, _guard });
+        app.logic(&ctx);
+        assert!(app.machine.is_none() && !running(&app), "taken without a drawn frame");
+        assert_eq!(app.ui.settings.machine_test.as_ref().map(|m| m.lanes), Some(3));
+        let other = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        assert!(running(&app), "a test started by a control request");
+        assert!(start(&mut app).is_err(), "not a second one");
+        drop(other);
     }
 
     /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would
