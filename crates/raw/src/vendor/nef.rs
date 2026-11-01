@@ -166,6 +166,7 @@ const MEASURED_BODIES: &[MeasuredBody] = &[
     // D800: 6 files; D800E: 2, with the D800 as sibling; masked: right 14 (issue #914, the top in portrait)
     MeasuredBody { model: "NIKON D800", size: (7424, 4924), bits: 12, crop: (8, 6, 7360, 4912), white: None },
     MeasuredBody { model: "NIKON D800", size: (7424, 4924), bits: 14, crop: (8, 6, 7360, 4912), white: None },
+    MeasuredBody { model: "NIKON D800E", size: (7424, 4924), bits: 12, crop: (8, 6, 7360, 4912), white: None },
     MeasuredBody { model: "NIKON D800E", size: (7424, 4924), bits: 14, crop: (8, 6, 7360, 4912), white: None },
     // 3 files; dark: bottom 1
     MeasuredBody { model: "NIKON D810", size: (7380, 4928), bits: 12, crop: (12, 8, 7360, 4912), white: None },
