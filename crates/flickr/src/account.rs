@@ -54,6 +54,10 @@ pub fn save(path: &Path, account: &Account) -> Result<(), String> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).ok_or_else(|| format!("{}: no folder", path.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let json = serde_json::to_string_pretty(account).map_err(|e| e.to_string())?;
+    // `load` refuses a larger file: saving one would sign the user out at the next start
+    if json.len() as u64 > MAX_FILE {
+        return Err(format!("{}: the account is larger than {MAX_FILE} bytes; not saved", path.display()));
+    }
     let tmp = dir.join(format!(".{}.tmp-{}", path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), crate::oauth::unique()));
     let write = || -> std::io::Result<()> {
         use std::io::Write;
@@ -67,7 +71,21 @@ pub fn save(path: &Path, account: &Account) -> Result<(), String> {
     write().map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("{}: {e}", path.display())
-    })
+    })?;
+    // the rename lives in the folder: sync it too, so a power cut after `Ok` keeps the new file
+    sync_dir(dir);
+    Ok(())
+}
+
+/// Flush a folder's entries to disk (best effort; Windows can't open a folder as a file, and its
+/// renames are already durable).
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 /// A new file at `p` (never an existing one), on Unix readable and writable by its owner only.
@@ -129,6 +147,19 @@ mod tests {
         }
         drop(f);
         assert!(create_owner_only(&p).is_err(), "never reuses a file that is already there");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_account_too_large_to_load_is_not_saved() {
+        let d = dir("toolarge");
+        let path = d.join("flickr.json");
+        let small = Account { api_key: "k".into(), api_secret: "s".into(), token: None };
+        save(&path, &small).unwrap();
+        let huge = Account { api_key: "k".repeat(MAX_FILE as usize), ..small.clone() };
+        assert!(save(&path, &huge).unwrap_err().contains("larger than"));
+        assert_eq!(load(&path).unwrap(), small, "the saved account is kept");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "no temp file left behind");
         let _ = std::fs::remove_dir_all(&d);
     }
 

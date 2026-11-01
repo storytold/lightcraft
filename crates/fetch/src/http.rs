@@ -607,6 +607,40 @@ fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u
         stream.write_all(body, limits)?;
     }
     let mut conn = Conn { stream, buf: Vec::new(), pos: 0 };
+    // interim answers (`100 Continue`, `103 Early Hints`) come before the real one: skip them,
+    // a bounded number of times. `101 Switching Protocols` is final (nothing here upgrades).
+    let mut interim = 0;
+    let (status, headers) = loop {
+        let (status, headers) = read_head(&mut conn, limits)?;
+        if !(100..200).contains(&status) || status == 101 {
+            break (status, headers);
+        }
+        interim += 1;
+        if interim > MAX_INTERIM {
+            return Err(HttpError::Protocol(format!("more than {MAX_INTERIM} interim (1xx) responses")));
+        }
+    };
+    let find = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
+    let body = if status == 204 || status == 304 || (100..200).contains(&status) {
+        BodyMode::Done
+    } else if find("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
+        BodyMode::Chunked { left: 0, done: false }
+    } else if let Some(n) = find("content-length") {
+        // RFC 9110: `1*DIGIT`; `u64::from_str` alone would also take a leading '+'
+        let v = n.trim();
+        let len = if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) { v.parse::<u64>().ok() } else { None };
+        BodyMode::Length(len.ok_or_else(|| HttpError::Protocol(format!("bad Content-Length `{n}`")))?)
+    } else {
+        BodyMode::Close
+    };
+    Ok(Response { status, headers, conn, body })
+}
+
+/// Most interim (1xx) responses skipped before the final one.
+const MAX_INTERIM: usize = 8;
+
+/// One status line and its headers.
+fn read_head(conn: &mut Conn, limits: &Limits) -> Result<(u16, Vec<(String, String)>), HttpError> {
     let status_line = conn.line(MAX_HEAD, limits)?;
     let mut parts = status_line.split_whitespace();
     let version = parts.next().unwrap_or_default();
@@ -629,20 +663,7 @@ fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u
             headers.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
-    let find = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
-    let body = if status == 204 || status == 304 || (100..200).contains(&status) {
-        BodyMode::Done
-    } else if find("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
-        BodyMode::Chunked { left: 0, done: false }
-    } else if let Some(n) = find("content-length") {
-        // RFC 9110: `1*DIGIT`; `u64::from_str` alone would also take a leading '+'
-        let v = n.trim();
-        let len = if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) { v.parse::<u64>().ok() } else { None };
-        BodyMode::Length(len.ok_or_else(|| HttpError::Protocol(format!("bad Content-Length `{n}`")))?)
-    } else {
-        BodyMode::Close
-    };
-    Ok(Response { status, headers, conn, body })
+    Ok((status, headers))
 }
 
 #[cfg(test)]
@@ -861,6 +882,25 @@ mod tests {
         assert!(head.starts_with("POST /upload HTTP/1.1\r\n"), "{head}");
         assert!(head.contains("Content-Length: 200000\r\n") && head.contains("Content-Type: application/octet-stream\r\n"), "{head}");
         assert_eq!(got, body);
+    }
+
+    #[test]
+    fn interim_answers_are_skipped_up_to_a_limit() {
+        let (addr, server) =
+            serve_once("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        let cancel = AtomicBool::new(false);
+        let limits = Limits { connect: Duration::from_secs(5), stall: Duration::from_secs(5), cancel: &cancel };
+        let url = Url::parse(&format!("{addr}/upload")).unwrap();
+        let mut r = post(&url, &[], b"x", &limits).unwrap();
+        assert_eq!(r.status, 200, "the final status, not the interim ones");
+        assert_eq!(r.read_to_end(16, &limits).unwrap(), b"ok");
+        server.join().unwrap();
+
+        let endless = "HTTP/1.1 100 Continue\r\n\r\n".repeat(MAX_INTERIM + 1);
+        let (addr, server) = serve_once(Box::leak(endless.into_boxed_str()));
+        let url = Url::parse(&format!("{addr}/upload")).unwrap();
+        assert!(matches!(post(&url, &[], b"x", &limits), Err(HttpError::Protocol(_))), "a server that never answers is refused");
+        server.join().unwrap();
     }
 
     #[test]

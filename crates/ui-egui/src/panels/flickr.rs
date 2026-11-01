@@ -58,8 +58,12 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         return;
     }
     let status = app.session.execute("flickr.status", &json!({})).unwrap_or_default();
-    if !app.flickr.loaded {
-        app.flickr.key = status["apiKey"].as_str().unwrap_or_default().to_string();
+    // filled from the stored key when first shown, and again whenever that key changes (a
+    // command, Forget Key): Save Key must never send a stale key, which would sign out
+    let stored = status["apiKey"].as_str().unwrap_or_default();
+    if !app.flickr.loaded || app.flickr.loaded_key != stored {
+        app.flickr.key = stored.to_string();
+        app.flickr.loaded_key = stored.to_string();
         app.flickr.secret.clear();
         app.flickr.loaded = true;
     }
