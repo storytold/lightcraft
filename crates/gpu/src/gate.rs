@@ -69,9 +69,9 @@ pub(crate) fn in_one_turn<R>(bytes: u64, vram: u64, stop: &dyn Fn() -> bool, f: 
         return f();
     }
     let turn = enter(bytes, vram, stop);
-    let was = IN_TURN.with(|c| c.replace(turn.is_some()));
+    let _restore = Restore(&IN_TURN, IN_TURN.with(|c| c.replace(turn.is_some())));
     let r = f();
-    IN_TURN.with(|c| c.set(was));
+    drop(_restore);
     drop(turn);
     r
 }
@@ -105,10 +105,19 @@ pub(crate) fn try_turn(bytes: u64, vram: u64) -> Option<Turn> {
 
 /// Run `f` with this thread's GPU renders counted as batch work.
 pub(crate) fn as_batch<R>(f: impl FnOnce() -> R) -> R {
-    let was = BATCH.with(|b| b.replace(true));
-    let r = f();
-    BATCH.with(|b| b.set(was));
-    r
+    let _restore = Restore(&BATCH, BATCH.with(|b| b.replace(true)));
+    f()
+}
+
+/// Puts a thread's flag back as it was when dropped, also when `f` panics (a panic caught by the
+/// export's guard must not leave the thread in batch work or in a turn: review of PR #3532).
+struct Restore(&'static std::thread::LocalKey<std::cell::Cell<bool>>, bool);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let was = self.1;
+        let _ = self.0.try_with(|c| c.set(was));
+    }
 }
 
 /// Are this thread's renders batch work?
@@ -252,6 +261,25 @@ mod tests {
 
     /// The gate's statics are shared: tests that use them take turns.
     static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// Review of PR #3532: a panic inside batch work or a turn leaves the thread's flags as they
+    /// were (the export guard catches the panic and the lane goes on with its next photo).
+    #[test]
+    fn a_panic_in_batch_work_leaves_the_thread_as_it_was() {
+        let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!is_batch());
+        let caught = std::panic::catch_unwind(|| as_batch(|| panic!("render")));
+        assert!(caught.is_err());
+        assert!(!is_batch(), "still batch work after the panic");
+        let caught = std::panic::catch_unwind(|| as_batch(|| in_one_turn(0, 1 << 30, &|| false, || panic!("render"))));
+        assert!(caught.is_err());
+        assert!(!is_batch() && !IN_TURN.with(|c| c.get()), "still in a turn after the panic");
+        // nested: the outer value comes back
+        as_batch(|| {
+            let _ = std::panic::catch_unwind(|| as_batch(|| panic!("inner")));
+            assert!(is_batch());
+        });
+    }
 
     #[test]
     fn job_memory_grows_with_the_pixels_and_never_overflows() {
