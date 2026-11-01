@@ -97,6 +97,32 @@ impl Attention {
         Ok(self.o.forward(x)?)
     }
 
+    /// [`Self::forward`] without a bias, through the multi-threaded CPU kernels (SAM 2).
+    pub fn forward_fast(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+        self.attend_fast(&self.proj_q_fast(q)?, &self.proj_k_fast(k)?, &self.proj_v_fast(v)?)
+    }
+
+    /// The query projection (fast path).
+    pub fn proj_q_fast(&self, x: &Tensor) -> Result<Tensor> {
+        crate::cpu::linear(x, &self.q, crate::cpu::Act::None, None)
+    }
+
+    /// The key projection (fast path).
+    pub fn proj_k_fast(&self, x: &Tensor) -> Result<Tensor> {
+        crate::cpu::linear(x, &self.k, crate::cpu::Act::None, None)
+    }
+
+    /// The value projection (fast path).
+    pub fn proj_v_fast(&self, x: &Tensor) -> Result<Tensor> {
+        crate::cpu::linear(x, &self.v, crate::cpu::Act::None, None)
+    }
+
+    /// Attention of already projected `q`, `k`, `v`, then the output projection (fast path).
+    pub fn attend_fast(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+        let o = crate::cpu::mha(q, k, v, self.heads, (self.head_dim as f64).powf(-0.5))?;
+        crate::cpu::linear(&o, &self.o, crate::cpu::Act::None, None)
+    }
+
     /// `q`, `k`, `v`: `[B, L, hidden]`; `bias` broadcastable to `[B, heads, Lq, Lk]`.
     pub fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
         let (b, lq, _) = q.dims3()?;

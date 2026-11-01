@@ -112,3 +112,65 @@ pub(super) fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: 
         ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("The download didn't work:"))).color(egui::Color32::from_rgb(230, 90, 80)));
     }
 }
+
+/// The dialog for an openly licensed AI model: what it does, its size and licence, and the download's progress.
+pub(super) fn ai_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, model: &str, error: Option<&str>) {
+    let t = Tokens::get(ui.ctx());
+    let seg = &app.session.segmenter;
+    let Some(m) = seg.model_status().into_iter().find(|m| m.id == model) else {
+        ui.label(crate::i18n::tr("AI masks are not available in this build."));
+        return;
+    };
+    ui.label(egui::RichText::new(format!("{} — {}", m.title, crate::i18n::tr(&m.purpose))).font(t.semibold(13.0)).color(t.text_label));
+    if m.installed {
+        ui.label(crate::i18n::tr("The model is installed: these AI masks are ready."));
+        return;
+    }
+    ui.label(crate::i18n::tr(
+        "This AI model isn't part of LightCraft, and everything else works without it: until it is installed, this mask is made by a simpler, approximate method.",
+    ));
+    let mb = |b: u64| b as f64 / 1e6;
+    let dir = m.dir.clone().unwrap_or_default();
+    ui.label(crate::i18n::tr_format!("A one-time download of about {mb} MB, saved in {dir}", mb = format!("{:.0}", mb(m.size_bytes)), dir = dir));
+    ui.label(
+        egui::RichText::new(crate::i18n::tr_format!(
+            "Licence: {licence}, an open-source licence that allows any use, including commercial work.",
+            licence = m.license
+        ))
+        .color(t.text_label),
+    );
+    if m.licence_pending {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "Test build: whether this model's training data allows LightCraft to offer it is pending a maintainer decision.",
+            ))
+            .color(t.text_dim),
+        );
+    }
+    let r = ui.link(crate::i18n::tr("Read the licence")).on_hover_text(&m.license_url);
+    crate::widgets::register(ui, "link:aiModelLicense", r.rect);
+    if r.clicked() {
+        let _ = crate::links::open(app, &m.license_url);
+    }
+    let d = m.download;
+    if d.running {
+        ui.add_space(4.0);
+        let frac = if d.total > 0 { d.done as f64 / d.total as f64 } else { 0.0 };
+        let text = format!("{:.0} / {:.0} MB", mb(d.done), mb(d.total));
+        let r = ui.add(egui::ProgressBar::new(frac as f32).text(text));
+        crate::widgets::register(ui, "progress:aiModelDownload", r.rect);
+        let r = ui.button(crate::i18n::tr("Cancel Download"));
+        crate::widgets::register(ui, "button:aiModelCancel", r.rect);
+        if r.clicked()
+            && let Err(e) = app.run("ai.models.cancel", json!({"id": model}))
+        {
+            app.toast_error(ui.ctx(), e);
+        }
+        ui.label(egui::RichText::new(crate::i18n::tr("You can close this: the download continues, and resumes if interrupted.")).color(t.text_dim));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    if let Some(e) = error.map(str::to_string).or(d.error) {
+        ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("The download didn't work:"))).color(egui::Color32::from_rgb(230, 90, 80)));
+    }
+}

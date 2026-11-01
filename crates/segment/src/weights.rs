@@ -52,6 +52,11 @@ impl Weights {
             }
             let dtype = match v.get("dtype").and_then(|d| d.as_str()) {
                 Some("F32") => Ok(DType::F32),
+                Some("F16") => Ok(DType::F16),
+                Some("BF16") => Ok(DType::BF16),
+                // integer buffers (BatchNorm's `num_batches_tracked`, index tables) are listed
+                // but never read as weights
+                Some("I64") => Ok(DType::I64),
                 other => Err(format!("{other:?}")),
             };
             let shape: Vec<usize> = v
@@ -92,12 +97,13 @@ impl Weights {
         self.entries.get(name).map(|e| e.shape.as_slice())
     }
 
-    /// Tensor `name` as stored, on the CPU.
+    /// Tensor `name` on the CPU, as `f32` (F16 and BF16 are converted).
     pub fn read(&self, name: &str) -> Result<Tensor> {
         let e = self.entries.get(name).ok_or_else(|| Error::Model(format!("missing tensor `{name}`")))?;
-        if let Err(dtype) = &e.dtype {
-            return Err(Error::Model(format!("{name}: unsupported dtype {dtype} (the SAM 3 checkpoint is F32)")));
-        }
+        let dtype = match &e.dtype {
+            Ok(d) => *d,
+            Err(other) => return Err(Error::Model(format!("{name}: unsupported dtype {other} (expected F32, F16 or BF16)"))),
+        };
         // checked against the file's length in `open`
         let len = usize::try_from(e.end.saturating_sub(e.start)).map_err(|_| Error::Model(format!("{name}: too large")))?;
         let mut bytes = vec![0u8; len];
@@ -106,8 +112,14 @@ impl Weights {
             f.seek(SeekFrom::Start(self.data_start + e.start)).map_err(|err| Error::Model(format!("{name}: {err}")))?;
             f.read_exact(&mut bytes).map_err(|err| Error::Model(format!("{name}: {err}")))?;
         }
-        let v: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
-        Ok(Tensor::from_vec(v, e.shape.as_slice(), &Device::Cpu)?)
+        match dtype {
+            DType::F32 => {
+                let v: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+                Ok(Tensor::from_vec(v, e.shape.as_slice(), &Device::Cpu)?)
+            }
+            DType::F16 | DType::BF16 => Ok(Tensor::from_raw_buffer(&bytes, dtype, e.shape.as_slice(), &Device::Cpu)?.to_dtype(DType::F32)?),
+            other => Err(Error::Model(format!("{name}: a {other:?} tensor, not weights"))),
+        }
     }
 }
 
