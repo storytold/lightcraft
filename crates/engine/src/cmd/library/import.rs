@@ -7,10 +7,10 @@ pub fn list_auto_import_folder(folder: &str) -> std::result::Result<Vec<(String,
     let rd = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
     Ok(rd
         .flatten()
-        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|e| {
-            let m = std::fs::metadata(e.path()).ok()?;
-            m.is_file().then(|| (e.path().to_string_lossy().to_string(), m.len()))
+            let path = e.path();
+            let m = std::fs::metadata(&path).ok()?;
+            (m.is_file() && !crate::walk::is_hidden_with(&path, &m)).then(|| (path.to_string_lossy().to_string(), m.len()))
         })
         .collect())
 }

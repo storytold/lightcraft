@@ -3,7 +3,8 @@
 //! [`files_in`], which stops at a depth and a number of directory entries instead of walking a
 //! whole drive, follows a symbolic link or junction to a folder at most once (no loops), and
 //! decides what is a folder from the directory listing itself (no extra open per entry, which
-//! is what makes a large walk slow on Windows).
+//! is what makes a large walk slow on Windows; nor, on macOS, an lstat per file to see whether it
+//! is hidden).
 //!
 //! It never chooses where to walk: callers pass a folder the user named. Nothing in the app walks
 //! at startup or on the UI thread.
@@ -43,36 +44,86 @@ pub struct Walked {
     pub entries: usize,
 }
 
-/// Whether the entry has a dot-prefixed name or a Windows or macOS hidden attribute.
+/// Whether a listed entry is hidden: a dot-prefixed name, or the Windows or macOS hidden
+/// attribute. Windows' comes with the listing; macOS' takes an lstat, so it is read for folders
+/// only (a hidden folder like `~/Library` hides a whole tree; a file hidden other than by a dot
+/// name is a rare system file).
 pub fn is_hidden_entry(entry: &std::fs::DirEntry) -> bool {
-    hidden_with_metadata(&entry.path(), || entry.metadata())
+    hidden_entry(entry, entry.file_type().is_ok_and(|t| t.is_dir()))
+}
+
+/// [`is_hidden_entry`] for an entry the caller already knows to be a folder or not.
+fn hidden_entry(entry: &std::fs::DirEntry, is_folder: bool) -> bool {
+    dot_name(Some(&entry.file_name())) || HIDDEN.is_some_and(|a| a.read_for(is_folder) && entry.metadata().is_ok_and(|m| a.hides(attribute_word(&m))))
 }
 
 /// Whether the path has a dot-prefixed name or a Windows or macOS hidden attribute.
 pub fn is_hidden_path(path: &Path) -> bool {
-    hidden_with_metadata(path, || std::fs::symlink_metadata(path))
+    dot_name(path.file_name()) || HIDDEN.is_some_and(|a| std::fs::symlink_metadata(path).is_ok_and(|m| a.hides(attribute_word(&m))))
 }
 
-fn hidden_with_metadata(path: &Path, metadata: impl FnOnce() -> std::io::Result<std::fs::Metadata>) -> bool {
-    if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
-        return true;
+/// Whether `path`, whose `metadata` the caller has already read, has a dot-prefixed name or a
+/// Windows or macOS hidden attribute (file or folder: the attribute is read already).
+pub fn is_hidden_with(path: &Path, metadata: &std::fs::Metadata) -> bool {
+    dot_name(path.file_name()) || HIDDEN.is_some_and(|a| a.hides(attribute_word(metadata)))
+}
+
+fn dot_name(name: Option<&std::ffi::OsStr>) -> bool {
+    name.is_some_and(|n| n.to_string_lossy().starts_with('.'))
+}
+
+/// A platform's hidden attribute: the bit of an entry's attribute word that hides it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HiddenAttribute {
+    bit: u32,
+    /// Whether a folder's listing already holds every entry's attribute word (Windows). Where it
+    /// does not (macOS: one lstat per entry, a round trip each on a network share), a listed
+    /// entry's attribute is read only for folders: a hidden folder (`~/Library`) hides a whole
+    /// tree, while a file hidden other than by a dot name is a rare system file, not a photo.
+    listed: bool,
+}
+
+impl HiddenAttribute {
+    fn hides(self, word: u32) -> bool {
+        word & self.bit != 0
     }
+
+    /// Whether a listed entry's attribute word is read: a folder's always, a file's only when
+    /// the listing holds it.
+    fn read_for(self, is_folder: bool) -> bool {
+        is_folder || self.listed
+    }
+}
+
+/// `FILE_ATTRIBUTE_HIDDEN` in the file attributes, which come with the listing.
+const WINDOWS_HIDDEN: HiddenAttribute = HiddenAttribute { bit: 0x2, listed: true };
+/// `UF_HIDDEN` (Finder's hidden flag) in `st_flags`, which takes an lstat.
+const MACOS_HIDDEN: HiddenAttribute = HiddenAttribute { bit: 0x8000, listed: false };
+/// This platform's hidden attribute (none elsewhere: only dot names are hidden).
+const HIDDEN: Option<HiddenAttribute> = if cfg!(windows) {
+    Some(WINDOWS_HIDDEN)
+} else if cfg!(target_os = "macos") {
+    Some(MACOS_HIDDEN)
+} else {
+    None
+};
+
+/// The word [`HIDDEN`]'s bit is in.
+fn attribute_word(m: &std::fs::Metadata) -> u32 {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-        metadata().is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+        m.file_attributes()
     }
     #[cfg(target_os = "macos")]
     {
         use std::os::darwin::fs::MetadataExt;
-        const UF_HIDDEN: u32 = 0x0000_8000;
-        metadata().is_ok_and(|m| m.st_flags() & UF_HIDDEN != 0)
+        m.st_flags()
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = metadata;
-        false
+        let _ = m;
+        0
     }
 }
 
@@ -91,7 +142,7 @@ pub enum EntryKind {
 /// ends the walk there (a scan cancelled; [`Walked::truncated`] is left alone: who stopped it knows).
 pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool) -> bool;
 
-/// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
+/// The files below folder `root` that `keep` accepts. Hidden entries (see [`is_hidden_entry`])
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
 /// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped.
 pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
@@ -147,13 +198,11 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             }
             out.entries = out.entries.saturating_add(1);
             let p = e.path();
-            // (a hidden entry's kind is only asked for when the listing is wanted; every other
-            // entry's is asked once)
-            let is_hidden = is_hidden_entry(&e);
+            let ft = e.file_type();
+            let is_hidden = hidden_entry(&e, ft.as_ref().is_ok_and(|t| t.is_dir()));
             if is_hidden && listed.is_none() {
                 continue;
             }
-            let ft = e.file_type();
             if let Some(listed) = listed.as_mut() {
                 let kind = match &ft {
                     Ok(t) if t.is_symlink() => EntryKind::Other,
@@ -228,11 +277,40 @@ mod tests {
         found.sort();
         let mut expected = vec![root.join("Shown.jpg")];
         if !cfg!(any(windows, target_os = "macos")) {
-            expected.extend([root.join("Hidden/inside.jpg"), root.join("hidden.jpg")]);
+            expected.push(root.join("Hidden/inside.jpg"));
+        }
+        // (macOS reads no file's flags in a walk: that would be an lstat per file)
+        if !cfg!(windows) {
+            expected.push(root.join("hidden.jpg"));
         }
         expected.sort();
         assert_eq!(found, expected);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The hidden attributes' bits and when a listed entry's is read, checked on every platform
+    /// (the attributes themselves can only be set on Windows and macOS).
+    #[test]
+    fn hidden_attributes_are_each_platforms_bit_and_macos_reads_only_folders() {
+        const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
+        const UF_IMMUTABLE: u32 = 0x2;
+        assert!(WINDOWS_HIDDEN.hides(0x2) && WINDOWS_HIDDEN.hides(0x2 | FILE_ATTRIBUTE_ARCHIVE));
+        assert!(!WINDOWS_HIDDEN.hides(FILE_ATTRIBUTE_ARCHIVE) && !WINDOWS_HIDDEN.hides(0x8000));
+        assert!(MACOS_HIDDEN.hides(0x8000) && MACOS_HIDDEN.hides(0x8000 | UF_IMMUTABLE));
+        assert!(!MACOS_HIDDEN.hides(UF_IMMUTABLE) && !MACOS_HIDDEN.hides(0));
+        // Windows' listing holds every entry's attributes; macOS's would take an lstat per file
+        assert!(WINDOWS_HIDDEN.read_for(true) && WINDOWS_HIDDEN.read_for(false));
+        assert!(MACOS_HIDDEN.read_for(true) && !MACOS_HIDDEN.read_for(false));
+        assert_eq!(
+            HIDDEN,
+            if cfg!(windows) {
+                Some(WINDOWS_HIDDEN)
+            } else if cfg!(target_os = "macos") {
+                Some(MACOS_HIDDEN)
+            } else {
+                None
+            }
+        );
     }
 
     /// Given a folder with files, a folder inside it, a hidden file and a link, when it is walked
