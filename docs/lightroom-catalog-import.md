@@ -62,7 +62,7 @@ Photographs counts them), and these add up to it:
 | `added` | became new library records (offline originals and virtual copies included), or whose record this import's file import made, or browsed Local photos that joined the library |
 | `alreadyInLibrary` | matched a library photo (by path, or by the import index on reimport); the record is updated in place |
 | `inRecentlyDeleted` | matched a library photo in Recently Deleted; it stays there |
-| `notSupported` | aren't a file type LightCraft reads (videos, for one), with their virtual copies; `notSupportedTypes` counts them by extension |
+| `notSupported` | aren't a file type LightCraft reads (a document or a program; a video the catalog lists as one becomes a video record, in `added`), with their virtual copies; `notSupportedTypes` counts them by extension |
 | `pathRefused` | have an original the import doesn't look at (below), with their virtual copies; no record is made |
 | `incomplete` | have incomplete catalog records (`skipped`) |
 
