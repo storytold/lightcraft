@@ -285,10 +285,14 @@ pub fn fetch(source: &dyn Source, camera: &str, known: &Known, dir: &Path, progr
         } else {
             let path = staged_path(dir, &f);
             // two device names that sanitize to one path: the first wins, the other is reported
-            if seen_paths.insert(path.clone()) {
-                wanted.push((f, path));
-            } else {
+            if !seen_paths.insert(path.clone()) {
                 out.failed.push(Failure { name: f.name.clone(), error: "same name as another file on the camera".into() });
+            } else if known.in_use(&path) {
+                // a library photo's original (added in place) is staged under this name: a different
+                // shot with the name is never copied over it
+                out.failed.push(Failure { name: f.name.clone(), error: "a library photo uses the file staged under this name".into() });
+            } else {
+                wanted.push((f, path));
             }
         }
     }
@@ -533,6 +537,29 @@ mod tests {
         assert_eq!((r.known, r.fetched), (2, 0), "{r:?}");
         assert!(a.is_file(), "the library's original stays");
         assert!(!b.exists(), "a staged copy the library doesn't use is still cleaned away");
+        done(&dir);
+    }
+
+    /// CodeRabbit on #1635: a different shot under the name of a staged file a library photo uses
+    /// (added in place) is reported, never copied over that photo's original.
+    #[test]
+    fn a_staged_original_is_never_replaced() {
+        let dir = temp("replace");
+        let r =
+            fetch(&fake(vec![file("DCIM/100", "A.JPG", 16, Some("2026-10-11T09:17:08"))]), "cam-1", &Known::default(), &dir, &Progress::default())
+                .unwrap();
+        let a = PathBuf::from(&r.staged[0]);
+        let before = std::fs::read(&a).unwrap();
+        let mut known = Known::default();
+        known.add("A.JPG", 16, Some("2026-10-11T09:17:08"));
+        known.uses(&a);
+        // the camera's counter started over: another A.JPG, of another size and time
+        let cam = fake(vec![file("DCIM/100", "A.JPG", 24, Some("2026-10-20T10:00:00"))]);
+        let r = fetch(&cam, "cam-1", &known, &dir, &Progress::default()).unwrap();
+        assert_eq!((r.fetched, r.staged.len(), r.failed.len()), (0, 0, 1), "{r:?}");
+        assert_eq!(r.failed[0].error, "a library photo uses the file staged under this name");
+        assert_eq!(std::fs::read(&a).unwrap(), before, "the library's original is unchanged");
+        assert!(cam.reads.lock().unwrap().is_empty(), "nothing read for it");
         done(&dir);
     }
 
