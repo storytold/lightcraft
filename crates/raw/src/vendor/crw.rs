@@ -28,8 +28,11 @@ fn map_err(e: craft_crw::Error) -> RawError {
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     // the crate's own cap (2²³ samples; the largest CRW frame is 7.4 million): its decode holds
     // about three `u16` buffers of the declared size, so the raw crate's general `MAX_SAMPLES`
-    // (2³⁰) would let a malformed file ask for gigabytes
-    let limits = craft_crw::Limits::default();
+    // (2³⁰) would let a malformed file ask for gigabytes. No sample may be filled after the
+    // entropy stream ends (the crate allows one 64-sample block by default): every corpus file
+    // ends exactly on its frame, so a shorter stream is a truncated file and is `Corrupt`.
+    let mut limits = craft_crw::Limits::default();
+    limits.max_stream_end_fill = 0;
     let full = mode == Mode::Full;
     let (h, samples, black, white) = if full {
         let img = craft_crw::decode(bytes, &limits).map_err(map_err)?;
@@ -221,6 +224,22 @@ mod tests {
         assert!(why.starts_with("CRW: ") && why.contains("before the frame does"), "{why}");
         // the header alone still reads, so the library can list the file and show its preview
         assert!(decode(&f, Mode::Header).is_ok());
+    }
+
+    /// A stream that ends a few samples short is `Corrupt` too: the crate's default limit fills up
+    /// to one 64-sample block silently, and no real CRW fills any.
+    #[test]
+    fn a_stream_a_few_samples_short_is_corrupt() {
+        // an all-zero entropy stream of 842 bytes decodes the 960-sample frame exactly
+        let payload = |len: usize| vec![0u8; 514 + len];
+        let whole = synthetic_crw_with_payload("Canon EOS D60", W, H, payload(842));
+        assert!(decode(&whole, Mode::Full).is_ok());
+        // six bytes fewer leave 10 samples unread, within the crate's default of 64
+        let short = synthetic_crw_with_payload("Canon EOS D60", W, H, payload(836));
+        let filled = craft_crw::decode(&short, &craft_crw::Limits::default()).map(|i| i.stream_end_fill);
+        assert_eq!(filled, Ok(10));
+        let Err(RawError::Corrupt(why)) = decode(&short, Mode::Full) else { panic!("a stream 10 samples short must be refused") };
+        assert!(why.contains("10 samples before the frame does"), "{why}");
     }
 
     #[test]
