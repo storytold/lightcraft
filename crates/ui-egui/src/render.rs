@@ -194,7 +194,7 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
 /// before / hover renders') may hold together before the idle ones are cleared (see
 /// [`stage_trim_order`] for the open photo's own): they are the decoded-image sized buffers that the
 /// engine's own caches do not count.
-const STAGE_BUDGET_SHARE: usize = 4;
+pub(crate) const STAGE_BUDGET_SHARE: usize = 4;
 
 /// Variant thumbnails kept as textures (LRU), when nothing asks for more.
 pub const VARIANT_TEXTURES: usize = 96;

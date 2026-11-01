@@ -20,12 +20,17 @@
 //! `cargo xtask ci` lists the skips by need and reason in its summary and in
 //! `target/ci/report.json`. A test that runs part of its checks (e.g. only the CPU half) records
 //! the part it could not run the same way.
+//!
+//! **Memory per test.** [`memory::per_test_bytes`] is a test's share of the memory available
+//! when libtest runs several tests at once, for harnesses that size caches per test.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
+
+pub mod memory;
 
 /// The environment variable naming the file skips are appended to (JSON lines).
 pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";

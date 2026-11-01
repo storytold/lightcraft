@@ -26,7 +26,7 @@ impl LightcraftApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
-        Self {
+        let app = Self {
             session,
             ui: UiState::default(),
             services,
@@ -134,7 +134,11 @@ impl LightcraftApp {
             recent_checks: Default::default(),
             activity_expanded: false,
             model_setup: Default::default(),
-        }
+        };
+        // a test app's own caches are sized for its test's share of the machine (issue #3066)
+        #[cfg(test)]
+        let app = test_budget::cap_instance(app);
+        app
     }
 
     /// Supply the browser's separately downloaded Simplified Chinese font before the first frame.
