@@ -21,7 +21,7 @@ fn edit_panel() -> Headless {
     assert_eq!(h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), T)["ok"], true);
     assert_eq!(h.request("ui.set", json!({"view": "detail", "right": "edit"}), T)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.open_sections");
     h
 }
 
@@ -41,7 +41,7 @@ fn default(control: &str) -> f64 {
 fn ask(h: &mut Headless, method: &str, params: serde_json::Value) {
     let r = h.request(method, params.clone(), T);
     assert_eq!(r["ok"], true, "{method} {params}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 fn set(h: &mut Headless, control: &str, value: f64) {

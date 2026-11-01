@@ -28,12 +28,12 @@ fn filmstrip_click_in_compare_keeps_the_active_photo_on_screen() {
         let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.app.ui.zoom = zoom;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.zoom");
         let target = vis[4];
         let before = rating(&h, target);
         let r = h.request("ui.clickWidget", json!({"id": format!("film:{target}")}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
         let (sel, cand) = h.app.ui.compare.expect("still comparing");
         let active = h.app.session.selection.active.map(|p| p.0).expect("an active photo");
         // a rating key must not change a photo that isn't shown
@@ -55,11 +55,11 @@ fn filmstrip_click_replaces_the_active_side_in_compare() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.compare");
     let click_film = |h: &mut Headless, id: u64| {
         let r = h.request("ui.clickWidget", json!({"id": format!("film:{id}")}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
     };
     let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
     let others: Vec<u64> = vis.iter().copied().filter(|v| *v != sel && *v != cand).take(3).collect();
@@ -94,11 +94,11 @@ fn modified_filmstrip_clicks_in_compare_change_the_selection_not_the_pair() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.compare");
     let click_film = |h: &mut Headless, id: u64, cmd: bool, shift: bool| {
         let r = h.request("ui.clickWidget", json!({"id": format!("film:{id}"), "cmd": cmd, "shift": shift}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
     };
     let selected = |h: &Headless| -> Vec<u64> {
         let s = &h.app.session.selection;
@@ -151,7 +151,7 @@ fn modified_filmstrip_clicks_in_compare_change_the_selection_not_the_pair() {
     // a rating key acts on the active photo, which is on screen; a merely selected photo is left alone
     let was = rating(&h, far);
     h.request("ui.key", json!({"key": "3"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key 3");
     assert_eq!(rating(&h, before.unwrap()), Some(3));
     assert_eq!(rating(&h, far), was, "the hidden photo was rated");
     // a plain click still replaces the active side
@@ -171,7 +171,7 @@ fn a_compare_pane_says_rendering_while_its_edit_renders() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.compare");
     assert!(!pill(&h), "finished renders");
     let open = Rc::new(Cell::new(false));
     h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
@@ -199,7 +199,7 @@ fn a_compare_pane_says_when_its_render_failed() {
     let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
     h.request("engine.execute", json!({"command": "view.compare"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.compare");
     assert!(!failed(&h));
     let open = Rc::new(Cell::new(true));
     h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::failing(open, |s| matches!(s, Slot::Compare(_)))));
@@ -265,13 +265,13 @@ fn deleting_the_pinned_reference_stops_drawing_it_and_reentry_uses_a_live_photo(
     let reference = h.app.session.visible_cloned()[0];
     h.app.run("library.select", json!({"ids": [reference.0]})).unwrap();
     h.app.run("view.reference", json!({})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.reference");
     let texture = h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).unwrap().tex.id();
     let drawn = |h: &Headless| h.view.painted_shapes().iter().any(|s| matches!(s, egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == texture));
     assert!(drawn(&h), "the live reference is shown before deletion");
     let active = h.app.session.active().unwrap();
     h.app.run("photo.delete", json!({"ids": [reference.0]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.delete");
     assert!(!drawn(&h), "Recently Deleted photos must not remain on the reference canvas");
     assert!(!h.app.renderer.textures.contains_key(&crate::render::Slot::Compare(0)), "the deleted reference's pane is released");
     assert!(!h.app.renderer.textures.contains_key(&crate::render::Slot::Compare(1)), "and the active photo's pane beside it");
@@ -281,7 +281,7 @@ fn deleting_the_pinned_reference_stops_drawing_it_and_reentry_uses_a_live_photo(
     assert_eq!(h.app.ui.reference, Some(active.0));
     h.app.run("photo.restore", json!({"ids": [reference.0]})).unwrap();
     h.app.run("photo.setReference", json!({"id": reference.0})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setReference");
     assert!(h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).is_some_and(|t| t.photo == reference));
 }
 
@@ -302,19 +302,19 @@ fn info_panel_label_in_compare_labels_the_active_photo_and_shows_it() {
     assert_eq!(r["ok"], true, "{r}");
     let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
     h.app.ui.right = crate::state::RightPanel::Info;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.right");
     let photo = |h: &Headless, id: u64| h.app.session.catalog.photo(PhotoId(id)).cloned().expect("photo");
     let widgets = |h: &mut Headless| h.request("ui.widgets", json!({}), T)["result"].to_string();
     assert!(!widgets(&mut h).contains(&format!("cull:{cand}:label")), "no label yet");
     let r = h.request("ui.clickWidget", json!({"id": "label:red"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking label:red");
     assert_eq!(photo(&h, cand).label, Some(ColorLabel::Red), "the active photo (the candidate) is labelled");
     assert_eq!(photo(&h, sel).label, None, "the select is not labelled with it");
     assert!(widgets(&mut h).contains(&format!("cull:{cand}:label")), "the label shows under the candidate");
     let r = h.request("ui.clickWidget", json!({"id": "star:info:3"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking star:info:3");
     assert_eq!(photo(&h, cand).rating, 3);
     assert_eq!(photo(&h, sel).rating, 0, "the select is not rated with it");
 }

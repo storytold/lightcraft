@@ -13,7 +13,7 @@ fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(Duration::from_secs(120));
+    h.settled(Duration::from_secs(120), "after ui.set");
     h
 }
 

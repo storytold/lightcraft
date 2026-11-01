@@ -26,6 +26,9 @@ use crate::{ControlRequest, LightcraftApp};
 const CLEAR: Color32 = Color32::from_rgb(12, 12, 12);
 /// Simulated frame interval (deterministic animation time).
 const FRAME_DT: f64 = 1.0 / 60.0;
+/// The shortest wait [`Headless::settled`] gives a test before failing it (see there).
+#[cfg(test)]
+const SETTLED_FLOOR: Duration = Duration::from_secs(120);
 
 /// Validate the scaled screenshot dimensions before layout or pixel allocation.
 pub fn viewport_pixels(size: [f32; 2], pixels_per_point: f32) -> Result<[usize; 2], String> {
@@ -388,26 +391,53 @@ impl Headless {
         }
     }
 
+    /// What is still in progress, as `(what, how many)` with 0 for idle: renders, file-system
+    /// checks the sidebar waits for, background work, queued input. [`Self::busy`] and
+    /// [`Self::busy_description`] both read it, so they can't drift apart.
+    fn busy_counts(&self) -> [(&'static str, usize); 14] {
+        [
+            ("renders in flight", self.app.renderer.in_flight()),
+            ("file-system checks", crate::panels::left::fs_cached_running(&self.view.ctx)),
+            ("merge", usize::from(self.app.merge.busy())),
+            ("folder scan", usize::from(self.app.scan.is_some())),
+            ("sync", usize::from(self.app.sync.is_some())),
+            ("sync run", usize::from(self.app.sync_run.is_some())),
+            ("import", usize::from(self.app.import.is_some())),
+            ("export", usize::from(self.app.export.is_some())),
+            ("AI denoise", usize::from(self.app.session.denoise_busy())),
+            ("background tasks", usize::from(!self.app.tasks.is_empty())),
+            ("Lightroom catalog task", usize::from(self.app.lightroom.is_some())),
+            ("synthetic input events", self.app.synthetic.len()),
+            ("pending gestures", self.app.pending_gestures.len()),
+            ("queued input events", self.events.len()),
+        ]
+    }
+
     /// Is anything still in progress (renders, file-system checks the sidebar waits for, queued
     /// input)?
     pub fn busy(&self) -> bool {
-        self.app.renderer.in_flight() > 0
-            || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
-            || self.app.merge.busy()
-            || self.app.scan.is_some()
-            || self.app.sync.is_some()
-            || self.app.sync_run.is_some()
-            || self.app.import.is_some()
-            || self.app.export.is_some()
-            || self.app.session.denoise_busy()
-            || !self.app.tasks.is_empty()
-            || !self.app.synthetic.is_empty()
-            || !self.app.pending_gestures.is_empty()
-            || !self.events.is_empty()
+        self.busy_counts().iter().any(|&(_, n)| n > 0)
+    }
+
+    /// What keeps the session [`Self::busy`], for a person reading a timeout: for example
+    /// `renders in flight: 2, background tasks: [Import]`, or `nothing` when idle.
+    pub fn busy_description(&self) -> String {
+        let parts: Vec<String> = self
+            .busy_counts()
+            .iter()
+            .filter(|&&(_, n)| n > 0)
+            .map(|&(what, n)| match what {
+                "background tasks" => format!("{what}: {:?}", self.app.tasks.labels()),
+                _ if n == 1 => what.to_string(),
+                _ => format!("{what}: {n}"),
+            })
+            .collect();
+        if parts.is_empty() { "nothing".to_string() } else { parts.join(", ") }
     }
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
     /// a row, or `timeout` passes. Returns whether it settled.
+    #[must_use = "`false` means it timed out with work still pending; tests use `settled`"]
     pub fn settle(&mut self, timeout: Duration) -> bool {
         let t0 = Instant::now();
         let mut quiet = 0;
@@ -426,6 +456,31 @@ impl Headless {
             if t0.elapsed() > timeout {
                 return false;
             }
+        }
+    }
+
+    /// [`Self::settle`], for tests: a timeout fails the test there and then, saying what it waited
+    /// for (`what`), where (the caller's line) and what was busy at the limit, instead of carrying on with
+    /// an unsettled app and failing later at an unrelated assertion (issue #3063).
+    ///
+    /// It waits at least [`SETTLED_FLOOR`] (120 s), whatever `timeout` says. Tests passed short
+    /// timeouts (5 or 10 s) back when a timeout was ignored, so none relies on a short wait giving
+    /// up; a healthy app settles in well under a second, so the floor only lengthens waits that
+    /// would otherwise fail the test on a slow or loaded machine. A test that is really stuck
+    /// still fails, after 120 s, naming what was busy.
+    #[cfg(test)]
+    #[track_caller]
+    pub(crate) fn settled(&mut self, timeout: Duration, what: &str) {
+        self.settled_within(timeout.max(SETTLED_FLOOR), what);
+    }
+
+    /// [`Self::settled`] without the floor: gives up after exactly `timeout` (its own tests).
+    #[cfg(test)]
+    #[track_caller]
+    fn settled_within(&mut self, timeout: Duration, what: &str) {
+        if !self.settle(timeout) {
+            // `nothing` here: the work ended in the last few frames, before the quiet frames a settle needs
+            panic!("did not settle within {timeout:?} ({what}); busy at the limit: {}", self.busy_description());
         }
     }
 
@@ -448,9 +503,11 @@ impl Headless {
         self.view.paint(&HashMap::new())
     }
 
-    /// Settle, then render the current UI.
+    /// Settle, then render the current UI. A timeout still paints: the picture shows whatever is
+    /// on screen by then (a placeholder for a render that never finished), which is what a
+    /// snapshot of a stuck app should show.
     pub fn snapshot(&mut self, timeout: Duration) -> ColorImage {
-        self.settle(timeout);
+        let _ = self.settle(timeout);
         self.paint()
     }
 

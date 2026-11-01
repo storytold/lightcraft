@@ -48,7 +48,7 @@ fn fixture_grid(count: usize, open: Rc<Cell<bool>>) -> (RenderFixture, Headless)
     // consume the wall-clock budget before the slideshow scheduling assertions begin.
     assert!(open.get(), "the native grid setup gate starts open");
     h.app.renderer.set_offload(Box::new(RenderGate::new(open)));
-    assert!(h.settle(SETTLE), "the grid renders settle before controlling slide renders");
+    h.settled(SETTLE, "the grid renders settle before controlling slide renders");
     assert_eq!(h.app.session.catalog.len(), count, "the slideshow fixture photos");
     let id = h.app.session.active().expect("a photo is open");
     let photo = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -94,7 +94,7 @@ fn slideshow_advances_pauses_and_ends() {
     // is exercised separately by next_slides_are_prepared_before_they_are_due.
     let library = SyntheticLibrary::with_photos("slideshow-automatic-controls", 3);
     let mut h = Headless::new(library.app(), [1000.0, 700.0], 1.0);
-    assert!(h.settle(SETTLE), "the automatic playback fixture settles");
+    h.settled(SETTLE, "the automatic playback fixture settles");
     let first = h.app.session.visible_cloned()[0];
     // The fixture selects its first imported photo; newest-first view order differs.
     // Establish the same first-in-view starting selection as the original demo test.
@@ -123,7 +123,7 @@ fn slideshow_advances_pauses_and_ends() {
     h.step();
     assert!(!h.app.ui.fullscreen && h.app.ui.slideshow.is_none());
     assert_eq!(slides_held(&h), 0, "slide textures freed");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn next_slides_are_prepared_before_they_are_due() {
     assert!(h.time() - start < 60.0, "before the first is due");
     assert_eq!(photo_up(&h), current, "still on the first slide");
     assert!(play(&h).remaining(h.time()) > 59.0, "renders are accepted before the first slide is due");
-    assert!(h.settle(SETTLE), "enabled-prefetch renders settle");
+    h.settled(SETTLE, "enabled-prefetch renders settle");
     drop(h);
     drop(fx);
 
@@ -186,7 +186,7 @@ fn next_slides_are_prepared_before_they_are_due() {
     open.set(true);
     assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the current slide renders once allowed");
     assert!(!has_slide(&h, next) && !h.app.renderer.is_pending(Slot::Slide(next)), "still not prepared");
-    assert!(h.settle(SETTLE), "disabled-prefetch renders settle");
+    h.settled(SETTLE, "disabled-prefetch renders settle");
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn a_fade_only_runs_between_rendered_slides() {
         }
     }
     assert!(fades >= 20, "fades ran ({fades})");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn arrows_cut_and_repeat_off_ends_after_the_last_slide() {
     assert_eq!(play(&h).position(), (photos.len(), photos.len()));
     run(&mut h, "slideshow.next", json!({}));
     assert!(h.app.ui.slideshow.is_none() && !h.app.ui.fullscreen, "no repeat: past the last one it ends");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after slideshow.next");
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     diagnose("after-existing-step", &h);
     eprintln!("manual-checkbox journal_after_existing_step={:?}", h.app.session.journal.get(journal_before..));
     assert!(h.app.session.slideshow.manual, "the checkbox goes through slideshow.playback");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn random_order_starts_at_the_selection_and_is_fixed_by_the_seed() {
             run(&mut h, "slideshow.next", json!({}));
             seen.push(photo_up(&h));
         }
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after slideshow.next");
         (photos, seen)
     };
     let (photos, a) = order(11);
@@ -358,7 +358,7 @@ fn playback_controls_show_on_pointer_movement_and_hide() {
     let r = h.request("ui.clickWidget", json!({"id": "icon:slideshowEnd"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.ui.slideshow.is_none() && !h.app.ui.fullscreen, "the end button ends it");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking icon:slideshowEnd");
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn playback_settings_drive_the_slideshow_and_bad_ones_are_refused() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["result"]["rect"], rect_json(validated), "the click used the rect reveal validated");
     assert!(h.app.session.slideshow.random_order, "the checkbox goes through slideshow.playback");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking check:settings.slideshowRandom");
 }
 
 /// The slide preview's render lands on a frame nobody can name (a worker thread); the page under it must
@@ -429,7 +429,7 @@ fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
     // scrolled page room, but they are still laid out and registered.
     let mut h = grid_sized([1000.0, 560.0]);
     run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.settle(SETTLE), "the settings page settles");
+    h.settled(SETTLE, "the settings page settles");
     let target = latest_widget_rect(&h, "check:settings.slideshowRandom").expect("the checkbox is registered");
     let hit = crate::control::widget_hit(&h.app, "check:settings.slideshowRandom").expect("the checkbox has an egui hit owner");
     assert!(
@@ -459,7 +459,7 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     assert!(h.app.session.catalog.photo(next).is_none());
     assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
     assert!(photos.len() > 3);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 /// The latest registry entry for `id`, as [`crate::control::widget_rect`] looks it up (the last
@@ -579,7 +579,7 @@ fn a_composed_slide_shows_during_playback() {
     h.step();
     assert_eq!(play(&h).current(), next, "navigation shows the prepared slide");
     assert_eq!(painted(&h.paint(), 5, 5), [255, 0, 0]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -607,7 +607,7 @@ fn the_default_layout_plays_the_photo_as_before() {
     if r.top() > 2.0 {
         assert_eq!(painted(&img, 500, 1), [0, 0, 0], "black above the photo");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -657,7 +657,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         h.step();
     };
     assert!(c[1] > 200 && c[0] < 60, "the green backdrop in the preview margin: {c:?}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -683,7 +683,7 @@ fn overlays_show_during_playback() {
         c[1] > 200 && c[0] < 80 && c[2] < 80
     });
     assert!(green.count() > 200, "the identity plate is on the slide");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 #[test]
@@ -728,7 +728,7 @@ fn settings_shows_the_overlays_and_the_preview_follows_them() {
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.overlays", json!({"identityPlate": {"text": "Studio", "color": "#ff00ff"}}));
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 /// Shows the playback controls (the pointer moves over the canvas).
@@ -805,7 +805,7 @@ fn the_intro_plays_before_the_first_photo_and_the_ending_closes_the_show() {
     run(&mut h, "slideshow.next", json!({}));
     run(&mut h, "slideshow.next", json!({}));
     assert!(h.app.ui.slideshow.is_none() && !h.app.ui.fullscreen, "ended after the ending");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after slideshow.next");
 }
 
 #[test]
@@ -838,7 +838,7 @@ fn titles_survive_deleting_the_only_photo_and_need_photos_to_start() {
     assert_ne!(r["ok"], true, "{r}");
     assert!(r.to_string().contains("no photos to show"), "{r}");
     assert!(h.app.ui.slideshow.is_none());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.slideshow");
 }
 
 #[test]
@@ -891,7 +891,7 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     let r = h.request("ui.clickWidget", json!({"id": "button:settingsSlideshowPreviewShows-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 fn tpl_hover_previews_without_changes(h: &mut Headless) -> lightcraft_engine::slide_template::SlideLook {
@@ -1016,7 +1016,7 @@ fn tpl_delete_then_back_to_previous(h: &mut Headless, dir: &std::path::Path, bef
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 /// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
@@ -1037,7 +1037,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     tpl_update_from_menu(&mut h);
     tpl_rename_in_place(&mut h);
     tpl_delete_then_back_to_previous(&mut h, &dir, &before);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let _ = std::fs::remove_dir_all(dir);
 }
 

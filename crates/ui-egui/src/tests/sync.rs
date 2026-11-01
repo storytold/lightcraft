@@ -81,7 +81,7 @@ fn imported_folder(dir: &Scratch, then: impl FnOnce()) -> Headless {
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
@@ -365,7 +365,7 @@ fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
     assert!(h.app.ui.dialog.is_none(), "and closes its dialog: there is nothing to show");
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.app.session.activity.list().is_empty());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(h.app.ui.dialog.is_none(), "a stopped scan opens nothing later");
 }
 
