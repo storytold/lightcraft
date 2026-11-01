@@ -70,13 +70,19 @@ const MAX_FOLLOWED: usize = 4096;
 
 /// What the grid derives from the visible photos, kept across frames. Everything is keyed by the
 /// session's visible-list generation ([`lightcraft_engine::Session::visible_shared`]), which
-/// changes whenever the list is recomputed (any catalog change: crops, orientation, dates, stacks;
+/// changes whenever the list is recomputed (a change to what the view reads: dates, stacks, photos;
 /// or another source, filter or sort) — so an unchanged frame neither copies nor hashes the ids.
+/// A develop edit keeps the list of a view that reads no develop state, but photo shapes (crop,
+/// orientation) are develop state: the photos it touched have their shapes read again, and the
+/// justified layout is made again only when one of them changed (`shapes`, [`GridCache::reshape`]).
 #[derive(Default)]
 pub struct GridCache {
     runs: Option<(RunsKey, Arc<Vec<DateRun>>)>,
-    /// Layout by (runs key, width, thumbnail size, square).
-    layout: Option<((RunsKey, u32, u32, bool), Arc<GridLayout>)>,
+    /// Layout by (runs key, width, thumbnail size, square, `shapes`).
+    layout: Option<((RunsKey, u32, u32, bool, u64), Arc<GridLayout>)>,
+    /// Moves on when a cell's shape in a kept list changed ([`GridCache::reshape`]): the justified layout is keyed
+    /// on it, so an exposure tick, which changes no shape, doesn't lay the grid out again.
+    shapes: u64,
     /// Stack index by generation.
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
@@ -92,7 +98,7 @@ pub struct GridCache {
 /// most of a 100 ms frame for each batch an import added.
 struct ListRead {
     ids: Arc<[PhotoId]>,
-    /// The catalog revision it was read at.
+    /// The catalog revision it was read at (or its shapes were kept up with to: [`GridCache::reshape`]).
     revision: u64,
     /// The date and grouping of the groups (`None`: the list has no date runs, no group is read).
     dates: Option<(SortKey, GroupBy)>,
@@ -102,13 +108,24 @@ struct ListRead {
     named: HashMap<String, u32>,
     /// Each photo's shape; `None` for the square grid, whose cells are all alike.
     shapes: Option<Vec<f32>>,
+    /// Each photo's position, made the first time a develop edit to the list's photos asks for it.
+    places: Option<HashMap<PhotoId, usize>>,
 }
 
 impl ListRead {
     fn new(ids: Arc<[PhotoId]>, revision: u64, dates: Option<(SortKey, GroupBy)>, shaped: bool) -> ListRead {
         let n = ids.len();
         let groups = Vec::with_capacity(if dates.is_some() { n } else { 0 });
-        ListRead { ids, revision, dates, groups, names: Vec::new(), named: HashMap::new(), shapes: shaped.then(|| Vec::with_capacity(n)) }
+        ListRead {
+            ids,
+            revision,
+            dates,
+            groups,
+            names: Vec::new(),
+            named: HashMap::new(),
+            shapes: shaped.then(|| Vec::with_capacity(n)),
+            places: None,
+        }
     }
 
     /// Read photo `id` from the catalog and put it next.
@@ -252,6 +269,51 @@ impl GridCache {
         }
     }
 
+    /// The cells' shapes of the list last shown kept up with the catalog, when the list itself was kept: an edit
+    /// to nothing the view reads (a slider tick, a crop, a rotation) leaves the list and its generation as they
+    /// were, but a crop or a rotation changes a cell's shape. The photos the edit touched are read again (all of
+    /// them when the catalog can't say which); returns [`GridCache::shapes`], what the justified layout is
+    /// keyed on, moved on only when one of the shapes read is not what it was.
+    fn reshape(&mut self, stats: &mut GridStats, cat: &Catalog) -> u64 {
+        let Some(read) = self.read.as_mut().filter(|r| r.revision != cat.revision) else { return self.shapes };
+        if let Some(shapes) = read.shapes.as_mut() {
+            // (the list was kept, so only develop state changed: the groups read stay right)
+            let reread = |shape: &mut f32, cat: &Catalog, id: PhotoId| {
+                let now = shape_of(cat, id);
+                // (bit for bit: a shape that can't be told apart from what it was is no change)
+                let changed = now.to_bits() != shape.to_bits();
+                *shape = now;
+                changed
+            };
+            let mut moved = false;
+            let touched = cat.touched_since(read.revision).filter(|t| t.len() <= MAX_FOLLOWED);
+            match touched {
+                Some(touched) => {
+                    let ids = &read.ids;
+                    let places = read.places.get_or_insert_with(|| ids.iter().enumerate().map(|(i, id)| (*id, i)).collect());
+                    for id in touched {
+                        // (a photo folded into a stack, or not in this view, has no cell)
+                        if let Some(shape) = places.get(&id).and_then(|i| shapes.get_mut(*i)) {
+                            moved |= reread(shape, cat, id);
+                            stats.photos_read += 1;
+                        }
+                    }
+                }
+                None => {
+                    for (shape, id) in shapes.iter_mut().zip(read.ids.iter()) {
+                        moved |= reread(shape, cat, *id);
+                    }
+                    stats.photos_read += read.ids.len() as u64;
+                }
+            }
+            if moved {
+                self.shapes = self.shapes.wrapping_add(1);
+            }
+        }
+        read.revision = cat.revision;
+        self.shapes
+    }
+
     fn local(&mut self, cat: &Catalog, ids: &[PhotoId], generation: u64) -> usize {
         match self.local {
             Some((g, n)) if g == generation => n,
@@ -369,8 +431,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let stats = &mut app.caches.grid_stats;
     let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key, square);
     // the layout only changes with the photos (and their shapes), the grouping, the width and
-    // the thumbnail size
-    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
+    // the thumbnail size; a develop edit (crop, rotation) can change a shape and leave the list
+    let shapes = app.caches.grid.reshape(stats, &app.session.catalog);
+    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square, shapes);
     let lay = match &app.caches.grid.layout {
         Some((k, l)) if *k == lay_key => l.clone(),
         _ => {

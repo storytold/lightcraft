@@ -91,8 +91,8 @@ mod services;
 
 #[cfg(test)]
 use app::{import_tick_allowed, sam_download_ended, shot_ready};
-pub(crate) use caches::key_of;
 pub use caches::{FilterValues, LibraryCounts, RulesView};
+pub(crate) use caches::{READS_NO_DEVELOP, key_of, still_right};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
 #[cfg(target_os = "linux")]
@@ -588,10 +588,11 @@ pub struct Caches {
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
     people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
-    suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
+    /// (catalog revision, what was asked, the suggestions).
+    suggestions: Option<(u64, u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
-    completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
+    completions: Option<(u64, u64, std::sync::Arc<panels::keywording::Offers>)>,
     counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
@@ -603,7 +604,7 @@ pub struct Caches {
     /// photo or a few, don't).
     pub album_count_scans: usize,
     /// What the open smart-album rule dialog shows besides the rules ([`Caches::rules_view`]).
-    rules_view: Option<(u64, std::sync::Arc<RulesView>)>,
+    rules_view: Option<(u64, u64, std::sync::Arc<RulesView>)>,
     pub rules_view_scans: usize,
     /// A count an open dialog shows ([`Caches::dialog_count`]), by what it counts.
     dialog_count: Option<(u64, usize)>,
