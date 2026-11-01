@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  "No duplicate photos found among {photos} photos.": "Nessuna foto duplicata tra {photos} foto.",
+  "{groups} groups among {photos} photos · {delete} to delete": "{groups} gruppi tra {photos} foto · {delete} da eliminare",
+  "Group {n} · {count} photos · {kind}": "Gruppo {n} · {count} foto · {kind}",
+  "Hashed {done} of {total} photos": "{done} foto su {total} analizzate"
 }

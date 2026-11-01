@@ -320,5 +320,9 @@
   "{name} is installed and in use: face recognition is on": "{name} är installerad och används: ansiktsigenkänning är på",
   "Creates {stacks} stack{} from {photos} of {scope}": "Skapar staplar: {stacks} · foton: {photos} av {scope}{:.0}",
   "{n} selected photo{} · {pages} page{}": "Markerade foton: {n} · sidor: {pages}{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}",
+  "No duplicate photos found among {photos} photos.": "Inga dubblettfoton hittades bland {photos} foton.",
+  "{groups} groups among {photos} photos · {delete} to delete": "{groups} grupper bland {photos} foton · {delete} att radera",
+  "Group {n} · {count} photos · {kind}": "Grupp {n} · {count} foton · {kind}",
+  "Hashed {done} of {total} photos": "{done} av {total} foton bearbetade"
 }

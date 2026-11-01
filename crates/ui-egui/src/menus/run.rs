@@ -1294,6 +1294,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
             Ok(Value::Null)
         }
+        "dialog.findDuplicates" => crate::panels::dialogs::dupes::open(app),
         "app.whatsNew" => {
             app.ui.dialog = Some(Dialog::WhatsNew);
             Ok(json!({"text": crate::panels::dialogs::WHATS_NEW}))

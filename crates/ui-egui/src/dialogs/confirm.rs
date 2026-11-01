@@ -182,6 +182,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             app.ui.cull_burst = Some((*burst_gap, *similarity));
             app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))
         }
+        Dialog::Duplicates { groups, .. } => super::dupes::confirm(app, groups),
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
             if let Some(problem) = rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).first() {

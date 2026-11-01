@@ -14,7 +14,9 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     if now < app.caches.dupes_next_pump {
         return;
     }
-    let pace = crate::panels::faces::background_pace(app, ctx, now);
+    // the review window is open: the user is waiting for this run, so it gets the machine
+    let watching = matches!(app.ui.dialog, Some(crate::state::Dialog::Duplicates { done: false, .. }));
+    let pace = if watching { "normal" } else { crate::panels::faces::background_pace(app, ctx, now) };
     let Ok(v) = app.session.execute("duplicates.pump", &json!({"pace": pace})) else { return };
     if v["active"] == true {
         app.caches.dupes_next_pump = now + BUSY_SECS;
