@@ -168,12 +168,13 @@ pub(super) fn crop_overlay(
             }
             Some(Gesture::CropRotate { start_angle, a0, pivot, start_rect }) => {
                 let a = (q - pivot).angle();
-                // Negate the angle delta because straighten angle is opposite to rotation direction:
-                // dragging clockwise (positive delta) should rotate image clockwise,
-                // but straighten angle is the correction (opposite of rotation).
+                // The straighten angle is the correction, opposite the visual turn, and a
+                // single-axis flip mirrors that turn on screen (PR #1876 review).
                 // `a`/`a0` are atan2 in (-π, π]: dragging down the left of the box crosses ±π, so
                 // the raw subtraction jumps by ~2π and the ±45° clamp snaps the crop to the stop.
-                let ang = (start_angle - shortest_turn(a0, a).to_degrees() as f64).clamp(-45.0, 45.0);
+                let delta = shortest_turn(a0, a).to_degrees() as f64;
+                let delta = if frame.flip_h ^ frame.flip_v { -delta } else { delta };
+                let ang = (start_angle - delta).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 // `start_rect` is the drawn crop, not the last step's shrunken one: without it a
                 // centred crop comes back as the whole photo (issue #1794).
