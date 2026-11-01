@@ -488,6 +488,51 @@ fn chroma_table_keeps_saturated_yellows_and_bleaches_near_neutrals() {
     }
 }
 
+/// A chroma table needs the photo's own colour and enough samples for its nodes: a partial look, or
+/// a fit on fewer samples than the table's minimum, gets the single chroma curve (#2022: a mostly
+/// clipped compact's partial look extrapolated its table over the frame).
+#[test]
+fn chroma_table_only_for_full_looks_with_enough_samples() {
+    let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    // `kept`: the camera keeps the bright yellows' colourfulness (else it bleaches every colour alike)
+    let scene = |kept: bool| -> Vec<([f64; 3], [f64; 3])> {
+        (0..6144)
+            .map(|i| {
+                let ev = 0.02 + (i % 37) as f32 * 0.02;
+                let yellow = i % 5 == 0;
+                let src = if yellow {
+                    [ev * (0.95 + (i % 7) as f32 * 0.02), ev * 0.85, ev * (0.12 + (i % 3) as f32 * 0.02)]
+                } else {
+                    [ev * (0.85 + (i % 11) as f32 * 0.03), ev, ev * (0.8 + (i % 13) as f32 * 0.03)]
+                };
+                let p = known.apply_f32(src);
+                let y = luminance_2020(p);
+                let o = 1.0 - (-2.5 * y).exp();
+                let k = if yellow && kept { 1.0 } else { 1.2 - 0.9 * o };
+                (src.map(f64::from), p.map(|v| f64::from((o + (v * o / y - o) * k).clamp(0.0, 0.999))))
+            })
+            .collect()
+    };
+    let tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.5 * x).exp()]
+    }))
+    .unwrap();
+    let look = CameraLook { matrix: known, tone, hue_sat: None };
+    let mixed = scene(true);
+    let full = hue_sat::fit_chroma(&mixed, &look, true).expect("a chroma fit");
+    assert!(full.chroma_sat().is_some(), "a full look with many samples keeps its table");
+    let partial = hue_sat::fit_chroma(&mixed, &look, false);
+    assert!(partial.is_none_or(|t| t.chroma_sat().is_none()), "a partial look gets no table: {partial:?}");
+    // where one curve fits, a partial look and a fit on too few samples still get it, without a table
+    let alike = scene(false);
+    let partial = hue_sat::fit_chroma(&alike, &look, false);
+    assert!(partial.is_some_and(|t| t.chroma_sat().is_none() && t.has_chroma()), "the single curve: {partial:?}");
+    // 300 pairs: about 200 training samples, enough for the curve but under the table's minimum
+    let few = hue_sat::fit_chroma(&alike[..300], &look, true);
+    assert!(few.is_some_and(|t| t.chroma_sat().is_none() && t.has_chroma()), "too few samples for a table: {few:?}");
+}
+
 /// Pooled pairs of several "photos" recover the camera's matrix, and a photo given that
 /// colour model (a camera profile) keeps it, fitting only its own tone.
 #[test]
