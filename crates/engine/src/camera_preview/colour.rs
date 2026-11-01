@@ -131,11 +131,20 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
     }
+    let correction = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(bytes));
+    starting_colour_tags_with_correction(raw, bytes, correction.as_ref())
+}
+
+pub(super) fn starting_colour_tags_with_correction(
+    raw: &mut RawImage,
+    bytes: &[u8],
+    correction: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<ColorData> {
     // the white the source shows, decided before `starting_colour` may fill in measured matrices
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None);
+    let (_, t, look) = starting_colour(raw, bytes, None, correction);
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 

@@ -176,3 +176,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-14 | minor | Gap 10: 515 of 1,446 models verified (36%), ~84% of photographers on a verified body (integration batch 36) |
 | 2026-10-24 | patch | LR-META-XMP: sidecar keywords are written as names in `dc:subject` and paths in `lr:hierarchicalSubject`, so other DAMs can search them; ranked gaps and estimates unchanged |
 | 2026-10-20 | minor | Opt-in Windows DirectComposition preference added; VRR hardware verification pending; parity counts unchanged |
+
+## Proposed external-profile correspondence geometry
+
+Camera colour calibration remains open. PR #2675 proposes geometry-gated external-profile alignment for file-local RAW colour fitting and pooled calibration, plus unique exact-mount lookup for unnamed fixed lenses. It preserves in-file geometry and the established CR3 framing path, applies source-position vignetting before geometry, and uses held-out edge agreement rather than RGB error to accept a candidate. Historical private-file observations and their limits are recorded in [Camera preview colour](camera-preview-colour.md); they are not a claim of validation of this rebased source.
