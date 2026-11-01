@@ -457,6 +457,19 @@ pub fn cameras() -> Result<Vec<Camera>, Error> {
     Ok(lock(&SHARED).cameras.clone())
 }
 
+/// Where the wait for an iPhone or iPad to lift its access restriction stands after `waited`:
+/// lifted (`true`), given up (`false`: unplugged, or not within `UNLOCK_WAIT`), cancelled, or still
+/// waiting (`None`).
+fn unlocked(s: &CatalogState, waited: Duration, cancel: &AtomicBool) -> Option<Result<bool, Error>> {
+    if cancel.load(Ordering::Relaxed) {
+        return Some(Err(Error::Cancelled));
+    }
+    if s.removed || waited >= UNLOCK_WAIT {
+        return Some(Ok(false));
+    }
+    (s.restricted == Some(false)).then_some(Ok(true))
+}
+
 pub struct Session {
     key: u64,
     id: String,
@@ -464,7 +477,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn open(id: &str) -> Result<Session, Error> {
+    pub fn open(id: &str, cancel: &AtomicBool) -> Result<Session, Error> {
         // the browser must be running for the camera to be known
         cameras()?;
         let owned = id.to_string();
@@ -473,7 +486,7 @@ impl Session {
         let session = Session { key, id: id.to_string(), state };
         // dropping `session` on failure closes the camera again
         let Some(rx) = rx else { return Ok(session) };
-        let Err(refused) = recv(&rx, OPEN_WAIT, None)? else { return Ok(session) };
+        let Err(refused) = recv(&rx, OPEN_WAIT, Some(cancel))? else { return Ok(session) };
         // An iPhone or iPad refuses the first session while it restricts access ("Please unlock
         // …"), even when it is unlocked, and lifts the restriction a moment later: wait for that
         // (or for its user to unlock it), then ask again.
@@ -483,19 +496,13 @@ impl Session {
             return Err(Error::Device(refused));
         }
         let start = Instant::now();
-        let lifted = wait_for(|| {
-            let s = lock(&session.state);
-            if s.removed || start.elapsed() >= UNLOCK_WAIT {
-                return Some(Ok(false));
-            }
-            (s.restricted == Some(false)).then_some(Ok(true))
-        })?;
+        let lifted = wait_for(|| unlocked(&lock(&session.state), start.elapsed(), cancel))?;
         if !lifted {
             return Err(Error::Device(refused));
         }
         let owned = id.to_string();
         let rx = on_main(move |_| reopen_on_main(&owned))??;
-        recv(&rx, OPEN_WAIT, None)?.map_err(Error::Device)?;
+        recv(&rx, OPEN_WAIT, Some(cancel))?.map_err(Error::Device)?;
         Ok(session)
     }
 
@@ -737,4 +744,24 @@ fn local_iso(d: &NSDate) -> Option<String> {
     }
     let offset = NSTimeZone::localTimeZone().secondsFromGMTForDate(d) as i64;
     crate::unix_to_iso((t.floor() as i64).saturating_add(offset))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CodeRabbit on #1635: ✕ ends the wait for a locked iPhone or iPad at once, not after 30 s.
+    #[test]
+    fn the_wait_for_an_unlock_ends_on_cancel() {
+        let (go, stop) = (AtomicBool::new(false), AtomicBool::new(true));
+        let locked = CatalogState { restricted: Some(true), ..Default::default() };
+        let open = CatalogState { restricted: Some(false), ..Default::default() };
+        let gone = CatalogState { restricted: Some(true), removed: true, ..Default::default() };
+        let second = Duration::from_secs(1);
+        assert!(unlocked(&locked, second, &go).is_none(), "still waiting");
+        assert!(matches!(unlocked(&locked, second, &stop), Some(Err(Error::Cancelled))));
+        assert!(matches!(unlocked(&open, second, &go), Some(Ok(true))));
+        assert!(matches!(unlocked(&gone, second, &go), Some(Ok(false))));
+        assert!(matches!(unlocked(&locked, UNLOCK_WAIT, &go), Some(Ok(false))));
+    }
 }

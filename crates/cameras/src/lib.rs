@@ -108,17 +108,24 @@ pub struct Session {
 impl Session {
     /// Open the camera `id` (from [`cameras`]) for reading.
     pub fn open(id: &str) -> Result<Session, Error> {
+        Session::open_unless(id, &AtomicBool::new(false))
+    }
+
+    /// [`Session::open`], giving up with [`Error::Cancelled`] once `cancel` is set: an iPhone or iPad
+    /// can keep it waiting up to 30 s to be unlocked.
+    pub fn open_unless(id: &str, cancel: &AtomicBool) -> Result<Session, Error> {
         #[cfg(windows)]
         {
+            let _ = cancel;
             Ok(Session { inner: wpd::Session::open(id)? })
         }
         #[cfg(target_os = "macos")]
         {
-            Ok(Session { inner: ica::Session::open(id)? })
+            Ok(Session { inner: ica::Session::open(id, cancel)? })
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = id;
+            let _ = (id, cancel);
             Err(Error::Unsupported)
         }
     }

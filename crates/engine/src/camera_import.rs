@@ -482,7 +482,8 @@ fn remove_empty_dirs(dir: &Path, depth: usize) {
 
 /// Open camera `id` and fetch from it (see [`fetch`]); the session lives on this thread.
 pub fn fetch_camera(id: &str, known: &Known, dir: &Path, progress: &Progress) -> Result<Fetched, Error> {
-    let session = lightcraft_cameras::Session::open(id)?;
+    // ✕ also ends the wait for a locked iPhone or iPad
+    let session = lightcraft_cameras::Session::open_unless(id, &progress.cancel)?;
     fetch(&session, id, known, dir, progress)
 }
 
