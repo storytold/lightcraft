@@ -96,34 +96,55 @@ pub fn native_item_presentation<'a>(
 /// a direct grid binding to a borrowed cycle hint must rebuild native handles and republish
 /// their owned shortcuts even when the visible menu model is identical.
 pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::shortcuts::Keymap) -> String {
+    /// Prefix variable-sized fields with their byte length or element count.
+    fn size(out: &mut String, value: usize) {
+        out.push_str(&value.to_string());
+        out.push(':');
+    }
+    /// User text may contain any structural marker, so delimiters alone cannot frame it.
+    fn text(out: &mut String, value: &str) {
+        size(out, value.len());
+        out.push_str(value);
+    }
+    /// Preserve the distinction between an absent value and an explicitly empty value.
+    fn optional_text(out: &mut String, value: Option<&str>) {
+        match value {
+            Some(value) => {
+                out.push('1');
+                text(out, value);
+            }
+            None => out.push('0'),
+        }
+    }
     /// Add stable identities and effective native keys; live checked values stay outside the cache key.
     fn walk(n: &[MenuNode], out: &mut String, keymap: &crate::shortcuts::Keymap) {
+        size(out, n.len());
         for x in n {
             match x {
                 MenuNode::Item { id, params, label, checked, shortcut, .. } => {
-                    out.push_str(&MenuNode::key(id, params));
+                    out.push('i');
+                    text(out, id);
+                    text(out, &params.to_string());
                     out.push(if checked.is_some() { 'c' } else { 'i' });
-                    out.push_str(shortcut.as_deref().unwrap_or(""));
+                    optional_text(out, shortcut.as_deref());
                     // A key can change owners while both visible hints stay identical.
-                    out.push('|');
-                    out.push_str(native_item_presentation(keymap, id, params, label, shortcut.as_deref()).1.unwrap_or(""));
+                    optional_text(out, native_item_presentation(keymap, id, params, label, shortcut.as_deref()).1);
                 }
                 MenuNode::Separator => out.push('-'),
                 MenuNode::Submenu { id, label, children } => {
-                    out.push('[');
-                    out.push_str(id.as_deref().unwrap_or(""));
-                    out.push('|');
-                    out.push_str(label);
+                    out.push('s');
+                    optional_text(out, id.as_deref());
+                    text(out, label);
                     walk(children, out, keymap);
-                    out.push(']');
                 }
             }
-            out.push(';');
         }
     }
-    let mut s = format!("{};", crate::i18n::language().code());
+    let mut s = String::new();
+    text(&mut s, crate::i18n::language().code());
+    size(&mut s, bar.len());
     for (t, items) in bar {
-        s.push_str(t);
+        text(&mut s, t);
         walk(items, &mut s, keymap);
     }
     s

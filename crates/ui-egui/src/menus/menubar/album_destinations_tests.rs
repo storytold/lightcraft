@@ -36,6 +36,47 @@ fn native_album_folder_cache_keys_disambiguate_ids_and_labels() {
     let key = |id, label| native_menu_structure(&bar(id, label), &app.ui.settings.keymap);
     assert_ne!(key("albumFolder:1", "File"), key("albumFolder:12", "File"), "identity matters even if the label is the same");
     assert_ne!(key("albumFolder:1", "23"), key("albumFolder:12", "3"), "an ID suffix cannot become a label prefix");
+
+    let layout = |label: &str, albums: &[u64]| {
+        vec![(
+            "Photo".to_string(),
+            vec![MenuNode::Submenu {
+                id: Some("albumFolder:1".to_string()),
+                label: label.to_string(),
+                children: albums.iter().map(|id| item("album.addPhotos", json!({"id": id}), "Favorites", None, true, None)).collect(),
+            }],
+        )]
+    };
+    // A rename and removal in one frame must rebuild even when the new name embeds an old
+    // child's serialization. Folder names are arbitrary user text, not serialization syntax.
+    assert_ne!(
+        native_menu_structure(&layout("File", &[40, 41]), &app.ui.settings.keymap),
+        native_menu_structure(&layout("Filealbum.addPhotos|{\"id\":40}i|;", &[41]), &app.ui.settings.keymap),
+        "a folder name cannot stand in for a removed child row",
+    );
+}
+
+/// Arbitrary folder text and child layouts must not alias another native menu structure.
+#[test]
+fn native_album_folder_cache_keys_frame_arbitrary_text_and_children() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+    let mut keys = std::collections::HashSet::new();
+    for id in [None, Some(""), Some("albumFolder:1"), Some("albumFolder:12")] {
+        for label in ["", "3", "23", "File", "[|;-]", "1:s0:日本語", "Filealbum.addPhotos|{\"id\":40}i|;"] {
+            for albums in [&[][..], &[40][..], &[41][..], &[40, 41][..]] {
+                let bar = vec![(
+                    "Photo".to_string(),
+                    vec![MenuNode::Submenu {
+                        id: id.map(str::to_string),
+                        label: label.to_string(),
+                        children: albums.iter().map(|id| item("album.addPhotos", json!({"id": id}), "Favorites", None, true, None)).collect(),
+                    }],
+                )];
+                assert!(keys.insert(native_menu_structure(&bar, &app.ui.settings.keymap)), "duplicate key for {bar:?}");
+            }
+        }
+    }
+    assert_eq!(keys.len(), 112);
 }
 
 /// #3525: destinations follow folder structure and sidebar order; duplicate leaf names keep
