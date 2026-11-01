@@ -322,5 +322,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{photos} 枚中 {groups} グループ · 削除 {delete} 枚",
   "Group {n} · {count} photos · {kind}": "グループ {n} · {count} 枚 · {kind}",
   "Hashed {done} of {total} photos": "{total} 枚中 {done} 枚を処理",
-  "visually identical, {bits} bits apart": "見た目が同一、ハッシュ差 {bits} ビット"
+  "visually identical, {bits} bits apart": "見た目が同一、ハッシュ差 {bits} ビット",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{photos} 枚中 {groups} グループ · 未チェック {unticked} 枚",
+  "Delete {unticked} unticked": "未チェック {unticked} 枚を削除",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "確認したかどうかにかかわらず、{groups} グループから {unticked} 枚の写真を削除します。"
 }

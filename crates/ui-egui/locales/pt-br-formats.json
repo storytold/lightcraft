@@ -322,5 +322,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} grupos entre {photos} fotos · {delete} para excluir",
   "Group {n} · {count} photos · {kind}": "Grupo {n} · {count} fotos · {kind}",
   "Hashed {done} of {total} photos": "{done} de {total} fotos analisadas",
-  "visually identical, {bits} bits apart": "visualmente idênticas, a {bits} bits"
+  "visually identical, {bits} bits apart": "visualmente idênticas, a {bits} bits",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} grupos entre {photos} fotos · {unticked} desmarcadas",
+  "Delete {unticked} unticked": "Excluir {unticked} desmarcadas",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Isto exclui {unticked} fotos de {groups} grupos, tenha você olhado para eles ou não."
 }

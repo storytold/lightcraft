@@ -322,5 +322,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} nhóm trong {photos} ảnh · {delete} ảnh sẽ xóa",
   "Group {n} · {count} photos · {kind}": "Nhóm {n} · {count} ảnh · {kind}",
   "Hashed {done} of {total} photos": "Đã xử lý {done} trong {total} ảnh",
-  "visually identical, {bits} bits apart": "giống hệt về hình ảnh, cách {bits} bit"
+  "visually identical, {bits} bits apart": "giống hệt về hình ảnh, cách {bits} bit",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} nhóm trong {photos} ảnh · {unticked} chưa đánh dấu",
+  "Delete {unticked} unticked": "Xóa {unticked} ảnh chưa đánh dấu",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Thao tác này xóa {unticked} ảnh từ {groups} nhóm, dù bạn đã xem chúng hay chưa."
 }

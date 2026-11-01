@@ -322,5 +322,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} groupes parmi {photos} photos · {delete} à supprimer",
   "Group {n} · {count} photos · {kind}": "Groupe {n} · {count} photos · {kind}",
   "Hashed {done} of {total} photos": "{done} photos sur {total} analysées",
-  "visually identical, {bits} bits apart": "visuellement identiques, à {bits} bits"
+  "visually identical, {bits} bits apart": "visuellement identiques, à {bits} bits",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} groupes parmi {photos} photos · {unticked} non cochées",
+  "Delete {unticked} unticked": "Supprimer {unticked} non cochées",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Ceci supprime {unticked} photos de {groups} groupes, que vous les ayez examinés ou non."
 }

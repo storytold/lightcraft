@@ -325,5 +325,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} ჯგუფი {photos} ფოტოს შორის · წასაშლელი: {delete}",
   "Group {n} · {count} photos · {kind}": "ჯგუფი {n} · {count} ფოტო · {kind}",
   "Hashed {done} of {total} photos": "დამუშავებულია {done} / {total} ფოტო",
-  "visually identical, {bits} bits apart": "ვიზუალურად იდენტური, {bits} ბიტის სხვაობა"
+  "visually identical, {bits} bits apart": "ვიზუალურად იდენტური, {bits} ბიტის სხვაობა",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} ჯგუფი {photos} ფოტოს შორის · მოუნიშნავი: {unticked}",
+  "Delete {unticked} unticked": "{unticked} მოუნიშნავის წაშლა",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "ეს წაშლის {unticked} ფოტოს {groups} ჯგუფიდან, მიუხედავად იმისა, ნახეთ თუ არა."
 }
