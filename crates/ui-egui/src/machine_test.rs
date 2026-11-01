@@ -391,7 +391,7 @@ mod tests {
         app.ui.settings.machine_test = Some(MachineReport { lanes: 3, helper_slower: true, ..Default::default() });
         app.logic(&ctx);
         assert!(app.ui.settings.machine_test.is_some(), "kept at startup");
-        app.ui.settings.gpu_helper = "off".into();
+        app.ui.settings.gpu_helper = String::new(); // Automatic (Off is the default)
         app.logic(&ctx);
         assert!(app.ui.settings.machine_test.is_none(), "another second card");
         app.ui.settings.machine_test = Some(MachineReport { lanes: 3, ..Default::default() });
