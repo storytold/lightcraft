@@ -305,7 +305,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             out.write_all(b"partial")?;
             return Err(io::Error::other("write failed (injected)"));
         }
-        io::copy(&mut inp, &mut out)?;
+        crate::file_copy::copy_buffered(&mut inp, &mut out)?;
         #[cfg(test)]
         if injected(Fault::Slow) {
             COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
