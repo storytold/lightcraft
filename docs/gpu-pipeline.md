@@ -262,8 +262,8 @@ scopes on the window's device are the window's (a surface reconfigured while the
 logged, not a reason to stop rendering.
 
 **Exports share the GPU** (`crates/gpu/src/gate.rs`). An export's photos render with
-`lightcraft_gpu::as_batch`: each takes a turn sized by the device memory it needs (~12 B per source
-pixel + 72 B per output pixel) against a budget of 55 % of the card's memory (read from the registry
+`lightcraft_gpu::as_batch`: each takes a turn sized by the device memory it needs (fitted to measured peaks: the larger of 15 B per
+source pixel + 40 B per output pixel and 88 B per output pixel; `crates/engine/examples/vram_peak.rs`) against a budget of 55 % of the card's memory (read from the registry
 on Windows, sysfs / `nvidia-smi` on Linux, else assumed; `LIGHTCRAFT_GPU_MEMORY_MB` overrides) and at
 most 4 at once (`lightcraft_gpu::set_batch_limits`). Views never wait and hold batch work back
 while they render; `lightcraft_gpu::hold_batch` (window resizes) pauses new batch work; and a batch

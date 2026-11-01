@@ -99,14 +99,24 @@ pub(crate) fn is_batch() -> bool {
 }
 
 /// Device memory a render of `out_px` output pixels from a source of `src_px` pixels holds at its
-/// peak: the uploaded source (12 B/px), its framed copy and the stages it keeps while finishing
-/// (measured: a 45 MP export peaks at ~[`OUT_BYTES_PER_PX`] B per output pixel).
+/// peak, the larger of two moments: while the source is on the device and the output is made from
+/// it ([`SRC_BYTES_PER_PX`] per source pixel + [`OUT_BYTES_WITH_SRC`] per output pixel), and while
+/// the output's own stages finish once the source is gone ([`OUT_BYTES_PER_PX`] per output pixel).
+/// Fitted to measured peaks with at least 8 % to spare (`crates/engine/examples/vram_peak.rs`,
+/// the table in this module's tests): a 61 MP photo exported at 6000 px peaks at 1.8 GiB, so an
+/// 8 GB card's budget holds two at once, and a full-size one at 4.0 GiB.
 pub(crate) fn job_bytes(src_px: usize, out_px: usize) -> u64 {
-    (src_px as u64).saturating_mul(12).saturating_add((out_px as u64).saturating_mul(OUT_BYTES_PER_PX))
+    let (src, out) = (src_px as u64, out_px as u64);
+    let with_source = src.saturating_mul(SRC_BYTES_PER_PX).saturating_add(out.saturating_mul(OUT_BYTES_WITH_SRC));
+    with_source.max(out.saturating_mul(OUT_BYTES_PER_PX))
 }
 
-/// Device bytes per output pixel at a render's peak (see [`job_bytes`]).
-pub(crate) const OUT_BYTES_PER_PX: u64 = 72;
+/// Device bytes per source pixel while it is on the device (see [`job_bytes`]).
+pub(crate) const SRC_BYTES_PER_PX: u64 = 15;
+/// Device bytes per output pixel made while the source is on the device (see [`job_bytes`]).
+pub(crate) const OUT_BYTES_WITH_SRC: u64 = 40;
+/// Device bytes per output pixel at the end of a render (see [`job_bytes`]).
+pub(crate) const OUT_BYTES_PER_PX: u64 = 88;
 
 /// The default budget of batch renders on a card with `vram` bytes: [`SHARE_PERCENT`] of it.
 pub(crate) fn auto_limit(vram: u64) -> u64 {
@@ -261,6 +271,39 @@ mod tests {
         assert!(job_bytes(45_000_000, 2_000_000) < job_bytes(45_000_000, 45_000_000));
         assert_eq!(job_bytes(usize::MAX, usize::MAX), u64::MAX);
         assert_eq!(auto_limit(12 << 30), (12u64 << 30) / 100 * SHARE_PERCENT);
+    }
+
+    /// The estimate against measured peaks: one export of an HDR gain map JPEG with a radial mask
+    /// (`cargo run -p lightcraft-engine --example vram_peak`; RTX 4070 SUPER and RTX 5070, DX12,
+    /// the same peaks on both; an SDR JPEG peaks the same). Every estimate is at least 8 % above
+    /// its peak and not more than a third above it at the photo sizes exports use. An 8 GB card
+    /// (insideTheFlux's GTX 1070 on PR #3499) holds two 61 MP photos at 6000 px at once.
+    #[test]
+    fn the_estimate_covers_the_measured_peaks() {
+        // (source width × height, output width × height, measured peak in MiB)
+        const MEASURED: [((usize, usize), (usize, usize), u64); 12] = [
+            ((6034, 4028), (6034, 4028), 1855), // Nikon D750 NEF, full size
+            ((6034, 4028), (6000, 4005), 1836), // at 6000 px
+            ((6034, 4028), (2048, 1367), 405),  // at 2048 px
+            ((6000, 4000), (6000, 4000), 1831), // 24 MP scene, full size
+            ((6000, 4000), (6000, 4000), 1831), // at 6000 px (already that size)
+            ((6000, 4000), (2048, 1365), 400),
+            ((8256, 5504), (8256, 5504), 3293), // 45 MP scene
+            ((8256, 5504), (6000, 4000), 1831),
+            ((8256, 5504), (2048, 1365), 681),
+            ((9504, 6336), (9504, 6336), 4134), // 61 MP scene
+            ((9504, 6336), (6000, 4000), 1831),
+            ((9504, 6336), (2048, 1365), 869),
+        ];
+        for ((sw, sh), (ow, oh), mib) in MEASURED {
+            let (est, peak) = (job_bytes(sw * sh, ow * oh), mib << 20);
+            assert!(est >= peak + peak * 8 / 100, "{sw}x{sh} to {ow}x{oh}: {} MiB for a {mib} MiB peak", est >> 20);
+            assert!(est <= peak + peak / 3, "{sw}x{sh} to {ow}x{oh}: {} MiB for a {mib} MiB peak is wasteful", est >> 20);
+        }
+        let budget_8gb = auto_limit(8 << 30);
+        let two_61mp_at_6000 = 2 * job_bytes(9504 * 6336, 6000 * 4000);
+        assert!(two_61mp_at_6000 <= budget_8gb, "{} MiB of {} MiB", two_61mp_at_6000 >> 20, budget_8gb >> 20);
+        assert!(3 * job_bytes(9504 * 6336, 6000 * 4000) > budget_8gb, "three would not fit");
     }
 
     #[test]
