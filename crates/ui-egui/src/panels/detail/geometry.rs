@@ -492,5 +492,27 @@ mod mask_map_tests {
         let runs = super::super::masks::runs([Some(a), Some(b), None, Some(c), None, None, Some(a), Some(b)]);
         assert_eq!(runs, vec![vec![a, b], vec![a, b]], "single points are dropped, the rest split");
         assert!(super::super::masks::runs([None, Some(a), None]).is_empty());
+        // a chord far longer than the usual step (across a fold) cuts the run too
+        let line: Vec<Pos2> = (0..10).map(|i| pos2(i as f32, 0.0)).chain((0..10).map(|i| pos2(200.0 + i as f32, 0.0))).collect();
+        let cut = super::super::masks::split_jumps(vec![line]);
+        assert_eq!(cut.len(), 2, "{cut:?}");
+        assert!(cut.iter().all(|r| r.len() == 10));
+    }
+
+    /// A guide through an end far off the photo still crosses the canvas (review of #3550).
+    #[test]
+    fn a_guide_through_an_end_off_the_photo_still_crosses_it() {
+        let mut d = DevelopSettings::default();
+        d.geometry.vertical = 35.0;
+        d.optics.distortion = 50.0;
+        let frame = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&frame, Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 300.0))).for_mask(true);
+        // a gradient drawn off the photo's right side (start and end both there): its guides are
+        // horizontal and cross the photo from 2.5 photo widths away
+        let (start, end) = (Point::new(3.5, 0.4), Point::new(3.5, 0.6));
+        for at in [start, end] {
+            let guide: Vec<Pos2> = super::super::masks::linear_guide(&m, start, end, at).concat();
+            assert!(guide.iter().filter(|g| m.rect.expand(-2.0).contains(**g)).count() > 2, "{at:?}: the guide crosses the canvas");
+        }
     }
 }

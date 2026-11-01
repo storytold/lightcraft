@@ -455,11 +455,48 @@ pub(super) fn linear_guide(map: &CanvasMap, start: Point, end: Point, at: Point)
         return Vec::new();
     }
     let perp = (-d.1 / n * l.0, d.0 / n * l.1);
-    const STEPS: usize = 48;
-    runs((0..=STEPS).map(|i| {
-        let t = -1.5 + 3.0 * i as f64 / STEPS as f64;
+    // from where the line enters the photo to where it leaves it (with a margin), measured from
+    // `at`, so a guide whose end lies off the photo still reaches it
+    let pp = perp.0 * perp.0 + perp.1 * perp.1;
+    let ts = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].map(|(x, y)| ((x - at.x) * perp.0 + (y - at.y) * perp.1) / pp);
+    let (lo, hi) = ts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| (lo.min(*t), hi.max(*t)));
+    let pad = 0.1 * (hi - lo);
+    let (lo, hi) = (lo - pad, hi + pad);
+    if !(lo.is_finite() && hi.is_finite() && hi > lo) {
+        return Vec::new();
+    }
+    // 48 steps across about a photo's width, at most 256
+    let steps = ((hi - lo) * 16.0).ceil().clamp(48.0, 256.0) as usize;
+    split_jumps(runs((0..=steps).map(|i| {
+        let t = lo + (hi - lo) * i as f64 / steps as f64;
         map.try_screen(Point::new(at.x + perp.0 * t, at.y + perp.1 * t))
-    }))
+    })))
+}
+
+/// `runs` cut again where a step is far longer than the run's usual one: a strong warp can fold
+/// the line, and a chord across the fold isn't part of it.
+pub(super) fn split_jumps(runs: Vec<Vec<Pos2>>) -> Vec<Vec<Pos2>> {
+    let mut out = Vec::new();
+    for run in runs {
+        let mut steps: Vec<f32> = run.windows(2).filter_map(|w| Some(w.first()?.distance(*w.get(1)?))).collect();
+        steps.sort_by(f32::total_cmp);
+        let usual = steps.get(steps.len() / 2).copied().unwrap_or(0.0);
+        let limit = (8.0 * usual).max(2.0);
+        let mut cur: Vec<Pos2> = Vec::new();
+        for q in run {
+            if cur.last().is_some_and(|p: &Pos2| p.distance(q) > limit) {
+                if cur.len() >= 2 {
+                    out.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+            }
+            cur.push(q);
+        }
+        if cur.len() >= 2 {
+            out.push(cur);
+        }
+    }
+    out
 }
 
 /// The unbroken runs (two points or more) of a sampled line whose missing samples (`None`) cut it.

@@ -420,27 +420,30 @@ mod tests {
     }
 
     /// Where a zoomed-in pass's new box reaches past what it covered (a turned box's corners), it
-    /// takes the whole-photo selection, not a copy of its own edge (review of #3550).
+    /// takes the whole-photo selection: neither a copy of its own edge (a negative whole-photo
+    /// selection) nor a fixed "unselected" (a positive one) (review of #3550).
     #[test]
     fn a_moved_detail_pass_takes_the_whole_selection_past_its_own_area() {
         const SIDE: usize = 16;
         let mut s = DevelopSettings::default();
         s.geometry.rotate = 20.0;
         let frame = Frame::new(300, 200, &s, false);
-        let detail = SegMask::from_logits_in(SIDE, &[8.0; SIDE * SIDE], [0.4, 0.4, 0.6, 0.6]);
-        let coarse = SegMask::from_logits(SIDE, &[8.0; SIDE * SIDE]);
-        let mut m =
-            mask(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: Vec::new(), seg: Some(coarse), detail: vec![detail], edge: 0.0 });
-        m.on_photo = false;
-        attach(&mut m, &frame);
-        let MaskShape::Object { detail, .. } = &m.components[0].shape else { panic!() };
-        let g = SegGrid::new(&detail[0]).unwrap();
-        let b = detail[0].bounds().unwrap();
-        // a corner of the new box is outside the turned patch: it takes the whole-photo selection
-        // (selected here), not a fixed "unselected"
-        let inset = |t: f64| Point::new(b[0] + t * (b[2] - b[0]), b[1] + t * (b[3] - b[1]));
-        assert!(g.logit(inset(0.03)) > 0.0, "{}", g.logit(inset(0.03)));
-        assert!(g.logit(inset(0.5)) > 0.0);
+        for whole in [8.0f32, -8.0] {
+            let detail = SegMask::from_logits_in(SIDE, &[8.0; SIDE * SIDE], [0.4, 0.4, 0.6, 0.6]);
+            let coarse = SegMask::from_logits(SIDE, &[whole; SIDE * SIDE]);
+            let mut m =
+                mask(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: Vec::new(), seg: Some(coarse), detail: vec![detail], edge: 0.0 });
+            m.on_photo = false;
+            attach(&mut m, &frame);
+            let MaskShape::Object { detail, .. } = &m.components[0].shape else { panic!() };
+            let g = SegGrid::new(&detail[0]).unwrap();
+            let b = detail[0].bounds().unwrap();
+            // a corner of the new box is outside the turned patch: the whole-photo selection's sign
+            let inset = |t: f64| Point::new(b[0] + t * (b[2] - b[0]), b[1] + t * (b[3] - b[1]));
+            let corner = g.logit(inset(0.03));
+            assert!((corner > 0.0) == (whole > 0.0), "whole {whole}: corner {corner}");
+            assert!(g.logit(inset(0.5)) > 0.0, "whole {whole}: the patch itself stays selected");
+        }
     }
 
     /// The box around a mapped rectangle holds the whole bent edge, also off the centre lines
