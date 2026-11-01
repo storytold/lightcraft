@@ -652,3 +652,37 @@ fn a_cr3_preview_box_with_hostile_sizes_is_skipped() {
     assert!(embedded_preview(&file).is_none());
     assert!(embedded_preview_covering(&file, 64).is_none());
 }
+
+/// A corrupt raw whose preview pointer (JPEGInterchangeFormat and its length) lies past the end
+/// of the file, or whose length runs past it, finds no preview and never panics; a real preview
+/// beside the lying pointer is still found (FredApps on #3080: the preview must be read with
+/// bounds on its offset and size).
+#[test]
+fn a_preview_pointer_past_the_end_of_the_file_finds_no_preview() {
+    let real = sized_jpeg(640, 480, 3, 200);
+    let lying = |off: u32, len: u32, with_real: bool| {
+        let mut ifd = IfdBuilder::new();
+        ifd.set(t::JPEG_INTERCHANGE_FORMAT, Value::Long(vec![off]));
+        ifd.set(t::JPEG_INTERCHANGE_FORMAT_LENGTH, Value::Long(vec![len]));
+        if with_real {
+            ifd.set(t::COMPRESSION, Value::Short(vec![6]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![1]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![1]));
+            ifd.set_image(ImageData::Strips { rows_per_strip: 1, strips: vec![real.clone()] });
+        }
+        TiffWriter::default().write(&[ifd]).unwrap()
+    };
+    let short = lying(0, 0, false).len() as u32;
+    for (off, len) in [(u32::MAX, u32::MAX), (u32::MAX, 16), (short + 10, 4096), (8, u32::MAX), (short - 2, u32::MAX - 1)] {
+        let file = lying(off, len, false);
+        assert_eq!(embedded_preview(&file), None, "pointer {off:#x}+{len:#x} in a {} byte file", file.len());
+        assert_eq!(embedded_preview_covering(&file, 64), None);
+        assert_eq!(embedded_preview_color_space(&file), None);
+        let with_real = lying(off, len, true);
+        assert_eq!(embedded_preview(&with_real).as_deref(), Some(&real[..]), "the strip preview beside pointer {off:#x}+{len:#x}");
+        // and every truncation of the file (a raw cut short by a failed copy) is safe too
+        for n in 0..with_real.len() {
+            let _ = embedded_preview_covering(&with_real[..n], 64);
+        }
+    }
+}
