@@ -15,17 +15,31 @@ measured on the frames it draws), so they exclude the control channel's round tr
 """
 import json, os, socket, statistics, sys, threading, time
 
+USAGE = __doc__.strip().splitlines()[2]
+if len(sys.argv) < 3 or not sys.argv[1].isdigit():
+    sys.exit(USAGE)
 PORT = int(sys.argv[1])
 FOLDER = sys.argv[2]
 args = sys.argv[3:]
 def opt(name, default):
-    return type(default)(args[args.index(name) + 1]) if name in args else default
+    """The value after option `name` (as `default`'s type), `default` when it isn't given; a
+    missing or unreadable value stops with the usage line."""
+    if name not in args:
+        return default
+    i = args.index(name) + 1
+    if i >= len(args):
+        sys.exit(f"{name} needs a value; {USAGE}")
+    try:
+        return type(default)(args[i])
+    except ValueError:
+        sys.exit(f"{name} {args[i]!r}: not a {type(default).__name__}; {USAGE}")
 STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
 LABEL = opt("--label", "run")
 OVERWRITE = "--overwrite" in args
-# a run takes minutes: refuse an existing result before it starts, not after
-if not OVERWRITE and os.path.exists(LABEL + ".json"):
+# a run takes minutes: refuse an existing result (or a link there, even a dangling one) before it
+# starts, not after
+if not OVERWRITE and os.path.lexists(LABEL + ".json"):
     sys.exit(f"{LABEL}.json exists: pass --label NAME for a new one, or --overwrite to replace it")
 
 class Conn:
