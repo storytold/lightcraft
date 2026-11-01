@@ -182,6 +182,12 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
+Lightroom's deferred numeric value `-999999` is omitted before mapping or clamping, including in
+white-balance conversions, numeric modes, curves and local adjustments. Unread global fields are
+included in the import report; an invalid crop leaves existing geometry unchanged.
+Crop import requires all four valid edges, with an optional angle (zero when omitted), even when
+`HasCrop` is absent. An incomplete rectangle is refused; `0/0/1/1` at angle zero is the full image,
+and an explicit `HasCrop="False"` always clears the crop.
 
 `crs:CameraProfile` is kept as the selected name in the photo's import warning and the active profile is left as it is: the name carries no rendering data and never selects an Adobe profile. Import reports such a profile as not applied (colours may differ from Lightroom), except Lightroom's default profiles (`Adobe Standard`, `Adobe Color`), which every sidecar names and which LightCraft's own starting look stands in for.
 
