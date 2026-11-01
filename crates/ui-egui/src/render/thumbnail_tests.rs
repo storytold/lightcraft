@@ -1344,10 +1344,19 @@ fn crop_on_and_off_with_an_unchanged_edit_renders_nothing_again() {
     assert_eq!(work.borrow().jobs.len(), 1, "a draft that left the view is rendered again, never kept");
     work.borrow_mut().jobs.clear();
     // the kept render counts in the renderer's memory; leaving the view lets it go
-    let held = |app: &crate::LightcraftApp| app.renderer.memory()["textures"]["count"].as_u64().unwrap();
+    let held = |app: &crate::LightcraftApp| {
+        let m = &app.renderer.memory()["textures"];
+        ["count", "bytes", "cpuCopyBytes"].map(|f| m[f].as_u64().unwrap())
+    };
+    let r = &app.renderer;
+    let going: Vec<&Tex> = r.textures.get(&Slot::Main).into_iter().chain(&r.kept_views).collect();
+    assert_eq!(going.len(), 2, "the shown render and one kept");
+    let bytes: u64 = going.iter().map(|t| (t.size[0] * t.size[1] * 4) as u64).sum();
+    let copies: u64 = going.iter().filter_map(|t| t.pixels.as_ref()).map(|p| (p.pixels.len() * 4) as u64).sum();
+    assert!(copies > 0, "the fixture keeps CPU copies");
     let before = held(&app);
     app.renderer.release(Slot::Main);
-    assert_eq!(held(&app), before - 2, "the shown render and the kept one are let go, and both were counted");
+    assert_eq!(held(&app), [before[0] - 2, before[1] - bytes, before[2] - copies], "both were counted, and both are let go");
     app.renderer.request(Slot::Main, uncropped, 100);
     assert_eq!(work.borrow().jobs.len(), 1, "after the view was released it renders");
 }
