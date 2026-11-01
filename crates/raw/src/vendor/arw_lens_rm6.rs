@@ -78,7 +78,8 @@ struct LensException {
 /// The measured lens exceptions (docs/sony-ilce7rm6-lens-corrections.md → ILCE-6700).
 const LENS_EXCEPTIONS: &[LensException] = &[
     // Sigma 10-18 mm F2.8 DC DN at its wide end: 97 photos at 10 mm and 2 at 10.4-10.5 mm. The body's rule leaves
-    // 1.36-1.38 px there; from 11.7 mm on the body's rule fits better
+    // 1.36-1.38 px there; from 11.7 mm on the body's rule fits better. `lens` is the only LensModel in 336 files of
+    // this lens (native E-mount, no adapter); the 116 measured copies carry body firmware "ILCE-6700 v2.00"
     LensException { body: "ILCE-6700", lens: "10-18mm F2.8 DC DN | Contemporary 023", max_focal_mm: 10.5, knot_spacing: 416.0, unit: 14250.0 },
 ];
 
