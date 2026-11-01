@@ -56,18 +56,54 @@ pub(super) struct Placer<'a> {
     stop_on_error: bool,
 }
 
-/// Why `subfolder` would lead out of the export folder (a `..` component, or an absolute path or
-/// drive), `None` when it stays inside. Nested subfolders (`a/b`) are fine. Checked when the
-/// params come in and again before writing, since a saved preset is read without the checks.
+/// Why `subfolder` would lead out of the export folder (a `..` component, also as Windows reads
+/// `...` or `.. .`, an absolute path or drive, or a Windows device name such as `CON` or `NUL`),
+/// `None` when it stays inside. Nested subfolders (`a/b`) are fine. Checked when the params come
+/// in and again before writing, since a saved preset is read without the checks.
 pub(super) fn subfolder_escapes(subfolder: &str) -> Option<&'static str> {
     let s = subfolder.trim();
     if s.starts_with(['/', '\\']) || (s.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) && s.as_bytes().get(1) == Some(&b':')) {
         return Some("is an absolute path; give a folder inside the export folder");
     }
-    if s.split(['/', '\\']).any(|c| c.trim() == "..") {
+    let components = || s.split(['/', '\\']);
+    // Windows drops a name's trailing dots and spaces, so `...` and `.. .` are `..` there
+    if components().any(|c| c.contains("..") && c.trim_matches([' ', '.']).is_empty()) {
         return Some("can't contain `..`; give a folder inside the export folder");
     }
+    if components().any(is_device_name) {
+        return Some("names a Windows device (CON, PRN, AUX, NUL, COM1–9, LPT1–9); give another folder name");
+    }
+    // the platform's own reading of the path, for any form the checks above don't know
+    if !plain_relative(std::path::Path::new(s)) {
+        return Some("is not a folder inside the export folder");
+    }
     None
+}
+
+/// A Windows device name, with or without an extension (`nul.txt`): Windows opens the device
+/// instead of a folder of that name.
+fn is_device_name(component: &str) -> bool {
+    const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    let base = component.trim_end_matches([' ', '.']);
+    let base = base.split('.').next().unwrap_or(base).trim_end();
+    let numbered = |prefix: &str| {
+        base.len() == 4
+            && base.get(..3).is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+            && base.as_bytes().get(3).is_some_and(|d| (b'1'..=b'9').contains(d))
+    };
+    DEVICES.iter().any(|d| base.eq_ignore_ascii_case(d)) || numbered("COM") || numbered("LPT")
+}
+
+/// Only folder names (and `.`), as the platform reads the path: no root, prefix or `..`.
+fn plain_relative(path: &std::path::Path) -> bool {
+    use std::path::Component;
+    path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
+/// Does `path` (built from `base`) still lie inside `base`? The second line behind
+/// [`subfolder_escapes`], on the folder actually written to.
+fn stays_inside(base: &str, path: &str) -> bool {
+    std::path::Path::new(path).strip_prefix(base).is_ok_and(plain_relative)
 }
 
 fn join_path(a: &str, b: &str) -> String {
@@ -106,7 +142,14 @@ impl<'a> Placer<'a> {
         if let Some(why) = subfolder_escapes(&self.o.subfolder) {
             return Err(format!("{name}: the subfolder `{}` {why}", self.o.subfolder));
         }
-        Ok(if self.o.subfolder.is_empty() { base } else { join_path(&base, &self.o.subfolder) })
+        if self.o.subfolder.is_empty() {
+            return Ok(base);
+        }
+        let folder = join_path(&base, &self.o.subfolder);
+        if !stays_inside(&base, &folder) {
+            return Err(format!("{name}: the subfolder `{}` is not a folder inside the export folder", self.o.subfolder));
+        }
+        Ok(folder)
     }
 
     /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it
@@ -187,5 +230,29 @@ impl<'a> Placer<'a> {
             Err(err) => self.out.push(json!({"photo": photo.0, "file": file, "error": err})),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_device_name, stays_inside};
+
+    #[test]
+    fn device_names_are_known_with_any_case_and_extension() {
+        for name in ["CON", "nul", "Aux", "PRN ", "nul.txt", "COM1", "lpt9", "com3.jpg", "CON."] {
+            assert!(is_device_name(name), "{name}");
+        }
+        for name in ["Console", "COM0", "COM10", "LPT", "connect", "a.nul", ""] {
+            assert!(!is_device_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_built_folder_is_checked_against_the_export_folder() {
+        assert!(stays_inside("out", "out/a/b"));
+        assert!(stays_inside("/home/me/out", "/home/me/out/./a"));
+        assert!(!stays_inside("out", "out/../elsewhere"));
+        assert!(!stays_inside("out", "other/a"));
+        assert!(!stays_inside("/home/me/out", "/home/me/outside"));
     }
 }

@@ -1211,13 +1211,16 @@ fn same_folder_as_original_refuses_photos_without_a_folder() {
 fn a_subfolder_can_not_lead_out_of_the_export_folder() {
     use crate::export::Destination;
     let err = |sub: &str| ExportOptions::from_params(&json!({"subfolder": sub})).err().map(|e| e.to_string()).unwrap_or_default();
-    for sub in ["..", "../out", "a/../../b", "a\\..\\b", " .. /x"] {
+    for sub in ["..", "../out", "a/../../b", "a\\..\\b", " .. /x", "...", ".. .", "a/... /b"] {
         assert!(err(sub).contains("`subfolder` can't contain `..`"), "{sub}: {}", err(sub));
     }
     for sub in ["/etc", "\\\\server\\share", "C:\\Users", "c:/x"] {
         assert!(err(sub).contains("`subfolder` is an absolute path"), "{sub}: {}", err(sub));
     }
-    for sub in ["", "Exports", "a/b", "..x", "x..", "Trip: day 1"] {
+    for sub in ["CON", "a/nul", "Aux.jpg", "COM1", "lpt9 "] {
+        assert!(err(sub).contains("`subfolder` names a Windows device"), "{sub}: {}", err(sub));
+    }
+    for sub in ["", "Exports", "a/b", "..x", "x..", "Trip: day 1", "Console", "COM10", "./a"] {
         assert_eq!(err(sub), "", "{sub}");
     }
 
