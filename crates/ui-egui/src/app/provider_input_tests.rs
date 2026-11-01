@@ -1,5 +1,8 @@
 //! Native regressions exercise actual slider buffers and the guard used before web staging.
 
+// Fixture helpers share the test-only panic policy; production guards retain the crate-wide deny.
+#![allow(clippy::unwrap_used)]
+
 use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use serde_json::json;
 
