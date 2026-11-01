@@ -66,12 +66,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }
     row(ui, t, crate::i18n::tr("In use"), |ui| {
-        let text = match used {
-            Some(Some(b)) => format!("{:.1} MB", b as f64 / 1048576.0),
-            Some(None) => crate::i18n::tr("counting…").to_string(),
-            None => crate::i18n::tr("memory only").to_string(),
-        };
-        ui.label(RichText::new(text).color(t.text));
+        ui.label(RichText::new(in_use_text(used)).color(t.text));
         let r = ui.button(crate::i18n::tr("Clear Cache"));
         register(ui, "button:settingsClearCache", r.rect);
         if r.clicked() {
@@ -100,6 +95,17 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
 /// the effective folder, what is in it, and choosing another one.
 #[cfg(not(target_arch = "wasm32"))]
+/// The disk cache's "In use": its size once counted, "counting…" while the first count of the
+/// folder runs on a thread of its own (`PreviewCache::disk_size_now` is `Some(None)` meanwhile),
+/// "memory only" without a disk cache.
+fn in_use_text(used: Option<Option<u64>>) -> String {
+    match used {
+        Some(Some(b)) => format!("{:.1} MB", b as f64 / 1048576.0),
+        Some(None) => crate::i18n::tr("counting…").to_string(),
+        None => crate::i18n::tr("memory only").to_string(),
+    }
+}
+
 fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // listing a big folder every frame would be slow: refresh every 2 s and after a change
     let cache = egui::Id::unique("smart-location");
@@ -200,4 +206,16 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_use_text;
+
+    #[test]
+    fn in_use_reads_counting_until_the_size_is_known() {
+        assert_eq!(in_use_text(Some(None)), "counting…");
+        assert_eq!(in_use_text(Some(Some(3 * 1048576 / 2))), "1.5 MB");
+        assert_eq!(in_use_text(None), "memory only");
+    }
 }

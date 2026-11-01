@@ -99,18 +99,18 @@ impl PreviewCache {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if !d.sizing.swap(true, Ordering::AcqRel) {
+            if d.claim_count() {
                 let cache = Arc::downgrade(self);
                 let spawned = std::thread::Builder::new().name("lc-preview-size".into()).spawn(move || {
                     if let Some(me) = cache.upgrade()
                         && let Some(d) = &me.disk
                     {
                         d.size();
-                        d.sizing.store(false, Ordering::Release);
+                        d.count_ended();
                     }
                 });
                 if spawned.is_err() {
-                    d.sizing.store(false, Ordering::Release);
+                    d.count_ended();
                 }
             }
             None

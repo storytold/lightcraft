@@ -72,13 +72,15 @@ pub struct DiskCache {
     /// Bytes the cache may hold (changed in place by [`DiskCache::set_budget`]).
     budget: AtomicU64,
     /// Bytes on disk (`None` until first scanned). Held across the first scan of the folder and each
-    /// file's write: never taken on the interface's thread (it reads [`Self::known`]).
-    pub(crate) total: Mutex<Option<u64>>,
+    /// file's write: never taken on the interface's thread, which reads [`Self::known_size`]. Only
+    /// this file's methods take it, so that rule lives here.
+    total: Mutex<Option<u64>>,
     /// A copy of `total` that never waits ([`UNKNOWN`] until first scanned): the interface shows
     /// the cache's size every frame and must not wait for a scan or a write (note 3 of 31 Oct).
     known: AtomicU64,
-    /// A background scan for [`Self::known`] is running ([`crate::PreviewCache::disk_size_now`]).
-    pub(crate) sizing: std::sync::atomic::AtomicBool,
+    /// A background count for [`Self::known_size`] is running ([`Self::claim_count`],
+    /// [`crate::PreviewCache::disk_size_now`]).
+    sizing: std::sync::atomic::AtomicBool,
     pub hits: AtomicU64,
     pub misses: AtomicU64,
     pub writes: AtomicU64,
@@ -382,6 +384,23 @@ impl DiskCache {
     /// on another thread): safe on the interface's thread.
     pub fn known_size(&self) -> Option<u64> {
         Some(self.known.load(Ordering::Relaxed)).filter(|b| *b != UNKNOWN)
+    }
+
+    /// Claim the one background count of the size: false while another runs. The claimant calls
+    /// [`Self::size`] off the interface's thread, then [`Self::count_ended`].
+    pub(crate) fn claim_count(&self) -> bool {
+        !self.sizing.swap(true, Ordering::AcqRel)
+    }
+
+    /// The background count claimed by [`Self::claim_count`] ended (or never started).
+    pub(crate) fn count_ended(&self) {
+        self.sizing.store(false, Ordering::Release);
+    }
+
+    /// The size's lock, held as a write or the first scan of the folder holds it (tests only).
+    #[cfg(test)]
+    pub(crate) fn hold_count(&self) -> std::sync::MutexGuard<'_, Option<u64>> {
+        self.total.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Bytes on disk (scans if not yet known: a walk of the whole folder, for a background thread).
