@@ -94,21 +94,18 @@ struct SysfsCard {
 }
 
 /// The memory sysfs reports for the adapter with PCI ids `vendor`:`device` among `cards`: the
-/// cards with both ids (several are the same model, so the same size), else, when the device id
-/// matches none, the vendor's cards if they all report one size. Two of the vendor's cards of
-/// different sizes that can't be told apart give `None`, so the caller assumes a safe size
-/// rather than another card's; another vendor's GPU (an integrated GPU beside a discrete card)
-/// never sizes this one.
+/// cards with both ids, else, when the device id matches none, the vendor's cards; either way
+/// only when they all report one size. Cards that can't be told apart and differ (or a matching
+/// card that reports nothing) give `None`, so the caller assumes a safe size rather than another
+/// card's; another vendor's GPU (an integrated GPU beside a discrete card) never sizes this one.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn sysfs_memory(cards: impl Iterator<Item = SysfsCard>, vendor: u32, device: u32) -> Option<u64> {
     let mine: Vec<SysfsCard> = cards.filter(|c| c.vendor == Some(vendor)).collect();
-    let exact = mine.iter().filter(|c| device != 0 && c.device == Some(device)).filter_map(|c| c.memory).max();
-    if exact.is_some() {
-        return exact;
-    }
-    let mut sizes = mine.iter().filter_map(|c| c.memory);
-    let first = sizes.next()?;
-    sizes.all(|m| m == first).then_some(first)
+    let exact: Vec<SysfsCard> = mine.iter().copied().filter(|c| device != 0 && c.device == Some(device)).collect();
+    // (matched cards only, when any match: never another model's size)
+    let candidates = if exact.is_empty() { mine } else { exact };
+    let first = candidates.first()?.memory?;
+    candidates.iter().all(|c| c.memory == Some(first)).then_some(first)
 }
 
 /// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
@@ -214,6 +211,12 @@ mod tests {
         assert_eq!(sysfs_memory(two(), AMD, 0), None);
         let same = [card(0x744c, 16u64 << 30), card(0x744c, 16 << 30)].into_iter();
         assert_eq!(sysfs_memory(same, AMD, 0), Some(16 << 30), "cards of one size, unmatched: that size");
+        // (review of 5af259201) a matching card that reports nothing is not sized by another card
+        let silent = [SysfsCard { vendor: Some(AMD), device: Some(0x164e), memory: None }, card(0x744c, 16 << 30)].into_iter();
+        assert_eq!(sysfs_memory(silent, AMD, 0x164e), None);
+        // (review of 9c77aa7b3) two cards with the same ids that report different sizes: neither
+        let differ = [card(0x744c, 16u64 << 30), card(0x744c, 8 << 30)].into_iter();
+        assert_eq!(sysfs_memory(differ, AMD, 0x744c), None);
         assert_eq!(parse_hex("0x1002\n"), Some(0x1002), "sysfs writes the vendor id as hex");
     }
 

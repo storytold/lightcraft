@@ -114,7 +114,7 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
     // the web build has no thread to run it on, and run inline it would hold the page (and its
     // Cancel) for minutes: Settings doesn't offer it there
     #[cfg(target_arch = "wasm32")]
-    let started = {
+    let started: Result<(), String> = {
         drop(work);
         Err(crate::i18n::tr("Test my machine runs in the desktop app").to_string())
     };
