@@ -1,4 +1,4 @@
-//! Geometry for `LightCraft`: points, rectangles, affine and projective transforms, and the crop model.
+//! Geometry for LightCraft: points, rectangles, affine and projective transforms, and the crop model.
 //!
 //! Conventions: image coordinates are y-down. *Normalized* coordinates map the full (uncropped,
 //! oriented) image to `0..1` on both axes, so tools and settings are resolution independent.
@@ -25,19 +25,15 @@ pub struct Point {
 
 impl Point {
     pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
-    #[must_use]
     pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
-    #[must_use]
     pub fn dist(self, o: Point) -> f64 {
         (self - o).len()
     }
-    #[must_use]
     pub fn lerp(self, o: Point, t: f64) -> Point {
         Point::new(self.x + (o.x - self.x) * t, self.y + (o.y - self.y) * t)
     }
-    #[must_use]
     pub fn to_vec(self) -> Vec2 {
         Vec2::new(self.x, self.y)
     }
@@ -50,32 +46,25 @@ pub struct Vec2 {
 }
 
 impl Vec2 {
-    #[must_use]
     pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
-    #[must_use]
     pub fn len(self) -> f64 {
         self.x.hypot(self.y)
     }
-    #[must_use]
     pub fn dot(self, o: Vec2) -> f64 {
         self.x * o.x + self.y * o.y
     }
-    #[must_use]
     pub fn cross(self, o: Vec2) -> f64 {
         self.x * o.y - self.y * o.x
     }
-    #[must_use]
     pub fn normalized(self) -> Vec2 {
         let l = self.len();
         if l > 0.0 { Vec2::new(self.x / l, self.y / l) } else { self }
     }
-    #[must_use]
     pub fn angle(self) -> f64 {
         self.y.atan2(self.x)
     }
-    #[must_use]
     pub fn rotate(self, a: f64) -> Vec2 {
         let (s, c) = a.sin_cos();
         Vec2::new(self.x * c - self.y * s, self.x * s + self.y * c)
@@ -136,76 +125,58 @@ pub struct Rect {
 
 impl Rect {
     pub const UNIT: Rect = Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 };
-    #[must_use]
     pub const fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
         Self { x0, y0, x1, y1 }
     }
-    #[must_use]
     pub fn from_xywh(x: f64, y: f64, w: f64, h: f64) -> Self {
         Self::new(x, y, x + w, y + h)
     }
-    #[must_use]
     pub fn from_center(c: Point, w: f64, h: f64) -> Self {
         Self::new(c.x - w / 2.0, c.y - h / 2.0, c.x + w / 2.0, c.y + h / 2.0)
     }
-    #[must_use]
     pub fn from_points(a: Point, b: Point) -> Self {
         Self::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
     }
-    #[must_use]
     pub fn width(&self) -> f64 {
         self.x1 - self.x0
     }
-    #[must_use]
     pub fn height(&self) -> f64 {
         self.y1 - self.y0
     }
-    #[must_use]
     pub fn area(&self) -> f64 {
         self.width().max(0.0) * self.height().max(0.0)
     }
-    #[must_use]
     pub fn center(&self) -> Point {
         Point::new(f64::midpoint(self.x0, self.x1), f64::midpoint(self.y0, self.y1))
     }
-    #[must_use]
     pub fn aspect(&self) -> f64 {
         if self.height() == 0.0 { 0.0 } else { self.width() / self.height() }
     }
-    #[must_use]
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x0 && p.x < self.x1 && p.y >= self.y0 && p.y < self.y1
     }
-    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.x1 <= self.x0 || self.y1 <= self.y0
     }
-    #[must_use]
     pub fn intersect(&self, o: &Rect) -> Rect {
         Rect::new(self.x0.max(o.x0), self.y0.max(o.y0), self.x1.min(o.x1), self.y1.min(o.y1))
     }
-    #[must_use]
     pub fn union(&self, o: &Rect) -> Rect {
         Rect::new(self.x0.min(o.x0), self.y0.min(o.y0), self.x1.max(o.x1), self.y1.max(o.y1))
     }
-    #[must_use]
     pub fn inflate(&self, dx: f64, dy: f64) -> Rect {
         Rect::new(self.x0 - dx, self.y0 - dy, self.x1 + dx, self.y1 + dy)
     }
-    #[must_use]
     pub fn scale(&self, sx: f64, sy: f64) -> Rect {
         Rect::new(self.x0 * sx, self.y0 * sy, self.x1 * sx, self.y1 * sy)
     }
-    #[must_use]
     pub fn translate(&self, v: Vec2) -> Rect {
         Rect::new(self.x0 + v.x, self.y0 + v.y, self.x1 + v.x, self.y1 + v.y)
     }
-    #[must_use]
     pub fn corners(&self) -> [Point; 4] {
         [Point::new(self.x0, self.y0), Point::new(self.x1, self.y0), Point::new(self.x1, self.y1), Point::new(self.x0, self.y1)]
     }
     /// Largest rectangle of aspect `a` (w/h) centred in `self`.
-    #[must_use]
     pub fn fit_aspect(&self, a: f64) -> Rect {
         if !(a.is_finite() && a > 0.0) || self.is_empty() {
             return *self;
@@ -215,7 +186,6 @@ impl Rect {
         Rect::from_center(self.center(), nw, nh)
     }
     /// Round outward to integer pixel bounds.
-    #[must_use]
     pub fn round_out(&self) -> Rect {
         Rect::new(self.x0.floor(), self.y0.floor(), self.x1.ceil(), self.y1.ceil())
     }
@@ -233,24 +203,19 @@ impl Default for Affine {
 
 impl Affine {
     pub const IDENTITY: Affine = Affine([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-    #[must_use]
     pub fn translate(v: Vec2) -> Affine {
         Affine([1.0, 0.0, 0.0, 1.0, v.x, v.y])
     }
-    #[must_use]
     pub fn scale(sx: f64, sy: f64) -> Affine {
         Affine([sx, 0.0, 0.0, sy, 0.0, 0.0])
     }
-    #[must_use]
     pub fn rotate(a: f64) -> Affine {
         let (s, c) = a.sin_cos();
         Affine([c, s, -s, c, 0.0, 0.0])
     }
-    #[must_use]
     pub fn rotate_about(a: f64, p: Point) -> Affine {
         Affine::translate(p.to_vec()) * Affine::rotate(a) * Affine::translate(-p.to_vec())
     }
-    #[must_use]
     pub fn apply(&self, p: Point) -> Point {
         let (x, y) = self.apply_real(p.x, p.y);
         Point::new(x, y)
@@ -261,17 +226,14 @@ impl Affine {
         let [a, b, c, d, e, f] = self.0;
         (x * a + y * c + e, x * b + y * d + f)
     }
-    #[must_use]
     #[expect(clippy::many_single_char_names, reason = "Affine coefficients use conventional a–d matrix notation.")]
     pub fn apply_vec(&self, v: Vec2) -> Vec2 {
         let [a, b, c, d, ..] = self.0;
         Vec2::new(a * v.x + c * v.y, b * v.x + d * v.y)
     }
-    #[must_use]
     pub fn determinant(&self) -> f64 {
         self.0[0] * self.0[3] - self.0[1] * self.0[2]
     }
-    #[must_use]
     #[expect(clippy::many_single_char_names, reason = "Affine inversion uses conventional a–f matrix-coefficient notation.")]
     pub fn inverse(&self) -> Option<Affine> {
         let det = self.determinant();
@@ -284,7 +246,6 @@ impl Affine {
         coefficients.iter().all(|v| v.is_finite()).then_some(Affine(coefficients))
     }
     /// Bounding box of a transformed rectangle.
-    #[must_use]
     pub fn transform_rect_bbox(&self, r: &Rect) -> Rect {
         let pts = r.corners().map(|p| self.apply(p));
         let mut out = Rect::new(pts[0].x, pts[0].y, pts[0].x, pts[0].y);
@@ -321,7 +282,6 @@ pub enum Orientation {
 }
 
 impl Orientation {
-    #[must_use]
     pub fn from_exif(v: u16) -> Orientation {
         match v {
             2 => Orientation::FlipH,
@@ -334,7 +294,6 @@ impl Orientation {
             _ => Orientation::Normal,
         }
     }
-    #[must_use]
     pub fn to_exif(self) -> u16 {
         match self {
             Orientation::Normal => 1,
@@ -348,12 +307,10 @@ impl Orientation {
         }
     }
     /// Whether width and height swap.
-    #[must_use]
     pub fn swaps_axes(self) -> bool {
         matches!(self, Orientation::Transpose | Orientation::Rotate90 | Orientation::Transverse | Orientation::Rotate270)
     }
     /// Decompose into (clockwise quarter turns applied after an optional horizontal flip).
-    #[must_use]
     pub fn to_parts(self) -> (bool, u8) {
         match self {
             Orientation::Normal => (false, 0),
@@ -366,7 +323,6 @@ impl Orientation {
             Orientation::Transpose => (true, 3),
         }
     }
-    #[must_use]
     pub fn from_parts(flip: bool, quarter_turns_cw: u8) -> Orientation {
         match (flip, quarter_turns_cw % 4) {
             (false, 0) => Orientation::Normal,
@@ -380,13 +336,11 @@ impl Orientation {
         }
     }
     /// Rotate the (already oriented) image a further quarter turn clockwise (`cw`) or counter-clockwise.
-    #[must_use]
     pub fn rotated(self, cw: bool) -> Orientation {
         let (f, t) = self.to_parts();
         Orientation::from_parts(f, if cw { t + 1 } else { t + 3 })
     }
     /// Flip the displayed image horizontally.
-    #[must_use]
     pub fn flipped_h(self) -> Orientation {
         let (f, t) = self.to_parts();
         // flipH ∘ rot(t) = rot(-t) ∘ flipH
@@ -394,7 +348,6 @@ impl Orientation {
     }
     /// The orientation that undoes this one (`o.inverse().map(o.map(p)) == p`). Flips and half turns
     /// are their own inverses; quarter turns swap.
-    #[must_use]
     pub fn inverse(self) -> Orientation {
         match self {
             Orientation::Rotate90 => Orientation::Rotate270,
@@ -405,14 +358,12 @@ impl Orientation {
     /// Map a rectangle in normalized (0..1) coordinates of the stored image to normalized coordinates
     /// of the oriented one (e.g. a face region given on the upright photo → the frame after the user's
     /// Rotate Left/Right).
-    #[must_use]
     pub fn map_norm_rect(self, r: Rect) -> Rect {
         let (ax, ay) = self.map(r.x0, r.y0, 1.0, 1.0);
         let (bx, by) = self.map(r.x1, r.y1, 1.0, 1.0);
         Rect::from_points(Point::new(ax, ay), Point::new(bx, by))
     }
     /// Map a point in stored pixel space (w×h stored dims) to oriented space.
-    #[must_use]
     #[expect(clippy::many_single_char_names, reason = "Orientation mapping uses conventional x/y/width/height/turn notation.")]
     pub fn map(self, x: f64, y: f64, w: f64, h: f64) -> (f64, f64) {
         let (flip, t) = self.to_parts();
@@ -433,17 +384,14 @@ impl Orientation {
     }
 }
 
-#[must_use]
 pub fn clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
-#[must_use]
 pub fn deg(r: f64) -> f64 {
     r.to_degrees()
 }
 
-#[must_use]
 pub fn rad(d: f64) -> f64 {
     d.to_radians()
 }

@@ -32,7 +32,6 @@ pub enum CropHandle {
 impl CropHandle {
     /// The overlay's numbering: 0..3 corners (clockwise from top-left), 4..7 edges (top, right,
     /// bottom, left), 8 = move.
-    #[must_use]
     pub fn from_index(i: u8) -> Option<CropHandle> {
         Some(match i {
             0 => CropHandle::TopLeft,
@@ -49,7 +48,6 @@ impl CropHandle {
     }
 
     /// Parse a command-parameter name (`"topLeft"`, `"top"`, `"move"`, …).
-    #[must_use]
     pub fn from_name(n: &str) -> Option<CropHandle> {
         Some(match n {
             "topLeft" => CropHandle::TopLeft,
@@ -74,7 +72,6 @@ impl CropHandle {
 /// - the edges opposite the handle stay where they were (a move keeps the size);
 /// - with `aspect`, the frame keeps that shape on every handle (when `start` had it);
 /// - the drag stops at the image edge instead of pushing the frame around, and slides along it.
-#[must_use]
 #[expect(
     clippy::many_single_char_names,
     clippy::too_many_lines,

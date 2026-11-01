@@ -17,14 +17,12 @@ impl Default for Homography {
 impl Homography {
     pub const IDENTITY: Homography = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
 
-    #[must_use]
     #[expect(clippy::many_single_char_names, reason = "Affine and homogeneous coefficients use conventional a–f matrix notation.")]
     pub fn from_affine(a: &Affine) -> Homography {
         let [a0, b, c, d, e, f] = a.0;
         Homography([a0, c, e, b, d, f, 0.0, 0.0, 1.0])
     }
 
-    #[must_use]
     pub fn apply(&self, p: Point) -> Point {
         let (x, y) = self.apply_real(p.x, p.y);
         Point::new(x, y)
@@ -37,7 +35,6 @@ impl Homography {
         ((x * m[0] + y * m[1] + m[2]) / w, (x * m[3] + y * m[4] + m[5]) / w)
     }
 
-    #[must_use]
     pub fn mul(&self, o: &Homography) -> Homography {
         let (a, b) = (&self.0, &o.0);
         let mut r = [0.0; 9];
@@ -49,7 +46,6 @@ impl Homography {
         Homography(r)
     }
 
-    #[must_use]
     pub fn inverse(&self) -> Option<Homography> {
         let m = &self.0;
         let c00 = m[4] * m[8] - m[5] * m[7];
@@ -75,7 +71,6 @@ impl Homography {
     }
 
     /// The homography mapping `src[i]` → `dst[i]` (4 correspondences, DLT with h33 = 1).
-    #[must_use]
     #[expect(clippy::many_single_char_names, reason = "The DLT system uses conventional source/destination x/y/u/v notation.")]
     pub fn from_quads(src: &[Point; 4], dst: &[Point; 4]) -> Option<Homography> {
         // Failed feature matches and invalid perspective parameters can contain
