@@ -1,6 +1,6 @@
 # Roadmap: milestones, current focus and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** major (gap 9: roadmap item 8 no longer lists Linux, where CI runs the tests since #2667, and lists the GPU tests; created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Forward-looking plan. The summary with the headline numbers is [ROADMAP.md](../ROADMAP.md); the
 ranked shortfalls are [gaps.md](gaps.md); the numbers come from [target-app-parity.md](target-app-parity.md).
@@ -23,7 +23,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
    mirror. Needs the maintainer's model decision.
 6. **Compressed ORF and HE NEF** (gaps 6–7, 28–55 h).
 7. **Lens profiles of our own** (gap 8, 40–80 h).
-8. **Tests in CI on macOS, Windows and Linux** (gap 9, 6–12 h).
+8. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
 9. **Per-model verification** (gap 10, 20–35 h).
 
 ## Alpha gate
@@ -72,12 +72,12 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs, HDR gain map JPEG / PQ AVIF ✅; JXL encode ⬜) |
-| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 4 bundled profiles, 52 spectral matrices; measured database missing); compressed ORF / SRW, HE NEF, IIQ, X3F ⬜) |
+| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed ORF / SRW, HE NEF, IIQ, X3F ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
 | M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; contact-sheet PDF 🟡; Map/Book/Slideshow/Print/Web ⬜) |
-| M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese/Brazilian Portuguese/Spanish/German/Russian/Ukrainian localisation 🟡; accessibility and further locales ⬜) |
+| M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese/Brazilian Portuguese/Spanish/German/Russian/Ukrainian/Georgian localisation 🟡; accessibility and further locales ⬜) |
 
 ## Risks that coding hours alone don't retire
 
@@ -108,6 +108,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | patch | Item 8 (gap 9): Linux dropped from "Tests in CI" and "the GPU tests in CI" added, because the CI gate has run the tests there since #2667; hours unchanged |
 | 2026-10-10 | minor | Beta hours 340–600; full ready ~59% in the gate note |
 | 2026-10-10 | minor | Added the Alpha gate table (core-workflow gate from the revised standard): passes, stays alpha |
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md (statuses refreshed: M3 ✅, M11 / M12 / M15 detail), current focus re-ranked toward beta, risks and design notes kept |

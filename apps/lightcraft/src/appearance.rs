@@ -51,12 +51,21 @@ fn decode(code: u32) -> Option<egui::Theme> {
 /// absolute path, and is never repeated.
 #[cfg(target_os = "linux")]
 fn gtk_theme() -> Option<egui::Theme> {
-    let exe = ["/usr/bin/gsettings", "/bin/gsettings", "/usr/local/bin/gsettings"].into_iter().find(|p| std::path::Path::new(p).is_file())?;
+    let exe = gsettings_exe(std::env::var_os("PATH").as_deref())?;
     let output = std::process::Command::new(exe).args(["get", "org.gnome.desktop.interface", "color-scheme"]).output().ok()?;
     if !output.status.success() {
         return None;
     }
     parse_gtk_scheme(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+/// `gsettings` by absolute path: the absolute `PATH` entries first (NixOS has no /usr/bin/gsettings),
+/// then the usual places for a sparse `PATH`. Relative entries are skipped, so nothing runs from
+/// the working folder.
+#[cfg(target_os = "linux")]
+fn gsettings_exe(path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+    let listed = path.map(std::env::split_paths).into_iter().flatten().filter(|dir| dir.is_absolute());
+    listed.chain(["/usr/bin", "/bin", "/usr/local/bin"].map(std::path::PathBuf::from)).map(|dir| dir.join("gsettings")).find(|exe| exe.is_file())
 }
 
 #[cfg(target_os = "linux")]
@@ -172,6 +181,24 @@ mod tests {
         let after_settle = calls.load(Ordering::Relaxed);
         super::publish(&value, &wake, 2);
         assert_eq!(calls.load(Ordering::Relaxed), after_settle);
+    }
+
+    /// NixOS keeps `gsettings` in /run/current-system/sw/bin or the per-user profile: it is found
+    /// on `PATH`, but never through a relative entry, even one that leads to a real file.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gsettings_is_found_on_absolute_path_entries_only() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-gsettings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("gsettings"), "").unwrap();
+        let path = std::env::join_paths([std::path::Path::new("relative/bin"), &dir]).unwrap();
+        assert_eq!(super::gsettings_exe(Some(&path)), Some(dir.join("gsettings")));
+        let cwd = std::env::current_dir().unwrap();
+        let relative = std::path::PathBuf::from("../".repeat(cwd.components().count() - 1)).join(dir.strip_prefix("/").unwrap());
+        assert!(relative.join("gsettings").is_file());
+        let found = super::gsettings_exe(Some(relative.as_os_str()));
+        assert!(found.as_ref().is_none_or(|p| p.is_absolute()), "{found:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(target_os = "linux")]

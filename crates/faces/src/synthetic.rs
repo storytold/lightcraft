@@ -248,3 +248,63 @@ pub fn tiny_detector_manifest() -> crate::manifest::ModelManifest {
     m.size_bytes = Some(bytes.len() as u64);
     m
 }
+
+/// A small network that uses every operator the interpreter runs (both kinds of convolution, batch norm, PRelu,
+/// sigmoid, broadcasting add/sub/mul with values and constants, max pooling, nearest upscaling, transposes, reshape,
+/// global pooling, flatten and a fully connected layer), with two outputs, for checking an accelerator's program
+/// against the CPU. Its input is `[1, 4, 8, 8]`.
+pub fn every_operator_graph() -> crate::graph::Graph {
+    use crate::graph::{Attr, Data, Graph, Node, Weight};
+    let node = |op: &str, inputs: &[&str], output: &str, attrs: &[(&str, Attr)]| Node {
+        op: op.into(),
+        inputs: inputs.iter().map(|s| s.to_string()).collect(),
+        outputs: vec![output.into()],
+        attrs: attrs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+    };
+    let wave = |n: usize, k: usize| -> Vec<f32> { (0..n).map(|i| (((i * k) % 23) as f32 - 11.0) * 0.04).collect() };
+    let w = |dims: &[usize], v: Vec<f32>| Weight { dims: dims.to_vec(), data: Data::F32(v) };
+    let weights = [
+        ("w1", w(&[8, 4, 3, 3], wave(288, 7))),
+        ("b1", w(&[8], wave(8, 5))),
+        ("bn_s", w(&[8], (0..8).map(|i| 0.5 + i as f32 * 0.1).collect())),
+        ("bn_b", w(&[8], wave(8, 3))),
+        ("bn_m", w(&[8], wave(8, 11))),
+        ("bn_v", w(&[8], (0..8).map(|i| 0.2 + i as f32 * 0.05).collect())),
+        ("slope", w(&[8, 1, 1], (0..8).map(|i| 0.05 * i as f32).collect())),
+        ("w2", w(&[8, 1, 3, 3], wave(72, 13))),
+        ("scales", w(&[4], vec![1.0, 1.0, 2.0, 2.0])),
+        ("half", w(&[1], vec![0.5])),
+        ("per_channel", w(&[1, 8, 1, 1], wave(8, 17))),
+        ("wg", w(&[5, 8], wave(40, 19))),
+        ("bg", w(&[5], wave(5, 2))),
+        ("flat", Weight { dims: vec![2], data: Data::I64(vec![1, -1]) }),
+    ];
+    let pads = |p: i64| ("pads", Attr::Ints(vec![p; 4]));
+    let nodes = vec![
+        node("Conv", &["x", "w1", "b1"], "c1", &[pads(1)]),
+        node("BatchNormalization", &["c1", "bn_s", "bn_b", "bn_m", "bn_v"], "bn", &[]),
+        node("PRelu", &["bn", "slope"], "pr", &[]),
+        node("Conv", &["pr", "w2"], "c2", &[("group", Attr::Int(8)), ("strides", Attr::Ints(vec![2, 2])), pads(1)]),
+        node("Sigmoid", &["c2"], "sg", &[]),
+        node("Mul", &["c2", "sg"], "swish", &[]),
+        node("Resize", &["swish", "", "scales"], "up", &[]),
+        node("Add", &["up", "pr"], "sum", &[]),
+        node("Sub", &["sum", "half"], "less", &[]),
+        node("MaxPool", &["less"], "pool", &[("kernel_shape", Attr::Ints(vec![2, 2])), ("strides", Attr::Ints(vec![2, 2]))]),
+        node("Relu", &["pool"], "relu", &[]),
+        node("Transpose", &["relu"], "nhwc", &[("perm", Attr::Ints(vec![0, 2, 3, 1]))]),
+        node("Transpose", &["nhwc"], "nchw", &[("perm", Attr::Ints(vec![0, 3, 1, 2]))]),
+        node("Mul", &["nchw", "per_channel"], "scaled", &[]),
+        node("Identity", &["scaled"], "same", &[]),
+        node("GlobalAveragePool", &["same"], "avg", &[]),
+        node("Flatten", &["avg"], "row", &[]),
+        node("Reshape", &["row", "flat"], "row2", &[]),
+        node("Gemm", &["row2", "wg", "bg"], "y", &[("transB", Attr::Int(1)), ("alpha", Attr::Float(0.5))]),
+    ];
+    Graph {
+        nodes,
+        weights: weights.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        inputs: vec![("x".into(), vec![1, 4, 8, 8])],
+        outputs: vec!["y".into(), "nhwc".into()],
+    }
+}

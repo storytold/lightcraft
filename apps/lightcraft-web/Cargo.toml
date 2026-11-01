@@ -77,3 +77,6 @@ web-sys = { workspace = true, features = [
 # it (HEVC patents); build with `--features heif` to include it. On wasm32 panics abort, so
 # heic-rs's `catch_unwind` guard does not apply there.
 heif = ["lightcraft-codecs/heif"]
+
+[dev-dependencies]
+egui = { workspace = true }

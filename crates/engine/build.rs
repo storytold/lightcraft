@@ -3,7 +3,7 @@
 //! Recipe from craft-fonts' docs/integration.md; craft-fonts is never a Cargo dependency, and this
 //! script only reads a local directory (no network).
 //!
-//! wasm32 (the web build) embeds only the UI font, BIZ UDPGothic Regular (~4.5 MB), to keep the
+//! wasm32 embeds BIZ UDPGothic Regular (~4.5 MB) and Noto Sans Thai (~214 KiB) and Noto Sans Georgian, to keep the
 //! `.wasm` within the web size budget (Cloudflare serves at most 25 MiB per file); the export
 //! watermark falls back to it there. Native builds embed every font.
 use std::fmt::Write as _;
@@ -69,6 +69,7 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
     let mut out = String::new();
     let mut has_japanese_ui = false;
     let mut has_chinese_ui = false;
+    let mut has_thai_ui = false;
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
         let [family, style, file, scripts, ..] = f.as_slice() else {
@@ -76,7 +77,8 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         };
         has_japanese_ui |= (*family, *style) == ("BIZ UDPGothic", "Regular");
         has_chinese_ui |= (*family, *style) == ("Noto Sans CJK SC", "Regular") && scripts.split(',').any(|script| script.trim() == "Hans");
-        if wasm && (*family, *style) != ("BIZ UDPGothic", "Regular") {
+        has_thai_ui |= (*family, *style) == ("Noto Sans Thai", "Regular") && scripts.split(',').any(|script| script.trim() == "Thai");
+        if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai" | "Noto Sans Georgian", "Regular")) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
@@ -88,6 +90,9 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
             scripts.join(", "),
             path.display().to_string(),
         );
+    }
+    if required && !has_thai_ui {
+        return Err("required Thai UI face Noto Sans Thai Regular (Thai) is missing from fonts/manifest.txt".into());
     }
     if required && !has_japanese_ui {
         return Err("required Japanese UI face BIZ UDPGothic Regular is missing from fonts/manifest.txt".into());

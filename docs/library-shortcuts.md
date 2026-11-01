@@ -4,6 +4,9 @@ Select photos in Photo Grid or Square Grid, then use:
 
 | Key | Action |
 |---|---|
+| `Enter` | Open the active photo in Detail from Photo Grid or Square Grid |
+| `Cmd+Shift+D` (macOS) / `Ctrl+Shift+D` (Windows/Linux) | Select only the active photo |
+| ⌘⇧K / Ctrl+Shift+K | Edit Keywords: show the Keywords panel and open the keyword picked in its Keyword List in Edit Keyword Tag |
 | `0` | Clear the star rating |
 | `1`–`5` | Set the star rating |
 | `[` / `]` | Decrease / increase each selected photo's rating by one, within 0–5 |
@@ -11,10 +14,28 @@ Select photos in Photo Grid or Square Grid, then use:
 | `P` | Flag as a pick |
 | `X` | Flag as rejected |
 | `U` | Clear the flag |
+| `` ` `` (backtick) | Cycle the flag: unflagged → pick → reject → unflagged |
+| `Cmd`/`Ctrl` + `↑` / `↓` | Raise / lower flag status (reject < unflagged < pick; stops at either end) |
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
+| ⌘⌥⇧K / Ctrl+Alt+Shift+K | Set Keyword Shortcut: type the keywords, with commas between them, that `Shift+K` adds |
+| `Shift+K` | Add the keyword shortcut's keywords to the selected photos, or remove them when every selected photo has them all |
+| `\` (backslash) | Show / hide the Filter Bar |
+| ⌘K / Ctrl+K | Add Keywords: show the Keywords panel with the cursor in its Add keyword box |
+| ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |
+| ⌘⌥K / Ctrl+Alt+K | Enable Painting: paint the painter box's keyword, or stop painting |
+| ⌘⌥⇧C / Ctrl+Alt+Shift+C | Copy Metadata: copy the active photo's metadata |
+| ⌘⌥⇧V / Ctrl+Alt+Shift+V | Paste Metadata: paste the copied metadata on the selected photos |
+
+Enter opens the active photo without changing the selection. Text fields, dialogs and open popups keep the key; a custom Enter binding takes precedence. Enter has no additional action in Detail.
+
+Select Only Active Photo (Edit menu) narrows the selection to the active photo. It does not change
+the photo, its edits or the last edit Undo step, and it works in any view that has an active photo.
+It can be reassigned or disabled in Help → Keyboard Shortcuts; text fields and dialogs keep the key.
 
 Purple and clearing a colour label are available in Photo → Set Color Label and the photo context
-menu. Purple has no default number key, matching Lightroom Classic. Rejection marks a photo for
+menu. Purple has no default number key, matching Lightroom Classic. Clear Color Label has none either,
+but it is a command of its own: give it a key in Help → Keyboard Shortcuts and the key clears the label of
+the selected photos, as the Photo → Set Color Label → None row does (which then shows the key). Rejection marks a photo for
 culling; it does not delete the original or remove it from the library.
 Setting a colour label shows the same brief bottom toast as a rating, using the colour or your
 custom label name. Clearing it shows a confirmation too, whether applied by a key, menu or swatch.
@@ -28,6 +49,21 @@ step. AutoWrite uses the normal rating metadata path. In Detail, including Maski
 `[` / `]` keep resizing the brush and shifted brackets keep adjusting feather. Saved overrides,
 remapping and disabling the default brush bindings take precedence over their grid bracket actions.
 The separate Decrease Rating / Increase Rating commands can also be assigned in Help → Keyboard Shortcuts.
+
+`\` shows and hides the Filter Bar in Photo Grid and Square Grid, as in Lightroom Classic's Library; in
+Detail and in the full-screen preview (`F`) it keeps showing the original (Develop's Before / After key).
+View → Filter Bar (`Shift+F`) works in every view. A Show Original moved to another key keeps its meaning
+in the grids, and `\` given to another command runs that command.
+
+Flag cycling and raise/lower use each photo's own flag, so a mixed selection steps together without being made uniform. Adobe's shortcut list names the backtick "Cycle flag settings" but does not state the order; unflagged → pick → reject is LightCraft's choice. The key is the logical grave key, so it follows the keyboard layout (on layouts where it is a dead accent key, assign another key in Help → Keyboard Shortcuts to `photo.cycleFlag`).
+
+`Home` and `End` make the first or last photo of the view the active, selected one. `Shift` + `←` /
+`→` add the previous or next photo of the view to the selection and make the added photo active; the
+key never removes a photo from the selection, and at either end of the view it does nothing. These
+four keys work in Photo Grid and Square Grid only. They wait in Detail, Compare and Survey, in the
+full-screen preview (which covers the grid), while a text field or a dialog has the keyboard, and
+when you gave the same key to a command in Help → Keyboard Shortcuts, where they are listed under
+Fixed keys.
 
 Grid actions apply to all selected photos and support Undo / Redo. In Compare and Survey, culling
 actions apply to the active photo. Auto Advance moves forward after an action; holding Shift with
@@ -46,19 +82,55 @@ commit `4e012a59a6d2442ba749f109ea27aadb5c0b11a5` by Gardy, and addresses the ca
 [issue #283](https://github.com/storytold/lightcraft/issues/283). That PR was open when checked
 on 2026-10-08; this work extends its fix with library culling bindings and tests.
 
-## RAW+JPEG pairs
+## Grid thumbnail size
 
-`library.pairPreferences` turns on two independent switches, both off until asked. `syncPairMetadata` makes
-ratings and pick/reject flags (`0`–`5`, `[` `]`, `P`, `X`, `U`) land on the other file of a joined pair as one
-Undo step. `syncPairLabels` does the same for colour labels, and only while metadata sync is on. Delete,
-Restore and Delete Permanently stay on the selected file. The **Both / JPEG** switch on the bottom bar turns
-`pairedCulling` and `syncPairMetadata` on together, joins detected pairs, and shows the JPEG. The
-RAW+JPEG badge switches to the raw with `photo.pairFocus`. Clicking the button again shows both files.
-Splitting the pair (`photo.splitPair`) keeps both photos and both files.
+`=` makes the grid thumbnails larger and `-` smaller (`+` also enlarges), as in Lightroom Classic. Each
+press moves the bottom-bar slider by 30 pt within its 90–480 pt range and stops at either end. The keys
+work in Photo Grid, Square Grid and People (the views with the slider), do nothing in Detail, Compare,
+Survey and Reference, and leave text fields alone, so the search box still types `-` and `=`. `⌘=` /
+`⌘−` remain Zoom In / Out. The same steps are the View ▸ Increase / Decrease Grid Thumbnail Size
+commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
+return `{"size"}`); the size is saved with the other interface settings.
 
-Public behaviour references, checked 2026-10-08:
+## Keyword painter
+
+`⌘⌥K` (`Ctrl+Alt+K` on Windows and Linux) is Photo ▸ Enable Painting (`tool.enablePainting`). It
+paints the keyword typed in the Keywords panel's painter box: LightCraft shows the grid, and a click on a
+photo there adds the keyword or takes it off. Pressed again while painting, the key stops painting, as `Esc` does.
+With the box empty, the key opens the Keywords panel and asks for a keyword to paint. The shortcut list
+names the key only; stopping on a second press and opening the panel are LightCraft's choice. The key
+can be reassigned in Help → Keyboard Shortcuts.
+
+## Keyword sets
+
+`⌥1`–`⌥9` (`Alt+1`–`Alt+9` on Windows and Linux) add or remove the current keyword set's keywords on
+the selected photos. `⌥0` makes the next keyword set current and `⌥⇧0` the previous one (`Alt+0` /
+`Alt+Shift+0`), in the order of the Keywords panel's Keyword Set menu: Recent Keywords, then the saved
+sets. After the last set comes Recent Keywords again, and before Recent Keywords comes the last set;
+with no saved sets the keys leave Recent Keywords current. The shortcut list does not say what happens
+past either end; wrapping around is LightCraft's choice. The same steps are the Next / Previous
+Keyword Set commands (`keyword.nextSet`, `keyword.previousSet`), which return what `keyword.sets`
+returns, and both keys can be reassigned in Help → Keyboard Shortcuts.
+
+Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyword painter and keyword sets: 2026-10-24):
 
 - [Lightroom Classic keyboard shortcuts](https://helpx.adobe.com/lightroom-classic/help/keyboard-shortcuts.html)
 - [Lightroom Classic flagging, labelling and rating](https://helpx.adobe.com/lightroom-classic/help/flag-label-rate-photos.html)
 
 Only public descriptions were consulted. No Adobe assets or application data are included.
+
+## RAW+JPEG pairs
+
+`library.pairPreferences` turns on two independent switches, both off until asked. `syncPairMetadata` makes
+ratings and pick/reject flags (`0`–`5`, `[` `]`, `P`, `X`, `U`, flag cycling and raising/lowering) land on the other file of a joined pair as one
+Undo step. `syncPairLabels` does the same for colour labels, and only while metadata sync is on. Delete,
+Restore and Delete Permanently stay on the selected file. The **Both / JPEG** switch on the bottom bar turns
+`pairedCulling` and `syncPairMetadata` on together, joins detected pairs, and shows the JPEG. The
+RAW+JPEG badge switches to the raw with `photo.pairFocus`. If that file is excluded by the current
+view, clear the filter or show both first. Navigation finishes any pending edit and keeps the other
+file's develop settings independent. Reopening restores the active RAW/JPEG member from the saved
+selection. Choosing Both shows both files again.
+Splitting the pair (`photo.splitPair`) keeps both photos and both files.
+
+This build uses catalog format 11, extending #1209's format 10 with pair links. Older builds refuse it;
+existing format-10 libraries retain their Fujifilm recipes when upgraded.

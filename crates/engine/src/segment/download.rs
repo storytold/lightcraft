@@ -20,6 +20,8 @@ pub struct Status {
     pub file: String,
     /// The last download's error (cleared when a new one starts).
     pub error: Option<String>,
+    /// The last download was cancelled (its `error` says so in words): decide on this, not on the text.
+    pub cancelled: bool,
     /// The last download finished and the files are in place.
     pub finished: bool,
 }
@@ -28,6 +30,7 @@ pub struct Status {
 struct Text {
     file: String,
     error: Option<String>,
+    cancelled: bool,
 }
 
 #[derive(Default)]
@@ -68,15 +71,17 @@ impl Downloader {
         {
             last.file.clone_from(&t.file);
             last.error.clone_from(&t.error);
+            last.cancelled = t.cancelled;
         }
         // (only the session's thread locks `last`)
-        let (file, error) = self.last.try_lock().map(|l| (l.file.clone(), l.error.clone())).unwrap_or_default();
+        let (file, error, cancelled) = self.last.try_lock().map(|l| (l.file.clone(), l.error.clone(), l.cancelled)).unwrap_or_default();
         Status {
             running: s.running.load(Ordering::SeqCst),
             done: s.done.load(Ordering::SeqCst),
             total: s.total.load(Ordering::SeqCst),
             file,
             error,
+            cancelled,
             finished: s.finished.load(Ordering::SeqCst),
         }
     }
@@ -135,6 +140,7 @@ impl Downloader {
             };
             let r =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch::download(files, &mirrors, &dir, &opts, &s.cancel, &mut on_progress)));
+            let cancelled = matches!(r, Ok(Err(fetch::DownloadError::Cancelled)));
             let error = match r {
                 Ok(Ok(())) => {
                     s.finished.store(true, Ordering::SeqCst);
@@ -147,7 +153,10 @@ impl Downloader {
             if let Some(e) = &error {
                 log::warn!("SAM 3 download: {e}");
             }
-            lock(&s.text).error = error;
+            let mut text = lock(&s.text);
+            text.cancelled = cancelled;
+            text.error = error;
+            drop(text);
             drop(guard);
         });
         match spawned {

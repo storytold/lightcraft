@@ -35,7 +35,8 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         Some(r) => r(path)?,
         None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
     };
-    let raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    crate::camera_preview::with_starting_colour(&mut raw, &bytes);
     drop(bytes);
     let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
         .map_err(|e| e.to_string())?;
@@ -58,7 +59,7 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
 
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.convertToDng";
-    let ids = s.targets(p);
+    let ids = s.targets(p)?;
     let mut ops = Vec::new();
     let mut converted = Vec::new();
     let mut skipped = Vec::new();
@@ -85,16 +86,19 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         match write_dng_for(s, path, packet) {
             Ok(out) => {
                 let file_name = Path::new(&out).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                // the DNG is a new file: its recipe comes from a probe, or is forgotten so the RAF's recipe is not shown for it
+                let probed = (s.media.file_probe.is_some()).then(|| crate::import::probe_paths(s, std::slice::from_ref(&out)).pop()).flatten();
                 // virtual copies of this photo follow it to the DNG
-                for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
+                let copies: Vec<_> = s.catalog.photos().filter(|c| c.copy_of == Some(id)).cloned().collect();
+                for photo in copies.iter().chain(std::iter::once(&ph)) {
                     ops.push(Op::Relink {
-                        id: c.id,
+                        id: photo.id,
                         file_name: file_name.clone(),
                         source: Source::File { path: out.clone() },
                         format: Some("DNG".into()),
                     });
+                    push_recipe_for_new_file(&mut ops, photo, probed.as_ref());
                 }
-                ops.push(Op::Relink { id, file_name, source: Source::File { path: out.clone() }, format: Some("DNG".into()) });
                 converted.push(json!({"id": id.0, "path": out, "original": path}));
             }
             Err(e) => skipped.push(json!([id.0, e])),
@@ -124,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// the library and stack it on top of the original. The host opens the file in the editor.
 fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.editExternal";
-    let mut ids = s.targets(p);
+    let mut ids = s.targets(p)?;
     ids.dedup();
     if ids.is_empty() {
         return Err(bad(C, "no active photo"));
@@ -201,12 +205,16 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
-/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`].
+/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`], and a
+/// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
+/// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
+    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
-        && info.preview_only == ph.preview_only;
+        && info.preview_only == ph.preview_only
+        && preview_checked == ph.preview_checked;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -214,6 +222,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         file_size: info.file_size,
         content_hash: info.content_hash,
         preview_only: info.preview_only,
+        preview_checked,
     })
 }
 
@@ -234,6 +243,11 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     m.aperture = m.aperture.or(src.aperture);
     m.iso = m.iso.or(src.iso);
     m.gps = m.gps.or(src.gps);
+    // the camera's focus point: photos imported before it was read get it here
+    if m.focus.is_none() {
+        m.focus = src.focus.clone();
+    }
+    adopt_fuji_recipe(&mut m, info);
     let mut ops = Vec::new();
     if m != before {
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
@@ -242,6 +256,52 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
         ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
     }
     ops
+}
+
+/// `SetMeta` that stores the probe's film recipe on `ph`, or nothing when the photo already has it.
+pub(crate) fn fuji_recipe_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
+    let mut meta = ph.meta.clone();
+    adopt_fuji_recipe(&mut meta, info).then(|| Op::SetMeta { id, meta: Box::new(meta) })
+}
+
+/// Drop a stored film recipe. The photo now points at a file that was not confirmed to be the same
+/// bytes, and there is no probe of it. The Info panel may read that file. Nothing when the photo
+/// had no recipe and had not been checked.
+pub(crate) fn forget_fuji_recipe_op(ph: &lightcraft_catalog::Photo) -> Option<Op> {
+    if ph.meta.fuji_recipe.is_none() && !ph.meta.fuji_recipe_known {
+        return None;
+    }
+    let mut meta = ph.meta.clone();
+    meta.fuji_recipe = None;
+    meta.fuji_recipe_known = false;
+    Some(Op::SetMeta { id: ph.id, meta: Box::new(meta) })
+}
+
+/// After a relink, keep the probe's recipe when there is one, and otherwise forget the previous
+/// file's recipe so it is not shown for the new file.
+pub(crate) fn push_recipe_for_new_file(
+    ops: &mut Vec<Op>,
+    ph: &lightcraft_catalog::Photo,
+    probed: Option<&std::result::Result<crate::media::ProbeInfo, String>>,
+) {
+    match probed {
+        Some(Ok(info)) => ops.extend(fuji_recipe_op(ph.id, ph, info)),
+        _ => ops.extend(forget_fuji_recipe_op(ph)),
+    }
+}
+
+/// Accept a known fresh recipe, including absence. Reload also refreshes labels after parser
+/// improvements when the file's bytes did not change. Returns whether `meta` changed.
+fn adopt_fuji_recipe(meta: &mut lightcraft_catalog::Meta, info: &crate::media::ProbeInfo) -> bool {
+    if !info.meta.fuji_recipe_known {
+        return false;
+    }
+    if meta.fuji_recipe == info.meta.fuji_recipe && meta.fuji_recipe_known {
+        return false;
+    }
+    meta.fuji_recipe.clone_from(&info.meta.fuji_recipe);
+    meta.fuji_recipe_known = true;
+    true
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -271,48 +331,49 @@ pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_cat
     (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
 }
 
+/// The ops that bring photo `id` and its virtual copies up to date with what their file is now
+/// (`info`, a fresh probe), appended to `ops`; the photos they change are appended to `changed`.
+/// Reload and the preview-only recheck (`library.recheckPreviewOnly`) share it.
+pub(crate) fn reload_ops(
+    cat: &lightcraft_catalog::Catalog,
+    id: lightcraft_catalog::PhotoId,
+    info: &crate::media::ProbeInfo,
+    ops: &mut Vec<Op>,
+    changed: &mut Vec<lightcraft_catalog::PhotoId>,
+) {
+    let Some(ph) = cat.photo(id) else { return };
+    // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
+    // nothing already set is overwritten
+    let meta_ops = fill_missing_meta(id, ph, info);
+    let mut mine: Vec<Op> =
+        content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
+    if !mine.is_empty() {
+        ops.append(&mut mine);
+        changed.push(id);
+    }
+    // virtual copies share the file
+    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+        let mut copy_meta = c.meta.clone();
+        let recipe = adopt_fuji_recipe(&mut copy_meta, info).then(|| Op::SetMeta { id: c.id, meta: Box::new(copy_meta) });
+        let theirs: Vec<Op> =
+            content_op(c.id, c, info.clone()).into_iter().chain(recipe).chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        if !theirs.is_empty() {
+            ops.extend(theirs);
+            changed.push(c.id);
+        }
+    }
+}
+
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
-/// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
+/// dimensions and content hash, cached sources dropped. The app runs the same steps
+/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = s.targets(p);
-    let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
-        .iter()
-        .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
-            Some(Source::File { path }) => Some((*id, path)),
-            _ => None,
-        })
-        .collect();
-    let probed = crate::import::probe_paths(s, &paths.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());
-    let mut ops = Vec::new();
-    let mut reloaded = Vec::new();
-    for ((id, _), info) in paths.into_iter().zip(probed) {
-        let (Ok(info), Some(ph)) = (info, s.catalog.photo(id)) else { continue };
-        // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
-        // nothing already set is overwritten
-        let meta_ops = fill_missing_meta(id, ph, &info);
-        let mut mine: Vec<Op> =
-            content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, &info)).chain(as_shot_wb_op(id, ph, &info)).collect();
-        if !mine.is_empty() {
-            ops.append(&mut mine);
-            reloaded.push(id);
-        }
-        // virtual copies share the file
-        for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
-            let theirs: Vec<Op> =
-                content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, &info)).chain(as_shot_wb_op(c.id, c, &info)).collect();
-            if !theirs.is_empty() {
-                ops.extend(theirs);
-                reloaded.push(c.id);
-            }
-        }
-    }
-    for id in &reloaded {
-        s.media.forget(*id);
-    }
-    if !ops.is_empty() {
-        s.commit("Reload Changed Files", Op::Batch { ops })?;
-    }
-    Ok(json!({"reloaded": reloaded.iter().map(|i| i.0).collect::<Vec<_>>()}))
+    use crate::cmd::reload as r;
+    let items = r::plan(s, p)?;
+    let probe = r::file_probe(s);
+    let results = r::probe(probe.as_ref(), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
+    let reloaded = r::apply(s, items, results)?;
+    Ok(r::to_json(&reloaded))
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
@@ -320,7 +381,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.duplicate";
     let mut made = Vec::new();
-    for id in s.targets(p) {
+    for id in s.targets(p)? {
         let Some(ph) = s.catalog.photo(id).map(|p| (**p).clone()) else { continue };
         let Source::File { path } = &ph.source else { return Err(bad(C, "a generated demo photo has no file to duplicate")) };
         let src = Path::new(path);
@@ -377,7 +438,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings) → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
             has_selection,
             reload
         ),
@@ -419,6 +480,108 @@ mod tests {
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    fn eterna() -> lightcraft_meta::FujiRecipe {
+        lightcraft_meta::FujiRecipe { rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Eterna".into() }] }
+    }
+
+    /// Reload stores a recipe the file already had when the photo was imported before recipes were
+    /// kept, and replaces it when a different file is now at that path. A virtual copy shares the file.
+    #[test]
+    fn reload_adopts_a_fuji_recipe_and_refreshes_it_when_the_file_changes() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/a.jpg".into() }, "a.jpg", "JPEG", 100, 80, "2026-10-12T00:00:00");
+        ph.meta.title = "Mine".into();
+        ph.content_hash = Some("old".into());
+        let mut info = crate::media::ProbeInfo { content_hash: Some("old".into()), ..Default::default() };
+        info.meta.fuji_recipe_known = true;
+        info.meta.fuji_recipe = Some(eterna());
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.title, "Mine");
+        assert!(meta.fuji_recipe_known);
+        assert_eq!(meta.fuji_recipe.as_ref().map(|r| r.rows[0].value.as_str()), Some("Eterna"));
+        ph.meta = (**meta).clone();
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "the same file is not written again");
+
+        info.content_hash = Some("new".into());
+        info.meta.fuji_recipe = None;
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert!(meta.fuji_recipe_known && meta.fuji_recipe.is_none(), "a replaced file drops the old recipe");
+
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let id = cat.alloc_photo_id();
+        let original = Photo::new(id, Source::File { path: "/a.jpg".into() }, "a.jpg", "JPEG", 100, 80, "t");
+        cat.apply(Op::AddPhoto { photo: Box::new(original.clone()) }).unwrap();
+        let cid = cat.alloc_photo_id();
+        let mut copy = original.clone();
+        copy.id = cid;
+        copy.copy_of = Some(id);
+        copy.copy_name = Some("Copy 1".into());
+        cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        info.meta.fuji_recipe = Some(eterna());
+        info.content_hash = Some("old".into());
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&cat, id, &info, &mut ops, &mut changed);
+        let recipes: Vec<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::SetMeta { id, meta } if meta.fuji_recipe.is_some() => Some(id.0),
+                _ => None,
+            })
+            .collect();
+        assert!(recipes.contains(&id.0) && recipes.contains(&cid.0), "{ops:?}");
+    }
+
+    #[test]
+    fn reload_refreshes_a_known_recipe_from_the_same_bytes() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/a.jpg".into() }, "a.jpg", "JPEG", 100, 80, "t");
+        ph.content_hash = Some("same".into());
+        ph.meta.title = "Mine".into();
+        ph.meta.fuji_recipe_known = true;
+        let mut old = eterna();
+        old.rows[0].value = "F2/Fujichrome (Velvia)".into();
+        ph.meta.fuji_recipe = Some(old);
+        let mut fresh = eterna();
+        fresh.rows[0].value = "Velvia/Vivid".into();
+        for recipe in [Some(fresh), None] {
+            let info = crate::media::ProbeInfo {
+                content_hash: ph.content_hash.clone(),
+                meta: lightcraft_catalog::Meta { fuji_recipe: recipe.clone(), fuji_recipe_known: true, ..Default::default() },
+                ..Default::default()
+            };
+            let ops = fill_missing_meta(ph.id, &ph, &info);
+            let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+            assert_eq!(meta.fuji_recipe, recipe);
+            assert!(meta.fuji_recipe_known);
+            assert_eq!(meta.title, "Mine");
+            let mut refreshed = ph.clone();
+            refreshed.meta = (**meta).clone();
+            assert!(fill_missing_meta(ph.id, &refreshed, &info).is_empty(), "unchanged recipes add no operation");
+        }
+    }
+
+    /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
+    /// and never replaces one it has.
+    #[test]
+    fn reload_fills_a_missing_focus_point() {
+        let fp = |x: f64| lightcraft_meta::FocusPoint {
+            rect: lightcraft_meta::Rect { x0: x, y0: 0.4, x1: x + 0.02, y1: 0.42 },
+            mode: Some("AF-C".into()),
+            area: None,
+            tracking: None,
+        };
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.arw".into() }, "x.arw", "ARW", 8640, 5760, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        info.meta.focus = Some(fp(0.3));
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.focus, Some(fp(0.3)));
+        ph.meta.focus = Some(fp(0.1));
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known focus point is kept");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {
@@ -494,7 +657,7 @@ mod tests {
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
         let f = root.join("raw/rw2-panasonic-gx80.rw2");
         if !f.exists() {
-            eprintln!("skip: {} absent", f.display());
+            lightcraft_testkit::skip!(Corpus, "{} absent", f.display());
             return;
         }
         let mut s = Session::new().with_fs();

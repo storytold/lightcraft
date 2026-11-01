@@ -106,7 +106,7 @@ fn side_of(p: &Photo) -> Side {
 }
 
 fn eligible(p: &Photo) -> bool {
-    p.copy_of.is_none() && !p.local && !p.deleted && matches!(p.source, Source::File { .. }) && p.kind != MediaKind::Video
+    p.copy_of.is_none() && !p.local && matches!(p.source, Source::File { .. }) && p.kind != MediaKind::Video
 }
 
 fn file_path(p: &Photo) -> Option<&str> {
@@ -133,7 +133,8 @@ pub fn metadata_agrees(raw: &Photo, jpeg: &Photo) -> bool {
     true
 }
 
-/// Whether these two photos are one camera pair (directory, stem, kinds, time, camera).
+/// Whether these photos form a camera pair, including links restored while a member is deleted.
+/// Detection excludes deleted records separately; restoring a journaled link must keep them.
 pub fn photos_match(raw: &Photo, jpeg: &Photo) -> bool {
     if !eligible(raw) || !eligible(jpeg) || side_of(raw) != Side::Raw || side_of(jpeg) != Side::Jpeg {
         return false;
@@ -158,7 +159,7 @@ pub fn scan(cat: &Catalog) -> PairScan {
     let mut groups: HashMap<(String, String), Vec<Item>> = HashMap::new();
     let mut located: Vec<(PhotoId, String, String, Side)> = Vec::new();
     for p in cat.photos() {
-        if !eligible(p) {
+        if p.deleted || !eligible(p) {
             continue;
         }
         let Some(path) = file_path(p) else { continue };

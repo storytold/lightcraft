@@ -1,4 +1,4 @@
-//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`), XMP packets
+//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`, HEIF items), XMP packets
 //! (read + write, standard namespaces plus our own `lc:` namespace) and basic IPTC-IIM.
 //!
 //! Entry points:
@@ -7,23 +7,33 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
-//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3).
+//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, PSD/PSB, Canon CR3,
+//!   HEIF/HEIC/AVIF).
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
+//! - [`heif`] — the HEIF/HEIC/AVIF container's Exif and XMP items (no HEVC decoder needed).
 #![forbid(unsafe_code)]
 
 mod container;
 pub mod cr3;
 mod datetime;
 mod exif;
+pub mod focus;
+mod focus_read;
+mod fuji;
 mod gpx;
+pub mod heif;
 mod iptc;
+pub mod mrw;
+mod psd;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
-pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
+pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
+pub use focus::FocusPoint;
+pub use fuji::{FujiRecipe, FujiRow, might_hold_fuji_recipe, read_recipe_file, recipe_from_bytes, recipe_from_exif};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
@@ -142,6 +152,12 @@ pub struct Metadata {
     pub label: Option<String>,
     /// Face/pet/focus/barcode regions (`mwg-rs:Regions`), read from XMP only.
     pub regions: Vec<Region>,
+    /// Where the camera focused, from its maker notes ([`focus`]; Sony only for now), on the upright photo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<FocusPoint>,
+    /// Fujifilm in-camera film recipe from the MakerNote. Not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuji_recipe: Option<FujiRecipe>,
 }
 
 macro_rules! fill {
@@ -179,7 +195,16 @@ impl Metadata {
             orientation,
             gps,
             width,
-            height,
+            height
+        );
+        self.fill_missing_descriptive(other);
+    }
+
+    /// Fill descriptive metadata separately from the camera and image properties.
+    fn fill_missing_descriptive(&mut self, other: &Metadata) {
+        fill!(
+            self,
+            other,
             artist,
             copyright,
             copyright_marked,
@@ -204,6 +229,12 @@ impl Metadata {
         }
         if self.regions.is_empty() {
             self.regions = other.regions.clone();
+        }
+        if self.focus.is_none() {
+            self.focus.clone_from(&other.focus);
+        }
+        if self.fuji_recipe.is_none() {
+            self.fuji_recipe.clone_from(&other.fuji_recipe);
         }
     }
 
@@ -272,15 +303,70 @@ impl Metadata {
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
-    let mut m = e.exif.as_deref().map(read_exif).unwrap_or_default();
+    let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
+    let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok()).map(|xmp| xmp.metadata);
+    extract_embedded(e, exif, xmp)
+}
+
+/// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
+/// them as empty. Other container formats retain [`extract`]'s best-effort behavior.
+pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
+    let e = container::try_embedded(bytes)?;
+    let is_psd = bytes.starts_with(b"8BPS");
+    let exif = match e.exif.as_deref() {
+        Some(exif) if is_psd => try_read_exif(exif).map_err(|_| ExtractError::MalformedPsd)?,
+        Some(exif) => read_exif(exif),
+        None => Metadata::default(),
+    };
+    let xmp = match e.xmp.as_deref() {
+        Some(xmp) if is_psd => Some(parse_xmp(xmp).map_err(|_| ExtractError::MalformedPsd)?.metadata),
+        Some(xmp) => parse_xmp(xmp).ok().map(|xmp| xmp.metadata),
+        None => None,
+    };
+    Ok(extract_embedded(e, exif, xmp))
+}
+
+fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<Metadata>) -> Metadata {
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));
     }
-    if let Some(x) = e.xmp.as_deref().and_then(|x| parse_xmp(x).ok()) {
-        m.overlay_user_fields(&x.metadata);
-        m.fill_missing(&x.metadata);
+    if let Some(xmp) = xmp {
+        m.overlay_user_fields(&xmp);
+        m.fill_missing(&xmp);
+    }
+    if let Some(exif) = e.exif.as_deref() {
+        m.fuji_recipe = fuji::recipe_from_exif(exif);
     }
     m
+}
+
+/// A container-level error reported by [`try_extract`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtractError {
+    /// The PSD/PSB header, image-resource section, or embedded EXIF/XMP structure is malformed.
+    MalformedPsd,
+}
+
+impl std::fmt::Display for ExtractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MalformedPsd => f.write_str("malformed PSD/PSB header, image-resource section, or embedded EXIF/XMP structure"),
+        }
+    }
+}
+
+impl std::error::Error for ExtractError {}
+
+/// A lens name from its focal and aperture range (Exif LensSpecification, or a Nikon maker note's Lens), written the
+/// way Lightroom shows a lens it has no name for: `50.0 mm f/1.8`, `18.0-135.0 mm f/3.5-5.6`.
+pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
+    let [short, long, wide, narrow] = spec;
+    if ![short, long, wide, narrow].iter().all(|v| v.is_finite() && *v > 0.0) || long < short {
+        return None;
+    }
+    let focal = if (long - short).abs() < 0.05 { format!("{short:.1}") } else { format!("{short:.1}-{long:.1}") };
+    let aperture = if (narrow - wide).abs() < 0.05 { format!("{wide:.1}") } else { format!("{wide:.1}-{narrow:.1}") };
+    Some(format!("{focal} mm f/{aperture}"))
 }
 
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
@@ -296,6 +382,17 @@ pub(crate) fn parse_number(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lens_names_from_a_spec_read_like_lightroom() {
+        assert_eq!(lens_spec_name([50.0, 50.0, 1.8, 1.8]).as_deref(), Some("50.0 mm f/1.8"));
+        assert_eq!(lens_spec_name([18.0, 135.0, 3.5, 5.6]).as_deref(), Some("18.0-135.0 mm f/3.5-5.6"));
+        assert_eq!(lens_spec_name([24.0, 70.0, 2.8, 2.8]).as_deref(), Some("24.0-70.0 mm f/2.8"));
+        assert_eq!(lens_spec_name([70.0, 210.0, 4.0, 5.6]).as_deref(), Some("70.0-210.0 mm f/4.0-5.6"));
+        assert_eq!(lens_spec_name([0.0, 0.0, 0.0, 0.0]), None);
+        assert_eq!(lens_spec_name([200.0, 80.0, 2.8, 2.8]), None);
+        assert_eq!(lens_spec_name([f64::NAN, 50.0, 1.8, 1.8]), None);
+    }
 
     #[test]
     fn numbers() {
@@ -319,12 +416,34 @@ mod tests {
     }
 
     #[test]
+    fn try_extract_keeps_non_psd_exif_best_effort() {
+        let payload = b"Exif\0\0not a TIFF stream";
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        jpeg.extend_from_slice(payload);
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+
+        assert!(matches!(try_extract(&jpeg), Ok(metadata) if metadata == Metadata::default()));
+    }
+
+    #[test]
     fn merge_rules() {
-        let mut a = Metadata { make: Some("A".into()), rating: Some(1), ..Default::default() };
-        let b = Metadata { make: Some("B".into()), model: Some("M".into()), rating: Some(4), keywords: vec!["k".into()], ..Default::default() };
+        let mut a = Metadata { make: Some("A".into()), title: Some("Original".into()), rating: Some(1), ..Default::default() };
+        let b = Metadata {
+            make: Some("B".into()),
+            model: Some("M".into()),
+            title: Some("Replacement".into()),
+            caption: Some("Caption".into()),
+            rating: Some(4),
+            keywords: vec!["k".into()],
+            ..Default::default()
+        };
         a.fill_missing(&b);
         assert_eq!(a.make.as_deref(), Some("A"));
         assert_eq!(a.model.as_deref(), Some("M"));
+        assert_eq!(a.title.as_deref(), Some("Original"));
+        assert_eq!(a.caption.as_deref(), Some("Caption"));
+        assert_eq!(a.keywords, vec!["k".to_string()]);
         assert_eq!(a.rating, Some(1));
         a.overlay_user_fields(&b);
         assert_eq!(a.rating, Some(4));

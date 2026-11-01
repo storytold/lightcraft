@@ -279,14 +279,17 @@ pub(crate) fn decode_rows(src: &[u8], w: usize, h: usize, rows: usize, bits: u32
             } else {
                 diff(&mut stream, &huff).ok_or_else(|| RawError::Corrupt(format!("NEF: invalid Huffman code at row {y}")))?
             };
+            // a run of large differences in a corrupt stream can drive a predictor past i32 (issue #1515)
+            let overflow = || RawError::Corrupt(format!("NEF: predictor out of range at row {y}"));
             let p = if x < 2 {
                 let s = seeds.get_mut(x).ok_or(RawError::Limit("NEF column"))?;
-                *s += d;
+                *s = s.checked_add(d).ok_or_else(overflow)?;
                 hpred[x & 1] = *s;
                 *s
             } else {
-                hpred[x & 1] += d;
-                hpred[x & 1]
+                let p = hpred[x & 1].checked_add(d).ok_or_else(overflow)?;
+                hpred[x & 1] = p;
+                p
             };
             let v = p.clamp(0, max);
             clipped += (v != p && (table.split == 0 || y < table.split)) as usize;
@@ -726,6 +729,35 @@ mod tests {
         assert_eq!(top[..], decode(&src, w, h, 14, &t).unwrap()[..w * MASK_ROWS]);
         assert_eq!(decode_rows(&src, w, h, h + 5, 14, &t).unwrap().len(), w * h, "rows are clamped to the height");
         assert!(decode_rows(&src[..w * h / 4 - 1], w, h, 1, 14, &t).is_err(), "a strip too short for the image is corrupt in any mode");
+    }
+
+    /// A long run of the largest difference drove a predictor past i32: a panic in builds with overflow checks,
+    /// wrapped values otherwise (issue #1515). Both the row and the column predictors now stop with an error.
+    #[test]
+    fn predictor_overflow_is_an_error_not_a_panic() {
+        let codes = LOSSLESS_14.codes();
+        let k = (0..codes.len()).rev().find(|&k| codes[k].1 > 0).unwrap();
+        let d = (1u32 << k) - 1;
+        let stream = |n: usize| {
+            let mut wr = Writer::default();
+            let (code, len) = codes[k];
+            for _ in 0..n {
+                wr.put(code as u32 >> (12 - len), len as u32);
+                wr.put(d, k as u32);
+            }
+            wr.finish()
+        };
+        // differences one predictor needs to pass i32::MAX
+        let steps = (i32::MAX as u32 / d) as usize + 2;
+        let table = DecodeTable { encoding: Encoding::Lossless, seeds: [[0; 2]; 2], split: 0 };
+        // along a row: every other sample adds to the same predictor
+        let w = 2 * steps + 2;
+        let err = decode(&stream(w), w, 1, 14, &table).unwrap_err();
+        assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("predictor")), "{err}");
+        // down two columns: each row adds to the seed of its parity
+        let h = 2 * steps + 2;
+        let err = decode(&stream(2 * h), 2, h, 14, &table).unwrap_err();
+        assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("predictor")), "{err}");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, mask_terms};
+use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
@@ -180,7 +180,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
-        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let _ = self.gpu.poll(wgpu::PollType::wait_indefinitely());
     }
 
     /// A zero-filled buffer (the clear is recorded).
@@ -229,29 +229,34 @@ pub(crate) fn rgb_words(img: &Rgb32f) -> &[f32] {
 // ---------------------------------------------------------------------------------------------
 // Filters (twins of `lightcraft_raster::blur` / `resample` and `lightcraft_pipeline::local`)
 
-/// Pixels each blur thread slides its running sum over (at least; longer for large radii, so the
+/// Rows each `box_v` thread slides its running sum over (at least; longer for large radii, so the
 /// priming sum stays a small share of the work).
 const CHUNK: usize = 16;
+
+/// One box pass of radius `r` (clamped edges) over a `w × h` image of `nc` interleaved channels,
+/// `src → dst`: horizontal or vertical.
+fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, r: usize) {
+    let chunk = (2 * r + 1).clamp(CHUNK, 128);
+    let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32];
+    let (k, groups) = if horizontal { ("box_h", groups2(w, h, [64, 4])) } else { ("box_v", groups2(w, h.div_ceil(chunk), [64, 4])) };
+    cx.run(k, &p, &[Some(src), Some(dst)], groups);
+}
 
 /// Gaussian blur of a `w × h` image of `nc` interleaved channels: three box passes each way
 /// (`lightcraft_raster::blur::gaussian`).
 pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize, sigma: f32) -> Buf {
-    if sigma <= 0.3 || w * h == 0 {
+    let Some(radii) = lightcraft_raster::blur::radii_for(sigma, w, h) else {
         return cx.copy(src);
-    }
-    let radii = lightcraft_raster::blur::box_radii(sigma);
-    let passes: Vec<(&str, usize)> = radii.iter().map(|r| ("box_h", *r)).chain(radii.iter().map(|r| ("box_v", *r))).filter(|p| p.1 > 0).collect();
+    };
+    let passes: Vec<(bool, usize)> = radii.iter().map(|r| (true, *r)).chain(radii.iter().map(|r| (false, *r))).filter(|p| p.1 > 0).collect();
     if passes.is_empty() {
         return cx.copy(src);
     }
     // ping-pong between two buffers
     let mut bufs = [cx.gpu.buffer(w * h * nc), cx.gpu.buffer(w * h * nc)];
-    for (i, (k, r)) in passes.iter().enumerate() {
-        let chunk = (2 * r + 1).clamp(CHUNK, 128);
-        let groups = if *k == "box_h" { groups2(w.div_ceil(chunk), h, [64, 4]) } else { groups2(w, h.div_ceil(chunk), [64, 4]) };
-        let p = [w as u32, h as u32, nc as u32, *r as u32, chunk as u32];
+    for (i, (horizontal, r)) in passes.iter().enumerate() {
         let (out, prev) = (&bufs[i % 2], &bufs[(i + 1) % 2]);
-        cx.run(k, &p, &[Some(if i == 0 { src } else { prev }), Some(out)], groups);
+        box_pass(cx, *horizontal, if i == 0 { src } else { prev }, out, (w, h), nc, *r);
     }
     let last = (passes.len() - 1) % 2;
     let [a, b] = std::mem::replace(&mut bufs, [cx.gpu.buffer(0), cx.gpu.buffer(0)]);
@@ -461,6 +466,10 @@ fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
     *g = None;
     SOURCE_UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let buf = Arc::new(upload());
+    // a failed upload's buffer holds zeros: this render falls back, and no other may reuse it
+    if crate::ctx::failed() {
+        return buf;
+    }
     *g = Some((Arc::downgrade(src), buf.clone()));
     buf
 }
@@ -594,7 +603,10 @@ pub fn render(
     };
     let plan = lightcraft_pipeline::plan(src, info, s, req);
     let (w, h) = (plan.w, plan.h);
-    let n = w * h;
+    let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
+        fail(FailKind::Limit, format!("{w}×{h} output is too large"));
+        return None;
+    };
     let _limit = match fault {
         Some(crate::Fault::Limit(bytes)) => Some(crate::ctx::LimitOverride::new(bytes)),
         _ => None,
@@ -663,9 +675,19 @@ pub fn render(
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
-    let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, req.space);
+    let mut fp = FinishParams::new(FinishParamsInput {
+        settings: s,
+        frame: &plan.frame,
+        info,
+        image_size: (w, h),
+        px_per_long: plan.px_per_long,
+        air_pre: prep.air,
+        space: req.space,
+    });
+    // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
+    fp.proof = req.proof.map(|pr| pr.params(req.space));
     if let Some(d) = &req.display {
-        fp.for_display(d, None);
+        fp.for_display(d, req.proof);
     }
     let present = Present {
         clarity: prep.clarity.is_some(),
@@ -712,6 +734,27 @@ pub fn render(
             _ => Err(m),
         }
     });
+    // every visible mask's alpha, for `Overlay::AllMasks` (one tint over all masks at once).
+    // The masks buffer holds each visible mask's alpha back-to-back in the same `list` order the
+    // single-mask overlay uses, so read the whole buffer back in ONE GPU->CPU transfer and split it
+    // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
+    let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
+        masks.as_ref().map(|all| {
+            let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+            if list.is_empty() {
+                return Vec::new();
+            }
+            let raw: Vec<f32> = cx.read(all, n * list.len());
+            let mut alphas = Vec::with_capacity(list.len());
+            for mi in 0..list.len() {
+                let s = mi * n;
+                alphas.push(Plane { width: w, height: h, data: raw[s..s + n].to_vec() });
+            }
+            alphas
+        })
+    } else {
+        None
+    };
     let data: Vec<[u8; 4]> = cx.read(&out, n);
     let image = Rgba8 { width: w, height: h, data };
     lap("finish + readback", &mut t, &mut cx);
@@ -747,7 +790,15 @@ pub fn render(
             lightcraft_pipeline::masks::evaluate_one(m, &plan.frame, w, h, &img, &l, s.light.exposure as f32, plan.mattes.as_deref())
         }
     });
-    lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref());
+    // a sharpening view: the detail planes this render sharpened with
+    let overlay_mask = overlay_mask.or_else(|| {
+        req.overlay.reads_detail().then(|| {
+            let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
+            let tex = prep.texture.as_deref().map(|b| cx.read_plane(b, w, h));
+            lightcraft_pipeline::visualize::sharpen_plane(req.overlay, &plan.settings, &l, tex.as_ref(), plan.px_per_long)
+        })?
+    });
+    lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
     // spots grew the window the render worked on: cut it back to the request
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
@@ -796,7 +847,7 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
 fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let (lum, col) = local::nr_params(&plan.settings, plan.src_long, plan.frame.output_long(w, h));
+    let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let mut img = img;
     if let Some(nr) = lum {
         let l = cx.gpu.buffer(n);
@@ -981,13 +1032,28 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                 }
                 MaskShape::ColorRange { samples, refine } => {
                     let tol = lightcraft_pipeline::masks::color_range_tolerance(*refine);
+                    // at most the CPU's samples (`MAX_COLOR_RANGE_SAMPLES`): cost is pixels x samples
+                    let samples = samples.iter().take(lightcraft_develop::MAX_COLOR_RANGE_SAMPLES);
                     p.extend([tol.to_bits(), ev.exp2().to_bits(), samples.len() as u32]);
-                    aux.extend(samples.iter().flat_map(|s| s.map(|v| v as f32)));
+                    aux.extend(samples.flat_map(|s| s.map(|v| v as f32)));
                     Some(3)
                 }
                 MaskShape::Brush { strokes } => {
-                    let dabs: Vec<_> = strokes.iter().map(|st| lightcraft_pipeline::masks::brush_dabs(st, frame, w, h)).collect();
-                    if dabs.iter().map(|d| d.dabs.len()).sum::<usize>() > MAX_DABS {
+                    // The kernel takes at most MAX_DABS across the whole mask, so no more than
+                    // that (plus one, to tell "at it" from "past it") is ever built: each stroke
+                    // may otherwise construct two million dabs before the sum below rejects them
+                    // all (#1520).
+                    let mut room = MAX_DABS + 1;
+                    let dabs: Vec<_> = strokes
+                        .iter()
+                        .map(|st| {
+                            let d = lightcraft_pipeline::masks::brush_dabs_within(st, frame, w, h, room);
+                            room -= d.dabs.len().min(room);
+                            d
+                        })
+                        .collect();
+                    // pen pressure varies radius and flow per dab, which the kernel doesn't take: the CPU rasterizes it
+                    if dabs.iter().map(|d| d.dabs.len()).sum::<usize>() > MAX_DABS || dabs.iter().any(|d| !d.pressure.is_empty()) {
                         None
                     } else if dabs.iter().any(|d| d.auto) {
                         // Auto Mask: stroke by stroke (each one refined before it's combined)
@@ -1132,6 +1198,33 @@ mod tests {
         assert!(covered > 0 && covered < w * h, "{covered} px covered");
     }
 
+    /// The blur against `lightcraft_raster::blur::gaussian`: widths that do and don't fill the last
+    /// workgroup, windows wider than the image, and 1, 2 (as two planes) and 3 channels.
+    #[test]
+    fn gaussian_matches_cpu() {
+        use lightcraft_raster::blur;
+        let Some(gpu) = crate::device() else { return };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let v = |x: usize, y: usize, c: usize| ((x * 7 + y * 13 + c * 5) % 17) as f32 / 16.0 + if x % 61 < 3 { 2.0 } else { 0.0 };
+        for (w, h) in [(1000, 5), (257, 3), (5, 4), (1, 9)] {
+            for sigma in [0.8f32, 2.0, 4.5, 30.0, 250.0, 1000.0] {
+                let planes: Vec<Plane> = (0..3).map(|c| Plane::from_fn(w, h, |x, y| v(x, y, c))).collect();
+                let want: Vec<Plane> = planes.iter().map(|p| blur::gaussian(p, sigma)).collect();
+                for nc in [1, 2, 3] {
+                    let words: Vec<f32> = (0..w * h).flat_map(|i| (0..nc).map(move |c| (i, c))).map(|(i, c)| planes[c].data[i]).collect();
+                    let mut cx = Cx::new(gpu);
+                    let src = gpu.upload(&words);
+                    let out = gaussian(&mut cx, &src, w, h, nc, sigma);
+                    let got: Vec<f32> = cx.read(&out, w * h * nc);
+                    for (i, g) in got.iter().enumerate() {
+                        let want = want[i % nc].data[i / nc];
+                        assert!((g - want).abs() < 1e-5 * (1.0 + sigma / 10.0), "{w}×{h} nc={nc} sigma={sigma}: word {i} {g} vs {want}");
+                    }
+                }
+            }
+        }
+    }
+
     /// Kernel timings on a 24 MP plane: `cargo test --release -p lightcraft-gpu -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -1139,6 +1232,7 @@ mod tests {
         let Some(gpu) = crate::device() else { return };
         let _scope = crate::ctx::RenderScope::new(gpu);
         let (w, h) = (6000, 4000);
+        eprintln!("{} ({:?})", gpu.info.name, gpu.info.backend);
         let src = gpu.upload(&vec![0.5f32; w * h * 3]);
         let time = |name: &str, f: &mut dyn FnMut(&mut Cx<'_>)| {
             let mut best = f64::MAX;
@@ -1153,8 +1247,18 @@ mod tests {
             eprintln!("{name:<40} {best:.1} ms");
         };
         for nc in [1, 2, 3] {
+            let out = gpu.buffer(w * h * nc);
+            // noise reduction's radii, Texture's and Dehaze's at 6000 px
+            for r in [2, 11, 120] {
+                for (k, horizontal) in [("box_h", true), ("box_v", false)] {
+                    time(&format!("{k} nc={nc} r={r}"), &mut |cx| box_pass(cx, horizontal, &src, &out, (w, h), nc, r));
+                }
+            }
+        }
+        for nc in [1, 2, 3] {
             time(&format!("gaussian nc={nc} sigma=2"), &mut |cx| drop(gaussian(cx, &src, w, h, nc, 2.0)));
         }
+        time("gaussian nc=3 sigma=4.5 (colour NR)", &mut |cx| drop(gaussian(cx, &src, w, h, 3, 4.5)));
         time("map log_lum", &mut |cx| {
             let o = cx.gpu.buffer(w * h);
             map(cx, "log_lum_k", w * h, &[], [Some(&src), None, None], &o);

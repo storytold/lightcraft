@@ -75,6 +75,38 @@ fn directional_sliders() {
     assert!(at("effects.dehaze", -100.0) != base);
 }
 
+/// Dehaze crushed dark regions next to bright ones to black: the dark channel is a blur, not a
+/// patch minimum, so near the boundary it credited the dark pixels with the bright side's veil and
+/// the subtraction went past zero (#2504). The veil credited to a pixel is now bounded by its own
+/// minimum channel, so a uniform dark region renders uniformly under dehaze.
+#[test]
+fn dehaze_does_not_crush_dark_regions_next_to_bright_ones() {
+    // a dark field against a bright hazy sky; the blur bleeds the sky's dark channel ~10 px into
+    // the field, which is where the blotches formed
+    let src = Rgb32f::from_fn(240, 160, |x, _| if x < 120 { [0.02, 0.03, 0.012] } else { [0.45, 0.5, 0.55] });
+    let mut s = DevelopSettings::default();
+    s.effects.dehaze = 80.0;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 160)).image;
+    for ch in 0..3 {
+        let mut v: Vec<u8> = Vec::with_capacity(160 * 100);
+        for y in 0..160 {
+            for x in 0..100 {
+                v.push(r.get(x, y)[ch]);
+            }
+        }
+        v.sort_unstable();
+        let mid = v[v.len() / 2] as i32;
+        // a field rendered all black would pass the comparison below vacuously
+        assert!(mid > 2, "the dark field itself is crushed in ch {ch}: level {mid}");
+        for y in 0..160 {
+            for x in 0..120 {
+                let p = r.get(x, y)[ch] as i32;
+                assert!(p >= mid - 2, "crushed at {x},{y} ch {ch}: {p} vs field level {mid}");
+            }
+        }
+    }
+}
+
 #[test]
 fn resolution_independence_of_local_contrast() {
     // Clarity at two preview sizes should give similar results after downscaling.
@@ -137,7 +169,8 @@ fn perf_report() {
 
 #[test]
 fn unedited_rendered_source_is_passthrough() {
-    // An sRGB ramp decoded to linear Rec.2020 must render back to (almost) the same 8-bit values.
+    // An sRGB ramp decoded to linear Rec.2020 must render back to the same 8-bit values, white
+    // included (issue #1945: neutral 255, 254 and 253 came back one level darker).
     let src8 = lightcraft_raster::Rgba8::from_fn(256, 4, |x, y| [x as u8, (x as u8).wrapping_add(y as u8 * 40), 255 - x as u8, 255]);
     let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
     let src = src8.to_linear().map(|c| m.apply_f32(c));
@@ -148,7 +181,24 @@ fn unedited_rendered_source_is_passthrough() {
             worst = worst.max((a[c] as i32 - b[c] as i32).abs());
         }
     }
-    assert!(worst <= 3, "max error {worst}");
+    assert_eq!(worst, 0, "max error {worst}");
+}
+
+#[test]
+fn unedited_neutral_near_whites_are_passthrough() {
+    // Issue #1945: neutral 255, 254 and 253 rendered one level darker (the display tone map's
+    // shoulder ran at neutral settings), so a white background never exported as 255.
+    let vals = [255u8, 254, 253, 252, 250, 240, 200, 128, 0];
+    let src8 = lightcraft_raster::Rgba8::from_fn(vals.len(), 1, |x, _| {
+        let v = vals[x];
+        [v, v, v, 255]
+    });
+    let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
+    let src = src8.to_linear().map(|c| m.apply_f32(c));
+    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(vals.len(), 1)).image;
+    let got: Vec<[u8; 3]> = r.data.iter().map(|p| [p[0], p[1], p[2]]).collect();
+    let want: Vec<[u8; 3]> = vals.iter().map(|&v| [v, v, v]).collect();
+    assert_eq!(got, want);
 }
 
 fn typical_edits() -> DevelopSettings {
@@ -270,6 +320,61 @@ fn exposure_after_spatial_filters_equals_exposing_the_source() {
     let b = render(&scaled, &info, &s, &RenderRequest::fit(200, 200)).image;
     let d = max_diff(&a, &b);
     assert!(d <= 2, "max difference {d}");
+}
+
+#[test]
+fn color_range_sampling_respects_disabled_sections() {
+    use crate::{MaskView, Overlay, color_range_sample};
+    let src = Rgb32f::from_fn(32, 24, |_, _| [0.15, 0.25, 0.08]);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(32, 24);
+    let point = lightcraft_geom::Point::new(0.5, 0.5);
+    let plain = color_range_sample(&src, &info, &DevelopSettings::default(), &req, point).unwrap();
+    for section in ["light", "color"] {
+        let mut s = DevelopSettings::default();
+        if section == "light" {
+            s.light.exposure = 3.0;
+        } else {
+            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.temp = 12000.0;
+            s.wb.tint = 100.0;
+        }
+        assert_ne!(color_range_sample(&src, &info, &s, &req, point).unwrap(), plain, "enabled {section}");
+        s.set_section_enabled(section, false);
+        let sample = color_range_sample(&src, &info, &s, &req, point).unwrap();
+        assert_eq!(sample, plain, "disabled {section} must not change the picked colour");
+        s.masks.push(lightcraft_develop::Mask {
+            id: 1,
+            components: vec![lightcraft_develop::MaskComponent {
+                name: None,
+                op: lightcraft_develop::MaskOp::Add,
+                invert: false,
+                shape: lightcraft_develop::MaskShape::ColorRange { samples: vec![sample], refine: 0.0 },
+            }],
+            ..Default::default()
+        });
+        let overlay = RenderRequest { overlay: Overlay::Mask { id: 1, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 }, ..req };
+        let img = render(&src, &info, &s, &overlay).image;
+        assert_eq!(img.data[12 * 32 + 16], [255; 4], "the sampled colour is selected with {section} off");
+    }
+}
+
+#[test]
+fn color_range_sampling_uses_the_requested_hdr_rendition() {
+    use crate::{OutputDepth, color_range_sample};
+    let src = Rgb32f::from_fn(32, 24, |_, _| [0.15, 0.25, 0.08]);
+    let info = SourceInfo::default();
+    let point = lightcraft_geom::Point::new(0.5, 0.5);
+    let mut s = DevelopSettings::default();
+    s.hdr.enabled = true;
+    s.hdr.sdr_brightness = 100.0;
+    let req = RenderRequest::fit(32, 24);
+    let expected = color_range_sample(&src, &info, &s.sdr_rendition(), &req, point).unwrap();
+    assert_eq!(color_range_sample(&src, &info, &s, &req, point).unwrap(), expected, "SDR preview brightness affects the picked colour");
+    let hdr = RenderRequest { depth: OutputDepth::F32Hdr, ..req };
+    let plain = color_range_sample(&src, &info, &DevelopSettings::default(), &hdr, point).unwrap();
+    assert_eq!(color_range_sample(&src, &info, &s, &hdr, point).unwrap(), plain, "HDR does not use the SDR offset");
+    assert_ne!(plain, expected);
 }
 
 /// A section whose eye is off renders as if it were at its defaults (issue #316): Light, Color
@@ -709,5 +814,45 @@ fn stored_process_numbers_render_with_a_known_process() {
                 assert!(out(&with(&s, ProcessVersion(Process::LATEST.version().0 + 7))) == latest, "newer than this build: as the latest");
             }
         }
+    }
+}
+
+/// A crop a hair wide (or of no size, as a command or a sidecar can set) shown to fit made the
+/// tone, clarity and dehaze stages blur with sigmas of millions of pixels (infinite for no size):
+/// the box width's square overflowed (a panic in debug builds, a radius of billions of pixels and
+/// a hung render in release ones). The blur is held to twice the picture's size: the render is
+/// quick and its pixels are numbers.
+#[test]
+fn sliver_crops_render_quickly_with_wide_stages_on() {
+    let src = scene();
+    for (rect, angle) in [([0.0, 0.0, 1e-9, 1.0], 45.0), ([0.5, 0.5, 0.5, 0.5], 0.0), ([0.0, 0.0, 1e-5, 1.0], -30.0)] {
+        let mut s = DevelopSettings::default();
+        s.crop.geometry.rect = lightcraft_geom::Rect::new(rect[0], rect[1], rect[2], rect[3]);
+        s.crop.geometry.angle = angle;
+        s.effects.clarity = 80.0;
+        s.effects.dehaze = 50.0;
+        s.effects.texture = 40.0;
+        s.light.highlights = -60.0;
+        s.light.shadows = 60.0;
+        let t = std::time::Instant::now();
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(280, 180));
+        assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
+        assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
+    }
+}
+
+/// A crop of no width used to give grain NaN coordinates (and NaN pixels); the render stays finite.
+#[test]
+fn zero_width_crop_with_grain_renders_finite_pixels() {
+    let mut s = DevelopSettings::default();
+    s.grain.amount = 60.0;
+    s.crop.geometry.rect = lightcraft_geom::Rect::new(0.5, 0.1, 0.5, 0.9);
+    let mut req = RenderRequest::fit(240, 240);
+    req.depth = crate::OutputDepth::F32Linear;
+    let r = render(&scene(), &SourceInfo::default(), &s, &req);
+    if let Some(d) = r.deep
+        && let crate::DeepSamples::F32(v) = d.samples
+    {
+        assert!(v.iter().all(|x| x.is_finite()), "non-finite sample in a zero-width crop with grain");
     }
 }

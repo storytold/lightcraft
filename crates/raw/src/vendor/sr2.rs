@@ -45,7 +45,7 @@
 //! of an accident 2⁻⁴⁰⁶⁴). For the DSC-R1's key `63 be 01 3e` the 11932-byte block becomes a well-formed 101-entry
 //! directory (black `0x7300`, white balance `0x7303`, crop `0x74c3`).
 
-use lightcraft_tiff::{ByteOrder, Ifd, ParseOptions, tags as t};
+use lightcraft_tiff::{ByteOrder, EntrySpan, Ifd, ParseOptions, decode_value, directory_entries, entry_span, tags as t};
 
 /// `SR2Private` tags.
 const SUBIFD_OFFSET: u16 = 0x7200;
@@ -136,11 +136,8 @@ impl SubIfd {
     /// [`MAX_LEN`].
     pub(crate) fn read(bytes: &[u8], ifd0: &Ifd, order: ByteOrder) -> Option<Self> {
         let at = order.read_u32(ifd0.bytes(t::DNG_PRIVATE_DATA)?, 0)?;
-        let opts = ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
-        let (private, _) = lightcraft_tiff::parse_ifd_at(bytes, u64::from(at), order, 0, false, &opts).ok()?;
-        let key: [u8; 4] = private.bytes(SUBIFD_KEY)?.try_into().ok()?;
-        let start = usize::try_from(private.u64(SUBIFD_OFFSET)?).ok()?;
-        let len = usize::try_from(private.u64(SUBIFD_LENGTH)?).ok()?;
+        let fields = private_fields(bytes, u64::from(at), order);
+        let (start, len, key) = (fields.offset?, fields.length?, fields.key?);
         if len > MAX_LEN {
             return None;
         }
@@ -163,6 +160,13 @@ impl SubIfd {
     /// The byte order of the directory's values (the file's).
     pub(crate) fn order(&self) -> ByteOrder {
         self.order
+    }
+
+    /// The decrypted block (the directory from its entry count on) and the file offset it was stored at, which its
+    /// value offsets count from: for readers that check each entry's exact type and count themselves
+    /// (`arw_lens`).
+    pub(crate) fn block(&self) -> (&[u8], usize) {
+        (&self.plain, self.start)
     }
 
     /// The field type and value bytes of a SHORT or SSHORT entry; `None` when the tag is absent, has another type
@@ -193,9 +197,69 @@ impl SubIfd {
     }
 }
 
+/// The `SR2Private` fields that locate the block.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PrivateFields {
+    offset: Option<usize>,
+    length: Option<usize>,
+    key: Option<[u8; 4]>,
+}
+
+/// The block's file offset, length and key from the `SR2Private` directory at `at`, exactly as the TIFF reader would
+/// give them (`parse_ifd_at` with its default limits, then its `u64` and `bytes` lookups), without decoding the
+/// directory. The selection uses the reader's own rules: its directory layout and entry limit
+/// ([`directory_entries`]), which entries it can read ([`entry_span`]) and its value budget; each field is its first
+/// readable occurrence. Of that entry only the first value is decoded (the key's first five bytes, which settle
+/// whether it is four bytes), so a hostile directory can't make this allocate memory sized by its other entries,
+/// which could each alias the whole file, before the block's own [`MAX_LEN`] is checked.
+fn private_fields(bytes: &[u8], at: u64, order: ByteOrder) -> PrivateFields {
+    let opts = ParseOptions::default();
+    let Ok(dir) = directory_entries(bytes, at, order, false, opts.max_entries) else { return PrivateFields::default() };
+    let mut budget = opts.budget_for(bytes.len());
+    let (mut offset, mut length, mut key) = (None, None, None);
+    for p in dir.positions() {
+        let Some(span) = entry_span(bytes, p, order, false, 0) else { continue };
+        if span.len > budget {
+            continue;
+        }
+        budget -= span.len;
+        match span.tag {
+            SUBIFD_OFFSET if offset.is_none() => offset = Some(first_number(bytes, &span, order)),
+            SUBIFD_LENGTH if length.is_none() => length = Some(first_number(bytes, &span, order)),
+            SUBIFD_KEY if key.is_none() => key = Some(four_bytes(bytes, &span, order)),
+            _ => {}
+        }
+    }
+    PrivateFields { offset: offset.flatten(), length: length.flatten(), key: key.flatten() }
+}
+
+/// The entry's first value as the reader's `u64` lookup reads it (an unsigned or non-negative integer), as a `usize`.
+fn first_number(bytes: &[u8], span: &EntrySpan, order: ByteOrder) -> Option<usize> {
+    if span.count == 0 {
+        return None;
+    }
+    let start = usize::try_from(span.start).ok()?;
+    let first = bytes.get(start..start.checked_add(span.field_type.size())?)?;
+    usize::try_from(decode_value(order, span.field_type, first).get_u64(0)?).ok()
+}
+
+/// The entry's bytes as the reader's `bytes` lookup gives them, when they are exactly four. Decoding the first five
+/// value bytes settles it: BYTE and UNDEFINED give all their bytes, ASCII its text before the first NUL, which
+/// decoding never makes shorter.
+fn four_bytes(bytes: &[u8], span: &EntrySpan, order: ByteOrder) -> Option<[u8; 4]> {
+    let start = usize::try_from(span.start).ok()?;
+    let head = bytes.get(start..start.checked_add(usize::try_from(span.len).ok()?.min(5))?)?;
+    <[u8; 4]>::try_from(decode_value(order, span.field_type, head).as_bytes()?).ok()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    /// TIFF field types.
+    const BYTE: u16 = 1;
+    const LONG: u16 = 4;
+    const UNDEFINED: u16 = 7;
+    const IFD: u16 = 13;
     use lightcraft_tiff::ByteOrder::{Big, Little};
 
     /// An `SR2SubIFD` block for file offset `start`, encrypted: SHORT/SSHORT entries `(tag, type, values)`, values
@@ -342,6 +406,200 @@ pub(crate) mod tests {
             // SSHORT is signed
             let enc = block(start, &[(0x7313, SSHORT, &[0xffff, 1024])], order);
             assert_eq!(SubIfd::decrypt(&enc, start, order).shorts(0x7313), Some(vec![-1.0, 1024.0]));
+        }
+    }
+
+    /// An `SR2Private` directory of `entries` `(tag, type, count, value field)` at file offset 0.
+    fn private(entries: &[(u16, u16, u32, [u8; 4])], order: ByteOrder) -> Vec<u8> {
+        let mut out = Vec::new();
+        order.put_u16(&mut out, entries.len() as u16);
+        for &(tag, kind, count, value) in entries {
+            order.put_u16(&mut out, tag);
+            order.put_u16(&mut out, kind);
+            order.put_u32(&mut out, count);
+            out.extend(value);
+        }
+        order.put_u32(&mut out, 0);
+        out
+    }
+
+    /// `(offset, length, key)` as one of the readers selects them.
+    type Selected = (Option<usize>, Option<usize>, Option<[u8; 4]>);
+
+    /// What `SubIfd::read` on main selects: the TIFF reader's parse of the directory with main's options, then the
+    /// directory's `u64` and `bytes` lookups.
+    fn reader_selects(bytes: &[u8], at: usize, order: ByteOrder) -> Selected {
+        let opts = lightcraft_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
+        let Ok((private, _)) = lightcraft_tiff::parse_ifd_at(bytes, at as u64, order, 0, false, &opts) else { return (None, None, None) };
+        let n = |tag: u16| private.u64(tag).and_then(|v| usize::try_from(v).ok());
+        (n(SUBIFD_OFFSET), n(SUBIFD_LENGTH), private.bytes(SUBIFD_KEY).and_then(|b| <[u8; 4]>::try_from(b).ok()))
+    }
+
+    /// Synthetic `SR2Private` directories at offset 0, with what each tests: filler entries ahead of the fields, and
+    /// unreadable, unusual or valid first occurrences of each field ahead of a valid second one.
+    fn differential_cases(order: ByteOrder) -> Vec<(String, Vec<u8>)> {
+        let w = |v: u32| {
+            let mut b = Vec::new();
+            order.put_u32(&mut b, v);
+            [b[0], b[1], b[2], b[3]]
+        };
+        let h = |a: u16, b: u16| {
+            let mut out = Vec::new();
+            order.put_u16(&mut out, a);
+            order.put_u16(&mut out, b);
+            [out[0], out[1], out[2], out[3]]
+        };
+        let valid = [(SUBIFD_OFFSET, LONG, 1, w(4096)), (SUBIFD_LENGTH, LONG, 1, w(64)), (SUBIFD_KEY, UNDEFINED, 4, KEY)];
+        let mut cases = Vec::new();
+        for fillers in [0usize, 1, 255, 256, 257, 8189, 8190, 8191, 8192, 8193] {
+            let mut entries = vec![(0x7300, LONG, 1, w(7)); fillers];
+            entries.extend(valid);
+            cases.push((format!("{fillers} fillers"), private(&entries, order)));
+        }
+        // a first occurrence ahead of the valid one; pointer values point into a 32-byte tail after the directory
+        let tail_at = 2 + 12 * 4 + 4;
+        let mut tail: Vec<u8> = (1..=32).collect();
+        tail[4..8].copy_from_slice(b"\x11\x22\x33\x44");
+        tail[8] = 0;
+        let numeric: Vec<(&str, u16, u32, [u8; 4])> = vec![
+            ("unknown type 0", 0, 1, w(8)),
+            ("unknown type 14", 14, 1, w(8)),
+            ("unknown type 0xffff", 0xffff, 1, w(8)),
+            ("LONG[2] past the file", LONG, 2, w(u32::MAX)),
+            ("LONG[2] straddling the end", LONG, 2, w(tail_at as u32 + 28)),
+            ("LONG[u32::MAX]", LONG, u32::MAX, w(tail_at as u32)),
+            ("DOUBLE[u32::MAX]", 12, u32::MAX, w(tail_at as u32)),
+            ("LONG[0]", LONG, 0, w(0)),
+            ("LONG[2] in the file", LONG, 2, w(tail_at as u32)),
+            ("SHORT[1]", SHORT, 1, h(9, 0)),
+            ("SHORT[2] inline", SHORT, 2, h(9, 10)),
+            ("BYTE[3]", BYTE, 3, [5, 6, 7, 0]),
+            ("SSHORT -1", SSHORT, 1, h(0xffff, 0)),
+            ("SSHORT 5", SSHORT, 1, h(5, 0)),
+            ("SLONG -1", 9, 1, w(u32::MAX)),
+            ("LONG8 at a pointer", 16, 1, w(tail_at as u32)),
+            ("RATIONAL", 5, 1, w(tail_at as u32)),
+            ("ASCII", 2, 4, *b"abc\0"),
+            ("IFD", IFD, 1, w(4096)),
+        ];
+        for (tag, other) in [(SUBIFD_OFFSET, [valid[1], valid[2]]), (SUBIFD_LENGTH, [valid[0], valid[2]])] {
+            for (what, kind, count, field) in &numeric {
+                let valid_one = if tag == SUBIFD_OFFSET { valid[0] } else { valid[1] };
+                let mut d = private(&[(tag, *kind, *count, *field), valid_one, other[0], other[1]], order);
+                d.extend(&tail);
+                cases.push((format!("{tag:#x}: first {what}"), d));
+            }
+        }
+        let keys: Vec<(&str, u16, u32, [u8; 4])> = vec![
+            ("unknown type", 0, 4, KEY),
+            ("UNDEFINED[8] past the file", UNDEFINED, 8, w(u32::MAX)),
+            ("UNDEFINED[5] in the file", UNDEFINED, 5, w(tail_at as u32)),
+            ("UNDEFINED[3]", UNDEFINED, 3, KEY),
+            ("UNDEFINED[0]", UNDEFINED, 0, KEY),
+            ("BYTE[4]", BYTE, 4, [1, 2, 3, 4]),
+            ("SBYTE[4]", 6, 4, KEY),
+            ("ASCII[4]", 2, 4, KEY),
+            ("ASCII[4] with NUL", 2, 4, [0x41, 0x42, 0, 0x43]),
+            ("ASCII[4] invalid UTF-8", 2, 4, [0xff, 0x41, 0, 0]),
+            ("ASCII[4] two invalid bytes", 2, 4, [0xc3, 0x28, 0x41, 0]),
+            ("ASCII[9] at a pointer, NUL at 4", 2, 9, w(tail_at as u32 + 4)),
+            ("ASCII[8] at a pointer, no NUL", 2, 8, w(tail_at as u32 + 12)),
+            ("LONG[1]", LONG, 1, KEY),
+        ];
+        for (what, kind, count, field) in &keys {
+            let mut d = private(&[(SUBIFD_KEY, *kind, *count, *field), valid[0], valid[1], valid[2]], order);
+            d.extend(&tail);
+            cases.push((format!("key: first {what}"), d));
+        }
+        // the reader's value budget (8 × the data's length + 1 MiB), used up by entries aliasing the data
+        for aliases in [23u32, 24] {
+            let mut entries = vec![(0x7300, UNDEFINED, 1 << 16, w(0)); aliases as usize];
+            entries.extend(valid);
+            let mut d = private(&entries, order);
+            d.resize(1 << 16, 0);
+            cases.push((format!("{aliases} entries using the value budget"), d));
+        }
+        // no entries; more entries declared than the data holds
+        cases.push(("empty directory".into(), private(&[], order)));
+        let mut long = private(&valid, order);
+        long[..2].copy_from_slice(&if order == Little { 10u16.to_le_bytes() } else { 10u16.to_be_bytes() });
+        long.truncate(2 + 12 * 3);
+        cases.push(("10 entries declared, 3 present".into(), long));
+        cases
+    }
+
+    #[test]
+    fn private_fields_match_the_tiff_readers_selection() {
+        let mut differ = Vec::new();
+        for order in [Little, Big] {
+            for (case, d) in differential_cases(order) {
+                let f = private_fields(&d, 0, order);
+                let (ours, reader) = ((f.offset, f.length, f.key), reader_selects(&d, 0, order));
+                if ours != reader {
+                    differ.push(format!("{order:?} {case}: {ours:?}, reader {reader:?}"));
+                }
+            }
+            assert_eq!(private_fields(&[], 0, order), PrivateFields::default());
+            assert_eq!(private_fields(&private(&[], order), u64::MAX, order), PrivateFields::default());
+        }
+        assert!(differ.is_empty(), "{} cases differ from the TIFF reader:\n{}", differ.len(), differ.join("\n"));
+        // what the reader (and so this) gives in the cases the review named: the limit is 8,192 entries, a later
+        // copy stands in for an unreadable first one, and a used-up value budget hides the fields
+        let found = |d: &[u8]| private_fields(d, 0, Little) == PrivateFields { offset: Some(4096), length: Some(64), key: Some(KEY) };
+        let cases = differential_cases(Little);
+        let case = |name: &str| cases.iter().find(|(c, _)| c == name).map(|(_, d)| d.clone()).unwrap();
+        for name in [
+            "0 fillers",
+            "256 fillers",
+            "8189 fillers",
+            "0x7200: first LONG[2] past the file",
+            "0x7201: first unknown type 14",
+            "key: first UNDEFINED[8] past the file",
+            "23 entries using the value budget",
+        ] {
+            assert!(found(&case(name)), "{name}");
+        }
+        for name in ["8190 fillers", "8192 fillers", "24 entries using the value budget", "0x7200: first ASCII", "key: first UNDEFINED[3]"] {
+            assert!(!found(&case(name)), "{name}");
+        }
+    }
+
+    /// The case that broke on review: valid entries ahead of the three fields, and an unreadable first offset ahead of
+    /// a valid one. Main's reader finds the block; so must this one (else the black level, white balance and crop it
+    /// holds are lost).
+    #[test]
+    fn the_block_is_found_behind_filler_and_unreadable_entries() {
+        for order in [Little, Big] {
+            for (fillers, unreadable_first) in [(256usize, false), (300, false), (0, true), (256, true)] {
+                let w = |v: u32| {
+                    let mut b = Vec::new();
+                    order.put_u32(&mut b, v);
+                    [b[0], b[1], b[2], b[3]]
+                };
+                let n = fillers + 3 + usize::from(unreadable_first);
+                let start = 2 + 12 * n + 4;
+                let block = block(start, &[(0x7310, SHORT, &[800; 4])], order);
+                let mut entries = vec![(0x7300, LONG, 1, w(7)); fillers];
+                if unreadable_first {
+                    entries.push((SUBIFD_OFFSET, LONG, 2, w(u32::MAX)));
+                }
+                entries.extend([
+                    (SUBIFD_OFFSET, LONG, 1, w(start as u32)),
+                    (SUBIFD_LENGTH, LONG, 1, w(block.len() as u32)),
+                    (SUBIFD_KEY, UNDEFINED, 4, KEY),
+                ]);
+                let mut file = private(&entries, order);
+                assert_eq!(file.len(), start);
+                file.extend(&block);
+                let mut pointer = Vec::new();
+                order.put_u32(&mut pointer, 0);
+                let ifd0 = Ifd {
+                    entries: vec![lightcraft_tiff::Entry { tag: t::DNG_PRIVATE_DATA, value: lightcraft_tiff::Value::Byte(pointer), offset: 0 }],
+                    ..Default::default()
+                };
+                let black = SubIfd::read(&file, &ifd0, order).and_then(|s| s.shorts(0x7310));
+                assert_eq!(black, Some(vec![800.0; 4]), "{order:?}: {fillers} fillers, unreadable first offset {unreadable_first}");
+            }
         }
     }
 

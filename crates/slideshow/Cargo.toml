@@ -1,0 +1,14 @@
+[package]
+name = "lightcraft-slideshow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft slideshow slides: layout, options and backdrop settings and the CPU slide composer (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-raster = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

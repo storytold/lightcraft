@@ -88,6 +88,11 @@ pub fn is_model_dir(dir: &Path) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Whether [`best_device`] can be a GPU in this build (Metal on macOS). Where it can, a caller that
+/// sees the model fail there can load it again with [`Sam3::load_cpu`].
+pub const GPU_BUILD: bool = cfg!(target_os = "macos");
+
+#[cfg(not(target_arch = "wasm32"))]
 /// The best device here: Metal on macOS (when a GPU is available), else the CPU.
 pub fn best_device() -> Device {
     #[cfg(target_os = "macos")]
@@ -134,11 +139,17 @@ impl Sam3 {
         Self::load_on(dir, best_device())
     }
 
+    /// [`Sam3::load`] on the CPU, whatever GPU there is.
+    pub fn load_cpu(dir: &Path) -> Result<Self> {
+        Self::load_on(dir, Device::Cpu)
+    }
+
     pub fn load_on(dir: &Path, device: Device) -> Result<Self> {
         if !is_model_dir(dir) {
             return Err(Error::Missing(dir.to_path_buf()));
         }
         let weights = weights::Weights::open(&dir.join(WEIGHTS_FILE))?;
+        hugging_face_format(&weights)?;
         let backbone = vit::Vit::new(Self::vb(&weights, &device).pp("detector_model.vision_encoder.backbone"))?;
         Ok(Self { dir: dir.to_path_buf(), device, weights, backbone, tracker_neck: None, tracker: None, detector: None, tokenizer: None })
     }
@@ -251,6 +262,20 @@ impl Encoded {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Meta's original checkpoint (`sam3.pt`, or a `sam3.safetensors` conversion of it as on community
+/// mirrors) names its tensors differently: say so, rather than name the first tensor it lacks (#3378).
+fn hugging_face_format(weights: &weights::Weights) -> Result<()> {
+    let first = "detector_model.vision_encoder.backbone.embeddings.patch_embeddings.projection.weight";
+    if !weights.contains(first) && (weights.has_prefix("detector.backbone.") || weights.has_prefix("tracker.")) {
+        return Err(Error::Model(format!(
+            "{WEIGHTS_FILE} is Meta's original checkpoint (sam3.pt, or a sam3.safetensors conversion of it as on community mirrors); \
+             LightCraft needs the Hugging Face format: {WEIGHTS_FILE} from facebook/sam3"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
@@ -262,4 +287,23 @@ pub use detector::Output as DetectorOutput;
 /// Wait for queued GPU work to finish (benchmarks).
 pub fn sync(model: &Sam3) -> Result<()> {
     Ok(model.device.synchronize()?)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_original_checkpoint_is_named_as_such() {
+        // #3378: a community mirror's `sam3.safetensors` (Meta's key names, C64 RoPE tables) saved as model.safetensors
+        let dir = std::env::temp_dir().join(format!("lc-sam3-original-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = r#"{"detector.backbone.vision_backbone.trunk.blocks.0.attn.freqs_cis":{"dtype":"C64","shape":[2],"data_offsets":[0,16]},"tracker.sam_mask_decoder.iou_token.weight":{"dtype":"F32","shape":[2],"data_offsets":[16,24]}}"#;
+        std::fs::rename(weights::tests::write("original", header, 24), dir.join(WEIGHTS_FILE)).unwrap();
+        std::fs::write(dir.join("vocab.json"), "{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), "").unwrap();
+        let err = Sam3::load_cpu(&dir).err().unwrap().to_string();
+        assert!(err.contains("Meta's original checkpoint") && err.contains("facebook/sam3"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

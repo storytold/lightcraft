@@ -287,8 +287,10 @@ mod tests {
             color,
             wb_multipliers: None,
             linearized: false,
+            pixel_aspect: 1.0,
             opcodes: Default::default(),
             metadata: Default::default(),
+            lens_metadata: Default::default(),
         }
     }
 

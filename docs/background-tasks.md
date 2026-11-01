@@ -9,7 +9,10 @@ a task that can stop is running. Agents see the same list through `activity.list
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
 window, panel or progress toast of your own**. A dialog may still show progress inline (the Synchronize Folder
-dialog counts files while it scans), and a toast at the end saying what happened is fine.
+dialog counts files while it scans), and a toast at the end saying what happened is fine. A view saying its pixels
+aren't final isn't progress either: the loupe's "Rendering…" pill (`loupe:rendering`) marks a stand-in or an
+out-of-date render on the photo itself, and the render behind it holds no row (a slider drag replaces it many times a
+second).
 
 ## Adding a task
 
@@ -30,7 +33,7 @@ guard.detail(&file_name);
   dead job never leaves a stuck bar. A worker that only reports progress takes a `TaskHandle` (`guard.handle()`,
   `Clone + Send`).
 - **`kind`** is a stable camelCase id that agents filter by (`export`, `import`, `scan`, `sync`, `previews`,
-  `download`, `faces`…). **`label`** is a short English name in sentence case ("Building previews"). The stack shows it
+  `download`, `faces`, `cache`, `focus`…). **`label`** is a short English name in sentence case ("Building previews"). The stack shows it
   translated, so add it to every catalog in `crates/ui-egui/locales/`.
 - **Progress:** `progress(done, total)`. A `total` of 0 means the amount of work isn't known yet, and the bar sweeps.
   `set_unit(Unit::Bytes)` makes the count read "12 of 340 MB"; `Unit::Percent` reads "40 %". The default `Unit::Count`
@@ -52,14 +55,17 @@ guard.detail(&file_name);
 |---|---|---|
 | Export, contact sheet | `crates/ui-egui/src/export_task.rs` | adopt the job's flag; update the row each frame |
 | Build Previews | `crates/engine/src/cmd/previews.rs` | move the guard into the worker thread |
+| Slideshow export | `crates/engine/src/cmd/slideshow.rs`, `crates/engine/src/slideshow_export.rs` | an engine command that owns its worker and row; progress from the worker through a `TaskHandle`; results read back by command |
 | Model downloads | `crates/engine/src/face_download.rs` | report progress through a `TaskHandle` in shared state |
 | Lightroom catalog import | `crates/ui-egui/src/lightroom_import.rs` | stop being cancellable for a phase that must finish |
 | Face scan, AI Denoise | `crates/engine/src/cmd/face_recognize.rs`, `crates/engine/src/denoise.rs` | a continuous job with no ✕, kept in session state |
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
+| Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
+| Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
 
 ## Testing
 
 Assert the row (`session.activity.list()`: kind, label, total, `cancellable`), that `activity.cancel(id)` stops the
-job, and that the row is gone once the job ends. `crates/ui-egui/src/tests_activity.rs` has the helpers, and the
+job, and that the row is gone once the job ends. `crates/ui-egui/src/tests/activity.rs` has the helpers, and the
 job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). A row only appears
 on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first.

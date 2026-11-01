@@ -9,7 +9,7 @@
 
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, dab_alpha, push_dabs};
+use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures};
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
 const MAX_SIDE: usize = 4096;
@@ -41,7 +41,11 @@ pub struct LiveStroke {
     alpha: Vec<f32>,
     /// Samples stamped so far, and the last one (buffer pixels).
     placed: usize,
+    /// Total dabs emitted across every stamp, including the first sample.
+    emitted: usize,
     last: Option<Point>,
+    /// The pen pressure of the last stamped sample.
+    last_pressure: f32,
     /// Buffer pixels painted since the last upload: (x0, y0, x1, y1), exclusive ends.
     dirty: Option<(usize, usize, usize, usize)>,
     texture: Option<TextureHandle>,
@@ -52,7 +56,7 @@ impl LiveStroke {
         let scale = buffer_scale(params.clip, params.scale);
         let params = LiveParams { scale, ..params };
         let (w, h) = buffer_size(params.clip, scale);
-        LiveStroke { params, w, h, alpha: vec![0.0; w * h], placed: 0, last: None, dirty: None, texture: None }
+        LiveStroke { params, w, h, alpha: vec![0.0; w * h], placed: 0, emitted: 0, last: None, last_pressure: 1.0, dirty: None, texture: None }
     }
 
     /// Stroke coverage (0..1) at buffer pixel `(x, y)`; 0 outside.
@@ -69,8 +73,9 @@ impl LiveStroke {
     }
 
     /// Stamp the dabs of `points` (screen positions of the stroke's samples so far) not yet
-    /// painted. Returns `true` when anything new was painted.
-    pub fn stamp(&mut self, points: &[Pos2]) -> bool {
+    /// painted, at the pen pressures `pressure` (one per point; empty: full pressure), as the
+    /// pipeline scales them. Returns `true` when anything new was painted.
+    pub fn stamp(&mut self, points: &[Pos2], pressure: &[f32]) -> bool {
         let Some(new) = points.get(self.placed..) else { return false };
         if new.is_empty() {
             return false;
@@ -78,17 +83,28 @@ impl LiveStroke {
         let LiveParams { clip, scale, r, hard, flow, density, .. } = self.params;
         let (r, hard) = ((r * scale) as f64, (hard * scale) as f64);
         let mut dabs = Vec::new();
-        for q in new {
+        let mut pressures = Vec::new();
+        let first = self.placed;
+        for (k, q) in new.iter().enumerate() {
             let q = Point::new(((q.x - clip.left()) * scale) as f64, ((q.y - clip.top()) * scale) as f64);
-            if push_dabs(&mut dabs, self.last, q, r) {
+            let before = dabs.len();
+            if push_dabs_counted(&mut dabs, &mut self.emitted, self.last, q, r) {
+                let pq = pressure.get(first + k).or(pressure.last()).copied().unwrap_or(1.0);
+                let from = if self.last.is_some() { self.last_pressure } else { pq };
+                push_pressures(&mut pressures, dabs.len() - before, from, pq);
                 self.last = Some(q);
+                self.last_pressure = pq;
             }
         }
         self.placed = points.len();
-        for d in dabs {
+        let base = (r, hard);
+        for (d, p) in dabs.into_iter().zip(pressures) {
             if !(d.x.is_finite() && d.y.is_finite()) {
                 continue;
             }
+            let r = pressure_radius(base.0, p);
+            let hard = if base.0 > 0.0 { base.1 * r / base.0 } else { base.1 };
+            let flow = pressure_flow(flow, p);
             let x0 = (d.x - r).floor().clamp(0.0, self.w as f64) as usize;
             let x1 = (d.x + r).ceil().clamp(0.0, self.w as f64) as usize;
             let y0 = (d.y - r).floor().clamp(0.0, self.h as f64) as usize;
@@ -168,7 +184,7 @@ fn buffer_size(clip: Rect, scale: f32) -> (usize, usize) {
 
 /// Paint the live stroke whose samples so far are `points` (screen positions) into `painter`,
 /// keeping its buffer in `slot` (a new stroke, or new parameters, start it afresh).
-pub fn paint(slot: &mut Option<LiveStroke>, ctx: &egui::Context, painter: &egui::Painter, params: LiveParams, points: &[Pos2]) {
+pub fn paint(slot: &mut Option<LiveStroke>, ctx: &egui::Context, painter: &egui::Painter, params: LiveParams, points: &[Pos2], pressure: &[f32]) {
     let fresh = match slot {
         Some(s) => {
             // the same stroke when painted with the same parameters (at the scale it settled on)
@@ -181,7 +197,7 @@ pub fn paint(slot: &mut Option<LiveStroke>, ctx: &egui::Context, painter: &egui:
         *slot = Some(LiveStroke::new(params));
     }
     let Some(s) = slot else { return };
-    s.stamp(points);
+    s.stamp(points, pressure);
     let clip = s.params.clip;
     // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
     let (w, h, scale) = (s.w as f32, s.h as f32, s.params.scale);
@@ -214,8 +230,8 @@ mod tests {
     #[test]
     fn a_fast_segment_is_painted_continuously() {
         let mut s = LiveStroke::new(params());
-        s.stamp(&[pos2(20.0, 100.0)]);
-        s.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)]);
+        s.stamp(&[pos2(20.0, 100.0)], &[]);
+        s.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
         for x in 20..380 {
             assert!(s.coverage(x, 100) > 0.99, "a gap at x = {x}: {}", s.coverage(x, 100));
         }
@@ -231,21 +247,71 @@ mod tests {
     fn incremental_stamping_matches_painting_the_whole_path() {
         let pts = [pos2(30.0, 40.0), pos2(200.0, 150.0), pos2(210.0, 152.0), pos2(390.0, 20.0)];
         let mut once = LiveStroke::new(LiveParams { flow: 0.4, ..params() });
-        once.stamp(&pts);
+        once.stamp(&pts, &[]);
         let mut steps = LiveStroke::new(LiveParams { flow: 0.4, ..params() });
         for n in 1..=pts.len() {
-            steps.stamp(&pts[..n]);
+            steps.stamp(&pts[..n], &[]);
         }
         assert_eq!(once.alpha, steps.alpha);
+    }
+
+    /// Crossing the budget in separate frames must match one stamp, including pressure state.
+    #[test]
+    fn incremental_stamping_respects_the_whole_stroke_budget() {
+        use lightcraft_pipeline::masks::MAX_STROKE_DABS;
+
+        let pts = [pos2(20.0, 20.0), pos2(80.0, 20.0), pos2(200.0, 80.0), pos2(21.0, 20.0)];
+        let pressure = [0.2, 0.4, 1.0, 0.9];
+        let mut once = LiveStroke::new(LiveParams { flow: 0.4, ..params() });
+        once.emitted = MAX_STROKE_DABS - 3;
+        once.stamp(&pts, &pressure);
+        let mut steps = LiveStroke::new(once.params);
+        steps.emitted = MAX_STROKE_DABS - 3;
+        for n in 1..=pts.len() {
+            steps.stamp(&pts[..n], &pressure[..n]);
+        }
+        assert_eq!(once.alpha, steps.alpha);
+        assert_eq!(once.emitted, MAX_STROKE_DABS);
+        assert_eq!(steps.emitted, once.emitted);
+        assert_eq!(once.last, Some(Point::new(80.0, 20.0)));
+        assert_eq!(steps.last, once.last);
+        assert_eq!(once.last_pressure, pressure[1]);
+        assert_eq!(steps.last_pressure, once.last_pressure);
+        assert!(once.coverage(80, 20) > 0.0);
+        assert_eq!(once.coverage(200, 80), 0.0);
+        let alpha = steps.alpha.clone();
+        let more = [pts[0], pts[1], pts[2], pts[3], pos2(300.0, 100.0)];
+        steps.stamp(&more, &[1.0; 5]);
+        assert_eq!(steps.alpha, alpha, "later frames cannot paint or reconnect discarded samples");
+        assert_eq!(steps.last, once.last);
+        assert_eq!(steps.last_pressure, once.last_pressure);
+        assert_eq!(steps.emitted, MAX_STROKE_DABS);
     }
 
     #[test]
     fn hostile_input_paints_nothing_and_does_not_panic() {
         let mut s = LiveStroke::new(params());
-        s.stamp(&[pos2(f32::NAN, 3.0), pos2(f32::INFINITY, -1e30), pos2(-5000.0, 9000.0)]);
+        s.stamp(&[pos2(f32::NAN, 3.0), pos2(f32::INFINITY, -1e30), pos2(-5000.0, 9000.0)], &[]);
         assert!(s.alpha.iter().all(|a| *a == 0.0));
         // an enormous canvas is painted at a capped resolution
         let big = LiveStroke::new(LiveParams { clip: Rect::from_min_size(Pos2::ZERO, vec2(1e6, 10.0)), scale: 2.0, ..params() });
         assert!(big.w <= MAX_SIDE && big.h >= 1);
+    }
+
+    /// The live stroke scales its dabs by pen pressure as the committed one does: a light touch paints a thinner,
+    /// fainter line, and a pressure list shorter than the points (or hostile values) is handled.
+    #[test]
+    fn pen_pressure_thins_and_fades_the_live_stroke() {
+        let pts = [pos2(20.0, 100.0), pos2(380.0, 100.0)];
+        let mut full = LiveStroke::new(params());
+        full.stamp(&pts, &[]);
+        let mut light = LiveStroke::new(params());
+        light.stamp(&pts, &[0.2, 0.2]);
+        let rows = |s: &LiveStroke| (0..s.h).filter(|y| s.coverage(200, *y) > 0.01).count();
+        assert!(rows(&light) < rows(&full), "{} vs {}", rows(&light), rows(&full));
+        assert!(light.coverage(200, 100) < full.coverage(200, 100));
+        let mut odd = LiveStroke::new(params());
+        odd.stamp(&pts, &[f32::NAN]);
+        assert!(odd.alpha.iter().all(|v| v.is_finite()));
     }
 }

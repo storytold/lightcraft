@@ -77,7 +77,7 @@ fn rejection_key(s: &Session, raw: PhotoId) -> Option<(String, String)> {
 }
 
 fn join(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = p.get("ids").map(|_| s.targets(p));
+    let ids = p.get("ids").map(|_| s.targets(p)).transpose()?;
     let chosen = chosen(s, ids.as_deref());
     let mut ops = Vec::new();
     for (raw, jpeg, dir, stem) in &chosen {
@@ -89,13 +89,17 @@ fn join(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let n = chosen.len();
     if !ops.is_empty() {
+        s.end_interaction()?;
         s.commit("Join RAW+JPEG", Op::Batch { ops })?;
+        if s.paired_culling {
+            show_paired_jpegs(s);
+        }
     }
     Ok(json!({"joined": n}))
 }
 
 fn split(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = s.targets(p);
+    let ids = s.targets(p)?;
     let mut ops = Vec::new();
     let mut seen: Vec<PairId> = Vec::new();
     for id in ids {
@@ -125,7 +129,7 @@ fn sync_meta(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut ops = Vec::new();
     let mut seen: Vec<PairId> = Vec::new();
-    for id in s.targets(p) {
+    for id in s.targets(p)? {
         let Some(pair) = s.catalog.pair_of(id).cloned() else { continue };
         if !seen.contains(&pair.id) {
             seen.push(pair.id);
@@ -156,6 +160,9 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
     let mut changed = false;
     if let Some(v) = p.get("pairedCulling").and_then(Value::as_bool) {
         if v && !s.paired_culling {
+            s.end_interaction()?;
+            s.paired_culling = true;
+            s.pair_show_raw.clear();
             show_paired_jpegs(s);
         }
         s.paired_culling = v;
@@ -179,23 +186,29 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// Paired culling shows the JPEG. A previous choice to show the raw is cleared, and a selected raw becomes its JPEG.
+/// Move a hidden selected raw to its visible JPEG, preserving focused raws and stacks.
 fn show_paired_jpegs(s: &mut Session) {
-    s.pair_show_raw.clear();
     s.pair_focus_gen = s.pair_focus_gen.saturating_add(1);
+    let visible: std::collections::HashSet<_> = s.visible_cloned().into_iter().collect();
+    let shown = |id| {
+        s.catalog
+            .pair_of(id)
+            .filter(|pair| pair.raw == id && !visible.contains(&id) && visible.contains(&pair.jpeg))
+            .map(|pair| pair.jpeg)
+            .unwrap_or(id)
+    };
     let mut ids = Vec::new();
     for id in s.selection.ids.clone() {
-        let shown = s.catalog.pair_of(id).filter(|pair| pair.raw == id).map(|pair| pair.jpeg).unwrap_or(id);
-        if !ids.contains(&shown) {
-            ids.push(shown);
+        let id = shown(id);
+        if !ids.contains(&id) {
+            ids.push(id);
         }
     }
-    if ids.is_empty() {
-        return;
-    }
-    let active = s.selection.active.map(|id| s.catalog.pair_of(id).filter(|pair| pair.raw == id).map(|pair| pair.jpeg).unwrap_or(id));
+    let active = s.selection.active.map(shown);
     s.selection.ids = ids;
     s.selection.active = active.or_else(|| s.selection.ids.last().copied());
+    s.active_mask = None;
+    s.active_spot = None;
 }
 
 fn focus(s: &mut Session, p: &Value) -> Result<Value> {
@@ -204,20 +217,32 @@ fn focus(s: &mut Session, p: &Value) -> Result<Value> {
         Some("jpeg") => true,
         _ => return Err(bad("photo.pairFocus", "which must be raw or jpeg")),
     };
-    let mut changed = 0;
-    for id in s.targets(p) {
-        let Some(pair) = s.catalog.pair_of(id).cloned() else { continue };
+    let pairs: Vec<_> = s.targets(p)?.into_iter().filter_map(|id| s.catalog.pair_of(id).cloned()).collect();
+    let previous = s.pair_show_raw.clone();
+    for pair in &pairs {
         if which_jpeg {
             s.pair_show_raw.remove(&pair.id);
         } else {
             s.pair_show_raw.insert(pair.id);
         }
-        let active = if which_jpeg { pair.jpeg } else { pair.raw };
-        s.selection = crate::Selection::single(active);
-        changed += 1;
     }
-    if changed > 0 {
+    let changed = pairs.len();
+    if let Some(pair) = pairs.last() {
         s.pair_focus_gen = s.pair_focus_gen.saturating_add(1);
+        let visible = s.visible_cloned();
+        if pairs.iter().any(|pair| !visible.contains(&if which_jpeg { pair.jpeg } else { pair.raw })) {
+            s.pair_show_raw = previous;
+            s.pair_focus_gen = s.pair_focus_gen.saturating_add(1);
+            return Err(bad("photo.pairFocus", "the chosen file is excluded by the current view; clear the filter or show both files first"));
+        }
+        if let Err(error) = s.end_interaction() {
+            s.pair_show_raw = previous;
+            s.pair_focus_gen = s.pair_focus_gen.saturating_add(1);
+            return Err(error);
+        }
+        s.selection = crate::Selection::single(if which_jpeg { pair.jpeg } else { pair.raw });
+        s.active_mask = None;
+        s.active_spot = None;
     }
     Ok(json!({"focused": if which_jpeg { "jpeg" } else { "raw" }, "changed": changed }))
 }

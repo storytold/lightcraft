@@ -227,7 +227,7 @@ pub enum TiffCompression {
 /// Encode TIFF: 8/16-bit integer or 32-bit float, gray/RGB with optional (unassociated) alpha.
 /// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lightcraft-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
-    use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
+    use tiff::encoder::{Compression, DeflateLevel, TiffEncoder};
     use tiff::tags::Predictor;
     img.validate()?;
     let e = |e: tiff::TiffError| Error::Encode(e.to_string());
@@ -235,7 +235,7 @@ pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &Encod
     let comp = match compression {
         TiffCompression::None => Compression::Uncompressed,
         TiffCompression::Lzw => Compression::Lzw,
-        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Fast),
+        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Balanced),
         TiffCompression::PackBits => Compression::Packbits,
     };
     let float = matches!(img.samples, Samples::F32(_));
@@ -243,52 +243,90 @@ pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &Encod
         if !float && matches!(compression, TiffCompression::Lzw | TiffCompression::Deflate) { Predictor::Horizontal } else { Predictor::None };
     let mut enc = TiffEncoder::new(&mut cur).map_err(e)?.with_compression(comp).with_predictor(predictor);
     let (w, h) = (img.width, img.height);
-    let n = w as usize * h as usize;
-    // Gray + alpha is stored as RGBA (the encoder has no GrayA colour type).
-    let ch = img.channels as usize;
-
-    macro_rules! write {
-        ($ct:ty, $data:expr, $alpha:expr) => {{
-            let mut im = enc.new_image::<$ct>(w, h).map_err(e)?;
-            if let Some(ppi) = meta.ppi.filter(|p| *p > 0) {
-                im.resolution(tiff::tags::ResolutionUnit::Inch, tiff::encoder::Rational { n: ppi as u32, d: 1 });
-            }
-            if let Some(icc) = meta.icc {
-                im.encoder().write_tag(tiff::tags::Tag::IccProfile, icc).map_err(e)?;
-            }
-            if let Some(xmp) = meta.xmp {
-                im.encoder().write_tag(tiff::tags::Tag::from_u16_exhaustive(700), xmp.as_bytes()).map_err(e)?;
-            }
-            if $alpha {
-                im.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[2u16][..]).map_err(e)?;
-            }
-            im.write_data($data).map_err(e)?;
-        }};
-    }
-    fn expand_ga<T: Copy>(s: &[T], n: usize) -> Vec<T> {
-        s.as_chunks::<2>().0.iter().take(n).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect()
-    }
+    let pixels = w as usize * h as usize;
     match img.samples {
-        Samples::U8(s) => match ch {
-            1 => write!(colortype::Gray8, &s[..n], false),
-            2 => write!(colortype::RGBA8, &expand_ga(s, n), true),
-            3 => write!(colortype::RGB8, &s[..n * 3], false),
-            _ => write!(colortype::RGBA8, &s[..n * 4], true),
-        },
-        Samples::U16(s) => match ch {
-            1 => write!(colortype::Gray16, &s[..n], false),
-            2 => write!(colortype::RGBA16, &expand_ga(s, n), true),
-            3 => write!(colortype::RGB16, &s[..n * 3], false),
-            _ => write!(colortype::RGBA16, &s[..n * 4], true),
-        },
-        Samples::F32(s) => match ch {
-            1 => write!(colortype::Gray32Float, &s[..n], false),
-            2 => write!(colortype::RGBA32Float, &expand_ga(s, n), true),
-            3 => write!(colortype::RGB32Float, &s[..n * 3], false),
-            _ => write!(colortype::RGBA32Float, &s[..n * 4], true),
-        },
+        Samples::U8(samples) => write_tiff_u8(&mut enc, samples, pixels, img.channels as usize, img, meta)?,
+        Samples::U16(samples) => write_tiff_u16(&mut enc, samples, pixels, img.channels as usize, img, meta)?,
+        Samples::F32(samples) => write_tiff_f32(&mut enc, samples, pixels, img.channels as usize, img, meta)?,
     }
     Ok(cur.into_inner())
+}
+
+macro_rules! write_tiff_image {
+    ($encoder:expr, $image:expr, $meta:expr, $color:ty, $data:expr, $alpha:expr) => {{
+        let mut image = $encoder.new_image::<$color>($image.width, $image.height).map_err(|e| Error::Encode(e.to_string()))?;
+        if let Some(ppi) = $meta.ppi.filter(|ppi| *ppi > 0) {
+            image.resolution(tiff::tags::ResolutionUnit::Inch, tiff::encoder::Rational { n: ppi as u32, d: 1 });
+        }
+        if let Some(icc) = $meta.icc {
+            image.encoder().write_tag(tiff::tags::Tag::IccProfile, icc).map_err(|e| Error::Encode(e.to_string()))?;
+        }
+        if let Some(xmp) = $meta.xmp {
+            image.encoder().write_tag(tiff::tags::Tag::from_u16_exhaustive(700), xmp.as_bytes()).map_err(|e| Error::Encode(e.to_string()))?;
+        }
+        if $alpha {
+            image.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[2u16][..]).map_err(|e| Error::Encode(e.to_string()))?;
+        }
+        image.write_data($data).map_err(|e| Error::Encode(e.to_string()))?;
+    }};
+}
+
+fn expanded_gray_alpha<T: Copy>(samples: &[T], pixels: usize) -> Vec<T> {
+    samples.as_chunks::<2>().0.iter().take(pixels).flat_map(|channel| [channel[0], channel[0], channel[0], channel[1]]).collect()
+}
+
+fn write_tiff_u8<W: std::io::Write + std::io::Seek>(
+    encoder: &mut tiff::encoder::TiffEncoder<W>,
+    samples: &[u8],
+    pixels: usize,
+    channels: usize,
+    image: &EncodeImage,
+    meta: &EncodeMeta,
+) -> Result<()> {
+    use tiff::encoder::colortype;
+    match channels {
+        1 => write_tiff_image!(encoder, image, meta, colortype::Gray8, &samples[..pixels], false),
+        2 => write_tiff_image!(encoder, image, meta, colortype::RGBA8, &expanded_gray_alpha(samples, pixels), true),
+        3 => write_tiff_image!(encoder, image, meta, colortype::RGB8, &samples[..pixels * 3], false),
+        _ => write_tiff_image!(encoder, image, meta, colortype::RGBA8, &samples[..pixels * 4], true),
+    }
+    Ok(())
+}
+
+fn write_tiff_u16<W: std::io::Write + std::io::Seek>(
+    encoder: &mut tiff::encoder::TiffEncoder<W>,
+    samples: &[u16],
+    pixels: usize,
+    channels: usize,
+    image: &EncodeImage,
+    meta: &EncodeMeta,
+) -> Result<()> {
+    use tiff::encoder::colortype;
+    match channels {
+        1 => write_tiff_image!(encoder, image, meta, colortype::Gray16, &samples[..pixels], false),
+        2 => write_tiff_image!(encoder, image, meta, colortype::RGBA16, &expanded_gray_alpha(samples, pixels), true),
+        3 => write_tiff_image!(encoder, image, meta, colortype::RGB16, &samples[..pixels * 3], false),
+        _ => write_tiff_image!(encoder, image, meta, colortype::RGBA16, &samples[..pixels * 4], true),
+    }
+    Ok(())
+}
+
+fn write_tiff_f32<W: std::io::Write + std::io::Seek>(
+    encoder: &mut tiff::encoder::TiffEncoder<W>,
+    samples: &[f32],
+    pixels: usize,
+    channels: usize,
+    image: &EncodeImage,
+    meta: &EncodeMeta,
+) -> Result<()> {
+    use tiff::encoder::colortype;
+    match channels {
+        1 => write_tiff_image!(encoder, image, meta, colortype::Gray32Float, &samples[..pixels], false),
+        2 => write_tiff_image!(encoder, image, meta, colortype::RGBA32Float, &expanded_gray_alpha(samples, pixels), true),
+        3 => write_tiff_image!(encoder, image, meta, colortype::RGB32Float, &samples[..pixels * 3], false),
+        _ => write_tiff_image!(encoder, image, meta, colortype::RGBA32Float, &samples[..pixels * 4], true),
+    }
+    Ok(())
 }
 
 /// Encode a flat PSD (8/16-bit gray or RGB, no layers; alpha dropped): the hand-off an image
@@ -394,11 +432,41 @@ pub fn pq_decode(e: f32) -> f32 {
     ((p - C1).max(0.0) / (C2 - C3 * p)).powf(1.0 / M1) * 10_000.0
 }
 
+/// Transfer curve of an HDR file: SMPTE ST 2084 (PQ, absolute) or ITU-R BT.2100 HLG (relative).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HdrTransfer {
+    #[default]
+    Pq,
+    Hlg,
+}
+
+/// Nominal peak of the HLG reference display, cd/m² (ITU-R BT.2100 / BT.2408).
+pub const HLG_REFERENCE_PEAK_NITS: f32 = 1000.0;
+
+/// Display-referred linear RGB (SDR white = 1.0, Rec. 2020) → HLG signal 0..1, per BT.2100:
+/// display light normalised to the 1000 cd/m² reference display, the inverse OOTF (system gamma
+/// 1.2, applied on luminance so hue is kept), then the HLG OETF. SDR white lands at signal 0.75,
+/// as BT.2408 asks. Non-finite or negative inputs count as 0.
+pub fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
+    const K: [f32; 3] = [0.2627, 0.6780, 0.0593];
+    const GAMMA: f32 = 1.2;
+    let fd = rgb.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * (HDR_REFERENCE_WHITE_NITS / HLG_REFERENCE_PEAK_NITS));
+    let yd = (K[0] * fd[0] + K[1] * fd[1] + K[2] * fd[2]).min(1.0);
+    let scale = if yd > 0.0 { yd.powf((1.0 - GAMMA) / GAMMA) } else { 0.0 };
+    fd.map(|v| lightcraft_color::transfer::hlg_encode(f64::from((v * scale).clamp(0.0, 1.0))).clamp(0.0, 1.0) as f32)
+}
+
+/// Encode an HDR AVIF with the PQ curve (see [`encode_avif_hdr`]).
+pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: u8, meta: &EncodeMeta) -> Result<Vec<u8>> {
+    encode_avif_hdr(width, height, rgb, quality, speed, meta, HdrTransfer::Pq)
+}
+
 /// Encode an HDR AVIF: `rgb` is linear light in **Rec. 2020** primaries with SDR white at 1.0
 /// (`width × height × 3`). Written as 10-bit 4:4:4 BT.2020 non-constant-luminance YCbCr with the
-/// PQ transfer curve, SDR white at [`HDR_REFERENCE_WHITE_NITS`], and a content light level box.
+/// `transfer` curve: PQ with SDR white at [`HDR_REFERENCE_WHITE_NITS`] and a content light level
+/// box, or HLG ([`hlg_signal`], no light level box: HLG is relative to the display).
 /// `quality` 1..=100, `speed` 1..=10. Native targets with the `avif` feature only.
-pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: u8, meta: &EncodeMeta) -> Result<Vec<u8>> {
+pub fn encode_avif_hdr(width: u32, height: u32, rgb: &[f32], quality: u8, speed: u8, meta: &EncodeMeta, transfer: HdrTransfer) -> Result<Vec<u8>> {
     let (w, h) = (width as usize, height as usize);
     let n = w.checked_mul(h).ok_or_else(|| Error::Encode("image too large".into()))?;
     if n == 0 || n.checked_mul(3).is_none_or(|need| rgb.len() < need) {
@@ -420,7 +488,10 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
                 let y_nits = K[0] * nits[0] + K[1] * nits[1] + K[2] * nits[2];
                 max_nits = max_nits.max(nits[0].max(nits[1]).max(nits[2]));
                 sum_nits += y_nits as f64;
-                let [r, g, b] = nits.map(pq_encode);
+                let [r, g, b] = match transfer {
+                    HdrTransfer::Pq => nits.map(pq_encode),
+                    HdrTransfer::Hlg => hlg_signal([c[0], c[1], c[2]]),
+                };
                 let y = K[0] * r + K[1] * g + K[2] * b;
                 let cb = (b - y) / (2.0 * (1.0 - K[2])) + 0.5;
                 let cr = (r - y) / (2.0 * (1.0 - K[0])) + 0.5;
@@ -446,11 +517,15 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
         ec.pixel_range = PixelRange::Full;
         ec.color_description = Some(ColorDescription {
             color_primaries: ColorPrimaries::BT2020,
-            transfer_characteristics: TransferCharacteristics::SMPTE2084,
+            transfer_characteristics: match transfer {
+                HdrTransfer::Pq => TransferCharacteristics::SMPTE2084,
+                HdrTransfer::Hlg => TransferCharacteristics::HLG,
+            },
             matrix_coefficients: MatrixCoefficients::BT2020NCL,
         });
         let cll = (max_nits.ceil().clamp(1.0, 10_000.0) as u16, ((sum_nits / n as f64).ceil().clamp(1.0, 10_000.0)) as u16);
-        ec.content_light = Some(ContentLight { max_content_light_level: cll.0, max_frame_average_light_level: cll.1 });
+        ec.content_light =
+            (transfer == HdrTransfer::Pq).then_some(ContentLight { max_content_light_level: cll.0, max_frame_average_light_level: cll.1 });
         ec.still_picture = true;
         ec.quantizer = quantizer;
         ec.min_quantizer = quantizer.min(255) as u8;
@@ -488,10 +563,15 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
         use avif_serialize::constants as c;
         let mut a = avif_serialize::Aviffy::new();
         a.set_matrix_coefficients(c::MatrixCoefficients::Bt2020Ncl)
-            .set_transfer_characteristics(c::TransferCharacteristics::Smpte2084)
+            .set_transfer_characteristics(match transfer {
+                HdrTransfer::Pq => c::TransferCharacteristics::Smpte2084,
+                HdrTransfer::Hlg => c::TransferCharacteristics::Hlg,
+            })
             .set_color_primaries(c::ColorPrimaries::Bt2020)
-            .set_full_color_range(true)
-            .set_content_light_level(cll.0, cll.1);
+            .set_full_color_range(true);
+        if transfer == HdrTransfer::Pq {
+            a.set_content_light_level(cll.0, cll.1);
+        }
         if let Some(exif) = meta.exif {
             a.set_exif(exif.to_vec());
         }
@@ -499,7 +579,7 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
-        let _ = (quality, speed, meta);
+        let _ = (quality, speed, meta, transfer);
         Err(Error::Encode("AVIF encoding is not available in this build".into()))
     }
 }
@@ -585,4 +665,38 @@ fn avif_10bit(enc: &ravif::Encoder, img: &EncodeImage, s: &[u16]) -> Result<Vec<
         .encode_raw_planes_10_bit(img.width as usize, img.height as usize, planes, alpha, ravif::PixelRange::Full, ravif::MatrixCoefficients::BT601)
         .map_err(|e| Error::Encode(e.to_string()))?;
     Ok(r.avif_file)
+}
+
+#[cfg(test)]
+mod hlg_tests {
+    use super::*;
+
+    #[test]
+    fn hlg_reference_white_and_peak() {
+        // BT.2408: SDR (HDR reference) white sits at 75 % HLG signal
+        for v in hlg_signal([1.0; 3]) {
+            assert!((v - 0.75).abs() < 0.005, "{v}");
+        }
+        // the 1000 cd/m² peak (≈ 4.9× SDR white) reaches full signal; above it clips
+        let peak = HLG_REFERENCE_PEAK_NITS / HDR_REFERENCE_WHITE_NITS;
+        assert!(hlg_signal([peak; 3]).iter().all(|v| (v - 1.0).abs() < 1e-3));
+        assert_eq!(hlg_signal([100.0; 3]), [1.0; 3]);
+        // black, negatives and non-finite values are 0, never NaN
+        assert_eq!(hlg_signal([0.0, -1.0, f32::NAN]), [0.0; 3]);
+        assert!(hlg_signal([f32::INFINITY, 0.0, 0.0]).iter().all(|v| v.is_finite()));
+        // monotonic in brightness
+        let mut prev = 0.0;
+        for i in 1..50 {
+            let v = hlg_signal([i as f32 * 0.1; 3])[1];
+            assert!(v >= prev);
+            prev = v;
+        }
+    }
+
+    #[test]
+    fn hdr_avif_rejects_short_buffers() {
+        let m = EncodeMeta::default();
+        assert!(encode_avif_hdr(4, 4, &[0.5; 10], 80, 10, &m, HdrTransfer::Hlg).is_err());
+        assert!(encode_avif_hdr(0, 4, &[], 80, 10, &m, HdrTransfer::Hlg).is_err());
+    }
 }

@@ -134,6 +134,7 @@ pub struct DevelopSettings {
     pub orientation: Orientation,
     pub masks: Vec<Mask>,
     pub spots: Vec<Spot>,
+    /// Red eye corrections; the first [`MAX_RED_EYES`] render.
     pub red_eye: Vec<RedEye>,
     pub lens_blur: LensBlur,
     pub enhance: Enhance,
@@ -900,12 +901,54 @@ pub struct BrushStroke {
     pub density: f64,
     pub erase: bool,
     pub auto_mask: bool,
+    /// Pen pressure (0..1) at each of `points`, recorded when the brush's pressure switch is on: it scales each dab's
+    /// radius and flow. Empty (the default, a mouse or the switch off) is full pressure everywhere; a point past the
+    /// end of a shorter list takes the last value.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pressure: Vec<f32>,
+}
+
+impl BrushStroke {
+    /// The pressure at point `i` (0..1; 1 without pressure data, a hostile value clamped, NaN as 1).
+    pub fn pressure_at(&self, i: usize) -> f32 {
+        let p = self.pressure.get(i).or(self.pressure.last()).copied().unwrap_or(1.0);
+        if p.is_nan() { 1.0 } else { p.clamp(0.0, 1.0) }
+    }
 }
 
 impl Default for BrushStroke {
     fn default() -> Self {
-        Self { points: Vec::new(), size: 0.03, feather: 50.0, flow: 100.0, density: 100.0, erase: false, auto_mask: false }
+        Self { points: Vec::new(), size: 0.03, feather: 50.0, flow: 100.0, density: 100.0, erase: false, auto_mask: false, pressure: Vec::new() }
     }
+}
+
+/// Most samples a colour-range mask keeps. It compares every pixel against every sample, so render and export cost
+/// is pixels x samples; the interactive sampler stops at 5, and a sidecar, preset or `mask.add` with thousands could
+/// stall a render or lose the GPU device (issue #2556).
+pub const MAX_COLOR_RANGE_SAMPLES: usize = 64;
+
+/// Deserialize a colour range's samples, keeping the first [`MAX_COLOR_RANGE_SAMPLES`] (the rest are skipped without
+/// being stored), however the settings arrive: sidecar, catalog, history, preset or merge.
+fn de_color_range_samples<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<[f64; 3]>, D::Error> {
+    struct Capped;
+    impl<'de> serde::de::Visitor<'de> for Capped {
+        type Value = Vec<[f64; 3]>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of OkLab colours")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<[f64; 3]>, A::Error> {
+            let mut out = Vec::new();
+            while out.len() < MAX_COLOR_RANGE_SAMPLES {
+                match seq.next_element::<[f64; 3]>()? {
+                    Some(s) => out.push(s),
+                    None => return Ok(out),
+                }
+            }
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(out)
+        }
+    }
+    d.deserialize_seq(Capped)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -928,8 +971,9 @@ pub enum MaskShape {
         feather: f64,
         invert: bool,
     },
-    /// Colour range: sampled OkLab colours with a refine amount 0..100.
+    /// Colour range: sampled OkLab colours (at most [`MAX_COLOR_RANGE_SAMPLES`]) with a refine amount 0..100.
     ColorRange {
+        #[serde(deserialize_with = "de_color_range_samples")]
         samples: Vec<[f64; 3]>,
         refine: f64,
     },
@@ -1055,6 +1099,10 @@ impl Default for Spot {
         Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None }
     }
 }
+
+/// Most red eye / pet eye corrections a photo renders. Every output pixel goes through every eye, so render cost is
+/// pixels x eyes; a sidecar, preset or agent with thousands could stall a render for hours (issue #2556).
+pub const MAX_RED_EYES: usize = 64;
 
 /// A red eye / pet eye correction: the user's ellipse (centre normalized, radii as fractions of
 /// the long edge); the pupil inside it is found automatically.

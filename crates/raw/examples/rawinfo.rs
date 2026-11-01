@@ -1,9 +1,11 @@
 //! `cargo run --release -p lightcraft-raw --example rawinfo -- [--tree] FILE...`
 //!
 //! Prints the TIFF structure (with `--tree`), decode result, timings (MP/s) and basic statistics.
+//! Exits unsuccessfully if any input cannot be read, decoded or developed, while inspecting the remaining files.
 
 use lightcraft_raw::{Method, RawData, decode, embedded_preview, probe};
 use lightcraft_tiff::{Ifd, Tiff, Value};
+use std::process::ExitCode;
 use std::time::Instant;
 
 fn short(v: &Value) -> String {
@@ -34,11 +36,23 @@ fn dump(ifd: &Ifd, depth: usize, label: &str) {
     }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn inspect_files(args: &[String]) -> usize {
     let tree = args.iter().any(|a| a == "--tree");
-    for path in args.iter().filter(|a| !a.starts_with("--")) {
-        let bytes = std::fs::read(path).expect("read");
+    let paths: Vec<_> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    if paths.is_empty() {
+        eprintln!("usage: rawinfo [--tree] FILE...");
+        return 1;
+    }
+    let mut failures = 0;
+    for path in paths {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("{path}: read error: {e}");
+                failures += 1;
+                continue;
+            }
+        };
         println!("== {path} ({:.1} MB) format {:?}", bytes.len() as f64 / 1e6, probe(&bytes));
         if tree && let Ok(t) = Tiff::parse(&bytes) {
             for (i, ifd) in t.ifds.iter().enumerate() {
@@ -119,15 +133,106 @@ fn main() {
                                 s[2] / n
                             );
                         }
-                        Err(e) => println!("  develop {m:?}: {e}"),
+                        Err(e) => {
+                            println!("  develop {m:?}: {e}");
+                            failures += 1;
+                        }
                     }
                 }
             }
-            Err(e) => println!("  decode error: {e}"),
+            Err(e) => {
+                println!("  decode error: {e}");
+                failures += 1;
+            }
         }
         match embedded_preview(&bytes) {
             Some(p) => println!("  preview: {} bytes", p.len()),
             None => println!("  preview: none"),
         }
+    }
+    failures
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if inspect_files(&args) == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inspect_files;
+    use lightcraft_raw::{BlackLevel, Cfa, ColorData, DngWriteOptions, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect, write_dng};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!("lightcraft-rawinfo-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn path(&self, name: &str) -> String {
+            self.0.join(name).to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn unreadable_input_is_a_failure_without_panicking() {
+        let dir = TempDir::new();
+        assert_eq!(inspect_files(&[dir.path("absent.arw")]), 1);
+    }
+
+    #[test]
+    fn invalid_inputs_are_counted_without_stopping_the_batch() {
+        let dir = TempDir::new();
+        let path = dir.path("invalid.arw");
+        std::fs::write(&path, b"not a raw file").expect("write invalid fixture");
+        assert_eq!(inspect_files(&[path.clone(), path]), 2);
+    }
+
+    #[test]
+    fn input_paths_are_required() {
+        assert_eq!(inspect_files(&[]), 1);
+        assert_eq!(inspect_files(&["--tree".into()]), 1);
+    }
+
+    #[test]
+    fn valid_generated_dng_succeeds_after_an_unreadable_input() {
+        let dir = TempDir::new();
+        let raw = RawImage {
+            format: RawFormat::Dng,
+            width: 16,
+            height: 16,
+            cpp: 1,
+            data: RawData::U16(vec![2048; 16 * 16]),
+            cfa: Some(Cfa::bayer("RGGB").expect("valid CFA")),
+            bits: 14,
+            black: BlackLevel::uniform(0.0),
+            white: vec![16383.0],
+            active_area: Rect::new(0, 0, 16, 16),
+            crop: Rect::new(0, 0, 16, 16),
+            orientation: Orientation::Normal,
+            color: ColorData::default(),
+            wb_multipliers: Some([1.0; 3]),
+            linearized: false,
+            opcodes: OpcodeLists::default(),
+            metadata: Default::default(),
+            lens_metadata: Default::default(),
+            pixel_aspect: 1.0,
+        };
+        let path = dir.path("valid.dng");
+        std::fs::write(&path, write_dng(&raw, &DngWriteOptions::default()).expect("encode generated fixture")).expect("write fixture");
+        assert_eq!(inspect_files(std::slice::from_ref(&path)), 0);
+        assert_eq!(inspect_files(&[dir.path("absent.arw"), path]), 1);
     }
 }

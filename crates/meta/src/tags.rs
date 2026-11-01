@@ -1,14 +1,15 @@
 //! Every EXIF / TIFF / GPS tag of a file as readable `(group, name, value)` rows (the Info
 //! panel's "All Metadata"). Names follow the public TIFF 6.0 / EXIF 2.3 / DNG specifications;
 //! common enumerations are spelled out, everything else is shown as stored. Maker notes and
-//! binary blobs are summarised by size.
+//! binary blobs are summarised by size; of a maker note only the lens name is listed (the
+//! Panasonic one, as Panasonic writes no Exif LensModel).
 
 use lightcraft_tiff::{Ifd, Tiff, Value};
 
 /// One metadata row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TagRow {
-    /// `TIFF`, `EXIF`, `GPS`, `Interop`.
+    /// `TIFF`, `EXIF`, `GPS`, `Interop`, or a maker note's (`Panasonic`).
     pub group: &'static str,
     pub tag: u16,
     pub name: String,
@@ -144,11 +145,23 @@ fn rational(n: f64, d: f64) -> String {
         return "—".into();
     }
     let v = n / d;
-    if (v - v.round()).abs() < 1e-9 { format!("{}", v.round()) } else { format!("{:.4}", v).trim_end_matches('0').to_string() }
+    if (v - v.round()).abs() < 1e-9 {
+        let r = v.round();
+        if r == 0.0 { "0".to_string() } else { format!("{}", r) }
+    } else {
+        let s = format!("{:.4}", v);
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        if s == "-0" { "0".to_string() } else { s.to_string() }
+    }
 }
 
 fn list<T: ToString>(v: &[T]) -> String {
-    let shown: Vec<String> = v.iter().take(16).map(|x| x.to_string()).collect();
+    list_with(v, T::to_string)
+}
+
+/// The first 16 values of `v` written by `f`, and how many there are when that's not all of them.
+fn list_with<T>(v: &[T], f: impl Fn(&T) -> String) -> String {
+    let shown: Vec<String> = v.iter().take(16).map(f).collect();
     if v.len() > 16 { format!("{} … ({} values)", shown.join(", "), v.len()) } else { shown.join(", ") }
 }
 
@@ -241,8 +254,8 @@ fn value_text(group: &str, tag: u16, v: &Value) -> String {
         }
         Value::Rational(a) if tag == 0x829d && group != "GPS" && a.len() == 1 => format!("f/{}", rational(a[0].0 as f64, a[0].1 as f64)),
         Value::Rational(a) if tag == 0x920a && group != "GPS" && a.len() == 1 => format!("{} mm", rational(a[0].0 as f64, a[0].1 as f64)),
-        Value::Rational(a) => a.iter().map(|(n, d)| rational(*n as f64, *d as f64)).collect::<Vec<_>>().join(", "),
-        Value::SRational(a) => a.iter().map(|(n, d)| rational(*n as f64, *d as f64)).collect::<Vec<_>>().join(", "),
+        Value::Rational(a) => list_with(a, |(n, d)| rational(*n as f64, *d as f64)),
+        Value::SRational(a) => list_with(a, |(n, d)| rational(*n as f64, *d as f64)),
         Value::Byte(b) | Value::Undefined(b) => {
             // version tags and short printable values read as text
             let printable = b.len() <= 64 && b.iter().all(|c| c.is_ascii_graphic() || *c == b' ' || *c == 0);
@@ -309,6 +322,13 @@ fn nikon_nef_compression(tiff: &Tiff, bytes: &[u8]) -> Option<&'static str> {
     nef_compression(mn.ifd.u32(0x0093)?)
 }
 
+/// The Panasonic maker note's lens name (LensType, `0x0051`) as a row, the name `photo.inspect` shows as the lens.
+fn panasonic_lens_row(data: &[u8], tiff: &Tiff, out: &mut Vec<TagRow>) {
+    if let Some(lens) = crate::exif::panasonic_maker_note_lens(data, tiff) {
+        out.push(TagRow { group: "Panasonic", tag: 0x0051, name: "Lens Type".into(), value: lens.trim().to_string() });
+    }
+}
+
 /// Every tag of a parsed TIFF structure (a TIFF-based raw, a TIFF, or an EXIF block): IFD0,
 /// then the EXIF, GPS and interoperability IFDs. A raw file's Compression row is the sensor
 /// image's, not IFD0's thumbnail's.
@@ -336,9 +356,9 @@ pub fn tag_rows(tiff: &Tiff) -> Vec<TagRow> {
 }
 
 /// [`tag_rows`] of a file's bytes: a TIFF-based file directly, else its embedded EXIF block
-/// (JPEG, PNG, WebP, HEIF…). Empty when there is none.
+/// (JPEG, PNG, WebP, HEIF, PSD/PSB…). Empty when there is none.
 pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
-    if Tiff::sniff(bytes).is_some()
+    let (mut rows, recipe) = if Tiff::sniff(bytes).is_some()
         && let Ok(t) = Tiff::parse(bytes)
     {
         let mut rows = tag_rows(&t);
@@ -347,15 +367,49 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
         {
             row.value = words.to_string();
         }
-        return rows;
+        panasonic_lens_row(bytes, &t, &mut rows);
+        (rows, crate::fuji::recipe_from_exif(bytes))
+    } else {
+        let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
+        let data = crate::strip_exif_header(&exif);
+        let Ok(t) = Tiff::parse(data) else { return Vec::new() };
+        let mut rows = tag_rows(&t);
+        panasonic_lens_row(data, &t, &mut rows);
+        (rows, crate::fuji::recipe_from_exif(&exif))
+    };
+    if let Some(recipe) = recipe {
+        for row in recipe.rows {
+            rows.push(TagRow { group: "Fujifilm", tag: row.tag, name: row.label, value: row.value });
+        }
     }
-    let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
-    Tiff::parse(crate::strip_exif_header(&exif)).map(|t| tag_rows(&t)).unwrap_or_default()
+    rows
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rational_has_no_trailing_dot() {
+        assert_eq!(rational(1.0, 100000.0), "0");
+        assert_eq!(rational(-1.0, 100000.0), "0");
+        assert_eq!(rational(-1.0, 1e10), "0");
+        assert_eq!(rational(1000001.0, 100000.0), "10");
+        assert_eq!(rational(1.0, 3.0), "0.3333");
+        assert_eq!(rational(5.0, 2.0), "2.5");
+    }
+
+    /// Rational lists were joined whole, unlike every other list (#2579): a tag of millions of
+    /// fractions became a string as long in the tag panel.
+    #[test]
+    fn rational_lists_show_sixteen_values_like_other_lists() {
+        let first16 = (1..=16).map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+        let many: Vec<(u32, u32)> = (1..=1000).map(|i| (i, 1)).collect();
+        assert_eq!(value_text("EXIF", 0x9999, &Value::Rational(many)), format!("{first16} … (1000 values)"));
+        let signed: Vec<(i32, i32)> = (1..=1000).map(|i| (-i, 1)).collect();
+        assert!(value_text("EXIF", 0x9999, &Value::SRational(signed)).ends_with("-16 … (1000 values)"));
+        assert_eq!(value_text("EXIF", 0x9999, &Value::Rational(vec![(1, 2), (3, 4)])), "0.5, 0.75");
+    }
 
     #[test]
     fn rows_from_written_exif() {
@@ -460,5 +514,23 @@ mod tests {
     fn plain_tiff_keeps_its_own_compression() {
         let b = [b"II*    ".to_vec(), ifd(&[entry(0x0103, 3, 1, 8)])].concat();
         assert_eq!(compression(&file_tag_rows(&b)), ["Deflate"]);
+    }
+
+    #[test]
+    fn panasonic_lens_is_listed_from_the_maker_note() {
+        let lens = |rows: &[TagRow]| rows.iter().filter(|r| r.group == "Panasonic" && r.tag == 0x0051).map(|r| r.value.clone()).collect::<Vec<_>>();
+        // a RW2: the note is only in the JpgFromRaw's Exif
+        let rw2 = crate::exif::tests::panasonic_rw2("LUMIX S 85/F1.8");
+        assert_eq!(lens(&file_tag_rows(&rw2)), ["LUMIX S 85/F1.8"]);
+        // a JPEG: the note is in its own Exif
+        let exif = crate::exif::tests::panasonic_exif(lightcraft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
+        let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpg.extend_from_slice(&((exif.len() + 8) as u16).to_be_bytes());
+        jpg.extend(b"Exif\0\0");
+        jpg.extend(exif);
+        jpg.extend_from_slice(&[0xff, 0xda, 0, 2, 0xff, 0xd9]);
+        assert_eq!(lens(&file_tag_rows(&jpg)), ["LUMIX G 25/F1.7"]);
+        // no Panasonic note, no row
+        assert!(lens(&file_tag_rows(&synthetic_raw(Some(3)))).is_empty());
     }
 }

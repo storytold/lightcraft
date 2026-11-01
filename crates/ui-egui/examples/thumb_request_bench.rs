@@ -113,7 +113,7 @@ fn micro(points: usize, pending: bool) {
             let key = app.session.thumb_job(id, 384).unwrap().key;
             app.renderer.textures.insert(
                 Slot::Thumb(id),
-                Tex { key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+                Tex { look: None, key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
             );
         }
         request_thumb(&mut app, id, 384, 10);
@@ -283,6 +283,7 @@ fn real() {
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, if (i / 45) % 2 == 0 { -12.0 } else { 12.0 }),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: Default::default(),
         });
         let t = Instant::now();

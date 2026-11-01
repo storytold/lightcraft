@@ -117,7 +117,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
-                register(ui.ctx(), format!("maskNew:{kind}"), r);
+                crate::widgets::announce(&resp, crate::i18n::tr(label));
+                register(ui, format!("maskNew:{kind}"), r);
                 ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
                 // (cut short only in a panel too narrow for the label: the full name on hover)
@@ -125,7 +126,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let g = one_line(ui.painter(), label, t.font(size), t.text_dim, tile - 2.0 * TILE_PAD);
                 let elided = g.elided;
                 let at = pos2(r.center().x, r.bottom() - 9.0) - g.size() / 2.0;
-                register(ui.ctx(), format!("maskNewLabel:{kind}"), Rect::from_min_size(at, g.size()));
+                register(ui, format!("maskNewLabel:{kind}"), Rect::from_min_size(at, g.size()));
                 ui.painter().galley(at, g, t.text_dim);
                 let resp = if elided { resp.on_hover_text(label) } else { resp };
                 if resp.clicked() {
@@ -168,7 +169,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         };
         if let Some(status) = status {
             ui.add_space(4.0);
-            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
+            ui.horizontal_top(|ui| {
+                crate::progress::spinner(ui, 14.0);
+                ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
+            });
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
         // the model download, while its dialog is closed
@@ -176,11 +180,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if download.running && app.ui.dialog.is_none() {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                let pct = if download.total > 0 { download.done as f64 / download.total as f64 } else { 0.0 };
-                let r = ui.add(
-                    egui::ProgressBar::new(pct as f32).desired_width(ui.available_width() - 70.0).text(format!("SAM 3: {} %", (pct * 100.0).floor())),
-                );
-                register(ui.ctx(), "maskSamProgress", r.rect);
+                // the bar takes what the Details button leaves
+                let details = ui.spacing().interact_size.x + 30.0;
+                sam_download_bar(ui, download.done, download.total, (ui.available_width() - details).max(96.0));
                 if text_button(ui, "maskSamDetails", crate::i18n::tr("Details"), false).clicked() {
                     app.offer_sam_download(None);
                 }
@@ -197,6 +199,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
                     app.ui.mask_overlay = !on;
                 }
+                let all = app.ui.mask_overlay_all;
+                let all_mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+                let all_base = crate::i18n::tr("Show all overlays");
+                let all_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.maskOverlayAll") {
+                    Some(sc) => format!("{all_base} ({})", crate::menubar::shortcut_text(sc, all_mac)),
+                    None => all_base.to_string(),
+                };
+                if icon_button(ui, "maskOverlayAll", Icon::Stack, vec2(24.0, 24.0), all, true, &all_tip).clicked() {
+                    app.ui.mask_overlay_all = !all;
+                }
             });
         });
         if d.masks.is_empty() {
@@ -209,7 +221,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // inline rename: Enter (or leaving the field) commits, Escape cancels
                 let rid = *rid;
                 let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()).id_salt(("maskRename", rid)));
-                register(ui.ctx(), format!("maskRename:{rid}"), r.rect);
+                register(ui, format!("maskRename:{rid}"), r.rect);
                 if !r.has_focus() && !r.lost_focus() {
                     r.request_focus();
                 }
@@ -225,7 +237,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 continue;
             }
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-            register(ui.ctx(), format!("mask:{}", m.id), r);
+            crate::widgets::announce_selected(&resp, m.name.clone(), Some(m.id) == app.session.active_mask);
+            register(ui, format!("mask:{}", m.id), r);
             ui.painter().rect_filled(
                 r,
                 4.0,
@@ -244,15 +257,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - 32.0);
             let elided = g.elided;
             let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
-            register(ui.ctx(), format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
+            register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
             ui.painter().galley(at, g, color);
             let resp = if elided { resp.on_hover_text(&m.name) } else { resp };
             // show / hide on hover (and always while hidden)
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
             if ui.rect_contains_pointer(r) || !m.visible {
                 let er = Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(22.0, 22.0));
-                register(ui.ctx(), format!("maskVisible:{}", m.id), er);
-                let eye = ui.interact(er, egui::Id::new(("maskVisible", m.id)), Sense::click());
+                register(ui, format!("maskVisible:{}", m.id), er);
+                let eye = ui.interact(er, egui::Id::unique(("maskVisible", m.id)), Sense::click());
+                crate::widgets::announce_selected(&eye, crate::i18n::tr("Show mask"), m.visible);
                 paint(
                     ui.painter(),
                     er.shrink(3.0),
@@ -269,7 +283,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.double_clicked() {
                 app.ui.renaming_mask = Some((m.id, m.name.clone()));
             }
-            resp.context_menu(|ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
+            crate::widgets::context_menu(&resp, |ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
             if sel {
                 // right under the selected mask: ＋ adds to it, − takes away from it (any mask
                 // type; Describe… opens its field here)
@@ -296,7 +310,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let (kind, icon) = kind_label(&c.shape);
             let label = c.name.clone().unwrap_or_else(|| match &c.shape {
                 MaskShape::Prompt { text, .. } => format!("“{text}”"),
-                _ => kind.to_string(),
+                _ => menu_label(kind).to_string(),
             });
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
@@ -309,7 +323,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(mid, k, _)| *mid == m.id && *k == i) {
                     // inline rename: Enter (or leaving the field) commits, Escape cancels
                     let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width() - 30.0).id_salt(("compRename", m.id, i)));
-                    register(ui.ctx(), format!("componentRename:{i}"), r.rect);
+                    register(ui, format!("componentRename:{i}"), r.rect);
                     if !r.has_focus() && !r.lost_focus() {
                         r.request_focus();
                     }
@@ -332,14 +346,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     ui.add(egui::Label::new(text).truncate().sense(Sense::click()))
                 });
                 let resp = resp.inner;
-                register(ui.ctx(), format!("component:{i}"), resp.rect);
+                register(ui, format!("component:{i}"), resp.rect);
                 if resp.double_clicked() {
                     app.ui.renaming_component = Some((m.id, i, label.clone()));
                 }
-                resp.context_menu(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
+                crate::widgets::context_menu(&resp, |ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let more = ui.small_button("…").on_hover_text(crate::i18n::tr("Component options"));
-                    register(ui.ctx(), format!("button:componentMenu{i}"), more.rect);
+                    register(ui, format!("button:componentMenu{i}"), more.rect);
                     egui::Popup::menu(&more).show(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 });
             });
@@ -368,6 +382,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         brush_settings(app, ui);
     }
     divider(ui);
+    super::mask_effects::effect_row(app, ui, &m);
     for s in LOCAL {
         let v = local_get(&m.adjust, s.id);
         let out = slider(ui, s, v, true, None);
@@ -403,10 +418,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let _ = Stroke::NONE;
 }
 
+/// Translate fixed action labels, but never mutate or translate user-entered mask names.
+fn menu_label(source: &str) -> &str {
+    crate::i18n::tr(source)
+}
+
 /// The right-click menu of a mask in the Masks list.
 fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
     let mut run = |ui: &mut egui::Ui, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
-        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+        if ui.add_enabled(enabled, egui::Button::new(menu_label(label))).clicked() {
             let _ = app.run(cmd, p);
             ui.close();
         }
@@ -439,10 +459,10 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
-        let r = crate::widgets::dropdown(ui, "maskOverlayMode", view.label(), t.font(12.5), t.text_label);
+        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
         egui::Popup::menu(&r).show(|ui| {
             for v in MaskView::ALL {
-                if ui.selectable_label(v == view, v.label()).clicked() {
+                if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
                     let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
                 }
             }
@@ -453,7 +473,8 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for c in OVERLAY_COLORS {
                 let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                register(ui.ctx(), format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]), r);
+                crate::widgets::announce(&resp, format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]));
+                register(ui, format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]), r);
                 ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
                 if app.ui.mask_overlay_color == c {
                     ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
@@ -483,6 +504,9 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if ui.checkbox(&mut pins, crate::i18n::tr("Show Pins")).changed() {
         let _ = app.run("view.maskPins", json!({"show": pins}));
     }
+    if app.ui.mask_pins {
+        super::right::tool_overlay_options(app, ui);
+    }
 }
 
 /// Controls for a range component: the selected range (two handles over a dark → light bar),
@@ -498,7 +522,8 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             let (lo, hi) = (*lo, *hi);
             let w = ui.available_width().min(240.0);
             let (rect, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click_and_drag());
-            register(ui.ctx(), format!("lumRange:{comp}"), rect);
+            crate::widgets::announce(&resp, crate::i18n::tr("Select Luminance Range"));
+            register(ui, format!("lumRange:{comp}"), rect);
             let p = ui.painter();
             // dark → light ramp, the selected span outlined
             let n = 24;
@@ -522,18 +547,27 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 p.circle_filled(pos2(x(v), rect.center().y), 5.0, egui::Color32::WHITE);
                 p.circle_stroke(pos2(x(v), rect.center().y), 5.0, Stroke::new(1.0, egui::Color32::from_gray(40)));
             }
-            // drag the nearer handle; one undo step per drag
+            // Choose at the press position, then keep that handle for the entire drag. Testing
+            // proximity on every frame can move the opposite endpoint after a fast/crossing drag.
+            let handle_id = resp.id.with("luminance-handle");
+            let nearer_low = |px: f32| (px - x(lo)).abs() <= (px - x(hi)).abs();
             if resp.drag_started() {
+                if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+                    ui.data_mut(|d| d.insert_temp(handle_id, nearer_low(origin.x)));
+                }
                 let _ = app.run("develop.beginInteraction", json!({"label": "Luminance Range"}));
             }
             if (resp.dragged() || resp.clicked())
                 && let Some(pos) = resp.interact_pointer_pos()
             {
                 let v = (((pos.x - rect.left()) / w) as f64).clamp(0.0, 1.0);
-                let (nlo, nhi) = if (v - lo).abs() <= (v - hi).abs() { (v.min(hi - 0.01), hi) } else { (lo, v.max(lo + 0.01)) };
+                let low =
+                    if resp.dragged() { ui.data(|d| d.get_temp::<bool>(handle_id)).unwrap_or_else(|| nearer_low(pos.x)) } else { nearer_low(pos.x) };
+                let (nlo, nhi) = if low { (v.min((hi - 0.01).max(0.0)), hi) } else { (lo, v.max((lo + 0.01).min(1.0))) };
                 update(app, MaskShape::LuminanceRange { lo: nlo, hi: nhi, lo_feather: *lo_feather, hi_feather: *hi_feather });
             }
             if resp.drag_stopped() {
+                ui.data_mut(|d| d.remove::<bool>(handle_id));
                 let _ = app.run("develop.endInteraction", json!({}));
             }
             // Smoothness: both falloffs at once
@@ -556,7 +590,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             });
             let mut map = app.ui.mask_overlay && app.ui.mask_overlay_mode == "colorOnBw";
             let r = ui.checkbox(&mut map, crate::i18n::tr("Show Luminance Map"));
-            register(ui.ctx(), format!("check:lumMap{comp}"), r.rect);
+            register(ui, format!("check:lumMap{comp}"), r.rect);
             if r.changed() {
                 // the luminance map: the photo in black & white with the selected range tinted
                 if map {
@@ -633,7 +667,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
 /// The right-click / "…" menu of one component of the selected mask.
 fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
     let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
-        if ui.button(text).clicked() {
+        if ui.button(menu_label(text)).clicked() {
             let mut p = p;
             p["id"] = json!(mask);
             p["component"] = json!(k);
@@ -644,14 +678,14 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
     run(ui, "Invert", json!({"action": "invert"}));
     run(ui, &crate::i18n::tr_format!("Duplicate \"{label}\"", label = label), json!({"action": "duplicate"}));
     if k > 0 {
-        ui.menu_button(crate::i18n::tr("Mode"), |ui| {
+        crate::widgets::menu_button(ui, crate::i18n::tr("Mode"), |ui| {
             for (op, text) in [("add", "Add"), ("subtract", "Subtract"), ("intersect", "Intersect")] {
                 run(ui, text, json!({"action": "op", "op": op}));
             }
         });
     }
-    ui.menu_button(crate::i18n::tr("Intersect with"), |ui| component_menu(app, ui, "intersect"));
-    ui.menu_button(crate::i18n::tr("Subtract"), |ui| component_menu(app, ui, "subtract"));
+    crate::widgets::menu_button(ui, crate::i18n::tr("Intersect with"), |ui| component_menu(app, ui, "intersect"));
+    crate::widgets::menu_button(ui, crate::i18n::tr("Subtract"), |ui| component_menu(app, ui, "subtract"));
     ui.separator();
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
         app.ui.renaming_component = Some((mask, k, label.to_string()));
@@ -685,8 +719,11 @@ pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &st
     if needs_model(app, "object", op) {
         return;
     }
-    let r =
-        if op == "new" { app.run("mask.add", json!({"kind": "object"})) } else { app.run("mask.addComponent", json!({"op": op, "kind": "object"})) };
+    let r = if op == "new" {
+        app.run_typed("mask.add", json!({"kind": "object"}))
+    } else {
+        app.run_typed("mask.addComponent", json!({"op": op, "kind": "object"}))
+    };
     match r {
         Ok(_) => {
             app.ui.tool = "object".into();
@@ -724,6 +761,28 @@ pub(crate) fn start_describe(app: &mut LightcraftApp, op: &str) {
     app.ui.describe = Some((op.to_string(), String::new()));
 }
 
+/// The SAM model's download, `width` wide. The label is a percentage once the size is known and
+/// just the model's name before, so the bar keeps its height and its accessible name.
+pub(crate) fn sam_download_bar(ui: &mut egui::Ui, done: u64, total: u64, width: f32) -> egui::Response {
+    let fraction = crate::progress::fraction_of(done, total);
+    let label = match fraction {
+        Some(f) => format!("SAM 3: {} %", crate::progress::percent(f)),
+        None => "SAM 3".to_string(),
+    };
+    crate::progress::Progress::new(fraction).label(label).width(width).widget("maskSamProgress").show(ui)
+}
+
+/// Whether the segmenter has work (loading, analyzing, a request, a detail pass running or waiting
+/// to start): nothing new starts then.
+fn segmenter_working(analyzing: bool, busy: bool, detail_busy: bool, detail_due: bool) -> bool {
+    analyzing || busy || detail_busy || detail_due
+}
+
+/// Enter in the Describe field is the Select button: it starts nothing while the segmenter works.
+fn enter_submits(working: bool, lost_focus: bool, enter_pressed: bool) -> bool {
+    !working && lost_focus && enter_pressed
+}
+
 /// The Describe field: type what to select ("sky", "the red car") and press Return.
 fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     let Some((op, mut text)) = app.ui.describe.clone() else { return };
@@ -741,7 +800,9 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     let mut submit = false;
     // the (translated) Select button is placed first, at the right; the field takes what is left
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
+        let seg = &app.session.segmenter;
+        let working = segmenter_working(seg.analyzing(), seg.busy(), seg.detail_busy(), app.ui.detail_due.is_some());
+        if crate::button::Button::new("Select").small().busy(working).widget("button:maskDescribeGo").show(ui).clicked() {
             submit = true;
         }
         let r = ui.add(
@@ -749,11 +810,12 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
                 .hint_text(crate::i18n::tr("e.g. sky · the red car · car, road"))
                 .desired_width(ui.available_width()),
         );
-        register(ui.ctx(), "maskDescribe", r.rect);
+        register(ui, "maskDescribe", r.rect);
         if !r.has_focus() && !r.lost_focus() && text.is_empty() {
             r.request_focus();
         }
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        // Enter is the Select button: nothing starts while the segmenter is working
+        if enter_submits(working, r.lost_focus(), ui.input(|i| i.key_pressed(egui::Key::Enter))) {
             submit = true;
         }
     });
@@ -764,9 +826,9 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     app.ui.describe = Some((op.clone(), text.clone()));
     if submit && !text.trim().is_empty() {
         let r = if op == "new" {
-            app.run("mask.add", json!({"kind": "prompt", "text": text}))
+            app.run_typed("mask.add", json!({"kind": "prompt", "text": text}))
         } else {
-            app.run("mask.addComponent", json!({"op": op, "kind": "prompt", "text": text}))
+            app.run_typed("mask.addComponent", json!({"op": op, "kind": "prompt", "text": text}))
         };
         match r {
             // the mask appears when the model has found it (a detail pass follows)
@@ -778,12 +840,12 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
 
 fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
     let b = ui.button(crate::i18n::tr("Object"));
-    register(ui.ctx(), format!("maskComp:{op}:object"), b.rect);
+    register(ui, format!("maskComp:{op}:object"), b.rect);
     if b.clicked() {
         start_object(app, ui.ctx(), op);
     }
     let b = ui.button(crate::i18n::tr("Describe…"));
-    register(ui.ctx(), format!("maskComp:{op}:prompt"), b.rect);
+    register(ui, format!("maskComp:{op}:prompt"), b.rect);
     if b.clicked() {
         start_describe(app, op);
     }
@@ -799,8 +861,8 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         if kind == "brush" && op == "intersect" {
             continue;
         }
-        let b = ui.button(label);
-        register(ui.ctx(), format!("maskComp:{op}:{kind}"), b.rect);
+        let b = ui.button(menu_label(label));
+        register(ui, format!("maskComp:{op}:{kind}"), b.rect);
         if b.clicked() {
             if kind == "brush" {
                 let _ = app.run("tool.brush", json!({"op": op}));
@@ -831,6 +893,14 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         {
             app.ui.brush_auto_mask = auto;
         }
+        let mut pressure = app.ui.brush_pressure;
+        if ui
+            .checkbox(&mut pressure, crate::i18n::tr("Pen Pressure"))
+            .on_hover_text(crate::i18n::tr("A pen's pressure sets the size and flow of the brush"))
+            .changed()
+        {
+            app.ui.brush_pressure = pressure;
+        }
     });
     for (id, label, min, max, get) in [
         ("ui.brushSize", "Size", 1.0, 100.0, (app.ui.brush_size * 400.0) as f64),
@@ -852,6 +922,28 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_detail_pass_counts_as_the_segmenter_working() {
+        assert!(segmenter_working(false, false, true, false));
+        assert!(segmenter_working(true, false, false, false));
+        assert!(segmenter_working(false, true, false, false));
+        assert!(!segmenter_working(false, false, false, false));
+    }
+
+    #[test]
+    fn a_pending_detail_pass_counts_as_the_segmenter_working() {
+        // a new prompt finishing before it starts would replace its target, and that mask never refines
+        assert!(segmenter_working(false, false, false, true));
+    }
+
+    #[test]
+    fn enter_in_the_describe_field_starts_nothing_while_the_segmenter_works() {
+        assert!(enter_submits(false, true, true));
+        assert!(!enter_submits(true, true, true));
+        assert!(!enter_submits(false, false, true));
+        assert!(!enter_submits(false, true, false));
+    }
 
     /// The grid keeps four 52 pt tiles when the labels fit, and gives a long (translated) label
     /// room by dropping a column rather than drawing it past its tile.

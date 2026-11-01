@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
 use crate::DevelopSettings;
 
@@ -183,18 +184,11 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 }
 
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
-/// through the control specs.
+/// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
-    let base = s.to_json();
-    let patch = if (amount - 1.0).abs() < 1e-9 { partial.clone() } else { scale_patch(&base, partial, amount) };
+    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json(), partial, amount)) };
     // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
-    let mut out = s.merged(&patch).unwrap_or_else(|_| s.clone());
-    for c in crate::controls::CONTROLS {
-        if let Some(v) = crate::controls::get(&out, c.id) {
-            crate::controls::set(&mut out, c.id, v);
-        }
-    }
-    out
+    s.merged(&patch).unwrap_or_else(|_| s.clone())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -226,14 +220,12 @@ impl Preset {
             o.remove("masks");
         }
         let mut out = apply_partial(s, &rest, amount);
-        let mut next = out.masks.iter().map(|m| m.id).max().unwrap_or(0);
         for m in masks {
             let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
             if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
                 continue;
             }
-            next += 1;
-            m.id = next;
+            m.id = out.next_mask_id();
             m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
             out.masks.push(m);
         }
@@ -298,5 +290,24 @@ mod tests {
         let mut a = json!({"x": {"a": 1, "b": 2}, "y": [1]});
         deep_merge(&mut a, &json!({"x": {"b": 3}, "y": [2, 3]}));
         assert_eq!(a, json!({"x": {"a": 1, "b": 3}, "y": [2, 3]}));
+    }
+
+    #[test]
+    fn preset_masks_get_unused_ids_after_a_mask_id_at_the_limit() {
+        let s = DevelopSettings { masks: vec![crate::Mask { id: u32::MAX, name: "Theirs".into(), ..Default::default() }], ..Default::default() };
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "User".into(),
+            settings: json!({"masks": [{"id": 7, "name": "A"}, {"id": 7, "name": "B"}]}),
+            favorite: false,
+            builtin: false,
+        };
+        let out = p.apply(&s, 1.0);
+        let mut ids: Vec<u32> = out.masks.iter().map(|m| m.id).collect();
+        assert_eq!(ids.len(), 3);
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 3, "{:?}", out.masks);
     }
 }

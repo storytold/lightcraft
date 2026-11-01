@@ -3,8 +3,11 @@
 //! The image is cut into bands of MCU rows separated by restart markers (`DRI` + `RSTn`): DC
 //! prediction restarts at every marker, so bands are entropy-coded independently on all cores and
 //! concatenated. Quantization uses the example tables of T.81 Annex K scaled by the usual 1–100
-//! quality convention; Huffman coding uses the Annex K example tables (interleaved baseline, readable
-//! by every decoder). Supports grayscale and YCbCr 4:4:4 / 4:2:0.
+//! quality convention. Huffman tables are made for each image from its own symbol counts (T.81
+//! Annex K.2): a first pass over the bands counts the symbols, a second codes them. The file stays
+//! interleaved baseline with the tables in its `DHT` segments, readable by every decoder, and is
+//! smaller than with the Annex K example tables at the same pixels. Supports grayscale and YCbCr
+//! 4:4:4 / 4:2:0.
 
 use crate::encode::ChromaSubsampling;
 
@@ -61,14 +64,101 @@ impl Huff {
         let (mut c, mut k) = (0u16, 0usize);
         for (len, &n) in bits.iter().enumerate() {
             for _ in 0..n {
-                code[vals[k] as usize] = (c, len as u8 + 1);
-                c += 1;
+                if let Some(&v) = vals.get(k) {
+                    code[v as usize] = (c, len as u8 + 1);
+                }
+                c = c.wrapping_add(1);
                 k += 1;
             }
-            c <<= 1;
+            c = c.wrapping_shl(1);
         }
         Huff { code }
     }
+}
+
+/// Symbol counts of one Huffman table: index = symbol (DC size category, or AC run/size byte).
+type Freq = [u64; 256];
+
+/// The code lengths (`BITS`, counts per length 1..16) and symbols (`HUFFVAL`) of an optimal
+/// Huffman table for `freq`, limited to 16-bit codes and never assigning the all-ones code
+/// (T.81 Annex K.2, figures K.1–K.4). Symbols with a zero count get no code. At least one symbol
+/// is always present (a table nothing used gets symbol 0), so the result is a valid `DHT`.
+fn optimal_table(freq: &Freq) -> ([u8; 16], Vec<u8>) {
+    // 256 is the reserved pseudo-symbol: counted once, it takes the longest code, which is
+    // then dropped so no real code is all ones (K.2)
+    let mut f = [0u64; 257];
+    f[..256].copy_from_slice(freq);
+    if f[..256].iter().all(|&c| c == 0) {
+        f[0] = 1;
+    }
+    f[256] = 1;
+    let mut size = [0usize; 257];
+    let mut next: [Option<usize>; 257] = [None; 257];
+    loop {
+        // the two smallest non-zero counts; on equal counts the larger symbol goes first (K.1)
+        let mut c1: Option<usize> = None;
+        for i in 0..257 {
+            if f[i] > 0 && c1.is_none_or(|c| f[i] <= f[c]) {
+                c1 = Some(i);
+            }
+        }
+        let Some(c1) = c1 else { break };
+        let mut c2: Option<usize> = None;
+        for i in 0..257 {
+            if i != c1 && f[i] > 0 && c2.is_none_or(|c| f[i] <= f[c]) {
+                c2 = Some(i);
+            }
+        }
+        let Some(c2) = c2 else { break };
+        f[c1] = f[c1].saturating_add(f[c2]);
+        f[c2] = 0;
+        // every symbol in both trees goes one level deeper; c2's chain is appended to c1's
+        let mut k = c1;
+        size[k] += 1;
+        while let Some(n) = next[k] {
+            k = n;
+            size[k] += 1;
+        }
+        next[k] = Some(c2);
+        let mut k = c2;
+        size[k] += 1;
+        while let Some(n) = next[k] {
+            k = n;
+            size[k] += 1;
+        }
+    }
+    // counts per code length; 257 symbols need at most 256 levels
+    let mut bits = [0usize; 257];
+    for &s in &size {
+        if s > 0 {
+            bits[s.min(256)] += 1;
+        }
+    }
+    // limit to 16 bits (K.3): move pairs of the longest codes up, one level at a time (the
+    // deepest level of a full tree always holds an even number of codes)
+    for i in (17..257).rev() {
+        while bits[i] >= 2 {
+            let Some(j) = (1..i - 1).rev().find(|&j| bits[j] > 0) else { break };
+            bits[i] -= 2;
+            bits[i - 1] += 1;
+            bits[j + 1] += 2;
+            bits[j] -= 1;
+        }
+    }
+    // drop the reserved symbol's code: it is one of the longest
+    if let Some(i) = (1..=16).rev().find(|&i| bits[i] > 0) {
+        bits[i] -= 1;
+    }
+    // symbols by code length, then by value (K.4); the reserved symbol is not listed
+    let mut vals = Vec::new();
+    for len in 1..257 {
+        vals.extend((0..256).filter(|&s| size[s] == len).map(|s| s as u8));
+    }
+    let mut out = [0u8; 16];
+    for (o, &b) in out.iter_mut().zip(&bits[1..=16]) {
+        *o = b.min(255) as u8;
+    }
+    (out, vals)
 }
 
 fn scaled_quant(base: &[u16; 64], quality: u8) -> [u16; 64] {
@@ -165,8 +255,19 @@ fn fdct_quant(block: &[f32; 64], recip: &[f32; 64], out: &mut [i16; 64]) {
         aan_1d(&mut d, c, 8);
     }
     for i in 0..64 {
-        out[i] = (d[i] * recip[i]).round() as i16;
+        out[i] = round_i16(d[i] * recip[i]);
     }
+}
+/// `x.round() as i16` (half away from zero, saturating, NaN to 0) for every `x` (checked for all of them), in plain
+/// arithmetic: without SSE4.1 `f32::round` is a libm call, one per coefficient, that keeps the loop from vectorising.
+#[inline(always)]
+fn round_i16(x: f32) -> i16 {
+    // (below 2^24 the truncation is exact and so is the remainder)
+    let c = x.clamp(-65536.0, 65536.0);
+    let t = c as i32;
+    let f = c - t as f32;
+    let r = t + i32::from(f >= 0.5) - i32::from(f <= -0.5);
+    r.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
 }
 
 #[inline]
@@ -177,13 +278,15 @@ fn magnitude(v: i32) -> (u32, u32) {
     (size, bits & ((1u32 << size) - 1))
 }
 
-fn encode_block(w: &mut Bits, q: &[i16; 64], pred: &mut i32, dc: &Huff, ac: &Huff) {
+/// The Huffman symbols of one quantized block in coding order: `sym(ac, symbol, bits, n)` for the
+/// DC size category (`ac` false) and each AC run/size, ZRL and EOB (`ac` true), each followed by
+/// its `n` extra bits `bits`.
+#[inline(always)]
+fn block_symbols(q: &[i16; 64], pred: &mut i32, mut sym: impl FnMut(bool, usize, u32, u32)) {
     let d = q[0] as i32 - *pred;
     *pred = q[0] as i32;
     let (s, b) = magnitude(d);
-    let (c, l) = dc.code[s as usize];
-    w.put(c as u32, l as u32);
-    w.put(b, s);
+    sym(false, s as usize, b, s);
     let mut run = 0u32;
     for &zi in &ZIGZAG[1..] {
         let v = q[zi] as i32;
@@ -192,20 +295,43 @@ fn encode_block(w: &mut Bits, q: &[i16; 64], pred: &mut i32, dc: &Huff, ac: &Huf
             continue;
         }
         while run >= 16 {
-            let (c, l) = ac.code[0xF0];
-            w.put(c as u32, l as u32);
+            sym(true, 0xF0, 0, 0);
             run -= 16;
         }
         let (s, b) = magnitude(v);
-        let (c, l) = ac.code[((run << 4) | s) as usize];
-        w.put(c as u32, l as u32);
-        w.put(b, s);
+        sym(true, ((run << 4) | s) as usize, b, s);
         run = 0;
     }
     if run > 0 {
-        let (c, l) = ac.code[0x00];
-        w.put(c as u32, l as u32);
+        sym(true, 0x00, 0, 0);
     }
+}
+
+/// One coded symbol of the entropy-coded data: bits 0–7 the symbol, 8–9 its table (0 DC luma,
+/// 1 AC luma, 2 DC chroma, 3 AC chroma), 10–13 the number of extra bits, 14–29 those bits (a
+/// baseline coefficient needs at most 11).
+type Token = u32;
+
+/// Append one block's symbols to `out` and count them in `freq` (by table, as in [`Token`]).
+fn tokenize_block(q: &[i16; 64], pred: &mut i32, chroma: bool, out: &mut Vec<Token>, freq: &mut [Freq; 4]) {
+    let base = if chroma { 2 } else { 0 };
+    block_symbols(q, pred, |is_ac, s, bits, n| {
+        let table = base + is_ac as usize;
+        freq[table][s & 0xFF] += 1;
+        out.push((s as u32 & 0xFF) | (table as u32) << 8 | (n & 0xF) << 10 | (bits & 0xFFFF) << 14);
+    });
+}
+
+/// Code a band's symbols with `tables` (indexed as in [`Token`]).
+fn write_tokens(tokens: &[Token], tables: &[Huff; 4]) -> Vec<u8> {
+    let mut w = Bits::new();
+    for &t in tokens {
+        let (s, table, n, bits) = (t & 0xFF, (t >> 8) & 3, (t >> 10) & 0xF, t >> 14);
+        let (c, l) = tables[table as usize].code[s as usize];
+        w.put(c as u32, l as u32);
+        w.put(bits, n);
+    }
+    w.finish()
 }
 
 /// Planar component samples (level-shifted to −128..127) with edge replication on read.
@@ -249,7 +375,8 @@ fn dht(out: &mut Vec<u8>, class_id: u8, bits: &[u8; 16], vals: &[u8]) {
     segment(out, 0xC4, &p);
 }
 
-/// Encode interleaved 8-bit samples (`channels` 1, 3 or 4; alpha is dropped).
+/// Encode interleaved 8-bit samples (`channels` 1, 3 or 4; alpha is dropped), with Huffman
+/// tables made for the image.
 pub fn encode(
     data: &[u8],
     width: usize,
@@ -259,36 +386,50 @@ pub fn encode(
     sub: ChromaSubsampling,
     app_segments: &[(u8, Vec<u8>)],
 ) -> Vec<u8> {
+    encode_with(data, width, height, channels, quality, sub, app_segments, true)
+}
+
+/// [`encode`], with optimized Huffman tables or (`optimize` false) the Annex K example tables.
+#[allow(clippy::too_many_arguments)]
+fn encode_with(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    quality: u8,
+    sub: ChromaSubsampling,
+    app_segments: &[(u8, Vec<u8>)],
+    optimize: bool,
+) -> Vec<u8> {
     let gray = channels == 1;
     let (hs, vs) = match (gray, sub) {
         (true, _) | (false, ChromaSubsampling::S444) => (1usize, 1usize),
         (false, _) => (2, 2),
     };
-    // colour conversion (JFIF YCbCr, full range, level-shifted) in one pass; chroma averaged 2×2 for 4:2:0
-    let n = width * height;
     #[cfg(feature = "parallel")]
     use rayon::prelude::*;
-    // 4:4:4: Y, Cb, Cr at full resolution in one pass; 4:2:0: Y here, chroma below straight from 2×2 RGB means
+    // colour conversion (JFIF YCbCr, full range, level-shifted) of the pixel rows `rows`, one band's worth at a
+    // time (in the band's task: the planes of the whole image would be ~290 MB at 24 MP, written and read back
+    // once): 4:4:4 Y, Cb, Cr at full resolution in one pass; 4:2:0 Y, and chroma (rows `crows` of the
+    // half-size planes) straight from 2×2 RGB means (conversion is linear: average first, then convert once)
     let ncomp = if gray || hs == 2 { 1 } else { 3 };
-    let mut full: Vec<Vec<f32>> = (0..ncomp).map(|_| vec![0f32; n]).collect();
-    {
-        let rows: Vec<(usize, Vec<&mut [f32]>)> = {
-            let mut its: Vec<_> = full.iter_mut().map(|p| p.chunks_mut(width)).collect();
-            (0..height).map_while(|y| Some((y, its.iter_mut().map(|it| it.next()).collect::<Option<_>>()?))).collect()
-        };
-        let conv = |(y, mut out): (usize, Vec<&mut [f32]>)| {
+    let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
+    let convert = |rows: std::ops::Range<usize>, crows: std::ops::Range<usize>| -> Vec<Plane> {
+        let mut full: Vec<Vec<f32>> = (0..ncomp).map(|_| vec![0f32; rows.len() * width]).collect();
+        for (k, y) in rows.clone().enumerate() {
             let src = &data[y * width * channels..(y + 1) * width * channels];
+            let mut out: Vec<&mut [f32]> = full.iter_mut().map(|p| &mut p[k * width..(k + 1) * width]).collect();
             if gray {
                 for (o, p) in out[0].iter_mut().zip(src.chunks_exact(channels)) {
                     *o = p[0] as f32 - 128.0;
                 }
-                return;
+                continue;
             }
             if out.len() == 1 {
                 for (o, p) in out[0].iter_mut().zip(src.chunks_exact(channels)) {
                     *o = 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32 - 128.0;
                 }
-                return;
+                continue;
             }
             for (x, p) in src.chunks_exact(channels).enumerate() {
                 let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
@@ -296,77 +437,95 @@ pub fn encode(
                 out[1][x] = -0.168_736 * r - 0.331_264 * g + 0.5 * b;
                 out[2][x] = 0.5 * r - 0.418_688 * g - 0.081_312 * b;
             }
-        };
-        #[cfg(feature = "parallel")]
-        rows.into_par_iter().for_each(conv);
-        #[cfg(not(feature = "parallel"))]
-        rows.into_iter().for_each(conv);
-    }
-    let mut it = full.into_iter();
-    let mut planes = vec![Plane { w: width, h: height, data: it.next().unwrap_or_default() }];
-    planes.extend(it.map(|c| Plane { w: width, h: height, data: c }));
-    if !gray && hs == 2 {
-        // conversion is linear: average RGB over 2×2 first, then convert once
-        let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
-        let (mut cb, mut cr) = (vec![0f32; cw * ch], vec![0f32; cw * ch]);
-        let down = |(cy, (ob, or)): (usize, (&mut [f32], &mut [f32]))| {
-            let (y0, y1) = (2 * cy, (2 * cy + 1).min(height - 1));
-            let (r0, r1) = (&data[y0 * width * channels..], &data[y1 * width * channels..]);
-            for cx in 0..cw {
-                let (x0, x1) = (2 * cx * channels, (2 * cx + 1).min(width - 1) * channels);
-                let s = |k: usize| (r0[x0 + k] as f32 + r0[x1 + k] as f32 + r1[x0 + k] as f32 + r1[x1 + k] as f32) * 0.25;
-                let (r, g, b) = (s(0), s(1), s(2));
-                ob[cx] = -0.168_736 * r - 0.331_264 * g + 0.5 * b;
-                or[cx] = 0.5 * r - 0.418_688 * g - 0.081_312 * b;
+        }
+        let mut planes: Vec<Plane> = full.into_iter().map(|data| Plane { w: width, h: rows.len(), data }).collect();
+        if !gray && hs == 2 {
+            let (mut cb, mut cr) = (vec![0f32; cw * crows.len()], vec![0f32; cw * crows.len()]);
+            for (cy, (ob, or)) in crows.clone().zip(cb.chunks_mut(cw).zip(cr.chunks_mut(cw))) {
+                let (y0, y1) = (2 * cy, (2 * cy + 1).min(height - 1));
+                let (r0, r1) = (&data[y0 * width * channels..], &data[y1 * width * channels..]);
+                for cx in 0..cw {
+                    let (x0, x1) = (2 * cx * channels, (2 * cx + 1).min(width - 1) * channels);
+                    let s = |k: usize| (r0[x0 + k] as f32 + r0[x1 + k] as f32 + r1[x0 + k] as f32 + r1[x1 + k] as f32) * 0.25;
+                    let (r, g, b) = (s(0), s(1), s(2));
+                    ob[cx] = -0.168_736 * r - 0.331_264 * g + 0.5 * b;
+                    or[cx] = 0.5 * r - 0.418_688 * g - 0.081_312 * b;
+                }
             }
-        };
-        #[cfg(feature = "parallel")]
-        cb.par_chunks_mut(cw).zip(cr.par_chunks_mut(cw)).enumerate().for_each(down);
-        #[cfg(not(feature = "parallel"))]
-        cb.chunks_mut(cw).zip(cr.chunks_mut(cw)).enumerate().for_each(down);
-        planes.push(Plane { w: cw, h: ch, data: cb });
-        planes.push(Plane { w: cw, h: ch, data: cr });
-    }
+            planes.push(Plane { w: cw, h: crows.len(), data: cb });
+            planes.push(Plane { w: cw, h: crows.len(), data: cr });
+        }
+        planes
+    };
 
     let ql = scaled_quant(&Q_LUMA, quality);
     let qc = scaled_quant(&Q_CHROMA, quality);
     let (rl, rc) = (recip_table(&ql), recip_table(&qc));
-    let (dcl, acl) = (Huff::new(&DC_LUMA_BITS, &DC_VALS), Huff::new(&AC_LUMA_BITS, &AC_LUMA_VALS));
-    let (dcc, acc) = (Huff::new(&DC_CHROMA_BITS, &DC_VALS), Huff::new(&AC_CHROMA_BITS, &AC_CHROMA_VALS));
-
     let (mcu_w, mcu_h) = (8 * hs, 8 * vs);
     let (mx, my) = (width.div_ceil(mcu_w), height.div_ceil(mcu_h));
     // restart interval: whole MCU rows per band, ≤ 65535 MCUs, enough bands to keep all cores busy
     let rows_per_band = (my / 64).clamp(1, (65_535 / mx.max(1)).max(1));
     let bands: Vec<usize> = (0..my.div_ceil(rows_per_band)).collect();
-    let encode_band = |band: &usize| -> Vec<u8> {
-        let mut w = Bits::new();
-        let mut pred = [0i32; 3];
+    // first pass: each band's quantized blocks as symbols, with their counts per table (DC
+    // prediction restarts per band, as the restart markers say)
+    let tokenize_band = |band: &usize| -> (Vec<Token>, [Freq; 4]) {
         let (mut blk, mut q) = ([0f32; 64], [0i16; 64]);
-        for mcu_y in band * rows_per_band..((band + 1) * rows_per_band).min(my) {
+        let (mut tokens, mut freq) = (Vec::new(), [[0u64; 256]; 4]);
+        let mut pred = [0i32; 3];
+        let (m0, m1) = (band * rows_per_band, ((band + 1) * rows_per_band).min(my));
+        // the band's planes, its MCU row `m0` at their top (blocks past the image's bottom repeat its last row,
+        // which is the band's last row then)
+        let planes = convert(m0 * mcu_h..(m1 * mcu_h).min(height), m0 * 8..(m1 * 8).min(ch));
+        for mcu_y in m0..m1 {
+            let mcu_y = mcu_y - m0;
             for mcu_x in 0..mx {
                 for vy in 0..vs {
                     for hx in 0..hs {
                         planes[0].block(mcu_x * hs + hx, mcu_y * vs + vy, &mut blk);
                         fdct_quant(&blk, &rl, &mut q);
-                        encode_block(&mut w, &q, &mut pred[0], &dcl, &acl);
+                        tokenize_block(&q, &mut pred[0], false, &mut tokens, &mut freq);
                     }
                 }
                 if !gray {
-                    for k in 1..3 {
-                        planes[k].block(mcu_x, mcu_y, &mut blk);
+                    for (plane, pred) in planes.iter().zip(pred.iter_mut()).take(3).skip(1) {
+                        plane.block(mcu_x, mcu_y, &mut blk);
                         fdct_quant(&blk, &rc, &mut q);
-                        encode_block(&mut w, &q, &mut pred[k], &dcc, &acc);
+                        tokenize_block(&q, pred, true, &mut tokens, &mut freq);
                     }
                 }
             }
         }
-        w.finish()
+        (tokens, freq)
     };
     #[cfg(feature = "parallel")]
-    let coded: Vec<Vec<u8>> = bands.par_iter().map(encode_band).collect();
+    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.par_iter().map(tokenize_band).collect();
     #[cfg(not(feature = "parallel"))]
-    let coded: Vec<Vec<u8>> = bands.iter().map(encode_band).collect();
+    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.iter().map(tokenize_band).collect();
+    // the tables: DC luma, AC luma, DC chroma, AC chroma
+    let tables: [([u8; 16], Vec<u8>); 4] = if optimize {
+        let mut total = [[0u64; 256]; 4];
+        for (_, f) in &tokenized {
+            for (t, f) in total.iter_mut().zip(f) {
+                for (t, f) in t.iter_mut().zip(f) {
+                    *t = t.saturating_add(*f);
+                }
+            }
+        }
+        total.each_ref().map(optimal_table)
+    } else {
+        [
+            (DC_LUMA_BITS, DC_VALS.to_vec()),
+            (AC_LUMA_BITS, AC_LUMA_VALS.to_vec()),
+            (DC_CHROMA_BITS, DC_VALS.to_vec()),
+            (AC_CHROMA_BITS, AC_CHROMA_VALS.to_vec()),
+        ]
+    };
+    let huff = tables.each_ref().map(|(bits, vals)| Huff::new(bits, vals));
+    // second pass: code the symbols
+    #[cfg(feature = "parallel")]
+    let coded: Vec<Vec<u8>> = tokenized.into_par_iter().map(|(t, _)| write_tokens(&t, &huff)).collect();
+    #[cfg(not(feature = "parallel"))]
+    let coded: Vec<Vec<u8>> = tokenized.into_iter().map(|(t, _)| write_tokens(&t, &huff)).collect();
 
     // headers
     let mut out = Vec::with_capacity(coded.iter().map(Vec::len).sum::<usize>() + 4096);
@@ -396,11 +555,12 @@ pub fn encode(
         sof.extend_from_slice(&[3, 1, ((hs as u8) << 4) | vs as u8, 0, 2, 0x11, 1, 3, 0x11, 1]);
     }
     segment(&mut out, 0xC0, &sof);
-    dht(&mut out, 0x00, &DC_LUMA_BITS, &DC_VALS);
-    dht(&mut out, 0x10, &AC_LUMA_BITS, &AC_LUMA_VALS);
+    let [(dlb, dlv), (alb, alv), (dcb, dcv), (acb, acv)] = &tables;
+    dht(&mut out, 0x00, dlb, dlv);
+    dht(&mut out, 0x10, alb, alv);
     if !gray {
-        dht(&mut out, 0x01, &DC_CHROMA_BITS, &DC_VALS);
-        dht(&mut out, 0x11, &AC_CHROMA_BITS, &AC_CHROMA_VALS);
+        dht(&mut out, 0x01, dcb, dcv);
+        dht(&mut out, 0x11, acb, acv);
     }
     let interval = (rows_per_band * mx) as u16;
     if coded.len() > 1 {
@@ -495,6 +655,128 @@ mod tests {
         }
     }
 
+    /// The code lengths of `(bits, vals)`, checked: every listed symbol once, at most 16 bits,
+    /// and room left in the code space (the all-ones code is never assigned, Kraft sum < 1).
+    fn check_table(bits: &[u8; 16], vals: &[u8]) {
+        assert_eq!(bits.iter().map(|&b| b as usize).sum::<usize>(), vals.len());
+        let mut seen = [false; 256];
+        for &v in vals {
+            assert!(!seen[v as usize], "symbol {v} listed twice");
+            seen[v as usize] = true;
+        }
+        let kraft: f64 = bits.iter().enumerate().map(|(i, &n)| n as f64 / 2f64.powi(i as i32 + 1)).sum();
+        assert!(kraft < 1.0, "code space full: {kraft}");
+        let h = Huff::new(bits, vals);
+        for &v in vals {
+            let (c, l) = h.code[v as usize];
+            assert!((1..=16).contains(&l));
+            assert_ne!(c as u32, (1u32 << l) - 1, "symbol {v} has the all-ones code");
+        }
+    }
+
+    #[test]
+    fn optimal_tables_are_valid_and_bounded() {
+        // one symbol, two, a typical spread and every symbol
+        let mut one = [0u64; 256];
+        one[7] = 5;
+        let mut two = [0u64; 256];
+        two[0] = 1;
+        two[0xF0] = 1_000_000;
+        let typical: Freq = std::array::from_fn(|s| if s % 3 == 0 { (s as u64 * 7919) % 1000 + 1 } else { 0 });
+        let all: Freq = std::array::from_fn(|s| s as u64 + 1);
+        // Fibonacci counts make an unbounded Huffman tree ~40 levels deep: the 16-bit limit applies
+        let mut fib = [0u64; 256];
+        let (mut a, mut b) = (1u64, 1u64);
+        for f in fib.iter_mut().take(40) {
+            *f = a;
+            (a, b) = (b, a + b);
+        }
+        for (name, f) in [("one", one), ("two", two), ("typical", typical), ("all", all), ("fib", fib), ("none", [0; 256])] {
+            let (bits, vals) = optimal_table(&f);
+            check_table(&bits, &vals);
+            for s in 0..256 {
+                assert_eq!(vals.contains(&(s as u8)), f[s] > 0 || (name == "none" && s == 0), "{name}: symbol {s}");
+            }
+        }
+        // more frequent symbols never get longer codes
+        let (bits, vals) = optimal_table(&typical);
+        let h = Huff::new(&bits, &vals);
+        for &x in &vals {
+            for &y in &vals {
+                if typical[x as usize] > typical[y as usize] {
+                    assert!(h.code[x as usize].1 <= h.code[y as usize].1, "{x} vs {y}");
+                }
+            }
+        }
+        // the Annex K example tables pass the same checks
+        check_table(&AC_LUMA_BITS, &AC_LUMA_VALS);
+        check_table(&DC_CHROMA_BITS, &DC_VALS);
+    }
+
+    /// Issue #1373: tables made for the image give a smaller file with exactly the same pixels as
+    /// the Annex K example tables (the quantized coefficients are the same), at every quality and
+    /// subsampling, and both decoders read it.
+    #[test]
+    fn optimized_tables_shrink_files_without_changing_pixels() {
+        let (w, h) = (517, 333);
+        // gradients plus deterministic noise, like a photo's grain
+        let mut seed = 0x2545_f491_u32;
+        let src: Vec<u8> = test_rgb(w, h)
+            .into_iter()
+            .map(|v| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                v.saturating_add((seed % 23) as u8)
+            })
+            .collect();
+        for (q, sub) in [(100, ChromaSubsampling::S444), (92, ChromaSubsampling::S444), (75, ChromaSubsampling::S420), (30, ChromaSubsampling::S420)]
+        {
+            let std = encode_with(&src, w, h, 3, q, sub, &[], false);
+            let opt = encode(&src, w, h, 3, q, sub, &[]);
+            assert!(opt.len() < std.len(), "q{q} {sub:?}: {} ≥ {}", opt.len(), std.len());
+            let a = jpeg_decoder::Decoder::new(&std[..]).decode().expect("standard tables");
+            let b = jpeg_decoder::Decoder::new(&opt[..]).decode().expect("optimized tables");
+            assert_eq!(a, b, "q{q} {sub:?}: pixels differ");
+            let z = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&opt[..])).decode().expect("zune-jpeg");
+            assert_eq!(z.len(), b.len());
+        }
+        // grayscale too
+        let gray: Vec<u8> = src.iter().step_by(3).copied().collect();
+        let std = encode_with(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[], false);
+        let opt = encode(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[]);
+        assert!(opt.len() < std.len());
+        assert_eq!(jpeg_decoder::Decoder::new(&std[..]).decode().unwrap(), jpeg_decoder::Decoder::new(&opt[..]).decode().unwrap());
+    }
+
+    /// The bytes written for 4:4:4, 4:2:0, grayscale and RGBA input at a size cut into many bands, with partial MCUs
+    /// at the right and bottom edges, pinned: each band converts its own rows to YCbCr, which must not change a bit.
+    #[test]
+    fn encoded_bytes_are_pinned() {
+        let fnv = |b: &[u8]| b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3));
+        let (w, h) = (1203, 1037);
+        let rgb = test_rgb(w, h);
+        let gray: Vec<u8> = rgb.as_chunks::<3>().0.iter().map(|p| p[1]).collect();
+        let rgba: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let got = [
+            fnv(&encode(&rgb, w, h, 3, 90, ChromaSubsampling::S444, &[])),
+            fnv(&encode(&rgb, w, h, 3, 75, ChromaSubsampling::S420, &[])),
+            fnv(&encode(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[])),
+            fnv(&encode(&rgba, w, h, 4, 85, ChromaSubsampling::S444, &[])),
+        ];
+        assert_eq!(got, PINNED, "{got:#x?}");
+    }
+    /// [`round_i16`] against `f32::round` at the halves, the ends of `i16`, NaN and infinities, and a spread of every
+    /// magnitude (all 2^32 inputs were compared once, offline).
+    #[test]
+    fn round_i16_is_round_as_i16() {
+        let special = [0.5f32, -0.5, 1.5, -1.5, 2.5, -2.5, 0.499_999_97, -0.499_999_97, 32767.5, -32768.5, 32766.5, 1e9, -1e9];
+        let all = special.into_iter().chain([f32::NAN, f32::INFINITY, f32::NEG_INFINITY]).chain((0..=u32::MAX).step_by(9973).map(f32::from_bits));
+        for x in all {
+            assert_eq!(round_i16(x), x.round() as i16, "{x:e}");
+        }
+    }
+    const PINNED: [u64; 4] = [0x52ba_772a_589c_1430, 0x013f_8364_821f_1dde, 0xb2a3_b5e5_aef3_7402, 0x08df_d6dc_aa2f_1c78];
     #[test]
     fn grayscale_and_quality_monotone() {
         let (w, h) = (300, 200);

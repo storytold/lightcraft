@@ -28,6 +28,7 @@ An export can hand the files it wrote to Apple Photos, optionally into an album 
 An import can take minutes, and the first one waits for the user to answer macOS's permission prompt. Each
 import is a job: `{job, running, requested, album}`, plus, once Photos is done, `{imported, ids, warning?}`,
 `{error}` or `{skipped}` (`exporting: true` while an export that will add its files is still writing them).
+`skipped` says why Photos wasn't asked, in words; `cancelled: true` comes with it when the export was cancelled.
 
 While Photos works, the activity stack ([background-tasks.md](background-tasks.md)) shows it. An export adding its
 files keeps its own row, which reads "Adding to Apple Photos…" and loses its ✕, since Photos can't be stopped once
@@ -129,7 +130,7 @@ new empty library first: hold ⌥ while opening Photos ▸ Create New).
 2. Open it from the Finder, or with `open target/macos-package/LightCraft.app --args --demo` (not by running
    the binary in a terminal, which makes the terminal the app macOS asks about).
 3. Select three photos, choose File ▸ Export…, set a folder (e.g. `~/Pictures/LightCraft Exports`), tick **Add
-   to Apple Photos**, type the album `LightCraft test "1"` and press OK.
+   to Apple Photos**, type the album `LightCraft test "1"` and press Export.
 4. macOS asks whether **LightCraft** may control Photos, showing the usage text from `Info.plist`: allow it.
    Expected: the toast reads "Exported 3 of 3 photos · 3 added to Apple Photos album “LightCraft test "1"”",
    and a top-level album of that name holds the three images.

@@ -161,6 +161,8 @@ struct Busy {
     level: SourceLevel,
     key: u64,
     cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// A slideshow slide: the worker renders the photo, it is composed here when it comes back.
+    slide: Option<Arc<lightcraft_engine::slide::SlideCompose>>,
 }
 
 struct W {
@@ -370,6 +372,13 @@ impl Workers {
             });
         }
         g.remote_done += 1;
+        let rendered = match (rendered, &b.slide) {
+            (Ok(mut r), Some(slide)) => {
+                r.image = slide.compose(&r.image);
+                Ok(r)
+            }
+            (r, _) => r,
+        };
         g.done.push((
             b.slot,
             RenderResult {
@@ -493,6 +502,7 @@ impl RenderOffload for Workers {
             level: job.level,
             key: job.key,
             cache: job.cache,
+            slide: job.slide,
         });
         None
     }

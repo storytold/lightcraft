@@ -27,6 +27,9 @@ pub(super) struct FaceSettings {
     pub(super) enabled: bool,
     /// The installed recogniser in use.
     pub(super) embedder: Option<String>,
+    /// Keep every face model on the CPU, even when the GPU would be faster.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) cpu_only: bool,
 }
 
 fn fail(what: &str, e: impl std::fmt::Display) -> EngineError {
@@ -55,6 +58,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&part);
         fail(&format!("could not write {}", path.display()), e)
     })
+}
+
+/// Keep the face models on the CPU (or let them use the GPU again).
+pub(super) fn set_cpu_only(dir: &Path, on: bool) -> Result<()> {
+    let mut st = read_settings(dir);
+    st.cpu_only = on;
+    write_settings(dir, &st)
 }
 
 fn write_settings(dir: &Path, st: &FaceSettings) -> Result<()> {
@@ -195,6 +205,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         "dir": dir.as_ref().map(|d| d.display().to_string()),
         "enabled": settings.enabled,
         "embedder": settings.embedder,
+        // where the models run: {cpuOnly, detection, recognition} as `faces.gpu` gives it
+        "gpu": super::face_detect::gpu_json(s),
         // Native builds always have the pure-Rust runner; model files/background scanning remain native-only.
         "runtime": cfg!(not(target_arch = "wasm32")),
         "models": models,

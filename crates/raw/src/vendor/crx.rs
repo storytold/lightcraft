@@ -30,6 +30,12 @@ const MAX_CRX_SAMPLES: usize = 200_000_000;
 const MAX_CRX_EDGE: u32 = 65_536;
 /// Unary QP-map prefix length that announces an 8-bit escaped symbol.
 const QP_ESCAPE_ZEROS: u32 = 23;
+/// Highest uniform (per-subband) quantization value with a measured step.
+const MAX_UNIFORM_QUANT: u8 = 44;
+/// Highest adaptive quantization value (QP − 124) seen in real files: QP 175 on the EOS R6 Mark II.
+/// See [`quant_step`].
+const MAX_ADAPTIVE_QUANT: u8 = 51;
+const MAX_QP: i32 = 124 + MAX_ADAPTIVE_QUANT as i32;
 const RUN_EXPONENT: [u8; 32] = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 fn corrupt(reason: &str) -> RawError {
@@ -207,7 +213,7 @@ fn validate_planes(tiles: &[Tile], config: &Cr3Compression) -> Result<()> {
                 if config.levels != 0 {
                     match band.quant {
                         Quantization::Uniform(value) => {
-                            quant_step(value)?;
+                            quant_step(value, MAX_UNIFORM_QUANT)?;
                         }
                         Quantization::Adaptive { gain, .. } => {
                             if index < 4 && gain != 0 {
@@ -342,12 +348,14 @@ fn tile_qp(sample: &[u8], tile: &Tile) -> Result<Option<QpMap>> {
         .transpose()
 }
 
-fn quant_step(value: u8) -> Result<i32> {
+fn quant_step(value: u8, max: u8) -> Result<i32> {
     // Measured independently with an external decoder after modifying only the
     // quantValue field: all forty values 4..43 follow this integer sequence. Value 44 (QP 168)
     // continues it (step 102); it was checked against a measured step of about 100 on an EOS R50
-    // C-RAW file. Nothing above 44 has been seen, so it stays rejected.
-    if !(4..=44).contains(&value) {
+    // C-RAW file. Uniform subband values stop there (`MAX_UNIFORM_QUANT`). Adaptive QP maps reach
+    // QP 175 (value 51) on the EOS R6 Mark II; those steps (114..228) continue the same sequence and
+    // were checked against the camera's own JPEGs (docs/cr3.md). Anything higher is still rejected.
+    if !(4..=max).contains(&value) {
         return Err(RawError::Unsupported(format!("Canon CRX quantization value {value}")));
     }
     let scale = [40i32, 45, 51, 57, 64, 72].get(usize::from(value % 6)).copied().ok_or_else(|| corrupt("quantization table index"))?;
@@ -356,6 +364,39 @@ fn quant_step(value: u8) -> Result<i32> {
 
 fn split_dimension(length: usize, before: bool, after: bool) -> (usize, usize) {
     (length.div_ceil(2) + usize::from(after && length.is_multiple_of(2)), length / 2 + usize::from(before) + usize::from(after))
+}
+
+/// The width at which high-frequency band `index` (1–9, coarsest level first) is entropy coded,
+/// given its synthesis width `width`.
+///
+/// A tile with a neighbour on its right codes the vertical high-pass band of the level-1 and level-2
+/// low-pass columns (bands 8 and 5, whose low-pass columns the next level transforms again) at an odd
+/// width: an even synthesis width gains one column, which synthesis does not use. Every other band,
+/// including band 2 of the last level, is coded at its synthesis width. Measured on every C-RAW plane
+/// that `tests/it/cr3_corpus.rs` decodes (CC0 raw.pixls.us files): two-tile files with tile widths 2816,
+/// 3144, 3192, 3444 and 3564 (G5 X Mark II, M50, R100, 250D, RP, R, 90D, M6 Mark II), where bands 5
+/// and 8 gain a column in left tiles exactly when the rule says so, and single-tile `0x100` and
+/// `0x200` files, which never extend a band. In every one of those planes, each band's entropy stream
+/// ends exactly at that width and at no other width from `width` to `width + 2`. The width used to be
+/// probed by trying `width`, `width + 1` and `width + 2` in turn, but two widths can both consume a
+/// stream exactly and give different coefficients (#899), so it is now taken from the geometry.
+/// No public file has a middle tile (three or more C-RAW tiles); it is assumed to follow the left tile.
+fn coded_band_width(index: usize, width: usize, edges: TileEdges) -> usize {
+    if edges.right && matches!(index, 5 | 8) { width | 1 } else { width }
+}
+
+/// A high-frequency band entropy coded `coded_width` columns wide, cropped to its `width` synthesis columns.
+fn coded_high_frequency_band(src: &[u8], width: usize, coded_width: usize, height: usize) -> Result<Vec<i32>> {
+    let values = high_frequency_band(src, coded_width, height)?;
+    if coded_width == width {
+        return Ok(values);
+    }
+    let mut cropped = Vec::new();
+    cropped.try_reserve_exact(width.saturating_mul(height)).map_err(|_| RawError::Limit("CRX cropped band allocation"))?;
+    for row in values.chunks_exact(coded_width) {
+        cropped.extend_from_slice(row.get(..width).ok_or_else(|| corrupt("band crop outside row"))?);
+    }
+    Ok(cropped)
 }
 
 fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edges: TileEdges, qp: Option<&QpMap>) -> Result<Vec<i32>> {
@@ -375,35 +416,10 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
     let mut bands = Vec::with_capacity(10);
     for (i, (&(w, h), band)) in shapes.iter().zip(&plane.bands).enumerate() {
         let bytes = band_bytes(sample, band)?;
-        let mut data = if i == 0 {
-            lossless_plane(bytes, w, h)?
-        } else {
-            // Some CRX high-frequency bands retain a redundant right column
-            // beyond synthesis support (LH2 in the M50/R100 fixtures). Infer
-            // that small extension only from a complete, correctly aligned
-            // entropy stream, then crop each row to the synthesis support.
-            let mut decoded = None;
-            for extra in 0..=2 {
-                let coded_width = w.checked_add(extra).ok_or(RawError::Limit("CRX band width"))?;
-                if let Ok(values) = high_frequency_band(bytes, coded_width, h) {
-                    if extra == 0 {
-                        decoded = Some(values);
-                    } else {
-                        let mut cropped = Vec::new();
-                        cropped.try_reserve_exact(w * h).map_err(|_| RawError::Limit("CRX cropped band allocation"))?;
-                        for row in values.chunks_exact(coded_width) {
-                            cropped.extend_from_slice(row.get(..w).ok_or_else(|| corrupt("band crop outside row"))?);
-                        }
-                        decoded = Some(cropped);
-                    }
-                    break;
-                }
-            }
-            decoded.ok_or_else(|| RawError::Corrupt(format!("Canon CRX band {i}: unsupported geometry or corrupt entropy")))?
-        };
+        let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
         for (position, value) in data.iter_mut().enumerate() {
             let step = match band.quant {
-                Quantization::Uniform(value) => quant_step(value)?,
+                Quantization::Uniform(value) => quant_step(value, MAX_UNIFORM_QUANT)?,
                 Quantization::Adaptive { base, gain } => {
                     adaptive_step(qp.ok_or_else(|| corrupt("missing QP map"))?, i, position % w, position / w, base, gain)?
                 }
@@ -443,7 +459,7 @@ fn adaptive_step(map: &QpMap, band: usize, x: usize, y: usize, base: u32, gain: 
         // QP rows are averaged before looking up the integer step. R8 field
         // mutations distinguish this order from averaging dequantization steps.
         let quant = u8::try_from(value - 124).map_err(|_| corrupt("QP value outside quantization table"))?;
-        u64::from(base) + u64::from(gain) * quant_step(quant)? as u64 / 8
+        u64::from(base) + u64::from(gain) * quant_step(quant, MAX_ADAPTIVE_QUANT)? as u64 / 8
     };
     i32::try_from(step.max(1)).map_err(|_| corrupt("adaptive quantization step outside precision"))
 }
@@ -775,7 +791,7 @@ fn qp_map(src: &[u8], width: usize, height: usize) -> Result<QpMap> {
             // The map opens with its first symbol as a 32-bit literal; every later one is Rice coded.
             let symbol = if x == 0 && y == 0 { (bits.take(16)? << 16) | bits.take(16)? } else { bits.qp_rice(k)? };
             let value = median(left, above, corner).checked_add(signed(symbol)).ok_or_else(|| corrupt("QP prediction overflow"))?;
-            if !(131..=168).contains(&value) {
+            if !(131..=MAX_QP).contains(&value) {
                 return Err(RawError::Unsupported(format!("Canon CRX adaptive QP value {value}")));
             }
             *current.get_mut(x).ok_or_else(|| corrupt("QP outside row"))? = value;
@@ -944,6 +960,56 @@ mod tests {
     }
 
     #[test]
+    fn coded_band_width_follows_the_measured_tile_geometry() {
+        let left_tile = TileEdges { right: true, ..TileEdges::default() };
+        let right_tile = TileEdges { left: true, ..TileEdges::default() };
+        let single = TileEdges::default();
+        // Bands 5 and 8 of a left tile: an even width gains a column (RP 400 -> 401, R 862 -> 863,
+        // 90D / M6 Mark II 892 -> 893), an odd one does not (90D / M6 Mark II band 5 at 447).
+        for (band, width, coded) in [(5, 394, 395), (5, 400, 401), (5, 432, 433), (5, 447, 447), (8, 862, 863), (8, 892, 893), (8, 705, 705)] {
+            assert_eq!(coded_band_width(band, width, left_tile), coded, "band {band} at {width}");
+        }
+        // The last level's low-pass columns are not transformed again: band 2 keeps an even width.
+        assert_eq!(coded_band_width(2, 198, left_tile), 198);
+        for band in [1, 3, 4, 6, 7, 9] {
+            assert_eq!(coded_band_width(band, 394, left_tile), 394, "band {band}");
+        }
+        for band in 1..=9 {
+            assert_eq!(coded_band_width(band, 446, right_tile), 446, "band {band}");
+            assert_eq!(coded_band_width(band, 446, single), 446, "band {band}");
+        }
+    }
+
+    #[test]
+    fn a_band_that_decodes_at_two_widths_uses_the_coded_width() {
+        // #899: entropy alignment alone does not identify the coded width. This 2-row stream is
+        // consumed exactly both 2 and 3 columns wide, with different retained coefficients.
+        let src = [0xc0, 0x0f];
+        assert_eq!(high_frequency_band(&src, 2, 2).unwrap(), [0, 0, 5, -2]);
+        assert_eq!(high_frequency_band(&src, 3, 2).unwrap(), [0, 0, 5, 0, 0, 0]);
+        // The width probe took the first width that decoded (2). Band 8 of a left tile at an even
+        // width is coded one column wider, so the geometry selects 3 and crops it.
+        let coded = coded_band_width(8, 2, TileEdges { right: true, ..TileEdges::default() });
+        assert_eq!(coded, 3);
+        assert_eq!(coded_high_frequency_band(&src, 2, coded, 2).unwrap(), [0, 0, 0, 0]);
+        // Elsewhere the same stream is read at its synthesis width.
+        assert_eq!(coded_high_frequency_band(&src, 2, coded_band_width(7, 2, TileEdges::default()), 2).unwrap(), [0, 0, 5, -2]);
+        // The #899 reproducer: an odd width is never extended, so the narrow reading is kept.
+        let src = [0x00, 0x33];
+        assert_eq!(coded_band_width(5, 3, TileEdges { right: true, ..TileEdges::default() }), 3);
+        assert_eq!(coded_high_frequency_band(&src, 3, 3, 1).unwrap(), [5, 0, -1]);
+        assert_eq!(high_frequency_band(&src, 4, 1).unwrap(), [5, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_band_that_fails_at_its_coded_width_is_an_error() {
+        // No fallback to another width: a stream that only fits 2 columns is corrupt where 3 are coded.
+        let src = [0xc0, 0x0f];
+        assert!(high_frequency_band(&src, 4, 2).is_err());
+        assert!(coded_high_frequency_band(&src, 3, 4, 2).is_err());
+    }
+
+    #[test]
     fn craw_overshoot_at_clipped_highlights_is_clamped_to_the_bit_depth() {
         // As `three_level_craw_reconstructs_sensor_samples`, but each LL3 coefficient is +8200
         // (Rice escape: 41 zeros, 1, 21-bit literal 16400 = signed +8200). Flat synthesis gives
@@ -990,10 +1056,19 @@ mod tests {
     #[test]
     fn measured_quantization_and_allocation_limits() {
         for (quant, expected) in [(4, 1), (9, 1), (10, 2), (16, 4), (22, 8), (26, 12), (32, 25), (36, 40), (41, 72), (42, 80), (43, 90), (44, 102)] {
-            assert_eq!(quant_step(quant).unwrap(), expected);
+            assert_eq!(quant_step(quant, MAX_UNIFORM_QUANT).unwrap(), expected);
         }
-        assert!(matches!(quant_step(3), Err(RawError::Unsupported(_))));
-        assert!(matches!(quant_step(45), Err(RawError::Unsupported(_))));
+        assert!(matches!(quant_step(3, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
+        assert!(matches!(quant_step(45, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
+        // Adaptive QP 169..=175 (EOS R6 Mark II C-RAW) continue the sequence; QP 176 does not decode.
+        for (quant, expected) in [(45, 114), (46, 128), (47, 144), (48, 160), (49, 180), (50, 204), (51, 228)] {
+            assert_eq!(quant_step(quant, MAX_ADAPTIVE_QUANT).unwrap(), expected);
+        }
+        assert!(matches!(quant_step(52, MAX_ADAPTIVE_QUANT), Err(RawError::Unsupported(_))));
+        let high = QpMap { width: 1, height: 2, data: vec![172, 175] };
+        // floor((172+175)/2) = 173 → value 49, step 180; gain 8/8 plus base 1.
+        assert_eq!(adaptive_step(&high, 4, 0, 0, 1, 8).unwrap(), 181);
+        assert_eq!(adaptive_step(&high, 7, 0, 1, 0, 8).unwrap(), 228);
         for (width, height) in [(20_000, 20_000), (65_538, 2), (2, 65_538)] {
             let mut config = coding();
             config.width = width;
@@ -1032,9 +1107,18 @@ mod tests {
     }
 
     #[test]
-    fn qp_168_is_accepted_and_169_is_not() {
-        assert_eq!(qp_map(&[0, 0, 1, 0x50, 0x94], 1, 4).unwrap().data, [168; 4]);
-        assert!(matches!(qp_map(&[0, 0, 1, 0x52, 0x94], 1, 4), Err(RawError::Unsupported(_))));
+    fn qp_limit_is_accepted_and_one_above_is_not() {
+        // The first symbol is a 32-bit literal: signed(2·QP) = QP from a prediction of 0. QP 172 and 175
+        // occur in EOS R6 Mark II maps (3 of 40 sample files failed with them before).
+        let map = |qp: u32| {
+            let symbol = 2 * qp;
+            let mut src = vec![0, 0, (symbol >> 8) as u8, symbol as u8];
+            src.push(0x94);
+            qp_map(&src, 1, 4)
+        };
+        assert_eq!(map(168).unwrap().data, [168; 4]);
+        assert_eq!(map(MAX_QP as u32).unwrap().data, [MAX_QP; 4]);
+        assert!(matches!(map(MAX_QP as u32 + 1), Err(RawError::Unsupported(_))));
     }
 
     #[test]
@@ -1115,6 +1199,10 @@ mod tests {
             ("cr3-canon-m50-craw.cr3", 0x9aacbfe66f505e1bu64),
             ("cr3-canon-r8-raw.cr3", 0x63c1c6d8d1eb2312u64),
             ("cr3-canon-r8-craw.cr3", 0xf836a663a795a375u64),
+            ("cr3-canon-rp-raw.cr3", 0x5cb0f46404b8b663u64),
+            ("cr3-canon-rp-craw.cr3", 0xf48df06ca1d67382u64),
+            ("cr3-canon-rp-raw-crop.cr3", 0x46808a9de3b3dcc7u64),
+            ("cr3-canon-rp-craw-crop.cr3", 0x39a60c4efed4e1f4u64),
         ] {
             let path = std::path::Path::new(&directory).join(name);
             let bytes = std::fs::read(path).unwrap();

@@ -10,7 +10,7 @@
 //! - `ui.move/click/drag {x, y, …}`: raw pointer input in screen points
 //! - `ui.pointer {events: [{kind: down|drag|up, x, y}], space: "image"}`: gestures in normalized
 //!   image coordinates (brush strokes, crop handles…) — mapped to screen and injected as real input
-//! - `ui.key {key, shift?, alt?, cmd?}` / `ui.text {text}` / `ui.scroll {dx, dy}`
+//! - `ui.key {key, shift?, alt?, cmd?}` / `ui.text {text}` / `ui.scroll {dx, dy, source?, unit?, phase?}`
 //! - `ui.set {view?, panel?, filmstrip?, leftPanel?, zoom?, …}` / `ui.dialog.confirm|cancel`
 //! - `ui.screenshot {path?, headless?}` (headless: CPU-rendered, no compositor needed), `ui.resize {width, height}`, `ui.render {id?, size?, path?}`, `app.quit`
 
@@ -26,25 +26,67 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<ControlResponse>,
+    /// Who has the request: [`PENDING`], [`TAKEN`] (the app runs it) or [`ABANDONED`] (the
+    /// sender gave up on it, so the app must not run it late: issue #718).
+    pub state: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
+
+/// Queued, not yet run.
+pub const PENDING: u8 = 0;
+/// The app has started it: it will answer.
+pub const TAKEN: u8 = 1;
+/// Its sender gave up waiting (the window drew no frames): it is dropped unrun.
+pub const ABANDONED: u8 = 2;
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), params, reply: tx, state: Default::default() }, rx)
+    }
+
+    /// Claim the request for running; false when its sender already gave up on it.
+    pub fn take(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.state.compare_exchange(PENDING, TAKEN, Ordering::SeqCst, Ordering::SeqCst).is_ok() || self.state.load(Ordering::SeqCst) == TAKEN
+    }
+
+    /// Give up on the request; false when the app has already started it (it will answer).
+    pub fn abandon(state: &std::sync::atomic::AtomicU8) -> bool {
+        use std::sync::atomic::Ordering;
+        state.compare_exchange(PENDING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_ok() || state.load(Ordering::SeqCst) == ABANDONED
     }
 }
 
 pub enum Outcome {
     Done(Value),
-    Screenshot { path: Option<String>, headless: bool },
+    /// Answered later, by whoever holds the request's `reply` (a task that is still running).
+    Later,
+    /// A capture was admitted: `target` pins the destination identity until the write.
+    Screenshot {
+        target: Option<lightcraft_engine::originals::WriteTarget>,
+        headless: bool,
+    },
+    /// A synthetic-input request that must wait for a fresh layout and for its last event to be
+    /// consumed before it is answered (see `LightcraftApp::admit_gesture`).
+    Gesture {
+        method: String,
+        params: Value,
+    },
 }
 
+/// A reply that says it worked: `result`.
+pub(crate) fn success(v: Value) -> Value {
+    json!({"ok": true, "result": v})
+}
+/// A reply that says it failed: `error`.
+pub(crate) fn failure(e: impl std::fmt::Display) -> Value {
+    json!({"ok": false, "error": e.to_string()})
+}
 fn ok(v: Value) -> Outcome {
-    Outcome::Done(json!({"ok": true, "result": v}))
+    Outcome::Done(success(v))
 }
 fn err(e: impl std::fmt::Display) -> Outcome {
-    Outcome::Done(json!({"ok": false, "error": e.to_string()}))
+    Outcome::Done(failure(e))
 }
 fn wrap(r: Result<Value, String>) -> Outcome {
     match r {
@@ -91,11 +133,13 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
         "widgetCount": app.widgets.len(),
-        "perf": {"frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
             "pending": app.renderer.is_pending(crate::render::Slot::Main),
+            // why its render failed (the loupe then shows a stand-in, or nothing, for good)
+            "failed": app.renderer.failure_of(crate::render::Slot::Main, p),
             // zoomed past the whole-frame render: the window rendered at no more than 100 % (pixels of its frame)
             "region": app.region_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::Region)})),
             // …and the same for the Before side of a Before/After view
@@ -136,6 +180,9 @@ fn modifiers(p: &Value) -> egui::Modifiers {
     egui::Modifiers { alt: b("alt"), ctrl: b("ctrl"), shift: b("shift"), mac_cmd: b("cmd") && cfg!(target_os = "macos"), command: b("cmd") }
 }
 
+/// Parse a control-protocol key name into an egui key. `egui::Key::from_name` is tried first;
+/// then lowercase aliases cover `return`/`enter`, `esc`/`escape`, `delete`/`backspace` (both
+/// Backspace), arrow names, space/tab, and backslash, slash and square brackets.
 fn key_from(name: &str) -> Option<egui::Key> {
     egui::Key::from_name(name).or(match name.to_ascii_lowercase().as_str() {
         "enter" | "return" => Some(egui::Key::Enter),
@@ -155,6 +202,50 @@ fn key_from(name: &str) -> Option<egui::Key> {
     })
 }
 
+/// Most clicks one `ui.click`/`ui.clickWidget` request may inject. The control server is a
+/// local automation surface, but a request must not be able to fill memory with synthetic events.
+pub(crate) const MAX_CLICKS: u64 = 16;
+/// Most pointer-move steps one `ui.drag`/`ui.dragWidget` request may inject.
+pub(crate) const MAX_DRAG_STEPS: u64 = 1000;
+
+/// What a widget gesture's synthetic events were aimed at when they were resolved. Delivery
+/// rechecks this against the latest completed layout before the first event and again before every
+/// press: a moved widget cancels the request instead of being retargeted.
+#[derive(Clone, Debug)]
+pub(crate) struct GestureTarget {
+    pub id: String,
+    /// The rect the request resolved against. An explicit `fx`/`fy` may place `at` outside it;
+    /// delivery accepts that only while egui's actual clipped interaction rectangle still
+    /// contains the point.
+    pub rect: egui::Rect,
+    /// The point the pointer events aim at.
+    pub at: egui::Pos2,
+    /// Whether the release must still find this widget. egui attributes a click on release while a
+    /// drag may legitimately end outside the widget it started on, so only `ui.clickWidget` sets
+    /// this.
+    pub check_release: bool,
+    /// Whether the first event must find the widget visible and topmost. A hover is not harmless
+    /// when its point is clipped out of the widget or covered by a non-modal overlay: the
+    /// documented contract refuses it rather than moving the pointer at a stale place.
+    pub check_visible: bool,
+}
+
+/// The events queued for a resolved gesture, plus the widget target whose geometry must still hold
+/// when the first event and each press are injected.
+#[derive(Debug)]
+pub(crate) struct GestureOutcome {
+    pub result: Value,
+    pub target: Option<GestureTarget>,
+}
+
+impl GestureOutcome {
+    /// A gesture outcome that injected no widget-targeted events, so delivery has no geometry to
+    /// re-check.
+    fn done(result: Value) -> Self {
+        Self { result, target: None }
+    }
+}
+
 fn push_drag(app: &mut LightcraftApp, a: egui::Pos2, b: egui::Pos2, steps: u64, m: egui::Modifiers) {
     app.synthetic.push(egui::Event::PointerMoved(a));
     app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
@@ -165,10 +256,81 @@ fn push_drag(app: &mut LightcraftApp, a: egui::Pos2, b: egui::Pos2, steps: u64, 
     app.synthetic.push(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
 }
 
-fn widget_rect(app: &LightcraftApp, id: &str) -> Option<egui::Rect> {
+/// The rectangle registered for automation id `id` in the latest completed pass. The last
+/// registration wins, so a redrawn widget's current geometry is returned.
+pub(crate) fn widget_rect(app: &LightcraftApp, id: &str) -> Option<egui::Rect> {
     app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| *r)
 }
 
+/// The real egui widget that owns automation id `id` in the latest completed pass (the last
+/// registration wins, as [`widget_rect`] does).
+pub(crate) fn widget_hit(app: &LightcraftApp, id: &str) -> Option<crate::widgets::WidgetHit> {
+    app.widget_hits.iter().rev().find(|(w, _)| w == id).map(|(_, hit)| *hit)
+}
+
+/// Whether the registered automation rectangle still owns egui's pointer hit at `at`.
+///
+/// A registration records the egui id and layer of a hover probe (or of the widget's own
+/// response), plus that response's clipped `interact_rect` in the same completed pass. This asks
+/// egui for the current areas at the point and checks:
+///
+/// - the recorded clipped rectangle still contains the point (a widget scrolled out of its panel
+///   has an empty interact rect even though its unclipped rect still contains the old point);
+/// - the top-most interactable area at the point is the recorded layer; or
+/// - the top-most area is the current modal layer and the recorded layer is below it. egui routes
+///   every point below a modal to that modal, even outside the dialog window, so leaving the press
+///   to egui is safe: the dialog consumes it or `clicked_backdrop` closes the dialog, and a
+///   background widget cannot receive it. A non-modal overlay is not the modal layer, so it must
+///   still match the target and is refused otherwise. The one exception is the explicitly
+///   blocking library-problem/launch-list window: its dim also owns the modal layer, but a
+///   background target is refused here rather than reported `ok:true` after the dim swallows the
+///   press; only controls drawn in that window's own layer pass. Same-layer overlaps are invisible
+///   to this area check; egui still delivers the press to whichever widget is top-most in that
+///   layer.
+///
+/// `interact_rect` comes from the latest completed registry, not `Context::read_response`:
+/// `raw_input_hook` runs before `begin_pass`, where `read_response` checks `this_pass` before
+/// `prev_pass` and can therefore return the pass before the one that just published the registry.
+/// This matters when clipping, scrolling or a viewport change alters the target without changing
+/// its layer.
+///
+/// In pinned egui `6d518fc`, `Response::hovered` is deliberately false while any button is down
+/// unless this is the clicked widget (`context.rs:1884-1886`, `interaction.rs:257-300`). A
+/// hover-only probe cannot use it for a click release. `Response::contains_pointer` would survive
+/// the press, but its hit-test snapshot is one frame behind the pointer move that precedes the
+/// press (`context.rs:517-548` reads `prev_pass.widgets` at `begin_pass`). The recorded clipped rect
+/// plus the current layer has no such lag.
+///
+/// This also avoids the old centre-of-an-interactive-rect heuristic: a registration may be a
+/// sub-rect of its widget's interactive response (rating stars, date cells, a checkbox's box, a
+/// profile card's star), so the interactive rect's centre need not lie in the registered rect.
+/// Disabled controls keep working as a no-op: their own probe is enabled and the injected click
+/// is ignored by egui, which is the documented `ui.clickWidget` semantics.
+pub(crate) fn widget_target_visible(ctx: &egui::Context, hit: Option<crate::widgets::WidgetHit>, at: egui::Pos2) -> bool {
+    let Some(hit) = hit else {
+        // A hand-built registry entry (tests) or painted geometry has no egui widget to own a
+        // press. Production widget registrations always record a probe or a real response.
+        return false;
+    };
+    let interact_rect = ctx.layer_transform_to_global(hit.layer_id).map_or(hit.interact_rect, |to_global| to_global * hit.interact_rect);
+    if !interact_rect.is_finite() || !interact_rect.contains(at) {
+        return false;
+    }
+    let (top_modal, allows_interaction, above_modal) =
+        ctx.memory(|memory| (memory.top_modal_layer(), memory.allows_interaction(hit.layer_id), memory.is_above_modal_layer(hit.layer_id)));
+    if crate::panels::library_problem::refuses_control_target(top_modal, hit.layer_id) {
+        return false;
+    }
+    let at_layer = ctx.layer_id_at(at);
+    if at_layer == Some(hit.layer_id) {
+        return allows_interaction;
+    }
+    top_modal == at_layer && !above_modal
+}
+
+/// Dispatch one control request: run engine commands, list menus/widgets, inspect state, queue
+/// file drops and synthetic input, capture screenshots, or return an error for an unknown or
+/// invalid request. Requests that need fresh widget geometry are queued as `Outcome` values.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -177,6 +339,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.execute" | "ui.menu.invoke" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            if id == "library.missing" {
+                // looks at every photo's file: on a worker thread, answered when it is done
+                let started = crate::missing_sweep::ask(app, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
             let r = app.run(id, params);
             ctx.request_repaint();
             wrap(r)
@@ -193,128 +361,30 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 app.widgets.iter().filter(|(id, _)| id.contains(filter)).map(|(id, r)| json!({"id": id, "rect": rect_json(*r)})).collect(),
             ))
         }
-        "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget" => {
-            let Some(id) = s("id") else { return err("missing `id`") };
-            let Some(r) = widget_rect(app, id) else { return err(format!("no widget `{id}` on screen (see ui.widgets)")) };
-            let m = modifiers(p);
-            // optional relative position inside the widget (0..1)
-            let at = egui::pos2(r.left() + r.width() * f("fx").unwrap_or(0.5) as f32, r.top() + r.height() * f("fy").unwrap_or(0.5) as f32);
-            if req.method == "ui.hoverWidget" {
-                app.synthetic.push(egui::Event::PointerMoved(at));
-            } else if req.method == "ui.clickWidget" {
-                let n = p.get("count").and_then(Value::as_u64).unwrap_or(1);
-                let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-                app.synthetic.push(egui::Event::PointerMoved(at));
-                for _ in 0..n {
-                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: m });
-                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: m });
-                }
-            } else {
-                let to = egui::pos2(
-                    f("toX").map(|v| v as f32).unwrap_or(at.x + f("dx").unwrap_or(0.0) as f32),
-                    f("toY").map(|v| v as f32).unwrap_or(at.y + f("dy").unwrap_or(0.0) as f32),
-                );
-                push_drag(app, at, to, p.get("steps").and_then(Value::as_u64).unwrap_or(10), m);
-            }
-            ctx.request_repaint();
-            ok(json!({"rect": rect_json(r)}))
-        }
-        "ui.move" => {
-            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32)));
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
-        "ui.click" | "ui.drag" => {
-            let a = egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32);
-            let m = modifiers(p);
-            let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-            if req.method == "ui.drag" {
-                let b = egui::pos2(f("toX").unwrap_or(0.0) as f32, f("toY").unwrap_or(0.0) as f32);
-                push_drag(app, a, b, p.get("steps").and_then(Value::as_u64).unwrap_or(10), m);
-            } else {
-                app.synthetic.push(egui::Event::PointerMoved(a));
-                for _ in 0..p.get("count").and_then(Value::as_u64).unwrap_or(1) {
-                    app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: true, modifiers: m });
-                    app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: false, modifiers: m });
-                }
-            }
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
-        "ui.pointer" => {
-            // events in normalized image coordinates of the displayed photo frame
-            let Some(img) = app.image_rect else { return err("no image on screen (switch to Detail view)") };
-            let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
-            let m = modifiers(p);
-            for e in events {
-                let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
-                let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.5) as f32;
-                let pos = egui::pos2(img.left() + x * img.width(), img.top() + y * img.height());
-                match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
-                    "down" => {
-                        app.synthetic.push(egui::Event::PointerMoved(pos));
-                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
-                    }
-                    "up" => {
-                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: m })
-                    }
-                    _ => app.synthetic.push(egui::Event::PointerMoved(pos)),
-                }
-            }
-            ctx.request_repaint();
-            ok(json!({"events": events.len()}))
-        }
-        "ui.key" => {
-            let Some(k) = s("key").and_then(key_from) else { return err("unknown or missing `key`") };
-            let m = modifiers(p);
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
-        "ui.text" => {
-            app.synthetic.push(egui::Event::Text(s("text").unwrap_or("").to_string()));
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
-        // what the system does for ⌘X / ⌘C / ⌘V in a text field: paste `text`, or (without it)
-        // what the system clipboard holds
-        "ui.clipboard" => {
-            // outside a text field ⌘C / ⌘V are the app's shortcuts (and the macOS menu bar's):
-            // agents run those as commands (`develop.copy`, `develop.paste`)
-            if !ctx.text_edit_focused() {
-                return err("ui.clipboard: no text field has the focus (click one first)");
-            }
-            match s("action") {
-                Some("cut") => app.synthetic.push(egui::Event::Cut),
-                Some("copy") => app.synthetic.push(egui::Event::Copy),
-                Some("paste") => match s("text") {
-                    Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
-                    None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
-                },
-                _ => return err("ui.clipboard: `action` is cut, copy or paste"),
-            }
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
-        "ui.scroll" => {
-            app.synthetic.push(egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(f("dx").unwrap_or(0.0) as f32, f("dy").unwrap_or(0.0) as f32),
-                phase: egui::TouchPhase::Move,
-                modifiers: modifiers(p),
-            });
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
-        "ui.zoom" => {
-            let Some(factor) = f("factor").map(|v| v as f32).filter(|v| v.is_finite() && *v > 0.0) else {
-                return err("ui.zoom: factor must be a finite positive number (1 = unchanged)");
+        "ui.dropFiles" => {
+            // every entry must be a string: a script is not told `ok` for a part of what it sent
+            let Some(paths) =
+                p.get("paths").and_then(Value::as_array).and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect::<Option<Vec<_>>>())
+            else {
+                return err("ui.dropFiles: paths must be an array of strings");
             };
-            app.synthetic.push(egui::Event::Zoom(factor));
+            if p.get("hover").and_then(Value::as_bool).unwrap_or(false) {
+                app.drop_hover = paths;
+            } else {
+                // the drag ends with the drop, as it does for the OS
+                app.drop_hover.clear();
+                app.drop_pending = paths;
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }
+        "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget" | "ui.move" | "ui.click" | "ui.drag" | "ui.pointer" | "ui.key" | "ui.text"
+        | "ui.clipboard" | "ui.scroll" => {
+            // Geometry and input events are resolved only after a fresh completed layout; the
+            // reply waits until the UI has consumed the last event (plan §4.5).
+            Outcome::Gesture { method: req.method.clone(), params: req.params.clone() }
+        }
+        "ui.zoom" => Outcome::Gesture { method: req.method.clone(), params: req.params.clone() },
         "ui.set" => {
             // an arrangement of the sidebar is checked, not made whole as a settings file's is
             let sidebar = match p.get("sidebar").map(crate::sidebar::SidebarLayout::parse).transpose() {
@@ -360,13 +430,25 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.dialog.confirm" => match app.ui.dialog.take() {
             Some(d) => {
                 let r = crate::panels::dialogs::confirm_dialog(app, &d);
-                // the import review and the rule editor stay open on an error, as with their buttons
+                // a refused one-line prompt says why on screen, as with its button; a folder made says where
+                match (&r, &d) {
+                    (Err(e), crate::state::Dialog::TextPrompt { .. }) => app.toast_error(ctx, e.clone()),
+                    (Ok(made), crate::state::Dialog::TextPrompt { .. }) => crate::dialogs::toast_created_folder(app, ctx, &d, made),
+                    _ => {}
+                }
+                // the import review, the rule editor and the one-line prompts stay open on an error, as with their buttons
                 if (r.is_err()
                     && matches!(
                         d,
-                        crate::state::Dialog::Import { .. } | crate::state::Dialog::SamModel { .. } | crate::state::Dialog::SmartRules { .. }
+                        crate::state::Dialog::Import { .. }
+                            | crate::state::Dialog::SamModel { .. }
+                            | crate::state::Dialog::SmartRules { .. }
+                            | crate::state::Dialog::SaveEffect { .. }
+                            | crate::state::Dialog::CaptureTime { .. }
+                            | crate::state::Dialog::TextPrompt { .. }
                     ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
+                    || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))
                 {
                     app.ui.dialog = Some(d);
                 }
@@ -375,6 +457,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             None => err("no dialog open"),
         },
         "ui.dialog.cancel" => {
+            if matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. })) {
+                app.renderer.forget_imports();
+            }
             app.ui.dialog = None;
             ok(Value::Null)
         }
@@ -403,15 +488,27 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             _ => err("ui.zoomFactor: factor must be a number from 0.5 to 3"),
         },
         "ui.screenshot" => {
-            // never over a photo's original
-            if let Some(Err(e)) = s("path").map(|path| app.session.check_write_target(path)) {
-                return err(e);
-            }
+            // Never over a photo's original, and pin the destination identity now: the write
+            // revalidates it after the (possibly lengthy) capture and never replaces a path that
+            // was absent at admission but appeared meanwhile.
+            let target = match s("path") {
+                Some(path) => match app.session.pin_write_target(path) {
+                    Ok(t) => Some(t),
+                    Err(e) => return err(e),
+                },
+                None => None,
+            };
             ctx.request_repaint();
-            Outcome::Screenshot { path: s("path").map(str::to_string), headless: p.get("headless").and_then(Value::as_bool).unwrap_or(false) }
+            Outcome::Screenshot { target, headless: p.get("headless").and_then(Value::as_bool).unwrap_or(false) }
         }
         "ui.render" => {
-            let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.active());
+            let id = match p.get("id").filter(|v| !v.is_null()) {
+                Some(v) => match v.as_u64() {
+                    Some(n) => Some(lightcraft_catalog::PhotoId(n)),
+                    None => return err("`id` must be a photo id (a whole number)"),
+                },
+                None => app.session.active(),
+            };
             let Some(id) = id else { return err("no photo") };
             if let Some(Err(e)) = s("path").map(|path| app.session.check_write_target(path)) {
                 return err(e);
@@ -457,13 +554,16 @@ pub fn default_export_dir() -> String {
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
     let p = &app.session.export_params(p)?;
-    let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
-    if let (Some(path), None) = (p.get("path").and_then(Value::as_str), p.get("format")) {
-        let ext = path.rsplit_once('.').map_or("", |(_, e)| e);
-        opts.format = lightcraft_engine::export::ExportFormat::parse(ext).unwrap_or(opts.format);
-    }
-    let ids: Vec<_> = match p.get("ids").and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect(),
+    // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
+    let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    let ids: Vec<_> = match p.get("ids").filter(|v| !v.is_null()) {
+        // `ids` that aren't photo ids are an error, not "export the selection"
+        Some(v) => v
+            .as_array()
+            .ok_or("app.export: `ids` must be a list of photo ids")?
+            .iter()
+            .map(|v| v.as_u64().map(lightcraft_catalog::PhotoId).ok_or("app.export: `ids` must be photo ids (whole numbers)"))
+            .collect::<Result<_, _>>()?,
         None if !app.session.selection.ids.is_empty() => {
             // Batch order (and `{seq}`) follows the grid order.
             let sel: std::collections::HashSet<_> = app.session.selection.ids.iter().copied().collect();
@@ -480,7 +580,8 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     // An exact output file needs no folder. A folder given but left blank (the Export dialog's Folder
     // field cleared) is an error, like Lightroom refusing to export to an unspecified folder, rather
     // than a silent write into the working directory. No folder at all (e.g. File → Export with
-    // Preset): the last export's, else the default.
+    // Preset): the last export's, else the default. "Same folder as original photo" needs none:
+    // each photo goes to its own folder.
     let exact = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string);
     let dir = match p.get("dir").and_then(Value::as_str) {
         Some(d) => d.trim().to_string(),
@@ -490,7 +591,8 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
             last_dir.map(str::to_string).unwrap_or_else(default_export_dir)
         }
     };
-    if dir.is_empty() && exact.is_none() {
+    let own_folders = opts.destination_mode == lightcraft_engine::export::DestinationMode::SameAsOriginal;
+    if dir.is_empty() && exact.is_none() && !own_folders {
         return Err(NO_EXPORT_FOLDER.into());
     }
     let to = Destination { dir: dir.clone(), exact };
@@ -524,22 +626,264 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     Ok(out)
 }
 
-pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
+/// The largest coordinate or offset a gesture takes, in points (far past any screen).
+const MAX_GESTURE_NUMBER: f64 = 1e6;
+
+/// Every number of a gesture's parameters (and of `ui.pointer`'s events) is finite and within
+/// ±[`MAX_GESTURE_NUMBER`]. A larger one turns into an infinite or NaN `f32` position or scroll
+/// delta: egui asserts on NaN positions, and a release build would hand them to every widget.
+/// `count` and `steps` are clamped where they are read instead, and `ui.zoom`'s `factor` (a
+/// multiplier, not a position) is checked and clamped by its own branch. Checked when a request
+/// is admitted and again here, for callers that resolve a gesture directly.
+pub(crate) fn check_gesture_numbers(method: &str, p: &Value) -> Result<(), String> {
+    fn check(method: &str, key: &str, v: &Value) -> Result<(), String> {
+        match v {
+            Value::Number(n) if !matches!(key, "count" | "steps" | "factor") => match n.as_f64() {
+                Some(x) if x.abs() <= MAX_GESTURE_NUMBER => Ok(()),
+                _ => Err(format!("{method}: `{key}` must be a number between -1000000 and 1000000")),
+            },
+            Value::Array(a) => a.iter().try_for_each(|v| check(method, key, v)),
+            Value::Object(o) => o.iter().try_for_each(|(k, v)| check(method, k, v)),
+            _ => Ok(()),
+        }
+    }
+    check(method, "", p)
+}
+
+/// Resolve one queued synthetic-input control request against the **current** layout.
+///
+/// Called by the app only after a completed UI pass newer than admission (plan §4.5). Widget rects
+/// and the image rect therefore come from that pass; nothing is retargeted. A successful return
+/// has pushed the events onto `app.synthetic`; the app answers the request once the UI consumed
+/// them.
+pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, method: &str, p: &Value) -> Result<GestureOutcome, String> {
+    check_gesture_numbers(method, p)?;
+    let s = |k: &str| p.get(k).and_then(Value::as_str);
+    let f = |k: &str| p.get(k).and_then(Value::as_f64);
+    match method {
+        "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget" => {
+            let Some(id) = s("id") else { return Err("missing `id`".into()) };
+            let Some(r) = widget_rect(app, id) else { return Err(format!("no widget `{id}` on screen (see ui.widgets)")) };
+            let m = modifiers(p);
+            let (fx, fy) = (f("fx").unwrap_or(0.5), f("fy").unwrap_or(0.5));
+            let at = egui::pos2(r.left() + r.width() * fx as f32, r.top() + r.height() * fy as f32);
+            if !fx.is_finite() || !fy.is_finite() || !at.is_finite() {
+                return Err(format!("{method}: fx and fy must resolve to a finite point"));
+            }
+            let hover = method == "ui.hoverWidget";
+            if hover && !widget_target_visible(ctx, widget_hit(app, id), at) {
+                return Err(format!("ui.hoverWidget: widget `{id}` has no visible interaction area at the requested point"));
+            }
+            if hover {
+                app.synthetic.push(egui::Event::PointerMoved(at));
+            } else if method == "ui.clickWidget" {
+                let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).min(MAX_CLICKS);
+                let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+                app.synthetic.push(egui::Event::PointerMoved(at));
+                for _ in 0..n {
+                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: m });
+                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: m });
+                }
+            } else {
+                let to = egui::pos2(
+                    f("toX").map(|v| v as f32).unwrap_or(at.x + f("dx").unwrap_or(0.0) as f32),
+                    f("toY").map(|v| v as f32).unwrap_or(at.y + f("dy").unwrap_or(0.0) as f32),
+                );
+                push_drag(app, at, to, p.get("steps").and_then(Value::as_u64).unwrap_or(10).min(MAX_DRAG_STEPS), m);
+            }
+            ctx.request_repaint();
+            Ok(GestureOutcome {
+                result: json!({"rect": rect_json(r)}),
+                target: Some(GestureTarget { id: id.to_string(), rect: r, at, check_release: method == "ui.clickWidget", check_visible: hover }),
+            })
+        }
+        "ui.move" => {
+            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32)));
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        "ui.click" | "ui.drag" => {
+            let a = egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32);
+            let m = modifiers(p);
+            let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+            if method == "ui.drag" {
+                let b = egui::pos2(f("toX").unwrap_or(0.0) as f32, f("toY").unwrap_or(0.0) as f32);
+                push_drag(app, a, b, p.get("steps").and_then(Value::as_u64).unwrap_or(10).min(MAX_DRAG_STEPS), m);
+            } else {
+                app.synthetic.push(egui::Event::PointerMoved(a));
+                for _ in 0..p.get("count").and_then(Value::as_u64).unwrap_or(1).min(MAX_CLICKS) {
+                    app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: true, modifiers: m });
+                    app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: false, modifiers: m });
+                }
+            }
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        "ui.pointer" => {
+            let Some(img) = app.image_rect else { return Err("no image on screen (switch to Detail view)".into()) };
+            let Some(events) = p.get("events").and_then(Value::as_array) else { return Err("missing `events`".into()) };
+            let m = modifiers(p);
+            for e in events {
+                let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
+                let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.5) as f32;
+                let pos = egui::pos2(img.left() + x * img.width(), img.top() + y * img.height());
+                match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
+                    "down" => {
+                        app.synthetic.push(egui::Event::PointerMoved(pos));
+                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+                    }
+                    "up" => {
+                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: m })
+                    }
+                    _ => app.synthetic.push(egui::Event::PointerMoved(pos)),
+                }
+            }
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(json!({"events": events.len()})))
+        }
+        "ui.key" => {
+            let Some(k) = s("key").and_then(key_from) else { return Err("unknown or missing `key`".into()) };
+            let m = modifiers(p);
+            // {action?: "press" | "down" | "up"}: down … up holds the key across other input (Space
+            // held over a drag); a press is both in one frame
+            let (down, up) = match s("action").unwrap_or("press") {
+                "press" => (true, true),
+                "down" => (true, false),
+                "up" => (false, true),
+                other => return Err(format!("ui.key: action {other:?} (press, down or up)")),
+            };
+            for pressed in [down.then_some(true), up.then_some(false)].into_iter().flatten() {
+                app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: m });
+            }
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        "ui.text" => {
+            app.synthetic.push(egui::Event::Text(s("text").unwrap_or("").to_string()));
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        "ui.clipboard" => {
+            // RequestPaste is a viewport command, not an event: the prompt/library input barrier
+            // cannot inspect it after the fact. Refuse the command while either barrier owns input,
+            // including a window created after this pass began resolving the gesture. Without
+            // `text` this only queues RequestPaste in egui; it is not a host-dispatch or delivery
+            // acknowledgement. egui 0.37 documents RequestPaste as asking the host to paste into
+            // the focused text edit, with no completion or correlation id. egui-winit emits a later
+            // Event::Paste only for non-empty text (or a PasteImage fallback; Wayland reads finish
+            // later), so a barrier created after the request can drop that later event; the reply
+            // below cannot promise dispatch or delivery. With `text`, the synthetic
+            // Event::Paste is filtered and canceled like other injected input.
+            let barrier = if crate::panels::notices::blocks_input(app) {
+                Some("a modal prompt")
+            } else if crate::panels::library_problem::blocks_dialog_input(app) {
+                Some("the blocking library window")
+            } else {
+                None
+            };
+            if let Some(barrier) = barrier {
+                return Err(format!("ui.clipboard: {barrier} is blocking background input"));
+            }
+            if !ctx.text_edit_focused() {
+                return Err("ui.clipboard: no text field has the focus (click one first)".into());
+            }
+            match s("action") {
+                Some("cut") => app.synthetic.push(egui::Event::Cut),
+                Some("copy") => app.synthetic.push(egui::Event::Copy),
+                Some("paste") => match s("text") {
+                    Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
+                    None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                },
+                _ => return Err("ui.clipboard: `action` is cut, copy or paste".into()),
+            }
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        "ui.scroll" => {
+            // Omitted keys keep the pre-0.37 request meaning; all other values are validated
+            // before anything is queued.
+            let source = match s("source") {
+                None | Some("unknown") => egui::MouseWheelSource::Unknown,
+                Some("wheel") => egui::MouseWheelSource::Wheel,
+                Some("trackpad") => egui::MouseWheelSource::Trackpad,
+                Some("momentum") => egui::MouseWheelSource::Momentum,
+                Some(other) => return Err(format!("ui.scroll: `source` is wheel, trackpad, momentum or unknown, not {other:?}")),
+            };
+            let unit = match s("unit") {
+                None | Some("point") => egui::MouseWheelUnit::Point,
+                Some("line") => egui::MouseWheelUnit::Line,
+                Some("page") => egui::MouseWheelUnit::Page,
+                Some(other) => return Err(format!("ui.scroll: `unit` is point, line or page, not {other:?}")),
+            };
+            let phase = match s("phase") {
+                None | Some("move") => egui::TouchPhase::Move,
+                Some("start") => egui::TouchPhase::Start,
+                Some("end") => egui::TouchPhase::End,
+                Some("cancel") => egui::TouchPhase::Cancel,
+                Some(other) => return Err(format!("ui.scroll: `phase` is start, move, end or cancel, not {other:?}")),
+            };
+            app.synthetic.push(egui::Event::MouseWheel {
+                unit,
+                delta: egui::vec2(f("dx").unwrap_or(0.0) as f32, f("dy").unwrap_or(0.0) as f32),
+                phase,
+                source,
+                modifiers: modifiers(p),
+            });
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        "ui.zoom" => {
+            let Some(factor) = f("factor").map(|v| v as f32).filter(|v| v.is_finite() && *v > 0.0) else {
+                return Err("ui.zoom: factor must be a finite positive number (1 = unchanged)".into());
+            };
+            app.synthetic.push(egui::Event::Zoom(factor));
+            ctx.request_repaint();
+            Ok(GestureOutcome::done(Value::Null))
+        }
+        other => Err(format!("not a synthetic-input gesture: `{other}`")),
+    }
+}
+
+/// Encode `image` as PNG and write it to the capture's pinned target, returning the control
+/// protocol's JSON result. The destination is revalidated before encoding; a new path is written
+/// with create-new semantics (never replacing a file that appeared), and a missing encoder or
+/// writer is an error. `None` only reports the image size without writing.
+pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target: Option<&lightcraft_engine::originals::WriteTarget>) -> Value {
     let [w, h] = image.size;
-    let Some(path) = path else {
+    let Some(target) = target else {
         return json!({"ok": true, "result": {"width": w, "height": h}});
     };
-    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
-    let Some(img) = lightcraft_raster::Rgba8::from_bytes(w, h, &rgba) else {
+    // Re-check the pinned destination immediately before encoding/writing. This is the point the
+    // asynchronous renderer callback and the CPU fallback share.
+    if let Err(error) = app.session.revalidate_write_target(target) {
+        return json!({"ok": false, "error": error});
+    }
+    // Rgba8's buffer is the only extra full-image allocation while encoding (the PNG bytes are
+    // the second transient; see MAX_SHOT_WORKING_SET_BYTES in `lib.rs`). Building it straight from
+    // the `Color32` pixels avoids the former flat `Vec<u8>` copy of the same image.
+    let Some(img) = lightcraft_raster::Rgba8::from_pixels(w, h, image.pixels.iter().map(|c| c.to_array())) else {
         return json!({"ok": false, "error": "bad screenshot buffer"});
     };
     let Some(png) = app.services.png.as_ref() else { return json!({"ok": false, "error": "no encoder"}) };
     let bytes = png(&img);
-    match app.services.write.as_mut() {
-        Some(wr) => match wr(path, &bytes) {
+    let path = target.path();
+    if target.was_absent() {
+        // Publish a complete temp file with create-new semantics: a file that appeared after the
+        // revalidation above is never replaced. Without this writer the capture fails closed.
+        let Some(writer) = app.services.write_new.as_mut() else {
+            return json!({"ok": false, "error": format!("{path}: no create-new writer configured for a new screenshot path")});
+        };
+        match writer(path, &bytes) {
             Ok(()) => json!({"ok": true, "result": {"path": path, "width": w, "height": h}}),
             Err(e) => json!({"ok": false, "error": e}),
-        },
-        None => json!({"ok": false, "error": "no writer configured"}),
+        }
+    } else {
+        match app.services.write.as_mut() {
+            Some(wr) => match wr(path, &bytes) {
+                Ok(()) => json!({"ok": true, "result": {"path": path, "width": w, "height": h}}),
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "no writer configured"}),
+        }
     }
 }

@@ -25,8 +25,13 @@ const MAX_FILE: u64 = 4 << 20;
 /// Profiles built into LightCraft (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
+    ("ILCA-99M2", include_str!("../../../assets/camera-profiles/ILCA-99M2.json")),
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
+    ("ILCE-7RM5", include_str!("../../../assets/camera-profiles/ILCE-7RM5.json")),
+    ("NIKON D5300", include_str!("../../../assets/camera-profiles/NIKON_D5300.json")),
+    ("NIKON Z 6_2", include_str!("../../../assets/camera-profiles/NIKON_Z_6_2.json")),
+    ("NIKON Z 8", include_str!("../../../assets/camera-profiles/NIKON_Z_8.json")),
     ("X-H2S", include_str!("../../../assets/camera-profiles/X-H2S.json")),
     ("X-T4", include_str!("../../../assets/camera-profiles/X-T4.json")),
 ];
@@ -155,29 +160,31 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
 /// keys, so thumbnails rendered before a profile existed are not reused after.
 pub fn cache_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| {
-        let entries = dir().and_then(|d| std::fs::read_dir(d).ok());
-        let mut files: Vec<(String, u64, u64)> = entries
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .filter_map(|e| {
-                let meta = e.metadata().ok()?;
-                let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-                Some((e.file_name().to_string_lossy().into_owned(), meta.len(), modified))
-            })
-            .collect();
-        files.sort();
-        let mut h = lightcraft_preview::Hasher128::new();
-        for (name, len, modified) in &files {
-            h.str(name).u64(*len).u64(*modified);
-        }
-        for (model, json) in BUNDLED {
-            h.str(model).str(json);
-        }
-        h.finish().0 as u64
-    })
+    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+}
+
+fn cache_key_for(directory: Option<&Path>) -> u64 {
+    let entries = directory.and_then(|d| std::fs::read_dir(d).ok());
+    let mut files: Vec<(String, u64, std::time::Duration)> = entries
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+            Some((e.file_name().to_string_lossy().into_owned(), meta.len(), modified))
+        })
+        .collect();
+    files.sort();
+    let mut h = lightcraft_preview::Hasher128::new();
+    for (name, len, modified) in &files {
+        h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
+    }
+    for (model, json) in BUNDLED {
+        h.str(model).str(json);
+    }
+    h.finish().0 as u64
 }
 
 /// Per camera model: the photos read and their pooled colour pairs.
@@ -194,10 +201,12 @@ impl Pool {
     /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
-        // colour only: geometric lens corrections would stop the sensor proxy from binning
+        // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
+        // the warp the camera applied to its JPEG)
+        let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
-        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes) else { return Ok(None) };
+        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
         let entry = self.models.entry(model.to_owned()).or_default();
         entry.0 += 1;
@@ -286,6 +295,38 @@ mod tests {
             assert_eq!(bundled(model), Some(p));
         }
         assert!(bundled("No Such Camera").is_none());
+    }
+
+    #[test]
+    fn same_second_profile_replacement_changes_render_cache_key() {
+        let dir = std::env::temp_dir().join(format!("lc-camera-profile-cache-{}", std::process::id()));
+        let mut first = profile();
+        first.model = "ILCE-7CR".into();
+        let path = save(&first, &dir).unwrap();
+        let set_modified = |millis| {
+            let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000) + std::time::Duration::from_millis(millis);
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
+            file.metadata().unwrap()
+        };
+        let before = set_modified(100);
+        assert_eq!(load(&path).unwrap(), first);
+        let before_key = cache_key_for(Some(&dir));
+
+        let mut second = first;
+        second.matrix[0][0] = 1.7;
+        save(&second, &dir).unwrap();
+        let after = set_modified(350);
+        assert_eq!(load(&path).unwrap(), second);
+        assert_eq!(before.len(), after.len());
+        let before_time = before.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
+        let after_time = after.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
+        assert_eq!(before_time.as_secs(), after_time.as_secs());
+        assert_ne!(before_time.subsec_nanos(), after_time.subsec_nanos());
+        let after_key = cache_key_for(Some(&dir));
+        let _ = std::fs::remove_dir_all(dir);
+
+        assert_ne!(before_key, after_key, "a changed profile must not reuse the previous render cache");
     }
 
     #[test]

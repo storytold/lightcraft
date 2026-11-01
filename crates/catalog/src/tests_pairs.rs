@@ -130,3 +130,20 @@ fn pair_index_stays_near_one_catalog_walk() {
     let budget = walk_ns.saturating_mul(40).max(Duration::from_millis(1500));
     assert!(scan_ns <= budget, "scan {scan_ns:?} exceeded {budget:?} (walk {walk_ns:?})");
 }
+
+#[test]
+fn undo_permanent_delete_restores_a_deleted_pairs_member() {
+    let mut c = Catalog::new();
+    let raw = file(&mut c, "/pics/DSCF0001.RAF", MediaKind::Raw, None, "");
+    let jpeg = file(&mut c, "/pics/DSCF0001.JPG", MediaKind::Image, None, "");
+    let id = c.alloc_pair_id();
+    c.apply(Op::AddPair { pair: RawJpegPair { id, raw, jpeg } }).unwrap();
+    c.apply(Op::SetDeleted { id: raw, deleted: true }).unwrap();
+    let before = c.to_snapshot();
+    let inverse = c.apply(c.delete_photos_permanently_ops(&[raw])).unwrap();
+    c.apply(inverse).unwrap();
+    assert_eq!(c.to_snapshot(), before);
+    assert!(c.photo(raw).unwrap().deleted);
+    assert_eq!(c.pair_partner(raw), Some(jpeg));
+    assert!(c.scan_pairs().pairs.is_empty(), "deleted photos are not fresh candidates");
+}

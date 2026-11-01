@@ -77,7 +77,7 @@ pool. A scalar implementation checks the optimized operators on synthetic networ
 Tract is not a workspace dependency or a product feature.
 CPU inference and the GPU model module are feature-gated; ordinary engine/web builds
 do not compile the faer/GEMM backend. The engine depends on the inference crate only through `denoise = ["dep:lightcraft-denoise", …]`;
-lightweight `lightcraft-denoise-core` metadata and cache formats remain available without inference. Pictures are capped at 100 megapixels; at most
+lightweight `lightcraft-denoise-core` metadata and cache formats remain available without inference. Pictures are capped at 110 megapixels; at most
 four tile calls run together, chosen within the process-wide working-memory budget.
 One idle CPU workspace is retained, and cache costs reserve room for the blended picture.
 
@@ -117,8 +117,8 @@ Fresh checks can be run using an already installed model and CC0 raw samples:
 
 ```text
 LC_DENOISE_MODEL=<model.onnx> cargo test --release -p lightcraft-gpu --lib real_model_on_the_gpu_matches_cpu -- --ignored --nocapture
-LC_DENOISE_MODEL=<model.onnx> LC_DENOISE_RAW=<corpus/raw> cargo test --release -p lightcraft-engine --features rawnind-model --test denoise_cpu -- --ignored --nocapture
-LC_DENOISE_MODEL=<model.onnx> LC_DENOISE_RAW=<corpus/raw> cargo test --release -p lightcraft-engine --features rawnind-model --test denoise_real -- --ignored --nocapture
+LC_DENOISE_MODEL=<model.onnx> LC_DENOISE_RAW=<corpus/raw> cargo test --release -p lightcraft-engine --features rawnind-model --test it denoise_cpu:: -- --ignored --nocapture
+LC_DENOISE_MODEL=<model.onnx> LC_DENOISE_RAW=<corpus/raw> cargo test --release -p lightcraft-engine --features rawnind-model --test it denoise_real:: -- --ignored --nocapture
 ```
 
 ## Another computer's graphics card

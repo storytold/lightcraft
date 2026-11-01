@@ -62,6 +62,28 @@ fn leftover_lock_files_are_not_a_lock() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A link planted at the owner note's name (`catalog.lock.owner`) in a library folder someone else
+/// prepared is removed, never written through: the file it points to keeps its bytes, and the note
+/// still lands in the library (as for the catalog's staging files, issue #1502).
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_owner_note_is_never_written_through() {
+    let _serial = serial();
+    let dir = temp_dir("owner-link");
+    let victim = dir.join("victim.txt");
+    std::fs::write(&victim, b"keep").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.join(OWNER)).unwrap();
+    let l = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(l.held());
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    assert!(!std::fs::symlink_metadata(dir.join(OWNER)).unwrap().file_type().is_symlink(), "the link was replaced by the note");
+    let owner: LockOwner = serde_json::from_slice(&std::fs::read(dir.join(OWNER)).unwrap()).unwrap();
+    assert_eq!(owner.pid, std::process::id());
+    drop(l);
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Another process holds the lock; when it is killed (a crash), the OS releases it.
 #[test]
 fn lock_held_by_another_process_is_released_when_it_dies() {
@@ -126,34 +148,40 @@ fn the_library_is_free_once_dropped_even_if_a_child_holds_a_copy() {
 
 /// Issue #680, as it happens in practice: one thread spawns cheap children while another acquires,
 /// drops and re-acquires the lock on its own directory. Every acquire must succeed (before the fix
-/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, pass or fail.
+/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, and on a
+/// slow or loaded machine (the FreeBSD CI VM, where a spawn can take longer than that) until a few
+/// children have been spawned during them, at most a minute.
 #[cfg(unix)]
 #[test]
 fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Children spawned while the lock cycles, at least, before the test may stop.
+    const CHILDREN: usize = 5;
 
     let dir = temp_dir("spawn");
     let stop = Arc::new(AtomicBool::new(false));
+    let count = Arc::new(AtomicUsize::new(0));
     let spawner = {
-        let stop = Arc::clone(&stop);
+        let (stop, count) = (Arc::clone(&stop), Arc::clone(&count));
         std::thread::spawn(move || {
-            let mut spawned = 0usize;
             while !stop.load(Ordering::Relaxed) {
-                if let Ok(mut c) =
-                    std::process::Command::new("/bin/true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
+                if let Ok(mut c) = std::process::Command::new("true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
                 {
                     let _ = c.wait();
-                    spawned += 1;
+                    count.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            spawned
+            count.load(Ordering::Relaxed)
         })
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let t0 = Instant::now();
+    let enough = |cycles: usize| (cycles >= 200_000 || t0.elapsed() >= Duration::from_secs(2)) && count.load(Ordering::Relaxed) >= CHILDREN;
     let mut cycles = 0usize;
     let mut refused = Vec::new();
-    while cycles < 200_000 && std::time::Instant::now() < deadline {
+    while !enough(cycles) && t0.elapsed() < Duration::from_secs(60) {
         match LibraryLock::acquire(&dir, "LightCraft") {
             Ok(l) => assert!(l.held()), // dropped here: the next cycle must get it back
             Err(e) => refused.push(format!("cycle {cycles}: {e:?}")),

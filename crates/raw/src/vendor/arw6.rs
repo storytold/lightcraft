@@ -329,9 +329,10 @@ type HalfLines = (Half, Vec<Vec<i32>>);
 fn decode_stream(tile: &[u8], st: &StreamRef, ntu: usize, w2: usize, layouts: &[HalfRows]) -> Result<Vec<HalfLines>> {
     let halves = stream_halves(tile, st, ntu)?;
     let width = line_width(st.group, w2);
+    // halves are independent bit streams: decode them in parallel
     halves
-        .into_iter()
-        .zip(layouts)
+        .into_par_iter()
+        .zip(layouts.par_iter())
         .map(|(half, rows)| {
             let end = half.start.checked_add(half.len).ok_or_else(|| corrupt("half position"))?;
             let bytes = tile.get(half.start..end).ok_or_else(|| corrupt("half outside the tile"))?;
@@ -468,36 +469,36 @@ pub(crate) fn colour(p: &TilePlanes) -> Result<Vec<u16>> {
     }
     let mw = w2.checked_mul(2).ok_or_else(|| corrupt("tile size"))?;
     let total = len.checked_mul(4).ok_or_else(|| corrupt("tile size"))?;
-    let at = |q: &Plane, j: usize, x: usize| -> i64 { q.data.get(j * w2 + x).copied().unwrap_or(0) as i64 };
+    // (rows as slices: `at` is 0 past a row's end, as never happens once the sizes above match)
+    let at = |r: &[i32], x: usize| i64::from(r.get(x).copied().unwrap_or(0));
     let mut g1 = vec![0i64; len];
-    for j in 0..h2 {
-        let jp = j.saturating_sub(1);
-        for x in 0..w2 {
+    g1.par_chunks_mut(w2.max(1)).enumerate().for_each(|(j, row)| {
+        let (Some(m), Some(rp), Some(rj)) = (p.m.row(j), p.res.row(j.saturating_sub(1)), p.res.row(j)) else { return };
+        for (x, g) in row.iter_mut().enumerate() {
             let xn = (x + 1).min(w2 - 1);
-            let r = at(&p.res, jp, x) + at(&p.res, jp, xn) + at(&p.res, j, x) + at(&p.res, j, xn);
-            if let Some(g) = g1.get_mut(j * w2 + x) {
-                *g = at(&p.m, j, x) - ((r + 4) >> 3);
-            }
+            let r = at(rp, x) + at(rp, xn) + at(rj, x) + at(rj, xn);
+            *g = at(m, x) - ((r + 4) >> 3);
         }
-    }
-    let g = |j: usize, x: usize| g1.get(j * w2 + x).copied().unwrap_or(0);
+    });
+    let g1_row = |j: usize| g1.get(j * w2..(j + 1) * w2).unwrap_or(&[]);
+    let g = |r: &[i64], x: usize| r.get(x).copied().unwrap_or(0);
     let mut out = vec![0u16; total];
-    for j in 0..h2 {
-        let jn = (j + 1).min(h2 - 1);
-        for x in 0..w2 {
+    // each plane row gives two mosaic rows
+    out.par_chunks_mut((2 * mw).max(1)).enumerate().for_each(|(j, rows)| {
+        let (gj, gn) = (g1_row(j), g1_row((j + 1).min(h2 - 1)));
+        let (Some(res), Some(c1), Some(c2), Some((top, bottom))) = (p.res.row(j), p.c1.row(j), p.c2.row(j), rows.split_at_mut_checked(mw)) else {
+            return;
+        };
+        for (x, (t, b)) in top.as_chunks_mut::<2>().0.iter_mut().zip(bottom.as_chunks_mut::<2>().0.iter_mut()).enumerate() {
             let xp = x.saturating_sub(1);
-            let g2 = ((g(j, xp) + g(j, x) + g(jn, xp) + g(jn, x)) >> 2) + at(&p.res, j, x);
-            let mean = (g(j, x).clamp(0, 4095) + g2.clamp(0, 4095)) >> 1;
-            let r = 2 * at(&p.c1, j, x) + mean;
-            let b = 2 * at(&p.c2, j, x) + mean;
-            let cells = [(0, r), (1, g(j, x)), (mw, g2), (mw + 1, b)];
-            for (off, v) in cells {
-                if let Some(o) = out.get_mut(2 * j * mw + 2 * x + off) {
-                    *o = curve(v.clamp(0, 4095) as i32);
-                }
+            let g2 = ((g(gj, xp) + g(gj, x) + g(gn, xp) + g(gn, x)) >> 2) + at(res, x);
+            let mean = (g(gj, x).clamp(0, 4095) + g2.clamp(0, 4095)) >> 1;
+            let cells = [2 * at(c1, x) + mean, g(gj, x), g2, 2 * at(c2, x) + mean];
+            for (o, v) in t.iter_mut().chain(b.iter_mut()).zip(cells) {
+                *o = curve(v.clamp(0, 4095) as i32);
             }
         }
-    }
+    });
     Ok(out)
 }
 
@@ -524,10 +525,10 @@ pub(crate) fn decode(strip: &[u8], width: usize, height: usize, mode: crate::Mod
         }
         return Ok(Vec::new());
     }
-    let decoded: Vec<Result<Vec<u16>>> = tiles.par_iter().enumerate().map(|(i, t)| decode_tile(bytes(i)?, t.width, t.height)).collect();
+    // a tile that fails is reported before the mosaic is allocated (issue #1512)
+    let decoded: Vec<Vec<u16>> = tiles.par_iter().enumerate().map(|(i, t)| decode_tile(bytes(i)?, t.width, t.height)).collect::<Result<_>>()?;
     let mut out = vec![0u16; width.checked_mul(height).ok_or_else(|| corrupt("image size"))?];
     for (t, d) in tiles.iter().zip(decoded) {
-        let d = d?;
         for (r, row) in d.chunks_exact(t.width.max(1)).enumerate() {
             let start = (t.y + r).checked_mul(width).and_then(|a| a.checked_add(t.x)).ok_or_else(|| corrupt("tile placement"))?;
             let dst = start.checked_add(row.len()).and_then(|end| out.get_mut(start..end)).ok_or_else(|| corrupt("tile outside image"))?;

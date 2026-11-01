@@ -16,7 +16,7 @@ use crate::optics::{Warp, reorient_lens};
 pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
 
 /// The geometric frame of a render.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     /// Source (EXIF-oriented) dimensions in pixels.
     pub src_w: usize,
@@ -54,7 +54,8 @@ impl Frame {
     pub fn with_lens(src_w: usize, src_h: usize, s: &DevelopSettings, apply_crop: bool, lens: Option<&EmbeddedLens>) -> Frame {
         let orient = s.orientation;
         let (ow, oh) = if orient.swaps_axes() { (src_h as f64, src_w as f64) } else { (src_w as f64, src_h as f64) };
-        let crop = if apply_crop { s.crop.geometry } else { CropGeometry::default() };
+        // bounded: a crop from a sidecar or an agent can reach far past the photo (issue #2555)
+        let crop = if apply_crop { s.crop.geometry.bounded(ow, oh) } else { CropGeometry::default() };
         let lens = lens.map(|l| reorient_lens(l, orient, src_w as f64, src_h as f64));
         let mut warp = Warp::from_settings(ow, oh, s, lens.as_ref());
         let persp = perspective(s, ow, oh);
@@ -167,10 +168,12 @@ impl Frame {
         }
     }
 
-    /// Aspect ratio (w/h) of the output.
+    /// Aspect ratio (w/h) of the output. A crop narrower than a source pixel (or of no size, from
+    /// an agent or a sidecar) counts each side as one pixel, so the aspect stays finite: 0/0 made
+    /// it NaN, and the loupe laid the photo out at a NaN size.
     pub fn aspect(&self) -> f64 {
         let r = self.crop.rect_px(self.ow, self.oh);
-        r.width() / r.height()
+        r.width().max(1.0) / r.height().max(1.0)
     }
 
     /// Size of the (cropped) output at the source's own resolution, in pixels.
@@ -182,6 +185,11 @@ impl Frame {
     pub fn fit(&self, max_w: usize, max_h: usize) -> (usize, usize) {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
+        // a box that is already this aspect up to rounding (an export size) is the size: fitting
+        // into it again rounds twice and can lose a pixel of the edge that was asked for
+        if (mw - 0.5) / a <= mh + 0.5 && (mw + 0.5) / a >= mh - 0.5 {
+            return (max_w.max(1), max_h.max(1));
+        }
         let (w, h) = if mw / mh > a { (mh * a, mh) } else { (mw, mw / a) };
         ((w.round() as usize).max(1), (h.round() as usize).max(1))
     }
@@ -348,6 +356,18 @@ pub const FULL: Rect = Rect::UNIT;
 mod tests {
     use super::*;
 
+    /// Issue #2555: a turned crop rect of 0..1000 (from a sidecar or an agent) made the native size
+    /// of a 6000 × 4000 photo ~2.4·10¹³ pixels, which a full-size export allocated.
+    #[test]
+    fn a_crop_far_past_the_photo_keeps_the_native_size_near_the_source() {
+        let mut s = DevelopSettings::default();
+        s.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.0, 0.0, 1000.0, 1000.0), angle: 5.0 };
+        let (w, h) = crate::native_output_size(6000, 4000, &s);
+        assert!(w <= 12_000.0 && h <= 8_000.0, "{w} x {h}");
+        // an untouched photo is its own size
+        assert_eq!(crate::native_output_size(6000, 4000, &DevelopSettings::default()), (6000.0, 4000.0));
+    }
+
     #[test]
     fn default_frame_is_identity() {
         let s = DevelopSettings::default();
@@ -376,6 +396,25 @@ mod tests {
         assert!((p.x - 0.5).abs() < 1e-9 && p.y.abs() < 1e-9);
         let back = f.norm_to_out(100, 100).apply(Point::new(0.75, 0.5));
         assert!((back.x - 50.0).abs() < 1e-6 && (back.y - 50.0).abs() < 1e-6);
+    }
+
+    /// A crop of no size (or under a pixel wide) gave a NaN or infinite aspect; each side now
+    /// counts as at least one source pixel.
+    #[test]
+    fn degenerate_crops_have_a_finite_aspect() {
+        let mut s = DevelopSettings::default();
+        for (rect, want) in [
+            (Rect::new(0.5, 0.5, 0.5, 0.5), 1.0),
+            (Rect::new(0.0, 0.0, 1e-9, 1.0), 1.0 / 200.0),
+            (Rect::new(0.0, 0.5, 1.0, 0.5), 400.0),
+            (Rect::new(0.25, 0.0, 0.75, 1.0), 1.0),
+        ] {
+            s.crop.geometry.rect = rect;
+            let f = Frame::new(400, 200, &s, true);
+            assert!((f.aspect() - want).abs() < 1e-9, "{rect:?}: {}", f.aspect());
+            let (w, h) = f.fit(1000, 1000);
+            assert!((1..=1000).contains(&w) && (1..=1000).contains(&h), "{rect:?}: {w}×{h}");
+        }
     }
 
     #[test]

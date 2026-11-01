@@ -12,6 +12,7 @@
 //! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and, on native targets, AVIF (feature `avif`) and
 //!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
+//! - [`video`] encodes AV1 video (native, feature `avif`) and writes it as MP4 or WebM.
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
@@ -31,16 +32,18 @@ mod jxl;
 mod jxl_encode;
 mod other;
 mod png_codec;
+pub mod print;
 pub mod proof;
 mod psd;
 mod sniff;
 pub mod space;
 mod tiff_codec;
+pub mod video;
 mod webp;
 
 pub use encode::{
-    ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, Samples, TiffCompression, encode_avif, encode_avif_pq, encode_jpeg,
-    encode_png, encode_png_pq, encode_psd, encode_tiff, encode_webp_lossless,
+    ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, HLG_REFERENCE_PEAK_NITS, HdrTransfer, Samples, TiffCompression,
+    encode_avif, encode_avif_hdr, encode_avif_pq, encode_jpeg, encode_png, encode_png_pq, encode_psd, encode_tiff, encode_webp_lossless, hlg_signal,
 };
 pub use jxl_encode::{JxlColour, JxlEffort, JxlOptions, encode_jxl};
 pub use sniff::{Format, sniff};
@@ -204,6 +207,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::WebP => webp::header(bytes)?,
         Format::Psd => psd::header(bytes)?,
         Format::Heif => heif::header(bytes)?,
+        Format::Gif | Format::Bmp => other::header(bytes, format)?,
         // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
         _ => {
             let d = decode_unguarded(bytes, format, &DecodeOptions::fit(64, 64))?;
@@ -244,12 +248,24 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
 }
 
 /// Convert a decode result to linear Rec.2020 D65 (Bradford-adapted), the develop working space.
+///
+/// The working space has no alpha: transparency is flattened onto white, in linear light like the rest
+/// of the pipeline (issue #1212).
 pub fn to_working(d: &Decoded) -> Rgb32f {
-    if d.space.is_working() {
-        return d.image.clone();
+    let mut img = if d.space.is_working() {
+        d.image.clone()
+    } else {
+        let m = d.space.to_working().to_f32();
+        d.image.map(|p| mat_apply(&m, p))
+    };
+    // white is (1, 1, 1) in the working space too: the conversion is white-preserving
+    if let Some(a) = d.alpha.as_ref().filter(|a| a.width == img.width && a.height == img.height) {
+        for (p, &av) in img.data.iter_mut().zip(&a.data) {
+            let av = av.clamp(0.0, 1.0);
+            *p = p.map(|c| c * av + (1.0 - av));
+        }
     }
-    let m = d.space.to_working().to_f32();
-    d.image.map(|p| mat_apply(&m, p))
+    img
 }
 
 /// Where a thumbnail came from.
@@ -322,4 +338,30 @@ pub fn decode_thumbnail_with(bytes: &[u8], opts: &ThumbnailOptions) -> Result<Th
         source_width: d.source_width,
         source_height: d.source_height,
     })
+}
+
+/// Checked sample-buffer length `width × height × ch`, in u64: `None` on overflow or a zero
+/// dimension. Image size is capped by `DecodeOptions::max_pixels` alone; once the buffer is known to
+/// hold this many samples, every later `usize` product is bounded by an allocation that exists.
+pub(crate) fn checked_sample_buf_len(width: usize, height: usize, ch: usize) -> Option<u64> {
+    (width as u64).checked_mul(height as u64).and_then(|n| n.checked_mul(ch as u64)).filter(|&n| n > 0)
+}
+
+#[cfg(test)]
+mod checked_arithmetic_tests {
+    use super::*;
+
+    #[test]
+    fn checked_sample_buf_len_wrap_inputs_rejected() {
+        assert_eq!(checked_sample_buf_len(usize::MAX, usize::MAX, 4), None);
+        assert_eq!(checked_sample_buf_len(0, 1, 3), None);
+    }
+
+    #[test]
+    fn checked_sample_buf_len_normal_accepted() {
+        assert_eq!(checked_sample_buf_len(100, 1, 3), Some(300));
+        assert_eq!(checked_sample_buf_len(1, 1, 1), Some(1));
+        // 300 Mpx RGBA is within the default pixel limit, so it must not be refused by sample count.
+        assert_eq!(checked_sample_buf_len(20_000, 15_000, 4), Some(1_200_000_000));
+    }
 }

@@ -135,6 +135,8 @@ mod tests {
 gpu vs cpu, loupe 1920×1280 typical: max 1 LSB, mean 0.0001 LSB
 loupe draft 1152×768 cold:             cpu: 379.5 ms wall, 139.5 ms cpu  |  gpu: 19.9 ms wall, 17.2 ms cpu
 export JPEG encode:                    63.9 ms wall, 278.0 ms cpu
+window 3072×2304 at (3328, 2048) of 9984×6656
+window pan (new window, warm src):     cpu: 912.0 ms wall, 2210.5 ms cpu  |  gpu: 37.5 ms wall, 8.7 ms cpu
 ";
 
     #[test]
@@ -143,7 +145,10 @@ export JPEG encode:                    63.9 ms wall, 278.0 ms cpu
         assert_eq!(m["loupe draft 1152×768 cold/cpu/wall"], 379.5);
         assert_eq!(m["loupe draft 1152×768 cold/gpu/cpu"], 17.2);
         assert_eq!(m["export JPEG encode/cpu/cpu"], 278.0);
-        assert_eq!(m.len(), 6, "{m:?}");
+        // (a comma in the name is no column separator)
+        assert_eq!(m["window pan (new window, warm src)/cpu/cpu"], 2210.5);
+        assert_eq!(m["window pan (new window, warm src)/gpu/wall"], 37.5);
+        assert_eq!(m.len(), 10, "{m:?}");
     }
 
     #[test]

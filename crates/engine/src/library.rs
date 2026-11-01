@@ -58,6 +58,22 @@ pub fn is_library(dir: &Path) -> bool {
     dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
 }
 
+/// [`is_library`] that tells "no library there" from "can't tell": `Ok(false)` only when the
+/// folder or its catalog files are definitely missing; a lookup that fails otherwise (a folder it
+/// may not read, a share that timed out) is the error, so a library that is there but can't be
+/// read isn't reported as gone (issue #3239).
+pub fn library_state(dir: &Path) -> std::io::Result<bool> {
+    for name in [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG] {
+        match std::fs::metadata(dir.join(name)) {
+            Ok(m) if m.is_file() => return Ok(true),
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
+}
+
 /// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/LightCraft Library`
 /// (`%USERPROFILE%\Pictures\LightCraft Library` on Windows).
 pub fn default_dir() -> Option<PathBuf> {
@@ -66,6 +82,37 @@ pub fn default_dir() -> Option<PathBuf> {
     }
     let home = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") }?;
     Some(PathBuf::from(home).join("Pictures").join(DEFAULT_NAME))
+}
+
+/// The user's home folder (`%USERPROFILE%` on Windows, `$HOME` elsewhere); `None` when the host has
+/// none or it is empty. The one place the home path is read for Local's built-in places, in the
+/// engine's rename/move guard and in the sidebar.
+pub fn home_folder() -> Option<PathBuf> {
+    home_folder_from(cfg!(windows), |name| std::env::var_os(name))
+}
+
+fn home_folder_from(windows: bool, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    var(if windows { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::home_folder_from;
+    use std::ffi::OsString;
+
+    #[test]
+    fn windows_reads_userprofile_and_the_rest_read_home() {
+        let env = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/example")),
+            "USERPROFILE" => Some(OsString::from("C:\\Users\\example")),
+            _ => None,
+        };
+        assert_eq!(home_folder_from(true, env).as_deref(), Some(std::path::Path::new("C:\\Users\\example")));
+        assert_eq!(home_folder_from(false, env).as_deref(), Some(std::path::Path::new("/home/example")));
+        // only the other platform's variable is set: no home, never a guess from it
+        assert_eq!(home_folder_from(true, |n| (n == "HOME").then(|| OsString::from("/home/example"))), None);
+        assert_eq!(home_folder_from(false, |_| Some(OsString::new())), None);
+    }
 }
 
 pub struct Library {
@@ -84,11 +131,15 @@ pub struct Library {
     /// Why the last append of queued ops failed; `None` once a save succeeds. While set, changes
     /// exist only in memory ([`Session::unsaved`]).
     pub unsaved_error: Option<String>,
+    /// Why the last write of presets.json failed; `None` once it is written. While set, the preset
+    /// changes exist only in memory and count as unsaved ([`Session::unsaved`], issue #2266).
+    presets_error: Option<String>,
     /// When the frame loop may retry a failed append ([`Session::persist_if_dirty`] backs off).
     retry_at: Option<web_time::Instant>,
     /// What forgetting untouched Local records did when the library opened.
     pub forgot_local: Option<lightcraft_catalog::ForgetPlan>,
-    presets_written: String,
+    /// What presets.json holds (see [`PresetsSaved`]).
+    presets_saved: PresetsSaved,
     view_written: Vec<u8>,
     /// Settings files that were unreadable or damaged when the library opened (`library.info` →
     /// `settingsWarnings`; shown by the UI once, see [`Session::take_library_warnings`]).
@@ -121,6 +172,53 @@ struct PresetsFile {
     /// Favourite profiles, and the recently applied ones (newest first).
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
+}
+
+/// The state presets.json was last written (or read) from. Saving checks the preset list's
+/// generation and the small profile lists before serializing anything: with a 10 000-preset
+/// collection presets.json is ~40 MB, and serializing it after every command made each slider
+/// tick take seconds.
+#[derive(Default)]
+struct PresetsSaved {
+    generation: u64,
+    profile_favorites: Vec<String>,
+    profile_recent: Vec<String>,
+    /// Hash of the bytes written: a list borrowed mutably but left as it was isn't rewritten.
+    hash: u64,
+}
+
+impl PresetsSaved {
+    fn state_of(s: &Session) -> PresetsSaved {
+        PresetsSaved {
+            generation: s.presets.generation(),
+            profile_favorites: s.profile_favorites.clone(),
+            profile_recent: s.profile_recent.clone(),
+            hash: 0,
+        }
+    }
+
+    /// `s` changed its presets or profile lists since this state.
+    fn differs(&self, s: &Session) -> bool {
+        self.generation != s.presets.generation() || self.profile_favorites != s.profile_favorites || self.profile_recent != s.profile_recent
+    }
+}
+
+fn bytes_hash(b: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRESETS_SERIALIZED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread serialized the preset list (tests).
+#[cfg(test)]
+pub(crate) fn presets_serialized() -> usize {
+    PRESETS_SERIALIZED.with(|c| c.get())
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -159,14 +257,22 @@ struct PrefsFile {
     /// Parameters of the last export (for Export with Previous).
     #[serde(alias = "last_export")]
     last_export: Option<serde_json::Value>,
+    /// Options of the last Photo Merge, per command.
+    last_merge: std::collections::BTreeMap<String, serde_json::Value>,
     /// The user's export presets.
     export_presets: Vec<crate::export::ExportPreset>,
+    /// Print templates.
+    print_templates: Vec<crate::print::template::PrintTemplate>,
     /// Metadata presets.
     metadata_presets: Vec<crate::cmd::metadata::MetadataPreset>,
     /// Filter presets.
     filter_presets: Vec<crate::cmd::filters::FilterPreset>,
     /// Point-curve presets.
     curve_presets: Vec<crate::cmd::curves::CurvePreset>,
+    /// Mask effect presets.
+    mask_effects: Vec<crate::cmd::mask_effects::MaskEffect>,
+    /// The effect new masks of each kind start with.
+    mask_tool_effects: std::collections::BTreeMap<String, String>,
     /// Colour-label name sets.
     label_sets: Vec<crate::cmd::manage::LabelSet>,
     /// Imported LUT profiles.
@@ -193,9 +299,21 @@ struct PrefsFile {
     /// Colour labels follow too, when metadata sync is on.
     #[serde(default)]
     sync_pair_labels: bool,
+    /// Slideshow playback settings.
+    slideshow: crate::slideshow::PlaybackSettings,
+    /// Slideshow slide layout (margins, options, backdrop).
+    slide_layout: crate::slide::SlideSettings,
+    /// Slideshow overlays.
+    slide_overlays: crate::slide_overlay::OverlaySettings,
+    /// Slideshow intro and ending screens.
+    slide_titles: crate::slide_title::TitleSettings,
+    /// A view holds the photos it shows until it is refreshed (`library.holdView`).
+    hold_view: bool,
 }
 
 fn presets_json(s: &Session) -> String {
+    #[cfg(test)]
+    PRESETS_SERIALIZED.with(|c| c.set(c.get() + 1));
     let presets = &s.presets;
     let f = PresetsFile {
         user: presets.iter().filter(|p| !p.builtin).cloned().collect(),
@@ -281,6 +399,38 @@ impl SettingsLoad {
 }
 
 impl Session {
+    /// Take over what the thumbnail cache wrote under its name of before (`.jpg` files, which
+    /// photo galleries took for the person's photos: issues #610, #1066), once for a cache
+    /// folder that was not made or tidied by this build yet. On a thread of its own, with a row
+    /// in the activity stack that can stop it: a large cache is some 100 000 files to rename.
+    fn tidy_thumbnail_cache(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let cache = self.media.rendered.clone();
+            if !cache.disk().is_some_and(|d| d.needs_tidying()) {
+                return;
+            }
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let task = self.activity.start("cache", "Tidying the thumbnail cache", crate::activity::Cancel::Flag(stop.clone()));
+            let spawned = std::thread::Builder::new().name("lc-thumbs-tidy".into()).spawn(move || {
+                // the row stays while this runs (it is dropped with the closure, however that ends)
+                let _row = task;
+                if let Some(disk) = cache.disk() {
+                    // (also given up when the library is closed or another is opened: the cache
+                    // is retired then, and it is gone on with when this library opens again)
+                    let stopped = || stop.load(Ordering::Relaxed) || cache.generation() == u64::MAX;
+                    let taken = disk.take_over_old(&stopped, &|done, of| _row.progress(done as u64, of as u64));
+                    log::info!("thumbnail cache: {taken} thumbnails taken over under their new name in {}", disk.dir().display());
+                }
+            });
+            // (not started: the thumbnails are still found one by one, and it is tried at the next open)
+            if let Err(e) = spawned {
+                log::warn!("thumbnail cache: could not be tidied: {e}");
+            }
+        }
+    }
+
     /// Check, without closing the library open now, that [`Session::open_library`] can be expected
     /// to open `dir`: not a Lightroom catalog, not some other file, a readable folder (or one not
     /// made yet), not locked by another program. Returns the library folder ([`resolve_dir`]).
@@ -381,6 +531,8 @@ impl Session {
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
         self.catalog = catalog;
+        // (nothing of the list the last library showed is this one's)
+        self.refresh_view();
         self.library_generation = crate::LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         for entry in self.undo.iter_mut().chain(self.redo.iter_mut()) {
             self.pending_sidecar_repairs.append(&mut entry.retry_sidecars);
@@ -390,6 +542,8 @@ impl Session {
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
+        self.pair_show_raw.clear();
+        self.pair_focus_gen = self.pair_focus_gen.saturating_add(1);
         self.source = LibrarySource::All;
         self.library_folder = None;
         if report.created && seed_demo {
@@ -401,10 +555,14 @@ impl Session {
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
         self.xmp = prefs.xmp;
         self.last_export = prefs.last_export;
+        self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
+        self.print_templates = prefs.print_templates;
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
+        self.mask_effects = prefs.mask_effects;
+        self.mask_tool_effects = prefs.mask_tool_effects;
         self.label_sets = prefs.label_sets;
         self.lut_profiles = prefs.lut_profiles;
         crate::cmd::lut_profiles::register_all(self);
@@ -413,10 +571,16 @@ impl Session {
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        self.slideshow = prefs.slideshow.sanitized();
+        self.slide_layout = prefs.slide_layout.sanitized();
+        self.slide_overlays = prefs.slide_overlays.sanitized();
+        self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.paired_culling = prefs.paired_culling;
         self.sync_pair_metadata = prefs.sync_pair_metadata;
         self.sync_pair_labels = prefs.sync_pair_labels;
+        self.hold_view = prefs.hold_view;
+        self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
@@ -426,8 +590,9 @@ impl Session {
             for p in &mut self.presets {
                 p.favorite = p.builtin && f.favorites.contains(&p.id) || (!p.builtin && p.favorite);
             }
+            let mut ids: std::collections::HashSet<String> = self.presets.iter().map(|p| p.id.clone()).collect();
             for u in f.user {
-                if !self.presets.iter().any(|p| p.id == u.id) {
+                if ids.insert(u.id.clone()) {
                     self.presets.push(u);
                 }
             }
@@ -454,16 +619,33 @@ impl Session {
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
             self.selection.active = self.selection.active.filter(|id| self.catalog.photo(*id).is_some());
         }
+        // Rebuild transient pair focus so the saved active photo stays visible.
+        if self.paired_culling {
+            let active = self.selection.active;
+            let selected: std::collections::HashSet<_> = self.selection.ids.iter().copied().chain(active).collect();
+            self.pair_show_raw.extend(
+                self.catalog
+                    .pairs()
+                    .filter(|pair| selected.contains(&pair.raw) && (active == Some(pair.raw) || !selected.contains(&pair.jpeg)))
+                    .map(|pair| pair.id),
+            );
+            self.pair_focus_gen = self.pair_focus_gen.saturating_add(1);
+        }
+        // not on Missing Photos: working that view out checks every original (minutes on a
+        // sleeping NAS), and the app checks them in the background once it runs
         if self.selection.active.is_none()
+            && self.source != LibrarySource::Missing
             && let Some(first) = self.visible_cloned().first()
         {
             self.selection = Selection::single(*first);
         }
-        let presets_written = presets_json(self);
+        // presets.json is as read: saved again only after the list changes (hash 0 = unknown bytes)
+        let presets_saved = PresetsSaved::state_of(self);
         // photo ids are per library: drop decoded sources of the previous one
         self.media.clear_sources();
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
+            self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
         self.library = Some(Library {
@@ -474,9 +656,10 @@ impl Session {
             report,
             last_error: None,
             unsaved_error: None,
+            presets_error: None,
             retry_at: None,
             forgot_local: None,
-            presets_written,
+            presets_saved,
             view_written,
             settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
             warnings_reported: 0,
@@ -538,14 +721,28 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
+        if !due {
+            return Ok(());
+        }
         let presets = presets_json(self);
+        let mut state = PresetsSaved::state_of(self);
+        state.hash = bytes_hash(presets.as_bytes());
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
-        if presets != lib.presets_written && !lib.blocked.contains(&"presets.json") {
-            if let Err(e) = lib.files.write_atomic("presets.json", presets.as_bytes()) {
-                log::error!("library: presets: {e}");
-            } else {
-                lib.presets_written = presets;
+        if state.hash == lib.presets_saved.hash {
+            lib.presets_saved = state;
+            lib.presets_error = None;
+        } else if let Err(e) = lib.files.write_atomic("presets.json", presets.as_bytes()) {
+            // the state stays stale: retried by the next command and the frame loop (backing off);
+            // meanwhile the presets count as unsaved, so the UI warns and a backup refuses
+            log::error!("library: presets: {e}");
+            lib.presets_error = Some(format!("presets: {e}"));
+            lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
+        } else {
+            if lib.presets_error.take().is_some() {
+                log::info!("library: presets written to disk");
             }
+            lib.presets_saved = state;
         }
         Ok(())
     }
@@ -554,7 +751,8 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        if self.library.is_some() && !self.pending_log.is_empty() && !backing_off {
+        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
+        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
@@ -562,11 +760,14 @@ impl Session {
     }
 
     /// Changes applied in memory but not yet written to disk because saving failed: the number of
-    /// queued ops and why (`None` when everything is saved, or no library is open). Retried by
-    /// every command and by [`Session::persist_if_dirty`].
+    /// queued ops (plus one for presets.json) and why (`None` when everything is saved, or no library
+    /// is open). Retried by every command and by [`Session::persist_if_dirty`].
     pub fn unsaved(&self) -> Option<(usize, &str)> {
         let lib = self.library.as_ref()?;
-        lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty()).map(|e| (self.pending_log.len(), e))
+        let ops = lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty());
+        let presets = lib.presets_error.as_deref();
+        let n = ops.map_or(0, |_| self.pending_log.len()) + usize::from(presets.is_some());
+        ops.or(presets).map(|why| (n, why))
     }
 
     /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
@@ -605,6 +806,16 @@ impl Session {
         result
     }
 
+    /// Let go of the open library's lock (and with it the owner note, `catalog.lock.owner`) while
+    /// the library stays open in this session. For a host that ends the process without running
+    /// destructors (`std::process::exit`), after [`Session::close_library`] has saved: the OS would
+    /// free the lock anyway, but only the lock's `Drop` removes the note. Nothing else is
+    /// protected after this, so call it only when the process is about to end. A no-op without a
+    /// library or a lock.
+    pub fn release_library_lock(&mut self) {
+        drop(self.library.as_mut().and_then(|l| l.lock.take()));
+    }
+
     fn view_json(&self) -> Vec<u8> {
         let view = ViewFile {
             source: self.source,
@@ -639,10 +850,14 @@ impl Session {
         let v = serde_json::to_vec_pretty(&PrefsFile {
             xmp: self.xmp,
             last_export: self.last_export.clone(),
+            last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),
+            print_templates: self.print_templates.clone(),
             metadata_presets: self.metadata_presets.clone(),
             filter_presets: self.filter_presets.clone(),
             curve_presets: self.curve_presets.clone(),
+            mask_effects: self.mask_effects.clone(),
+            mask_tool_effects: self.mask_tool_effects.clone(),
             label_sets: self.label_sets.clone(),
             lut_profiles: self.lut_profiles.clone(),
             keyword_sets: self.keyword_sets.clone(),
@@ -655,6 +870,11 @@ impl Session {
             paired_culling: self.paired_culling,
             sync_pair_metadata: self.sync_pair_metadata,
             sync_pair_labels: self.sync_pair_labels,
+            slideshow: self.slideshow.clone(),
+            slide_layout: self.slide_layout.clone(),
+            slide_overlays: self.slide_overlays.clone(),
+            slide_titles: self.slide_titles.clone(),
+            hold_view: self.hold_view,
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -763,6 +983,26 @@ mod resolve_tests {
         let e = Session::new().with_fs().open_library(&other, false).err().unwrap().to_string();
         assert!(e.contains("is a file"), "{e}");
         assert!(!e.contains("File exists"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host that ends the process without destructors releases the lock by hand: the owner note
+    /// goes and another opener is let in, while the session keeps its library.
+    #[test]
+    fn release_library_lock_removes_the_owner_note() {
+        let dir = std::env::temp_dir().join(format!("lc-release-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        s.close_library().unwrap();
+        assert!(dir.join(lightcraft_catalog::lock::OWNER).exists(), "close_library keeps the lock");
+        assert!(matches!(LibraryLock::acquire(&dir, "other"), Err(lightcraft_catalog::lock::LockError::InUse(_))));
+        s.release_library_lock();
+        assert!(!dir.join(lightcraft_catalog::lock::OWNER).exists());
+        drop(LibraryLock::acquire(&dir, "other").unwrap());
+        s.release_library_lock();
+        assert!(s.library.is_some(), "the library stays open");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
