@@ -247,7 +247,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.focus.is_none() {
         m.focus = src.focus.clone();
     }
-    adopt_fuji_recipe(&mut m, &ph.content_hash, info);
+    adopt_fuji_recipe(&mut m, info);
     let mut ops = Vec::new();
     if m != before {
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
@@ -261,7 +261,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 /// `SetMeta` that stores the probe's film recipe on `ph`, or nothing when the photo already has it.
 pub(crate) fn fuji_recipe_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
     let mut meta = ph.meta.clone();
-    adopt_fuji_recipe(&mut meta, &ph.content_hash, info).then(|| Op::SetMeta { id, meta: Box::new(meta) })
+    adopt_fuji_recipe(&mut meta, info).then(|| Op::SetMeta { id, meta: Box::new(meta) })
 }
 
 /// Drop a stored film recipe. The photo now points at a file that was not confirmed to be the same
@@ -290,12 +290,10 @@ pub(crate) fn push_recipe_for_new_file(
     }
 }
 
-/// Copy a film recipe learned by a fresh probe onto `meta`. Photos imported before the recipe was
-/// stored get it here. A file whose bytes changed (a different content hash) is read again, so a
-/// replaced original does not keep the previous camera's recipe. Returns whether `meta` changed.
-fn adopt_fuji_recipe(meta: &mut lightcraft_catalog::Meta, had_hash: &Option<String>, info: &crate::media::ProbeInfo) -> bool {
-    let replaced = info.content_hash.is_some() && had_hash != &info.content_hash;
-    if (meta.fuji_recipe_known && !replaced) || !info.meta.fuji_recipe_known {
+/// Accept a known fresh recipe, including absence. Reload also refreshes labels after parser
+/// improvements when the file's bytes did not change. Returns whether `meta` changed.
+fn adopt_fuji_recipe(meta: &mut lightcraft_catalog::Meta, info: &crate::media::ProbeInfo) -> bool {
+    if !info.meta.fuji_recipe_known {
         return false;
     }
     if meta.fuji_recipe == info.meta.fuji_recipe && meta.fuji_recipe_known {
@@ -356,7 +354,7 @@ pub(crate) fn reload_ops(
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
         let mut copy_meta = c.meta.clone();
-        let recipe = adopt_fuji_recipe(&mut copy_meta, &c.content_hash, info).then(|| Op::SetMeta { id: c.id, meta: Box::new(copy_meta) });
+        let recipe = adopt_fuji_recipe(&mut copy_meta, info).then(|| Op::SetMeta { id: c.id, meta: Box::new(copy_meta) });
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(recipe).chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {
@@ -535,6 +533,34 @@ mod tests {
             })
             .collect();
         assert!(recipes.contains(&id.0) && recipes.contains(&cid.0), "{ops:?}");
+    }
+
+    #[test]
+    fn reload_refreshes_a_known_recipe_from_the_same_bytes() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/a.jpg".into() }, "a.jpg", "JPEG", 100, 80, "t");
+        ph.content_hash = Some("same".into());
+        ph.meta.title = "Mine".into();
+        ph.meta.fuji_recipe_known = true;
+        let mut old = eterna();
+        old.rows[0].value = "F2/Fujichrome (Velvia)".into();
+        ph.meta.fuji_recipe = Some(old);
+        let mut fresh = eterna();
+        fresh.rows[0].value = "Velvia/Vivid".into();
+        for recipe in [Some(fresh), None] {
+            let info = crate::media::ProbeInfo {
+                content_hash: ph.content_hash.clone(),
+                meta: lightcraft_catalog::Meta { fuji_recipe: recipe.clone(), fuji_recipe_known: true, ..Default::default() },
+                ..Default::default()
+            };
+            let ops = fill_missing_meta(ph.id, &ph, &info);
+            let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+            assert_eq!(meta.fuji_recipe, recipe);
+            assert!(meta.fuji_recipe_known);
+            assert_eq!(meta.title, "Mine");
+            let mut refreshed = ph.clone();
+            refreshed.meta = (**meta).clone();
+            assert!(fill_missing_meta(ph.id, &refreshed, &info).is_empty(), "unchanged recipes add no operation");
+        }
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,

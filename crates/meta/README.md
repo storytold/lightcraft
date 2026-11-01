@@ -14,11 +14,18 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
 | `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
 | `try_extract(&[u8]) -> Result<Metadata, ExtractError>` | Like `extract`, but reports malformed PSD/PSB headers, image-resource sections, or embedded EXIF/XMP structure (including duplicate EXIF/XMP resources) so callers can fail closed when location absence cannot be established. Other formats remain best-effort. |
+| `recipe_from_exif(&[u8])`, `recipe_from_bytes(&[u8])` | Fujifilm in-camera recipe from a MakerNote; byte input may be TIFF/DNG, JPEG or RAF embedded EXIF. |
+| `read_recipe_file(&Path)` | Bounded header/EXIF read for a recipe, without reading RAF sensor data; returns an error for failed I/O. |
 
 `Metadata` carries camera (make, model, serial, software), lens (make, model, serial, specification), capture
 (date-time with UTC offset and milliseconds, exposure time, f-number, ISO incl. extended ISO, focal length and
 35 mm equivalent, flash, exposure bias, program, metering, white balance), orientation, GPS, dimensions and the
 user fields (artist, copyright, title, caption, keywords, hierarchical keywords, rating −1…5, colour label).
+
+EXIF capture-time candidates are tried in order: DateTimeOriginal, DateTimeDigitized, then IFD0 DateTime. A clock
+with more than three colon-separated components is rejected as a whole, allowing the next valid candidate or XMP
+fallback to supply the capture time. The original tag remains available in All Metadata. JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
+malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
 ## XMP namespaces
 
@@ -41,6 +48,10 @@ No panics on malformed input: proptests feed random bytes to every container wal
 XMP parser; truncation tests cut a sample JPEG at every byte and exercise truncated PSD/PSB headers and
 image-resource records with hostile declared lengths.
 PSD/PSB XMP resources require valid UTF-8; trailing NUL padding is trimmed after validation.
+
+ISO capture-time parsing requires a complete clock and consumes every clock and fractional-second character. Invalid
+XMP capture-time values remain available in the raw property map but are not projected into `Metadata`; a later valid
+capture-time property can still supply the metadata value. Invalid GPX point times are treated as untimed.
 
 ## Sources
 

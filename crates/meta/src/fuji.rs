@@ -1,7 +1,7 @@
 //! Fujifilm in-camera film recipe, read from the MakerNote.
 //!
-//! Tag numbers and value names follow the public FujiFilm table (ExifTool tag names,
-//! `MakerNotes` / FujiFilm). No third-party metadata code was consulted. This does not
+//! Tag numbers and value names follow the public [ExifTool FujiFilm table](https://exiftool.org/TagNames/FujiFilm.html).
+//! No third-party metadata code was consulted. This does not
 //! reproduce the camera JPEG or recover a custom recipe name: the file does not store one.
 
 use std::fs::File;
@@ -116,9 +116,10 @@ fn read_for_recipe(path: &Path) -> Result<Vec<u8>, String> {
 
 /// The bytes a recipe can live in.
 fn recipe_window<R: Read + Seek>(mut file: R, shown: &str) -> Result<Vec<u8>, String> {
-    let mut head = [0u8; HEADER_BYTES];
-    let n = file.read(&mut head).map_err(|e| format!("{shown}: {e}"))?;
-    let got = head.get(..n).unwrap_or(&[]);
+    let mut head = Vec::with_capacity(HEADER_BYTES);
+    fill(&mut file, &mut head, HEADER_BYTES, HEADER_BYTES, shown)?;
+    let n = head.len();
+    let got = head.as_slice();
     if got.starts_with(b"FUJIFILMCCD-RAW") {
         return raf_embedded_jpeg(&mut file, &head, n, shown);
     }
@@ -147,9 +148,10 @@ fn raf_embedded_jpeg<R: Read + Seek>(file: &mut R, head: &[u8], n: usize, shown:
     file.seek(SeekFrom::Start(off)).map_err(|e| format!("{shown}: {e}"))?;
     // the length stops the read at the embedded JPEG: bytes after it are the raw image
     let mut jpeg = file.take(len);
-    let mut jhead = [0u8; HEADER_BYTES];
-    let jn = jpeg.read(&mut jhead).map_err(|e| format!("{shown}: {e}"))?;
-    let Some(got) = jhead.get(..jn) else { return Ok(Vec::new()) };
+    let mut jhead = Vec::with_capacity(HEADER_BYTES);
+    fill(&mut jpeg, &mut jhead, HEADER_BYTES, HEADER_BYTES, shown)?;
+    let jn = jhead.len();
+    let got = jhead.as_slice();
     if jn < 2 || got.first() != Some(&0xff) || got.get(1) != Some(&0xd8) {
         return Ok(Vec::new());
     }
@@ -225,7 +227,7 @@ fn jpeg_exif_window<R: Read>(file: &mut R, head: &[u8], shown: &str) -> Result<V
 enum TiffMake {
     Fuji,
     Other,
-    /// The header parsed, and it has no Make tag in this prefix.
+    /// No Make yet, or a truncated IFD: the bounded prefix may need more bytes.
     Unknown,
     /// Not a TIFF we can read from this prefix. Reading further does not help.
     Unreadable,
@@ -245,7 +247,11 @@ fn tiff_prefix<R: Read>(file: &mut R, head: &[u8], shown: &str) -> Result<Vec<u8
 }
 
 fn tiff_make(bytes: &[u8]) -> TiffMake {
-    let Ok(tiff) = Tiff::parse(bytes) else { return TiffMake::Unreadable };
+    let tiff = match Tiff::parse(bytes) {
+        Ok(tiff) => tiff,
+        Err(lightcraft_tiff::TiffError::Truncated(offset)) if offset < TIFF_META_MAX as u64 => return TiffMake::Unknown,
+        Err(_) => return TiffMake::Unreadable,
+    };
     match tiff.ifds.first().and_then(|ifd| ifd.string(0x010f)) {
         Some(make) if mentions_fuji(&make) => TiffMake::Fuji,
         Some(_) => TiffMake::Other,
@@ -259,7 +265,10 @@ fn fill<R: Read>(file: &mut R, buf: &mut Vec<u8>, need: usize, cap: usize, shown
         let mut tmp = [0u8; 8192];
         let want = (need - buf.len()).min(tmp.len());
         let Some(dest) = tmp.get_mut(..want) else { break };
-        let n = file.read(dest).map_err(|e| format!("{shown}: {e}"))?;
+        let n = match file.read(dest) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|e| format!("{shown}: {e}"))?,
+        };
         if n == 0 {
             break;
         }
@@ -279,7 +288,24 @@ fn decode(ifd: &Ifd) -> FujiRecipe {
         (None, Some(filter)) => out.push(0x1003, "Film simulation", filter.to_string()),
         (None, None) => {}
     }
-    if let Some(dr) = ifd.u16(0x1402).map(dynamic_range_setting).or_else(|| ifd.u16(0x1400).map(dynamic_range_legacy)) {
+    if let Some(mode) = ifd.u16(0x1443) {
+        let strength = match mode {
+            // X-H1 files can put the strength in the other mode's tag.
+            0 => ifd.u16(0x1444).or_else(|| ifd.u16(0x1445)).map(|v| named(v, &[(1, "Weak"), (2, "Strong"), (3, "Plus")])),
+            1 => ifd.u16(0x1445).or_else(|| ifd.u16(0x1444)).map(|v| named(v, &[(1, "Weak"), (2, "Strong")])),
+            _ => None,
+        };
+        let priority = match (mode, strength) {
+            (0, Some(strength)) => format!("Auto ({strength})"),
+            (1, Some(strength)) => strength,
+            _ => named(mode, &[(0, "Auto"), (1, "Fixed")]),
+        };
+        out.push(0x1443, "D-Range priority", priority);
+    } else if ifd.u16(0x1402) == Some(1)
+        && let Some(dr) = ifd.u16(0x1403)
+    {
+        out.push(0x1403, "Dynamic range", named(dr, &[(100, "DR100"), (200, "DR200"), (400, "DR400")]));
+    } else if let Some(dr) = ifd.u16(0x1402).map(dynamic_range_setting).or_else(|| ifd.u16(0x1400).map(dynamic_range_legacy)) {
         let tag = if ifd.contains(0x1402) { 0x1402 } else { 0x1400 };
         out.push(tag, "Dynamic range", dr);
     }
@@ -342,7 +368,7 @@ fn film_mode(v: u16) -> String {
             (0x110, "F1a/Studio Portrait Enhanced Saturation"),
             (0x120, "F1b/Studio Portrait Smooth Skin Tone (Astia)"),
             (0x130, "F1c/Studio Portrait Increased Sharpness"),
-            (0x200, "F2/Fujichrome (Velvia)"),
+            (0x200, "Velvia/Vivid"),
             (0x300, "F3/Studio Portrait Ex"),
             (0x400, "F4/Velvia"),
             (0x500, "Pro Neg. Std"),
@@ -646,7 +672,7 @@ mod tests {
 
     #[test]
     fn classic_chrome_recipe_from_jpeg_and_raf() {
-        for bytes in [sample_jpeg(), sample_raf(64)] {
+        for bytes in [sample_jpeg(), sample_raf(64), exif_with_note(fuji_note(0x600, [40, -80]))] {
             let recipe = recipe_from_bytes(&bytes).unwrap();
             assert_eq!(value(&recipe, "Film simulation"), "Classic Chrome");
             assert_eq!(value(&recipe, "Dynamic range"), "DR200");
@@ -659,6 +685,12 @@ mod tests {
             assert!(text.contains("Film simulation: Classic Chrome"), "{text}");
             assert!(crate::file_tag_rows(&bytes).iter().any(|r| r.group == "Fujifilm" && r.value == "Classic Chrome"));
             assert!(crate::file_tag_rows(&bytes).iter().any(|r| r.name == "Maker Note"));
+            let rows = crate::file_tag_rows(&bytes);
+            let fuji_rows: Vec<_> = rows.iter().filter(|r| r.group == "Fujifilm").collect();
+            assert_eq!(fuji_rows.len(), recipe.rows.len());
+            for (actual, expected) in fuji_rows.iter().zip(&recipe.rows) {
+                assert_eq!((actual.tag, &actual.name, &actual.value), (expected.tag, &expected.label, &expected.value));
+            }
         }
         assert_eq!(crate::extract(&sample_jpeg()).fuji_recipe.as_ref().map(|r| value(r, "Dynamic range")), Some("DR200"));
     }
@@ -667,6 +699,88 @@ mod tests {
     fn old_shift_scale_is_not_divided() {
         let recipe = recipe_from_exif(&exif_with_note(fuji_note(0x600, [2, -4]))).unwrap();
         assert_eq!(value(&recipe, "White balance shift"), "R +2 / B −4");
+    }
+
+    #[test]
+    fn xs10_velvia_uses_the_camera_menu_name() {
+        let recipe = recipe_from_exif(&exif_with_note(fuji_note(0x200, [0, 0]))).unwrap();
+        assert_eq!(value(&recipe, "Film simulation"), "Velvia/Vivid");
+    }
+
+    fn recipe_with_tags(tags: &[(u16, u16)]) -> (FujiRecipe, Vec<u8>) {
+        let mut note = b"FUJIFILM".to_vec();
+        note.extend_from_slice(&12u32.to_le_bytes());
+        note.extend_from_slice(&(tags.len() as u16).to_le_bytes());
+        for &(tag, code) in tags {
+            note.extend_from_slice(&u16_inline(tag, code));
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        let exif = exif_with_note(note);
+        (recipe_from_exif(&exif).unwrap(), exif)
+    }
+
+    #[test]
+    fn manual_dynamic_range_uses_the_development_percentage() {
+        for (percentage, expected) in [(100, "DR100"), (200, "DR200"), (400, "DR400"), (123, "Unknown (123)")] {
+            let (recipe, exif) = recipe_with_tags(&[(0x1400, 1), (0x1402, 1), (0x1403, percentage)]);
+            assert_eq!(value(&recipe, "Dynamic range"), expected);
+            assert_eq!(recipe.rows[0].tag, 0x1403);
+            let rows = crate::file_tag_rows(&jpeg_with_exif(&exif));
+            assert!(rows.iter().any(|r| r.group == "Fujifilm" && r.name == "Dynamic range" && r.value == expected));
+        }
+        let (recipe, _) = recipe_with_tags(&[(0x1402, 1)]);
+        assert_eq!(value(&recipe, "Dynamic range"), "Manual");
+        let (recipe, _) = recipe_with_tags(&[(0x1402, 0), (0x1403, 200)]);
+        assert_eq!(value(&recipe, "Dynamic range"), "Auto");
+    }
+
+    #[test]
+    fn priority_suppresses_legacy_dynamic_range_and_reads_camera_strength() {
+        for (tags, expected) in [
+            (vec![(0x1443, 1), (0x1444, 1)], "Weak"),
+            (vec![(0x1443, 1), (0x1444, 2)], "Strong"),
+            (vec![(0x1443, 1), (0x1444, 1), (0x1445, 2)], "Strong"),
+            (vec![(0x1443, 0), (0x1444, 1), (0x1445, 2)], "Auto (Weak)"),
+            (vec![(0x1443, 0), (0x1445, 1)], "Auto (Weak)"),
+            (vec![(0x1443, 0), (0x1444, 3)], "Auto (Plus)"),
+            (vec![(0x1443, 0)], "Auto"),
+            (vec![(0x1443, 1)], "Fixed"),
+            (vec![(0x1443, 1), (0x1445, 42)], "Unknown (42)"),
+            (vec![(0x1443, 42)], "Unknown (42)"),
+        ] {
+            let mut tags = tags;
+            tags.extend_from_slice(&[(0x1400, 1), (0x1402, 1), (0x1403, 100)]);
+            tags.sort_unstable();
+            let (recipe, _) = recipe_with_tags(&tags);
+            assert_eq!(value(&recipe, "D-Range priority"), expected);
+            assert_eq!(value(&recipe, "Dynamic range"), "");
+            assert!(recipe.text().contains(&format!("D-Range priority: {expected}")));
+        }
+    }
+
+    #[test]
+    fn monochrome_variants_need_no_film_mode_tag() {
+        for (code, name) in [
+            (0x300, "B&W"),
+            (0x301, "B&W Red Filter"),
+            (0x302, "B&W Yellow Filter"),
+            (0x303, "B&W Green Filter"),
+            (0x310, "B&W Sepia"),
+            (0x500, "Acros"),
+            (0x501, "Acros Red Filter"),
+            (0x502, "Acros Yellow Filter"),
+            (0x503, "Acros Green Filter"),
+        ] {
+            let mut note = b"FUJIFILM".to_vec();
+            note.extend_from_slice(&12u32.to_le_bytes());
+            note.extend_from_slice(&1u16.to_le_bytes());
+            note.extend_from_slice(&u16_inline(0x1003, code));
+            note.extend_from_slice(&0u32.to_le_bytes());
+            let recipe = recipe_from_exif(&exif_with_note(note)).unwrap();
+            assert_eq!(value(&recipe, "Film simulation"), name);
+            assert_eq!(recipe.rows[0].tag, 0x1003);
+            assert!(!recipe.rows.iter().any(|row| row.label == "Color"));
+        }
     }
 
     #[test]
@@ -775,6 +889,66 @@ mod tests {
             self.pos = next as usize;
             Ok(next)
         }
+    }
+
+    /// Legal short reads and transient interruptions, including inside the RAF preview.
+    struct Fragmented {
+        inner: Budget,
+        chunk: usize,
+        interrupt: bool,
+        retry: bool,
+    }
+
+    impl Read for Fragmented {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.interrupt && !self.retry {
+                self.retry = true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            self.retry = false;
+            let n = buf.len().min(self.chunk);
+            self.inner.read(&mut buf[..n])
+        }
+    }
+
+    impl Seek for Fragmented {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    /// Fragmentation must not change format detection or read into the sensor tail.
+    #[test]
+    fn fragmented_recipe_reads_preserve_recipes_and_budgets() {
+        for chunk in [1, 7, HEADER_BYTES] {
+            for interrupt in [false, true] {
+                let tiff = exif_with_note(fuji_note(0x600, [40, -80]));
+                for (bytes, limit) in
+                    [(sample_jpeg(), sample_jpeg().len()), (sample_raf(3_000_000), HEADER_BYTES + sample_jpeg().len()), (tiff.clone(), tiff.len())]
+                {
+                    let expected = recipe_from_bytes(&bytes).unwrap();
+                    let reader = Fragmented { inner: Budget::new(bytes, limit), chunk, interrupt, retry: false };
+                    let window = recipe_window(reader, "fragmented").unwrap();
+                    assert_eq!(recipe_from_bytes(&window), Some(expected), "chunk={chunk}, interrupt={interrupt}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tiff_recipe_beyond_the_sniff_window_is_read_within_the_cap() {
+        let mut bytes = exif_with_note(fuji_note(0x600, [0, 0]));
+        let root = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(bytes[root..root + 2].try_into().unwrap()) as usize;
+        let ifd = bytes[root..root + 2 + count * 12 + 4].to_vec();
+        let relocated = TIFF_SNIFF + 1024;
+        bytes.resize(relocated, 0);
+        bytes.extend_from_slice(&ifd);
+        bytes[4..8].copy_from_slice(&(relocated as u32).to_le_bytes());
+        let expected = recipe_from_bytes(&bytes).unwrap();
+        bytes.resize(TIFF_META_MAX + 1024, 0);
+        let window = recipe_window(Budget::new(bytes, TIFF_META_MAX), "late TIFF IFD").unwrap();
+        assert_eq!(recipe_from_bytes(&window), Some(expected));
     }
 
     #[test]

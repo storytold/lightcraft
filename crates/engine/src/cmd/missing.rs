@@ -41,7 +41,77 @@ pub fn missing(s: &Session) -> Vec<(PhotoId, String)> {
     if cfg!(target_arch = "wasm32") {
         return Vec::new();
     }
-    missing_with(&s.catalog, |f| Path::new(f).exists())
+    let exists = s.media.availability.probe();
+    missing_with(&s.catalog, |f| exists(f))
+}
+
+/// Every in-scope photo with its file ([`checked_path`]), without touching the disk: what a
+/// sweep ([`sweep`]) goes through, so a caller can take the list on its own thread and check
+/// the files on another.
+pub fn checked(cat: &Catalog) -> Vec<(PhotoId, String)> {
+    cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f.to_string()))).collect()
+}
+
+fn fingerprint_of<'a>(entries: impl Iterator<Item = (PhotoId, &'a str)>) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    entries.fold(0u64, |sum, entry| {
+        let mut h = DefaultHasher::new();
+        entry.hash(&mut h);
+        sum.wrapping_add(h.finish())
+    })
+}
+
+/// What [`checked`] lists, as one number (the photos in scope and the file each one points at,
+/// whatever their order), without building the list. A caller that took `checked` and checked its
+/// files on another thread compares it with [`fingerprint_of_checked`] to know whether the photos
+/// changed meanwhile.
+pub fn fingerprint(cat: &Catalog) -> u64 {
+    fingerprint_of(cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f))))
+}
+
+/// [`fingerprint`] of the list [`checked`] gave.
+pub fn fingerprint_of_checked(files: &[(PhotoId, String)]) -> u64 {
+    fingerprint_of(files.iter().map(|(id, f)| (*id, f.as_str())))
+}
+
+/// What of `gone` (a sweep's answer, of the catalog as it was) still holds in `cat` as it is now: the
+/// photos still in scope that still point at the file that was not found. A photo removed, moved to
+/// Recently Deleted or relinked since is not reported as missing; one added since was not checked.
+pub fn still_missing(cat: &Catalog, gone: Vec<(PhotoId, String)>) -> Vec<(PhotoId, String)> {
+    gone.into_iter().filter(|(id, file)| cat.photo(*id).and_then(|p| checked_path(p)) == Some(file.as_str())).collect()
+}
+
+/// How many files [`sweep`] checks between two reports of its progress.
+const PROGRESS_EVERY: usize = 64;
+
+/// The files among `files` that `exists` doesn't find, in order: [`missing`] for a caller that
+/// checks on a thread of its own. `stop` is asked before every check (`None`: it said yes, and
+/// the rest was not looked at); `progress` is told how many files are done every few dozen.
+pub fn sweep(
+    files: Vec<(PhotoId, String)>,
+    exists: impl Fn(&str) -> bool,
+    stop: impl Fn() -> bool,
+    progress: impl Fn(usize),
+) -> Option<Vec<(PhotoId, String)>> {
+    let mut gone = Vec::new();
+    for (done, (id, file)) in files.into_iter().enumerate() {
+        if stop() {
+            return None;
+        }
+        if done % PROGRESS_EVERY == 0 {
+            progress(done);
+        }
+        if !exists(&file) {
+            gone.push((id, file));
+        }
+    }
+    // (a stop that came during the last check is honoured too)
+    (!stop()).then_some(gone)
+}
+
+/// `library.missing`'s answer: `[{id, path}]`.
+pub fn missing_json(gone: Vec<(PhotoId, String)>) -> Value {
+    Value::Array(gone.into_iter().map(|(id, path)| json!({"id": id.0, "path": path})).collect())
 }
 
 /// Whether photo `id` is in scope and its file is gone (the Missing Photos view checks only
@@ -211,8 +281,8 @@ pub struct FoundFile {
     pub from: String,
     pub to: String,
     pub by: MatchBy,
-    /// The found file's bytes match the hash the library already stored. A name-and-size guess
-    /// does not, so the stored film recipe is dropped rather than shown for a different file.
+    /// The found file's bytes matched the stored hash when planned. This is only a hint when
+    /// submitted later: recipes are invalidated rather than trusting it as current proof.
     pub same_bytes: bool,
 }
 
@@ -382,19 +452,26 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
 /// photo that no longer points at the path it was missing from (relinked, removed) is left
 /// alone, and a file that is now some photo's original — or that the plan names twice — is not
 /// used (that photo stays missing). `missing` is the plan's count, corrected for what changed
-/// among the photos the plan names.
-fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
+/// among the photos the plan names. Only synchronous folder searches verify recipe hashes;
+/// submitted plans invalidate recipes without reading whole files on the UI thread.
+fn commit_find(s: &mut Session, plan: FindPlan, verify_recipes: bool) -> Result<Value> {
     let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
     let mut in_use: HashSet<String> = candidates(&s.catalog).into_iter().collect();
     let mut found = Vec::new();
     let mut missing = plan.missing;
-    for f in plan.found {
+    for mut f in plan.found {
         if !still_at(&s.catalog, f.id, &f.from) {
             continue;
         }
         if in_use.contains(&f.to) {
             missing += 1;
             continue;
+        }
+        // Only the synchronous command may read whole files here. The UI submits a worker's
+        // plan on its drawing thread: it must invalidate recipes instead of blocking on I/O.
+        if verify_recipes {
+            f.same_bytes =
+                f.same_bytes && s.catalog.photo(f.id).and_then(|p| stored_hash(p)).is_some_and(|hash| file_hash(&f.to).as_deref() == Some(hash));
         }
         in_use.insert(f.to.clone());
         found.push(f);
@@ -407,9 +484,9 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
         let mut ops = Vec::new();
         for f in &found {
             ops.push(relink_op(f.id, &f.to));
-            // a hash match is the same file, so its recipe is still true. A name-and-size guess
-            // may be a different file: drop the recipe and let the Info panel read the new one.
-            if !f.same_bytes
+            // Submitted sameBytes is only a planning hint, not proof of current contents.
+            // The Info panel reads invalidated recipes on its worker, and undo restores them.
+            if (!verify_recipes || !f.same_bytes)
                 && let Some(ph) = s.catalog.photo(f.id)
             {
                 ops.extend(crate::cmd::convert::forget_fuji_recipe_op(ph));
@@ -429,17 +506,17 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
 fn find_missing(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.findMissing";
     if p.get("found").is_some_and(Value::is_array) {
-        return commit_find(s, FindPlan::from_json(p));
+        return commit_find(s, FindPlan::from_json(p), false);
     }
     let folder = str_param(p, "folder").ok_or_else(|| bad(C, "missing `folder`"))?;
     let plan = plan_find_missing(&find_candidates(&s.catalog), folder).map_err(|e| bad(C, e))?;
-    commit_find(s, plan)
+    commit_find(s, plan, true)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "library.missing", "Missing Photos", [], None, "{} → [{id, path}] — photos whose original file isn't where the library expects it", always, |s, _| {
-            Ok(Value::Array(missing(s).into_iter().map(|(id, path)| json!({"id": id.0, "path": path})).collect()))
+        cmd!(query "library.missing", "Missing Photos", [], None, "{} → [{id, path}] — photos whose original file isn't where the library expects it (every file is looked at: on a network share that takes minutes, so the desktop app, asked over its control channel, checks on a worker thread, with a row in the activity stack that can stop it, and answers when it is done)", always, |s, _| {
+            Ok(missing_json(missing(s)))
         }),
         cmd!(
             "photo.relink",

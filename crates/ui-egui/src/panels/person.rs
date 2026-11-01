@@ -221,7 +221,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 let Some(f) = page.confirmed.get(row * cols + col) else { break };
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), PAD + row as f32 * row_h);
-                if let Hit::Open = tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, false, &shown_name, 0) {
+                if let Hit::Open =
+                    tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: false, name: &shown_name, above_count: 0 })
+                {
                     hit = Some((Hit::Open, f.clone()));
                 }
             }
@@ -254,7 +256,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), grid_top + row as f32 * row_h);
                 let above_count = more.iter().filter(|candidate| candidate.score >= f.score).count();
-                match tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, true, &shown_name, above_count) {
+                match tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: true, name: &shown_name, above_count }) {
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
                     Hit::ConfirmAbove => hit = Some((Hit::ConfirmAbove, (*f).clone())),
                     Hit::Dismiss => hit = Some((Hit::Dismiss, (*f).clone())),
@@ -287,9 +289,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     }
 }
 
+/// What one face tile shows.
+struct TileSpec<'a> {
+    /// where it is drawn
+    r: Rect,
+    f: &'a Face,
+    /// pixels per point, for the size of the face picture
+    ppp: f32,
+    /// a "More" tile (a face that looks like the person) rather than a confirmed one
+    more: bool,
+    /// the person's name
+    name: &'a str,
+    /// how many shown faces look at least as much like the person (for a "More" tile)
+    above_count: usize,
+}
+
 /// One face tile. A confirmed one opens its photo when clicked; a "More" one is confirmed when clicked, and has a × that
 /// hides it.
-fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: bool, name: &str, above_count: usize) -> Hit {
+fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
+    let TileSpec { r, f, ppp, more, name, above_count } = *spec;
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());

@@ -319,6 +319,13 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     if status["enabled"] != true {
         return;
     }
+    speed_section(app, ui, t, list, &status);
+    photos_section(app, ui, t, list, &status);
+    cache_section(app, ui, t, list, &status);
+}
+
+/// Where the work runs.
+fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Speed");
     let current = list["runOn"].as_str().unwrap_or("auto").to_string();
     let mut run_on = current.as_str();
@@ -342,6 +349,10 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
             app.caches.denoise.epoch += 1;
         }
     }
+}
+
+/// Whether photos are made as they are looked at, and the progress of what is being made.
+fn photos_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Photos");
     let mut auto = list["auto"].as_bool().unwrap_or(true);
     if check(ui, "settings.denoiseAuto", &mut auto, "Make the denoised picture of the photos I am looking at") {
@@ -350,27 +361,7 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     }
     hint(ui, t, "Only photos whose AI Denoise amount is above 0 are made. Exports always make theirs if it is missing.");
     let (running, queued) = (app.caches.denoise.running, app.caches.denoise.queued);
-    match running {
-        Some((done, total)) => {
-            let name = status["running"]["photo"]
-                .as_u64()
-                .and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone()))
-                .unwrap_or_default();
-            let text = tr_format!(
-                "Denoising {name}: {done} of {total} tiles{}",
-                if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() },
-                name = name,
-                done = done,
-                total = total
-            );
-            settings_bar(ui, done, total, text);
-        }
-        None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
-        None => {
-            let ready = status["ready"].as_u64().unwrap_or(0);
-            hint(ui, t, &count(ready, "photo has its denoised picture.", "photos have their denoised picture."))
-        }
-    }
+    progress_line(app, ui, t, status, running, queued);
     ui.horizontal(|ui| {
         let r = ui.button(tr("Denoise all photos with an Amount"));
         register(ui, "denoise:queueAll", r.rect);
@@ -385,6 +376,37 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
             }
         }
     });
+}
+
+/// "Denoising {photo}: {done} of {total} tiles", and how many photos wait.
+fn running_text(app: &LightcraftApp, status: &Value, done: u64, total: u64, queued: u64) -> String {
+    let name =
+        status["running"]["photo"].as_u64().and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone())).unwrap_or_default();
+    tr_format!("Denoising {name}: {done} of {total} tiles{}", waiting_suffix(queued), name = name, done = done, total = total)
+}
+
+/// " · N waiting" after the running photo, when any wait.
+fn waiting_suffix(queued: u64) -> String {
+    if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() }
+}
+
+/// What is being made now, or how many photos wait or are done.
+fn progress_line(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, status: &Value, running: Option<(u64, u64)>, queued: u64) {
+    match running {
+        Some((done, total)) => {
+            let text = running_text(app, status, done, total, queued);
+            settings_bar(ui, done, total, text);
+        }
+        None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
+        None => {
+            let ready = status["ready"].as_u64().unwrap_or(0);
+            hint(ui, t, &count(ready, "photo has its denoised picture.", "photos have their denoised picture."))
+        }
+    }
+}
+
+/// The cache's contents and limit.
+fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Cache");
     let (files, bytes) = (status["cache"]["files"].as_u64().unwrap_or(0), status["cache"]["bytes"].as_u64().unwrap_or(0));
     hint(
@@ -486,7 +508,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         });
                     }
                     (Some("failed"), Some(d)) => {
-                        let why = sentence(d["error"].as_str().unwrap_or("The download failed"));
+                        let why = download_failure(d);
                         ui.add(egui::Label::new(RichText::new(why).font(t.font(11.5)).color(t.caution)).wrap());
                     }
                     _ => {}
@@ -642,10 +664,15 @@ pub(super) fn mb(bytes: Option<u64>) -> String {
     }
 }
 
+/// Why a model download failed, as a sentence: the engine's reason, or, when it gave none, a message in the UI language.
+pub(crate) fn download_failure(d: &Value) -> String {
+    sentence(d["error"].as_str().unwrap_or_else(|| tr("The download failed")))
+}
+
 pub(super) fn sentence(s: &str) -> String {
     let s = s.trim();
     let mut out = crate::i18n::upper_first(s);
-    if !out.is_empty() && !out.ends_with(['.', '!', '?']) {
+    if !out.is_empty() && !out.ends_with(['.', '!', '?', '。', '！', '？']) {
         out.push('.');
     }
     out
@@ -742,4 +769,20 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         "The model is kept on this computer only. LightCraft never uploads or shares it."
     };
     ui.label(RichText::new(tr(closing)).font(t.font(11.5)).color(t.text_dim));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_failure_without_a_reason_is_said_in_the_ui_language() {
+        let de = crate::i18n::Locale::De;
+        crate::i18n::set_language(de);
+        let said = download_failure(&json!({}));
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        assert_eq!(said, sentence(de.tr("The download failed")));
+        assert_eq!(download_failure(&json!({"error": "no space left"})), "No space left.", "the engine's own reason is shown as given");
+        assert_eq!(sentence("下载失败。"), "下载失败。", "a Chinese or Japanese full stop ends the sentence");
+    }
 }
