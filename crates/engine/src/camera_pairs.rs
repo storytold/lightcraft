@@ -60,6 +60,14 @@ struct Photo {
     data: String,
 }
 
+fn validate_model(model: &str) -> Result<&str, &'static str> {
+    let model = super::camera_profiles::model_key(model);
+    if model.is_empty() || model.chars().count() > MAX_MODEL || model.chars().any(char::is_control) {
+        return Err("unusable camera model");
+    }
+    Ok(model)
+}
+
 /// The pairs file for `photos`, each photo's pairs in value order ([`canonical_order`]).
 pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
     if photos.len() > MAX_PHOTOS {
@@ -67,12 +75,14 @@ pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
     }
     let photos = photos
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(n, p)| {
+            let model = validate_model(&p.model).map_err(|why| format!("photo {}: {why}", n + 1))?;
             let mut pairs = p.pairs.clone();
             canonical_order(&mut pairs);
-            Photo { model: p.model.clone(), id: p.id.clone(), dro: p.dro, pairs: pairs.len(), data: base64(&pack(&pairs)) }
+            Ok(Photo { model: model.to_owned(), id: p.id.clone(), dro: p.dro, pairs: pairs.len(), data: base64(&pack(&pairs)) })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     serde_json::to_vec(&File { format: FORMAT.into(), version: VERSION, pair: LAYOUT.into(), photos }).map_err(|e| e.to_string())
 }
 
@@ -98,10 +108,7 @@ pub fn read(bytes: &[u8], origin: &str) -> Result<Vec<PhotoPairs>, String> {
         .enumerate()
         .map(|(n, p)| {
             let bad = |why: &str| format!("{origin}: photo {}: {why}", n + 1);
-            let model = p.model.trim();
-            if model.is_empty() || model.chars().count() > MAX_MODEL || model.chars().any(char::is_control) {
-                return Err(bad("unusable camera model"));
-            }
+            let model = validate_model(&p.model).map_err(bad)?;
             if p.id.len() != 32 || !p.id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
                 return Err(bad("id is not 32 hex digits"));
             }
@@ -203,6 +210,37 @@ mod tests {
     }
 
     const ID: &str = "00112233445566778899aabbccddeeff";
+
+    #[test]
+    fn writer_and_reader_reject_unusable_models() {
+        let good = photo("ILCE-7CR", ID, 1);
+        let file: serde_json::Value = serde_json::from_slice(&write(&[&good]).unwrap()).unwrap();
+        for model in
+            ["".into(), " \t\n".into(), "a\nb".into(), "a\0b".into(), "a\u{85}b".into(), "a".repeat(MAX_MODEL + 1), "\u{e9}".repeat(MAX_MODEL + 1)]
+        {
+            let invalid = photo(&model, ID, 1);
+            let error = write(&[&good, &invalid]).unwrap_err();
+            assert_eq!(error, "photo 2: unusable camera model", "{model:?}");
+            let mut file = file.clone();
+            file["photos"][0]["model"] = model.clone().into();
+            let error = read(&serde_json::to_vec(&file).unwrap(), "t").unwrap_err();
+            assert_eq!(error, "t: photo 1: unusable camera model", "{model:?}");
+        }
+    }
+
+    #[test]
+    fn model_limits_count_unicode_characters_after_trimming() {
+        for model in ["ILCE-7CR".into(), "a".repeat(MAX_MODEL), "\u{e9}".repeat(MAX_MODEL)] {
+            let expected = photo(&model, ID, 1);
+            let padded = photo(&format!(" \t{model}\r\n"), ID, 1);
+            let bytes = write(&[&padded]).unwrap();
+            let mut file: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(file["photos"][0]["model"], model);
+            assert_eq!(read(&bytes, "t").unwrap().as_slice(), std::slice::from_ref(&expected));
+            file["photos"][0]["model"] = padded.model.into();
+            assert_eq!(read(&serde_json::to_vec(&file).unwrap(), "t").unwrap(), [expected]);
+        }
+    }
 
     #[test]
     fn write_enforces_photo_limit() {
