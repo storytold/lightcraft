@@ -167,6 +167,8 @@ fn inspect_main(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "scan": app.scan.as_ref().map(crate::import::ScanTask::status),
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
+        // "Test my machine" / `app.testMachine`: running, and how the last one ended
+        "machineTest": {"running": crate::machine_test::running(app), "last": app.machine_last},
         "tasks": app.tasks.labels(),
         // every long-running task in flight, as the activity stack shows them (`activity.list`)
         "activity": app.session.activity.list(),
