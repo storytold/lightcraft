@@ -53,6 +53,9 @@ lightcraft-testkit = { workspace = true }
 # JPEG XL tests read encoded samples without our colour conversion
 jxl-oxide = { workspace = true }
 proptest = { workspace = true }
+# the Deflate backend the desktop app ships (`craft-update` -> `zip` turns flate2's `zlib-rs` on): the TIFF size
+# tests check what an exported file gets, also when this crate is tested alone
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 
