@@ -26,6 +26,7 @@ mod dialog_settings_text;
 mod dialog_tab;
 mod dialogs;
 mod disk_space;
+mod display_truth;
 mod docking_acceptance;
 mod drop_import;
 mod edit_layout;

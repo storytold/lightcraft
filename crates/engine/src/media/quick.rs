@@ -1,5 +1,6 @@
+use super::render::fit_cached;
 use super::render::{RenderJob, RenderResult};
-use super::source::{PreviewLoader, SourceLevel};
+use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel};
 use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
 
 /// Where a [`QuickJob`]'s stand-in image came from.
@@ -12,6 +13,9 @@ pub enum QuickSource {
     Embedded,
     /// A thumbnail-level develop render made for the occasion.
     Small,
+    /// The photo's latest render, made with earlier settings (an edited photo whose render for its
+    /// current settings is on its way: its edit as last seen, never the unedited camera JPEG).
+    Last,
 }
 
 /// Something to show *now* for a photo while its real render is prepared. Tried in order: cached
@@ -40,6 +44,12 @@ pub struct QuickJob {
     pub minimum_embedded_edge: Option<usize>,
     /// Last resort: run this thumbnail job.
     pub small: Option<Box<RenderJob>>,
+    /// The photo's latest pictures (aliases, [`PreviewCache::get_latest`]), tried after `cached` and
+    /// before `embedded` ([`QuickSource::Last`]).
+    pub latest: Vec<(Arc<PreviewCache>, Hash128)>,
+    /// Shrink a picture taken from the caches to fit this (a loupe view standing in for a grid
+    /// thumbnail is not kept at 2 000 px for a 256 px cell).
+    pub fit: Option<(usize, usize)>,
 }
 
 impl QuickJob {
@@ -80,9 +90,18 @@ impl QuickJob {
             let histogram = Histogram::of_srgb8(&image);
             Ok(Rendered { image, histogram, deep: None })
         };
+        let fitted = |img: Arc<Rgba8>| match self.fit {
+            Some((w, h)) if img.width > w.max(1) || img.height > h.max(1) => fit_cached(&img, w, h).unwrap_or_else(|| Arc::unwrap_or_clone(img)),
+            _ => Arc::unwrap_or_clone(img),
+        };
         for (cache, k) in &self.cached {
             if let Some(img) = cache.get(*k) {
-                return done(rendered(Arc::unwrap_or_clone(img)), Some(QuickSource::Cached));
+                return done(rendered(fitted(img)), Some(QuickSource::Cached));
+            }
+        }
+        for (cache, k) in &self.latest {
+            if let Some(img) = cache.get_latest(*k) {
+                return done(rendered(fitted(img)), Some(QuickSource::Last));
             }
         }
         let mut embedded_fallback = None;
@@ -127,6 +146,18 @@ impl QuickJob {
 /// The thumbnail cache's key for the camera JPEG standing for the thumbnail of cache key `k`.
 pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
     Hasher128::new().str("embedded-thumb").u64((k.0 >> 64) as u64).u64(k.0 as u64).finish()
+}
+
+/// The alias of photo `p`'s latest loupe view, whatever settings it was rendered with
+/// ([`PreviewCache::put_latest`]): an edited photo's first picture while the render for its current
+/// settings is on its way (notes 3, 11 and 31 of 2026-10-24).
+pub fn latest_view_key(p: &Photo, apply_crop: bool) -> Hash128 {
+    Hasher128::new().str(&content_key(p)).str("latest-view").u64(apply_crop as u64).u64(RENDER_CACHE_VERSION).finish()
+}
+
+/// The alias of photo `p`'s latest grid thumbnail, whatever settings it was rendered with.
+pub fn latest_thumb_key(p: &Photo) -> Hash128 {
+    Hasher128::new().str(&content_key(p)).str("latest-thumb").u64(RENDER_CACHE_VERSION).finish()
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.

@@ -42,12 +42,19 @@ struct Write {
     cost: usize,
 }
 
+/// Most photos whose latest picture ([`PreviewCache::put_latest`]) is remembered in memory by alias;
+/// past it the memory map starts again (the pictures stay on disk under their alias).
+const MAX_ALIASES: usize = 1 << 16;
+
 /// Rendered-thumbnail cache: memory LRU over an optional disk cache.
 pub struct PreviewCache {
     /// Current generation; `None` once [`Self::retire`]d (nothing is read or written any more).
     generation: RwLock<Option<u64>>,
     mem: Mutex<Lru<Hash128, Arc<Rgba8>>>,
     disk: Option<DiskCache>,
+    /// A photo's latest picture of a kind (its last loupe view, its last grid thumbnail, whatever its
+    /// settings were then): alias → the key it is kept under in memory ([`Self::put_latest`]).
+    aliases: Mutex<std::collections::HashMap<Hash128, Hash128>>,
     /// The writer thread's queue (started with the first deferred write), and the bytes waiting in it.
     #[cfg(not(target_arch = "wasm32"))]
     writer: Mutex<Option<std::sync::mpsc::Sender<Write>>>,
@@ -65,6 +72,7 @@ impl PreviewCache {
             generation: RwLock::new(Some(0)),
             mem: Mutex::new(Lru::new(mem_bytes)),
             disk,
+            aliases: Mutex::new(Default::default()),
             #[cfg(not(target_arch = "wasm32"))]
             writer: Mutex::new(None),
             queued: Arc::new(AtomicUsize::new(0)),
@@ -198,9 +206,75 @@ impl PreviewCache {
         let c = cost(&img);
         self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img.clone(), c);
         drop(current);
+        self.write_deferred(generation, key, img, c);
+    }
+
+    /// `img`, just kept under `real` (by [`Self::put_at`] or [`Self::put_deferred_at`]), is also
+    /// its photo's latest picture of a kind: `alias` names it whatever the settings it was made
+    /// with (notes 3, 11, 31 of 2026-10-24: an edited photo whose preview for its current settings
+    /// is not there yet shows its last rendered picture, never the camera's unedited JPEG). In
+    /// memory the alias points at `real` (the picture is kept once); on disk it is a file of its
+    /// own, so the next session has it too. `now`: written before this returns (a preview build),
+    /// else by the cache's writer thread.
+    pub fn put_latest(self: &Arc<Self>, generation: u64, alias: Hash128, real: Hash128, img: Arc<Rgba8>, now: bool) {
+        if *self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner) != Some(generation) {
+            return;
+        }
+        {
+            let mut a = self.aliases.lock().unwrap_or_else(|e| e.into_inner());
+            if a.len() >= MAX_ALIASES && !a.contains_key(&alias) {
+                a.clear();
+            }
+            a.insert(alias, real);
+        }
+        if let Some(d) = &self.disk {
+            // (the photo's only picture of its edit, until its next render: pruned last)
+            d.keep_last_one(alias);
+            if now || cfg!(target_arch = "wasm32") {
+                d.put(alias, &img);
+            } else {
+                let c = cost(&img);
+                self.write_deferred(generation, alias, img, c);
+            }
+        }
+    }
+
+    /// The latest picture kept under `alias` ([`Self::put_latest`]): from memory when the picture it
+    /// points at is still there, else from its own file on disk (then kept in memory under the alias).
+    pub fn get_latest(&self, alias: Hash128) -> Option<Arc<Rgba8>> {
+        let generation = self.generation();
+        if generation == u64::MAX {
+            return None;
+        }
+        let real = self.aliases.lock().unwrap_or_else(|e| e.into_inner()).get(&alias).copied();
+        if let Some(img) = real.and_then(|k| self.get_memory(k)) {
+            return Some(img);
+        }
+        self.get_at(generation, alias)
+    }
+
+    /// Whether a picture is kept under `key` or as the latest picture `key` aliases, in memory or on
+    /// disk, without reading it (a file's existence is looked up): cheap enough for a grid cell.
+    pub fn has(&self, key: Hash128) -> bool {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return false;
+        }
+        let real = self.aliases.lock().unwrap_or_else(|e| e.into_inner()).get(&key).copied();
+        {
+            let m = self.mem.lock().unwrap_or_else(|e| e.into_inner());
+            if m.peek(&key).is_some() || real.is_some_and(|r| m.peek(&r).is_some()) {
+                return true;
+            }
+        }
+        self.disk.as_ref().is_some_and(|d| d.contains(key))
+    }
+
+    /// Queue `img`'s disk write under `key` for the writer thread (nothing without a disk).
+    fn write_deferred(self: &Arc<Self>, generation: u64, key: Hash128, img: Arc<Rgba8>, c: usize) {
         let Some(d) = &self.disk else { return };
         #[cfg(target_arch = "wasm32")]
         {
+            let _ = (generation, c);
             d.put(key, &img);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -258,6 +332,7 @@ impl PreviewCache {
         // (never reaches u64::MAX, which stands for "retired")
         *g = g.wrapping_add(1) % u64::MAX;
         self.mem.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.aliases.lock().unwrap_or_else(|e| e.into_inner()).clear();
         if let Some(d) = &self.disk {
             d.clear();
         }

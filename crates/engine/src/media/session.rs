@@ -1,4 +1,4 @@
-use super::quick::{QuickJob, content_key, embedded_thumb_key, source_info};
+use super::quick::{QuickJob, content_key, embedded_thumb_key, latest_thumb_key, latest_view_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
@@ -69,6 +69,8 @@ impl crate::Session {
             }
             (self.media.rendered.clone(), k.finish())
         });
+        // a thumbnail of the photo's own settings is its latest grid picture too
+        let latest = cache.as_ref().filter(|_| !before).map(|(c, _)| (c.clone(), latest_thumb_key(&p)));
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -84,6 +86,7 @@ impl crate::Session {
             cache,
             stages: None,
             view_cache: None,
+            latest,
             display: None,
             slide: None,
             preview_cut: None,
@@ -138,6 +141,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            latest: None,
             display: None,
             slide: None,
             preview_cut: None,
@@ -193,6 +197,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            latest: None,
             display: None,
             slide: None,
             preview_cut,
@@ -240,6 +245,7 @@ impl crate::Session {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         let p = self.catalog.photo(id)?;
         job.view_cache = Some((self.media.rendered.clone(), self.view_key(p, apply_crop)));
+        job.latest = Some((self.media.rendered.clone(), latest_view_key(p, apply_crop)));
         Some(job)
     }
 
@@ -353,7 +359,10 @@ impl crate::Session {
     }
 
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
-    /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
+    /// render, else its latest render with earlier settings, else the embedded preview of a raw as
+    /// shot, else a cached or fresh thumbnail. An edited photo never gets the camera's JPEG: it is
+    /// unedited and uncropped (notes 3, 11 and 31 of 2026-10-24: "land on any photo that I just
+    /// edited and you see the camera JPG").
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
@@ -362,7 +371,16 @@ impl crate::Session {
         // (the photo too: a virtual copy shares the file and, unedited, the settings)
         let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(id.0).finish();
         let key = h.0 as u64;
-        let embedded = self.embedded_stand_in_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
+        let as_shot = crate::import::looks_as_shot(&p);
+        // an edited photo: its last view, else its last grid thumbnail (its edit, if older); a photo
+        // as shot has its camera JPEG, sharper than a thumbnail
+        let latest = if as_shot {
+            Vec::new()
+        } else {
+            vec![(self.media.rendered.clone(), latest_view_key(&p, apply_crop)), (self.media.rendered.clone(), latest_thumb_key(&p))]
+        };
+        let embedded =
+            self.embedded_stand_in_of(&p).filter(|_| as_shot).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
             let generation = cache.generation();
@@ -377,6 +395,8 @@ impl crate::Session {
             embedded_cache,
             embedded_on_disk: false,
             minimum_embedded_edge: None,
+            latest,
+            fit: None,
             small: apply_crop.then(|| Box::new(small)),
         })
     }
@@ -401,6 +421,8 @@ impl crate::Session {
             embedded_cache: None,
             embedded_on_disk: false,
             minimum_embedded_edge: None,
+            latest: Vec::new(),
+            fit: None,
             small: None,
         })
     }
@@ -411,10 +433,36 @@ impl crate::Session {
     /// itself: the grid queues no render behind an unedited raw's quick thumbnail
     /// ([`Self::embedded_thumb_is_final`]), so a preview that can't be read must not leave the
     /// cell empty (issue #1448). `None` for other photos (render them directly).
+    ///
+    /// An edited photo (not as shot, [`crate::import::looks_as_shot`]) never gets its camera JPEG
+    /// (unedited, uncropped): its stand-in is its own thumbnail for these settings, else its latest
+    /// thumbnail or view with earlier settings, shrunk to the cell ([`QuickSource::Last`]). `None`
+    /// when it has none of them: its render is the first picture.
     pub fn quick_thumb_job(&mut self, job: &RenderJob) -> Option<QuickJob> {
         let p = self.catalog.photo(job.photo)?.clone();
-        let (path, l) = self.embedded_stand_in_of(&p)?;
         let edge = job.request.max_w.max(job.request.max_h);
+        if !crate::import::looks_as_shot(&p) {
+            let c = self.media.rendered.clone();
+            let latest = vec![(c.clone(), latest_thumb_key(&p)), (c.clone(), latest_view_key(&p, true))];
+            let exact = job.cache.clone();
+            if !exact.iter().any(|(c, k)| c.has(*k)) && !latest.iter().any(|(c, k)| c.has(*k)) {
+                return None;
+            }
+            return Some(QuickJob {
+                request_id: 0,
+                photo: job.photo,
+                key: job.key,
+                cached: exact.into_iter().collect(),
+                embedded: None,
+                embedded_cache: None,
+                embedded_on_disk: false,
+                minimum_embedded_edge: None,
+                latest,
+                fit: Some((edge, edge)),
+                small: None,
+            });
+        }
+        let (path, l) = self.embedded_stand_in_of(&p)?;
         Some(QuickJob {
             request_id: 0,
             photo: job.photo,
@@ -426,6 +474,8 @@ impl crate::Session {
             embedded_cache: job.cache.as_ref().map(|(c, k)| (c.clone(), embedded_thumb_key(*k), c.generation())),
             embedded_on_disk: true,
             minimum_embedded_edge: None,
+            latest: Vec::new(),
+            fit: None,
             small: Some(Box::new(job.clone())),
         })
     }

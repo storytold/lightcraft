@@ -1029,11 +1029,15 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
 /// between photos, and the full render replaces them in place). Returns what it drew.
 fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
+    // an edited photo never shows the camera's JPEG (unedited, uncropped), not even one made while
+    // the photo was still as shot (notes 3, 11, 31 of 2026-10-24)
+    let as_shot = app.session.catalog.photo(id).is_none_or(|p| lightcraft_engine::import::looks_as_shot(p));
+    let truthful = |t: &&crate::render::Tex| as_shot || t.quick != Some(lightcraft_engine::media::QuickSource::Embedded);
     let (tex, what) = if let Some(t) = mine(slot) {
         (t, "render")
-    } else if let Some(t) = mine(Slot::Preview) {
+    } else if let Some(t) = mine(Slot::Preview).filter(truthful) {
         (t, t.quick.map(quick_name).unwrap_or("preview"))
-    } else if let Some(t) = app.renderer.thumb(id) {
+    } else if let Some(t) = app.renderer.thumb(id).filter(truthful) {
         (t, "thumb")
     } else {
         return "none";

@@ -78,6 +78,9 @@ pub struct DiskCache {
     pub writes: AtomicU64,
     /// The thumbnails read in this session: a full cache lets them go last ([`Self::prune`]).
     read: Mutex<std::collections::HashSet<u128>>,
+    /// Pictures a full cache lets go only after everything else ([`Self::keep_last`]): the edited
+    /// photos' latest previews, the only pictures of their edits (an unedited photo has its camera JPEG).
+    last: Mutex<std::collections::HashSet<u128>>,
 }
 
 impl DiskCache {
@@ -90,7 +93,26 @@ impl DiskCache {
             misses: AtomicU64::new(0),
             writes: AtomicU64::new(0),
             read: Mutex::new(Default::default()),
+            last: Mutex::new(Default::default()),
         }
+    }
+
+    /// Let the pictures under `keys` go last when the cache is full (after the ones read in this
+    /// session too): the edited photos' latest previews (notes 3/11/31 of 2026-10-24: the rendered
+    /// edits were pruned and the loupe had nothing but the unedited camera JPEG). Replaces the set.
+    pub fn keep_last(&self, keys: impl IntoIterator<Item = Hash128>) {
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = keys.into_iter().map(|k| k.0).collect();
+    }
+
+    /// Add one key to [`Self::keep_last`]'s set.
+    pub fn keep_last_one(&self, key: Hash128) {
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).insert(key.0);
+    }
+
+    /// Whether a file is kept under `key` (its name is looked up; nothing is read).
+    pub fn contains(&self, key: Hash128) -> bool {
+        let p = self.path(key);
+        p.parent().is_some_and(is_real_dir) && (p.is_file() || self.named(key, OLD_EXT).is_file())
     }
 
     pub fn dir(&self) -> &Path {
@@ -367,14 +389,17 @@ impl DiskCache {
     }
 
     /// Remove least recently used files until the cache is at most 80 % of its budget: by the
-    /// date of each file, the ones read in this session last.
+    /// date of each file, the ones read in this session later, the ones to keep last
+    /// ([`Self::keep_last`]) last of all.
     pub fn prune(&self) {
         let mut files = self.scan();
         let mut total: u64 = files.iter().map(|f| f.1).sum();
         let target = self.budget() / 5 * 4;
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let last = self.last.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let in_use = |p: &Path| key_of(p).is_some_and(|k| read.contains(&k));
-        files.sort_by_cached_key(|f| (in_use(&f.0), f.2));
+        let kept = |p: &Path| key_of(p).is_some_and(|k| last.contains(&k));
+        files.sort_by_cached_key(|f| (kept(&f.0), in_use(&f.0), f.2));
         let mut gone = Vec::new();
         for (p, len, _) in files {
             if total <= target {

@@ -189,6 +189,8 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
         embedded_cache: None,
         embedded_on_disk: false,
         minimum_embedded_edge: None,
+        latest: Vec::new(),
+        fit: None,
         small: None,
     };
     let r = quick.run();
@@ -214,6 +216,8 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
             embedded_cache: Some((cache.clone(), key, made_in)),
             embedded_on_disk: on_disk,
             minimum_embedded_edge: None,
+            latest: Vec::new(),
+            fit: None,
             small: None,
         };
         // the user discards the cache while the job is on its way
@@ -230,6 +234,8 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
             embedded_cache: Some((cache.clone(), key, cache.generation())),
             embedded_on_disk: on_disk,
             minimum_embedded_edge: None,
+            latest: Vec::new(),
+            fit: None,
             small: None,
         };
         assert!(quick.run().rendered.is_ok());

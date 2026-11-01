@@ -634,6 +634,7 @@ impl Session {
         self.media.clear_sources();
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
+            self.keep_edited_previews_last();
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
@@ -889,6 +890,19 @@ impl Session {
     /// grows with the library: [`crate::media::default_disk_cache_bytes`]).
     pub fn cache_bytes(&self) -> u64 {
         if self.cache_mb == 0 { crate::media::default_disk_cache_bytes(self.catalog.len()) } else { u64::from(self.cache_mb) << 20 }
+    }
+
+    /// The edited photos' latest previews (their last loupe view and grid thumbnail) are the last
+    /// pictures a full disk cache lets go: the only pictures of their edits (an unedited photo has
+    /// its camera JPEG). Notes 3/11/31 of 2026-10-24: "every rendered edit is also lost".
+    pub fn keep_edited_previews_last(&self) {
+        let Some(d) = self.media.rendered.disk() else { return };
+        let keys = self
+            .catalog
+            .photos()
+            .filter(|p| !crate::import::looks_as_shot(p))
+            .flat_map(|p| [crate::media::latest_view_key(p, true), crate::media::latest_thumb_key(p)]);
+        d.keep_last(keys);
     }
 
     /// Bring the disk cache's budget up to date with the library (photos were added since it was

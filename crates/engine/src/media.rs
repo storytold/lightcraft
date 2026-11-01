@@ -36,7 +36,7 @@ mod source;
 pub use cache::DenoiseIndex;
 #[cfg(test)]
 pub(crate) use cache::rendered_budget;
-pub use quick::{QuickJob, QuickSource, content_key, source_info};
+pub use quick::{QuickJob, QuickSource, content_key, latest_thumb_key, latest_view_key, source_info};
 pub use render::{RenderJob, RenderResult, develop, develop_reporting, fit_cached, fit_for_display};
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;

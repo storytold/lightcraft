@@ -30,6 +30,10 @@ pub struct RenderJob {
     pub stages: Option<Arc<StageCache>>,
     /// Keep a full-quality result here as the photo's view preview ([`crate::Session::loupe_job`]).
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// Keep a full-quality result also as the photo's latest picture of its kind, whatever its
+    /// settings ([`PreviewCache::put_latest`]; the alias, [`latest_view_key`] or [`latest_thumb_key`]):
+    /// what an edited photo shows while the render for its current settings is on its way.
+    pub latest: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
@@ -105,6 +109,7 @@ impl RenderJob {
         // a diagnostic view (visualized range / spots) must never become the photo's cached preview
         if overlay != lightcraft_pipeline::Overlay::None {
             self.view_cache = None;
+            self.latest = None;
         }
         self
     }
@@ -119,6 +124,7 @@ impl RenderJob {
         }
         if proof.is_some() {
             self.view_cache = None;
+            self.latest = None;
         }
         self
     }
@@ -142,6 +148,7 @@ impl RenderJob {
         self.settings = Arc::new(s);
         self.cache = None;
         self.view_cache = None;
+        self.latest = None;
         self.preview_cut = None;
         self
     }
@@ -349,14 +356,23 @@ impl RenderJob {
                     }
                     _ => None,
                 };
+                let full = self.request.quality == Quality::Full;
                 if let Some((cache, key)) = &self.cache {
-                    cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
+                    let img = Arc::new(rendered.image.clone());
+                    cache.put_at(self.cache_generation, *key, img.clone());
+                    if let Some((latest, alias)) = self.latest.as_ref().filter(|_| full && self.view_cache.is_none()) {
+                        latest.put_latest(self.cache_generation, *alias, *key, img, false);
+                    }
                 }
                 if let Some((cache, key)) = &self.view_cache
-                    && self.request.quality == Quality::Full
+                    && full
                     && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
+                    let img = Arc::new(srgb.unwrap_or_else(|| rendered.image.clone()));
+                    cache.put_deferred_at(self.cache_generation, *key, img.clone());
+                    if let Some((latest, alias)) = &self.latest {
+                        latest.put_latest(self.cache_generation, *alias, *key, img, false);
+                    }
                 }
                 // the display fit, after the caches have the full render
                 if let Some((fw, fh)) = self.display_fit

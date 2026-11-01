@@ -230,16 +230,33 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
         // A preview that isn't kept fails the photo: it is not built (a full or unwritable cache folder, or the
         // cache discarded while the photo rendered).
         let keep = j.view_cache.take().map(|v| (v, j.cache_generation));
+        // (and the photo's latest view / thumbnail, on disk before the photo counts as built: the
+        // picture an edited photo shows once its settings change again)
+        let latest = j.latest.take();
+        let thumb = j.cache.as_ref().map(|c| c.1);
+        let generation = j.cache_generation;
         let r = j.run();
-        if let (Some(((cache, key), generation)), Ok(img)) = (keep, r.rendered.as_ref())
-            && !cache.put_at(generation, key, Arc::new(img.image.clone()))
-        {
-            if cache.generation() == generation {
-                log::warn!("building previews: the view preview could not be written to the cache folder");
-            } else {
-                log::warn!("building previews: the preview cache was discarded while the photo rendered");
+        if let Ok(img) = r.rendered.as_ref() {
+            let img = Arc::new(img.image.clone());
+            let real = match keep {
+                Some(((cache, key), generation)) => {
+                    if !cache.put_at(generation, key, img.clone()) {
+                        if cache.generation() == generation {
+                            log::warn!("building previews: the view preview could not be written to the cache folder");
+                        } else {
+                            log::warn!("building previews: the preview cache was discarded while the photo rendered");
+                        }
+                        ok = false;
+                    }
+                    Some(key)
+                }
+                None => thumb,
+            };
+            if let (Some((cache, alias)), Some(real)) = (latest, real)
+                && r.quick != Some(crate::media::QuickSource::Cached)
+            {
+                cache.put_latest(generation, alias, real, img, true);
             }
-            ok = false;
         }
         ok &= r.rendered.is_ok();
         if decoded.is_none() {
