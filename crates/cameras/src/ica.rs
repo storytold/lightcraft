@@ -89,6 +89,8 @@ struct CatalogState {
     items: usize,
     ready: bool,
     removed: bool,
+    /// The camera ended an open session itself.
+    closed: bool,
     /// An iPhone or iPad restricting access (`Some(true)`), or no longer (`Some(false)`); `None`
     /// until it says either.
     restricted: Option<bool>,
@@ -102,8 +104,8 @@ struct Open {
     /// Kept alive here: a device holds its delegate weakly.
     delegate: Retained<CameraDelegate>,
     state: Arc<Mutex<CatalogState>>,
-    /// Sessions using it; the camera's session is closed when the last one ends.
-    users: usize,
+    /// The [`Session`] that opened it: only its end closes the camera.
+    key: u64,
 }
 
 #[derive(Default)]
@@ -246,7 +248,9 @@ define_class!(
 
     unsafe impl ICDeviceDelegate for CameraDelegate {
         #[unsafe(method(device:didCloseSessionWithError:))]
-        fn did_close(&self, _device: &ICDevice, _error: Option<&NSError>) {}
+        fn did_close(&self, _device: &ICDevice, _error: Option<&NSError>) {
+            lock(self.ivars()).closed = true;
+        }
 
         #[unsafe(method(didRemoveDevice:))]
         fn did_remove(&self, _device: &ICDevice) {
@@ -481,11 +485,9 @@ impl Session {
         // the browser must be running for the camera to be known
         cameras()?;
         let owned = id.to_string();
-        let opened = on_main(move |mtm| open_on_main(mtm, owned))??;
-        let (key, state, rx) = opened;
-        let session = Session { key, id: id.to_string(), state };
-        // dropping `session` on failure closes the camera again
-        let Some(rx) = rx else { return Ok(session) };
+        // made on the main thread: one that comes too late for this thread (it stopped waiting) is
+        // dropped there, which closes the camera again, as dropping `session` on failure does
+        let (session, rx) = on_main(move |mtm| open_on_main(mtm, owned))??;
         let Err(refused) = recv(&rx, OPEN_WAIT, Some(cancel))? else { return Ok(session) };
         // An iPhone or iPad refuses the first session while it restricts access ("Please unlock
         // …"), even when it is unlocked, and lifts the restriction a moment later: wait for that
@@ -503,6 +505,8 @@ impl Session {
         let owned = id.to_string();
         let rx = on_main(move |_| reopen_on_main(&owned))??;
         recv(&rx, OPEN_WAIT, Some(cancel))?.map_err(Error::Device)?;
+        // the refused first try may have reported a closed session
+        lock(&session.state).closed = false;
         Ok(session)
     }
 
@@ -515,6 +519,9 @@ impl Session {
             let s = lock(&self.state);
             if s.removed {
                 return Some(Err(Error::Device("the camera was disconnected".into())));
+            }
+            if s.closed {
+                return Some(Err(Error::Device("the camera ended the session".into())));
             }
             if s.ready {
                 return Some(Ok(()));
@@ -576,29 +583,31 @@ impl Drop for Session {
     }
 }
 
-type Opened = (u64, Arc<Mutex<CatalogState>>, Option<Receiver<Result<(), String>>>);
-
-/// Start a session with camera `id` (or join the one already open). The receiver, when there is
-/// one, gets the session's result.
-fn open_on_main(mtm: MainThreadMarker, id: String) -> Result<Opened, Error> {
+/// Start a session with camera `id`; the receiver gets its result. One session per camera: a
+/// second reader is refused while the first one's session lasts.
+fn open_on_main(mtm: MainThreadMarker, id: String) -> Result<(Session, Receiver<Result<(), String>>), Error> {
     let found = with_main(|m| {
         m.next_session = m.next_session.wrapping_add(1);
         let key = m.next_session;
-        if let Some(o) = m.open.get_mut(&id) {
-            o.users = o.users.saturating_add(1);
-            return Ok((key, o.state.clone(), None));
+        if let Some(o) = m.open.get(&id) {
+            let s = lock(&o.state);
+            // a session the camera ended (or was unplugged from) is replaced; its reader's close
+            // then leaves the new one alone (see `close_on_main`)
+            if !s.closed && !s.removed {
+                return Err(Error::Device("the camera is already being read".into()));
+            }
         }
         let device = m.devices.iter().find(|(d, _)| *d == id).map(|(_, d)| d.clone());
         let device = device.ok_or_else(|| Error::Device("the camera isn't connected any more".into()))?;
         let camera = device.downcast::<ICCameraDevice>().map_err(|_| Error::Device("the device isn't a camera".into()))?;
         let state = Arc::new(Mutex::new(CatalogState::default()));
         let delegate = CameraDelegate::new(mtm, state.clone());
-        m.open.insert(id.clone(), Open { camera: camera.clone(), delegate: delegate.clone(), state: state.clone(), users: 1 });
-        Ok((key, state, Some((camera, delegate))))
+        m.open.insert(id.clone(), Open { camera: camera.clone(), delegate: delegate.clone(), state: state.clone(), key });
+        Ok((key, state, camera, delegate))
     })
     .ok_or_else(|| Error::Device("busy".into()))??;
-    let (key, state, start) = found;
-    let Some((camera, delegate)) = start else { return Ok((key, state, None)) };
+    let (key, state, camera, delegate) = found;
+    let session = Session { key, id, state };
     // SAFETY: the delegate is retained in `MAIN.open` while the session is (the camera holds it
     // weakly); the presentation is one of the framework's constants.
     unsafe {
@@ -606,7 +615,7 @@ fn open_on_main(mtm: MainThreadMarker, id: String) -> Result<Opened, Error> {
         // the files as they are on the device (a phone would otherwise offer JPEG copies of HEICs)
         camera.setMediaPresentation(ICMediaPresentation::OriginalAssets);
     }
-    Ok((key, state, Some(request_open(&camera))))
+    Ok((session, request_open(&camera)))
 }
 
 /// Ask `camera` for a session; the receiver gets the answer.
@@ -637,9 +646,8 @@ fn reopen_on_main(id: &str) -> Result<Receiver<Result<(), String>>, Error> {
 fn close_on_main(key: u64, id: &str) {
     let camera = with_main(|m| {
         m.files.remove(&key);
-        let o = m.open.get_mut(id)?;
-        o.users = o.users.saturating_sub(1);
-        if o.users > 0 {
+        // only the session that opened the camera closes it, not one replaced since
+        if m.open.get(id).is_none_or(|o| o.key != key) {
             return None;
         }
         m.open.remove(id).map(|o| (o.camera, o.delegate))
