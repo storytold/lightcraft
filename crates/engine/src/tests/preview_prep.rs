@@ -574,8 +574,9 @@ fn a_build_that_cant_start_waits_before_trying_again() {
     assert!(s.prep_retry_in().is_some_and(|d| d <= crate::prep::RETRY_AFTER && d > crate::prep::RETRY_AFTER / 2));
     s.prep_tick(mode, Some(ids[2]), false);
     assert!(s.preview_build.is_none(), "not tried again at once");
-    // the wait is over
+    // the wait is over: no more frames asked for it (CodeRabbit on #3077 / #3080)
     s.prep.retry_at = s.prep.retry_at.map(|(view, _)| (view, web_time::Instant::now()));
+    assert_eq!(s.prep_retry_in(), None, "a deadline that has passed asks for no frame");
     s.prep_tick(mode, Some(ids[2]), false);
     let b = s.preview_build.clone().expect("tried again");
     assert!(b.background && s.prep.retry_at.is_none());
