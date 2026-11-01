@@ -329,7 +329,9 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW"].iter().any(|f| format.eq_ignore_ascii_case(f))
+    ["ARW", "SR2", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW"]
+        .iter()
+        .any(|f| format.eq_ignore_ascii_case(f))
 }
 
 /// Whether a raw of `format` shot on `camera` (Exif make and model, as [`Meta::camera`] keeps them) is developed
@@ -634,6 +636,7 @@ mod edited_tests {
     fn supported_raws_use_relative_white_balance() {
         for (name, format, relative) in [
             ("a.arw", "ARW", true),
+            ("a.sr2", "sR2", true),
             ("a.nef", "NEF", true),
             ("a.nrw", "nrw", true),
             ("a.rw2", "RW2", true),
@@ -651,7 +654,7 @@ mod edited_tests {
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
             p.kind = MediaKind::Raw;
-            p.meta.camera = "Pentax K-1".into();
+            p.meta.camera = "Acme X-1".into();
             p.as_shot_wb = Some((5200.0, 4.0));
             assert_eq!(p.relative_wb(), relative, "{format}");
             assert_eq!(p.fitted_look(), relative, "{format}");
@@ -681,13 +684,18 @@ mod edited_tests {
             ("Canon Canon EOS 5D Mark III", "CR2", false),
             ("Canon Canon EOS R6m2", "CR3", false),
             ("Canon Canon EOS R6 Mark II", "CR3", false),
-            ("Canon Canon EOS R7", "CR3", true),
+            ("Canon Canon EOS R7", "CR3", false),
+            ("Canon Canon EOS 20D", "CR2", true),
+            ("Panasonic DMC-GX85", "RW2", false),
+            ("LEICA CAMERA AG D-LUX 7", "RWL", false),
+            ("RICOH PENTAX K-3 Mark III", "PEF", false),
+            ("SONY DSC-R1", "SR2", true),
             ("FUJIFILM X-T4", "RAF", false),
             ("ILCE-7M3", "ARW", false),
-            ("SONY ILCE-7M2", "ARW", true),
+            ("SONY ILCE-7M2", "ARW", false),
             ("SONY ILCA-99M2", "ARW", false),
             ("SONY SLT-A33", "ARW", false),
-            ("SONY ILCE-1", "ARW", true),
+            ("SONY ILCE-1", "ARW", false),
             ("", "ARW", true),
             ("SONY ILCE-7M3", "DNG", false),
             ("NIKON CORPORATION NIKON Z5_2", "NEF", false),
@@ -698,11 +706,7 @@ mod edited_tests {
             p.as_shot_wb = Some((4986.0, -2.0));
             assert_eq!(p.relative_wb(), relative, "{camera} {format}");
             assert_eq!(relative_wb_camera(format, camera), relative, "{camera} {format}");
-            assert_eq!(
-                p.fitted_look(),
-                format == "ARW" || format == "NEF" || format == "CR2" || format == "CR3" || format == "RAF",
-                "{camera} {format}"
-            );
+            assert_eq!(p.fitted_look(), ["ARW", "SR2", "NEF", "CR2", "CR3", "RAF", "RW2", "RWL", "PEF"].contains(&format), "{camera} {format}");
             let wb = p.camera_defaults().wb;
             assert_eq!((wb.temp, wb.tint), if relative { (6500.0, 0.0) } else { (4986.0, -2.0) }, "{camera} {format}");
             assert_eq!(wb.scale, if relative { WbScale::Legacy } else { WbScale::Kelvin }, "{camera} {format}");

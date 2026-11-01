@@ -13,6 +13,13 @@
 //! taken in Kelvin order ([`KelvinPresets::from_unordered`]). On the PowerShot G1 X Mark III's nine settings the
 //! curve reads the as-shot levels within 5 % of the camera's own `ColorTempAsShot`.
 //!
+//! Canon CR3s list the same presets in the `ColorData` of the maker note (layout by `ColorDataVersion`, see
+//! `vendor::cr3`). Panasonic and Leica RW2s store, in tag `0x0027`, neutral multipliers for named lights (D55 and
+//! studio tungsten, which are 5500 K and 3200 K: `vendor::rw2`), and Pentax PEFs a table of presets
+//! keyed by temperature in maker note tag `0x0221` (`vendor::pef`); each gives the same
+//! curve, the two-point ones through [`KelvinPresets::from_neutral_lights`]. All tag numbers were found with a
+//! black-box `exiftool` run; the layouts were read from the bytes of the sample files.
+//!
 //! The model, in `(ln R/G, ln B/G)` of the multipliers ([`KelvinPresets::temp_tint`]):
 //! - The presets (three or more) are joined piecewise linearly, with mired linear along each segment and the end segments
 //!   extended. On every Sony body measured, mired is nearly linear in arc length along the whole curve (2500 K to
@@ -48,8 +55,10 @@ const MAX_TINT: f64 = 150.0;
 /// Models whose white balance is edited in Kelvin through their presets, as (brand, Exif model without the brand),
 /// each checked to carry them: the Sony bodies on 80–150 own photos each, or the public corpus samples for the
 /// ILCE-3500 and ILCE-7S; the Canon PowerShot G1 X Mark III on a reporter's nine photos, one per white-balance
-/// setting (issue #157 of a downstream fork). A camera with measured matrices (`crate::spectral`) is read through
-/// those instead.
+/// setting (issue #157 of a downstream fork); the other Canon bodies listed here when every sample file of the
+/// model (CR2 or CR3) stored a ColorData version with the presets, those with only some files or none left out
+/// (the Fujifilm X-Trans III bodies are in [`FUJI_MODELS`]). A camera with measured matrices (`crate::spectral`)
+/// is read through those instead.
 const MODELS: &[(&str, &str)] = &[
     ("SONY", "DSC-RX10"),
     ("SONY", "ILCA-77M2"),
@@ -58,12 +67,80 @@ const MODELS: &[(&str, &str)] = &[
     ("SONY", "ILCE-7S"),
     ("SONY", "SLT-A33"),
     ("CANON", "PowerShot G1 X Mark III"),
+    ("CANON", "EOS 1000D"),
+    ("CANON", "EOS 1100D"),
+    ("CANON", "EOS 1200D"),
+    ("CANON", "EOS 1300D"),
+    ("CANON", "EOS 2000D"),
+    ("CANON", "EOS 30D"),
+    ("CANON", "EOS 4000D"),
+    ("CANON", "EOS 450D"),
+    ("CANON", "EOS 500D"),
+    ("CANON", "EOS 550D"),
+    ("CANON", "EOS 650D"),
+    ("CANON", "EOS 700D"),
+    ("CANON", "EOS 750D"),
+    ("CANON", "EOS 760D"),
+    ("CANON", "EOS 77D"),
+    ("CANON", "EOS 800D"),
+    ("CANON", "EOS 850D"),
+    ("CANON", "EOS 90D"),
+    ("CANON", "EOS DIGITAL REBEL XS"),
+    ("CANON", "EOS DIGITAL REBEL XSi"),
+    ("CANON", "EOS KISS M"),
+    ("CANON", "EOS Kiss F"),
+    ("CANON", "EOS Kiss X3"),
+    ("CANON", "EOS Kiss X4"),
+    ("CANON", "EOS Kiss X80"),
+    ("CANON", "EOS M100"),
+    ("CANON", "EOS M2"),
+    ("CANON", "EOS M200"),
+    ("CANON", "EOS M5"),
+    ("CANON", "EOS M50"),
+    ("CANON", "EOS M50m2"),
+    ("CANON", "EOS M6"),
+    ("CANON", "EOS M6 Mark II"),
+    ("CANON", "EOS R100"),
+    ("CANON", "EOS R3"),
+    ("CANON", "EOS R50 V"),
+    ("CANON", "EOS R6 Mark III"),
+    ("CANON", "EOS R7"),
+    ("CANON", "EOS REBEL T1i"),
+    ("CANON", "EOS REBEL T2i"),
+    ("CANON", "EOS REBEL T3"),
+    ("CANON", "EOS REBEL T4i"),
+    ("CANON", "EOS REBEL T5"),
+    ("CANON", "EOS REBEL T5i"),
+    ("CANON", "EOS REBEL T7i"),
+    ("CANON", "EOS Rebel T100"),
+    ("CANON", "EOS Rebel T6"),
+    ("CANON", "EOS Rebel T6i"),
+    ("CANON", "EOS Rebel T6s"),
+    ("CANON", "EOS Rebel T7"),
+    ("CANON", "EOS Rebel T7i"),
+    ("CANON", "EOS-1D Mark II N"),
+    ("CANON", "EOS-1D Mark III"),
+    ("CANON", "EOS-1D X"),
+    ("CANON", "EOS-1D X Mark III"),
+    ("CANON", "PowerShot G5 X Mark II"),
+    ("CANON", "PowerShot G7 X Mark II"),
+    ("CANON", "PowerShot G7 X Mark III"),
+    ("CANON", "PowerShot G9 X Mark II"),
+    ("CANON", "PowerShot SX70 HS"),
+    ("CANON", "PowerShot V1"),
+    ("HASSELBLAD", "Lunar"),
 ];
 
 /// Fujifilm's X-Trans III bodies, whose raws carry the camera's own neutral multipliers for Illuminant A and D65
 /// (`vendor::raf`, tag `0xf00c`; see [`KelvinPresets::from_neutral_pair`]): checked on the files of each (X-T20,
 /// X-T2, X-Pro2, X-E3, X-H1, X100F), the Exif model as Fujifilm writes it.
 const FUJI_MODELS: &[&str] = &["X-T20", "X-T2", "X-Pro2", "X-E3", "X-H1", "X100F"];
+
+/// Brands whose every body of a format that stores its presets is covered, with the models that do not store them.
+/// Sony: the SR2 private data in ARW (all of 369 bodies' files in the corpus carry it but the DSC-R1's); Panasonic
+/// and Leica: the RW2 white balance table (all of 132 models carry it). A covered model whose file lacks the presets
+/// reads as D65 (about 6500 K) instead of relative, so only formats whose files nearly always carry them are here.
+const BRANDS: &[(&str, &[&str])] = &[("SONY", &["DSC-R1"]), ("PANASONIC", &[]), ("LEICA", &[]), ("PENTAX", &["K-3 Mark III Monochrome"])];
 
 /// Whether a raw of this Exif make and model is edited in Kelvin through its presets (when it has no colour
 /// matrices of its own or measured: see [`crate::spectral::find`], which comes first), from the file's presets or
@@ -74,16 +151,26 @@ pub fn covers(make: Option<&str>, model: &str) -> bool {
     }
     let model = model.trim();
     let brand = make.and_then(|m| m.split_whitespace().next());
-    let bare_of = |b: &str| {
+    // the model without a leading brand word ("SONY ILCE-7S" -> "ILCE-7S")
+    let bare = |b: &str| {
         model
             .get(..b.len())
             .zip(model.get(b.len()..))
             .filter(|(p, rest)| p.eq_ignore_ascii_case(b) && rest.starts_with(' '))
-            .map_or(model, |(_, rest)| rest.trim_start())
+            .map(|(_, rest)| rest.trim_start())
     };
-    let listed = MODELS.iter().any(|(b, m)| brand.is_none_or(|x| x.eq_ignore_ascii_case(b)) && bare_of(b).eq_ignore_ascii_case(m));
-    let fuji = brand.is_none_or(|b| b.eq_ignore_ascii_case("FUJIFILM")) && FUJI_MODELS.iter().any(|m| bare_of("FUJIFILM").eq_ignore_ascii_case(m));
-    listed || fuji
+    MODELS.iter().any(|(b, m)| brand.is_none_or(|x| x.eq_ignore_ascii_case(b)) && bare(b).unwrap_or(model).eq_ignore_ascii_case(m))
+        || (brand.is_none_or(|b| b.eq_ignore_ascii_case("FUJIFILM"))
+            && FUJI_MODELS.iter().any(|m| bare("FUJIFILM").unwrap_or(model).eq_ignore_ascii_case(m)))
+        || BRANDS.iter().any(|(b, skip)| {
+            // the brand is the make, or leads the model (Ricoh's Pentax bodies: make RICOH, model "PENTAX K-3 Mark III")
+            let rest = match (brand, bare(b)) {
+                (Some(x), _) if x.eq_ignore_ascii_case(b) => bare(b).unwrap_or(model),
+                (_, Some(rest)) => rest,
+                _ => return false,
+            };
+            !skip.iter().any(|s| rest.eq_ignore_ascii_case(s))
+        })
 }
 
 /// [`covers`] for make and model joined by a space, as the catalog keeps them (`"SONY ILCA-99M2"`).
@@ -104,6 +191,9 @@ pub struct KelvinPresets {
     /// ([`Self::from_neutral_pair`]); the points are then the line between them at five temperatures.
     #[serde(default)]
     pair: Option<[[f32; 3]; 2]>,
+    /// The two lights' chromaticities (warmer first) when the pair is not A and D65.
+    #[serde(default)]
+    lights: Option<[[f64; 2]; 2]>,
 }
 
 /// Illuminant A and D65 as chromaticities (CIE).
@@ -134,7 +224,11 @@ impl KelvinPresets {
                 let (a, b) = (log_point(w[0].1), log_point(w[1].1));
                 w[0].0 < w[1].0 && b[0] > a[0] && b[1] < a[1]
             });
-        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect(), pair: None })
+        ok.then(|| KelvinPresets {
+            points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect(),
+            pair: None,
+            lights: None,
+        })
     }
 
     /// A curve from presets in any order, as a camera lists them by name (Canon's Daylight, Shade, Cloudy, …):
@@ -164,12 +258,23 @@ impl KelvinPresets {
     /// plus the tint the two lights themselves have (A is on the locus, D65 is about +9.5 off it). No other camera's
     /// data is involved. `None` for unusable multipliers or two that make no curve.
     pub fn from_neutral_pair(a: [f32; 3], d65: [f32; 3]) -> Option<KelvinPresets> {
+        Self::from_neutral_lights([A_XY, D65_XY], [a, d65])
+    }
+
+    /// [`Self::from_neutral_pair`] for any two lights of known chromaticity, the warmer first (Panasonic stores
+    /// its D55 and ISO studio tungsten whites): `None` unless the lights are at least 300 K apart.
+    pub fn from_neutral_lights(lights: [Xy; 2], m: [[f32; 3]; 2]) -> Option<KelvinPresets> {
+        let [a, d65] = m;
         if !usable(a) || !usable(d65) {
+            return None;
+        }
+        let (ta, td) = (cct::xy_to_temp_tint(lights[0]).0, cct::xy_to_temp_tint(lights[1]).0);
+        if (ta + 300.0).partial_cmp(&td) != Some(std::cmp::Ordering::Less) {
             return None;
         }
         let (a, d65) = ([a[0] / a[1], 1.0, a[2] / a[1]], [d65[0] / d65[1], 1.0, d65[2] / d65[1]]);
         let (pa, pd) = (log_point(a), log_point(d65));
-        let (ma, md) = (1e6 / cct::xy_to_temp_tint(A_XY).0, 1e6 / cct::xy_to_temp_tint(D65_XY).0);
+        let (ma, md) = (1e6 / ta, 1e6 / td);
         let points = POINT_KELVIN.map(|k| {
             let f = (1e6 / k as f64 - ma) / (md - ma);
             let q = [pa[0] + f * (pd[0] - pa[0]), pa[1] + f * (pd[1] - pa[1])];
@@ -177,11 +282,14 @@ impl KelvinPresets {
         });
         let mut out = KelvinPresets::new(points)?;
         out.pair = Some([a, d65]);
+        if lights != [A_XY, D65_XY] {
+            out.lights = Some(lights.map(|l| [l.x, l.y]));
+        }
         Some(out)
     }
 
     /// [`Self::temp_tint`] for a neutral pair (see [`Self::from_neutral_pair`]).
-    fn pair_temp_tint(pair: [[f32; 3]; 2], q: [f64; 2]) -> Option<(f64, f64)> {
+    fn pair_temp_tint(pair: [[f32; 3]; 2], lights: [Xy; 2], q: [f64; 2]) -> Option<(f64, f64)> {
         let (pa, pd) = (log_point(pair[0]), log_point(pair[1]));
         let d = [pd[0] - pa[0], pd[1] - pa[1]];
         let len = d[0].hypot(d[1]);
@@ -194,7 +302,7 @@ impl KelvinPresets {
         let r = [q[0] - pa[0], q[1] - pa[1]];
         let along = (r[0] * t[0] + r[1] * t[1]) / len;
         let off = r[0] * n[0] + r[1] * n[1];
-        let ((ta, tint_a), (td, tint_d)) = (cct::xy_to_temp_tint(A_XY), cct::xy_to_temp_tint(D65_XY));
+        let ((ta, tint_a), (td, tint_d)) = (cct::xy_to_temp_tint(lights[0]), cct::xy_to_temp_tint(lights[1]));
         let ((u0, v0), (u1, v1)) = (locus_uv(ta), locus_uv(td));
         let tint_per_len = cct::TINT_SCALE * (u1 - u0).hypot(v1 - v0) / len;
         let mired = 1e6 / ta + along * (1e6 / td - 1e6 / ta);
@@ -209,7 +317,8 @@ impl KelvinPresets {
         }
         let q = log_point(wb_multipliers);
         if let Some(pair) = self.pair {
-            let (t, tint) = Self::pair_temp_tint(pair, q)?;
+            let lights = self.lights.map_or([A_XY, D65_XY], |l| l.map(|p| Xy::new(p[0], p[1])));
+            let (t, tint) = Self::pair_temp_tint(pair, lights, q)?;
             return Some((t, tint.clamp(-MAX_TINT, MAX_TINT)));
         }
         let last = self.points.len().saturating_sub(2);
@@ -275,6 +384,21 @@ mod tests {
             (8500.0, g(3136.0, 1300.0)),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn neutral_lights_read_back_and_reject_close_lights() {
+        let (warm, cool) = (cct::temp_tint_to_xy(3200.0, 0.0), cct::temp_tint_to_xy(5500.0, 0.0));
+        let (a, d) = ([1.0, 1.0, 2.4], [1.4, 1.0, 1.7]);
+        let p = KelvinPresets::from_neutral_lights([warm, cool], [a, d]).unwrap();
+        assert!((p.temp_tint(a).unwrap().0 - 3200.0).abs() < 40.0);
+        assert!((p.temp_tint(d).unwrap().0 - 5500.0).abs() < 40.0);
+        assert!(p.temp_tint(a).unwrap().0 < p.temp_tint([1.2, 1.0, 2.0]).unwrap().0);
+        // lights less than 300 K apart, or in the wrong order, make no line
+        assert_eq!(KelvinPresets::from_neutral_lights([cool, warm], [d, a]), None);
+        assert_eq!(KelvinPresets::from_neutral_lights([warm, cct::temp_tint_to_xy(3400.0, 0.0)], [a, d]), None);
+        // A and D65 as the lights are the plain pair
+        assert_eq!(KelvinPresets::from_neutral_lights([A_XY, D65_XY], [a, d]), KelvinPresets::from_neutral_pair(a, d));
     }
 
     #[test]
@@ -360,11 +484,11 @@ mod tests {
         assert_eq!(KelvinPresets::from_unordered([(5000.0, g(1400.0, 1400.0)), (6000.0, g(1500.0, 1300.0))]), None);
         assert_eq!(KelvinPresets::from_unordered(std::iter::empty()), None);
         // a stored curve with a repeated point (only deserializing can make one) reads without dividing by zero
-        let bad = KelvinPresets { points: vec![(5000.0, g(1400.0, 1400.0)); 3], pair: None };
+        let bad = KelvinPresets { points: vec![(5000.0, g(1400.0, 1400.0)); 3], pair: None, lights: None };
         assert_eq!(bad.temp_tint(g(1400.0, 1400.0)), None);
-        assert_eq!(KelvinPresets { points: vec![], pair: None }.temp_tint(g(1400.0, 1400.0)), None);
+        assert_eq!(KelvinPresets { points: vec![], pair: None, lights: None }.temp_tint(g(1400.0, 1400.0)), None);
         // and so does a stored neutral pair with equal endpoints
-        let same = KelvinPresets { points: vec![], pair: Some([[1.0, 1.0, 1.0]; 2]) };
+        let same = KelvinPresets { points: vec![], pair: Some([[1.0, 1.0, 1.0]; 2]), lights: None };
         assert_eq!(same.temp_tint(g(1400.0, 1400.0)), None);
     }
 
@@ -403,7 +527,7 @@ mod tests {
         for c in ["FUJIFILM X-T20", "Fujifilm X-T2", "FUJIFILM X100F", "FUJIFILM X-H1", "FUJIFILM X-Pro2", "FUJIFILM X-E3"] {
             assert!(covers_camera(c), "{c}");
         }
-        for c in ["FUJIFILM X-T3", "FUJIFILM X-T30", "SONY X-T20", "FUJIFILM GFX 100"] {
+        for c in ["FUJIFILM X-T3", "FUJIFILM X-T30", "Canon X-T20", "FUJIFILM GFX 100"] {
             assert!(!covers_camera(c), "{c}");
         }
     }
@@ -417,15 +541,31 @@ mod tests {
             "SONY ILCA-77M2",
             "SONY SLT-A33",
             "ILCA-99M2",
+            "SONY ILCE-7M3",
+            "SONY DSC-RX10M4",
+            "Panasonic DC-G9M2",
+            "LEICA CAMERA AG D-LUX 7",
             "Sony ilca-99m2",
             "Canon Canon PowerShot G1 X Mark III",
             "Canon PowerShot G1 X Mark III",
+            "Canon EOS R7",
+            "Canon EOS DIGITAL REBEL XSi",
+            "RICOH PENTAX K-1 Mark II",
+            "PENTAX K-7",
         ] {
             assert!(covers_camera(c), "{c}");
         }
-        for c in
-            ["SONY ILCE-7M3", "SONY DSC-RX10M4", "Canon SLT-A33", "", "SONY", "Canon Canon PowerShot G1 X Mark II", "SONY PowerShot G1 X Mark III"]
-        {
+        for c in [
+            "SONY DSC-R1",
+            "Sony DSC-R1",
+            "DSC-R1",
+            "NIKON Z6",
+            "Canon SLT-A33",
+            "",
+            "SONY",
+            "Canon Canon PowerShot G1 X Mark II",
+            "NIKON PowerShot G1 X Mark III",
+        ] {
             assert!(!covers_camera(c), "{c}");
         }
         assert!(covers(Some("SONY"), "ILCA-99M2") && covers(None, "ILCA-99M2") && !covers(Some("NIKON CORPORATION"), "ILCA-99M2"));
