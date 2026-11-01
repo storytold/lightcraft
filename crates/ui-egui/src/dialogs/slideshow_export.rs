@@ -164,7 +164,7 @@ mod tests {
             picker: Some(Box::new(move |req| {
                 requests.lock().unwrap().push(req);
                 let (tx, rx) = std::sync::mpsc::channel();
-                tx.send(vec![answer.clone()]).unwrap();
+                tx.send(Ok(vec![answer.clone()])).unwrap();
                 Ok(rx)
             })),
             ..Default::default()
@@ -198,6 +198,35 @@ mod tests {
         r["sawRow"] = json!(seen_row);
         r["toast"] = json!(h.app.ui.toast.as_ref().map(|t| t.0.clone()));
         r
+    }
+
+    #[test]
+    fn fullscreen_picker_export_reports_completion() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-ssexp-fullscreen-{}", std::process::id()));
+        let path = dir.join("Show.pdf").to_string_lossy().to_string();
+        let (_files, mut app, asked) = app_answering("ssexp-fullscreen", path.clone());
+        app.ui.fullscreen = true;
+        app.run("app.slideshowExport", json!({"format": "pdf", "size": 96})).unwrap();
+        assert_eq!(app.pending_picks.len(), 1);
+        let mut h = crate::headless::Headless::new(app, [1000.0, 800.0], 1.0);
+        assert!(h.step_until(Duration::from_secs(60), |h| h.app.slideshow_export_reported && h.app.session.slideshow_export.is_some()));
+        assert!(h.app.ui.fullscreen);
+        assert_eq!(asked.lock().unwrap().len(), 1);
+        assert!(h.app.session.slideshow_export.as_ref().unwrap().result().unwrap().is_ok());
+        assert!(h.app.ui.toast.as_ref().unwrap().0.contains("Slideshow exported"));
+        if let Ok(path) = std::env::var("FULLSCREEN_EXPORT_SCREENSHOT") {
+            let pixels = h.paint();
+            let image = lightcraft_raster::Rgba8 {
+                width: pixels.size[0],
+                height: pixels.size[1],
+                data: pixels.pixels.iter().map(|pixel| pixel.to_array()).collect(),
+            };
+            let png =
+                lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            std::fs::write(path, png).unwrap();
+        }
+        assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF-1.4"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

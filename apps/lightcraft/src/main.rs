@@ -33,6 +33,7 @@ mod dialog_filter;
 mod editors;
 mod hdr_display;
 mod logging;
+mod native_dialog;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(target_os = "macos")]
