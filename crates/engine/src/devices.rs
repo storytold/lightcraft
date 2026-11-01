@@ -190,9 +190,27 @@ fn scan() -> Vec<Device> {
     let mut out = devices_in(&mount_parents(), extra);
     // tests that fix the roots see only those; a camera the system can't read is simply not listed
     if !fixed {
-        out.extend(cameras(lightcraft_cameras::cameras().unwrap_or_default()));
+        static LAST: Mutex<Vec<Device>> = Mutex::new(Vec::new());
+        out.extend(cameras_or_last(lightcraft_cameras::cameras(), &LAST));
     }
     out
+}
+
+/// The cameras listed now, or when listing failed (a passing error), the ones listed last time:
+/// a camera that drops out of one scan would be "connected" again on the next, which asks to
+/// import from it again.
+fn cameras_or_last(now: Result<Vec<lightcraft_cameras::Camera>, lightcraft_cameras::Error>, last: &Mutex<Vec<Device>>) -> Vec<Device> {
+    let mut last = last.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match now {
+        Ok(list) => {
+            *last = cameras(list);
+            last.clone()
+        }
+        Err(e) => {
+            log::debug!("cameras: {e}");
+            last.clone()
+        }
+    }
 }
 
 /// Cameras that don't mount as a disk, as devices.
@@ -239,6 +257,19 @@ pub fn dcim_in(root: &std::path::Path) -> Option<std::path::PathBuf> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// CodeRabbit on #1635: a camera listing that fails once keeps the cameras listed before, so
+    /// a camera still plugged in isn't taken for a new one on the next scan.
+    #[test]
+    fn a_failed_camera_listing_keeps_the_last_one() {
+        let last = Mutex::new(Vec::new());
+        let x100t = lightcraft_cameras::Camera { id: "usb#04cb".into(), name: "X100T".into(), manufacturer: "FUJIFILM".into() };
+        let listed = cameras_or_last(Ok(vec![x100t]), &last);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(cameras_or_last(Err(lightcraft_cameras::Error::Device("busy".into())), &last), listed);
+        assert!(cameras_or_last(Ok(Vec::new()), &last).is_empty(), "a listing that works says it's gone");
+        assert!(cameras_or_last(Err(lightcraft_cameras::Error::Device("busy".into())), &last).is_empty());
+    }
 
     #[test]
     fn volumes_with_a_dcim_folder_are_devices() {
