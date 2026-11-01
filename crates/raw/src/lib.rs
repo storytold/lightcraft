@@ -17,9 +17,9 @@
 //! `jxl` feature, on by default), tiled/stripped, CFA and LinearRaw),
 //! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
-//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500).
+//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500), Light LRI (one of the L16's camera modules, with its own colour and vignetting calibration).
 //! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
-//! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
+//! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files but LRI carry no
 //! colour matrix: [`spectral`] has matrices fitted to measured spectral sensitivities for 52 models, and
 //! otherwise [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
 #![forbid(unsafe_code)]
@@ -128,6 +128,9 @@ pub enum RawFormat {
     Erf,
     /// Mamiya MEF: an uncompressed 12-bit packed CFA sub-IFD (`vendor::mef`).
     Mef,
+    /// Light LRI (Light L16): `LELR` blocks of protocol-buffers messages and the 10-bit mosaics of up to 16 camera
+    /// modules, one of which is developed (`vendor::lri`).
+    Lri,
     /// Another TIFF-based raw (3FR, IIQ, ERF, KDC, DCR, MOS, …).
     OtherTiff,
 }
@@ -152,6 +155,7 @@ impl RawFormat {
                 | RawFormat::Mrw
                 | RawFormat::Erf
                 | RawFormat::Mef
+                | RawFormat::Lri
         )
     }
 }
@@ -175,6 +179,9 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     if bytes.starts_with(b"FOVb") {
         return Some(RawFormat::X3f);
+    }
+    if vendor::lri::is_lri(bytes) {
+        return Some(RawFormat::Lri);
     }
     if bytes.len() >= 14 && bytes.starts_with(b"II") && &bytes[6..14] == b"HEAPCCDR" {
         return Some(RawFormat::Crw);
@@ -425,6 +432,7 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Mrw => vendor::mrw::decode(bytes, mode),
         RawFormat::Erf => vendor::erf::decode(bytes, mode),
         RawFormat::Mef => vendor::mef::decode(bytes, mode),
+        RawFormat::Lri => vendor::lri::decode(bytes, mode),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }

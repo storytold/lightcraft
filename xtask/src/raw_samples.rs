@@ -2269,4 +2269,9 @@ pub(crate) const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/data/Mamiya/ZD/RAW_MAMIYA_ZD.MEF",
         "bcd63507c3c4cc3ea1bad2945e3f88cb4677a1a3c762e1acc38df4445714eb7c",
     ),
+    (
+        "lri-light-l16.lri",
+        "https://raw.pixls.us/getfile.php/4445/nice/Light%20-%20L16.lri",
+        "7f31e8a34f3a2557de4e0effcb67e80400db6744b2044f476125daa5a9b842dd",
+    ),
 ];
