@@ -235,6 +235,33 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.effects.clarity = -60.0;
             s.effects.texture = -40.0;
         }),
+        ("sharpen radius 2.5 detail 100", |s| {
+            s.detail.sharpen_amount = 100.0;
+            s.detail.sharpen_radius = 2.5;
+            s.detail.sharpen_detail = 100.0;
+        }),
+        ("sharpen radius 0.6 detail 0", |s| {
+            s.detail.sharpen_amount = 80.0;
+            s.detail.sharpen_radius = 0.6;
+            s.detail.sharpen_detail = 0.0;
+        }),
+        ("sharpen + texture + masking", |s| {
+            s.detail.sharpen_amount = 70.0;
+            s.detail.sharpen_masking = 30.0;
+            s.effects.texture = 40.0;
+        }),
+        ("local sharpness", |s| {
+            s.masks = vec![Mask {
+                components: vec![MaskComponent {
+                    name: None,
+                    op: MaskOp::Add,
+                    invert: false,
+                    shape: MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.6) },
+                }],
+                adjust: lightcraft_develop::LocalAdjustments { sharpness: 80.0, ..Default::default() },
+                ..Default::default()
+            }];
+        }),
         ("sharpen masking", |s| {
             s.detail.sharpen_amount = 90.0;
             s.detail.sharpen_masking = 60.0;
@@ -652,6 +679,30 @@ fn highlights_shadows_base_matches_on_every_process() {
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");
             let fresh = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu");
             assert_eq!(warm.image, fresh.image, "{p:?} at {w} px, cached");
+        }
+    }
+}
+
+#[test]
+fn sharpening_matches_each_process_and_reduced_source() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 256, 192);
+    let info = SourceInfo { raw: true, native_long: Some(1024), ..Default::default() };
+    let req = RenderRequest::fit(128, 128);
+    let cache = StageCache::default();
+    for process in [Process::V1, Process::V2, Process::V3, Process::V2, Process::V3] {
+        let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+        s.detail.sharpen_amount = 80.0;
+        s.detail.sharpen_radius = 2.0;
+        s.detail.sharpen_detail = 75.0;
+        for nr in [0.0, 50.0, 20.0] {
+            s.detail.nr_luminance = nr;
+            check(&format!("{process:?} sharpening NR {nr}"), &src, &info, &s, &req);
+            let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+            let fresh = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu");
+            assert_eq!(warm.image, fresh.image, "{process:?} NR {nr}");
         }
     }
 }

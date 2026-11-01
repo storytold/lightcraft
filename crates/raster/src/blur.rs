@@ -126,8 +126,67 @@ pub fn gaussian<T: Pixel>(img: &Image<T>, sigma: f32) -> Image<T> {
     a
 }
 
+/// Largest sigma [`gauss_taps`] makes taps for (larger ones are clamped to it). The GPU blur reads
+/// the same taps, so it is the limit of both paths.
+pub const GAUSS_SIGMA_MAX: f32 = 64.0;
+
+/// Normalized Gaussian taps `[w(-r) .. w(r)]` for `sigma`, `r = ceil(3 sigma)`.
+///
+/// An exact kernel, unlike the three-box approximation of [`gaussian`], which cannot represent
+/// a sigma under about 0.8 px (its boxes collapse to the identity): sharpening needs those.
+pub fn gauss_taps(sigma: f32) -> Vec<f32> {
+    let sigma = if sigma.is_nan() { 0.05 } else { sigma.clamp(0.05, GAUSS_SIGMA_MAX) };
+    let r = (3.0 * sigma).ceil() as i32;
+    let k = -0.5 / (sigma * sigma);
+    let mut t: Vec<f32> = (-r..=r).map(|i| ((i * i) as f32 * k).exp()).collect();
+    let sum: f32 = t.iter().sum();
+    t.iter_mut().for_each(|v| *v /= sum);
+    t
+}
+
+/// Separable blur with odd-length symmetric `taps` (clamped edges), see [`gauss_taps`].
+pub fn gaussian_taps<T: Pixel>(img: &Image<T>, taps: &[f32]) -> Image<T> {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 || taps.len() < 3 {
+        return img.clone();
+    }
+    let r = (taps.len() / 2) as isize;
+    let mut a = Image::<T>::new(w, h);
+    par_rows(&mut a.data, w, |y, row| {
+        let src = &img.data[y * w..(y + 1) * w];
+        for (x, o) in row.iter_mut().enumerate() {
+            let mut acc = T::zero();
+            for (k, t) in taps.iter().enumerate() {
+                let xi = (x as isize + k as isize - r).clamp(0, w as isize - 1) as usize;
+                acc = acc.madd(src[xi], *t);
+            }
+            *o = acc;
+        }
+    });
+    let mut b = Image::<T>::new(w, h);
+    par_rows(&mut b.data, w, |y, row| {
+        for (k, t) in taps.iter().enumerate() {
+            let yi = (y as isize + k as isize - r).clamp(0, h as isize - 1) as usize;
+            for (o, v) in row.iter_mut().zip(&a.data[yi * w..(yi + 1) * w]) {
+                *o = o.madd(*v, *t);
+            }
+        }
+    });
+    b
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fir_gaussian_has_bounded_finite_taps_for_hostile_sigmas() {
+        for sigma in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, f32::MAX, -5.0, 0.0, 0.1, 4.0] {
+            let taps = super::gauss_taps(sigma);
+            assert!(taps.len() <= 385 && taps.len() % 2 == 1);
+            assert!(taps.iter().all(|v| v.is_finite() && *v >= 0.0));
+            assert!((taps.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        }
+    }
+
     /// The box radii of the formula as it was, for the check below.
     fn box_radii_before(sigma: f32) -> [usize; 3] {
         let n = 3.0f32;
