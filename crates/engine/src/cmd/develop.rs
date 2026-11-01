@@ -847,7 +847,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad("geometry.upright", e))?;
                         let info = s.source_info(id);
                         let a = lightcraft_pipeline::upright::analyze_source(&src, &info, &d);
-                        let family = lightcraft_pipeline::upright::guided_hint(m);
+                        let family = lightcraft_pipeline::upright::guided_hint(m, &a);
                         (Some(lightcraft_pipeline::upright::solve(m, &a)), lightcraft_pipeline::upright::shortfall(m, &a), family)
                     }
                 };

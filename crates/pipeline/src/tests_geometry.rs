@@ -857,12 +857,24 @@ fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
 /// one of a kind only levels), Vertical two vertical ones, and Level a single line.
 #[test]
 fn upright_hint_asks_for_the_lines_guided_needs() {
-    use crate::upright::guided_hint;
+    use crate::upright::{Analysis, Segment, guided_hint};
     use lightcraft_develop::Upright;
-    assert_eq!(guided_hint(Upright::Full), "two lines along what should be vertical and two along what should be horizontal");
-    assert_eq!(guided_hint(Upright::Vertical), "two lines along what should be vertical");
-    assert_eq!(guided_hint(Upright::Level), "a line along what should be level or upright");
-    assert_eq!(guided_hint(Upright::Auto), "two lines along what should be vertical, or one line along what should be level");
+    let none = Analysis::default();
+    assert_eq!(guided_hint(Upright::Full, &none), "two lines along what should be vertical and two along what should be horizontal");
+    assert_eq!(guided_hint(Upright::Vertical, &none), "two lines along what should be vertical");
+    assert_eq!(guided_hint(Upright::Level, &none), "a line along what should be level or upright");
+    // Auto with no usable lines: either kind of guide can help
+    assert_eq!(guided_hint(Upright::Auto, &none), "two lines along what should be vertical, or one line along what should be level");
+    // Auto stopped by a horizon over 5°: one level line fixes it (solve_guided_levels_one_guide_of_each_family_only)
+    let line = |deg: f64, y: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Segment { a: Point::new(-0.4 * c, y - 0.4 * s), b: Point::new(0.4 * c, y + 0.4 * s) }
+    };
+    let tilted = Analysis { horizontal: vec![line(10.0, -0.2), line(10.0, 0.2)], ..Analysis::default() };
+    assert_eq!(guided_hint(Upright::Auto, &tilted), "one line along what should be level");
+    // Auto stopped by converging posts too steep for it: a level line can't straighten them (CodeRabbit, #2966)
+    let steep = Analysis { vertical_vp: Some([0.0, 0.3, 1.0]), ..Analysis::default() };
+    assert_eq!(guided_hint(Upright::Auto, &steep), "two lines along what should be vertical");
 }
 
 /// What the hints promise is what Guided does: one vertical and one horizontal guide only level (the horizontal one
