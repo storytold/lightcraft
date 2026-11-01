@@ -2315,5 +2315,15 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "AI masks": "Maski AI",
+  "Device": "Urządzenie",
+  "Last photo": "Ostatnie zdjęcie",
+  "Remote worker": "Zdalny proces",
+  "Not loaded yet": "Jeszcze nie wczytano",
+  "Run on": "Uruchamiaj na",
+  "Automatic (GPU when available)": "Automatycznie (GPU, gdy jest)",
+  "CPU": "CPU",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Maski Obiekt i Opisz analizują każde zdjęcie raz, na karcie graficznej, chyba że wybrano CPU albo opcja „Użyj procesora graficznego do renderowania” jest wyłączona. Na procesorze trwa to znacznie dłużej.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatycznie uruchamia model na karcie graficznej Maca. Wybierz CPU, jeśli maski AI tam zawodzą; na procesorze trwa to znacznie dłużej."
 }
