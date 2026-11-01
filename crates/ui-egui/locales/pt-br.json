@@ -2234,5 +2234,9 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "User Templates": "Modelos do usuário",
+  "Delete Folder": "Excluir pasta",
+  "Folder name": "Nome da pasta",
+  "Its templates move to User Templates.": "Os modelos dela vão para Modelos do usuário."
 }

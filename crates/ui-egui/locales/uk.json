@@ -2386,5 +2386,9 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "User Templates": "Власні шаблони",
+  "Delete Folder": "Видалити теку",
+  "Folder name": "Назва теки",
+  "Its templates move to User Templates.": "Її шаблони буде переміщено до «Власні шаблони»."
 }

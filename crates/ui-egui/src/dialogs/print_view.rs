@@ -10,7 +10,7 @@ use lightcraft_catalog::PhotoId;
 use lightcraft_engine::export::ExportOptions;
 use lightcraft_engine::print::compose::{self, place};
 use lightcraft_engine::print::layout::{self, Snap, Style, Unit};
-use lightcraft_engine::print::template::PrintSettings;
+use lightcraft_engine::print::template::{DEFAULT_FOLDER, PrintSettings};
 use lightcraft_engine::print_color::{ManagedSpace, PrintColorSettings, PrintIntent, PrintMedia, PrintProfile, PrintSharpen};
 use serde_json::{Value, json};
 
@@ -49,8 +49,25 @@ pub struct PrintUi {
     drag: Option<Drag>,
     /// The name typed for Save Template.
     pub template_name: String,
+    /// The folder Save and Import… put a template in; `None`: User Templates.
+    pub save_folder: Option<String>,
+    /// A folder name being typed in the Template Browser.
+    pub folder_edit: Option<FolderEdit>,
+    /// The folder whose Delete Folder waits for a confirmation.
+    pub delete_folder: Option<String>,
+    /// Template Browser folders shown closed, lowercase.
+    pub closed_folders: Vec<String>,
+    /// The template being dragged onto a folder.
+    pub dragging_template: Option<String>,
     /// Size of the next cell added, inches.
     pub new_cell: Option<(f64, f64)>,
+}
+
+/// New Folder… (`from: None`) or Rename Folder… of the folder `from`, with the name typed so far.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FolderEdit {
+    pub from: Option<String>,
+    pub name: String,
 }
 
 fn run(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Option<Value> {
@@ -196,31 +213,241 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     app.ui.print = pu;
 }
 
-/// The print templates: save the settings as one, import, and the saved ones to apply, export and delete.
+/// The folder a command names for `folder` (`None`: User Templates).
+fn folder_param(folder: Option<&str>) -> &str {
+    folder.unwrap_or(DEFAULT_FOLDER)
+}
+
+/// How the Template Browser names `folder`: User Templates in the interface's language, a folder
+/// of the user's as it was typed.
+fn folder_label(folder: Option<&str>) -> String {
+    folder.map_or_else(|| crate::i18n::tr("User Templates").to_string(), str::to_string)
+}
+
+/// The print templates: save the settings as one into a folder, import, and the Template Browser:
+/// its folders (New Folder…, Rename Folder…, Delete Folder) and in each the saved templates to
+/// apply, export, delete, and drag onto another folder or move there from their menu.
 fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) {
     let ctx = ui.ctx().clone();
     heading(ui, t, "Templates");
+    // a folder deleted or renamed by a command is no longer the one Save uses
+    if pu.save_folder.as_ref().is_some_and(|f| !app.session.print_template_folders.contains(f)) {
+        pu.save_folder = None;
+    }
     ui.horizontal(|ui| {
         crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
             .hint(crate::i18n::tr("Template name"))
             .width(140.0)
             .show(ui);
+        let folder = folder_param(pu.save_folder.as_deref()).to_string();
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
-            run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
+            run(app, &ctx, "print.template.save", json!({"name": pu.template_name, "folder": folder}));
         }
         if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
             let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
             for path in paths {
-                if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path})) {
+                if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path, "folder": folder})) {
                     app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
                 }
             }
         }
     });
-    let names: Vec<String> = app.session.print_templates.iter().map(|t| t.name.clone()).collect();
-    for (i, name) in names.iter().enumerate() {
+    let folders: Vec<Option<String>> = std::iter::once(None).chain(app.session.print_template_folders.iter().cloned().map(Some)).collect();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr("Folder")).color(t.text_label));
+        let c = craft_ui::ComboBox::from_id_salt("printSaveFolder").width(120.0).selected_text(folder_label(pu.save_folder.as_deref())).show_ui(
+            ui,
+            |ui| {
+                for (j, f) in folders.iter().enumerate() {
+                    let r = ui.selectable_label(pu.save_folder == *f, folder_label(f.as_deref()));
+                    register(ui, format!("item:printSaveFolder-{j}"), r.rect);
+                    if r.clicked() {
+                        pu.save_folder.clone_from(f);
+                    }
+                }
+            },
+        );
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Folder"));
+        register(ui, "combo:printSaveFolder", c.response.rect);
+        if text_button(ui, "printTemplateNewFolder", "New Folder…", false).clicked() {
+            pu.folder_edit = Some(FolderEdit::default());
+            pu.delete_folder = None;
+        }
+    });
+    folder_editor(app, ui, &ctx, pu);
+    folder_delete_confirmation(app, ui, t, &ctx, pu);
+    for (j, folder) in folders.iter().enumerate() {
+        folder_rows(app, ui, t, pu, j, folder.as_deref(), &folders);
+    }
+    template_drag_feedback(&ctx, t, pu);
+}
+
+/// The New Folder… / Rename Folder… field under the Save row, while one is open: Return or its
+/// button runs the command, Esc or Cancel closes it. A refused name keeps it open, with the reason
+/// in a toast.
+fn folder_editor(app: &mut LightcraftApp, ui: &mut Ui, ctx: &egui::Context, pu: &mut PrintUi) {
+    let Some(mut edit) = pu.folder_edit.take() else { return };
+    let (mut confirm, mut cancel) = (false, false);
+    ui.horizontal(|ui| {
+        let r = crate::text_field::TextField::singleline("field:printFolderName", &mut edit.name)
+            .hint(crate::i18n::tr("Folder name"))
+            .width(140.0)
+            .select_on_focus(true)
+            .show(ui);
+        if super::frame::just_opened(ui, "printFolderName") {
+            r.response.request_focus();
+        }
+        match r.ending {
+            Some(crate::text_field::Ending::Return) => confirm = true,
+            Some(crate::text_field::Ending::Escape) => cancel = true,
+            _ => {}
+        }
+        confirm |= text_button(ui, "printFolderOk", if edit.from.is_some() { "Rename" } else { "Create" }, false).clicked();
+        cancel |= text_button(ui, "printFolderCancel", "Cancel", false).clicked();
+    });
+    if cancel {
+        return;
+    }
+    if confirm {
+        let (id, params) = match &edit.from {
+            None => ("print.template.folder.create", json!({"name": edit.name})),
+            Some(from) => ("print.template.folder.rename", json!({"name": from, "to": edit.name})),
+        };
+        if let Some(r) = run(app, ctx, id, params) {
+            let made = r["name"].as_str().map(str::to_string);
+            // a new folder is where the next Save goes; a renamed one keeps its place there and its closed state
+            if edit.from.is_none() || pu.save_folder == edit.from {
+                pu.save_folder.clone_from(&made);
+            }
+            if let (Some(from), Some(to)) = (&edit.from, &made) {
+                for c in &mut pu.closed_folders {
+                    if *c == from.to_lowercase() {
+                        *c = to.to_lowercase();
+                    }
+                }
+            }
+            return;
+        }
+    }
+    pu.folder_edit = Some(edit);
+}
+
+/// Delete Folder's question, while it is asked: the folder's templates move to User Templates.
+fn folder_delete_confirmation(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context, pu: &mut PrintUi) {
+    let Some(name) = pu.delete_folder.clone() else { return };
+    let question =
+        format!("{} {}", crate::i18n::tr_format!("Delete “{name}”?", name = name), crate::i18n::tr("Its templates move to User Templates."));
+    ui.label(egui::RichText::new(question).color(t.text_label));
+    ui.horizontal(|ui| {
+        if text_button(ui, "printFolderDeleteConfirm", "Delete Folder", false).clicked()
+            && run(app, ctx, "print.template.folder.delete", json!({"name": name})).is_some()
+        {
+            pu.delete_folder = None;
+            pu.closed_folders.retain(|c| *c != name.to_lowercase());
+        }
+        if text_button(ui, "printFolderDeleteCancel", "Cancel", false).clicked() {
+            pu.delete_folder = None;
+        }
+    });
+}
+
+/// Moves the template `name` to `folder` and says so; nothing when it is there already.
+fn move_template(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, folder: Option<&str>) {
+    if let Some(r) = run(app, ctx, "print.template.move", json!({"name": name, "folder": folder_param(folder)}))
+        && r["moved"] == true
+    {
+        app.toast(ctx, crate::i18n::tr_format!("Moved {name} to {folder}", name = name, folder = folder_label(folder)));
+    }
+}
+
+/// One Template Browser folder: its row (a click opens or closes it, a template dropped on it moves
+/// there, its menu has New Folder… and, for the user's folders, Rename Folder… and Delete Folder),
+/// then, while it is open, its templates.
+fn folder_rows(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, j: usize, folder: Option<&str>, folders: &[Option<String>]) {
+    let ctx = ui.ctx().clone();
+    let label = folder_label(folder);
+    let key = folder_param(folder).to_lowercase();
+    let open = !pu.closed_folders.contains(&key);
+    let count = app.session.print_templates.iter().filter(|x| x.folder.as_deref() == folder).count();
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+    crate::widgets::announce_disclosure(&resp, true, open, &label);
+    register(ui, format!("printTemplateFolder-{j}"), r);
+    let pointer = ui.input(|i| i.pointer.latest_pos());
+    let under_drag = pu.dragging_template.is_some() && crate::docking::drop_target(ui, r, pointer);
+    if under_drag {
+        ui.painter().rect_stroke(r.shrink(1.0), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.6));
+    }
+    crate::icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(14.0, 14.0)),
+        if open { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::ChevronRight },
+        t.text_label,
+    );
+    ui.painter().text(pos2(r.left() + 20.0, r.center().y), Align2::LEFT_CENTER, &label, t.semibold(12.0), t.text);
+    ui.painter().text(pos2(r.right() - 4.0, r.center().y), Align2::RIGHT_CENTER, count.to_string(), t.font(11.0), t.text_dim);
+    if resp.clicked() {
+        if open {
+            pu.closed_folders.push(key);
+        } else {
+            pu.closed_folders.retain(|c| *c != key);
+        }
+    }
+    if under_drag
+        && ui.input(|i| i.pointer.primary_released())
+        && let Some(name) = pu.dragging_template.take()
+    {
+        move_template(app, &ctx, &name, folder);
+    }
+    crate::widgets::context_menu(&resp, |ui| {
+        let new = ui.button(crate::i18n::tr("New Folder…"));
+        register(ui, format!("item:printFolderNew-{j}"), new.rect);
+        if new.clicked() {
+            pu.folder_edit = Some(FolderEdit::default());
+            pu.delete_folder = None;
+        }
+        if let Some(f) = folder {
+            let rename = ui.button(crate::i18n::tr("Rename Folder…"));
+            register(ui, format!("item:printFolderRename-{j}"), rename.rect);
+            if rename.clicked() {
+                pu.folder_edit = Some(FolderEdit { from: Some(f.to_string()), name: f.to_string() });
+                pu.delete_folder = None;
+            }
+            let delete = ui.button(crate::i18n::tr("Delete Folder"));
+            register(ui, format!("item:printFolderDelete-{j}"), delete.rect);
+            if delete.clicked() {
+                pu.delete_folder = Some(f.to_string());
+                pu.folder_edit = None;
+            }
+        }
+    });
+    if !open {
+        return;
+    }
+    let rows: Vec<(usize, String)> =
+        app.session.print_templates.iter().enumerate().filter(|(_, x)| x.folder.as_deref() == folder).map(|(i, x)| (i, x.name.clone())).collect();
+    for (i, name) in &rows {
+        let (i, name) = (*i, name.as_str());
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(name).color(t.text_label));
+            ui.add_space(20.0);
+            let resp = ui.add(egui::Label::new(egui::RichText::new(name).color(t.text_label)).sense(Sense::click_and_drag()));
+            register(ui, format!("printTemplate-{i}"), resp.rect);
+            if resp.drag_started() {
+                pu.dragging_template = Some(name.to_string());
+            }
+            crate::widgets::context_menu(&resp, |ui| {
+                let sub = crate::widgets::menu_button(ui, crate::i18n::tr("Move to Folder"), |ui| {
+                    for (k, f) in folders.iter().enumerate().filter(|(_, f)| f.as_deref() != folder) {
+                        let item = ui.button(folder_label(f.as_deref()));
+                        register(ui, format!("item:printTemplateMove-{i}-{k}"), item.rect);
+                        if item.clicked() {
+                            move_template(app, &ctx, name, f.as_deref());
+                        }
+                    }
+                });
+                register(ui, format!("item:printTemplateMoveMenu-{i}"), sub.response.rect);
+            });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, &format!("printTemplateDelete-{i}"), "Delete", false).clicked() {
                     run(app, &ctx, "print.template.delete", json!({"name": name}));
@@ -242,6 +469,28 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
             });
         });
     }
+}
+
+/// A template being dragged: its name follows the pointer, and the drag ends with the button's
+/// release (after the folder rows, which take the drop) or with Esc.
+fn template_drag_feedback(ctx: &egui::Context, t: &Tokens, pu: &mut PrintUi) {
+    let Some(name) = pu.dragging_template.clone() else { return };
+    let (released, down, at, esc) =
+        ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
+    if released || !down || esc {
+        pu.dragging_template = None;
+        return;
+    }
+    let Some(at) = at else { return };
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    egui::Area::new(egui::Id::unique("drag-print-template")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(
+        ctx,
+        |ui| {
+            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
+                ui.label(egui::RichText::new(name).color(Color32::WHITE).font(t.semibold(12.0)));
+            });
+        },
+    );
 }
 
 /// The image settings: zoom, rotation, border and stroke.

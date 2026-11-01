@@ -289,6 +289,7 @@
   "Exported to {path}": "已匯出到 {path}",
   "Saved template {name}": "已儲存範本 {name}",
   "Imported {name}": "已匯入 {name}",
+  "Moved {name} to {folder}": "已將 {name} 移至 {folder}",
   "Skipped {problem}": "已略過：{problem}",
   "…and {more} more": "…還有 {more} 個",
   "Template preview: {name}": "範本預覽：{name}",

@@ -97,6 +97,7 @@
   "Import warnings ({n}):\n{warnings}": "Importvarningar ({n}):\n{warnings}",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "Importerade {e} maskeffekt{} (Maskering → Effekt)",
   "Imported {name}": "Importerade {name}",
+  "Moved {name} to {folder}": "Flyttade {name} till {folder}",
   "Imported {n} point curve preset{}": "Importerade {n} punktkurvförinställning{}",
   "Imported {n} preset{}": "Importerade {n} förinställning{}",
   "Imported {n} preset{}, {f} file{} not readable": "Importerade {n} förinställning{}, {f} fil{} kunde inte läsas",

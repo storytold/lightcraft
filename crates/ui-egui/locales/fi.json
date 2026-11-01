@@ -2356,5 +2356,9 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "User Templates": "Käyttäjän mallipohjat",
+  "Delete Folder": "Poista kansio",
+  "Folder name": "Kansion nimi",
+  "Its templates move to User Templates.": "Sen mallipohjat siirretään kansioon Käyttäjän mallipohjat."
 }

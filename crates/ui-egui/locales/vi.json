@@ -2684,5 +2684,9 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "User Templates": "Mẫu người dùng",
+  "Delete Folder": "Xóa thư mục",
+  "Folder name": "Tên thư mục",
+  "Its templates move to User Templates.": "Các mẫu trong đó sẽ được chuyển vào Mẫu người dùng."
 }

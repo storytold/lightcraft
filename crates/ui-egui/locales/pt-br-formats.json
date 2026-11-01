@@ -289,6 +289,7 @@
   "Exported to {path}": "Exportado para {path}",
   "Saved template {name}": "Modelo {name} salvo",
   "Imported {name}": "{name} importado",
+  "Moved {name} to {folder}": "{name} movido para {folder}",
   "Skipped {problem}": "Ignorado: {problem}",
   "…and {more} more": "…e mais {more}",
   "Template preview: {name}": "Prévia do modelo: {name}",

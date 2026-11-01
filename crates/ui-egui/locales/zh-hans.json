@@ -2389,5 +2389,9 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "User Templates": "用户模板",
+  "Delete Folder": "删除文件夹",
+  "Folder name": "文件夹名称",
+  "Its templates move to User Templates.": "其中的模板将移到“用户模板”。"
 }

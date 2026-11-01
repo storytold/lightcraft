@@ -2438,5 +2438,9 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "User Templates": "Uživatelské šablony",
+  "Delete Folder": "Odstranit složku",
+  "Folder name": "Název složky",
+  "Its templates move to User Templates.": "Její šablony se přesunou do složky Uživatelské šablony."
 }

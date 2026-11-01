@@ -3659,5 +3659,9 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "User Templates": "მომხმარებლის შაბლონები",
+  "Delete Folder": "საქაღალდის წაშლა",
+  "Folder name": "საქაღალდის სახელი",
+  "Its templates move to User Templates.": "მისი შაბლონები გადავა „მომხმარებლის შაბლონებში“."
 }

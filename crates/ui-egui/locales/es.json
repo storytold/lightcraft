@@ -2390,5 +2390,9 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "User Templates": "Plantillas del usuario",
+  "Delete Folder": "Eliminar carpeta",
+  "Folder name": "Nombre de la carpeta",
+  "Its templates move to User Templates.": "Sus plantillas se moverán a Plantillas del usuario."
 }
