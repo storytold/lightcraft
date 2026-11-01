@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  "Couldn't read {name}: {error}": "Impossibile leggere {name}: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: impossibile leggere {n} foto{s:.0}",
+  "No new photos on {name} ({n} already in the library)": "Nessuna foto nuova su {name} (già nella libreria: {n})",
+  "No photos found on {name}": "Nessuna foto trovata su {name}"
 }

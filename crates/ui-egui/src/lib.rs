@@ -16,6 +16,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 };
 
 pub mod brush_live;
+pub mod camera_import;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
@@ -314,6 +315,8 @@ pub struct LightcraftApp {
     pub scan: Option<import::ScanTask>,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
+    /// A camera being read for File → Import from Device (`camera_import`).
+    pub camera: Option<camera_import::CameraTask>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).

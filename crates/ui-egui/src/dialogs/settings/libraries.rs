@@ -14,6 +14,10 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if app.import.is_some() || app.scan.is_some() {
         return Err("wait for the import to finish before switching libraries".into());
     }
+    // the fetch skips what this library has and opens its review here (issue #1005)
+    if app.camera.is_some() {
+        return Err("wait for the camera to be read before switching libraries".into());
+    }
     if app.pending_picks.iter().any(|p| p.command == "folder.move") {
         return Err("wait for Move Folder To… to finish before switching libraries".into());
     }
