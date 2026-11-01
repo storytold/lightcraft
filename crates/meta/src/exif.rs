@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use lightcraft_tiff::{Ifd, ParseOptions, Tiff, TiffError, tags as t};
+use lightcraft_tiff::{FieldType, Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -30,7 +30,7 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     // Panasonic RW2's private ISO tags are meaningful only when the container magic confirms RW2.
     // Keep this out of `from_tiff`: TIFF/DNG files can use the same tag numbers for unrelated data.
     if m.iso.is_none() && data.starts_with(b"IIU\0") {
-        m.iso = tiff.ifds.first().and_then(|ifd| ifd.u32(0x0017).filter(|&value| value > 0).or_else(|| ifd.u32(0x0037).filter(|&value| value > 0)));
+        m.iso = tiff.ifds.first().and_then(|ifd| rw2_private_iso(ifd, 0x0017).or_else(|| rw2_private_iso(ifd, 0x0037)));
     }
     // Panasonic (and some Canons) write no LensModel, only the name in their maker note
     if m.lens_model.is_none() {
@@ -39,6 +39,24 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
     m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
     Ok(m)
+}
+
+fn rw2_private_iso(ifd: &Ifd, tag: u16) -> Option<u32> {
+    let value = ifd.value(tag)?;
+    if !matches!(
+        value.field_type(),
+        FieldType::Byte
+            | FieldType::Short
+            | FieldType::Long
+            | FieldType::SByte
+            | FieldType::SShort
+            | FieldType::SLong
+            | FieldType::Long8
+            | FieldType::SLong8
+    ) {
+        return None;
+    }
+    ifd.u32(tag).filter(|&value| value > 0)
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
@@ -352,6 +370,14 @@ pub(crate) mod tests {
 
         let malformed_short = rw2_iso_tiff(Some(Value::Ascii("bad".into())), Some(Value::Long(vec![250])), None, None);
         assert_eq!(try_read_exif(&malformed_short).unwrap().iso, Some(250));
+
+        // Undefined contains bytes but is not an integer TIFF field type. It must not
+        // shadow a usable fallback value in the second Panasonic tag.
+        let undefined_short = rw2_iso_tiff(Some(Value::Undefined(vec![98])), Some(Value::Long(vec![250])), None, None);
+        assert_eq!(try_read_exif(&undefined_short).unwrap().iso, Some(250));
+
+        let undefined_long = rw2_iso_tiff(None, Some(Value::Undefined(vec![98])), None, None);
+        assert_eq!(try_read_exif(&undefined_long).unwrap().iso, None);
 
         let malformed = rw2_iso_tiff(Some(Value::Short(vec![0])), Some(Value::Long(vec![0])), None, None);
         assert_eq!(try_read_exif(&malformed).unwrap().iso, None);
