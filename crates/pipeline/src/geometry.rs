@@ -571,4 +571,27 @@ mod tests {
         let f = Frame::new(48_000, 48_000, &s, true);
         assert_eq!(f.fit(54_000, 13_000), (54_000, 13_000));
     }
+
+    /// A box of exactly the ceiling's pixels (32000×16000 = 512 megapixels, the frame's own 2:1
+    /// aspect) is on the allowed side of `px > ceiling` and is returned unchanged: the ceiling
+    /// holds *over*-ceiling requests, not the last legal pixel.
+    #[test]
+    fn a_box_at_the_ceiling_is_returned_unchanged() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(8, 4, &s, true); // 2:1, 32 px of its own
+        assert_eq!(f.fit(32_000, 16_000), (32_000, 16_000));
+    }
+
+    /// One pixel more than the ceiling (32002×16001 = 512,064,002 px) is scaled back to exactly
+    /// it: both sides by the same factor lands the 2:1-ish box at 32000×16000 = 512,000,000 px
+    /// (±1 for the rounding of the two f64 sides), not a single pixel past 512 megapixels.
+    #[test]
+    fn a_box_one_pixel_over_the_ceiling_clamps_back_to_it() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(8, 4, &s, true); // 2:1, 32 px of its own
+        let (w, h) = f.fit(32_002, 16_001);
+        assert!((w as i64 - 32_000).abs() <= 1 && (h as i64 - 16_000).abs() <= 1, "{w}×{h}");
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS, "{} px", w * h);
+        assert!(((w as f64) / (h as f64) - 2.0).abs() < 0.01, "the frame's 2:1 aspect: {w}×{h}");
+    }
 }
