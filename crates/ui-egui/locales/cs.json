@@ -2438,5 +2438,8 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "Toto místo je příliš světlé, aby šla přečíst jeho barva: klepněte na o něco tmavší neutrální oblast",
+  "This spot is too dark to read its colour: click a brighter neutral area": "Toto místo je příliš tmavé, aby šla přečíst jeho barva: klepněte na světlejší neutrální oblast",
+  "This spot can't be read": "Toto místo nelze přečíst"
 }

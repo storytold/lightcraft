@@ -2370,5 +2370,8 @@
   "Set up name suggestions…": "Siapkan saran nama…",
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
-  "Bottom bar": "Bilah bawah"
+  "Bottom bar": "Bilah bawah",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "Titik ini terlalu terang untuk dibaca warnanya: klik area netral yang sedikit lebih gelap",
+  "This spot is too dark to read its colour: click a brighter neutral area": "Titik ini terlalu gelap untuk dibaca warnanya: klik area netral yang lebih terang",
+  "This spot can't be read": "Titik ini tidak dapat dibaca"
 }

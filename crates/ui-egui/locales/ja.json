@@ -2388,5 +2388,8 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "この場所は明るすぎて色を読み取れません。少し暗いニュートラルな部分をクリックしてください",
+  "This spot is too dark to read its colour: click a brighter neutral area": "この場所は暗すぎて色を読み取れません。もっと明るいニュートラルな部分をクリックしてください",
+  "This spot can't be read": "この場所は読み取れません"
 }

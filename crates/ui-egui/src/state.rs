@@ -120,6 +120,9 @@ pub struct UiState {
     pub show_counts: bool,
     /// Face / pet boxes (read from XMP) over the photo in the loupe.
     pub face_boxes: bool,
+    /// The White Balance Selector's sample, its side in screen pixels (odd; the mouse wheel
+    /// changes it while the selector is armed: test notes 2026-10-25 note 13).
+    pub wb_sample: u32,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
@@ -419,6 +422,7 @@ impl Default for UiState {
             grid_info: "filename".into(),
             show_counts: true,
             face_boxes: true,
+            wb_sample: crate::wb_loupe::DEFAULT_SAMPLE,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,

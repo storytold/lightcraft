@@ -2386,5 +2386,8 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "Це місце надто світле, щоб прочитати його колір: клацніть трохи темнішу нейтральну ділянку",
+  "This spot is too dark to read its colour: click a brighter neutral area": "Це місце надто темне, щоб прочитати його колір: клацніть світлішу нейтральну ділянку",
+  "This spot can't be read": "Це місце не вдається прочитати"
 }

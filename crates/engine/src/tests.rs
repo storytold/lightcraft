@@ -50,6 +50,7 @@ mod slideshow_export;
 mod spots;
 mod sync;
 mod view_follow;
+mod wb_pick;
 pub(super) mod xmp;
 
 fn demo() -> Session {

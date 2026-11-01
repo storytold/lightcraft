@@ -2234,5 +2234,8 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "Este ponto está claro demais para ler sua cor: clique em uma área neutra um pouco mais escura",
+  "This spot is too dark to read its colour: click a brighter neutral area": "Este ponto está escuro demais para ler sua cor: clique em uma área neutra mais clara",
+  "This spot can't be read": "Este ponto não pode ser lido"
 }

@@ -12,7 +12,7 @@ pub(crate) mod convert;
 mod cull;
 pub mod curves;
 pub(crate) mod denoise;
-mod develop;
+pub(crate) mod develop;
 mod edit;
 mod export;
 pub(crate) mod face_detect;
