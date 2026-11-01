@@ -139,10 +139,18 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
 /// this window is open; see `dupes_scan`).
 fn progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let v = app.session.execute("duplicates.pump", &json!({"pace": "normal"})).unwrap_or_default();
-    if v["active"] != true
-        && let Some(last) = v.get("last").filter(|l| !l.is_null())
-    {
-        take_result(dlg, last);
+    if v["active"] != true {
+        match v.get("last").filter(|l| !l.is_null()) {
+            Some(last) => take_result(dlg, last),
+            // no run and no result: the library changed under the window (the switch drops the run and its
+            // result), so there is nothing to wait for
+            None => {
+                if let Dialog::Duplicates { done, error, .. } = dlg {
+                    *done = true;
+                    *error = Some(crate::i18n::tr("Finding duplicate photos was stopped before it finished.").to_string());
+                }
+            }
+        }
         return;
     }
     ui.label(egui::RichText::new(crate::i18n::tr("Looking for duplicate photos…")).color(t.text_label));
@@ -315,6 +323,25 @@ mod tests {
         let mut dlg = Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None };
         super::take_result(&mut dlg, &json!({"groups": [], "photos": 12, "cancelled": false}));
         assert!(matches!(&dlg, Dialog::Duplicates { done: true, error: None, .. }), "{dlg:?}");
+    }
+
+    /// A window left waiting with no run and no result (the library was switched under it, which drops both)
+    /// ends as a stopped run instead of showing progress forever.
+    #[test]
+    fn a_window_whose_run_went_with_the_library_stops_waiting() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+        h.step();
+        h.app.ui.dialog = Some(Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None });
+        h.step();
+        h.step();
+        match &h.app.ui.dialog {
+            Some(Dialog::Duplicates { done: true, error: Some(e), .. }) => assert!(e.contains("stopped"), "{e}"),
+            d => panic!("{d:?}"),
+        }
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.dialog.is_none());
     }
 
     /// Without duplicates the window says so and its confirm deletes nothing.
