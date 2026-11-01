@@ -663,14 +663,14 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
         cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model} — delete an installed model (its cached pictures stay until they are evicted)", always, remove),
-        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null} → {model} — null switches denoise off", always, select),
+        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null} → {model} — null uses the built-in denoiser", always, select),
         cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
         cmd!(
             "denoise.toggle",
             "AI Denoise",
             [],
             None,
-            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo, independent of selection and Auto Sync; needs an installed model to turn on",
+            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo, independent of selection and Auto Sync; uses the built-in denoiser when no model is chosen",
             always,
             toggle
         ),

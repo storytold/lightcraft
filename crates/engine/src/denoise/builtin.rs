@@ -64,7 +64,7 @@ impl Model for BuiltinModel {
 
     fn self_test(&self, _run_on: RunOn) -> Result<Value, String> {
         let side = 16;
-        let out = lightcraft_denoise::builtin::Builtin::default().run(&vec![0.25; 4 * side * side]).map_err(|e| e.to_string())?;
+        let out = lightcraft_denoise::builtin::Builtin::with_noise((0.01, 0.001)).run(&vec![0.25; 4 * side * side]).map_err(|e| e.to_string())?;
         if out.len() != 12 * side * side || out.iter().any(|v| !v.is_finite()) {
             return Err("the built-in denoiser gave an unexpected result".into());
         }
