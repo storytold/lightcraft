@@ -195,3 +195,44 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
     assert_eq!((r.request_id, r.key), (7, 9));
     assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: preview reader bug"));
 }
+
+/// CodeRabbit on #3544: a stand-in job decoding a camera JPEG when Discard Preview Cache clears the
+/// cache doesn't put the picture back: it writes for the generation it was made in (memory and
+/// disk alike), as render jobs do.
+#[test]
+fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
+    for on_disk in [false, true] {
+        let cache = Arc::new(PreviewCache::memory(64 << 20));
+        let made_in = cache.generation();
+        let key = Hash128(5);
+        let quick = QuickJob {
+            request_id: 1,
+            photo: PhotoId(1),
+            key: 2,
+            cached: Vec::new(),
+            embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| Some(Rgba8::new(16, 16))), 256)),
+            embedded_cache: Some((cache.clone(), key, made_in)),
+            embedded_on_disk: on_disk,
+            minimum_embedded_edge: None,
+            small: None,
+        };
+        // the user discards the cache while the job is on its way
+        cache.clear();
+        assert!(quick.run().rendered.is_ok(), "the stand-in is still shown");
+        assert!(cache.get_memory(key).is_none(), "on disk {on_disk}: nothing kept in the cleared cache");
+        // a job made after the clear keeps it as before
+        let quick = QuickJob {
+            request_id: 1,
+            photo: PhotoId(1),
+            key: 2,
+            cached: Vec::new(),
+            embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| Some(Rgba8::new(16, 16))), 256)),
+            embedded_cache: Some((cache.clone(), key, cache.generation())),
+            embedded_on_disk: on_disk,
+            minimum_embedded_edge: None,
+            small: None,
+        };
+        assert!(quick.run().rendered.is_ok());
+        assert!(cache.get_memory(key).is_some(), "on disk {on_disk}: kept when made after the clear");
+    }
+}

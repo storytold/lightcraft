@@ -553,3 +553,39 @@ fn a_photo_another_build_is_rendering_is_counted_only_once_it_is_built() {
     assert!(s.media.rendered.disk().and_then(|d| d.dims(key)).is_some(), "rendered here, on disk");
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// CodeRabbit on #3544: a library preparation setting that can't be saved is not kept, nor is
+/// going back to the app-wide settings: the session stays as the command's error says.
+#[test]
+fn a_prep_setting_that_cant_be_saved_is_not_kept() {
+    use crate::prep::PrepSettings;
+    let (mut s, root, _) = library("prep-unsaved", 1);
+    let mut own = PrepSettings::default();
+    own.culling.ahead = 3;
+    s.set_prep_settings(own, true).unwrap();
+    // prefs.json can't be written: a folder stands in its place
+    let prefs = root.join("lib").join("prefs.json");
+    let _ = std::fs::remove_file(&prefs);
+    std::fs::create_dir_all(prefs.join("in-the-way")).unwrap();
+    let mut other = own;
+    other.culling.ahead = 5;
+    assert!(s.set_prep_settings(other, true).is_err());
+    assert_eq!(s.prep_json()["library"], json!(own), "the setting that couldn't be saved is not kept");
+    assert!(s.clear_library_prep().is_err());
+    assert_eq!(s.prep_json()["library"], json!(own), "nor going back to the app-wide settings");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// CodeRabbit on #3544: a build asked for with malformed ids fails without stopping the
+/// background preparation that is running.
+#[test]
+fn a_bad_build_request_leaves_the_background_build_running() {
+    let _hold = crate::prep::TestHold::new();
+    let (mut s, root, ids) = library("prep-bad-ids", 3);
+    s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "background": true})).unwrap();
+    let b = s.preview_build.clone().expect("the background build");
+    assert!(b.running());
+    assert!(s.execute("library.buildPreviews", &json!({"ids": ["x"]})).is_err(), "ids that are not photo ids");
+    assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
+    let _ = std::fs::remove_dir_all(&root);
+}

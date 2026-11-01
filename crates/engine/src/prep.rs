@@ -494,7 +494,11 @@ impl Session {
         let p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
         match self.execute("library.buildPreviews", &p) {
             Ok(_) => self.prep.build = self.preview_build.clone(),
-            Err(e) => log::info!("background preparation: {e}"),
+            Err(e) => {
+                // not started: this view may try again on a later tick
+                self.prep.started_for = None;
+                log::info!("background preparation: {e}");
+            }
         }
     }
 
@@ -519,8 +523,9 @@ impl Session {
     pub fn set_prep_settings(&mut self, settings: PrepSettings, library: bool) -> crate::Result<()> {
         let settings = settings.sanitized();
         if library {
+            let previous = self.prep.library;
             self.prep.library = Some(settings);
-            self.save_prefs()
+            self.save_library_prep(previous)
         } else {
             self.prep.app = settings;
             Ok(())
@@ -529,8 +534,19 @@ impl Session {
 
     /// Back to the app-wide settings for this library.
     pub fn clear_library_prep(&mut self) -> crate::Result<()> {
+        let previous = self.prep.library;
         self.prep.library = None;
-        self.save_prefs()
+        self.save_library_prep(previous)
+    }
+
+    /// Save this library's preparation settings; when that fails, `previous` is put back, so the
+    /// session doesn't go on with settings the command reported as not changed (CodeRabbit on #3544).
+    fn save_library_prep(&mut self, previous: Option<PrepSettings>) -> crate::Result<()> {
+        let saved = self.save_prefs();
+        if saved.is_err() {
+            self.prep.library = previous;
+        }
+        saved
     }
 
     pub(crate) fn prep_json(&self) -> Value {
