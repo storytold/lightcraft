@@ -93,7 +93,7 @@
   "Move {what} to Recently Deleted?": "¿Mover {what} a Eliminadas recientemente?",
   "Named ({named_n})": "Con nombre ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Pintando “{k}”: hacer clic en las fotos para añadirla o quitarla · Esc para terminar",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Pegar en {n} foto{}: solo se pegan los ajustes copiados",
+  "Paste into {n} photo{}": "Pegar en {n} foto{}",
   "Preset: {name}": "Ajuste preestablecido: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Solo vista previa: editando el JPEG incrustado de la cámara ({})",
   "Preview only — {}": "Solo vista previa: {}",

@@ -93,7 +93,7 @@
   "Move {what} to Recently Deleted?": "Перемістити {what} до нещодавно видалених?",
   "Named ({named_n})": "З іменами ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Призначення «{k}»: клацайте фото, щоб додати або вилучити його · Esc завершує",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Вставка у фото: {n}{:.0} — вставляються лише скопійовані налаштування",
+  "Paste into {n} photo{}": "Вставка у фото: {n}{:.0}",
   "Preset: {name}": "Набір налаштувань: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Лише перегляд — редагування вбудованого JPEG камери ({})",
   "Preview only — {}": "Лише перегляд — {}",

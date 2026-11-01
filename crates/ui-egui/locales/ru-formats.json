@@ -98,7 +98,7 @@
   "Moved; {} photo(s) relinked": "Перемещено; перепривязано фото: {}",
   "Named ({named_n})": "Именованные ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Назначение «{k}»: щёлкайте по фото, чтобы добавить или снять его · Esc — завершить",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Вставка в фото: {n}{:.0} — вставляются только скопированные настройки",
+  "Paste into {n} photo{}": "Вставка в фото: {n}{:.0}",
   "Preset: {name}": "Пресет: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Только просмотр — правка встроенного в камеру JPEG ({})",
   "Preview only — {}": "Только просмотр — {}",
