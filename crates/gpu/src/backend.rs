@@ -352,9 +352,9 @@ pub(crate) fn picked_at(
     entries: Vec<crate::cards::AdapterEntry>,
     resolution: crate::cards::Resolution,
 ) -> Result<Picked, String> {
-    if let Some(i) = resolution.index
-        && let Some(adapter) = all.into_iter().nth(i)
-    {
+    let mut all = all;
+    if let Some(i) = resolution.index.filter(|i| *i < all.len()) {
+        let adapter = all.swap_remove(i);
         let key = entries.get(i).map(|e| e.key.clone());
         return Ok(Picked { adapter, key, resolution, entries });
     }
@@ -363,8 +363,21 @@ pub(crate) fn picked_at(
     )
     .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?;
     let k = crate::cards::AdapterKey::of(&adapter.get_info(), 1);
-    let key = entries.iter().find(|e| e.key.same_model(&k)).map(|e| e.key.clone());
+    let wgpu_pick = entries.iter().position(|e| e.key.same_model(&k));
+    // wgpu's pick can't render here but a listed card can: that one (review of PR #3544)
+    if let Some(u) = usable_instead(&entries, wgpu_pick).filter(|u| *u < all.len()) {
+        let adapter = all.swap_remove(u);
+        let key = entries.get(u).map(|e| e.key.clone());
+        return Ok(Picked { adapter, key, resolution, entries });
+    }
+    let key = wgpu_pick.and_then(|i| entries.get(i)).map(|e| e.key.clone());
     Ok(Picked { adapter, key, resolution, entries })
+}
+
+/// When wgpu's own pick (entry `wgpu_pick`) is listed as unusable: the first usable entry.
+fn usable_instead(entries: &[crate::cards::AdapterEntry], wgpu_pick: Option<usize>) -> Option<usize> {
+    let pick = entries.get(wgpu_pick?)?;
+    if pick.usable { None } else { entries.iter().position(|e| e.usable) }
 }
 
 /// The adapter for a compute device of its own (the denoise network's, the face detector's, the
@@ -610,6 +623,24 @@ pub fn window_renderer_order(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 pub(crate) mod tests {
+
+    /// Review of PR #3544: wgpu's pick that can't render here gives way to a usable listed card.
+    #[test]
+    fn an_unusable_wgpu_pick_gives_way_to_a_usable_card() {
+        let info = |name: &str, device| wgpu::AdapterInfo {
+            name: name.into(),
+            vendor: 0x10de,
+            device,
+            ..wgpu::AdapterInfo::new(wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Dx12)
+        };
+        let mut e = crate::cards::entries_from(&[(info("Card A", 1), 64, None), (info("Card B", 2), 64, None)], None);
+        assert_eq!(super::usable_instead(&e, Some(0)), None, "wgpu's pick is usable");
+        e[0].usable = false;
+        assert_eq!(super::usable_instead(&e, Some(0)), Some(1));
+        assert_eq!(super::usable_instead(&e, None), None, "wgpu's pick isn't listed: kept");
+        e[1].usable = false;
+        assert_eq!(super::usable_instead(&e, Some(0)), None, "nothing usable: kept");
+    }
 
     /// #250: the indirect-call validation pipeline is off unless asked for; other flags are kept.
     #[test]
