@@ -203,7 +203,8 @@ impl OriginalGuard {
 
     /// The indexed entries that are symlinks, keyed by the lower-case name of the file each one
     /// resolves to. Each folder is listed once; only the entries the listing reports as symlinks
-    /// are resolved, so a library of plain files costs one listing per folder.
+    /// are resolved, so a library of plain files costs one listing per folder. A folder that is
+    /// there but can't be listed has each of its entries asked instead.
     fn resolve_symlinks(&self) -> HashMap<String, Vec<(PathBuf, String)>> {
         let mut by_folder: HashMap<&Path, Vec<(String, &PathBuf, &String)>> = HashMap::new();
         for (p, what) in self.by_name.values().flatten() {
@@ -213,17 +214,29 @@ impl OriginalGuard {
         }
         let mut out: HashMap<String, Vec<(PathBuf, String)>> = HashMap::new();
         for (folder, entries) in by_folder {
-            let Ok(listing) = std::fs::read_dir(folder) else { continue }; // offline or gone: nothing to replace there
-            let links: std::collections::HashSet<String> = listing
-                .flatten()
-                .filter(|e| e.file_type().is_ok_and(|t| t.is_symlink()))
-                .map(|e| e.file_name().to_string_lossy().to_lowercase())
-                .collect();
-            if links.is_empty() {
-                continue;
-            }
+            let listed = std::fs::read_dir(folder).and_then(|listing| {
+                let mut links = std::collections::HashSet::new();
+                for e in listing {
+                    let e = e?;
+                    // an entry whose type can't be read is resolved below, like a link
+                    if e.file_type().map_or(true, |t| t.is_symlink()) {
+                        links.insert(e.file_name().to_string_lossy().to_lowercase());
+                    }
+                }
+                Ok(links)
+            });
+            let links = match listed {
+                Ok(links) if links.is_empty() => continue,
+                Ok(links) => Some(links),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue, // gone: nothing to replace there
+                Err(_) => None,
+            };
             for (name, p, what) in entries {
-                if !links.contains(&name) {
+                let is_link = match &links {
+                    Some(links) => links.contains(&name),
+                    None => std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()),
+                };
+                if !is_link {
                     continue;
                 }
                 let Some(resolved) = std::fs::canonicalize(p).ok().and_then(|c| c.file_name().map(|n| n.to_string_lossy().to_lowercase())) else {
@@ -415,6 +428,30 @@ mod tests {
         let symlinks = g.symlinks.get().expect("built by the first existing target");
         assert_eq!(symlinks.values().flatten().count(), 1, "only the symlink is resolved: {symlinks:?}");
         assert!(g.others.get().is_none(), "an export overwrite doesn't scan every original");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder that can be entered but not listed (`-wx`) still has its symlinked originals
+    /// found: each catalogued entry is asked instead of the listing.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_original_in_a_folder_that_cant_be_listed_is_still_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("lc-originals-unlisted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(d.join("out")).unwrap();
+        let real = d.join("out/export.jpg");
+        std::fs::write(&real, b"pixels").unwrap();
+        let link = d.join("lib/IMG_1.jpg");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut c = Catalog::default();
+        let p = Photo::new(PhotoId(1), Source::File { path: link.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o300)).unwrap();
+        let refused = OriginalGuard::new(&c).check(&real);
+        std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refused.unwrap_err().contains("original of IMG_1.jpg"));
         let _ = std::fs::remove_dir_all(&d);
     }
 
