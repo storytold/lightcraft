@@ -1564,15 +1564,20 @@ fn a_file_size_limit_takes_at_most_two_encodes() {
 
 /// Review of PR #3499: a size the photo can't reach even at quality 1 ends with an error that says
 /// so (that photo is not written), after a bounded number of
-/// encodes: each retry is at a lower quality than the last.
+/// encodes: each retry is at a lower quality than the last, and the error comes only after
+/// quality 1 was tried (CodeRabbit on PR #3506).
 #[test]
 fn an_unreachable_file_size_fails_after_a_few_encodes() {
     let img = detailed(1600, 1100);
     FIT_ENCODES.with(|c| c.set(0));
+    FIT_QUALITIES.with(|v| v.borrow_mut().clear());
     let e = encode_image(&img, &ExportOptions { quality: 90, limit_kb: Some(1), ..Default::default() }).unwrap_err();
     let n = FIT_ENCODES.with(|c| c.get());
+    let q = FIT_QUALITIES.with(|v| v.borrow().clone());
     assert!(e.contains("cannot fit within 1 KB"), "{e}");
     assert!((2..=8).contains(&n), "{n} encodes");
+    assert_eq!((q.len(), q.first(), q.last()), (n, Some(&90), Some(&1)), "{q:?}");
+    assert!(q.windows(2).all(|w| w[1] < w[0]), "each retry lower: {q:?}");
 }
 
 /// The limit holds for a gain map JPEG too (it used to only switch to 4:2:0), in at most two
