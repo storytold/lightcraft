@@ -1,0 +1,8 @@
+# Plain `cargo nextest run` runs at most 4 tests at once, as plain `cargo test` does
+# (`.cargo/config.toml`, #3059). NEXTEST_TEST_THREADS or `--test-threads` wins; `cargo xtask ci`
+# and `cargo xtask test` set it from available RAM.
+[profile.default]
+test-threads = 4
+# A test still running after 30 minutes is killed (`cargo xtask` gives each test binary under
+# `cargo test` the same limit, LIGHTCRAFT_TEST_BINARY_TIMEOUT, #3060).
+slow-timeout = { period = "60s", terminate-after = 30 }
