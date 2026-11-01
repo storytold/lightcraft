@@ -107,6 +107,18 @@ fn source_from_before_a_lens_profile_change_is_not_accepted() {
     s.accept(&new);
     assert_ne!(s.media.source_usage().0, 0);
 }
+/// The loupe's hover preview (a preset or profile under the pointer) is cached by its key, so a database lens
+/// profile looked up again gives it a new key and the hover renders afresh instead of showing the old correction.
+#[test]
+fn a_hover_preview_key_follows_the_lens_profile() {
+    let mut s = session();
+    let settings = s.catalog.photo(PhotoId(1)).unwrap().develop.clone();
+    let before = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
+    let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(lens)) }).unwrap();
+    let after = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
+    assert_ne!(before, after);
+}
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
 /// for renders and for stand-ins, answering the request it came from.

@@ -34,6 +34,13 @@ pub const MARKER: &str = "SOURCE.txt";
 const STAGING: &str = "download";
 /// The suffix of the folder the previous database is moved to while the new one takes its place.
 const PREVIOUS: &str = "previous";
+/// The suffix of the file that says a download into the folder is under way (another window or session of the
+/// app may be the one downloading).
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK: &str = "lock";
+/// A lock this old is left over from an app that quit mid-download, not a download still running.
+#[cfg(not(target_arch = "wasm32"))]
+const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// Largest database file accepted (the biggest is under 1 MB).
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FILE: u64 = 8 << 20;
@@ -329,8 +336,48 @@ fn run(dir: &Path, mirrors: &[String], files: &[Pin], shared: &Shared) {
     }
 }
 
+/// Held while one download uses a folder's staging and previous folders, across sessions and processes: a file
+/// beside the folder, made only if it isn't there, removed when the download ends.
+#[cfg(not(target_arch = "wasm32"))]
+struct DirLock(PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DirLock {
+    fn take(dir: &Path) -> Result<DirLock, String> {
+        let path = beside(dir, LOCK);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+        }
+        for _ in 0..2 {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => return Ok(DirLock(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale =
+                        std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > STALE_LOCK);
+                    if !stale {
+                        return Err("the lens database is already downloading (in another LightCraft window)".into());
+                    }
+                    // left by an app that quit mid-download: taken over
+                    let _ = std::fs::remove_file(&path);
+                }
+                Err(e) => return Err(format!("could not create {}: {e}", path.display())),
+            }
+        }
+        Err("the lens database is already downloading (in another LightCraft window)".into())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for DirLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_all(dir: &Path, mirrors: &[String], files: &[Pin], shared: &Shared) -> Result<usize, String> {
+    // (from before the recovery through the swap: another download of this folder would move the same folders)
+    let _lock = DirLock::take(dir)?;
     recover(dir);
     let staging = beside(dir, STAGING);
     std::fs::create_dir_all(&staging).map_err(|e| format!("could not create {}: {e}", staging.display()))?;
@@ -423,6 +470,27 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    /// Two downloads into one folder (two windows, or two sessions of one app) never share its staging and previous
+    /// folders: the second is refused while the first holds the folder, and may go once it ends; a lock left by an
+    /// app that quit mid-download is taken over.
+    #[test]
+    fn one_download_at_a_time_holds_a_folder() {
+        let d = scratch("lock");
+        let _ = std::fs::remove_file(beside(&d, LOCK));
+        let first = DirLock::take(&d).unwrap();
+        let second = DirLock::take(&d);
+        assert!(second.as_ref().is_err_and(|e| e.contains("already downloading")), "{:?}", second.as_ref().err());
+        drop(first);
+        let again = DirLock::take(&d).unwrap();
+        std::mem::forget(again);
+        // (the app quit with the lock in place an hour and more ago)
+        let old = std::time::SystemTime::now() - STALE_LOCK - Duration::from_secs(60);
+        std::fs::OpenOptions::new().write(true).open(beside(&d, LOCK)).unwrap().set_modified(old).unwrap();
+        let taken = DirLock::take(&d).unwrap();
+        drop(taken);
+        assert!(!beside(&d, LOCK).exists(), "removed when the download ends");
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-lensfun-{name}-{}", std::process::id()));
