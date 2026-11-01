@@ -255,8 +255,8 @@ real failure still stops the whole process. Such a test asserts on its own rende
 ## Correctness: CPU oracle and equivalence tests
 `crates/gpu/tests/it/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
 bounds **mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB** per channel. Measured (Apple M4 Pro, Metal):
-**max 1 LSB, mean ≤ 0.0003 LSB** for every case — 26 settings cases (all tone/colour/effects tools,
-3 vignette styles, grain, curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
+**max 1 LSB, mean ≤ 0.0003 LSB** for every case — 27 settings cases (all tone/colour/effects tools,
+3 vignette styles, grain (fine, and coarse with colour grain), curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
 three mask sets incl. CPU-evaluated shapes, spots + defringe), all 8 orientations ± crop, embedded
 DNG lens data, display-referred sources, draft quality, full-size renders; the 24 MP export in
 `render_bench` also differs by max 1 LSB. Cached (slider-drag) GPU renders are bit-identical to

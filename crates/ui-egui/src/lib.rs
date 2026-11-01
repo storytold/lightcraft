@@ -36,6 +36,7 @@ mod missing_sweep;
 mod model_setup;
 pub mod panels;
 pub mod pick;
+mod pointer_repair;
 pub mod recheck;
 pub mod region;
 pub mod reload;
@@ -252,6 +253,8 @@ pub struct LightcraftApp {
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
+    /// Puts back mouse-button releases the window integration dropped (see `pointer_repair`).
+    pointer_repair: pointer_repair::PointerRepair,
     /// The host's last reported physical modifier state (`ModifiersChanged`), restored after a
     /// synthetic gesture releases instead of unconditionally announcing `NONE`.
     host_mods: egui::Modifiers,

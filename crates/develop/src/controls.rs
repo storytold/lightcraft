@@ -254,7 +254,12 @@ controls! {
     "vignette.highlights" => vignette.highlights, "Highlights", Vignette, 0, 100, 0, 1, 0, Plain;
     "grain.amount" => grain.amount, "Grain", Grain, 0, 100, 0, 1, 0, Plain;
     "grain.size" => grain.size, "Size", Grain, 0, 100, 25, 1, 0, Plain;
-    "grain.roughness" => grain.roughness, "Roughness", Grain, 0, 100, 50, 1, 0, Plain;
+    "grain.sizeVariation" => grain.size_variation, "Size Variation", Grain, 0, 100, 40, 1, 0, Plain;
+    "grain.roughness" => grain.roughness, "Shape", Grain, 0, 100, 50, 1, 0, Plain;
+    "grain.clumping" => grain.clumping, "Clumping", Grain, 0, 100, 30, 1, 0, Plain;
+    "grain.color" => grain.color, "Color", Grain, 0, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#c05ad0" };
+    "grain.response" => grain.response, "Response", Grain, -100, 100, 0, 1, 0, Centered;
+    "grain.seed" => grain.seed, "Seed", Grain, 0, 99999, 0, 1, 0, Plain;
     "enhance.denoise" => enhance.denoise, "Amount", Detail, 0, 100, 0, 1, 0, Plain;
     "detail.sharpenAmount" => detail.sharpen_amount, "Sharpening", Detail, 0, 150, 0, 1, 0, Plain;
     "detail.sharpenRadius" => detail.sharpen_radius, "Radius", Detail, 0.5, 3, 1, 0.1, 1, Plain;

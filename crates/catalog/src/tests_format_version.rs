@@ -97,6 +97,33 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v9 library (before the particle grain and process V3, #1060) opens with its photos' grain and
+/// process as they were: the new grain fields take their defaults, the process stays V2 (so the
+/// photo keeps its value-noise grain), and the library is rewritten in the current format, which a
+/// v9 build then refuses instead of dropping the new fields.
+#[test]
+fn v9_grain_loads_as_it_was_and_is_upgraded() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 4, 3, "2026-01-01");
+    let mut d = (*p.develop).clone();
+    d.process = lightcraft_develop::Process::V2.version();
+    d.grain.amount = 30.0;
+    let grain = d.grain;
+    p.develop = std::sync::Arc::new(d);
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let snap = c.to_snapshot();
+    assert!(!snap.contains("size_variation") && !snap.contains("clumping"), "a v9 build wrote none of them");
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    let d = &loaded.photo(id).unwrap().develop;
+    assert_eq!(d.process, lightcraft_develop::Process::V2.version());
+    assert_eq!(d.grain, grain, "the new grain fields take their defaults");
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,8 +265,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v11: the particle grain's fields (`Grain.color`, `.response`, `.size_variation`, `.clumping`)
+    /// and process V3.
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

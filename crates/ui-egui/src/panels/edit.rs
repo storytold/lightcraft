@@ -285,8 +285,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, c, enabled);
         }
         sub_title(ui, crate::i18n::tr("Grain"));
-        for c in ["grain.amount", "grain.size", "grain.roughness"] {
-            control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+        for c in
+            ["grain.amount", "grain.size", "grain.sizeVariation", "grain.roughness", "grain.clumping", "grain.color", "grain.response", "grain.seed"]
+        {
+            control(app, ui, d, c, grain_control_enabled(d, c));
         }
         ui.add_space(8.0);
     });
@@ -371,5 +373,43 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
+    }
+}
+
+/// Whether a Grain slider can be moved: Amount always; the rest once there is grain. Size
+/// Variation, Clumping, Color and Response shape the particle grain of process V3; a photo on V1
+/// or V2 keeps its value-noise grain, which they don't act on, so they stay disabled there.
+fn grain_control_enabled(d: &DevelopSettings, id: &str) -> bool {
+    if id == "grain.amount" {
+        return true;
+    }
+    let particle_only = matches!(id, "grain.sizeVariation" | "grain.clumping" | "grain.color" | "grain.response");
+    d.grain.amount != 0.0 && (!particle_only || d.process.process() >= lightcraft_develop::Process::V3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn particle_only_grain_sliders_are_disabled_before_process_v3() {
+        use lightcraft_develop::{Process, ProcessVersion};
+        let all = ["grain.size", "grain.sizeVariation", "grain.roughness", "grain.clumping", "grain.color", "grain.response", "grain.seed"];
+        let particle_only = ["grain.sizeVariation", "grain.clumping", "grain.color", "grain.response"];
+        let mut d = DevelopSettings::default();
+        assert!(grain_control_enabled(&d, "grain.amount"));
+        assert!(all.iter().all(|c| !grain_control_enabled(&d, c)), "no grain: only Amount moves");
+        d.grain.amount = 30.0;
+        assert_eq!(d.process.process(), Process::LATEST);
+        assert!(all.iter().all(|c| grain_control_enabled(&d, c)), "V3: every grain slider moves");
+        for p in [Process::V1, Process::V2] {
+            d.process = p.version();
+            for c in all {
+                assert_eq!(grain_control_enabled(&d, c), !particle_only.contains(&c), "{p:?} {c}");
+            }
+            assert!(grain_control_enabled(&d, "grain.amount"));
+        }
+        d.process = ProcessVersion::legacy();
+        assert!(!grain_control_enabled(&d, "grain.clumping"), "settings saved without a process are V1");
     }
 }

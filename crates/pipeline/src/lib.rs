@@ -31,6 +31,7 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grain;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
