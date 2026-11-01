@@ -1442,9 +1442,13 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                 Some(x) => Some(x.to_string()),
                 None => {
                     let name = format!("{}.lcpreset", group.as_deref().unwrap_or("LightCraft Presets"));
-                    // titled after the menu item: a group's Export Group… names the group
+                    // titled after the menu item: a group's Export Group… names the group as the
+                    // panel shows it (a stock group's name in the UI language)
                     let title = match &group {
-                        Some(g) => crate::i18n::tr_format!("Export Group “{name}”", name = g),
+                        Some(g) => {
+                            let builtin = app.session.presets.iter().any(|p| p.builtin && p.group == *g);
+                            crate::i18n::tr_format!("Export Group “{name}”", name = crate::i18n::builtin_label(g, builtin))
+                        }
                         None => crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Export Presets").to_string(),
                     };
                     let req = PickRequest::save(
