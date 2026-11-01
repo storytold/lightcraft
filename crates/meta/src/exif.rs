@@ -129,8 +129,11 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     if let Some(x) = ifd0.and_then(|i| i.bytes(t::XMP)).map(String::from_utf8_lossy)
         && let Ok(x) = crate::parse_xmp(&x)
     {
+        // (the size stays the one Exif states: `extract` turns regions by it, and a size only the XMP states may be the upright one)
+        let size = (m.width, m.height);
         m.overlay_user_fields(&x.metadata);
         m.fill_missing(&x.metadata);
+        (m.width, m.height) = size;
     }
     m
 }

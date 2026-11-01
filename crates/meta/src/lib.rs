@@ -296,7 +296,7 @@ impl Metadata {
 pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
     let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
-    let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok()).map(|xmp| xmp.metadata);
+    let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok());
     extract_embedded(e, exif, xmp)
 }
 
@@ -311,22 +311,46 @@ pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
         None => Metadata::default(),
     };
     let xmp = match e.xmp.as_deref() {
-        Some(xmp) if is_psd => Some(parse_xmp(xmp).map_err(|_| ExtractError::MalformedPsd)?.metadata),
-        Some(xmp) => parse_xmp(xmp).ok().map(|xmp| xmp.metadata),
+        Some(xmp) if is_psd => Some(parse_xmp(xmp).map_err(|_| ExtractError::MalformedPsd)?),
+        Some(xmp) => parse_xmp(xmp).ok(),
         None => None,
     };
     Ok(extract_embedded(e, exif, xmp))
 }
 
-fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<Metadata>) -> Metadata {
+fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metadata {
+    // the size the Exif states: a size only the XMP states may be the upright one, so it can't tell how the photo is stored
+    let stored = m.width.zip(m.height);
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));
     }
     if let Some(xmp) = xmp {
-        m.overlay_user_fields(&xmp);
-        m.fill_missing(&xmp);
+        m.overlay_user_fields(&xmp.metadata);
+        m.fill_missing(&xmp.metadata);
+        // boxes another app drew on the photo as stored go where the upright photo has them (#2674)
+        if let (Some(drawn_on), Some(orientation), Some(stored)) = (xmp.regions_drawn_on(), m.orientation, stored) {
+            upright_regions(&mut m.regions, drawn_on, orientation, stored);
+        }
     }
     m
+}
+
+/// Turn regions drawn on a photo as it is stored onto the upright photo. MWG gives each box as a fraction of
+/// `AppliedToDimensions` (`drawn_on`); for a photo whose Exif `orientation` turns it a quarter turn, some apps give the
+/// stored, sideways size there and boxes on the stored pixels to match (Lightroom says so per box with
+/// `mwg-rs:Rotation` instead, which [`parse_xmp`] reads). When `drawn_on` has the shape of the photo as stored
+/// (`stored`, before `orientation`) rather than the upright one, every box is turned with `orientation`. Returns
+/// whether they were. A square photo or `drawn_on` looks the same both ways, and a half turn or a mirror doesn't
+/// change the shape: their boxes are left as they are.
+pub fn upright_regions(regions: &mut [Region], drawn_on: (f64, f64), orientation: Orientation, stored: (u32, u32)) -> bool {
+    let ((dw, dh), (sw, sh)) = (drawn_on, stored);
+    if regions.is_empty() || !orientation.swaps_axes() || sw == sh || dw == dh || (dw > dh) != (sw > sh) {
+        return false;
+    }
+    for r in regions.iter_mut() {
+        r.rect = orientation.map_norm_rect(r.rect);
+    }
+    true
 }
 
 /// A container-level error reported by [`try_extract`].
@@ -445,5 +469,138 @@ mod tests {
         let m = Metadata { metering_mode: Some(5), exposure_program: Some(3), ..Default::default() };
         assert_eq!(m.metering_name(), Some("Pattern"));
         assert_eq!(m.exposure_program_name(), Some("Aperture-priority AE"));
+    }
+
+    /// An MWG regions packet with one face, its box centred at (0.25, 0.4) and 0.1 × 0.15 of `AppliedToDimensions`
+    /// `w` × `h`; `extra` goes on the region (e.g. Lightroom's `mwg-rs:Rotation`).
+    fn regions_packet(w: u32, h: u32, extra: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+              <mwg-rs:Regions rdf:parseType="Resource">
+                <mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="{w}" stDim:h="{h}" stDim:unit="pixel"/>
+                <mwg-rs:RegionList><rdf:Bag>
+                  <rdf:li rdf:parseType="Resource" mwg-rs:Name="Hannah" mwg-rs:Type="Face"{extra}>
+                    <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.25" stArea:y="0.4" stArea:w="0.1" stArea:h="0.15" stArea:unit="normalized"/>
+                  </rdf:li>
+                </rdf:Bag></mwg-rs:RegionList>
+              </mwg-rs:Regions>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    fn near(r: Rect, b: [f64; 4]) -> bool {
+        [r.x0 - b[0], r.y0 - b[1], r.x1 - b[2], r.y1 - b[3]].iter().all(|d| d.abs() < 1e-9)
+    }
+
+    /// The face's box as drawn: on the photo as stored, or on the upright one by apps that draw there.
+    const DRAWN: [f64; 4] = [0.2, 0.325, 0.3, 0.475];
+    /// The same box on the photo turned upright by Exif orientation 6 (a quarter turn clockwise).
+    const TURNED_6: [f64; 4] = [0.525, 0.2, 0.675, 0.3];
+
+    #[test]
+    fn boxes_drawn_on_the_stored_photo_turn_with_its_orientation() {
+        let region = || Region {
+            rect: Rect { x0: DRAWN[0], y0: DRAWN[1], x1: DRAWN[2], y1: DRAWN[3] },
+            kind: RegionKind::Face,
+            name: None,
+            description: None,
+        };
+        let turned = |o: Orientation, drawn_on: (f64, f64), stored: (u32, u32)| {
+            let mut regions = [region()];
+            let did = upright_regions(&mut regions, drawn_on, o, stored);
+            (did, regions[0].rect)
+        };
+        // drawn on the 6000 × 4000 photo as stored: every quarter turn and its mirror image land elsewhere
+        for (o, want) in [
+            (Orientation::Rotate90, TURNED_6),
+            (Orientation::Rotate270, [0.325, 0.7, 0.475, 0.8]),
+            (Orientation::Transpose, [0.325, 0.2, 0.475, 0.3]),
+            (Orientation::Transverse, [0.525, 0.7, 0.675, 0.8]),
+        ] {
+            let (did, r) = turned(o, (6000.0, 4000.0), (6000, 4000));
+            assert!(did && near(r, want), "{o:?}: {r:?}");
+            // a smaller copy of the photo as stored is the same frame
+            assert!(near(turned(o, (1500.0, 1000.0), (6000, 4000)).1, want), "{o:?} on a smaller size");
+        }
+        // drawn on the upright photo (MWG's own frame), or where the shape can't tell the two apart: as they are
+        for (o, drawn_on, stored) in [
+            (Orientation::Rotate90, (4000.0, 6000.0), (6000, 4000)),
+            (Orientation::Rotate90, (4000.0, 4000.0), (6000, 4000)),
+            (Orientation::Rotate90, (4000.0, 4000.0), (4000, 4000)),
+            (Orientation::Rotate180, (6000.0, 4000.0), (6000, 4000)),
+            (Orientation::FlipH, (6000.0, 4000.0), (6000, 4000)),
+            (Orientation::Normal, (6000.0, 4000.0), (6000, 4000)),
+        ] {
+            let (did, r) = turned(o, drawn_on, stored);
+            assert!(!did && near(r, DRAWN), "{o:?} drawn on {drawn_on:?} of {stored:?}: {r:?}");
+        }
+    }
+
+    /// Issue #2674: an app that doesn't say how the photo was turned (no `mwg-rs:Rotation`) drew the faces of a photo
+    /// with Exif orientation 6 on its stored pixels, with the stored 6000 × 4000 as `AppliedToDimensions`. The boxes
+    /// land on the faces of the upright photo, not where the stored photo had them.
+    #[test]
+    fn regions_drawn_on_the_stored_photo_are_read_onto_the_upright_one() {
+        let jpeg = |packet: &str| {
+            let mut j = vec![0xff, 0xd8];
+            let mut seg = |payload: Vec<u8>| {
+                j.extend([0xff, 0xe1]);
+                j.extend(u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+                j.extend(payload);
+            };
+            // orientation 6, 6000 × 4000 as stored
+            seg([b"Exif\0\0".as_slice(), &crate::exif::tests::sample_exif(lightcraft_tiff::ByteOrder::Little)].concat());
+            seg([b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat());
+            j.extend([0xff, 0xd9]);
+            j
+        };
+        let read = |packet: &str| {
+            let m = extract(&jpeg(packet));
+            assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(6000), Some(4000)));
+            assert_eq!(try_extract(&jpeg(packet)).unwrap().regions, m.regions);
+            assert_eq!(m.regions.len(), 1);
+            m.regions[0].rect
+        };
+        let stored = read(&regions_packet(6000, 4000, ""));
+        assert!(near(stored, TURNED_6), "drawn on the photo as stored: {stored:?}");
+        let upright = read(&regions_packet(4000, 6000, ""));
+        assert!(near(upright, DRAWN), "drawn on the upright photo, MWG's way: {upright:?}");
+        // Lightroom's boxes say how the photo was turned: turned once, by that
+        let lightroom = read(&regions_packet(6000, 4000, r#" mwg-rs:Rotation="-1.57080""#));
+        assert!(near(lightroom, TURNED_6), "Lightroom's −π/2: {lightroom:?}");
+    }
+
+    /// A size only the XMP states can't tell how the photo is stored: `tiff:ImageWidth` and `tiff:ImageLength` of the
+    /// upright photo have the shape of boxes drawn on it upright, and those must not be turned.
+    #[test]
+    fn a_size_only_the_xmp_states_turns_no_regions() {
+        // orientation 6, no pixel size
+        let exif = write_exif(&Metadata { orientation: Some(Orientation::Rotate90), ..Default::default() });
+        let exif = strip_exif_header(&exif);
+        let packet = regions_packet(4000, 6000, "")
+            .replace(r#"rdf:about="""#, r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:ImageWidth="4000" tiff:ImageLength="6000""#);
+        let mut j = vec![0xff, 0xd8];
+        let mut seg = |payload: Vec<u8>| {
+            j.extend([0xff, 0xe1]);
+            j.extend(u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+            j.extend(payload);
+        };
+        seg([b"Exif\0\0".as_slice(), exif].concat());
+        seg([b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat());
+        j.extend([0xff, 0xd9]);
+        let m = extract(&j);
+        assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(4000), Some(6000)));
+        assert_eq!(m.regions.len(), 1);
+        assert!(near(m.regions[0].rect, DRAWN), "{:?}", m.regions[0].rect);
+        assert_eq!(try_extract(&j).unwrap().regions, m.regions);
+        // a TIFF-based file: the whole file is the Exif block, with the XMP in its first IFD
+        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
+        ifd0.set(lightcraft_tiff::tags::ORIENTATION, lightcraft_tiff::Value::Short(vec![6]));
+        ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
+        let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
+        assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(4000), Some(6000)));
+        assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
     }
 }
