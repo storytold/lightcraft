@@ -628,7 +628,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let bits = info.bits() as u32;
     let linear_rgb = info.compression == 7 && info.photometric == photometric::YCBCR;
     let chunks = info.chunks(bytes.len() as u64);
-    let strip_len: u64 = chunks.iter().map(|c| c.len).sum();
+    let strip_len = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     // The row-per-w-bytes (ARW2) layout stores exactly one byte per pixel in a single strip; all 108 such files in the test
     // archive measure exactly width x height. A200/A230/A350 files carry a strip 4-23 % larger than that (and A290/A390 one
     // smaller), which is a different packing, so they are refused rather than read with the wrong layout.
@@ -642,6 +642,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         32767 if one_byte_per_sample => {
             let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            if src.len() as u64 != strip_len {
+                return Err(RawError::Corrupt("raw strip shorter than its rows".into()));
+            }
             let curve = code_curve(&raw.u64s(TONE_CURVE).unwrap_or_else(|| vec![8000, 10400, 12900, 14100]));
             let mut data = vec![0u16; samples as usize];
             data.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
@@ -659,6 +662,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         32767 if packed12 => {
             let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            if src.len() as u64 != strip_len {
+                return Err(RawError::Corrupt("raw strip shorter than its rows".into()));
+            }
             let row_bytes = w / 2 * 3;
             let mut data = vec![0u16; samples as usize];
             data.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
@@ -898,6 +904,15 @@ mod tests {
         raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
         raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![vec![0u8; strip]] });
         TiffWriter::default().write(&[raw]).unwrap()
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        let file = crate::vendor::tests::huge_strip_counts(arw_with_strip(32 * 4));
+        for mode in [Mode::Header, Mode::Full] {
+            let _ = super::decode(&file, mode);
+        }
     }
 
     /// The ILCE-7RM6's distortion table reaches `OpcodeList3`, in the headers-only probe and in the full decode, as
@@ -1560,5 +1575,29 @@ mod tests {
         };
         assert!(is_quad_tiled(&file, &info));
         assert_eq!(read_quad_tiles(&file, &info).unwrap(), mosaic);
+    }
+
+    /// #2561: a small file whose one-byte or packed 12-bit strip declares a large frame is refused before the full
+    /// decode allocates the frame.
+    #[test]
+    fn a_strip_cut_short_is_refused_before_allocating() {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let (w, h) = (3000u32, 2000u32);
+        for declared in [w * h, w * h / 2 * 3] {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::MAKE, Value::Ascii("SONY".into()));
+            raw.set(t::MODEL, Value::Ascii("DSLR-A100".into()));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+            raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+            raw.set(t::COMPRESSION, Value::Short(vec![32767]));
+            raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+            raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![vec![0u8; 12]] });
+            let mut f = TiffWriter::default().write(&[raw]).unwrap();
+            crate::vendor::declare_strip_len(&mut f, 12, declared);
+            assert!(matches!(decode(&f, Mode::Full), Err(RawError::Corrupt(_))), "{declared} bytes declared");
+        }
     }
 }
