@@ -21,7 +21,8 @@
 //! `cargo xtask bench` parses, and the lot as one JSON object with `--json FILE`. Nothing is
 //! written next to the photos: every library is made in a new folder of the run's own under
 //! `--work` (default: a folder in the system temp directory; nothing already there is deleted),
-//! XMP auto-write stays off, and the source folder is only read.
+//! XMP auto-write stays off, and the source folder is only read (a `--work` or `--json` inside it
+//! is refused).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -84,6 +85,42 @@ fn run_dir(work: &Path) -> Result<PathBuf, String> {
     Ok(d)
 }
 
+/// `path` made absolute with its links resolved, as far as it exists (a `--work` folder not made
+/// yet): the nearest existing ancestor is resolved and the rest appended. At most 64 levels up.
+fn resolved(path: &Path) -> Option<PathBuf> {
+    let abs = std::path::absolute(path).ok()?;
+    let mut base = abs.as_path();
+    let mut rest = Vec::new();
+    for _ in 0..64 {
+        if let Ok(real) = base.canonicalize() {
+            // (the parts below don't exist, so a `..` among them is plain: it drops the last one)
+            return Some(rest.iter().rev().fold(real, |mut p: PathBuf, part| {
+                if part == ".." {
+                    p.pop();
+                } else if part != "." {
+                    p.push(part);
+                }
+                p
+            }));
+        }
+        rest.push(base.components().next_back()?.as_os_str().to_os_string());
+        base = base.parent()?;
+    }
+    None
+}
+
+/// Refuse to write `what` (`--work`, `--json`) inside the photo folder: nothing is ever written
+/// next to the photos (FredApps on #3055). A path that can't be resolved is refused too.
+fn outside_photos(folder: &Path, path: &Path, what: &str) -> Result<(), String> {
+    let (Some(photos), Some(target)) = (resolved(folder), resolved(path)) else {
+        return Err(format!("{what} {}: can't tell whether it is inside {}", path.display(), folder.display()));
+    };
+    if target.starts_with(&photos) {
+        return Err(format!("{what} {} is inside the photo folder {}: nothing is written next to the photos", path.display(), folder.display()));
+    }
+    Ok(())
+}
+
 fn library(dir: &Path) -> Result<Session, String> {
     let mut s = Session::new().with_fs().with_system_clock();
     s.open_library(dir, false).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -137,6 +174,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return Err(format!("{}: not a folder", folder.display()));
     }
     let work = work.unwrap_or_else(|| std::env::temp_dir().join(format!("lightcraft-bench-cull-{}", std::process::id())));
+    outside_photos(&folder, &work, "--work")?;
+    if let Some(p) = &json_out {
+        outside_photos(&folder, p, "--json")?;
+    }
     let work = run_dir(&work)?;
     let mut out = json!({"folder": folder.display().to_string(), "threads": render_threads()});
 
@@ -321,5 +362,29 @@ mod tests {
         assert!(fresh_dir(&a, "lib-browse").is_err(), "an existing folder is never reused");
         assert_eq!(std::fs::read(&keep).unwrap(), b"mine");
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// FredApps on #3055: `--work` and `--json` inside the photo folder (or the folder itself, or a
+    /// path that goes there through `..`) are refused before anything is made; beside it they are fine.
+    #[test]
+    fn work_and_json_inside_the_photo_folder_are_refused() {
+        let root = run_dir(&std::env::temp_dir()).unwrap();
+        let photos = root.join("shoot");
+        std::fs::create_dir(&photos).unwrap();
+        for inside in [photos.clone(), photos.join("bench"), photos.join("a").join("b"), root.join("x").join("..").join("shoot").join("w")] {
+            let r = outside_photos(&photos, &inside, "--work");
+            assert!(r.as_ref().is_err_and(|e| e.contains("inside the photo folder")), "{}: {r:?}", inside.display());
+            assert!(!photos.join("bench").exists() && !photos.join("a").exists(), "nothing was made");
+        }
+        let args = |work: &Path| vec![photos.display().to_string(), "--work".into(), work.display().to_string(), "--n".into(), "0".into()];
+        let r = run(&args(&photos.join("bench")));
+        assert!(r.is_err_and(|e| e.contains("inside the photo folder")));
+        assert_eq!(std::fs::read_dir(&photos).unwrap().count(), 0, "the photo folder is untouched");
+        let json = vec![photos.display().to_string(), "--json".into(), photos.join("r.json").display().to_string()];
+        assert!(run(&json).is_err_and(|e| e.contains("--json")));
+        // beside the photos: fine, and a sibling whose name starts the same is not inside
+        assert!(outside_photos(&photos, &root.join("work"), "--work").is_ok());
+        assert!(outside_photos(&photos, &root.join("shoot-bench"), "--work").is_ok());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
