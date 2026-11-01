@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Remove is content-aware, also on spots you already made
+- The Remove tool now rebuilds what is under the brush from its surroundings, as Lightroom's Remove does, instead of
+  healing it from a source it picked by itself. Heal and Clone still copy from a source you can move.
+- Remove spots made before this update render the new way too, so a photo edited with them can look different. Their
+  old source is still stored: an agent or script can turn such a spot back into a healed one with `spot.update` and
+  `mode: "heal"`. Dust spots (Find Dust Spots) and spots from Lightroom edits are Heal or Clone spots and don't change.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
