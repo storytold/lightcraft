@@ -150,6 +150,11 @@ run the same model file: the client compares the manifest's SHA-256 (or the file
 and the server checks it again for every tile. `denoise.status` → `device.remote` reports the server's address, its
 device and whether it is used, or why not.
 
+Each connection has one monotonic budget for its first request header: at most 10 seconds, capped by the configured
+connection timeout. Sending the header in fragments does not renew this budget. After the protocol version and token
+are accepted, the configured idle/transfer timeout applies; the token is still checked on every request. A first
+`run` request can therefore carry its payload under the ordinary timeout, using the same buffered stream.
+
 **The protocol is not encrypted.** Listen on a VPN address (Tailscale, WireGuard) or a LAN, or bind every interface
 behind a firewall rule that admits only the VPN; never expose the port to the internet. Requests carry the shared
 token (compared in constant time); the server refuses other models, other tile sizes, oversized headers and payloads
