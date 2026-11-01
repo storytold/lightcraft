@@ -282,7 +282,7 @@ machine without a hardware GPU (a VM, a container) every GPU test skips.
 ```sh
 log="$(mktemp -d)/gpu-skips.jsonl"   # a new private directory; an absolute path, as tests run in crates/gpu
 LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG="$log" cargo test -p lightcraft-gpu --tests
-grep '"need":"gpu"' "$log" | grep -v 'lost on purpose'   # no output: no GPU test skipped but the device-loss one
+grep '"need":"gpu"' "$log" | grep -v -e 'lost on purpose' -e 'memory never ran out'   # no output: only the two below skipped
 ```
 
 - **Linux:** Mesa's lavapipe (Vulkan; `mesa-vulkan-drivers` on Debian and Ubuntu). Its storage
@@ -294,8 +294,9 @@ grep '"need":"gpu"' "$log" | grep -v 'lost on purpose'   # no output: no GPU tes
 
 A machine with a hardware GPU picks it over the software adapter, variable or not. Each test that
 skips prints `skipped (gpu): …` and appends a line to the `LIGHTCRAFT_SKIP_LOG` file; with a software
-adapter the only one left should be the device-loss test (`no GPU device, or one that can't be lost on
-purpose here`). Measured 2026-10-11 on lavapipe and WARP, and again 2026-10-30 on lavapipe (Mesa's
+adapter the only ones left should be the device-loss test (`no GPU device, or one that can't be lost on
+purpose here`) and the device-memory test (`no GPU device, or its memory never ran out`: on lavapipe its
+allocations never fail, seen 2026-10-31). Measured 2026-10-11 on lavapipe and WARP, and again 2026-10-30 on lavapipe (Mesa's
 llvmpipe on LLVM 20, 143 compared renders), every compared render stayed within **max 1 LSB, mean ≤
 0.0003 LSB**, as on the M4 Pro. The equivalence binary takes about 20 s on lavapipe and several
 minutes on WARP.
