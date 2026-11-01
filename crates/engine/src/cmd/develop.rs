@@ -1332,11 +1332,11 @@ pub(crate) enum WbSample {
 }
 
 /// The photo's top in each channel: white (1.0), or its brightest value where a scene-referred
-/// source passes that; read on every other pixel. Never below white, so the brightest part of a
+/// source passes that; every pixel is read. Never below white, so the brightest part of a
 /// photo that isn't clipped (a grey card in a dim room) is still read.
 fn wb_top(img: &lightcraft_raster::Rgb32f) -> [f32; 3] {
     let mut top = [1.0f32; 3];
-    for c in img.data.iter().step_by(2) {
+    for c in &img.data {
         for i in 0..3 {
             if c[i].is_finite() && c[i] > top[i] {
                 top[i] = c[i];
@@ -1381,7 +1381,7 @@ pub(crate) fn wb_sample(img: &lightcraft_raster::Rgb32f, x: f64, y: f64, size: f
         return WbSample::TooDark;
     }
     let mean = acc.map(|v| (v / n as f64) as f32);
-    if clipped * 4 > n || (0..3).any(|i| mean[i] >= WB_NEAR_WHITE * top[i]) {
+    if clipped * 4 >= n || (0..3).any(|i| mean[i] >= WB_NEAR_WHITE * top[i]) {
         return WbSample::TooBright;
     }
     if mean[0].max(mean[1]).max(mean[2]) < WB_DARK {

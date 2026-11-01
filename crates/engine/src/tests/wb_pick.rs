@@ -9,7 +9,10 @@ use crate::Session;
 /// A photo of four bands, left to right: pure white, a warm grey, near black, and a warm grey
 /// with a white speck every other pixel (more than a quarter of it clipped).
 fn bands() -> (std::path::PathBuf, Session) {
-    let dir = std::env::temp_dir().join(format!("lc-wbpick-{}", std::process::id()));
+    // one folder per call: the tests run in parallel and each clears its own
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("lc-wbpick-{}-{call}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (w, h) = (256usize, 128usize);
@@ -90,4 +93,24 @@ fn bright_but_unclipped_spots_are_read() {
     }
     assert!(matches!(sample(&hdr, 0.5, 0.9, 0.1), Some(true)), "a value over 1 below the photo's top is read");
     assert!(matches!(sample(&hdr, 0.1, 0.0, 0.05), Some(false)), "the photo's top is clipped");
+}
+
+/// The photo's top is read on every pixel (a scene-referred highlight on an odd pixel set it too),
+/// and exactly a quarter of the sample clipped is refused.
+#[test]
+fn the_top_reads_every_pixel_and_a_quarter_clipped_is_refused() {
+    use crate::cmd::develop::{WbSample, wb_sample};
+    // one bright pixel at an odd index: the top is 2.0, so a 0.95 grey elsewhere is read, not
+    // refused as near white
+    let mut img = lightcraft_raster::Rgb32f::new(8, 1);
+    img.data.fill([0.95, 0.95, 0.95]);
+    img.data[1] = [2.0, 2.0, 2.0];
+    assert!(matches!(wb_sample(&img, 6.5 / 8.0, 0.5, 1.0 / 8.0), WbSample::Neutral(_)));
+    // 4 × 4, a quarter of it white (the photo's top) and the rest dark grey: refused
+    let mut img = lightcraft_raster::Rgb32f::new(4, 4);
+    img.data.fill([0.2, 0.2, 0.2]);
+    for i in 0..4 {
+        img.data[i] = [1.0, 1.0, 1.0];
+    }
+    assert!(matches!(wb_sample(&img, 0.5, 0.5, 1.0), WbSample::TooBright));
 }

@@ -328,7 +328,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     photo_overlays(app, ui, &p, &over);
     // Cursor selection must also run on gesture frames, when tool input is suppressed.
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
-        general_cursor(app, ui, &resp, img_rect, main_area);
+        general_cursor(app, ui, &resp, [img_rect, main_area], split.then(|| areas.first().map(|a| (before_img, *a))).flatten());
     }
     if !navigating {
         let tv = ToolView { right, map: &map, frame: &frame, d: &d, id, split, native, aspect };
@@ -980,20 +980,30 @@ fn clipping_overlay(app: &LightcraftApp, p: &egui::Painter, r: Rect) {
     }
 }
 
-fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
+/// `before`: in Side by side and Stacked, the Before view's image and pane (a click there samples
+/// the same point of the photo, so the White Balance Selector's loupe follows the pointer there).
+fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, [img, canvas]: [Rect; 2], before: Option<(Rect, Rect)>) {
     // A panel or overlay under the pointer keeps its own cursor.
     if !resp.dragged() && !resp.hovered() {
         return;
     }
-    // the White Balance Selector shows what it reads: the pixels by the pointer, magnified, the
-    // sample outlined (test notes 2026-10-25 note 13)
+    // the White Balance Selector shows where it reads: the picture on screen by the pointer,
+    // magnified, with the sample's size outlined (test notes 2026-10-25 note 13). It is the
+    // view's picture, not the undeveloped source develop.wbPick reads, so it shows the place and
+    // size of the sample, not its values.
     if app.ui.tool == "wbPicker"
         && let Some(q) = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()))
-        && img.contains(q)
         && let Some(id) = app.session.active()
-        && let Some(t) = app.renderer.textures.get(&crate::render::Slot::Main).filter(|t| t.photo == id)
     {
-        crate::wb_loupe::show(ui.ctx(), t.tex.id(), img, q, app.ui.wb_sample, ui.ctx().pixels_per_point());
+        let (slot, pic) = match before {
+            Some((before_img, pane)) if pane.contains(q) => (crate::render::Slot::Before, before_img),
+            _ => (crate::render::Slot::Main, img),
+        };
+        if pic.contains(q)
+            && let Some(t) = app.renderer.textures.get(&slot).filter(|t| t.photo == id)
+        {
+            crate::wb_loupe::show(ui.ctx(), t.tex.id(), pic, q, app.ui.wb_sample, ui.ctx().pixels_per_point());
+        }
     }
     let cursor = match app.ui.tool.as_str() {
         "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,

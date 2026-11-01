@@ -1,6 +1,8 @@
 //! The White Balance Selector's loupe (test notes 2026-10-25 note 13): while the selector is armed,
 //! a small box by the pointer shows the pixels around it as a magnified grid, the area that is
-//! sampled outlined, so the photographer sees what the click reads. The mouse wheel changes the
+//! sampled outlined, so the photographer sees where the click reads and how much. It shows the
+//! picture on screen (developed), not the undeveloped source `develop.wbPick` reads, so it shows the
+//! sample's place and size, not its values. The mouse wheel changes the
 //! sample's size ([`step`]); a small sample is shown more zoomed in than a large one. Drawn in code
 //! from the photo on screen: original work (see `assets/ATTRIBUTION.md`).
 
