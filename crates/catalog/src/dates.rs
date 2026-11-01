@@ -264,6 +264,16 @@ mod tests {
     use crate::{Op, Photo, Source};
 
     #[test]
+    fn normalize_iso_rejects_a_truncated_time() {
+        for s in ["2026-04-01 9:30", "2026-04-01T10", "2026-04-01 10:5"] {
+            assert_eq!(normalize_iso(s), None, "{s}");
+        }
+        assert_eq!(normalize_iso("2026-04-01 09:30").as_deref(), Some("2026-04-01T09:30:00"));
+        assert_eq!(normalize_iso("2026-04-01t09:30").as_deref(), Some("2026-04-01T09:30:00"));
+        assert_eq!(normalize_iso("2026-04-01").as_deref(), Some("2026-04-01T00:00:00"));
+    }
+
+    #[test]
     fn calendar() {
         assert_eq!(civil(0), "1970-01-01T00:00:00");
         assert_eq!(civil(951_782_400), "2000-02-29T00:00:00");
