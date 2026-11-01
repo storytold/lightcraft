@@ -29,9 +29,9 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     let mut m = from_tiff(&tiff);
     // Panasonic (and some Canons) write no LensModel, only the name in their maker note
     if m.lens_model.is_none() {
-        m.lens_model = panasonic_maker_note_lens_with(data, &tiff, opts).or_else(|| canon_maker_note_lens(data, &tiff));
+        m.lens_model = panasonic_lens(data, &tiff).or_else(|| canon_maker_note_lens(data, &tiff));
     }
-    fill_from_panasonic_jpg_from_raw(&mut m, data, &tiff, opts);
+    fill_from_panasonic_raw(&mut m, data, &tiff, opts);
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
     m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
     Ok(m)
@@ -188,11 +188,7 @@ const PANASONIC_JPG_FROM_RAW: u16 = 0x002E;
 /// The lens name in the Panasonic maker note (tag `0x0051`) of this Exif or RW2 stream (`data` starts at its
 /// TIFF header): the note of its own Exif IFD, else, for a raw, the note in its JpgFromRaw's Exif.
 pub(crate) fn panasonic_maker_note_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
-    panasonic_maker_note_lens_with(data, tiff, &ParseOptions::default())
-}
-
-fn panasonic_maker_note_lens_with(data: &[u8], tiff: &Tiff, opts: &ParseOptions) -> Option<String> {
-    panasonic_lens(data, tiff).or_else(|| panasonic_jpg_from_raw_lens(tiff, opts))
+    panasonic_lens(data, tiff).or_else(|| panasonic_jpg_from_raw_lens(tiff, &ParseOptions::default()))
 }
 
 /// The lens name in a `Panasonic\0` maker note of this Exif stream (`data` starts at its TIFF header).
@@ -214,24 +210,27 @@ const PANASONIC_ISO_32: u16 = 0x0037;
 /// A RW2's own Exif IFD is a short subset (older bodies such as the GF6 or GM1 leave out ISOSpeedRatings and
 /// more). The full Exif is in the APP1 of its JpgFromRaw: fill what the raw stream lacks from there, then fall
 /// back to the ISO in the Panasonic raw IFD0. The raw's own dimensions stay; the preview's would be smaller.
-fn fill_from_panasonic_jpg_from_raw(m: &mut Metadata, data: &[u8], tiff: &Tiff, opts: &ParseOptions) {
-    let Some(ifd0) = tiff.ifds.first() else { return };
-    // Private IFD0 ISO tag numbers are meaningful only in the RW2 container.
-    let is_rw2 = data.starts_with(b"IIU\0");
-    if ifd0.get(PANASONIC_JPG_FROM_RAW).is_none() && !is_rw2 {
+fn fill_from_panasonic_raw(m: &mut Metadata, data: &[u8], tiff: &Tiff, opts: &ParseOptions) {
+    // Private IFD0 tags are meaningful only in the RW2 container, including JpgFromRaw.
+    if !data.starts_with(b"IIU\0") {
         return;
     }
+    let Some(ifd0) = tiff.ifds.first() else { return };
     m.iso = without_iso_overflow(m.iso, tiff);
     if let Some(jpg) = ifd0.bytes(PANASONIC_JPG_FROM_RAW)
         && let Some(exif) = crate::jpeg_segments(jpg).exif
         && let Ok(inner) = Tiff::parse_with(strip_exif_header(&exif), opts)
     {
         let mut full = from_tiff(&inner);
+        // Reuse this parse for the lens name too, under the same caller policy.
+        if full.lens_model.is_none() {
+            full.lens_model = panasonic_lens(strip_exif_header(&exif), &inner);
+        }
         (full.width, full.height) = (None, None);
         full.iso = without_iso_overflow(full.iso, &inner);
         m.fill_missing(&full);
     }
-    if m.iso.is_none() && is_rw2 {
+    if m.iso.is_none() {
         // Ifd::u32 also accepts untyped bytes; these ISO fields have specific unsigned types.
         let iso = |tag, kind| ifd0.get(tag).filter(|entry| entry.field_type() == kind).and_then(|_| ifd0.u32(tag));
         m.iso = iso(PANASONIC_ISO, FieldType::Short)
@@ -396,7 +395,9 @@ pub(crate) mod tests {
         ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
         ifd0.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(jpg));
         ifd0.set_child(t::EXIF_IFD, exif);
-        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        bytes
     }
 
     #[test]
@@ -479,11 +480,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn ordinary_tiff_does_not_import_a_private_jpeg_tag_collision() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Short(vec![160]));
+        inner.set(t::LENS_MODEL, Value::Ascii("Preview lens".into()));
+        inner.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2020:01:02 03:04:05".into()));
+        let mut bytes = rw2_with(Some(inner), Some(200));
+        assert_eq!(read_exif(&bytes).iso, Some(160));
+        assert_eq!(read_exif(&bytes).lens_model.as_deref(), Some("Preview lens"));
+        assert!(read_exif(&bytes).capture_time.is_some());
+        bytes[2..4].copy_from_slice(&42u16.to_le_bytes());
+        let m = read_exif(&bytes);
+        assert_eq!(m.iso, None);
+        assert_eq!(m.lens_model, None);
+        assert_eq!(m.capture_time, None);
+        assert_eq!(m.width, Some(4816));
+        assert_eq!(m.exposure_time, Some(8.0));
+    }
+
+    #[test]
     fn rw2_raw_iso_requires_the_recorded_unsigned_field_types() {
         for with_jpg in [false, true] {
             for (iso16, iso32, want) in [
                 (Value::Undefined(vec![98]), Value::Long(vec![250]), Some(250)),
                 (Value::Byte(vec![98]), Value::Long(vec![250]), Some(250)),
+                (Value::SLong(vec![-1]), Value::Long(vec![250]), Some(250)),
                 (Value::Long(vec![98]), Value::Long(vec![250]), Some(250)),
                 (Value::Short(vec![0]), Value::Undefined(vec![98]), None),
                 (Value::Short(vec![0]), Value::Short(vec![98]), None),
@@ -527,7 +548,7 @@ pub(crate) mod tests {
             tiff.ifds[0].exif.as_mut().unwrap().entries.push(lightcraft_tiff::Entry { tag, value: Value::Long(vec![65535]), offset: 0 });
             tiff.ifds[0].exif.as_mut().unwrap().entries.sort_by_key(|e| e.tag);
             let mut m = from_tiff(&tiff);
-            fill_from_panasonic_jpg_from_raw(&mut m, &bytes, &tiff, &ParseOptions::default());
+            fill_from_panasonic_raw(&mut m, &bytes, &tiff, &ParseOptions::default());
             assert_eq!(m.iso, Some(65535));
         }
     }
@@ -544,15 +565,83 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn rw2_damaged_jpg_keeps_raw_metadata_and_iso_fallback() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Short(vec![160]));
+        let complete = rw2_with(Some(inner), Some(200));
+        let parsed = Tiff::parse(&complete).unwrap();
+        let jpg = parsed.ifds[0].bytes(PANASONIC_JPG_FROM_RAW).unwrap();
+        // Truncation can retain readable Exif; otherwise the private raw ISO is used.
+        let mut damaged: Vec<&[u8]> = (0..jpg.len()).map(|end| &jpg[..end]).collect();
+        damaged.push(b"not a JPEG");
+        for payload in damaged {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::MAKE, Value::Ascii("Panasonic".into()));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![4816]));
+            raw.set(PANASONIC_ISO, Value::Short(vec![200]));
+            raw.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(payload.to_vec()));
+            let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+            bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+            let m = try_read_exif(&bytes).unwrap();
+            assert!(matches!(m.iso, Some(160 | 200)), "payload length {}: {:?}", payload.len(), m.iso);
+            if payload.len() < 12 || !payload.starts_with(&[0xff, 0xd8]) {
+                assert_eq!(m.iso, Some(200));
+            }
+            assert_eq!(m.width, Some(4816));
+        }
+    }
+
+    #[test]
     fn rw2_fills_missing_exif_from_its_jpg_from_raw() {
         let mut inner = IfdBuilder::new();
         inner.set(t::ISO_SPEED, Value::Short(vec![160]));
         inner.set(t::EXPOSURE_TIME, Value::Rational(vec![(1, 60)]));
         inner.set(t::PIXEL_X_DIMENSION, Value::Long(vec![1920]));
+        inner.set(t::LENS_MODEL, Value::Ascii("Preview lens".into()));
+        inner.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2020:01:02 03:04:05".into()));
         let m = read_exif(&rw2_with(Some(inner), Some(200)));
         assert_eq!(m.iso, Some(160), "the JpgFromRaw's ISOSpeedRatings");
         assert_eq!(m.exposure_time, Some(8.0), "the raw's own Exif wins");
         assert_eq!(m.width, Some(4816), "the raw's size, not the preview's");
+        assert_eq!(m.lens_model.as_deref(), Some("Preview lens"));
+        assert!(m.capture_time.is_some());
+    }
+
+    #[test]
+    fn rw2_embedded_standard_lens_wins_over_its_maker_note() {
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(panasonic_exif(ByteOrder::Little, Some("Maker lens"), Some("Standard lens")));
+        let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+        jpg.extend(app1);
+        jpg.extend_from_slice(&[0xff, 0xd9]);
+        let mut raw = IfdBuilder::new();
+        raw.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(jpg));
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        assert_eq!(read_exif(&bytes).lens_model.as_deref(), Some("Standard lens"));
+    }
+
+    #[test]
+    fn rw2_raw_lens_and_date_win_over_embedded_exif() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::LENS_MODEL, Value::Ascii("Preview lens".into()));
+        inner.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2020:01:02 03:04:05".into()));
+        let with_preview = rw2_with(Some(inner), None);
+        let preview = Tiff::parse(&with_preview).unwrap();
+        let mut raw_exif = IfdBuilder::new();
+        raw_exif.set(t::LENS_MODEL, Value::Ascii("Raw lens".into()));
+        raw_exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2021:02:03 04:05:06".into()));
+        let mut raw = IfdBuilder::new();
+        raw.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(preview.ifds[0].bytes(PANASONIC_JPG_FROM_RAW).unwrap().to_vec()));
+        raw.set_child(t::EXIF_IFD, raw_exif);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        let m = read_exif(&bytes);
+        assert_eq!(m.lens_model.as_deref(), Some("Raw lens"));
+        assert!(m.capture_time.is_some());
+        assert_eq!(m.capture_time, from_tiff(&Tiff::parse(&bytes).unwrap()).capture_time);
+        assert_ne!(m.capture_time, read_exif(&with_preview).capture_time);
     }
 
     #[test]
