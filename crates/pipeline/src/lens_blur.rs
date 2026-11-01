@@ -19,6 +19,11 @@
 //! circle of confusion, so what it fully selects gets the whole blur, its feathered edge less, and
 //! what it leaves out stays sharp and doesn't bleed into the blur.
 //!
+//! Amount is capped at 3.5% of the output's long edge. The disc convolution runs on a grid whose
+//! disc radius is at most [`DISC_CELLS`] cells and whose size is capped by [`MAX_CELLS`] per level,
+//! so increasing the output resolution or blur radius does not make the convolution kernel grow.
+//! The full-resolution passes remain linear in the output pixel count.
+//!
 //! It runs on the scene-linear image (white-balanced and denoised, before exposure: a blur is
 //! linear, so exposure commutes with it), on the CPU, for both renderers.
 
@@ -524,18 +529,16 @@ impl Level {
 fn level(img: &Rgb32f, coc: &[f32], k: usize, r: f32, gain: &(impl Fn([f32; 3]) -> f32 + Sync), origin: (usize, usize)) -> Level {
     let (w, h) = (img.width, img.height);
     let radius = r * k as f32 / LEVELS as f32;
-    let at_least = ((w * h) as f64 / MAX_CELLS as f64).sqrt().ceil() as usize;
-    let f = ((radius / DISC_CELLS).ceil() as usize).max(at_least).clamp(1, w.max(h));
-    let shift = (origin.0 % f, origin.1 % f);
-    let (lw, lh) = ((w + shift.0).div_ceil(f), (h + shift.1).div_ceil(f));
+    let (f, shift, lw, lh) = level_grid(w, h, radius, origin);
+    let (grid_w, grid_h) = (w.saturating_add(shift.0), h.saturating_add(shift.1));
     // a pixel counts in this level when its own circle of confusion reaches it
     let (lo, hi) = ((k - 1) as f32 / LEVELS as f32, k as f32 / LEVELS as f32);
     let mut cells = vec![[0f32; 4]; lw * lh];
     crate::for_rows(&mut cells, lw, |cy, row| {
         for (cx, cell) in row.iter_mut().enumerate() {
             let mut acc = [0f32; 4];
-            for vy in cy * f..((cy + 1) * f).min(h + shift.1) {
-                for vx in cx * f..((cx + 1) * f).min(w + shift.0) {
+            for vy in cy * f..((cy + 1) * f).min(grid_h) {
+                for vx in cx * f..((cx + 1) * f).min(grid_w) {
                     let (Some(x), Some(y)) = (vx.checked_sub(shift.0), vy.checked_sub(shift.1)) else { continue };
                     let i = y * w + x;
                     let (Some(c), Some(d)) = (img.data.get(i), coc.get(i)) else { continue };
@@ -552,6 +555,21 @@ fn level(img: &Rgb32f, coc: &[f32], k: usize, r: f32, gain: &(impl Fn([f32; 3]) 
         }
     });
     Level { img: disc(&cells, lw, lh, radius / f as f32), f, shift }
+}
+
+/// Grid scale and dimensions for one disc level, bounded even when a window's grid is offset.
+fn level_grid(w: usize, h: usize, radius: f32, origin: (usize, usize)) -> (usize, (usize, usize), usize, usize) {
+    let at_least = ((w as f64 * h as f64) / MAX_CELLS as f64).sqrt().ceil() as usize;
+    let max_edge = w.max(h).max(1);
+    let mut f = ((radius / DISC_CELLS).ceil() as usize).max(at_least).clamp(1, max_edge);
+    loop {
+        let shift = (origin.0 % f, origin.1 % f);
+        let (lw, lh) = (w.saturating_add(shift.0).div_ceil(f), h.saturating_add(shift.1).div_ceil(f));
+        if lw.saturating_mul(lh) <= MAX_CELLS || f == max_edge {
+            return (f, shift, lw, lh);
+        }
+        f = f.saturating_add(1);
+    }
 }
 
 /// The normalized disc blur of radius `rho` cells of weighted sums `cells` (`[r·w, g·w, b·w, w]`,
@@ -659,6 +677,35 @@ mod tests {
         let mut img = Rgb32f::from_fn(w, h, |x, _| if x < w / 3 && x % 4 < 2 { [0.6; 3] } else { [0.02; 3] });
         img.set(px, py, [4.0; 3]);
         img
+    }
+
+    /// On a 60 MP export, the strongest global and per-mask settings keep a fixed-size disc kernel
+    /// and every level's coarse grid within its cell budget, including an offset render window.
+    #[test]
+    fn large_image_blur_work_is_bounded() {
+        let (w, h) = (9500, 6316);
+        let long_edge = w.max(h) as f64;
+        let s = on(100.0);
+        let r = radius_px(&s, long_edge);
+        assert!((r - (MAX_RADIUS * long_edge) as f32).abs() < 1e-3);
+
+        let mut mask = Mask::default();
+        mask.adjust.lens_blur = 100.0;
+        assert!((mask_radius_px(&mask, long_edge) - r).abs() < 1e-3);
+
+        let mut total_cells = 0usize;
+        for k in 1..=LEVELS {
+            let radius = r * k as f32 / LEVELS as f32;
+            let (f, _, lw, lh) = level_grid(w, h, radius, (17, 29));
+            let cells = lw.saturating_mul(lh);
+            assert!(cells <= MAX_CELLS, "level {k}: {lw} × {lh} = {cells}");
+            total_cells = total_cells.saturating_add(cells);
+            assert!(radius / f as f32 <= DISC_CELLS);
+        }
+        assert!(total_cells <= LEVELS * MAX_CELLS);
+
+        let (_, _, lw, lh) = level_grid(w, h, r, (w - 1, h - 1));
+        assert!(lw.saturating_mul(lh) <= MAX_CELLS, "offset window: {lw} × {lh}");
     }
 
     /// Switched off, at Amount 0 or with the section's eye closed, the photo is untouched.
