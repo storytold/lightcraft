@@ -420,7 +420,9 @@ fn component_outline(
             let (a, b) = (map.screen(*start), map.screen(*end));
             let (a1, a2): (u8, u8) = if sel { (230, 110) } else { (170, 80) };
             for (at, alpha) in [(*start, a1), (*end, a2)] {
-                p.add(egui::Shape::line(linear_guide(map, *start, *end, at), Stroke::new(1.0, Color32::from_white_alpha(alpha))));
+                for run in linear_guide(map, *start, *end, at) {
+                    p.add(egui::Shape::line(run, Stroke::new(1.0, Color32::from_white_alpha(alpha))));
+                }
             }
             if sel {
                 for (i, q) in [a, b].iter().enumerate() {
@@ -437,29 +439,48 @@ fn component_outline(
 /// A linear gradient's guide through `at` (its start or end): the line at right angles to it, as
 /// screen points. In a mask's coordinates on the photo, a lens or perspective warp bends and
 /// turns it on screen, so it is drawn through the warp in steps; else it is a straight line.
-pub(super) fn linear_guide(map: &CanvasMap, start: Point, end: Point, at: Point) -> Vec<Pos2> {
+pub(super) fn linear_guide(map: &CanvasMap, start: Point, end: Point, at: Point) -> Vec<Vec<Pos2>> {
     let (a, b) = (map.screen(start), map.screen(end));
     if !map.warped() {
         let dir = (b - a).normalized();
         let perp = vec2(-dir.y, dir.x) * 3000.0;
         let q = map.screen(at);
-        return vec![q - perp, q + perp];
+        return vec![vec![q - perp, q + perp]];
     }
     // in long-edge units the perpendicular is a right angle; it spans the whole photo
     let l = frame_long_norm(map);
     let d = ((end.x - start.x) / l.0, (end.y - start.y) / l.1);
     let n = d.0.hypot(d.1);
     if !(n.is_finite() && n > 1e-12) {
-        return vec![a, a];
+        return Vec::new();
     }
     let perp = (-d.1 / n * l.0, d.0 / n * l.1);
     const STEPS: usize = 48;
-    (0..=STEPS)
-        .map(|i| {
-            let t = -1.5 + 3.0 * i as f64 / STEPS as f64;
-            map.screen(Point::new(at.x + perp.0 * t, at.y + perp.1 * t))
-        })
-        .collect()
+    runs((0..=STEPS).map(|i| {
+        let t = -1.5 + 3.0 * i as f64 / STEPS as f64;
+        map.try_screen(Point::new(at.x + perp.0 * t, at.y + perp.1 * t))
+    }))
+}
+
+/// The unbroken runs (two points or more) of a sampled line whose missing samples (`None`) cut it.
+pub(super) fn runs(samples: impl IntoIterator<Item = Option<Pos2>>) -> Vec<Vec<Pos2>> {
+    let mut out: Vec<Vec<Pos2>> = Vec::new();
+    let mut cur: Vec<Pos2> = Vec::new();
+    for s in samples {
+        match s {
+            Some(q) => cur.push(q),
+            None => {
+                if cur.len() >= 2 {
+                    out.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+            }
+        }
+    }
+    if cur.len() >= 2 {
+        out.push(cur);
+    }
+    out
 }
 
 /// Object selections (SAM 3) of the selected mask: each click, green to include, red to exclude
@@ -693,7 +714,8 @@ fn grip_gestures(
     if resp.dragged()
         && let (Some(Gesture::MaskHandle { mask, comp, handle, original_shape }), Some(q)) = (app.gesture.clone(), resp.interact_pointer_pos())
     {
-        let map = &map.for_mask_id(d, Some(mask));
+        // (the live flag: the drag's first frame began the interaction, which put an old mask on the photo)
+        let map = &current_on_photo(app, mask).map_or_else(|| map.for_mask_id(d, Some(mask)), |on| map.for_mask(on));
         let n = map.norm(q);
         let press_origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(q);
         let n0 = map.norm(press_origin);

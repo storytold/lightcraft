@@ -49,10 +49,19 @@ impl CanvasMap {
         }
     }
     pub fn screen(&self, n: Point) -> Pos2 {
+        self.try_screen(n).unwrap_or_else(|| self.place(n))
+    }
+    /// [`Self::screen`], or `None` where the warp can't be undone at `n` (a point a strong
+    /// warp folds away), for drawing that must not join such a point to its neighbours.
+    pub(crate) fn try_screen(&self, n: Point) -> Option<Pos2> {
         let n = match self.warp.as_deref().filter(|_| self.on_photo) {
-            Some((w, ow, oh)) => w.from_source(Point::new(n.x * ow, n.y * oh)).map_or(n, |t| Point::new(t.x / ow, t.y / oh)),
+            Some((w, ow, oh)) => w.from_source(Point::new(n.x * ow, n.y * oh)).map(|t| Point::new(t.x / ow, t.y / oh))?,
             None => n,
         };
+        Some(self.place(n))
+    }
+    /// A point on the displayed frame (normalized) on screen.
+    fn place(&self, n: Point) -> Pos2 {
         let q = self.from_norm.apply(n);
         pos2(self.rect.left() + q.x as f32 / self.k, self.rect.top() + q.y as f32 / self.k)
     }
@@ -464,12 +473,24 @@ mod mask_map_tests {
         let dd = ((end.x - start.x) * sx, (end.y - start.y) * sy);
         let t = |q: Point| ((q.x - start.x) * sx * dd.0 + (q.y - start.y) * sy * dd.1) / (dd.0 * dd.0 + dd.1 * dd.1);
         for (at, want) in [(start, 0.0), (end, 1.0)] {
-            let guide = super::super::masks::linear_guide(&m, start, end, at);
+            let guide: Vec<Pos2> = super::super::masks::linear_guide(&m, start, end, at).concat();
             assert!(guide.len() > 2, "drawn in steps");
-            for g in guide.iter().filter(|g| m.rect.expand(-2.0).contains(**g)) {
+            let inside: Vec<&Pos2> = guide.iter().filter(|g| m.rect.expand(-2.0).contains(**g)).collect();
+            assert!(inside.len() > 2, "the guide crosses the canvas: {}", inside.len());
+            for g in inside {
                 let got = t(m.norm(*g));
                 assert!((got - want).abs() < 1e-3, "{g:?}: band {got}, want {want}");
             }
         }
+    }
+
+    /// A guide is cut where a sample can't go through the warp, so no line joins a warped point
+    /// to an unwarped one (review of #3550).
+    #[test]
+    fn a_guide_breaks_where_the_warp_cant_be_undone() {
+        let (a, b, c) = (pos2(1.0, 1.0), pos2(2.0, 2.0), pos2(3.0, 3.0));
+        let runs = super::super::masks::runs([Some(a), Some(b), None, Some(c), None, None, Some(a), Some(b)]);
+        assert_eq!(runs, vec![vec![a, b], vec![a, b]], "single points are dropped, the rest split");
+        assert!(super::super::masks::runs([None, Some(a), None]).is_empty());
     }
 }

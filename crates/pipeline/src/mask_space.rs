@@ -428,7 +428,7 @@ mod tests {
         s.geometry.rotate = 20.0;
         let frame = Frame::new(300, 200, &s, false);
         let detail = SegMask::from_logits_in(SIDE, &[8.0; SIDE * SIDE], [0.4, 0.4, 0.6, 0.6]);
-        let coarse = SegMask::from_logits(SIDE, &[-8.0; SIDE * SIDE]);
+        let coarse = SegMask::from_logits(SIDE, &[8.0; SIDE * SIDE]);
         let mut m =
             mask(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: Vec::new(), seg: Some(coarse), detail: vec![detail], edge: 0.0 });
         m.on_photo = false;
@@ -436,9 +436,10 @@ mod tests {
         let MaskShape::Object { detail, .. } = &m.components[0].shape else { panic!() };
         let g = SegGrid::new(&detail[0]).unwrap();
         let b = detail[0].bounds().unwrap();
-        // a corner of the new box is outside the turned patch: unselected there, selected inside
+        // a corner of the new box is outside the turned patch: it takes the whole-photo selection
+        // (selected here), not a fixed "unselected"
         let inset = |t: f64| Point::new(b[0] + t * (b[2] - b[0]), b[1] + t * (b[3] - b[1]));
-        assert!(g.logit(inset(0.03)) < 0.0, "{}", g.logit(inset(0.03)));
+        assert!(g.logit(inset(0.03)) > 0.0, "{}", g.logit(inset(0.03)));
         assert!(g.logit(inset(0.5)) > 0.0);
     }
 

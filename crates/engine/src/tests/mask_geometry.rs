@@ -172,3 +172,144 @@ fn a_click_on_an_old_object_mask_goes_onto_the_photo_with_it() {
     let want = frame.for_mask(true).norm_to_mask(p);
     assert!((hint[0].x - want.x).abs() < 1e-9 && (hint[0].y - want.y).abs() < 1e-9, "{hint:?} vs {want:?}");
 }
+
+/// An old mask the photo keeps, when an edit both brings in a mask and changes the geometry (a
+/// preset), goes onto the photo from the photo's settings before the edit, where it rendered; the
+/// mask brought in, from the settings it came with (review of #3550).
+#[test]
+fn a_kept_old_mask_attaches_under_the_settings_before_an_edit_that_adds_one() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let mut d = active_dev(&s);
+    d.geometry.vertical = 30.0;
+    d.geometry.rotate = 5.0;
+    let p = Point::new(0.3, 0.4);
+    let mut kept = radial_at(p);
+    kept.on_photo = false;
+    d.masks = vec![kept];
+    s.catalog.apply(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(d.clone()), label: "Old".into(), edited: None }).unwrap();
+    // the preset: another Transform and a new old mask
+    let mut incoming = d.clone();
+    incoming.geometry.vertical = -20.0;
+    incoming.geometry.rotate = 0.0;
+    let q = Point::new(0.6, 0.6);
+    let mut added = radial_at(q);
+    added.id = 2;
+    added.on_photo = false;
+    incoming.masks.push(added);
+    s.set_develop(id, incoming.clone(), "Preset").unwrap();
+    let now = active_dev(&s);
+    assert!(now.masks.iter().all(|m| m.on_photo));
+    let photo = s.catalog.photo(id).unwrap();
+    let frame = |d: &DevelopSettings| lightcraft_pipeline::geometry::Frame::with_lens(photo.width as usize, photo.height as usize, d, false, None);
+    let at = |m: &Mask| match &m.components[0].shape {
+        MaskShape::Radial { center, .. } => *center,
+        other => panic!("{other:?}"),
+    };
+    let back = frame(&d).for_mask(true).mask_to_norm(at(&now.masks[0]));
+    assert!((back.x - p.x).abs() < 1e-6 && (back.y - p.y).abs() < 1e-6, "the kept mask, from the frame it was drawn on: {back:?}");
+    let back = frame(&incoming).for_mask(true).mask_to_norm(at(&now.masks[1]));
+    assert!((back.x - q.x).abs() < 1e-6 && (back.y - q.y).abs() < 1e-6, "the added mask, from its own: {back:?}");
+}
+
+/// A sync or paste of the Crop group without the Masks group turns the photo: its masks turn with
+/// it, as Rotate does (review of #3550).
+#[test]
+fn masks_turn_with_an_orientation_a_sync_brings() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let mut d = active_dev(&s);
+    let p = Point::new(0.2, 0.3);
+    d.masks = vec![radial_at(p)];
+    s.set_develop(id, d.clone(), "Mask").unwrap();
+    let mut synced = d.clone();
+    synced.orientation = d.orientation.rotated(true);
+    s.set_develop(id, synced, "Sync Settings").unwrap();
+    let (c, a) = centre(&active_dev(&s));
+    assert!((c.x - 0.7).abs() < 1e-9 && (c.y - 0.2).abs() < 1e-9 && a == 110.0, "{c:?} {a}");
+    // Rotate itself still turns them once
+    s.execute("photo.rotateLeft", &json!({})).unwrap();
+    let (c, a) = centre(&active_dev(&s));
+    assert!((c.x - p.x).abs() < 1e-9 && (c.y - p.y).abs() < 1e-9 && a == 20.0, "{c:?} {a}");
+}
+
+/// The change between two orientations is the turn Rotate makes, and none between equal ones.
+#[test]
+fn the_change_between_orientations_is_the_turn_made() {
+    use lightcraft_geom::Orientation;
+    for k in 0..8u8 {
+        let o = Orientation::from_parts(k >= 4, k % 4);
+        assert_eq!(crate::orientation_change(o, o), None);
+        for cw in [true, false] {
+            assert_eq!(crate::orientation_change(o, o.rotated(cw)), Some(Orientation::Normal.rotated(cw)), "{o:?} {cw}");
+        }
+    }
+}
+
+/// An old Object mask with a Transform active, and a click.
+fn old_object_mask() -> (Session, lightcraft_catalog::PhotoId, DevelopSettings, Point) {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let mut d = active_dev(&s);
+    d.geometry.vertical = 30.0;
+    d.geometry.rotate = 5.0;
+    let p = Point::new(0.3, 0.4);
+    d.masks = vec![Mask {
+        id: 1,
+        on_photo: false,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Object { hint: vec![p], exclude: Vec::new(), seg: None, detail: Vec::new(), edge: 0.0 },
+        }],
+        ..Default::default()
+    }];
+    s.catalog.apply(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(d.clone()), label: "Old".into(), edited: None }).unwrap();
+    s.active_mask = Some(1);
+    (s, id, d, p)
+}
+
+/// A click on an old Object mask that lands off the photo (the corrected frame's blank space) is
+/// refused, not moved onto the photo's edge, and leaves the mask as it was (review of #3550).
+#[test]
+fn a_click_off_the_photo_on_an_old_object_mask_is_refused() {
+    let (mut s, id, d, _) = old_object_mask();
+    let photo = s.catalog.photo(id).unwrap();
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(photo.width as usize, photo.height as usize, &d, false, None);
+    let f = frame.for_mask(true);
+    let off = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.0), (0.5, 1.0)]
+        .map(|(x, y)| Point::new(x, y))
+        .into_iter()
+        .find(|p| {
+            let n = f.norm_to_mask(*p);
+            !(n.x.is_finite() && n.y.is_finite()) || n.x < -0.01 || n.x > 1.01 || n.y < -0.01 || n.y > 1.01
+        })
+        .expect("a corner of the transformed frame is off the photo");
+    let e = s.execute("mask.objectPoint", &json!({"x": off.x, "y": off.y})).unwrap_err().to_string();
+    assert!(e.contains("outside the photo"), "{e}");
+    assert_eq!(active_dev(&s).masks, d.masks, "nothing changed");
+}
+
+/// The click on its way to the model is in the mask's coordinates with the stored ones (with a
+/// model folder that looks installed; skipped where the build has no model support).
+#[test]
+fn a_pending_click_on_an_old_object_mask_is_in_the_masks_coordinates() {
+    if !crate::segment::Segmenter::AVAILABLE {
+        lightcraft_testkit::skip!(Model, "built without the segmentation model");
+        return;
+    }
+    let (mut s, id, d, p) = old_object_mask();
+    s.segmenter.background = true;
+    s.segmenter.dir = Some(super::segment::damaged_model("mask-geometry-pending"));
+    let r = s.execute("mask.objectPoint", &json!({"x": 0.6, "y": 0.5})).unwrap();
+    assert_eq!(r["pending"], true);
+    let photo = s.catalog.photo(id).unwrap();
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(photo.width as usize, photo.height as usize, &d, false, None);
+    let f = frame.for_mask(true);
+    let pending = s.segmenter.pending_clicks().expect("the click is pending").clone();
+    assert_eq!(pending.hint.len(), 2);
+    for (got, want) in pending.hint.iter().zip([f.norm_to_mask(p), f.norm_to_mask(Point::new(0.6, 0.5))]) {
+        assert!((got.x - want.x).abs() < 1e-9 && (got.y - want.y).abs() < 1e-9, "{got:?} vs {want:?}");
+    }
+}

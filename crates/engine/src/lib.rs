@@ -1027,14 +1027,25 @@ impl Session {
         // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
         // masks this edit kept, under the photo's settings before it (a geometry edit then moves
         // the photo, not them); masks it brought in (paste, sync, a preset, a history step, a
-        // sidecar), under the settings they came with, where they render now
-        if settings.masks.iter().any(|m| !m.on_photo) {
-            let before = match &self.interaction {
-                Some(i) if i.photo == id => Some(i.original.clone()),
-                _ => self.develop_of(id),
-            };
-            let drawn = before.filter(|b| b.masks == settings.masks).unwrap_or_else(|| Arc::new(settings.clone()));
-            self.attach_masks(id, &drawn, &mut settings);
+        // sidecar), under the settings they came with, where they render now. Kept masks also
+        // turn with an orientation change the edit makes (a sync or paste of the Crop group).
+        let before = match &self.interaction {
+            Some(i) if i.photo == id => Some(i.original.clone()),
+            _ => self.develop_of(id),
+        };
+        let turn = before.as_ref().and_then(|b| orientation_change(b.orientation, settings.orientation));
+        if settings.masks.iter().any(|m| !m.on_photo) || turn.is_some() {
+            let kept_frame = before.as_ref().and_then(|b| self.mask_frame(id, b));
+            let new_frame = self.mask_frame(id, &settings);
+            for m in &mut settings.masks {
+                let kept = before.as_ref().is_some_and(|b| b.masks.contains(m));
+                if let Some(f) = if kept { kept_frame.as_ref() } else { new_frame.as_ref() } {
+                    lightcraft_pipeline::mask_space::attach(m, f);
+                }
+                if let (true, Some(t)) = (kept, turn) {
+                    lightcraft_pipeline::mask_space::turn(m, t);
+                }
+            }
         }
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
@@ -1420,3 +1431,22 @@ mod tests;
 use tests::face_recognize as tests_face_recognize;
 #[cfg(test)]
 use tests::xmp as tests_xmp;
+
+/// The turn or flip that takes orientation `from` to `to` (`None` when they are the same): what the
+/// masks, on the oriented photo, must follow ([`lightcraft_pipeline::mask_space::turn`]).
+pub(crate) fn orientation_change(from: lightcraft_geom::Orientation, to: lightcraft_geom::Orientation) -> Option<lightcraft_geom::Orientation> {
+    use lightcraft_geom::Orientation;
+    if from == to {
+        return None;
+    }
+    let inv = from.inverse();
+    let probes = [(0.2, 0.3), (0.7, 0.1), (0.4, 0.9)];
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+    (0..8u8).map(|k| Orientation::from_parts(k >= 4, k % 4)).find(|t| {
+        probes.iter().all(|&(x, y)| {
+            let (rx, ry) = inv.map(x, y, 1.0, 1.0);
+            let (tx, ty) = from.map(rx, ry, 1.0, 1.0);
+            close(t.map(tx, ty, 1.0, 1.0), to.map(rx, ry, 1.0, 1.0))
+        })
+    })
+}
