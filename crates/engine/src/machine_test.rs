@@ -312,6 +312,10 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
         "{paths?: [file], quick?: bool, apply?: bool = true} — export a few photos (yours, else the demo's) at several numbers side by side, with and without the GPU, and use the fastest; returns the report {summary, lanes, useGpu, gpuJobs, photosPerMin, limit, runs}; in the desktop app it runs in the background (its row in the activity stack, ✕ stops it) and answers {started} at once, the report then in ui.inspect → machineTest.last ({applied, report} or {error}; applied also in ui.settings.machineTest)",
         always, |s, p| {
             const C: &str = "app.testMachine";
+            // (a list or a number read as an empty object would run, and apply, the test)
+            if !(p.is_object() || p.is_null()) {
+                return Err(bad(C, "parameters must be an object"));
+            }
             let paths: Vec<String> = match p.get("paths") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(Value::Array(a)) => a.iter().map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(C, "paths must be file paths"))).collect::<Result<_, _>>()?,
@@ -431,6 +435,11 @@ mod tests {
         for p in [serde_json::json!({"apply": "false"}), serde_json::json!({"quick": "true"}), serde_json::json!({"quick": 1})] {
             let e = s.execute("app.testMachine", &p).unwrap_err().to_string();
             assert!(e.contains("must be true or false"), "{p}: {e}");
+        }
+        // (review of PR #3506) parameters that aren't an object
+        for p in [serde_json::json!([true]), serde_json::json!(false), serde_json::json!("apply")] {
+            let e = s.execute("app.testMachine", &p).unwrap_err().to_string();
+            assert!(e.contains("parameters must be an object"), "{p}: {e}");
         }
         assert!(s.activity.list().iter().all(|t| t.kind != "benchmark"), "no test ran");
     }
