@@ -1,4 +1,5 @@
 use super::albums::MARK_W;
+use super::sections::visible_right;
 use super::{Align2, Icon, LightcraftApp, Rect, Sense, Tokens, paint, pos2, register, vec2};
 
 /// How wide the sidebar's content needs to be, from the widest row of the last frame: rows are
@@ -22,12 +23,30 @@ pub(super) const SCROLL_TO_ROW: &str = "left-scroll-to-row";
 /// removed, they open again.
 pub(super) const LIBFOLDER_REVEALED: &str = "libfolder-revealed";
 
+/// The least of its name a row shows before its count gives way (about three letters and an
+/// ellipsis).
+const MIN_COUNT_NAME_ROOM: f32 = 36.0;
+
 /// A row says how wide it needs to be.
 pub(super) fn note_width(ui: &egui::Ui, w: f32) {
     ui.data_mut(|d| {
         let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::unique("left-content-width-next"), || 0.0);
         *m = m.max(w);
     });
+}
+
+/// Where a row's count (and label dot) go when the visible `edge` leaves too little room for the
+/// name: after the name (at least a bit of it, [`MIN_COUNT_NAME_ROOM`], or all of a shorter name)
+/// and wholly past the edge, never cut in two by it, reached by scrolling sideways. `None` when
+/// they stay at the edge, which a row with room (or with neither count nor dot, which has
+/// nothing to keep whole) always does. A row asks for that much width, drawn or not, so from the
+/// next frame on the content reaches it and the clamp to the row no longer bites; the name's
+/// share is at most what [`row_need`] already asks for, so scrolling to the count never narrows
+/// the content and sends it back.
+fn count_past_edge(label_left: f32, name_w: f32, mark_w: f32, count_w: Option<f32>, has_mark: bool, edge: f32) -> Option<f32> {
+    let w = count_w.unwrap_or(0.0);
+    let after_name = label_left + name_w.min(MIN_COUNT_NAME_ROOM) + 8.0 + mark_w + w + 18.0;
+    (after_name > edge && (count_w.is_some() || has_mark)).then(|| after_name.max(edge + 4.0 + mark_w + w + 18.0))
 }
 
 /// One level of a sidebar tree when the panel has room: callers pass `indent` in these steps.
@@ -175,8 +194,15 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
     let count_color = |n: usize| if n == 0 { t.text_dim.gamma_multiply(0.55) } else { t.text_dim };
     let count_galley = count.filter(|_| app.ui.show_counts).map(|n| ui.painter().layout_no_wrap(n.to_string(), t.font(12.5), count_color(n)));
     let label_left = r.left() + 42.0 + indent;
-    let count_left = count_galley.as_ref().map_or(edge - 18.0, |g| edge - 18.0 - g.size().x);
+    let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
+    let full_w = measure(label);
     // a label's dot sits just before the count
+    let count_w = count_galley.as_ref().map(|g| g.size().x);
+    let past_edge = count_past_edge(label_left, full_w, mark_w, count_w, mark.is_some(), edge);
+    // (held to the row's end only when that ends inside the panel: a row that reaches past the
+    // panel's edge keeps the count wholly past it, not cut by it)
+    let edge = past_edge.map_or(edge, |e| if r.right() < visible_right { e.min(r.right()) } else { e });
+    let count_left = edge - 18.0 - count_w.unwrap_or(0.0);
     if let Some(c) = mark {
         let dot = Rect::from_center_size(pos2(count_left - MARK_W / 2.0, r.center().y), vec2(8.0, 8.0));
         ui.painter().circle_filled(dot.center(), 4.0, c);
@@ -184,18 +210,20 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
     }
     // the name gives way to the count: cut with an ellipsis, in full on hover
     let room = count_left - mark_w - 8.0 - label_left;
-    let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
-    let full_w = measure(label);
     let shown = if full_w <= room { label.to_string() } else { crate::widgets::elide_head(label, room.max(0.0), measure) };
     let label_rect = ui.painter().text(pos2(label_left, r.center().y), Align2::LEFT_CENTER, &shown, font.clone(), color);
     register(ui, format!("label:{id}"), label_rect);
     let resp = if shown != label { resp.on_hover_text(label) } else { resp };
-    note_width(ui, row_need(indent, full_w, mark_w, count_galley.as_ref().map(|g| g.size().x)));
+    let mut needed = row_need(indent, full_w, mark_w, count_galley.as_ref().map(|g| g.size().x));
     if let Some(galley) = count_galley {
         let rect = Rect::from_min_size(pos2(edge - 18.0 - galley.size().x, r.center().y - galley.size().y / 2.0), galley.size());
         register(ui, format!("count:{id}"), rect);
         ui.painter().galley(rect.min, galley, t.text_dim);
     }
+    if let Some(e) = past_edge {
+        needed = needed.max(e - r.left());
+    }
+    note_width(ui, needed);
     resp
 }
 
@@ -216,7 +244,14 @@ pub(super) fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, lab
     let painter = ui.painter();
     let name_w = painter.layout_no_wrap(label.to_string(), t.font(13.5), t.text_label).size().x;
     let count_w = count.filter(|_| app.ui.show_counts).map(|n| painter.layout_no_wrap(n.to_string(), t.font(12.5), t.text_dim).size().x);
-    note_width(ui, row_need(indent, name_w, if mark { MARK_W } else { 0.0 }, count_w));
+    let mark_w = if mark { MARK_W } else { 0.0 };
+    let mut needed = row_need(indent, name_w, mark_w, count_w);
+    // a row that drawn would keep its count past the edge asks for the same width as when drawn
+    let edge = r.right().min(visible_right(ui));
+    if let Some(e) = count_past_edge(r.left() + 42.0 + indent, name_w, mark_w, count_w, mark, edge) {
+        needed = needed.max(e - r.left());
+    }
+    note_width(ui, needed);
     true
 }
 
@@ -229,7 +264,9 @@ fn scroll_asked(ui: &egui::Ui, id: &str) -> bool {
 /// room for its name up to a share of a panel, so one very long name does not make everything
 /// scroll: depth does that.
 fn row_need(indent: f32, name_w: f32, mark_w: f32, count_w: Option<f32>) -> f32 {
-    42.0 + indent + name_w.min(MAX_NAME_NEED) + 18.0 + mark_w + count_w.map_or(0.0, |w| w + 16.0)
+    // (a colour dot with no count keeps the gap after the name that a count's 16 pt includes)
+    let after = count_w.map_or(if mark_w > 0.0 { 8.0 } else { 0.0 }, |w| w + 16.0);
+    42.0 + indent + name_w.min(MAX_NAME_NEED) + 18.0 + mark_w + after
 }
 
 /// The disclosure chevron at the left of a tree row (`indent` is the row's): right-pointing
@@ -246,6 +283,11 @@ fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open
     tr
 }
 
+/// What a disclosure triangle is called: "Expand Travel" / "Collapse Travel".
+pub(crate) fn disclosure_name(open: bool, name: &str) -> String {
+    if open { crate::i18n::tr_format!("Collapse {name}", name = name) } else { crate::i18n::tr_format!("Expand {name}", name = name) }
+}
+
 /// Whether the tree row `key` is open: what the user last chose this session, else `default`.
 pub(super) fn tree_open(ui: &egui::Ui, key: egui::Id, default: bool) -> bool {
     ui.data(|d| d.get_temp(key)).unwrap_or(default)
@@ -259,13 +301,22 @@ pub(super) fn set_tree_open(ui: &egui::Ui, key: egui::Id, open: bool) {
 /// The chevron of a tree row that has rows inside it (Albums' folders, Local, By Date, Folders,
 /// Keywords): a click flips `open` and remembers it under `key`. Returns the chevron's response
 /// (it sits on the row and takes its clicks, so a row's context menu is attached to it too).
-pub(super) fn tree_toggle(ui: &mut egui::Ui, row: &egui::Response, indent: f32, key: egui::Id, open: &mut bool, widget: String) -> egui::Response {
+pub(super) fn tree_toggle(
+    ui: &mut egui::Ui,
+    row: &egui::Response,
+    indent: f32,
+    key: egui::Id,
+    open: &mut bool,
+    widget: String,
+    name: &str,
+) -> egui::Response {
     let tri = disclosure_chevron(ui, row, indent, *open, key.with("triangle"), widget);
     if tri.clicked() {
         *open = !*open;
         set_tree_open(ui, key, *open);
     }
-    let label = if *open { crate::i18n::tr("Collapse") } else { crate::i18n::tr("Expand") };
-    tri.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    // (the name of the row it opens: a screen reader lists the triangles one after another)
+    let label = disclosure_name(*open, name);
+    tri.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
     tri
 }

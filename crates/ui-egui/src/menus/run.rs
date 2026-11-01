@@ -222,9 +222,36 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 app.ui.view = ViewMode::PhotoGrid;
             }
             if let Some(k) = app.ui.keyword_painter.clone() {
+                app.ui.keyword_painter_text = k.clone();
                 app.toast(ctx, crate::i18n::tr_format!("Painting “{k}”: click photos to add or remove it · Esc stops", k = k));
             }
             Ok(json!({"keyword": app.ui.keyword_painter}))
+        }
+        "tool.enablePainting" => {
+            let k = app.ui.keyword_painter_text.trim().to_string();
+            if app.ui.keyword_painter.is_some() {
+                app.ui.keyword_painter = None;
+                Ok(json!({"keyword": null}))
+            } else {
+                // the full-screen preview covers both the grid and the Keywords panel
+                if app.ui.fullscreen {
+                    crate::panels::slideshow::end(app);
+                }
+                if k.is_empty() {
+                    app.ui.right = RightPanel::Keywords;
+                    if app.ui.tool != "wbPicker" {
+                        app.ui.tool.clear();
+                    }
+                    let _ = app.session.end_interaction();
+                    if app.ui.section_folded("keywording") {
+                        app.ui.toggle_folded("keywording");
+                    }
+                    app.toast(ctx, crate::i18n::tr("Type a keyword to paint in the Keywords panel"));
+                    Ok(json!({"keyword": null}))
+                } else {
+                    run_ui_command(app, "tool.keywordPainter", &json!({"keyword": k})).unwrap_or(Ok(Value::Null))
+                }
+            }
         }
         "view.secondWindow" => {
             app.ui.second_window = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.second_window);
@@ -678,6 +705,18 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.thumb_size = (app.ui.thumb_size + step).clamp(crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MAX);
             Ok(json!({"size": app.ui.thumb_size}))
         }
+        "view.importThumbSize" => {
+            // {size?: points}; without a size, read the current preference.
+            let size = match p.get("size") {
+                None => app.ui.import_thumb_size,
+                Some(value) => match value.as_f64().map(|n| n as f32).filter(|n| n.is_finite()) {
+                    Some(size) => size,
+                    None => return Some(Err("view.importThumbSize: size must be a finite number".into())),
+                },
+            };
+            app.ui.import_thumb_size = crate::import::thumb_size(size);
+            Ok(json!({"size": app.ui.import_thumb_size}))
+        }
         "view.navigate" => {
             // {zoom?: "fit"|"fill"|{percent: number}, pan?: [x, y]} (normalized image centre).
             // Validate the complete request before changing either part of the viewport.
@@ -942,6 +981,18 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             panel(app, ctx, RightPanel::Versions, "Versions");
             Ok(Value::Null)
         }
+        "panel.editKeywords" => {
+            // the Keywords panel with its Keyword List open; the keyword picked there opens in
+            // Edit Keyword Tag (with none picked, no dialog opens)
+            if app.ui.right != RightPanel::Keywords {
+                panel(app, ctx, RightPanel::Keywords, "Keywords");
+            }
+            app.ui.folded_sections.retain(|s| s != "keywordList");
+            if let Some(k) = app.ui.keyword_list_selected.clone().filter(|k| app.session.catalog.has_keyword(k)) {
+                app.ui.dialog = Some(crate::panels::keyword_list::edit_dialog(app, &k));
+            }
+            Ok(Value::Null)
+        }
         "panel.activity" => {
             panel(app, ctx, RightPanel::Activity, "History");
             Ok(Value::Null)
@@ -957,6 +1008,9 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             // Return commits a tool panel (crop, remove, red eye, masking): back to Edit
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
+                if app.ui.right == Crop {
+                    app.apply_crop_preview();
+                }
                 let _ = app.session.end_interaction();
                 app.ui.tool.clear();
                 app.ui.right = Edit;
@@ -1320,6 +1374,11 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "dialog.saveMetadataPreset" => {
             // from the active photo's copyright, creator and place
             crate::panels::dialogs::prompt(app, "Save Metadata Preset", "Preset name", "", "metadata.savePreset", json!({}), "name");
+            Ok(Value::Null)
+        }
+        "dialog.keywordShortcut" => {
+            let now = app.session.catalog.keyword_shortcut().join(", ");
+            crate::panels::dialogs::prompt(app, "Set Keyword Shortcut", "Separated by commas", &now, "keyword.setShortcut", json!({}), "keywords");
             Ok(Value::Null)
         }
         "file.findMissing" => file_find_missing_command(app, id, p),
