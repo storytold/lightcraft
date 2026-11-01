@@ -177,6 +177,55 @@ fn panorama_command_with_auto_crop() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #1765: keep source IDs and order, including every exposure of an HDR position.
+/// The first position has no features. The other two overlap. Check preview and final output.
+#[test]
+fn panorama_reports_omitted_source_photos() {
+    for bracket in [1, 2] {
+        let dir = temp_dir(&format!("1765-{bracket}"));
+        let mut images = vec![lightcraft_raster::Rgb32f::from_fn(400, 300, |_, _| [0.2; 3])];
+        images.extend(lightcraft_merge::synth::pano_views(400, 300, 350.0, &[-15.0, 15.0]).unwrap());
+        let mut paths = Vec::new();
+        for (i, image) in images.iter().enumerate() {
+            for exposure in 0..bracket {
+                let img = image.map(|p| p.map(|v| v * (1.0 + exposure as f32 * 0.1))).to_srgb8();
+                let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+                let path = dir.join(format!("position-{i}-exposure-{exposure}.png"));
+                std::fs::write(&path, png).unwrap();
+                paths.push(path.to_string_lossy().to_string());
+            }
+        }
+        if let Ok(dump) = std::env::var("LC_MERGE_DUMP") {
+            let dest = std::path::Path::new(&dump).join(format!("1765-{bracket}"));
+            std::fs::create_dir_all(&dest).unwrap();
+            for path in &paths {
+                std::fs::copy(path, dest.join(std::path::Path::new(path).file_name().unwrap())).unwrap();
+            }
+        }
+        let mut s = Session::new().with_fs();
+        let ids = import(&mut s, paths.clone());
+        let cmd = if bracket == 1 { "merge.panorama" } else { "merge.hdrPanorama" };
+        for preview in [true, false] {
+            let r = s.execute(cmd, &json!({"ids": ids, "bracket": bracket, "align": false, "autoSettings": false, "preview": preview})).unwrap();
+            assert_eq!(r["used"], json!(ids[bracket..]), "{r}");
+            let omitted = r["omitted"].as_array().expect("explicit omitted photos");
+            assert_eq!(omitted.len(), bracket);
+            for (i, entry) in omitted.iter().enumerate() {
+                assert_eq!(entry["id"], ids[i]);
+                assert_eq!(entry["path"], paths[i]);
+                assert_eq!(entry["reason"], "notRegistered");
+            }
+            let pairs = r["pairs"].as_array().expect("pair verification diagnostics");
+            assert_eq!(pairs.len(), 3);
+            assert_eq!(pairs[0]["a"], json!(ids[..bracket]));
+            assert_eq!(pairs[0]["b"], json!(ids[bracket..2 * bracket]));
+            assert_eq!(pairs[0]["status"], "insufficientMatches");
+            assert_eq!(pairs[2]["status"], "accepted");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// HDR for Each Bracket Set: two stacks of brackets → two merged DNGs, each next to its first photo; photos that form
 /// no set are refused.
 #[test]
