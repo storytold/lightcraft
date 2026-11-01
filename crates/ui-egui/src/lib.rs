@@ -359,6 +359,9 @@ pub struct LightcraftApp {
     export_tuning_applied: Option<machine_test::Tuning>,
     /// "Test my machine" while it runs (Settings ▸ Performance).
     pub machine: Option<machine_test::MachineTask>,
+    /// How the last test ended (`ui.inspect` → `machineTest.last`): its report and whether it was
+    /// applied, or why it stopped; kept also when `app.testMachine {apply: false}` only reports.
+    pub machine_last: Option<serde_json::Value>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
     /// The display profile setting last applied (`app.displayProfile`).

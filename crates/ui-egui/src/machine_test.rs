@@ -66,22 +66,40 @@ pub fn adopt(st: &mut AppSettings, r: &MachineReport) {
     st.machine_test = Some(r.clone());
 }
 
-/// Raw photos of the library to test with (the newest few that are on disk): the user's own
-/// camera's decode is part of an export. Empty: the test uses the demo photos.
-fn sample_paths(app: &LightcraftApp, n: usize) -> Vec<String> {
+/// Raw photos of the library the test may use, newest last, at most [`CANDIDATES`]: no file is
+/// looked at here, on the UI thread (a library on a slow or gone network share would hold the
+/// window); [`on_disk`] picks those that are there, on the test's thread.
+fn sample_candidates(app: &LightcraftApp) -> Vec<String> {
     let mut v: Vec<String> = app
         .session
         .catalog
         .photos()
         .filter(|p| p.kind == lightcraft_engine::catalog::MediaKind::Raw)
         .filter_map(|p| match &p.source {
-            lightcraft_engine::catalog::Source::File { path } if std::path::Path::new(path).is_file() => Some(path.clone()),
+            lightcraft_engine::catalog::Source::File { path } => Some(path.clone()),
             _ => None,
         })
         .collect();
-    let keep = v.len().saturating_sub(n);
+    let keep = v.len().saturating_sub(CANDIDATES);
     v.drain(..keep);
     v
+}
+
+/// Library photos the test considers (the newest ones).
+const CANDIDATES: usize = 64;
+
+/// The newest `n` of `candidates` (newest last) that are files on disk, in their order: the user's
+/// own camera's decode is part of an export. Empty: the test uses the demo photos.
+fn on_disk(candidates: Vec<String>, n: usize, is_file: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut v: Vec<String> = candidates.into_iter().rev().filter(|p| is_file(p)).take(n).collect();
+    v.reverse();
+    v
+}
+
+/// The photos a test runs on: the caller's, or the library's newest (checked on the test's thread).
+enum Photos {
+    Given(Vec<String>),
+    Library(Vec<String>),
 }
 
 /// Whether a test is running: the app's, or one a control request (`app.testMachine`) started.
@@ -98,7 +116,8 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
 /// `app.testMachine {paths?, quick?, apply?}` in the desktop app: the test of the Settings button,
 /// on its thread with its row (✕ stops it), never on the UI thread, which would hold the window
 /// for minutes. It answers at once; the report goes into `settings.machineTest` (unless `apply` is
-/// false) and the toast, and `ui.inspect` → `activity` shows the test running.
+/// false) and the toast, and `ui.inspect` → `machineTest` shows the test running, then how it
+/// ended (`last`: the report and whether it was applied, also with `apply: false`).
 pub fn command(app: &mut LightcraftApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
     const C: &str = "app.testMachine";
     let paths: Option<Vec<String>> = match p.get("paths") {
@@ -108,10 +127,15 @@ pub fn command(app: &mut LightcraftApp, p: &serde_json::Value) -> Result<serde_j
         }
         Some(_) => return Err(format!("{C}: paths must be a list of file paths")),
     };
-    let flag = |k: &str, d: bool| p.get(k).and_then(serde_json::Value::as_bool).unwrap_or(d);
-    start_with(app, paths, flag("quick", false), flag("apply", true)).map_err(|e| format!("{C}: {e}"))?;
+    // (a value that isn't true or false is refused: `"false"` read as absent would apply the test)
+    let flag = |k: &str, d: bool| match p.get(k) {
+        None | Some(serde_json::Value::Null) => Ok(d),
+        Some(v) => v.as_bool().ok_or(format!("{C}: {k} must be true or false")),
+    };
+    let (quick, apply) = (flag("quick", false)?, flag("apply", true)?);
+    start_with(app, paths, quick, apply).map_err(|e| format!("{C}: {e}"))?;
     Ok(
-        serde_json::json!({"started": true, "note": "the test runs in the background: ui.inspect → activity shows it, ui.settings.machineTest holds its report"}),
+        serde_json::json!({"started": true, "note": "the test runs in the background: ui.inspect → machineTest shows it running, then its report (machineTest.last)"}),
     )
 }
 
@@ -122,13 +146,20 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
     if app.export.is_some() {
         return Err(crate::i18n::tr("Wait for the export to finish, then test this computer").to_string());
     }
-    let paths = paths.unwrap_or_else(|| sample_paths(app, 4));
+    let photos = match paths {
+        Some(v) => Photos::Given(v),
+        None => Photos::Library(sample_candidates(app)),
+    };
     let guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
     let cancel = guard.cancel_flag();
     let row = guard.handle();
     let (tx, rx) = channel();
     let stop = cancel.clone();
     let work = move || {
+        let paths = match photos {
+            Photos::Given(v) => v,
+            Photos::Library(c) => on_disk(c, 4, |p| std::path::Path::new(p).is_file()),
+        };
         let r = run(paths, quick, stop, &mut |done, total, what| {
             row.progress(done as u64, total as u64);
             row.detail(what);
@@ -176,6 +207,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the test stopped unexpectedly".into()),
     };
     app.machine = None;
+    app.machine_last = Some(match &r {
+        Ok(report) => serde_json::json!({"applied": apply_it, "report": report}),
+        Err(e) => serde_json::json!({"applied": false, "error": e}),
+    });
     match r {
         Ok(report) => {
             if apply_it {
@@ -285,6 +320,10 @@ mod tests {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
         let ctx = egui::Context::default();
         assert!(command(&mut app, &serde_json::json!({"paths": "x"})).is_err());
+        // a flag that isn't true or false is refused, not read as absent ("false" would apply it)
+        let e = command(&mut app, &serde_json::json!({"apply": "false"})).unwrap_err();
+        assert!(e.contains("apply must be true or false"), "{e}");
+        assert!(command(&mut app, &serde_json::json!({"quick": 1})).is_err());
         assert!(!running(&app), "nothing started");
         let t = std::time::Instant::now();
         let r = crate::menus::run_ui_command(&mut app, "app.testMachine", &serde_json::json!({"quick": true, "apply": false}))
@@ -302,6 +341,43 @@ mod tests {
         }
         assert!(app.machine.is_none(), "stopped");
         assert!(app.ui.settings.machine_test.is_none(), "a stopped test changes nothing");
+        let last = crate::control::inspect(&app, &ctx)["machineTest"].clone();
+        assert_eq!((last["running"].as_bool(), last["last"]["applied"].as_bool()), (Some(false), Some(false)), "{last}");
+        assert!(last["last"]["error"].is_string(), "{last}");
+    }
+
+    /// Review of PR #3499: `app.testMachine {apply: false}` keeps its report where the caller can
+    /// read it (`ui.inspect` → `machineTest.last`), and the settings stay as they were.
+    #[test]
+    fn a_report_that_is_not_applied_is_kept() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let ctx = egui::Context::default();
+        let (tx, rx) = channel();
+        let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        app.machine = Some(MachineTask { rx, _guard, apply: false });
+        let report = MachineReport { lanes: 5, gpu_jobs: 2, summary: "Exports about 9 photos a minute".into(), ..Default::default() };
+        tx.send(Ok(report.clone())).unwrap();
+        poll(&mut app, &ctx);
+        assert!(app.machine.is_none());
+        assert!(app.ui.settings.machine_test.is_none(), "only reported");
+        let last = crate::control::inspect(&app, &ctx)["machineTest"]["last"].clone();
+        assert_eq!(last["applied"], false, "{last}");
+        assert_eq!(serde_json::from_value::<MachineReport>(last["report"].clone()).ok(), Some(report), "{last}");
+    }
+
+    /// Review of PR #3499: the library's photos are looked at on the test's thread, newest first,
+    /// and only as many as the test needs.
+    #[test]
+    fn the_newest_photos_on_disk_are_tested() {
+        let c: Vec<String> = (1..=6).map(|i| format!("p{i}.nef")).collect();
+        let looked = std::cell::RefCell::new(Vec::new());
+        let gone = |p: &str| {
+            looked.borrow_mut().push(p.to_string());
+            p != "p5.nef"
+        };
+        assert_eq!(on_disk(c.clone(), 3, gone), ["p3.nef", "p4.nef", "p6.nef"]);
+        assert_eq!(*looked.borrow(), ["p6.nef", "p5.nef", "p4.nef", "p3.nef"], "it stops once it has enough");
+        assert!(on_disk(c, 4, |_| false).is_empty(), "none there: the demo photos");
     }
 
     /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would
