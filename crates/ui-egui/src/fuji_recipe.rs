@@ -79,6 +79,9 @@ impl Recipes {
     /// A relink may replace a file without changing its key. Its old worker must not refill the cache.
     pub(crate) fn forget(&mut self, key: &RecipeKey) {
         self.entries.retain(|(old, _)| old != key);
+        if self.wanted.as_ref() == Some(key) {
+            self.wanted = None;
+        }
         if self.inflight.as_ref() == Some(key) {
             self.discard_inflight = true;
         }
@@ -388,6 +391,24 @@ mod tests {
         }
         assert!(matches!(cache.plan(1, &photo(1, "C:/old.jpg", "JPEG"), 1.0), Plan::Start(_)));
         assert!(matches!(cache.plan(2, &photo(10, "C:/0.jpg", "JPEG"), 1.0), Plan::Hidden));
+    }
+
+    #[test]
+    fn forget_drops_only_a_queued_read_of_that_file() {
+        let mut cache = Recipes::default();
+        let busy = photo(1, "C:/busy.jpg", "JPEG");
+        let waiting = photo(2, "C:/waiting.jpg", "JPEG");
+        let kb = key(1, &busy);
+        assert!(cache.reserve(&kb));
+        assert!(matches!(cache.plan(1, &waiting, 0.0), Plan::Wait));
+        cache.forget(&key(1, &photo(3, "C:/other.jpg", "JPEG")));
+        let next = cache.finish(&kb, Ok(Some(recipe("Acros"))), 1, 1.0).expect("another file stays queued");
+        assert_eq!(next, key(1, &waiting));
+
+        assert!(cache.reserve(&kb));
+        assert!(matches!(cache.plan(1, &waiting, 2.0), Plan::Wait));
+        cache.forget(&key(1, &waiting));
+        assert!(cache.finish(&kb, Ok(Some(recipe("Acros"))), 1, 3.0).is_none(), "a relinked file must not restart from the old queue");
     }
 
     #[test]
