@@ -274,6 +274,29 @@ impl Drop for Scopes {
     }
 }
 
+/// A buffer holding `contents` (zero-padded to the copy alignment), written through the queue. Not
+/// `create_buffer_init`: it maps the new buffer, and mapping one that couldn't be allocated (out of
+/// device memory) panics inside wgpu instead of raising the error the product's scopes catch (as
+/// `ctx::Gpu::init_buffer`, issue #1764), which gave the GPU up for the session.
+fn upload(d: &Dev, label: &'static str, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    let align = wgpu::COPY_BUFFER_ALIGNMENT as usize;
+    let size = contents.len().max(align).next_multiple_of(align);
+    let buf = d.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: size as u64,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if size == contents.len() {
+        d.queue.write_buffer(&buf, 0, contents);
+    } else {
+        let mut padded = contents.to_vec();
+        padded.resize(size, 0);
+        d.queue.write_buffer(&buf, 0, &padded);
+    }
+    buf
+}
+
 fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dyn Fn() -> Option<Vec<f32>>) -> Result<Vec<f32>, String> {
     let d = dev_for_work()?;
     let _work = crate::exit::enter().ok_or("LightCraft is closing")?;
@@ -308,29 +331,15 @@ fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dy
             cache.weights.clear();
             cache.bytes = 0;
         }
-        use wgpu::util::DeviceExt;
-        let buf = d.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("gemm weights"),
-            contents: bytemuck::cast_slice(&w),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let buf = upload(d, "gemm weights", bytemuck::cast_slice(&w), wgpu::BufferUsages::STORAGE);
         if let Some((old, ..)) = cache.weights.insert(key, (buf, k, n)) {
             cache.bytes = cache.bytes.saturating_sub(old.size());
         }
         cache.bytes = cache.bytes.saturating_add(w_bytes);
     }
     let (wbuf, ..) = cache.weights.get(&key).ok_or("weights missing")?;
-    use wgpu::util::DeviceExt;
-    let abuf = d.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("gemm a"),
-        contents: bytemuck::cast_slice(a),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
-    let ubuf = d.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("gemm dims"),
-        contents: bytemuck::bytes_of(&dims),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let abuf = upload(d, "gemm a", bytemuck::cast_slice(a), wgpu::BufferUsages::STORAGE);
+    let ubuf = upload(d, "gemm dims", bytemuck::bytes_of(&dims), wgpu::BufferUsages::UNIFORM);
     let cbuf = d.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("gemm c"),
         size: c_bytes,
