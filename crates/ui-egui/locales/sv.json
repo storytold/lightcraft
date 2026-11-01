@@ -792,6 +792,8 @@
   "Find Duplicate Photos…": "Sök efter dubblettfoton…",
   "Keep": "Behåll",
   "Looking for duplicate photos…": "Söker efter dubblettfoton…",
+  "Find": "Sök",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Strikt hittar samma bild i annan storlek eller komprimering; Lös tar även lätt redigerade. Sök går igenom hela biblioteket.",
   "Strict": "Strikt",
   "Normal": "Normal",
   "Loose": "Lös",

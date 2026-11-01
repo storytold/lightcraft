@@ -565,6 +565,8 @@
   "Find Duplicate Photos…": "Buscar fotos duplicadas…",
   "Keep": "Conservar",
   "Looking for duplicate photos…": "Buscando fotos duplicadas…",
+  "Find": "Buscar",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Estricta encuentra la misma foto en otro tamaño o compresión; Amplia también con ediciones leves. Buscar recorre toda la biblioteca.",
   "Strict": "Estricta",
   "Normal": "Normal",
   "Loose": "Amplia",

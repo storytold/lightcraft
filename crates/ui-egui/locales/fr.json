@@ -530,6 +530,8 @@
   "Find Duplicate Photos…": "Rechercher les photos en double…",
   "Keep": "Conserver",
   "Looking for duplicate photos…": "Recherche des photos en double…",
+  "Find": "Rechercher",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Stricte trouve la même image à une autre taille ou compression ; Large accepte aussi de légères retouches. Rechercher parcourt toute la bibliothèque.",
   "Strict": "Stricte",
   "Normal": "Normale",
   "Loose": "Large",

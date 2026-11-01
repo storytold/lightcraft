@@ -695,6 +695,8 @@
   "Find Duplicate Photos…": "查找重复照片…",
   "Keep": "保留",
   "Looking for duplicate photos…": "正在查找重复照片…",
+  "Find": "查找",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "“严格”找出同一张照片的不同尺寸或压缩版本；“宽松”也包括轻微编辑。查找会遍历整个图库。",
   "Strict": "严格",
   "Normal": "正常",
   "Loose": "宽松",

@@ -741,6 +741,8 @@
   "Find Duplicate Photos…": "Cari foto duplikat…",
   "Keep": "Simpan",
   "Looking for duplicate photos…": "Mencari foto duplikat…",
+  "Find": "Cari",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Ketat menemukan foto yang sama dalam ukuran atau kompresi lain; Longgar juga menerima suntingan ringan. Cari memeriksa seluruh pustaka.",
   "Strict": "Ketat",
   "Normal": "Normal",
   "Loose": "Longgar",

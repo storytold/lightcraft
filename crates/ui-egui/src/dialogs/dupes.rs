@@ -1,8 +1,9 @@
-//! Photo ▸ Find Duplicate Photos…: the review window. It starts the engine's finder (`library.findDuplicates`, with
-//! the view and selection left alone), shows the run's progress, then every group with a thumbnail per photo, the
-//! finder's keeper ticked and the others unticked with why they lose. Strict / Normal / Loose and "same moment only"
-//! run the finder again (the hashes are kept, so that is quick). The confirm, "Delete N Photos", moves the unticked
-//! photos to Recently Deleted through `photo.delete` (one undo step); any tick can be changed first.
+//! Photo ▸ Find Duplicate Photos…: the review window. It opens with its settings — Strict / Normal / Loose and "same
+//! moment only" — and waits; Find starts the engine's finder (`library.findDuplicates`, with the view and selection
+//! left alone) and locks the settings, the window shows the run's progress, then every group with a thumbnail per
+//! photo, the finder's keeper ticked and the others unticked with why they lose. The confirm, "Delete N Photos",
+//! moves the unticked photos to Recently Deleted through `photo.delete` (one undo step); any tick can be changed
+//! first. Another search with other settings is another opening of the window (the hashes are kept, so it is quick).
 
 use egui::{Color32, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -24,26 +25,28 @@ const MAX_WIDTH: f32 = 1180.0;
 /// The strictness choices: bits of hash distance.
 const STRICTNESS: [(&str, u32); 3] = [("Strict", 2), ("Normal", 6), ("Loose", 10)];
 
-/// `dialog.findDuplicates`: open the window and start the finder.
+/// `dialog.findDuplicates`: open the window with its settings; nothing runs until Find is pressed.
 pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
-    let mut dlg =
-        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: crate::state::default_distance(), same_moment: true };
-    search(app, &mut dlg);
-    app.ui.dialog = Some(dlg);
+    app.ui.dialog = Some(Dialog::Duplicates {
+        groups: Vec::new(),
+        done: false,
+        photos: 0,
+        error: None,
+        distance: crate::state::default_distance(),
+        same_moment: true,
+        started: false,
+    });
     Ok(Value::Null)
 }
 
-/// Run the finder with the window's strictness; the window shows progress until it ends.
+/// Find: run the finder with the window's settings and lock them; the window shows progress until it ends.
 fn search(app: &mut LightcraftApp, dlg: &mut Dialog) {
-    let Dialog::Duplicates { groups, done, error, distance, same_moment, .. } = dlg else { return };
+    let Dialog::Duplicates { groups, done, error, distance, same_moment, started, .. } = dlg else { return };
     groups.clear();
     *done = false;
     *error = None;
-    // (`replace`: a run still going starts over with these settings; the hashes it made are kept, so little is lost)
-    match app.run(
-        "library.findDuplicates",
-        json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false, "replace": true}),
-    ) {
+    *started = true;
+    match app.run("library.findDuplicates", json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false})) {
         // (nothing to render and no worker: the result came at once)
         Ok(r) => {
             if let Some(last) = r.get("last").filter(|l| !l.is_null()) {
@@ -110,13 +113,17 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     let width = (ui.ctx().content_rect().width() - 160.0).clamp(560.0, MAX_WIDTH);
     ui.set_min_width(width);
     ui.set_max_width(width);
-    if controls(app, ui, t, dlg) {
+    if controls(ui, t, dlg) {
         search(app, dlg);
     }
     ui.add_space(6.0);
-    if matches!(dlg, Dialog::Duplicates { done: false, .. }) {
-        progress(app, ui, t, dlg);
-        return;
+    match dlg {
+        Dialog::Duplicates { started: false, .. } => return,
+        Dialog::Duplicates { done: false, .. } => {
+            progress(app, ui, t, dlg);
+            return;
+        }
+        _ => {}
     }
     let Dialog::Duplicates { groups, photos, error, .. } = dlg else { return };
     if let Some(e) = error {
@@ -171,31 +178,44 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     });
 }
 
-/// The strictness and same-moment controls, live at any time (a change while the finder runs starts it over with the
-/// new settings, keeping the hashes made so far). `true` when a new search is asked for.
-fn controls(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
-    let Dialog::Duplicates { distance, same_moment, .. } = dlg else { return false };
-    let mut again = false;
+/// The strictness and same-moment settings and the Find button. The settings can be changed until Find is pressed
+/// and are shown locked from then on. `true` when Find was pressed.
+fn controls(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
+    let Dialog::Duplicates { distance, same_moment, started, .. } = dlg else { return false };
+    let mut find = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Match")).color(t.text_label));
         for (label, bits) in STRICTNESS {
             // (`text_button` translates the label itself)
-            let r = crate::widgets::text_button(ui, &format!("dupes:{}", label.to_ascii_lowercase()), label, *distance == bits);
-            if r.clicked() && *distance != bits {
+            let r = ui
+                .add_enabled_ui(!*started, |ui| {
+                    crate::widgets::text_button(ui, &format!("dupes:{}", label.to_ascii_lowercase()), label, *distance == bits)
+                })
+                .inner;
+            if r.clicked() && !*started {
                 *distance = bits;
-                again = true;
             }
         }
         ui.add_space(12.0);
-        let r = ui.checkbox(same_moment, crate::i18n::tr("Same moment only"));
+        let r = ui.add_enabled(!*started, egui::Checkbox::new(same_moment, crate::i18n::tr("Same moment only")));
         crate::widgets::register(ui, "check:dupesSameMoment", r.rect);
-        if r.changed() {
-            again = true;
-        }
         r.on_hover_text(crate::i18n::tr("Copies keep the original's capture time; the next frame of a burst has its own."));
-        let _ = app;
+        if !*started {
+            ui.add_space(12.0);
+            if crate::button::Button::new("Find").primary().widget("button:dupesFind").min_width(96.0).show(ui).clicked() {
+                find = true;
+            }
+        }
     });
-    again
+    if !*started {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.",
+            ))
+            .color(t.text_dim),
+        );
+    }
+    find
 }
 
 /// While the finder runs: its progress, from the engine's pump (the frame loop drives the job at full pace while
@@ -293,8 +313,17 @@ mod tests {
     const T: Duration = Duration::from_secs(20);
     const SETTLE: Duration = Duration::from_secs(120);
 
+    /// A window whose Find was pressed and whose run is still going.
     fn fresh() -> Dialog {
-        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: 6, same_moment: true }
+        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: 6, same_moment: true, started: true }
+    }
+
+    /// Press Find and wait for the run to end.
+    fn find_and_wait(h: &mut Headless) {
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesFind"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        wait_done(h);
     }
 
     /// A smooth procedural picture of `seed`, drawn in normalized coordinates so every size shows the same picture.
@@ -350,9 +379,10 @@ mod tests {
         h.step();
     }
 
+    /// Open the window, press Find with its default settings and wait for the run to end.
     fn open_and_wait(h: &mut Headless) {
         h.app.run("dialog.findDuplicates", json!({})).expect("opens");
-        wait_done(h);
+        find_and_wait(h);
     }
 
     /// The window lists the group with the finder's keeper ticked, the confirm counts the unticked photos, a tick
@@ -387,24 +417,37 @@ mod tests {
         assert_eq!(h.app.session.visible_cloned().len(), 3, "the view was never filtered by the window");
     }
 
-    /// Strict (2 bits) and Normal (6) search again from the kept hashes; the strictness buttons and the same-moment
-    /// box are on screen and change the window's state.
+    /// The window opens with its settings and runs nothing; Strict and the same-moment box can be changed until Find
+    /// is pressed, Find runs with them, and after that they are locked.
     #[test]
-    fn the_strictness_controls_search_again() {
-        let (mut h, _) = app_with_duplicates("strict");
-        open_and_wait(&mut h);
-        assert_eq!(groups(&h).len(), 1);
+    fn the_settings_are_chosen_before_find_and_locked_after() {
+        let (mut h, _) = app_with_duplicates("settings");
+        h.app.run("dialog.findDuplicates", json!({})).expect("opens");
+        h.step();
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { started: false, done: false, .. })), "{:?}", h.app.ui.dialog);
+        assert!(h.app.session.activity.list().is_empty(), "nothing runs before Find");
         let r = h.request("ui.clickWidget", json!({"id": "button:dupes:strict"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        wait_done(&mut h);
-        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { distance: 2, .. })), "{:?}", h.app.ui.dialog);
-        // the planted copies are 0–2 bits apart, so Strict still finds them, and nothing was rendered again
-        assert_eq!(groups(&h).len(), 1);
         let r = h.request("ui.clickWidget", json!({"id": "check:dupesSameMoment"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        wait_done(&mut h);
-        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { same_moment: false, .. })), "{:?}", h.app.ui.dialog);
+        h.step();
+        assert!(
+            matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { started: false, distance: 2, same_moment: false, .. })),
+            "{:?}",
+            h.app.ui.dialog
+        );
+        assert!(h.app.session.activity.list().is_empty(), "still nothing runs");
+        find_and_wait(&mut h);
+        // the planted copies are 0–2 bits apart, so Strict finds them
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { started: true, distance: 2, same_moment: false, .. })));
         assert_eq!(groups(&h).len(), 1);
+        // locked: the Find button is gone and the settings don't take a click
+        assert!(!h.app.widgets.iter().any(|(w, _)| w == "button:dupesFind"), "Find is gone once pressed");
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupes:loose"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { distance: 2, .. })), "{:?}", h.app.ui.dialog);
     }
 
     /// A run that was stopped says so instead of "no duplicates", and offers nothing to delete.

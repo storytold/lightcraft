@@ -800,6 +800,8 @@
   "Find Duplicate Photos…": "დუბლიკატი ფოტოების მოძებნა…",
   "Keep": "დატოვება",
   "Looking for duplicate photos…": "დუბლიკატი ფოტოები იძებნება…",
+  "Find": "ძებნა",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "მკაცრი პოულობს იმავე ფოტოს სხვა ზომით ან შეკუმშვით; თავისუფალი — მსუბუქი რედაქტირებითაც. ძებნა მთელ ბიბლიოთეკას ათვალიერებს.",
   "Strict": "მკაცრი",
   "Normal": "ჩვეულებრივი",
   "Loose": "თავისუფალი",

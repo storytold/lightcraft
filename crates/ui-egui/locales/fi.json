@@ -736,6 +736,8 @@
   "Find Duplicate Photos…": "Etsi kaksoiskappaleet…",
   "Keep": "Säilytä",
   "Looking for duplicate photos…": "Etsitään kaksoiskappaleita…",
+  "Find": "Etsi",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Tiukka löytää saman kuvan toisessa koossa tai pakkauksessa; Väljä myös kevyesti muokattuna. Etsi käy läpi koko kirjaston.",
   "Strict": "Tiukka",
   "Normal": "Normaali",
   "Loose": "Väljä",
