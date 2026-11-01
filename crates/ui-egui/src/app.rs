@@ -129,6 +129,7 @@ impl LightcraftApp {
             last_screen: egui::Vec2::ZERO,
             export_tuning_applied: None,
             machine: None,
+            machine_last: None,
             memory_applied: None,
             display_applied: None,
             display_error: None,
