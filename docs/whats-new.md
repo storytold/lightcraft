@@ -954,6 +954,10 @@
   ⇧-click and the line tapers from the old values to the new ones. The whole line is one undo step.
   `mask.brushStroke {connect: true}` does the same for agents.
 
+- Import ▸ Move (and a move to another volume) now writes the new file's folder entry to disk before it removes the
+  original, and keeps the original when that fails (issue #1501). The copy's contents were already synced, but not
+  the name in its folder, so a crash right after the move could in principle keep the deletion and lose the copy.
+
 ### Local folders you browse are kept
 - Browsing a folder under Local now records it as browsed, so the photos in folders you use aren't forgotten after
   the number of days set in Settings → Performance. Only the `library.browse` command recorded it before, so a
