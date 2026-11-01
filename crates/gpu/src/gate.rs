@@ -346,6 +346,41 @@ mod tests {
         set_limits(None, None);
     }
 
+    /// Review of PR #3530 (a starvation bound): while the view renders back to back, at 60 frames
+    /// a second, work prepared ahead still gets the GPU in the gaps between its renders. A view
+    /// render's turn given back wakes the batch renders waiting.
+    #[test]
+    fn work_prepared_ahead_gets_the_gaps_between_view_renders() {
+        let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        set_limits(Some(10 << 30), None);
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_view = done.clone();
+        let view = std::thread::spawn(move || {
+            let t = Instant::now();
+            // a 10 ms render every 16 ms frame, for at most 3 s
+            while !stop_view.load(Ordering::SeqCst) && t.elapsed() < Duration::from_secs(3) {
+                let p = enter(1 << 20, 0, &|| false);
+                std::thread::sleep(Duration::from_millis(10));
+                drop(p);
+                std::thread::sleep(Duration::from_millis(6));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        let t = Instant::now();
+        let mut waits = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            let p = as_batch(|| enter(1 << 20, 0, &|| t.elapsed() > Duration::from_secs(2)));
+            assert!(p.is_some(), "a batch render got no turn in 2 s of view renders");
+            waits.push(started.elapsed());
+            drop(p);
+        }
+        done.store(true, Ordering::SeqCst);
+        view.join().unwrap();
+        assert!(waits.iter().all(|w| *w < Duration::from_millis(500)), "each waits about a frame at most: {waits:?}");
+        set_limits(None, None);
+    }
+
     #[test]
     fn a_turn_is_taken_only_when_free() {
         let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
