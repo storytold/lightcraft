@@ -416,10 +416,21 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     }
                     u.collapsed_sidebar.clear();
                     u.toast = app.ui.toast.clone();
+                    // the panel a tool panel took the place of, to put back when it closes, survives a ui.set
+                    u.tool_return = app.ui.tool_return;
+                    u.right_seen = app.ui.right_seen;
+                    // (and what a panel toggle replaced, so pressing its key again still puts that back)
+                    u.toggle_return = app.ui.toggle_return.clone();
+                    u.right_shown_by_f8 = app.ui.right_shown_by_f8;
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
+                    let right_changed = u.right != app.ui.right;
                     crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());
                     app.ui = u;
+                    if right_changed {
+                        // noted now, as a command does: the next request may open a tool before a frame is drawn
+                        app.ui.note_right();
+                    }
                     crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())

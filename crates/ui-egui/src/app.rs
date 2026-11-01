@@ -194,6 +194,15 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        let r = self.dispatch(id, params);
+        // the panel a command left on show is noted now, not at the next frame, success or not: the next command
+        // of the same frame (a script, queued shortcuts) sees it (Close Panel, B, Done = the column stays hidden)
+        self.ui.note_right();
+        r
+    }
+
+    /// The command itself, for [`LightcraftApp::run_typed`].
+    fn dispatch(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }
