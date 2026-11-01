@@ -432,6 +432,107 @@ fn chroma_curve_follows_highlight_bleaching() {
     assert!(b < 0.5 * a, "highlight error {a:.4} -> {b:.4}");
 }
 
+/// Issue #2022: a camera that bleaches bright near-neutrals toward white but keeps bright saturated
+/// yellows. One chroma curve for every colour, fitted mostly on the many near-neutrals, bleached the
+/// yellows as much; the chroma table keys on colourfulness too, so the yellows keep the camera's
+/// colour, the near-neutrals still bleach like the camera's, and greys stay exactly grey.
+#[test]
+fn chroma_table_keeps_saturated_yellows_and_bleaches_near_neutrals() {
+    let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    let near_neutral_chroma = |o: f32| 1.2 - 0.9 * o;
+    let mut sensor = Rgb32f::new(96, 64);
+    let mut reference = sensor.clone();
+    for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        let ev = 0.02 + (i % 37) as f32 * 0.02;
+        let yellow = i % 5 == 0;
+        *src = if yellow {
+            [ev * (0.95 + (i % 7) as f32 * 0.02), ev * 0.85, ev * (0.12 + (i % 3) as f32 * 0.02)]
+        } else {
+            [ev * (0.85 + (i % 11) as f32 * 0.03), ev, ev * (0.8 + (i % 13) as f32 * 0.03)]
+        };
+        let p = known.apply_f32(*src);
+        let y = luminance_2020(p);
+        let o = 1.0 - (-2.5 * y).exp();
+        let k = if yellow { 1.0 } else { near_neutral_chroma(o) };
+        *dst = p.map(|v| (o + (v * o / y - o) * k).clamp(0.0, 0.999));
+    }
+    let fit = fit_pairs(&sensor, &reference).unwrap();
+    assert!(fit.tone.chroma_sat().is_some(), "a chroma table: {:?}", fit.tone);
+    let table = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
+    let single = ToneMap::camera(&fit.tone.with_chroma(*fit.tone.chroma()).unwrap(), 0.0, 0.0, 0.0);
+    // rendered colourfulness over the camera's, for the bright yellows or the bright near-neutrals
+    let ratio = |map: &ToneMap, yellow: bool| -> f64 {
+        let (mut got, mut want) = (0.0, 0.0);
+        for (i, (x, y)) in sensor.data.iter().zip(&reference.data).enumerate() {
+            let y = y.map(f64::from);
+            if (i % 5 == 0) != yellow || luma(y) < 0.45 {
+                continue;
+            }
+            let p = displayed(fit.matrix.apply(x.map(f64::from)), map);
+            got += chroma_key(p, luma(p));
+            want += chroma_key(y, luma(y));
+        }
+        got / want
+    };
+    let (yellow_single, yellow_table) = (ratio(&single, true), ratio(&table, true));
+    assert!(yellow_single < 0.9, "one curve bleaches the bright yellows: {yellow_single:.3}");
+    assert!((0.95..1.05).contains(&yellow_table), "the table keeps them: {yellow_single:.3} -> {yellow_table:.3}");
+    let neutral = ratio(&table, false);
+    assert!((0.93..1.07).contains(&neutral), "bright near-neutrals bleach like the camera's: {neutral:.3}");
+    // greys get no colour from any chroma scale, and render as without the table
+    for v in [0.01, 0.1, 0.3, 0.8] {
+        let grey = [v; 3];
+        assert_eq!(displayed(grey, &table), displayed(grey, &single), "grey {v}");
+        let p = displayed(grey, &table);
+        assert!(p.iter().all(|c| (c - p[1]).abs() < 1e-12), "grey {v} stays grey: {p:?}");
+    }
+}
+
+/// A chroma table needs the photo's own colour and enough samples for its nodes: a partial look, or
+/// a fit on fewer samples than the table's minimum, gets the single chroma curve (#2022: a mostly
+/// clipped compact's partial look extrapolated its table over the frame).
+#[test]
+fn chroma_table_only_for_full_looks_with_enough_samples() {
+    let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    // `kept`: the camera keeps the bright yellows' colourfulness (else it bleaches every colour alike)
+    let scene = |kept: bool| -> Vec<([f64; 3], [f64; 3])> {
+        (0..6144)
+            .map(|i| {
+                let ev = 0.02 + (i % 37) as f32 * 0.02;
+                let yellow = i % 5 == 0;
+                let src = if yellow {
+                    [ev * (0.95 + (i % 7) as f32 * 0.02), ev * 0.85, ev * (0.12 + (i % 3) as f32 * 0.02)]
+                } else {
+                    [ev * (0.85 + (i % 11) as f32 * 0.03), ev, ev * (0.8 + (i % 13) as f32 * 0.03)]
+                };
+                let p = known.apply_f32(src);
+                let y = luminance_2020(p);
+                let o = 1.0 - (-2.5 * y).exp();
+                let k = if yellow && kept { 1.0 } else { 1.2 - 0.9 * o };
+                (src.map(f64::from), p.map(|v| f64::from((o + (v * o / y - o) * k).clamp(0.0, 0.999))))
+            })
+            .collect()
+    };
+    let tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.5 * x).exp()]
+    }))
+    .unwrap();
+    let look = CameraLook { matrix: known, tone, hue_sat: None };
+    let mixed = scene(true);
+    let full = hue_sat::fit_chroma(&mixed, &look, true).expect("a chroma fit");
+    assert!(full.chroma_sat().is_some(), "a full look with many samples keeps its table");
+    let partial = hue_sat::fit_chroma(&mixed, &look, false);
+    assert!(partial.is_none_or(|t| t.chroma_sat().is_none()), "a partial look gets no table: {partial:?}");
+    // where one curve fits, a partial look and a fit on too few samples still get it, without a table
+    let alike = scene(false);
+    let partial = hue_sat::fit_chroma(&alike, &look, false);
+    assert!(partial.is_some_and(|t| t.chroma_sat().is_none() && t.has_chroma()), "the single curve: {partial:?}");
+    // 300 pairs: about 200 training samples, enough for the curve but under the table's minimum
+    let few = hue_sat::fit_chroma(&alike[..300], &look, true);
+    assert!(few.is_some_and(|t| t.chroma_sat().is_none() && t.has_chroma()), "too few samples for a table: {few:?}");
+}
+
 /// Pooled pairs of several "photos" recover the camera's matrix, and a photo given that
 /// colour model (a camera profile) keeps it, fitting only its own tone.
 #[test]
@@ -1269,7 +1370,11 @@ fn dro_test_look(xs: &[f32; 32], f: &dyn Fn(f32) -> f32) -> CameraLook {
 /// last knot below the fitted one; nowhere brighter than `fitted`, colour unchanged.
 fn assert_lowered(fitted: &CameraLook, fixed: &CameraLook, what: &str) {
     let dro_off = sony_dro_off_tone().unwrap();
-    assert_eq!((fixed.matrix, &fixed.hue_sat, fixed.tone.chroma()), (fitted.matrix, &fitted.hue_sat, fitted.tone.chroma()), "{what}");
+    assert_eq!(
+        (fixed.matrix, &fixed.hue_sat, fixed.tone.chroma(), fixed.tone.chroma_sat()),
+        (fitted.matrix, &fitted.hue_sat, fitted.tone.chroma(), fitted.tone.chroma_sat()),
+        "{what}"
+    );
     for (i, (k, own)) in fixed.tone.knots().iter().zip(fitted.tone.knots()).enumerate() {
         let lowered = own[1].min(dro_off.apply(own[0]));
         assert_eq!(k[0], own[0], "{what}: knot {i}");
@@ -1688,7 +1793,8 @@ fn clipped_sky_does_not_dull_the_look() {
     for r in [new_ratio.0, new_ratio.1] {
         assert!((0.9..1.1).contains(&r), "colourfulness vs camera {new_ratio:?}, chroma {:?}", new.tone.chroma());
     }
-    assert!(new.tone.chroma().iter().all(|k| *k > 0.85), "no colour cut: {:?}", new.tone.chroma());
+    let cut = new.tone.chroma().iter().chain(new.tone.chroma_sat().into_iter().flatten().flatten());
+    assert!(cut.clone().all(|k| *k > 0.85), "no colour cut: {:?}", cut.collect::<Vec<_>>());
 }
 
 /// When the accepted attempt misses the gates without the clipped pixels (here: too few pixels
@@ -2000,7 +2106,7 @@ fn a_black_and_white_jpeg_gives_its_tone_curve() {
     assert!(fit_look(&sensor, &reference, &none, None).is_none(), "no colour to fit");
     let look = fit_tone_only(&sensor, &reference, None).expect("a tone curve");
     assert!(look.matrix == Mat3::IDENTITY && look.hue_sat.is_none(), "the colour is left as it was");
-    assert!(look.tone.chroma().iter().all(|k| *k == 1.0), "the chroma curve stays neutral: {:?}", look.tone.chroma());
+    assert!(!look.tone.has_chroma(), "the chroma curve stays neutral: {:?}", look.tone);
     let n = sensor.data.len() as f64;
     let mean = |tone: &ToneMap| sensor.data.iter().map(|p| luma(displayed(p.map(f64::from), tone))).sum::<f64>() / n;
     let target = reference.data.iter().map(|p| f64::from(luminance_2020(*p))).sum::<f64>() / n;

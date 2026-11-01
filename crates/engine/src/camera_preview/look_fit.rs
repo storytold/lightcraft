@@ -174,7 +174,7 @@ pub(super) fn dro_off(own_tone: &CameraTone) -> CameraTone {
     let rate = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
     let floor = last[1] - rate * (1.0 - last[1]).max(0.01) * (b[0] - a[0]);
     knots[30][1] = knots[30][1].max(floor).min(last[1]);
-    let Some(tone) = CameraTone::new(knots).and_then(|tone| tone.with_chroma(*own_tone.chroma())) else { return *own_tone };
+    let Some(tone) = CameraTone::new(knots).map(|tone| tone.with_chroma_of(own_tone)) else { return *own_tone };
     if !at_most(&tone, own_tone) {
         return *own_tone;
     }

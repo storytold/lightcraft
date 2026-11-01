@@ -48,6 +48,18 @@ fn camera_tone_and_relative_wb() {
     let info = SourceInfo { camera_tone: Some(curve), ..info };
     check("camera chroma curve", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
     check("camera chroma curve edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // a chroma table by colourfulness: near-neutrals bleached, saturated colours kept
+    let table = [
+        [1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2],
+        [1.3, 1.2, 1.05, 1.0, 0.8, 0.55, 0.4, 0.3],
+        [1.2, 1.1, 1.0, 1.0, 0.9, 0.75, 0.6, 0.5],
+        [1.1, 1.05, 1.0, 1.0, 1.0, 0.95, 0.9, 0.85],
+        [1.0, 1.0, 1.0, 1.05, 1.1, 1.1, 1.0, 1.0],
+    ];
+    let curve = curve.with_chroma_sat(table).unwrap();
+    let info = SourceInfo { camera_tone: Some(curve), ..info };
+    check("camera chroma table", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
+    check("camera chroma table edited", &src, &info, &s, &RenderRequest::fit(320, 240));
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {

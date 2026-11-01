@@ -16,16 +16,35 @@ pub const LUT_N: usize = 4096;
 /// Nodes of a camera chroma curve, evenly spaced over display luminance 0..=1.
 pub const CHROMA_N: usize = 8;
 const NO_CHROMA: [f32; CHROMA_N] = [1.0; CHROMA_N];
+/// Nodes of a camera chroma table's second axis: the pixel's colourfulness going into the curve,
+/// [`chroma_key`]. Below the first node and above the last the end curves apply.
+pub const CHROMA_SATS: [f32; CHROMA_SAT_N] = [0.05, 0.2, 0.4, 0.7, 1.1];
+pub const CHROMA_SAT_N: usize = 5;
+const NO_CHROMA_TABLE: [f32; CHROMA_N * CHROMA_SAT_N] = [1.0; CHROMA_N * CHROMA_SAT_N];
+
+/// Colourfulness of linear Rec.2020 `rgb` with luminance `y`, as the camera chroma table keys it:
+/// the distance from neutral of the luminance-normalised RGB (0 for grey and for black).
+#[inline]
+pub fn chroma_key(rgb: [f32; 3], y: f32) -> f32 {
+    if y.is_nan() || y <= 0.0 {
+        return 0.0;
+    }
+    rgb.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f32>().sqrt()
+}
 
 /// A file-local camera look, fitted independently of the scene-linear colour transform.
 /// Knots are scene/display-linear luminance pairs. Keeping this in the finish stage preserves
 /// RAW exposure and highlight headroom; it is never baked into the decoded sensor pixels.
 /// `chroma` scales colourfulness by display luminance after the curve (a camera's per-channel
 /// curve saturates shadows and bleaches highlights toward white, which a luminance curve can't).
+/// `chroma_sat`, when set, replaces it with one such curve per [`CHROMA_SATS`] node: a camera
+/// bleaches bright near-neutrals much more than bright saturated colours (#2022).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct CameraTone {
     knots: [[f32; 2]; 32],
     chroma: [f32; CHROMA_N],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chroma_sat: Option<[[f32; CHROMA_N]; CHROMA_SAT_N]>,
 }
 
 impl<'de> serde::Deserialize<'de> for CameraTone {
@@ -36,14 +55,24 @@ impl<'de> serde::Deserialize<'de> for CameraTone {
             // absent in smart previews written before the chroma curve existed
             #[serde(default)]
             chroma: Option<[f32; CHROMA_N]>,
+            // absent in smart previews written before the chroma table existed
+            #[serde(default)]
+            chroma_sat: Option<[[f32; CHROMA_N]; CHROMA_SAT_N]>,
         }
         let w = Wire::deserialize(d)?;
-        let tone = Self::new(w.knots).ok_or_else(|| serde::de::Error::custom("invalid camera tone curve"))?;
-        match w.chroma {
-            Some(c) => tone.with_chroma(c).ok_or_else(|| serde::de::Error::custom("invalid camera chroma curve")),
-            None => Ok(tone),
+        let mut tone = Self::new(w.knots).ok_or_else(|| serde::de::Error::custom("invalid camera tone curve"))?;
+        if let Some(c) = w.chroma {
+            tone = tone.with_chroma(c).ok_or_else(|| serde::de::Error::custom("invalid camera chroma curve"))?;
         }
+        if let Some(t) = w.chroma_sat {
+            tone = tone.with_chroma_sat(t).ok_or_else(|| serde::de::Error::custom("invalid camera chroma table"))?;
+        }
+        Ok(tone)
     }
+}
+
+fn valid_chroma(chroma: &[f32]) -> bool {
+    chroma.iter().all(|k| k.is_finite() && (0.0..=4.0).contains(k))
 }
 
 impl CameraTone {
@@ -55,16 +84,46 @@ impl CameraTone {
             }
             previous = p;
         }
-        Some(Self { knots, chroma: NO_CHROMA })
+        Some(Self { knots, chroma: NO_CHROMA, chroma_sat: None })
     }
 
-    /// The curve with chroma scales at display luminance 0, 1/7 … 1 (each finite, 0..=4).
+    /// The curve with chroma scales at display luminance 0, 1/7 … 1 (each finite, 0..=4), the same
+    /// for every colourfulness (it drops a [`Self::with_chroma_sat`] table).
     pub fn with_chroma(self, chroma: [f32; CHROMA_N]) -> Option<Self> {
-        chroma.iter().all(|k| k.is_finite() && (0.0..=4.0).contains(k)).then_some(Self { chroma, ..self })
+        valid_chroma(&chroma).then_some(Self { chroma, chroma_sat: None, ..self })
+    }
+
+    /// The curve with one chroma curve (as in [`Self::with_chroma`]) per [`CHROMA_SATS`] node, which
+    /// replaces the single one in rendering. [`Self::chroma`] stays as it was: older versions,
+    /// which read only that, render it.
+    pub fn with_chroma_sat(self, table: [[f32; CHROMA_N]; CHROMA_SAT_N]) -> Option<Self> {
+        table.iter().all(|c| valid_chroma(c)).then_some(Self { chroma_sat: Some(table), ..self })
+    }
+
+    /// This curve's knots with `other`'s chroma curve and table.
+    pub fn with_chroma_of(self, other: &CameraTone) -> Self {
+        Self { chroma: other.chroma, chroma_sat: other.chroma_sat, ..self }
     }
 
     pub fn chroma(&self) -> &[f32; CHROMA_N] {
         &self.chroma
+    }
+
+    pub fn chroma_sat(&self) -> Option<&[[f32; CHROMA_N]; CHROMA_SAT_N]> {
+        self.chroma_sat.as_ref()
+    }
+
+    /// Whether the curve changes colourfulness anywhere.
+    pub fn has_chroma(&self) -> bool {
+        self.chroma_sat.map_or(self.chroma.iter().any(|k| *k != 1.0), |t| t.iter().flatten().any(|k| *k != 1.0))
+    }
+
+    /// The chroma table as rendered, curve after curve ([`ToneMap::chroma_lut`]).
+    fn chroma_table(&self) -> ([f32; CHROMA_N * CHROMA_SAT_N], bool) {
+        match self.chroma_sat {
+            Some(t) => (std::array::from_fn(|i| t[i / CHROMA_N][i % CHROMA_N]), true),
+            None => (std::array::from_fn(|i| self.chroma[i % CHROMA_N]), false),
+        }
     }
 
     /// The (scene, display) luminance knots, in increasing order.
@@ -98,7 +157,8 @@ const HDR_FROM_EV: f32 = 1.5;
 #[derive(Clone, Debug)]
 pub struct ToneMap {
     lut: Vec<f32>,
-    chroma: [f32; CHROMA_N],
+    chroma: [f32; CHROMA_N * CHROMA_SAT_N],
+    by_sat: bool,
 }
 
 impl ToneMap {
@@ -123,7 +183,8 @@ impl ToneMap {
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })
             .collect();
-        ToneMap { lut, chroma: curve.chroma }
+        let (chroma, by_sat) = curve.chroma_table();
+        ToneMap { lut, chroma, by_sat }
     }
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
@@ -169,7 +230,7 @@ impl ToneMap {
                 o.clamp(0.0, peak)
             })
             .collect();
-        ToneMap { lut, chroma: NO_CHROMA }
+        ToneMap { lut, chroma: NO_CHROMA_TABLE, by_sat: false }
     }
 
     /// Tone map for display-referred sources: identity at neutral settings.
@@ -218,7 +279,7 @@ impl ToneMap {
                 o.clamp(0.0, peak)
             })
             .collect();
-        ToneMap { lut, chroma: NO_CHROMA }
+        ToneMap { lut, chroma: NO_CHROMA_TABLE, by_sat: false }
     }
 
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
@@ -226,22 +287,39 @@ impl ToneMap {
         &self.lut
     }
 
-    /// The chroma curve (`CHROMA_N` entries, see [`ToneMap::chroma_scale`]).
+    /// The chroma table (`CHROMA_SAT_N` curves of `CHROMA_N` entries, one per [`CHROMA_SATS`] node;
+    /// all the same unless the camera look has a table; see [`ToneMap::chroma_scale`]).
     pub fn chroma_lut(&self) -> &[f32] {
         &self.chroma
     }
 
-    /// Chroma scale at display luminance `o` (exactly 1 everywhere unless a camera look sets it).
+    /// Whether [`ToneMap::chroma_scale`] depends on its `key` (else any key gives the same scale).
+    pub fn chroma_by_sat(&self) -> bool {
+        self.by_sat
+    }
+
+    /// Chroma scale at display luminance `o` for a pixel of colourfulness `key` ([`chroma_key`]),
+    /// bilinear in the table (exactly 1 everywhere unless a camera look sets it).
     #[inline]
-    pub fn chroma_scale(&self, o: f32) -> f32 {
+    pub fn chroma_scale(&self, o: f32, key: f32) -> f32 {
         if !o.is_finite() {
             return 1.0;
         }
         let f = o.clamp(0.0, 1.0) * (CHROMA_N - 1) as f32;
         let i = (f as usize).min(CHROMA_N - 2);
         let t = f - i as f32;
-        let (a, b) = (self.chroma.get(i).copied().unwrap_or(1.0), self.chroma.get(i + 1).copied().unwrap_or(1.0));
-        if a == b { a } else { a + (b - a) * t }
+        let at = |s: usize| {
+            let (a, b) = (self.chroma.get(s * CHROMA_N + i).copied().unwrap_or(1.0), self.chroma.get(s * CHROMA_N + i + 1).copied().unwrap_or(1.0));
+            if a == b { a } else { a + (b - a) * t }
+        };
+        if !self.by_sat {
+            return at(0);
+        }
+        let key = if key.is_finite() { key.clamp(CHROMA_SATS[0], CHROMA_SATS[CHROMA_SAT_N - 1]) } else { CHROMA_SATS[0] };
+        let j = CHROMA_SATS[1..CHROMA_SAT_N - 1].iter().filter(|n| key >= **n).count();
+        let u = (key - CHROMA_SATS[j]) / (CHROMA_SATS[j + 1] - CHROMA_SATS[j]);
+        let (lo, hi) = (at(j), at(j + 1));
+        if lo == hi { lo } else { lo + (hi - lo) * u }
     }
 
     /// Scene luminance → display-linear luminance.
@@ -279,8 +357,8 @@ mod tests {
     fn chroma_curve_is_identity_unless_set_and_survives_serde() {
         let plain = CameraTone::new(knots()).unwrap();
         let map = ToneMap::camera(&plain, 0.0, 0.0, 0.0);
-        assert!([0.0, 0.3, 0.77, 1.0, 2.0].iter().all(|o| map.chroma_scale(*o) == 1.0));
-        assert!([0.0, 0.5, 1.0].iter().all(|o| ToneMap::new(0.0, 0.0, 0.0).chroma_scale(*o) == 1.0));
+        assert!([0.0, 0.3, 0.77, 1.0, 2.0].iter().all(|o| map.chroma_scale(*o, 0.0) == 1.0));
+        assert!([0.0, 0.5, 1.0].iter().all(|o| ToneMap::new(0.0, 0.0, 0.0).chroma_scale(*o, 0.0) == 1.0));
         // smart previews written before the chroma curve existed still load (identity)
         let old = serde_json::json!({ "knots": knots() });
         assert_eq!(serde_json::from_value::<CameraTone>(old).unwrap(), plain);
@@ -288,14 +366,46 @@ mod tests {
         let back: CameraTone = serde_json::from_value(serde_json::to_value(tone).unwrap()).unwrap();
         assert_eq!(back, tone);
         let map = ToneMap::camera(&tone, 0.0, 0.0, 0.0);
-        assert!((map.chroma_scale(0.0) - 1.4).abs() < 1e-6 && (map.chroma_scale(1.0) - 0.2).abs() < 1e-6);
-        assert!((map.chroma_scale(0.5 / 7.0) - 1.35).abs() < 1e-5, "interpolates between nodes");
-        assert_eq!(map.chroma_scale(f32::NAN), 1.0);
+        assert!((map.chroma_scale(0.0, 0.0) - 1.4).abs() < 1e-6 && (map.chroma_scale(1.0, 0.0) - 0.2).abs() < 1e-6);
+        assert!((map.chroma_scale(0.5 / 7.0, 0.0) - 1.35).abs() < 1e-5, "interpolates between nodes");
+        assert_eq!(map.chroma_scale(f32::NAN, 0.0), 1.0);
         // hostile values are rejected, also when deserialized
         assert!(plain.with_chroma([f32::NAN; CHROMA_N]).is_none());
         assert!(plain.with_chroma([-1.0; CHROMA_N]).is_none());
         let bad = serde_json::json!({ "knots": knots(), "chroma": [9.0, 1, 1, 1, 1, 1, 1, 1] });
         assert!(serde_json::from_value::<CameraTone>(bad).is_err());
+    }
+
+    #[test]
+    fn chroma_table_keys_on_colourfulness_and_survives_serde() {
+        let curve = |k: f32| [k; CHROMA_N];
+        let plain = CameraTone::new(knots()).unwrap().with_chroma(curve(0.6)).unwrap();
+        // without a table every colourfulness gets the single curve, and the key is not needed
+        let map = ToneMap::camera(&plain, 0.0, 0.0, 0.0);
+        assert!(!map.chroma_by_sat());
+        assert!([0.0, 0.3, 2.0, f32::NAN].iter().all(|key| map.chroma_scale(0.5, *key) == 0.6));
+        let tone = plain.with_chroma_sat([curve(0.6), curve(0.8), curve(1.0), curve(1.0), curve(1.2)]).unwrap();
+        assert_eq!(tone.chroma(), &curve(0.6), "the single curve stays for older readers");
+        let map = ToneMap::camera(&tone, 0.0, 0.0, 0.0);
+        assert!(map.chroma_by_sat() && tone.has_chroma());
+        assert_eq!(map.chroma_scale(0.5, 0.0), 0.6, "below the first node");
+        assert_eq!(map.chroma_scale(0.5, f32::NAN), 0.6);
+        assert!((map.chroma_scale(0.5, 0.125) - 0.7).abs() < 1e-6, "between nodes");
+        assert_eq!(map.chroma_scale(0.5, 0.5), 1.0);
+        assert_eq!(map.chroma_scale(0.5, 3.0), 1.2, "above the last node");
+        let back: CameraTone = serde_json::from_value(serde_json::to_value(tone).unwrap()).unwrap();
+        assert_eq!(back, tone);
+        // a curve without a table writes none; dropping the single curve drops the table
+        assert!(serde_json::to_value(plain).unwrap().get("chroma_sat").is_none());
+        assert_eq!(tone.with_chroma(curve(1.0)).unwrap().chroma_sat(), None);
+        assert_eq!(CameraTone::new(knots()).unwrap().with_chroma_of(&tone), tone);
+        assert!(plain.with_chroma_sat([curve(f32::NAN); CHROMA_SAT_N]).is_none());
+        let table = [[9.0f32; CHROMA_N]; CHROMA_SAT_N];
+        let bad = serde_json::json!({ "knots": knots(), "chroma_sat": table });
+        assert!(serde_json::from_value::<CameraTone>(bad).is_err());
+        assert_eq!(chroma_key([0.3, 0.3, 0.3], 0.3), 0.0);
+        assert_eq!(chroma_key([0.3, 0.3, 0.3], 0.0), 0.0);
+        assert!(chroma_key([0.6, 0.4, 0.0], 0.43) > 0.9);
     }
 
     #[test]

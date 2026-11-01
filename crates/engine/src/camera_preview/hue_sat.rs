@@ -1,5 +1,5 @@
 use super::mono::to_prophoto;
-use super::pairs::{displayed, luma};
+use super::pairs::{chroma_key, displayed, luma};
 use super::{CameraLook, CameraTone, HsvTable, Mat3, ToneMap, luminance_2020};
 
 /// [`HueSat::apply`] restores the luminance in full only if the table kept at least this share of it. A colour
@@ -212,10 +212,24 @@ const CHROMA_KERNEL: f64 = 0.08;
 
 const CHROMA_SHRINK: f64 = 2.0;
 
-/// The look's tone curve with a chroma-by-display-luminance curve fitted to `pairs` (two thirds
-/// train, one third held out), when that lowers the held-out error. Colourfulness is compared as
-/// the distance from neutral of luminance-normalised RGB.
-pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<CameraTone> {
+/// Kernel width of the chroma table's colourfulness nodes (`CHROMA_SATS`, in [`chroma_key`] units).
+const CHROMA_SAT_KERNEL: f64 = 0.12;
+
+/// Fewest training samples for a chroma table: as many per node as the single curve's minimum
+/// (64 samples for its [`CHROMA_N`] nodes) over the table's `CHROMA_N × CHROMA_SAT_N` nodes. With
+/// fewer, the single curve is fitted instead.
+const CHROMA_TABLE_MIN_SAMPLES: usize = 64 * lightcraft_pipeline::tone::CHROMA_SAT_N;
+
+/// The look's tone curve with a chroma table fitted to `pairs` (two thirds train, one third held
+/// out), when that lowers the held-out error: one chroma-by-display-luminance curve per
+/// colourfulness node (`CHROMA_SATS`). One curve for every colour was fitted mostly on the many
+/// near-neutral pixels, which a camera bleaches toward white in the highlights, and bleached bright
+/// saturated colours as much (Z 9 yellows, #2022); a node with few samples stays near 1.
+/// Colourfulness is compared as the distance from neutral of luminance-normalised RGB.
+/// `allow_table` false (a partial look, whose colour is only partly the photo's own) or fewer than
+/// [`CHROMA_TABLE_MIN_SAMPLES`] samples fit the single curve only.
+pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, allow_table: bool) -> Option<CameraTone> {
+    use lightcraft_pipeline::tone::{CHROMA_N, CHROMA_SAT_N, CHROMA_SATS};
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let scene = |x: &[f64; 3]| {
         let p = look.matrix.apply(*x);
@@ -225,7 +239,7 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
     let predict = |x: &[f64; 3]| displayed(scene(x), &tone);
     let chroma = |p: [f64; 3]| {
         let y = luma(p);
-        (y > 0.0).then(|| p.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f64>().sqrt())
+        (y > 0.0).then(|| chroma_key(p, y))
     };
     let samples: Vec<(f64, f64, f64)> = pairs
         .iter()
@@ -240,19 +254,26 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
     if samples.len() < 64 {
         return None;
     }
-    let mut curve = [1.0f32; lightcraft_pipeline::tone::CHROMA_N];
-    for (j, node) in curve.iter_mut().enumerate() {
-        let at = j as f64 / (lightcraft_pipeline::tone::CHROMA_N - 1) as f64;
+    // Per node the kernel-weighted mean log ratio, shrunk toward 1; `sat` None for one curve over
+    // every colourfulness (kept for versions that read no table).
+    let node = |j: usize, sat: Option<f64>| -> f32 {
+        let at = j as f64 / (CHROMA_N - 1) as f64;
         let (mut weight, mut sum) = (0.0, 0.0);
         for &(o, cp, log_ratio) in &samples {
-            let k = (-0.5 * ((o - at) / CHROMA_KERNEL).powi(2)).exp() * cp;
+            let mut k = (-0.5 * ((o - at) / CHROMA_KERNEL).powi(2)).exp() * cp;
+            if let Some(sat) = sat {
+                k *= (-0.5 * ((cp - sat) / CHROMA_SAT_KERNEL).powi(2)).exp();
+            }
             weight += k;
             sum += k * log_ratio;
         }
-        *node = (sum / (weight + CHROMA_SHRINK)).exp() as f32;
-    }
-    let fitted = look.tone.with_chroma(curve)?;
-    let with = ToneMap::camera(&fitted, 0.0, 0.0, 0.0);
+        (sum / (weight + CHROMA_SHRINK)).exp() as f32
+    };
+    let use_table = allow_table && samples.len() >= CHROMA_TABLE_MIN_SAMPLES;
+    let curve: [f32; CHROMA_N] = std::array::from_fn(|j| node(j, None));
+    let table: [[f32; CHROMA_N]; CHROMA_SAT_N] = std::array::from_fn(|s| std::array::from_fn(|j| node(j, Some(f64::from(CHROMA_SATS[s])))));
+    let single = look.tone.with_chroma(curve)?;
+    let fitted = if use_table { single.with_chroma_sat(table)? } else { single };
     let error = |map: &ToneMap| -> f64 {
         pairs
             .iter()
@@ -263,9 +284,15 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
             })
             .sum()
     };
-    let (before, after) = (error(&tone), error(&with));
+    let before = error(&tone);
+    let after = error(&ToneMap::camera(&fitted, 0.0, 0.0, 0.0));
     if lightcraft_pipeline::profiling() {
-        eprintln!("[profile] ARW chroma curve {curve:?}: held-out error {before:.4} -> {after:.4}");
+        let one = error(&ToneMap::camera(&single, 0.0, 0.0, 0.0));
+        if use_table {
+            eprintln!("[profile] ARW chroma table {table:?} (one curve {curve:?}): held-out error {before:.4} -> {after:.4} (one curve {one:.4})");
+        } else {
+            eprintln!("[profile] ARW chroma curve {curve:?} ({} samples, no table): held-out error {before:.4} -> {after:.4}", samples.len());
+        }
     }
     (after.is_finite() && after < before).then_some(fitted)
 }
