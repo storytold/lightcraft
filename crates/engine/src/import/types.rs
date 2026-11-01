@@ -161,6 +161,8 @@ pub struct FileFacts {
     /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
     /// file's modification time.
     pub captured: Option<String>,
+    /// Its XMP sidecar (or a raw's embedded XMP), which a file import merges into the record.
+    pub sidecar: Option<crate::sidecar::SidecarData>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
