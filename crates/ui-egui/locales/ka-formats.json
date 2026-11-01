@@ -320,5 +320,9 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  "No duplicate photos found among {photos} photos.": "{photos} ფოტოს შორის დუბლიკატები ვერ მოიძებნა.",
+  "{groups} groups among {photos} photos · {delete} to delete": "{groups} ჯგუფი {photos} ფოტოს შორის · წასაშლელი: {delete}",
+  "Group {n} · {count} photos · {kind}": "ჯგუფი {n} · {count} ფოტო · {kind}",
+  "Hashed {done} of {total} photos": "დამუშავებულია {done} / {total} ფოტო"
 }

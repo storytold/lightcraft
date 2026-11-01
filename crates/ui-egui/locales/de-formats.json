@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "Die Bereichsanordnung konnte nicht wiederhergestellt werden: {error}",
   "Panel move was not applied: {error}": "Das Verschieben des Bereichs wurde nicht ausgeführt: {error}",
   "{name} is installed": "{name} ist installiert",
-  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet"
+  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
+  "No duplicate photos found among {photos} photos.": "Keine doppelten Fotos unter {photos} Fotos gefunden.",
+  "{groups} groups among {photos} photos · {delete} to delete": "{groups} Gruppen unter {photos} Fotos · {delete} zu löschen",
+  "Group {n} · {count} photos · {kind}": "Gruppe {n} · {count} Fotos · {kind}",
+  "Hashed {done} of {total} photos": "{done} von {total} Fotos verarbeitet"
 }

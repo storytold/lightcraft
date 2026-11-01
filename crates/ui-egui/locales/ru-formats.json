@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "No duplicate photos found among {photos} photos.": "Среди {photos} фото дубликатов не найдено.",
+  "{groups} groups among {photos} photos · {delete} to delete": "Групп: {groups} среди {photos} фото · к удалению: {delete}",
+  "Group {n} · {count} photos · {kind}": "Группа {n} · фото: {count} · {kind}",
+  "Hashed {done} of {total} photos": "Обработано {done} из {total} фото"
 }

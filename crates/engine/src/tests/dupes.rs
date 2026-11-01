@@ -126,11 +126,13 @@ fn a_second_run_decodes_nothing_and_a_run_without_duplicates_shows_an_empty_view
     let r = s.execute("library.findDuplicates", &json!({"wait": true})).unwrap();
     assert_eq!(r["queued"], 0, "{r}");
     assert_eq!(r["last"]["decoded"], 0);
+    assert!(s.activity.list().iter().all(|t| t.kind != "duplicates"), "the grouping-only run's row is gone too");
     assert_eq!(r["last"]["groups"].as_array().map(Vec::len), Some(1));
     // only the two different pictures: no duplicates, an explicitly empty view, Clear Filters brings everything back
     let r = s.execute("library.findDuplicates", &json!({"ids": [ids["a.jpg"], ids["b.jpg"]], "wait": true})).unwrap();
     assert_eq!(r["last"]["groups"].as_array().map(Vec::len), Some(0), "{r}");
     assert_eq!(s.visible_cloned().len(), 0, "no duplicates must show no photos, not the whole library");
+    assert!(s.selection.ids.is_empty() && s.selection.active.is_none(), "nothing the empty view doesn't show stays selected for Delete");
     s.execute("library.clearFilter", &json!({})).unwrap();
     assert_eq!(s.visible_cloned().len(), 4);
     // with filter and selection switched off nothing but the answer changes
@@ -159,6 +161,32 @@ fn the_run_has_a_row_in_the_activity_stack_and_the_frame_pump_finishes_it() {
     assert_eq!(v["last"]["groups"].as_array().map(Vec::len), Some(1), "{v}");
     assert_eq!(v["hashed"], 4);
     assert_eq!(s.visible_cloned().len(), 3, "the pump that ends the run shows the group");
+}
+
+/// A script that waits while a run is already going gets that run's result, not a "running" answer.
+#[test]
+fn waiting_on_a_run_already_going_returns_its_result() {
+    let (mut s, ids) = library("wait");
+    s.execute("duplicates.pump", &json!({"pace": "pause"})).unwrap();
+    let r = s.execute("library.findDuplicates", &json!({})).unwrap();
+    assert_eq!(r["running"], true, "{r}");
+    let r = s.execute("library.findDuplicates", &json!({"wait": true})).unwrap();
+    assert_eq!(r["running"], false, "{r}");
+    assert_eq!(r["last"]["groups"][0]["keep"], ids["a.jpg"], "{r}");
+    assert!(s.activity.list().iter().all(|t| t.kind != "duplicates"));
+}
+
+/// The difference hash is held to the same distance as the DCT hash: a pair whose difference hashes are further
+/// apart than `distance` is not a duplicate, whatever the DCT hash says.
+#[test]
+fn both_hashes_must_be_within_the_distance() {
+    let a = crate::dupes::Sig { dct: 0, diff: 0, aspect: 1.5 };
+    let b = crate::dupes::Sig { dct: 0b11, diff: 0b111_1111, aspect: 1.5 };
+    assert!(!crate::dupes::same_picture_for_tests(&a, &b, 6), "7 difference-hash bits at distance 6");
+    let c = crate::dupes::Sig { dct: 0b11, diff: 0b11_1111, aspect: 1.5 };
+    assert!(crate::dupes::same_picture_for_tests(&a, &c, 6));
+    let d = crate::dupes::Sig { dct: 0, diff: 0, aspect: 1.6 };
+    assert!(!crate::dupes::same_picture_for_tests(&a, &d, 6), "another frame");
 }
 
 #[test]

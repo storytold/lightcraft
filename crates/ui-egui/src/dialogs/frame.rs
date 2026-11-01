@@ -189,9 +189,11 @@ pub enum ConfirmStyle {
 
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. } => {
-            ConfirmStyle::Plain
-        }
+        Dialog::ConfirmDelete { .. }
+        | Dialog::DeleteKeyword { .. }
+        | Dialog::DeleteEffects { .. }
+        | Dialog::RemoveFolder { .. }
+        | Dialog::Duplicates { .. } => ConfirmStyle::Plain,
         _ if only_shows(dlg) => ConfirmStyle::Plain,
         _ => ConfirmStyle::Primary,
     }

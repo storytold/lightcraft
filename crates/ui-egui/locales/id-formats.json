@@ -320,5 +320,9 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "No duplicate photos found among {photos} photos.": "Tidak ada foto duplikat di antara {photos} foto.",
+  "{groups} groups among {photos} photos · {delete} to delete": "{groups} grup di antara {photos} foto · {delete} akan dihapus",
+  "Group {n} · {count} photos · {kind}": "Grup {n} · {count} foto · {kind}",
+  "Hashed {done} of {total} photos": "{done} dari {total} foto diproses"
 }

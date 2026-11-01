@@ -10,6 +10,7 @@ use lightcraft_engine::export::{ExportOptions, Resize};
 
 mod confirm;
 mod cull;
+pub mod dupes;
 mod export;
 mod frame;
 mod rename;
@@ -304,6 +305,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
         Dialog::Cull { .. } => "Assisted Culling",
+        Dialog::Duplicates { .. } => "Find Duplicate Photos",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
         Dialog::SmartRules { .. } => "Edit Smart Album",
         Dialog::AutoStack { .. } => "Auto-Stack by Capture Time",
@@ -380,6 +382,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
     match dlg {
         Dialog::Import { opts } => import_ok_label(opts),
         Dialog::Export { .. } => photos_ok_label("Export", app.session.selection.ids.len().max(1)),
+        Dialog::Duplicates { groups, .. } => photos_ok_label("Delete", dupes::delete_ids(groups).len()),
         Dialog::SamModel { .. } => sam_ok_label(dlg, sam).to_string(),
         _ => fixed_ok_label(app, dlg, informational).to_string(),
     }
@@ -410,7 +413,7 @@ fn import_ok_label(opts: &crate::import::ImportDialog) -> String {
 fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'static str {
     match dlg {
         // worded with a count or by the SAM state: `ok_label` builds them
-        Dialog::Import { .. } | Dialog::Export { .. } | Dialog::SamModel { .. } => "",
+        Dialog::Import { .. } | Dialog::Export { .. } | Dialog::Duplicates { .. } | Dialog::SamModel { .. } => "",
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
         Dialog::SlideshowExport { .. } => "Export…",
@@ -488,7 +491,8 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     let waiting = matches!(
         dlg,
         Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
-    );
+    ) || matches!(dlg, Dialog::Duplicates { done: false, .. })
+        || matches!(dlg, Dialog::Duplicates { groups, .. } if dupes::delete_ids(groups).is_empty());
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
     !rename_blocked && (informational || (!waiting && !bad_rules))
@@ -1918,6 +1922,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
     match dlg {
         Dialog::AutoStack { .. } => auto_stack_body(app, ui, t, dlg),
         Dialog::Cull { .. } => cull_body(app, ui, t, dlg),
+        Dialog::Duplicates { .. } => dupes::body(app, ui, t, dlg),
         Dialog::WhatsNew => whats_new_body(ui, t, dlg),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, t, info, accepted),
         Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, t, info, accepted),
