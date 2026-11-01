@@ -89,6 +89,7 @@ fn box_v(@builtin(global_invocation_id) g: vec3<u32>) {
 // scratch memory because it is indexed dynamically.
 const MED_K: u32 = 4u;
 const MED_LINE: u32 = 113u; // 16·MED_K + 2·24, odd
+// Not zero-initialised (`build_jobs` in ctx.rs turns that off): write every element read.
 var<workgroup> med_tile: array<f32, 1808>; // 16 lines
 
 // The medians of the 2r+1-tap windows starting at `med_tile[base + k]`, k < 4 (r ≥ 1). Taps 3 to
