@@ -209,6 +209,12 @@ pub enum Op {
         id: PhotoId,
         width: u32,
         height: u32,
+        /// Uncropped decoder dimensions when the file probe knows them; `None` preserves the
+        /// current value for older/replay-only operations, while `Some(0)` records unavailable data.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_height: Option<u32>,
         file_size: u64,
         #[serde(default)]
         content_hash: Option<String>,
@@ -1042,12 +1048,16 @@ impl Catalog {
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
                 Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
             }
-            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
+            Op::SetContent { id, width, height, source_width, source_height, file_size, content_hash, preview_only, preview_checked } => {
                 let p = self.photo_mut(id)?;
+                let source_width = source_width.map(|width| std::mem::replace(&mut p.source_width, width));
+                let source_height = source_height.map(|height| std::mem::replace(&mut p.source_height, height));
                 Op::SetContent {
                     id,
                     width: std::mem::replace(&mut p.width, width),
                     height: std::mem::replace(&mut p.height, height),
+                    source_width,
+                    source_height,
                     file_size: std::mem::replace(&mut p.file_size, file_size),
                     content_hash: std::mem::replace(&mut p.content_hash, content_hash),
                     preview_only: std::mem::replace(&mut p.preview_only, preview_only),

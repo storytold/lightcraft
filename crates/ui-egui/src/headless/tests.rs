@@ -2303,6 +2303,8 @@ fn preview_only_raw_shows_badge_and_notices() {
             id: po,
             width: ph.width,
             height: ph.height,
+            source_width: None,
+            source_height: None,
             file_size: ph.file_size,
             content_hash: ph.content_hash.clone(),
             preview_only: Some("Nikon Huffman-compressed NEF (no clean-room description available)".into()),

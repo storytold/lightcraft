@@ -210,12 +210,15 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
+        && (info.source_width, info.source_height) == (ph.source_width, ph.source_height)
         && info.preview_only == ph.preview_only
         && preview_checked == ph.preview_checked;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
         height: info.height,
+        source_width: Some(info.source_width),
+        source_height: Some(info.source_height),
         file_size: info.file_size,
         content_hash: info.content_hash,
         preview_only: info.preview_only,
