@@ -10,9 +10,12 @@ PyTorch are used only to train, and the result is an ONNX file that LightCraft's
   is **CC0** (public domain). `fetch_rpu.py` checks every file's SHA-256 and records it in `sources.csv`
   (URL, camera, ISO, licence), which is the model's data credit.
 - **Noise:** synthetic Poisson-Gaussian sensor noise. Its parameters can be measured from your own photos with
-  `calibrate_noise.py`, which stores numbers only (per ISO: `variance = a · mean + b`), never pictures. `train.py`
-  does not read that file: its read-noise relation (`read_noise`) was set by hand from such a measurement, so a new
-  camera's numbers are a check of it (and a reason to edit it), not an input to the next run.
+  `calibrate_noise.py`, which stores numbers only (per camera, ISO and Bayer plane: `variance = a · mean + b`), never
+  pictures. `train.py --noise-cal <that file>` trains on them: a share of the patches (`--cal-share`, default 0.5)
+  gets one measured camera and ISO's per-plane `a`, `b` exactly, and the rest keep the wide ISO range with the
+  read-noise relation `b = c · a²` fitted to the file. Without `--noise-cal`, `c` is the built-in EOS R5 C fit, as
+  before; the first log lines (and `log.jsonl`) say which was used. A file with a missing key, NaN, infinity, a
+  negative number or nothing in it stops `train.py` before it trains, naming the camera, ISO and plane.
 - Not used: RawNIND (the dataset is CC BY-SA 4.0 and its published weights GPL-3.0), SIDD, FiveK, DIV2K and other
   research-only sets.
 
@@ -28,9 +31,12 @@ CARGO_TARGET_DIR=<target> cargo build --release --manifest-path tools/denoise-tr
 
 python fetch_rpu.py --out <scratch>/data --rawdump <target>/release/lc-denoise-rawdump
 python calibrate_noise.py --rawdump <...> --out <scratch>/noise/camera.json --sample 200 <photo folders>   # optional
-python train.py --data <scratch>/data --out <scratch>/run1 --steps 160000 --duty 0.75
+python train.py --data <scratch>/data --out <scratch>/run1 --steps 160000 --duty 0.75 [--noise-cal <scratch>/noise/camera.json]
 python export.py --ckpt <scratch>/run1/final.pt --out <scratch>/model --rawdump <...> --data <scratch>/data
 ```
+
+Tests (numpy and torch, no data or graphics card): `python -m unittest discover -s tools/denoise-train -p "test_*.py"`.
+`train.py --device cpu` runs without a graphics card (slowly; for a smoke test).
 
 `export.py` writes `model.onnx` and `denoise-model.json` (with its SHA-256, size, licence and data credits) and runs
 LightCraft's installation self-test on them (`rawdump selftest`). Install the folder with Settings ▸ AI Denoise ▸
