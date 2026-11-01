@@ -750,6 +750,22 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
     par_rows(data, w, f)
 }
 
+/// `plan` must keep the output box the caller (export) already decided instead of
+/// re-fitting it: `Frame::fit` passes a box through unchanged only when it matches
+/// the *decoded* frame's aspect within rounding slack (geometry.rs:189-191), so a
+/// reduced source whose aspect rounds differently (a 149 x 100 proxy of a 240 x 160
+/// photo) makes `plan` return a size a pixel off from the box (issue #1042).
+#[cfg(test)]
+#[test]
+fn plan_preserves_matching_box_size() {
+    let src = Rgb32f::from_fn(149, 100, |_, _| [0.5; 3]);
+    let info = SourceInfo { native_long: Some(240), ..SourceInfo::default() };
+    let s = DevelopSettings::default();
+    let req = RenderRequest::fit(240, 160);
+    let p = plan(&src, &info, &s, &req);
+    assert_eq!((p.w, p.h), (240, 160));
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
