@@ -13,8 +13,12 @@
 //! The files live in [`Store`]s: a directory ([`FsStore`]) natively, or any other implementation
 //! via [`Session::open_library_in`] (the browser build keeps them in OPFS or IndexedDB).
 //!
-//! Every top-level [`Session::execute`] persists the ops it produced (fsynced) before returning,
-//! so a crash loses at most the command in flight. When that write fails the command returns
+//! Every top-level [`Session::execute`] persists the ops it produced before returning: fsynced
+//! there, or natively handed to the catalog log's own thread, which writes and syncs them right
+//! after (the UI thread never waits for the drive), so a crash or power cut loses at most the
+//! batch in flight (what arrived during one sync). A write that thread
+//! can't make is held and retried, counts as unsaved ([`Session::unsaved`]) and makes a snapshot
+//! due. When that write fails the command returns
 //! [`EngineError::NotSaved`]: its change stays applied in memory and queued, and every later save
 //! retries the queue ([`Session::unsaved`] reports it meanwhile), so nothing is lost once the
 //! disk is writable again. The log is compacted into a snapshot when it
@@ -134,6 +138,10 @@ pub struct Library {
     /// Why the last write of presets.json failed; `None` once it is written. While set, the preset
     /// changes exist only in memory and count as unsaved ([`Session::unsaved`], issue #2266).
     presets_error: Option<String>,
+    /// Records the catalog log's own thread holds because writing them failed (it retries them),
+    /// and why; refreshed by every persist and every frame ([`Session::persist_if_dirty`]). While
+    /// set they count as unsaved ([`Session::unsaved`]), so quitting asks first.
+    log_held: Option<(usize, String)>,
     /// When the frame loop may retry a failed append ([`Session::persist_if_dirty`] backs off).
     retry_at: Option<web_time::Instant>,
     /// What forgetting untouched Local records did when the library opened.
@@ -322,6 +330,8 @@ fn poll_compaction(lib: &mut Library) {
         log::error!("library: compaction: {e}");
         lib.last_error = Some(format!("compaction: {e}"));
     }
+    // (never waits: the log's thread publishes what it holds)
+    lib.log_held = lib.journal.unwritten();
 }
 
 /// How long the frame loop waits before retrying a failed append (commands retry at once).
@@ -631,6 +641,7 @@ impl Session {
             last_error: None,
             unsaved_error: None,
             presets_error: None,
+            log_held: None,
             retry_at: None,
             forgot_local: None,
             presets_saved,
@@ -661,7 +672,7 @@ impl Session {
         Ok(())
     }
 
-    /// Write pending ops to the log (fsynced), compact when due, and save changed presets.
+    /// Write pending ops to the log (fsynced, or handed to the log's own thread natively), compact when due, and save changed presets.
     /// Called after every top-level command; cheap when nothing changed. Fails (with
     /// [`EngineError::NotSaved`]) only when the queued ops couldn't be written; they stay queued.
     pub fn persist(&mut self) -> Result<()> {
@@ -726,7 +737,9 @@ impl Session {
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
-        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
+        // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
+        let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
+        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || log_held) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
@@ -740,8 +753,9 @@ impl Session {
         let lib = self.library.as_ref()?;
         let ops = lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty());
         let presets = lib.presets_error.as_deref();
-        let n = ops.map_or(0, |_| self.pending_log.len()) + usize::from(presets.is_some());
-        ops.or(presets).map(|why| (n, why))
+        let held = lib.log_held.as_ref().map(|(n, why)| (*n, why.as_str()));
+        let n = ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some());
+        ops.or(held.map(|(_, why)| why)).or(presets).map(|why| (n, why))
     }
 
     /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
@@ -760,6 +774,8 @@ impl Session {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
         let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
+        // (a snapshot that landed holds what the log's thread held)
+        lib.log_held = lib.journal.unwritten();
         if unlogged > 0 && lib.journal.seq() == before + unlogged {
             // the snapshot holds the queued ops: they are saved, never append them again
             log::info!("library: {unlogged} queued change(s) saved in the closing snapshot");

@@ -6,7 +6,10 @@
 //!   rename).
 //! - `catalog.log` — JSON lines, one per op applied after the snapshot:
 //!   `{"seq":N,"crc":C,"op":{…}}` where `C` is the CRC-32 of the op's JSON text. Appends are
-//!   fsynced before [`Journal::append`] returns.
+//!   fsynced before [`Journal::append`] returns, except natively: [`crate::FsStore`] hands them to
+//!   a thread of its own that writes and syncs them in order right after (so a flag never waits
+//!   for the drive), holds and retries whatever fails ([`Journal::unwritten`]) and refuses later
+//!   appends meanwhile, so the log never has a gap and nothing handed over is dropped.
 //!
 //! Loading = snapshot + replay of the records with `seq > snapshot seq`. Recovery rules:
 //! - a **torn final record** (crash mid-append: truncated line or bad CRC at the end) is dropped
@@ -193,6 +196,10 @@ pub struct Journal {
     /// A failed append may have left part of its records after `log_bytes`, and cutting them off
     /// failed too: the next append cuts the log back to `log_bytes` first.
     tail_dirty: bool,
+    /// An append failed (natively that can be the store's own log thread failing to write records
+    /// handed over before, which it holds and retries): the next chance writes a snapshot, a fresh
+    /// file holding everything, in case only the log's file is broken.
+    snapshot_due: bool,
 }
 
 /// A background snapshot in flight.
@@ -381,6 +388,7 @@ impl Journal {
             pending: None,
             retry_at_records: 0,
             tail_dirty: false,
+            snapshot_due: false,
         };
         let log = log.unwrap_or_default();
 
@@ -514,6 +522,7 @@ impl Journal {
             self.tail_dirty = false;
         }
         if let Err(e) = self.store.append(LOG, buf.as_bytes()) {
+            self.snapshot_due = true;
             // Part of the batch may be in the file. Cut it back to the last whole record, so the
             // retry (same seqs) starts on a clean line instead of after a fragment that would
             // read back as damage.
@@ -676,6 +685,7 @@ impl Journal {
     }
 
     fn record_snapshot(&mut self, t: SnapshotTiming) {
+        self.snapshot_due = false;
         self.stats.snapshots += 1;
         self.stats.last_snapshot = t;
         self.stats.max_snapshot_ms = self.stats.max_snapshot_ms.max(t.total_ms);
@@ -695,6 +705,19 @@ impl Journal {
         }
     }
 
+    /// Wait until every appended record is in the file and synced (natively the store writes the
+    /// log on a thread of its own, [`crate::FsStore`]): before the files are read or copied from
+    /// outside. An error says why some aren't yet: they are held and retried, never dropped.
+    pub fn flush(&mut self) -> Result<()> {
+        self.store.flush().map_err(io)
+    }
+
+    /// Appended records the store holds because writing them failed (retried), and why; `None`
+    /// when nothing is held back. Never waits for the drive.
+    pub fn unwritten(&self) -> Option<(usize, String)> {
+        self.store.unwritten()
+    }
+
     /// Where persistence time went so far.
     pub fn stats(&self) -> PersistStats {
         PersistStats { snapshot_running: self.pending.is_some(), ..self.stats }
@@ -704,7 +727,10 @@ impl Journal {
     pub fn wants_snapshot(&self) -> bool {
         self.pending.is_none()
             && self.log_records >= self.retry_at_records
-            && (self.log_records >= self.policy.max_records || self.log_bytes >= self.policy.max_bytes)
+            && (self.snapshot_due
+                || self.store.unwritten().is_some()
+                || self.log_records >= self.policy.max_records
+                || self.log_bytes >= self.policy.max_bytes)
     }
 
     pub fn seq(&self) -> u64 {
