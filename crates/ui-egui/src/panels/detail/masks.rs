@@ -1,7 +1,7 @@
 use super::geometry::CanvasMap;
 use super::{
-    Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, ToolOverlay, json, pos2,
-    register, vec2,
+    Color32, DevelopSettings, Gesture, LightcraftApp, MaskShape, Point, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, ToolOverlay, adjusting, json,
+    overlay_shown, pos2, register, vec2,
 };
 
 /// What the user did to a face box this frame.
@@ -313,7 +313,12 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let active = app.session.active_mask;
     let clip = app.canvas_rect.unwrap_or(map.rect);
-    let p = &ui.painter_at(clip);
+    let mut painter = ui.painter_at(clip);
+    // a slider at work: no lines, handles or pins over the effect
+    if adjusting(app) {
+        painter.set_invisible();
+    }
+    let p = &painter;
     // (mask, component, handle, screen position) of everything that can be grabbed
     let mut grips: Vec<(u32, usize, u8, Pos2)> = Vec::new();
     // pins follow Show Pins and the Tool Overlay mode (Shift+H); Auto hides them while brushing
@@ -343,6 +348,12 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
                 grips.push((m.id, ci, 0, q));
             }
         }
+    }
+    // the pointer on a pin shows that mask's overlay (as Lightroom Classic)
+    if let Some(h) = resp.hover_pos()
+        && let Some((mid, ..)) = grips.iter().find(|(_, _, handle, q)| *handle == 0 && q.distance(h) < 9.0)
+    {
+        app.ui.mask_hover = app.session.active().map(|photo| (photo, *mid));
     }
     mask_keys(app, ui, map, d, &grips);
     object_marks(app, p, map, d, active);
@@ -526,6 +537,15 @@ fn brush_tool(
     clip: Rect,
     d: &DevelopSettings,
 ) {
+    // a live stroke cut short (no release seen): what went to the photo stays, in one step
+    if matches!(app.gesture, Some(Gesture::Brush { live: Some(_), .. }))
+        && !resp.drag_stopped()
+        && !resp.clicked()
+        && !ui.input(|i| i.pointer.any_down())
+    {
+        app.gesture = None;
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
     let active = app.session.active_mask;
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let r = (app.ui.brush_size as f64 * long) as f32;
@@ -542,30 +562,39 @@ fn brush_tool(
         match &mut app.gesture {
             // a held, unmoving pointer records nothing: coverage builds by passes, not time (#518)
             Some(Gesture::Brush { points, .. }) if points.last() == Some(&n) => {}
-            Some(Gesture::Brush { points, pressure }) => {
+            Some(Gesture::Brush { points, pressure, .. }) => {
                 record_pressure(pressure, points.len(), force);
                 points.push(n);
             }
+            // a stroke starts with a press, not part-way through a drag: one ended for picking another mask
+            // or photo ([`LightcraftApp::cancel_brush_gesture`]) paints nothing more until the button is let go
+            _ if !(resp.drag_started() || resp.clicked()) => {}
             _ => {
                 let mut pressure = Vec::new();
                 record_pressure(&mut pressure, 0, force);
-                app.gesture = Some(Gesture::Brush { points: vec![n], pressure });
+                app.gesture = Some(Gesture::Brush { points: vec![n], pressure, live: None });
             }
         }
     }
-    // the stroke being painted (the render shows it once it's committed), with the committed
-    // stroke's dab spacing, feather and flow (issue #517), tinted only when the overlay will
-    // show it: with the overlay hidden (O, or a mask slider hid it) or a colour overlay at
-    // opacity 0, the photo stays untinted while painting, so dodging and burning is judged on
-    // the photo (issue #2549)
+    // the overlay rule: a mask with settings shows its effect while painted (the stroke goes to the photo live),
+    // never tinted; the stroke is tinted only when the overlay will show it (O, or a mask without settings yet).
+    // With the all-masks overlay it follows the mask's visibility, and a colour overlay at opacity 0 tints nothing,
+    // so dodging and burning is judged on the photo (issue #2549). The tinted stroke has the committed stroke's dab
+    // spacing, feather and flow (issue #517); the render shows it once it's committed.
     use lightcraft_pipeline::MaskView;
     let colored = matches!(MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), MaskView::Color | MaskView::ColorOnBw);
     // the all-masks overlay ([`view_overlay`]) shows only visible masks, and gives way to the
     // selected mask's when none has anything in it (a stroke goes into the selected mask, or a new one)
-    let visible = active.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.visible);
+    let mask = active.and_then(|id| d.masks.iter().find(|m| m.id == id));
+    let visible = mask.is_none_or(|m| m.visible);
     let all = app.ui.mask_overlay_all && (visible || d.masks.iter().any(|m| m.visible && !m.components.is_empty()));
-    let shown = if all { visible } else { app.ui.mask_overlay } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
-    if shown && let Some(Gesture::Brush { points, pressure }) = &app.gesture {
+    let red = if all { visible } else { mask.is_none_or(|m| overlay_shown(app, m)) } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
+    if !red {
+        live_stroke(app, ui);
+    }
+    if let Some(Gesture::Brush { points, pressure, live: None }) = &app.gesture
+        && red
+    {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
         // opacity 0 only gets here in the image views, which ignore it: a fixed tint there
         let opacity = if app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
@@ -584,7 +613,7 @@ fn brush_tool(
         app.brush_live = None;
     }
     if (resp.drag_stopped() || resp.clicked())
-        && let Some(Gesture::Brush { points, pressure }) = app.gesture.take()
+        && let Some(Gesture::Brush { points, pressure, live }) = app.gesture.take()
     {
         app.brush_live = None;
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
@@ -596,8 +625,54 @@ fn brush_tool(
         let _ = app.run(
             "mask.brushStroke",
             json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
-                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
+                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect && live.is_none(),
+                   "continue": live.is_some()}),
         );
+        if live.is_some() {
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+    }
+}
+
+/// A stroke on a mask with settings goes to the photo every moment while painting, so its effect
+/// shows live (one undo step for the whole stroke).
+fn live_stroke(app: &mut LightcraftApp, ui: &egui::Ui) {
+    let now = ui.input(|i| i.time);
+    let Some(Gesture::Brush { points, pressure, live }) = &app.gesture else { return };
+    if !live_due(*live, points.len(), now) {
+        return;
+    }
+    let (pts, pressure, first) = (points.iter().map(|q| [q.x, q.y]).collect::<Vec<_>>(), pressure.clone(), live.is_none());
+    if first {
+        let _ = app.run("develop.beginInteraction", json!({"label": "Brush"}));
+    }
+    let erase = app.ui.brush_erase != ui.input(|i| i.modifiers.alt);
+    let sent = app.run(
+        "mask.brushStroke",
+        json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
+               "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "continue": !first}),
+    );
+    // only a stroke that reached the photo is live: else the release would replace the mask's
+    // previous stroke instead of adding this one
+    if sent.is_ok() {
+        if let Some(Gesture::Brush { live, .. }) = &mut app.gesture {
+            *live = Some((now, pts.len()));
+        }
+    } else if first {
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LIVE_STROKE_EVERY));
+}
+
+/// How often (seconds) a stroke whose effect shows while painting goes to the photo.
+const LIVE_STROKE_EVERY: f64 = 0.12;
+
+/// Whether the stroke of `len` points should go to the photo now: the first time once it has two
+/// points, then every [`LIVE_STROKE_EVERY`] when it grew.
+fn live_due(live: Option<(f64, usize)>, len: usize, now: f64) -> bool {
+    match live {
+        None => len >= 2,
+        Some((at, sent)) => len > sent && (now - at >= LIVE_STROKE_EVERY || now < at || now.is_nan()),
     }
 }
 

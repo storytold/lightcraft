@@ -195,9 +195,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // lit while the overlay is on to stay; a click does what O does
                 let on = app.ui.mask_overlay;
-                if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
-                    app.ui.mask_overlay = !on;
+                if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked()
+                    && let Err(e) = app.run("view.maskOverlay", json!({}))
+                {
+                    app.toast(ui.ctx(), e);
                 }
                 let all = app.ui.mask_overlay_all;
                 let all_mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
@@ -260,6 +263,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
             ui.painter().galley(at, g, color);
             let resp = if elided { resp.on_hover_text(&m.name) } else { resp };
+            // the mask's own row (name, eye, menu) is where its effect is judged, the eye switching it
+            // on and off: the pointer on it shows no overlay (a component row under it does)
             // show / hide on hover (and always while hidden)
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
             if ui.rect_contains_pointer(r) || !m.visible {
@@ -312,7 +317,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 MaskShape::Prompt { text, .. } => format!("“{text}”"),
                 _ => menu_label(kind).to_string(),
             });
-            ui.horizontal(|ui| {
+            let row = ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                 paint(ui.painter(), r, icon, t.text_label);
                 let op = match c.op {
@@ -357,6 +362,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     egui::Popup::menu(&more).show(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 });
             });
+            // the pointer on a component's row shows the whole mask's overlay, to see where it is
+            if ui.rect_contains_pointer(row.response.rect) {
+                app.ui.mask_hover = app.session.active().map(|photo| (photo, m.id));
+            }
             range_controls(app, ui, i, &c.shape);
         }
         ui.add_space(6.0);
@@ -373,7 +382,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("mask.invert", json!({}));
             }
             if icon_button(ui, "maskDelete", Icon::Trash, vec2(26.0, 24.0), false, true, "Delete mask").clicked() {
-                let _ = app.run("mask.delete", json!({}));
+                delete_mask(app, None);
             }
         });
     });
@@ -444,7 +453,7 @@ fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, vi
         ui.close();
     }
     if ui.button(crate::i18n::tr("Delete Mask")).clicked() {
-        let _ = app.run("mask.delete", json!({"id": id}));
+        delete_mask(app, Some(id));
         ui.close();
     }
 }
@@ -917,6 +926,25 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+/// Deletes mask `id` of the active photo (`None`: the active mask). A deleted mask's id is free for the next new
+/// one, so whether O hid its overlay goes with it.
+pub(crate) fn delete_mask(app: &mut LightcraftApp, id: Option<u32>) {
+    let (photo, target) = (app.session.active(), id.or(app.session.active_mask));
+    let params = id.map_or_else(|| json!({}), |id| json!({"id": id}));
+    if app.run("mask.delete", params).is_ok()
+        && let (Some(photo), Some(target)) = (photo, target)
+    {
+        app.ui.mask_overlay_hidden.retain(|k| *k != (photo, target));
+    }
+}
+
+/// Forgets that O hid the overlay of a mask that no longer exists (undone, stepped back in the history, replaced by
+/// pasted settings): its id goes to the next new mask, which must not start hidden.
+pub(crate) fn forget_missing_overlays(app: &mut LightcraftApp) {
+    let session = &app.session;
+    app.ui.mask_overlay_hidden.retain(|(photo, id)| session.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|m| m.id == *id)));
 }
 
 #[cfg(test)]

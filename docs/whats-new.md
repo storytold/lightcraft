@@ -234,6 +234,17 @@
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
   the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
+### The mask overlay shows when it helps
+- One rule now decides when a mask's overlay covers the photo: when you switch it on with **O** (or the eye by the
+  Masks title), while the pointer is on one of the mask's parts (the rows under its name) or its pin, or by itself for a mask that
+  has no settings yet, so you see what it selects. The pointer on the mask's own row shows nothing, so its eye
+  switches the effect on and off with nothing over the photo. A mask with settings (its own or a preset's) never shows the overlay by itself, so you can
+  judge its effect: picking, creating, duplicating or adding to such a mask no longer covers the photo. While a
+  slider is at work nothing covers the photo, not even an overlay switched on with O; it comes back when you let go.
+  During a mask drag or a brush stroke, hovering shows no overlay; an overlay switched on with O, or a mask without
+  settings, keeps showing what it selects. While an Object click or a description is still being computed, no stand-in
+  overlay shows.
+
 ### Import rename numbering stops safely at its limit
 - Copy and Move imports can use the last representable rename number once. If more renamed files remain, each is
   reported as failed with guidance to lower `renameStart` or leave `rename` blank; completed transfers stay
