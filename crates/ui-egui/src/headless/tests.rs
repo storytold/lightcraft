@@ -4756,7 +4756,7 @@ fn trackpad_pinch_anchors_fractional_zoom_and_scroll_pans() {
     assert!((edge.left() - area.left()).abs() < 0.01 && (edge.bottom() - area.bottom()).abs() < 0.01, "{edge:?} vs {area:?}");
 
     h.request("ui.zoom", json!({"factor": 1e20}), t);
-    assert_eq!(h.app.ui.zoom, Zoom::Percent(800.0));
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
     h.request("ui.zoom", json!({"factor": 0.000001}), t);
     assert_eq!(h.app.ui.zoom, Zoom::Fit);
     assert_eq!(h.app.ui.pan, (0.5, 0.5));
@@ -4870,6 +4870,15 @@ fn navigation_rejects_invalid_input_and_preserves_old_zoom_state() {
     assert_eq!(h.app.ui.zoom, Zoom::Percent(200.0));
     h.app.run("view.zoomOut", json!({})).unwrap();
     assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0));
+    h.app.run("view.navigate", json!({"zoom": {"percent": 800.0}})).unwrap();
+    h.app.run("view.zoomIn", json!({})).unwrap();
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
+    h.app.run("view.zoomIn", json!({})).unwrap();
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
+    h.app.run("view.navigate", json!({"zoom": {"percent": crate::state::MAX_ZOOM}})).unwrap();
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
+    assert!(h.app.run("view.navigate", json!({"zoom": {"percent": crate::state::MAX_ZOOM + 1.0}})).is_err());
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
 
     let area = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(1000.0, 700.0));
     for pan in [(0.0, 0.0), (1.0, 1.0)] {

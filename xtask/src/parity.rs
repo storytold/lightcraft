@@ -445,6 +445,14 @@ old
     }
 
     #[test]
+    fn checked_in_checklist_has_valid_unique_rows() {
+        let md = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(DOC)).unwrap();
+        let doc = parse(&md);
+        assert!(!doc.rows.is_empty(), "the checklist must contain feature rows");
+        assert!(doc.errors.is_empty(), "{:?}", doc.errors);
+    }
+
+    #[test]
     fn gaps_are_listed_once() {
         let md = "\
 # Gaps
