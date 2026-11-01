@@ -32,6 +32,9 @@ pub struct RenderJob {
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
+    /// HDR display ([`RenderJob::with_hdr_display`]): also render the HDR rendition into
+    /// [`Rendered::deep`].
+    pub hdr_display: bool,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
     pub slide: Option<Arc<crate::slide::SlideCompose>>,
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
@@ -275,6 +278,11 @@ impl RenderJob {
                 let clip_view = self.request.overlay.is_clipping();
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu);
+                // HDR display: the HDR rendition too, for the window to show (see `hdr_display.rs`)
+                if self.hdr_display {
+                    rendered.deep =
+                        super::hdr_display::rendition(&self.settings, &self.request, self.stages.as_deref(), self.display_fit, src, &info);
+                }
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;

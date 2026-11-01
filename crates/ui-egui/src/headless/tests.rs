@@ -5092,3 +5092,5 @@ fn export_sizes_keep_the_pixels_typed() {
     type_value(&mut h, "sliderValue:export.sizeH", "1350");
     assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
 }
+
+mod hdr_display;

@@ -26,6 +26,7 @@ mod drop_overlay;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;
+pub mod hdr_view;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -156,6 +157,9 @@ pub struct LightcraftApp {
     pub integrated_titlebar: bool,
     /// The `movable` flag last given to the window (macOS, `craft_window::title_bar::sync_movable`).
     pub window_movable: Option<bool>,
+    /// Set by the host when the window is HDR (and HDR display is on): HDR edits' loupe renders
+    /// carry their HDR rendition and are painted through it ([`hdr_view`]).
+    pub hdr_presenter: Option<Box<dyn hdr_view::HdrPresenter>>,
     /// The host installed a native menu bar (no in-window menus then).
     pub native_menu: bool,
     /// Shortcuts the native menu bar currently handles (`Cmd+Z`, `G`…): the egui shortcut handler
@@ -227,6 +231,9 @@ pub struct LightcraftApp {
     pub(crate) missing_count_test_delay: Option<std::time::Duration>,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// Drawing into `shadow`: the CPU rasterizer drops paint callbacks, so the loupe paints its
+    /// SDR rendition even on an HDR window.
+    pub(crate) offscreen: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
     /// A gesture was canceled after its synthetic pointer press reached egui. The next
