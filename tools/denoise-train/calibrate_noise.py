@@ -6,9 +6,8 @@ Offline training tooling for AI Denoise; not part of LightCraft.
 brightness bin, low percentiles of the variance. Flat areas give the lowest variances, so the 10th percentile,
 corrected for the spread of a 64-sample variance estimate, follows the sensor's noise curve. Per ISO we fit the
 Poisson-Gaussian model `variance = a * mean + b` (white = 1). No picture data is stored: the output is the fitted
-`a`, `b` per ISO and camera. `train.py` does not read this file: its read-noise relation (`read_noise`, the EOS R5 C
-fit `b = 1.25e-6 (a / 6.6e-4)^2`) was set by hand from these numbers, so a new camera's calibration is a check of
-that relation, and a reason to edit it, not an input to the next run.
+`a`, `b` per ISO and camera. `train.py --noise-cal <this file>` trains on it: part of each batch gets a measured
+camera's noise exactly, and the read-noise relation for the rest is fitted to these numbers.
 
     python calibrate_noise.py --rawdump <exe> --out noise-<camera>.json --sample 200 <folder> [<folder> ...]
 
@@ -17,6 +16,7 @@ The folders are only read.
 
 import argparse
 import json
+import math
 import os
 import random
 import subprocess
@@ -38,7 +38,10 @@ def files_in(folders):
 
 
 def fit(points):
-    """Weighted least squares of var = a*m + b, with relative weights (each point counts by its relative error)."""
+    """Weighted least squares of var = a*m + b, with relative weights (each point counts by its relative error).
+
+    Read noise can't be negative: when the free fit puts `b` below zero (read noise too small for these photos to
+    resolve), `a` is refitted with `b = 0`, so the file never holds a variance that is negative in the shadows."""
     import numpy as np
 
     m = np.array([p[0] for p in points])
@@ -46,7 +49,41 @@ def fit(points):
     w = 1.0 / np.maximum(v, 1e-12)
     A = np.stack([m, np.ones_like(m)], 1) * w[:, None]
     (a, b), *_ = np.linalg.lstsq(A, v * w, rcond=None)
+    if b < 0:
+        a, b = float(np.sum(m * v * w * w) / np.sum(m * m * w * w)), 0.0
     return float(a), float(b)
+
+
+def build_calibration(measurements):
+    """`rawdump noise` outputs (dicts; None for a skipped file) -> {camera: {iso: {"photos": n, plane: {a, b}}}}.
+
+    A plane whose fit gives no positive, finite shot-noise slope is left out (with a message), so every number
+    written is one `train.py` can use."""
+    # per (camera, iso, plane): mean bin -> list of p10 variances (one per photo)
+    pts = defaultdict(lambda: defaultdict(list))
+    counts = defaultdict(int)
+    for d in measurements:
+        if not d or not d.get("iso"):
+            continue
+        cam = f"{d['make']} {d['model']}".strip()
+        counts[(cam, d["iso"])] += 1
+        for pl in d["planes"]:
+            for b in pl["bins"]:
+                if b["n"] >= 50:
+                    pts[(cam, d["iso"], pl["plane"])][round(b["mean"], 6)].append(b["p10"] / P10_BIAS)
+
+    result = defaultdict(dict)
+    for (cam, iso, plane), bins in sorted(pts.items()):
+        # the lowest photo's value per bin (the flattest content), above the darkest bins where quantisation rules
+        points = [(m, min(v)) for m, v in bins.items() if 0.002 <= m <= 0.6]
+        if len(points) < 5:
+            continue
+        aa, bb = fit(points)
+        if not (math.isfinite(aa) and math.isfinite(bb) and aa > 0):
+            print(f"{cam} ISO {iso} {plane}: no usable fit (a={aa}, b={bb}); left out", file=sys.stderr)
+            continue
+        result[cam].setdefault(str(iso), {"photos": counts[(cam, iso)]})[plane] = {"a": aa, "b": bb}
+    return dict(result)
 
 
 def main():
@@ -74,30 +111,13 @@ def main():
             print(f"skipped {f}: {e}", file=sys.stderr, flush=True)
             return None
 
-    # per (camera, iso, plane): mean bin -> list of p10 variances (one per photo)
-    pts = defaultdict(lambda: defaultdict(list))
-    counts = defaultdict(int)
     with ThreadPoolExecutor(a.jobs) as ex:
+        measurements = []
         for i, d in enumerate(ex.map(one, files)):
-            if not d or not d.get("iso"):
-                continue
-            cam = f"{d['make']} {d['model']}".strip()
-            counts[(cam, d["iso"])] += 1
-            for pl in d["planes"]:
-                for b in pl["bins"]:
-                    if b["n"] >= 50:
-                        pts[(cam, d["iso"], pl["plane"])][round(b["mean"], 6)].append(b["p10"] / P10_BIAS)
+            measurements.append(d)
             if i % 20 == 0:
                 print(f"{i} done", flush=True)
-
-    result = defaultdict(dict)
-    for (cam, iso, plane), bins in sorted(pts.items()):
-        # the lowest photo's value per bin (the flattest content), above the darkest bins where quantisation rules
-        points = [(m, min(v)) for m, v in bins.items() if 0.002 <= m <= 0.6]
-        if len(points) < 5:
-            continue
-        aa, bb = fit(points)
-        result[cam].setdefault(str(iso), {"photos": counts[(cam, iso)]})[plane] = {"a": aa, "b": bb}
+    result = build_calibration(measurements)
     if not result:
         # (a mistyped folder, or raws the helper can't read): keep any earlier calibration rather than empty it
         print(f"no noise could be fitted from {len(files)} files; {a.out} is left as it was", file=sys.stderr)
