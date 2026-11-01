@@ -160,7 +160,9 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
                 return Ok(Later::Nothing);
             }
             match s.segmenter.auto_model(&kind) {
-                Err(_) => return Ok(Later::Approximate(kind.preferred_model())),
+                // (the model that is missing: a People selection may need the face model though
+                // its preferred one is installed, or the other way round)
+                Err(e) => return Ok(Later::Approximate(crate::segment::models::missing_model(&e).unwrap_or_else(|| kind.preferred_model()))),
                 Ok(_) if background => return Ok(Later::Auto(kind)),
                 Ok(_) => match s.segment_auto(id, &kind).map_err(ai_err)? {
                     Some(seg) => {

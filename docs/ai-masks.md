@@ -138,7 +138,7 @@ Folders: `models/<name>/` in LightCraft's settings folder — `%APPDATA%\LightCr
 or the folder `LIGHTCRAFT_AI_MODELS_DIR` names: `mediapipe-selfie-multiclass/`,
 `mediapipe-face-landmarker/`, `birefnet-portrait/`, `eomt-s-coco/`, `sam2.1-hiera-tiny/` (SAM 3
 has its own folder, below). To install one by hand, put its files there (`model.safetensors`, plus
-`config.json` for EoMT; `selfie_multiclass_256x256.tflite` and `face_landmarker.task` for the
+`config.json` for EoMT and SAM 2.1; `selfie_multiclass_256x256.tflite` and `face_landmarker.task` for the
 MediaPipe models).
 
 Download locations, in order: `LIGHTCRAFT_<MODEL>_MIRRORS` (`LIGHTCRAFT_PEOPLE_MIRRORS`,
