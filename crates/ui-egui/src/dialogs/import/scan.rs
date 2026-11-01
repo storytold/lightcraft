@@ -71,6 +71,10 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     if app.review_pending.is_some() {
         return Err("an import review is waiting for the open dialog to close".into());
     }
+    // its review opens when the camera's photos are staged (`camera_import::poll`)
+    if app.camera.is_some() {
+        return Err("a camera is being read".into());
+    }
     let sources = paths.clone();
     let (input, paths) = ScanInput::new(&mut app.session, &paths);
     let progress = std::sync::Arc::new(ScanProgress::default());

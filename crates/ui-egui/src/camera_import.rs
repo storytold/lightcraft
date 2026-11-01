@@ -72,6 +72,10 @@ pub fn start(app: &mut LightcraftApp, id: &str, name: &str, album: Option<u64>) 
     if app.scan.is_some() || app.import.is_some() {
         return Err("an import is running".into());
     }
+    // the review imports staged files: a read now could replace them or clean them away under it
+    if app.review_pending.is_some() || matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. })) {
+        return Err("an import review is open".into());
+    }
     crate::import::busy_synchronizing(app)?;
     let name = if name.trim().is_empty() { "Camera".to_string() } else { name.trim().to_string() };
     let known = Known::of(&app.session.catalog);
@@ -249,6 +253,24 @@ mod tests {
         task(&mut h, "X100T", None);
         let e = crate::panels::settings::can_switch_library(&h.app).unwrap_err();
         assert!(e.contains("camera"), "{e}");
+    }
+
+    /// CodeRabbit on #1635: a camera read and an import review never overlap. A read during a
+    /// review could replace or clean away the staged files it imports; a review started during a
+    /// read would leave the read's own review nowhere to open.
+    #[test]
+    fn a_camera_read_and_an_import_review_never_overlap() {
+        let mut h = demo();
+        h.app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::default() });
+        assert_eq!(start(&mut h.app, "x", "X100T", None).err().as_deref(), Some("an import review is open"));
+        h.app.review_pending = h.app.ui.dialog.take();
+        assert_eq!(start(&mut h.app, "x", "X100T", None).err().as_deref(), Some("an import review is open"));
+        assert!(h.app.camera.is_none());
+        h.app.review_pending = None;
+        task(&mut h, "X100T", None);
+        let e = crate::import::open(&mut h.app, vec![std::env::temp_dir().to_string_lossy().to_string()]).unwrap_err();
+        assert_eq!(e, "a camera is being read");
+        assert!(h.app.scan.is_none());
     }
 
     #[test]
