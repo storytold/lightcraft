@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Automatic RAW checks show progress and can be cancelled
+- When a newer LightCraft version rechecks preview-only RAW files on library open, the activity stack now shows the
+  completed-file count and offers cancellation. Successful probes that completed can still update the catalog;
+  files not started remain preview-only and will be eligible for a later recheck. Cancellation is between files: an
+  active file read may finish, and the cancelled job does not restart on every frame.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
