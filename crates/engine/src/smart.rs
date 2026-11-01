@@ -52,6 +52,29 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
     if legacy.exists() { legacy } else { sharded }
 }
 
+/// Keep a photo's proxy when its content key changes but its pixels don't (a hash computed on
+/// demand replaces the `file:` key): the proxy saved under `before`'s key is linked, or copied, to
+/// `after`'s place. The old file stays, so undoing the change finds it again. Nothing happens when
+/// there is no old proxy or the new place already has one. Touches the disk: call it only for the
+/// few photos whose key changed.
+pub fn carry_over(dir: &Path, before: &Photo, after: &Photo) -> std::io::Result<()> {
+    let to = sharded_file_path(dir, after);
+    let from = file_path(dir, before);
+    if from == to || to.exists() || !from.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::hard_link(&from, &to).or_else(|_| copy_whole(&from, &to))
+}
+
+/// Copy `from` to `to` through a temp file: a failed copy leaves no partial proxy at `to`, which
+/// [`carry_over`] would take for a finished one.
+fn copy_whole(from: &Path, to: &Path) -> std::io::Result<()> {
+    lightcraft_catalog::safe_file::write_atomic_with(to, &mut |w| std::io::copy(&mut std::fs::File::open(from)?, w).map(|_| ())).map(|_| ())
+}
+
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
 

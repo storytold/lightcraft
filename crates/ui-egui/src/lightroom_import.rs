@@ -1,8 +1,10 @@
 //! Background Lightroom catalog inspection and import.
 //!
 //! Reading a catalog, probing its originals and staging its archive can take minutes on a
-//! removable or network drive.  This task keeps that work off the owner thread, commits prepared
-//! data only on the owner thread, then finishes the archive index on a worker.
+//! removable or network drive.  This task keeps that work off the owner thread: a worker reads the
+//! catalog and prepares its photos in batches, each batch is added on the owner thread as it
+//! arrives (photos appear while the rest is read; a cancel keeps what was added), then the archive
+//! index is finished on a worker.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +24,12 @@ enum Kind {
 
 enum Message {
     Inspected(Result<Value, String>),
-    Prepared(Result<Box<lightcraft_engine::lightroom_job::PreparedLightroom>, String>),
+    /// The catalog was read: what adding its photos needs.
+    Started(Result<Box<lightcraft_engine::lightroom_job::LightroomStart>, String>),
+    /// The next photos, ready to be added.
+    Batch(Result<Box<lightcraft_engine::lightroom_job::LightroomBatch>, String>),
+    /// Every batch was handed over.
+    Read,
     Finalized(Result<(), String>),
 }
 
@@ -43,6 +50,10 @@ pub struct LightroomTask {
     phase: Phase,
     cancelled: bool,
     guard: TaskGuard,
+    /// The import being added (from the worker's `Started` on).
+    import: Option<lightcraft_engine::lightroom_job::LightroomImport>,
+    /// Writes the import index after each batch of virtual copies (from the first one on).
+    index_writer: Option<IndexWriter>,
 }
 
 impl LightroomTask {
@@ -60,12 +71,12 @@ impl LightroomTask {
             Kind::Import => "Importing Lightroom catalog",
         };
         let guard = s.activity.start("lightroom", label, Cancel::Flag(cancel.clone()));
-        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard };
+        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard, import: None, index_writer: None };
         task.refresh();
         task
     }
 
-    /// Move to `phase`; only reading the catalog can stop, adding the photos runs to the end.
+    /// Move to `phase`; reading (and adding batch by batch) can stop, the final step runs to the end.
     fn enter(&mut self, phase: Phase) {
         self.phase = phase;
         self.guard.set_cancellable(phase == Phase::Reading);
@@ -119,6 +130,7 @@ impl LightroomTask {
             "done": done,
             "total": total,
             "fraction": self.progress.fraction(),
+            "added": self.import.as_ref().map_or(0, |i| i.progress().0),
             "cancelled": self.cancelled || self.cancel.load(Ordering::Relaxed),
         })
     }
@@ -194,22 +206,48 @@ fn spawn_inspect(
         .map_err(|e| format!("could not start Lightroom inspect: {e}"))
 }
 
+/// Batches a worker may have ready before the owner thread added them.
+#[cfg(not(target_arch = "wasm32"))]
+const BATCHES_AHEAD: usize = 2;
+
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_prepare(
     mut job: lightcraft_engine::lightroom_job::LightroomJob,
     cancel: Arc<AtomicBool>,
-    tx: mpsc::Sender<Message>,
+    tx: mpsc::SyncSender<Message>,
     ctx: egui::Context,
 ) -> Result<(), String> {
     std::thread::Builder::new()
         .name("lc-lightroom-import".into())
         .spawn(move || {
-            let result =
-                lightcraft_engine::guard::catch("Lightroom import", || job.prepare(&cancel)).and_then(|r| r.map(Box::new).map_err(|e| e.to_string()));
-            if let Err(mpsc::SendError(Message::Prepared(Ok(prepared)))) = tx.send(Message::Prepared(result)) {
-                // The owner dropped the task (for example while closing): staged copies/moves
-                // must be put back even though no UI receiver remains to accept the result.
-                prepared.rollback();
+            let started =
+                lightcraft_engine::guard::catch("Lightroom import", || job.start(&cancel)).and_then(|r| r.map(Box::new).map_err(|e| e.to_string()));
+            let ok = started.is_ok();
+            if tx.send(Message::Started(started)).is_err() || !ok {
+                ctx.request_repaint();
+                return;
+            }
+            ctx.request_repaint();
+            loop {
+                let next = lightcraft_engine::guard::catch("Lightroom import", || job.next_batch(&cancel))
+                    .unwrap_or_else(|e| Some(Err(lightcraft_engine::EngineError::Other(e))));
+                let Some(batch) = next else {
+                    let _ = tx.send(Message::Read);
+                    break;
+                };
+                let failed = batch.is_err();
+                match tx.send(Message::Batch(batch.map(Box::new).map_err(|e| e.to_string()))) {
+                    // The owner dropped the task (for example while closing): staged copies/moves
+                    // must be put back even though no UI receiver remains to accept the result.
+                    Err(mpsc::SendError(Message::Batch(Ok(batch)))) => {
+                        batch.rollback();
+                        break;
+                    }
+                    Err(_) => break,
+                    Ok(()) if failed => break,
+                    Ok(()) => {}
+                }
+                ctx.request_repaint();
             }
             ctx.request_repaint();
         })
@@ -220,12 +258,16 @@ fn spawn_prepare(
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_finalize(
     finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    previous: Option<std::thread::JoinHandle<()>>,
     tx: mpsc::Sender<Message>,
     ctx: egui::Context,
 ) -> Result<(), String> {
     std::thread::Builder::new()
         .name("lc-lightroom-finalize".into())
         .spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
             let result = lightcraft_engine::guard::catch("Lightroom archive finalization", || finalization.finish())
                 .and_then(|r| r.map_err(|e| e.to_string()));
             let _ = tx.send(Message::Finalized(result));
@@ -238,10 +280,103 @@ fn spawn_finalize(
 #[cfg(target_arch = "wasm32")]
 fn spawn_finalize(
     _finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    _previous: Option<std::thread::JoinHandle<()>>,
     _tx: mpsc::Sender<Message>,
     _ctx: egui::Context,
 ) -> Result<(), String> {
     unsupported_wasm().map(|_| ())
+}
+
+/// Write the import index (`write`), logging a failure: the final write, which comes after this
+/// one, writes the whole index again and reports one.
+fn write_index(write: lightcraft_engine::lightroom_job::LightroomArchiveFinalization) {
+    let written = lightcraft_engine::guard::catch("Lightroom import index", || write.finish()).and_then(|r| r.map_err(|e| e.to_string()));
+    if let Err(e) = written {
+        log::warn!("Lightroom import index: {e}");
+    }
+}
+
+type IndexJob = Box<dyn FnOnce() + Send>;
+
+/// What waits for the index writer: the newest write, and whether to stop.
+#[derive(Default)]
+struct IndexQueue {
+    next: Option<IndexJob>,
+    closed: bool,
+}
+
+/// One worker that writes the import index after each batch of virtual copies, in order. A
+/// newer index replaces one still waiting (it holds every identity of the older one), so however
+/// fast the batches come, one write runs and at most one waits. With no worker (none could start)
+/// each write runs where it is handed in.
+struct IndexWriter {
+    queue: Arc<(std::sync::Mutex<IndexQueue>, std::sync::Condvar)>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl IndexWriter {
+    fn start() -> Self {
+        let queue: Arc<(std::sync::Mutex<IndexQueue>, std::sync::Condvar)> = Arc::default();
+        let shared = queue.clone();
+        let worker = std::thread::Builder::new()
+            .name("lc-lightroom-index".into())
+            .spawn(move || {
+                let (lock, ready) = &*shared;
+                loop {
+                    let job = {
+                        let mut queue = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        loop {
+                            if let Some(job) = queue.next.take() {
+                                break Some(job);
+                            }
+                            if queue.closed {
+                                break None;
+                            }
+                            queue = ready.wait(queue).unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                    };
+                    match job {
+                        Some(job) => job(),
+                        None => return,
+                    }
+                }
+            })
+            .ok();
+        Self { queue, worker }
+    }
+
+    /// Write after the write before it (in place of one that still waits).
+    fn write(&mut self, job: impl FnOnce() + Send + 'static) {
+        if self.worker.is_none() {
+            job();
+            return;
+        }
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next = Some(Box::new(job));
+        ready.notify_one();
+    }
+
+    /// Stop for the final write, which holds every identity: a write still waiting is dropped, and
+    /// the one running is returned to wait for.
+    fn close(mut self) -> Option<std::thread::JoinHandle<()>> {
+        let (lock, ready) = &*self.queue;
+        {
+            let mut queue = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            queue.next = None;
+            queue.closed = true;
+        }
+        ready.notify_one();
+        self.worker.take()
+    }
+}
+
+impl Drop for IndexWriter {
+    /// (without a final write, a write still waiting is made before the worker stops)
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed = true;
+        ready.notify_one();
+    }
 }
 
 /// What `status` and the result window show for an inspected catalog: counts, missing originals,
@@ -274,7 +409,13 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
             crate::i18n::tr_format!("Lightroom import failed: {e}{warning}", e = e, warning = warning)
         }
     } else if value.get("cancelled").and_then(Value::as_bool).unwrap_or(false) {
-        crate::i18n::tr(if matches!(kind, Kind::Inspect) { "Lightroom inspection cancelled" } else { "Lightroom import cancelled" }).into()
+        match value["imported"].as_u64().filter(|n| *n > 0 && matches!(kind, Kind::Import)) {
+            // what was added stays: importing the catalog again continues
+            Some(imported) => crate::i18n::tr_format!("Lightroom import cancelled · {imported} photos added", imported = imported),
+            None => {
+                crate::i18n::tr(if matches!(kind, Kind::Inspect) { "Lightroom inspection cancelled" } else { "Lightroom import cancelled" }).into()
+            }
+        }
     } else if matches!(kind, Kind::Inspect) {
         let photos = value["photos"].as_u64().unwrap_or(0);
         let collections = value["collections"].as_u64().unwrap_or(0);
@@ -397,7 +538,7 @@ fn start_import(app: &mut LightcraftApp, path: PathBuf, update_existing: bool, c
     let job = lightcraft_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing).map_err(|e| e.to_string())?;
     let cancel = Arc::new(AtomicBool::new(false));
     let progress = job.progress();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(BATCHES_AHEAD);
     spawn_prepare(job, cancel.clone(), tx, ctx.clone())?;
     app.lightroom_last = None;
     app.lightroom = Some(LightroomTask::new(&app.session, Kind::Import, path.clone(), cancel, progress, rx));
@@ -440,90 +581,115 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value, ctx: &egui::Context
     }
 }
 
-/// Poll owner-thread work, commit a prepared import, and finish its archive index.
+/// Poll owner-thread work: add each batch as it arrives, finish the import, then its archive index.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     show_result(app);
     let Some(mut task) = app.lightroom.take() else { return };
-    let message = match task.rx.try_recv() {
-        Ok(m) => m,
-        Err(mpsc::TryRecvError::Empty) => {
-            task.refresh();
-            app.lightroom = Some(task);
-            return;
+    // a few messages a frame: each batch is added in one short step
+    for _ in 0..BATCHES_PER_FRAME {
+        let message = match task.rx.try_recv() {
+            Ok(m) => m,
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // the worker is gone without saying it was done: what was added stays
+                finish(app, ctx, task, false, Some("Lightroom worker stopped unexpectedly".into()));
+                return;
+            }
+        };
+        match receive(app, ctx, task, message) {
+            Some(t) => task = t,
+            None => {
+                ctx.request_repaint();
+                return;
+            }
         }
-        Err(mpsc::TryRecvError::Disconnected) => {
-            terminal(app, ctx, &task, json!({"error": "Lightroom worker stopped unexpectedly"}));
-            return;
-        }
-    };
+    }
+    task.refresh();
+    app.lightroom = Some(task);
+}
+
+/// Batches added per frame at most.
+const BATCHES_PER_FRAME: usize = 4;
+
+/// Act on one message; the task while it goes on.
+fn receive(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask, message: Message) -> Option<LightroomTask> {
     // The task's cancel flag says whether it was cancelled (the worker only stops for it), not an
     // error's words: a real failure that mentions "cancelled" is still reported as a failure.
+    let cancelled = |task: &LightroomTask| task.cancel.load(Ordering::Relaxed);
     match message {
-        Message::Inspected(result) => match result {
-            Ok(report) if !task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &task, report),
-            Ok(_) => terminal(app, ctx, &task, json!({"cancelled": true})),
-            Err(_) if task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &task, json!({"cancelled": true})),
-            Err(e) => terminal(app, ctx, &task, json!({"error": e})),
-        },
-        Message::Prepared(result) => {
-            let prepared = match result {
-                Ok(p) => p,
-                Err(_) if task.cancel.load(Ordering::Relaxed) => {
+        Message::Inspected(result) => {
+            match result {
+                Ok(report) if !task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &task, report),
+                Ok(_) => terminal(app, ctx, &task, json!({"cancelled": true})),
+                Err(_) if cancelled(&task) => terminal(app, ctx, &task, json!({"cancelled": true})),
+                Err(e) => terminal(app, ctx, &task, json!({"error": e})),
+            }
+            None
+        }
+        Message::Started(result) => {
+            let start = match result {
+                Ok(start) => start,
+                Err(_) if cancelled(&task) => {
                     terminal(app, ctx, &task, json!({"cancelled": true}));
-                    return;
+                    return None;
                 }
                 Err(e) => {
                     terminal(app, ctx, &task, json!({"error": e}));
-                    return;
+                    return None;
                 }
             };
-            if task.cancel.load(Ordering::Relaxed) || prepared.is_cancelled() || !prepared.token().matches(&app.session) {
-                prepared.rollback();
-                terminal(
-                    app,
-                    ctx,
-                    &task,
-                    if task.cancel.load(Ordering::Relaxed) {
-                        json!({"cancelled": true})
-                    } else {
-                        json!({"error": "Lightroom import belongs to a different open library"})
-                    },
-                );
-                return;
+            if task.cancel.load(Ordering::Relaxed) {
+                terminal(app, ctx, &task, json!({"cancelled": true}));
+                return None;
             }
-            task.enter(Phase::Committing);
-            let mut finalization = None;
-            let mut report = None;
-            let committed = app.session.execute_fn("library.importLightroom", |s| {
-                let completion = lightcraft_engine::lightroom_job::commit_prepared(s, *prepared)?;
-                report = Some(completion.report.clone());
-                finalization = Some(completion.finalization);
-                Ok(completion.report)
+            match lightcraft_engine::lightroom_job::LightroomImport::begin(&app.session, *start) {
+                Ok(import) => {
+                    task.import = Some(import);
+                    Some(task)
+                }
+                Err(e) => {
+                    terminal(app, ctx, &task, json!({"error": e.to_string()}));
+                    None
+                }
+            }
+        }
+        Message::Batch(Ok(batch)) => {
+            if task.cancel.load(Ordering::Relaxed) || !batch.token().matches(&app.session) {
+                batch.rollback();
+                let error = (!task.cancel.load(Ordering::Relaxed)).then(|| "Lightroom import belongs to a different open library".to_string());
+                finish(app, ctx, task, false, error);
+                return None;
+            }
+            let Some(import) = task.import.as_mut() else {
+                batch.rollback();
+                terminal(app, ctx, &task, json!({"error": "Lightroom batch before the catalog was read"}));
+                return None;
+            };
+            let mut index = None;
+            let added = app.session.execute_fn("library.importLightroom", |s| {
+                index = import.commit(s, *batch)?;
+                Ok(Value::Null)
             });
-            let report = report.unwrap_or(Value::Null);
-            task.enter(Phase::Finalizing);
-            let (tx, rx) = mpsc::channel();
-            let commit_error = committed.as_ref().err().map(ToString::to_string);
-            let Some(finalization) = finalization else {
-                terminal(app, ctx, &task, json!({"error": commit_error.clone().unwrap_or_else(|| "Lightroom import did not commit".into())}));
-                return;
-            };
-            if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {
-                let mut result = json!({"report": report, "indexWarning": e});
-                if let Some(error) = commit_error {
-                    result["error"] = json!(error);
-                }
-                terminal(app, ctx, &task, result);
-                return;
+            if let Err(e) = added {
+                finish(app, ctx, task, false, Some(e.to_string()));
+                return None;
             }
-            task.rx = rx;
-            task.cancelled = false;
-            let mut pending = json!({"running": true, "kind": "import", "report": report});
-            if let Some(error) = commit_error {
-                pending["error"] = json!(error);
+            // (the batch is saved; its virtual copies are found again through the index)
+            if let Some(index) = index {
+                task.index_writer.get_or_insert_with(IndexWriter::start).write(move || write_index(index));
             }
-            app.lightroom_last = Some(pending);
-            app.lightroom = Some(task);
+            Some(task)
+        }
+        Message::Batch(Err(e)) => {
+            let error = (!cancelled(&task)).then_some(e);
+            finish(app, ctx, task, false, error);
+            None
+        }
+        Message::Read => {
+            // (a cancel after the last batch still leaves the collections for the next import)
+            let complete = !cancelled(&task);
+            finish(app, ctx, task, complete, None);
+            None
         }
         Message::Finalized(result) => {
             let pending = app.lightroom_last.take().unwrap_or(Value::Null);
@@ -539,9 +705,56 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
                     terminal(app, ctx, &task, value);
                 }
             }
+            None
         }
     }
-    ctx.request_repaint();
+}
+
+/// Finish the import: its collections when it is `complete`, one undo step, then the archive index
+/// on a worker (the task stays until it is written). A cancelled or failed import keeps the photos
+/// added so far; `error` says why it stopped.
+fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask, complete: bool, error: Option<String>) {
+    let Some(import) = task.import.take() else {
+        let value = match error {
+            Some(e) => json!({"error": e}),
+            None => json!({"cancelled": true}),
+        };
+        terminal(app, ctx, &task, value);
+        return;
+    };
+    task.enter(Phase::Committing);
+    let mut finalization = None;
+    let mut report = None;
+    let finished = app.session.execute_fn("library.importLightroom", |s| {
+        let completion = import.finish(s, complete)?;
+        report = Some(completion.report.clone());
+        finalization = Some(completion.finalization);
+        Ok(completion.report)
+    });
+    let report = report.unwrap_or(Value::Null);
+    let error = error.or_else(|| finished.as_ref().err().map(ToString::to_string));
+    let Some(finalization) = finalization else {
+        terminal(app, ctx, &task, json!({"error": error.unwrap_or_else(|| "Lightroom import did not commit".into())}));
+        return;
+    };
+    task.enter(Phase::Finalizing);
+    let (tx, rx) = mpsc::channel();
+    if let Err(e) = spawn_finalize(finalization, task.index_writer.take().and_then(IndexWriter::close), tx, ctx.clone()) {
+        let mut result = json!({"report": report, "indexWarning": e});
+        if let Some(error) = error {
+            result["error"] = json!(error);
+        }
+        terminal(app, ctx, &task, result);
+        return;
+    }
+    task.rx = rx;
+    task.cancelled = false;
+    let mut pending = json!({"running": true, "kind": "import", "report": report});
+    if let Some(error) = error {
+        pending["error"] = json!(error);
+    }
+    app.lightroom_last = Some(pending);
+    app.lightroom = Some(task);
 }
 
 /// Wait for a task in control/headless mode while still applying owner-thread completion.
@@ -584,6 +797,53 @@ mod tests {
         h
     }
 
+    /// Index writes after batches of virtual copies run one at a time, in order; a newer one
+    /// replaces one still waiting, so however fast batches come only one waits (review of #1735).
+    #[test]
+    fn index_writes_keep_their_order_and_only_the_newest_waits() {
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let job = |n: u32, ran: &Arc<std::sync::Mutex<Vec<u32>>>| {
+            let ran = ran.clone();
+            move || ran.lock().unwrap().push(n)
+        };
+        let mut writer = IndexWriter::start();
+        let (release, gate) = mpsc::channel::<()>();
+        let (running, started) = mpsc::channel::<()>();
+        let first = job(1, &ran);
+        writer.write(move || {
+            running.send(()).unwrap();
+            gate.recv().unwrap();
+            first();
+        });
+        started.recv().unwrap();
+        writer.write(job(2, &ran));
+        let (done, finished) = mpsc::channel::<()>();
+        let third = job(3, &ran);
+        writer.write(move || {
+            third();
+            done.send(()).unwrap();
+        });
+        release.send(()).unwrap();
+        finished.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(*ran.lock().unwrap(), [1, 3], "the newest replaced the one waiting");
+
+        // the final write holds everything: a write still waiting is dropped for it
+        let (release, gate) = mpsc::channel::<()>();
+        let (running, started) = mpsc::channel::<()>();
+        let fourth = job(4, &ran);
+        writer.write(move || {
+            running.send(()).unwrap();
+            gate.recv().unwrap();
+            fourth();
+        });
+        started.recv().unwrap();
+        writer.write(job(5, &ran));
+        let worker = writer.close().unwrap();
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(*ran.lock().unwrap(), [1, 3, 4]);
+    }
+
     #[test]
     fn lightroom_row_is_not_cancellable_while_committing() {
         let mut h = demo();
@@ -617,7 +877,7 @@ mod tests {
         let id = h.app.session.activity.list()[0].id;
         h.app.session.activity.cancel(id).unwrap();
         assert!(cancel.load(Ordering::Relaxed), "the worker sees the stack's ✕");
-        tx.send(Message::Prepared(Err("cancelled".into()))).unwrap();
+        tx.send(Message::Started(Err("cancelled".into()))).unwrap();
         h.step();
         assert!(h.app.lightroom.is_none());
         assert_eq!(h.app.lightroom_last, Some(serde_json::json!({"cancelled": true, "path": "fixture.lrcat"})));
@@ -632,13 +892,15 @@ mod tests {
         let (task, tx, cancel, _) = fake_import(&h);
         h.app.lightroom = Some(task);
         cancel.store(true, Ordering::Relaxed);
-        tx.send(Message::Prepared(Err("Lightroom-Import abgebrochen".into()))).unwrap();
+        tx.send(Message::Started(Err("Lightroom-Import abgebrochen".into()))).unwrap();
         h.step();
         assert_eq!(h.app.lightroom_last, Some(serde_json::json!({"cancelled": true, "path": "fixture.lrcat"})));
 
-        for message in
-            [Message::Prepared(Err("the drive was ejected: copy cancelled by the system".into())), Message::Inspected(Err("cancelled".into()))]
-        {
+        for message in [
+            Message::Started(Err("the drive was ejected: copy cancelled by the system".into())),
+            Message::Batch(Err("the drive was ejected: copy cancelled by the system".into())),
+            Message::Inspected(Err("cancelled".into())),
+        ] {
             let (task, tx, _, _) = fake_import(&h);
             h.app.lightroom = Some(task);
             tx.send(message).unwrap();

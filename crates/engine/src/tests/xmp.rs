@@ -1237,6 +1237,39 @@ fn reload_picks_up_changed_files() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A photo with no content hash on record (a Lightroom catalog's originals are added from their
+/// headers) is left alone by Reload while its file is the same: no undo step, the same render key.
+/// A file that did change is picked up as before, hash included.
+#[test]
+fn reload_leaves_an_unchanged_photo_without_a_hash_alone() {
+    let dir = temp_dir("reload-unhashed");
+    let f = dir.join("x.png");
+    write_png(&f, 10);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [f.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let ph = s.catalog.photo(id).unwrap().clone();
+    let op = lightcraft_catalog::Op::SetContent {
+        id,
+        width: ph.width,
+        height: ph.height,
+        file_size: ph.file_size,
+        content_hash: None,
+        preview_only: None,
+        preview_checked: ph.preview_checked.clone(),
+    };
+    s.commit("as added from its headers", op).unwrap();
+    let (undo0, key0) = (s.undo.len(), s.thumb_job(id, 128).unwrap().key);
+    assert_eq!(s.execute("photo.reload", &json!({})).unwrap()["reloaded"], json!([]), "the same file is not a change");
+    assert_eq!(s.undo.len(), undo0, "no Reload Changed Files step");
+    assert_eq!(s.thumb_job(id, 128).unwrap().key, key0, "previews keep their key");
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
+    write_png(&f, 200);
+    assert_eq!(s.execute("photo.reload", &json!({})).unwrap()["reloaded"], json!([id.0]), "a changed file still is");
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn duplicate_copies_the_file_and_the_edits() {
     let dir = temp_dir("dup");

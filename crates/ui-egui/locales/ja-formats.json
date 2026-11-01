@@ -130,6 +130,7 @@
   "Build Standard-Sized Previews ({scope})": "標準プレビューを作成（{scope}）",
   "Discard Smart Previews ({scope})": "スマートプレビューを破棄（{scope}）",
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "Lightroom カタログを確認しました：写真 {photos} 枚、コレクション {collections} 件、見つからないファイル {missing} 件",
+  "Lightroom import cancelled · {imported} photos added": "Lightroom の読み込みをキャンセルしました · {imported} 枚の写真を追加済み",
   "Lightroom import complete: {imported} photos added": "Lightroom の読み込みが完了しました：{imported} 枚の写真を追加",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom の読み込みが完了しました：{imported} 枚を追加、{failed} 枚が失敗",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom の読み込みが完了しました：{imported} 枚を追加。インデックスの警告：{warning}",

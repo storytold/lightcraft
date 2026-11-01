@@ -67,6 +67,11 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// Add: raws are described from their headers ([`crate::media::MediaCache::header_probe`]), their
+    /// pixel data never read: an import of many files from a slow drive (a Lightroom catalog's
+    /// originals) reads a few percent of their bytes. Such files get no content hash, so a copy of
+    /// one elsewhere is found by its content only when it is hashed on demand.
+    pub headers_only: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the

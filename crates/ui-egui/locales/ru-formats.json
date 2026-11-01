@@ -86,6 +86,7 @@
   "LightCraft could not open its window: {e}": "LightCraft не удалось открыть окно: {e}",
   "LightCraft could not open its window: {e}\n\nThe log file has the details: {path}": "LightCraft не удалось открыть окно: {e}\n\nПодробности в файле журнала: {path}",
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "Каталог Lightroom проверен: фото — {photos}, коллекций — {collections}, отсутствует — {missing}",
+  "Lightroom import cancelled · {imported} photos added": "Импорт из Lightroom отменён · добавлено фото — {imported}",
   "Lightroom import complete: {imported} photos added": "Импорт из Lightroom завершён: добавлено фото — {imported}",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Импорт из Lightroom завершён: добавлено фото — {imported}, ошибок — {failed}",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Импорт из Lightroom завершён: добавлено фото — {imported}; предупреждение индекса: {warning}",

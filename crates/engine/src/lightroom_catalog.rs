@@ -14,7 +14,7 @@ use lightcraft_geom::{Affine, Orientation, Point, Rect};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-type Row = BTreeMap<String, Value>;
+pub(crate) type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
 /// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
 const MAX_FILE: u64 = 1 << 32;
@@ -33,7 +33,7 @@ fn number(r: &Row, k: &str) -> i64 {
 pub(crate) fn number_for_job(r: &Row, k: &str) -> i64 {
     number(r, k)
 }
-fn key(path: &str) -> String {
+pub(crate) fn key(path: &str) -> String {
     let p = path.replace('\\', "/");
     if cfg!(windows) { p.to_lowercase() } else { p }
 }
@@ -240,13 +240,8 @@ pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
     }
 }
 
-pub(crate) struct AppliedImport {
-    pub(crate) report: Value,
-    pub(crate) index: ImportIndex,
-}
-
-fn identity(data: &CatalogImport, photo: &CatalogPhoto) -> String {
-    if photo.uuid.is_empty() { format!("{}:{}", key(&data.source), photo.source_id) } else { photo.uuid.clone() }
+fn identity(source: &str, photo: &CatalogPhoto) -> String {
+    if photo.uuid.is_empty() { format!("{}:{}", key(source), photo.source_id) } else { photo.uuid.clone() }
 }
 
 fn validate(data: &CatalogImport) -> Result<(), String> {
@@ -834,9 +829,8 @@ fn catalog_masks(partial: &mut Value, orientation: Orientation) {
 /// radials come fitted to the sidecar default aspect and `sidecar::merge_into` re-fits them to the
 /// photo's size, so they are fitted to the stored image to be turned (a quarter turn swaps the
 /// radii) and handed back in the default aspect, for that re-fit to undo.
-fn catalog_xmp_masks(partial: &mut Value, orientation: Orientation, stored_aspect: f64, photo: &Photo) {
+fn catalog_xmp_masks(partial: &mut Value, orientation: Orientation, stored_aspect: f64, merged: f64) {
     use crate::crs_masks::{DEFAULT_ASPECT, refit_radials};
-    let merged = if photo.width > 0 && photo.height > 0 { photo.width as f64 / photo.height as f64 } else { DEFAULT_ASPECT };
     let fit = if stored_aspect.is_finite() && stored_aspect > 0.0 { stored_aspect } else { merged };
     refit_radials(partial, DEFAULT_ASPECT, fit);
     catalog_masks(partial, orientation);
@@ -886,11 +880,34 @@ fn strip_xmp_sentinels(value: &mut Value) {
 
 /// Import into the current library. Existing edited records are preserved unless explicitly
 /// requested; missing originals remain catalogued for later relinking. The source catalog is read-only.
+/// Photos are added batch by batch ([`crate::lightroom_job`]); one undo step reverses the import.
 pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> crate::Result<Value> {
     let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?;
     let cancel = AtomicBool::new(false);
-    let prepared = job.prepare(&cancel)?;
-    let completion = crate::lightroom_job::commit_prepared(s, prepared)?;
+    let start = job.start(&cancel)?;
+    let mut import = crate::lightroom_job::LightroomImport::begin(s, start)?;
+    let mut added = || -> crate::Result<()> {
+        while let Some(batch) = job.next_batch(&cancel) {
+            let index = import.commit(s, batch?)?;
+            // each batch is saved: a crash keeps what was added, and importing again continues
+            // (with the index after a batch of virtual copies, which are found again through it)
+            if s.library.as_ref().is_some_and(|library| library.on_disk) {
+                s.persist()?;
+                if let Some(index) = index {
+                    index.finish()?;
+                }
+            }
+        }
+        Ok(())
+    };
+    if let Err(e) = added() {
+        // what was added stays (one undo step), and so does its identity for a later import
+        if let Ok(partial) = import.finish(s, false) {
+            let _ = partial.finalization.finish();
+        }
+        return Err(e);
+    }
+    let completion = import.finish(s, true)?;
     if s.library.as_ref().is_some_and(|library| library.on_disk) {
         s.persist()?;
     }
@@ -898,177 +915,236 @@ pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> cra
     Ok(completion.report)
 }
 
-#[cfg(test)]
-fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> crate::Result<Value> {
-    let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
-    let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
-    let mut index = load_index(index_path.as_deref())?;
-    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
-    let undo0 = s.undo.len();
-    let existing: HashMap<_, _> =
-        s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
-    let paths: Vec<_> = data
-        .photos
-        .iter()
-        .filter(|p| number(&p.image, "masterImage") == 0 && !existing.contains_key(&key(&p.path)) && p.original_is_file())
-        .map(|p| p.path.clone())
-        .collect();
-    let missing_sources: HashSet<String> =
-        data.photos.iter().filter(|p| number(&p.image, "masterImage") == 0).filter(|p| !p.original_is_file()).map(|p| key(&p.path)).collect();
-    let files = crate::import::import(s, &paths, crate::import::ImportMode::Add)?;
-    let applied =
-        apply_prepared(s, data, ApplyPrepared { update_existing, files, index: &mut index, archive_path, missing_sources: &missing_sources, undo0 })?;
-    if let Some(path) = index_path {
-        s.persist()?;
-        let bytes = serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?;
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))?;
+const RAW_FORMATS: [&str; 11] = ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"];
+
+/// The photo a catalog record becomes when its original couldn't be read (relinked later).
+pub(crate) fn catalog_photo(src: &CatalogPhoto, id: PhotoId, now: &str) -> Photo {
+    let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
+    let mut p = Photo::new(
+        id,
+        Source::File { path: src.path.clone() },
+        &name,
+        text(&src.image, "fileFormat"),
+        number(&src.image, "fileWidth").max(0) as u32,
+        number(&src.image, "fileHeight").max(0) as u32,
+        now,
+    );
+    if RAW_FORMATS.contains(&p.format.to_uppercase().as_str()) {
+        p.kind = lightcraft_catalog::MediaKind::Raw;
     }
-    Ok(applied.report)
+    p
 }
 
-/// Apply prepared normal-file results and Lightroom metadata in one owner-thread operation.
-/// This function does no filesystem work; callers finish its returned index separately.
-pub(crate) struct ApplyPrepared<'a> {
-    pub(crate) update_existing: bool,
-    pub(crate) files: crate::import::ImportReport,
-    pub(crate) index: &'a mut ImportIndex,
-    pub(crate) archive_path: Option<PathBuf>,
-    pub(crate) missing_sources: &'a HashSet<String>,
-    pub(crate) undo0: usize,
+/// What mapping a catalog record's XMP and develop settings depends on: the photo's target, size
+/// and its own Rotate / Flip in LightCraft (masks are turned into the frame it draws them in).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Shape {
+    target: crate::crs::Target,
+    width: u32,
+    height: u32,
+    user: Orientation,
 }
 
-fn stage_collections(
-    s: &mut crate::Session,
-    data: &CatalogImport,
-    index: &mut ImportIndex,
-    ids: &HashMap<i64, PhotoId>,
-    ops: &mut Vec<Op>,
-    warnings: &mut Vec<String>,
-) -> usize {
-    let mut albums = HashMap::new();
-    for collection in &data.collections {
-        if number(collection, "systemOnly") != 0 {
-            continue;
-        }
-        let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
-        let id = index
-            .collections
-            .get(&collection_key)
-            .copied()
-            .map(lightcraft_catalog::AlbumId)
-            .filter(|id| s.catalog.album(*id).is_some())
-            .unwrap_or_else(|| s.catalog.alloc_album_id());
-        index.collections.insert(collection_key, id.0);
-        albums.insert(number(collection, "id_local"), id);
+impl Shape {
+    pub(crate) fn of(p: &Photo) -> Self {
+        Shape { target: crate::crs::Target::for_photo(p), width: p.width, height: p.height, user: p.develop.orientation }
     }
-    let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
-    let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
-    for member in &data.members {
-        grouped_members.entry(number(member, "collection")).or_default().push(member);
+
+    /// The aspect the develop settings are mapped with.
+    fn aspect(self) -> f64 {
+        self.width.max(1) as f64 / self.height.max(1) as f64
     }
-    for members in grouped_members.values_mut() {
-        members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
+
+    /// The aspect `sidecar::merge_into` re-fits the XMP packet's radials to.
+    fn merged_aspect(self) -> f64 {
+        if self.width > 0 && self.height > 0 { self.width as f64 / self.height as f64 } else { crate::crs_masks::DEFAULT_ASPECT }
     }
-    let mut ordered: Vec<_> = data.collections.iter().collect();
-    ordered.sort_by_key(|r| {
-        let mut depth = 0;
-        let mut at = number(r, "parent");
-        while at != 0 && depth < 64 {
-            depth += 1;
-            at = parents.get(&at).copied().unwrap_or(0);
-        }
-        depth
-    });
-    for collection in ordered {
-        let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
-        let mut album = Album::new(id, text(collection, "name"));
-        album.parent = albums.get(&number(collection, "parent")).copied();
-        album.folder = text(collection, "creationId").contains("group");
-        if text(collection, "creationId").contains("smart") {
-            warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
-        }
-        if !album.folder {
-            album.photos = grouped_members
-                .get(&number(collection, "id_local"))
-                .into_iter()
-                .flatten()
-                .filter_map(|r| ids.get(&number(r, "image")).copied())
-                .collect();
-        }
-        if s.catalog.album(id).is_some() {
-            // Reimport preserves the user's album name/hierarchy, merges only new membership.
-            if let Some(old) = s.catalog.album(id).filter(|a| !a.folder && !a.is_smart()) {
-                let mut photos = old.photos.clone();
-                let mut seen: HashSet<_> = photos.iter().copied().collect();
-                for photo in album.photos {
-                    if seen.insert(photo) {
-                        photos.push(photo);
-                    }
+}
+
+/// A catalog record with the work that needs no library done (on a worker): its XMP packet parsed
+/// and its develop settings mapped, for the shape its photo is expected to have. The owner thread
+/// maps again only when the photo turns out different.
+pub(crate) struct MappedPhoto {
+    pub(crate) src: CatalogPhoto,
+    sidecar: Option<(Shape, std::result::Result<crate::sidecar::SidecarData, String>)>,
+    settings: Option<(Shape, std::result::Result<(Value, Vec<String>), String>)>,
+}
+
+impl MappedPhoto {
+    pub(crate) fn new(src: CatalogPhoto, shape: Shape) -> Self {
+        let mut m = MappedPhoto { src, sidecar: None, settings: None };
+        m.sidecar = m.parse_sidecar(shape).map(|r| (shape, r));
+        m.settings = m.map_settings(shape).map(|r| (shape, r));
+        m
+    }
+
+    /// The catalog's orientation and the stored image's aspect (the frame its masks are in).
+    fn stored_frame(&self) -> (Orientation, f64) {
+        let orientation = lightroom_orientation(text(&self.src.image, "orientation")).unwrap_or_default();
+        (orientation, number(&self.src.image, "fileWidth") as f64 / number(&self.src.image, "fileHeight") as f64)
+    }
+
+    fn parse_sidecar(&self, shape: Shape) -> Option<std::result::Result<crate::sidecar::SidecarData, String>> {
+        let (orientation, stored_aspect) = self.stored_frame();
+        (!self.src.xmp.is_empty()).then(|| {
+            crate::sidecar::parse_sidecar(&self.src.xmp, shape.target).map(|mut sc| {
+                if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
+                    strip_xmp_sentinels(partial);
+                    catalog_xmp_masks(partial, in_photo_frame(orientation, shape.user), stored_aspect, shape.merged_aspect());
                 }
-                ops.push(Op::SetAlbumPhotos { id, photos });
-            }
-        } else {
-            ops.push(Op::AddAlbum { album });
+                sc
+            })
+        })
+    }
+
+    fn map_settings(&self, shape: Shape) -> Option<std::result::Result<(Value, Vec<String>), String>> {
+        let (orientation, stored_aspect) = self.stored_frame();
+        (!self.src.settings.is_empty())
+            .then(|| mapped_settings(&self.src.settings, shape.target, shape.aspect(), orientation, stored_aspect, shape.user))
+    }
+
+    /// The parsed XMP packet, for `shape`.
+    fn sidecar_for(&mut self, shape: Shape) -> Option<std::result::Result<crate::sidecar::SidecarData, String>> {
+        match self.sidecar.take() {
+            Some((s, r)) if s == shape => Some(r),
+            _ => self.parse_sidecar(shape),
         }
     }
-    albums.len()
+
+    /// The mapped develop settings, for `shape`.
+    fn settings_for(&mut self, shape: Shape) -> Option<std::result::Result<(Value, Vec<String>), String>> {
+        match self.settings.take() {
+            Some((s, r)) if s == shape => Some(r),
+            _ => self.map_settings(shape),
+        }
+    }
 }
 
-/// Turn the read catalog into library records in one undo step and return the import report
-/// (added, missing, failed, warnings and skipped images).
-pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, context: ApplyPrepared<'_>) -> crate::Result<AppliedImport> {
-    let ApplyPrepared { update_existing, files, index, archive_path, missing_sources, undo0 } = context;
-    // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
-    refuse_non_media(&mut data);
-    validate(&data).map_err(error)?;
-    let mut warnings = data.warnings.clone();
-    let duplicates: HashMap<_, _> =
-        files.duplicates.iter().filter_map(|d| d.existing.map(|id| (key(&d.path), (PhotoId(id), d.file.as_deref())))).collect();
-    let mut by_path: HashMap<_, _> =
-        s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
-    let mut ids = HashMap::new();
-    let mut ops = Vec::new();
-    let now = (s.clock)();
-    let mut missing = Vec::new();
-    // Normal import counts probed originals; catalog import also adds offline records,
-    // distinct originals with identical bytes, and virtual copies.
-    let mut imported = files.imported.len();
-    let mut promoted = HashSet::new();
-    let mut unmapped = BTreeMap::new();
-    let mut preserved = 0;
-    // Library photos in Recently Deleted that a catalog photo matched: they stay there (only an
-    // import of the files themselves brings a photo back, see `OnDeleted`), and the report says so.
-    let mut in_trash = HashSet::new();
-    // Masters precede their virtual copies.
-    let mut photos: Vec<_> = data.photos.iter().collect();
-    photos.sort_by_key(|p| number(&p.image, "masterImage") != 0);
-    let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
-    let refused: HashSet<_> = data.photos.iter().filter(|p| matches!(p.original, Original::Refused(_))).map(|p| p.source_id).collect();
-    let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
-    for src in photos {
+/// The new record for a catalog photo whose file has the same bytes as the library photo
+/// `duplicate`: catalogs can contain distinct originals with identical bytes and independent edits.
+/// It takes only what the bytes determine from that photo, never that photo's own state: not its
+/// Recently Deleted (#2589), virtual copy, edits, history, versions, ratings, capture time or the
+/// metadata a person writes. Its metadata and capture time are what its own file gives it (`file`),
+/// as a file import reads them (copyright, creator…); the catalog's capture time, when it has one,
+/// applies on top.
+fn content_duplicate(s: &mut crate::Session, path: &str, duplicate: &Photo, file: Option<&crate::import::FileFacts>, now: &str) -> Photo {
+    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+    let mut p = Photo::new(
+        s.catalog.alloc_photo_id(),
+        Source::File { path: path.to_string() },
+        &name,
+        &duplicate.format,
+        duplicate.width,
+        duplicate.height,
+        now,
+    );
+    p.kind = duplicate.kind;
+    p.file_size = duplicate.file_size;
+    p.duration = duplicate.duration;
+    p.as_shot_wb = duplicate.as_shot_wb;
+    p.content_hash = duplicate.content_hash.clone();
+    p.embedded_lens = duplicate.embedded_lens;
+    p.preview_only = duplicate.preview_only.clone();
+    p.preview_checked = duplicate.preview_checked.clone();
+    if let Some(file) = file {
+        p.meta = file.meta.clone();
+        p.captured = file.captured.clone();
+    } else {
+        // (the file wasn't read: only the exposure description, which no command edits; not GPS,
+        // which placing a photo on the map does, nor the capture time, which Edit Capture Time does)
+        let m = &duplicate.meta;
+        p.meta.camera = m.camera.clone();
+        p.meta.lens = m.lens.clone();
+        p.meta.focal_mm = m.focal_mm;
+        p.meta.aperture = m.aperture;
+        p.meta.shutter = m.shutter.clone();
+        p.meta.iso = m.iso;
+        p.meta.focus = m.focus.clone();
+    }
+    // the settings a file import gives it (as-shot white balance, embedded lens corrections, the
+    // default preset); the catalog's settings apply on top
+    crate::import::apply_import_defaults(s, &mut p);
+    p
+}
+
+/// Adding a Lightroom import to the library on the owner thread: batch by batch
+/// ([`LightroomApply::batch`]), then its collections ([`LightroomApply::finish`]). No filesystem work.
+pub(crate) struct LightroomApply {
+    source: String,
+    update_existing: bool,
+    pub(crate) index: ImportIndex,
+    now: String,
+    /// Source photo id → its photo in the library.
+    ids: HashMap<i64, PhotoId>,
+    /// Photos in the library (and added so far) by path.
+    by_path: HashMap<String, PhotoId>,
+    warnings: Vec<String>,
+    unmapped: BTreeMap<i64, Vec<String>>,
+    missing: Vec<String>,
+    preserved: usize,
+    /// Photos added: the originals the file import added, offline records, virtual copies and
+    /// Local records that joined the library.
+    imported: usize,
+    /// Local records this import brought into the library.
+    promoted: HashSet<PhotoId>,
+    /// Source photos whose original path is refused ([`Original::Refused`]): left out, with their
+    /// virtual copies.
+    refused: HashSet<i64>,
+    failed: Vec<(String, String)>,
+    /// The catalog's images the reader skipped (incomplete records), for the report.
+    pub(crate) skipped: Vec<SkippedImage>,
+    /// Library photos in Recently Deleted that a catalog photo matched: they stay there (only an
+    /// import of the files themselves brings a photo back, see `OnDeleted`), and the report says so.
+    in_trash: HashSet<PhotoId>,
+}
+
+impl LightroomApply {
+    pub(crate) fn new(s: &crate::Session, source: String, update_existing: bool, index: ImportIndex, warnings: Vec<String>, now: String) -> Self {
+        let by_path = s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
+        LightroomApply {
+            source,
+            update_existing,
+            index,
+            now,
+            ids: HashMap::new(),
+            by_path,
+            warnings,
+            unmapped: BTreeMap::new(),
+            missing: Vec::new(),
+            preserved: 0,
+            imported: 0,
+            promoted: HashSet::new(),
+            refused: HashSet::new(),
+            failed: Vec::new(),
+            skipped: Vec::new(),
+            in_trash: HashSet::new(),
+        }
+    }
+
+    /// Photos added so far.
+    pub(crate) fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// The photo a catalog record becomes before its own metadata and settings: the library's
+    /// (`existing`), a new virtual copy of its master, a new photo for a content duplicate of a
+    /// library photo (`duplicate`, with what its own file says), or one from the catalog record.
+    fn base_photo(
+        &mut self,
+        s: &mut crate::Session,
+        src: &CatalogPhoto,
+        existing: Option<PhotoId>,
+        planned: &HashMap<PhotoId, Photo>,
+        duplicate: Option<(PhotoId, Option<&crate::import::FileFacts>)>,
+    ) -> crate::Result<Photo> {
         let master = number(&src.image, "masterImage");
-        if master == 0 && missing_sources.contains(&key(&src.path)) {
-            missing.push(src.path.clone());
-        }
-        // A refused path must not become a library record the app would look at later; its
-        // virtual copies go with it.
-        if refused.contains(&src.source_id) || refused.contains(&master) {
-            continue;
-        }
-        let indexed = index
-            .photos
-            .get(&identity(&data, src))
-            .copied()
-            .map(PhotoId)
-            .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
-        let existing_id = indexed.or_else(|| if master == 0 { by_path.get(&key(&src.path)).copied() } else { None });
-        let mut p = if let Some(id) = existing_id.and_then(|id| s.catalog.photo(id)) {
+        let mut p = if let Some(id) = existing.and_then(|id| s.catalog.photo(id)) {
             if id.deleted {
-                in_trash.insert(id.id);
+                self.in_trash.insert(id.id);
             }
             (**id).clone()
         } else if master != 0 {
-            let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
+            let master_id = self.ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
             let mut p = planned
                 .get(&master_id)
                 .cloned()
@@ -1080,175 +1156,332 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // a new copy of a master in Recently Deleted is imported, not trashed with it
             p.deleted = false;
             p
-        } else if let Some((duplicate, file)) =
-            duplicates.get(&key(&src.path)).and_then(|(id, meta)| s.catalog.photo(*id).cloned().map(|p| (p, *meta)))
-        {
-            // Catalogs can contain distinct originals with identical bytes and independent edits.
-            // The new record takes only what the bytes determine from the photo with the same
-            // bytes, never that photo's own state: not its Recently Deleted (#2589), virtual copy,
-            // edits, history, versions, ratings, capture time or the metadata a person writes. Its
-            // metadata and capture time are what its own file gives it, as a file import reads them
-            // (copyright, creator…); the catalog's capture time, when it has one, applies on top.
-            let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
-            let mut p = Photo::new(
-                s.catalog.alloc_photo_id(),
-                Source::File { path: src.path.clone() },
-                &name,
-                &duplicate.format,
-                duplicate.width,
-                duplicate.height,
-                &now,
-            );
-            p.kind = duplicate.kind;
-            p.file_size = duplicate.file_size;
-            p.duration = duplicate.duration;
-            p.as_shot_wb = duplicate.as_shot_wb;
-            p.content_hash = duplicate.content_hash.clone();
-            p.embedded_lens = duplicate.embedded_lens;
-            p.preview_only = duplicate.preview_only.clone();
-            p.preview_checked = duplicate.preview_checked.clone();
-            if let Some(file) = file {
-                p.meta = file.meta.clone();
-                p.captured = file.captured.clone();
-            } else {
-                // (the file wasn't read: only the exposure description, which no command edits;
-                // not GPS, which placing a photo on the map does, nor the capture time, which
-                // Edit Capture Time does)
-                let m = &duplicate.meta;
-                p.meta.camera = m.camera.clone();
-                p.meta.lens = m.lens.clone();
-                p.meta.focal_mm = m.focal_mm;
-                p.meta.aperture = m.aperture;
-                p.meta.shutter = m.shutter.clone();
-                p.meta.iso = m.iso;
-                p.meta.focus = m.focus.clone();
-            }
-            // the settings a file import gives it (as-shot white balance, embedded lens
-            // corrections, the default preset); the catalog's settings apply on top
-            crate::import::apply_import_defaults(s, &mut p);
-            p
+        } else if let Some((duplicate, file)) = duplicate.and_then(|(id, file)| s.catalog.photo(id).cloned().map(|p| (p, file))) {
+            content_duplicate(s, &src.path, &duplicate, file, &self.now)
         } else {
-            let id = s.catalog.alloc_photo_id();
-            let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
-            let mut p = Photo::new(
-                id,
-                Source::File { path: src.path.clone() },
-                &name,
-                text(&src.image, "fileFormat"),
-                number(&src.image, "fileWidth").max(0) as u32,
-                number(&src.image, "fileHeight").max(0) as u32,
-                &now,
-            );
-            if ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
-                p.kind = lightcraft_catalog::MediaKind::Raw;
-            }
-            p
+            catalog_photo(src, s.catalog.alloc_photo_id(), &self.now)
         };
         // Offline videos bypass file probing; Lightroom's format still identifies their kind.
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lightcraft_catalog::MediaKind::Video;
         }
-        ids.insert(src.source_id, p.id);
-        index.photos.insert(identity(&data, src), p.id.0);
-        let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
-        let previous_develop = (p.develop.clone(), p.edited.clone());
-        if keep_develop {
-            preserved += 1;
+        Ok(p)
+    }
+
+    /// Add one batch of catalog photos (masters ahead of their virtual copies), whose originals
+    /// `files` (the import of the batch's files, just committed) added; one undo step.
+    pub(crate) fn batch(
+        &mut self,
+        s: &mut crate::Session,
+        mut photos: Vec<MappedPhoto>,
+        files: crate::import::ImportReport,
+        missing_sources: &HashSet<String>,
+    ) -> crate::Result<()> {
+        for id in &files.imported {
+            if let Some(p) = s.catalog.photo(PhotoId(*id)).filter(|p| p.copy_of.is_none())
+                && let Some(path) = source_path(p)
+            {
+                self.by_path.insert(key(path), p.id);
+            }
         }
-        let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
-        let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
-        if !src.xmp.is_empty() {
-            match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
-                Ok(mut sc) => {
-                    if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
-                        strip_xmp_sentinels(partial);
-                        catalog_xmp_masks(partial, in_photo_frame(orientation, p.develop.orientation), stored_aspect, &p);
-                    }
+        self.imported += files.imported.len();
+        self.failed.extend(files.failed);
+        let duplicates: HashMap<_, _> =
+            files.duplicates.iter().filter_map(|d| d.existing.map(|id| (key(&d.path), (PhotoId(id), d.file.as_deref())))).collect();
+        let mut ops = Vec::new();
+        let now = self.now.clone();
+        photos.sort_by_key(|m| number(&m.src.image, "masterImage") != 0);
+        // Only a master whose virtual copy is in this batch needs a second owned photo while the
+        // batch is staged (a copy in a later batch finds its master in the library).
+        let copy_masters: HashSet<i64> = photos.iter().map(|m| number(&m.src.image, "masterImage")).filter(|id| *id != 0).collect();
+        let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
+        for mut m in photos {
+            let src = &m.src;
+            let master = number(&src.image, "masterImage");
+            // nothing but a file type LightCraft reads becomes a record (#2135); the catalog's
+            // reader already left these out, so this finds one only on a route around it
+            if master == 0 && !crate::open_path::is_media(Path::new(&src.path)) && !is_catalog_video(src) {
+                self.warnings.push(format!("image {}: not imported; {} isn't one of the file types LightCraft reads", src.source_id, src.path));
+                self.refused.insert(src.source_id);
+                continue;
+            }
+            if master == 0 && missing_sources.contains(&key(&src.path)) {
+                self.missing.push(src.path.clone());
+            }
+            // A refused path must not become a library record the app would look at later; its
+            // virtual copies (in this batch or a later one) go with it. (`masterImage` is 0 for a
+            // master: a refused id 0 in a malformed catalog must not take every master with it.)
+            if matches!(src.original, Original::Refused(_)) || (master != 0 && self.refused.contains(&master)) {
+                self.refused.insert(src.source_id);
+                continue;
+            }
+            let indexed = self
+                .index
+                .photos
+                .get(&identity(&self.source, src))
+                .copied()
+                .map(PhotoId)
+                .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
+            let existing_id = indexed.or_else(|| if master == 0 { self.by_path.get(&key(&src.path)).copied() } else { None });
+            let duplicate = if master == 0 { duplicates.get(&key(&src.path)).copied() } else { None };
+            let mut p = self.base_photo(s, src, existing_id, &planned, duplicate)?;
+            self.ids.insert(src.source_id, p.id);
+            self.index.photos.insert(identity(&self.source, src), p.id.0);
+            let keep_develop = existing_id.is_some() && p.edited.is_some() && !self.update_existing;
+            let previous_develop = (p.develop.clone(), p.edited.clone());
+            if keep_develop {
+                self.preserved += 1;
+            }
+            let source_id = m.src.source_id;
+            match m.sidecar_for(Shape::of(&p)) {
+                Some(Ok(sc)) => {
                     crate::sidecar::merge_into(&mut p, &sc, &now);
                 }
-                Err(e) => warnings.push(format!("image {} XMP: {e}", src.source_id)),
+                Some(Err(e)) => self.warnings.push(format!("image {source_id} XMP: {e}")),
+                None => {}
             }
-        }
-        p.rating = number(&src.image, "rating").clamp(0, 5) as u8;
-        p.flag = match number(&src.image, "pick") {
-            1 => Flag::Pick,
-            -1 => Flag::Reject,
-            _ => Flag::None,
-        };
-        p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
-        if !text(&src.image, "captureTime").is_empty() {
-            p.captured = Some(text(&src.image, "captureTime").into());
-        }
-        if !src.keywords.is_empty() {
-            p.meta.keywords = src.keywords.clone();
-        }
-        if !src.settings.is_empty() && !keep_develop {
-            match mapped_settings(
-                &src.settings,
-                crate::crs::Target::for_photo(&p),
-                p.width.max(1) as f64 / p.height.max(1) as f64,
-                orientation,
-                stored_aspect,
-                p.develop.orientation,
-            ) {
-                Ok((partial, unknown)) => {
-                    p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
-                    p.edited = Some(now.clone());
-                    if !unknown.is_empty() {
-                        unmapped.insert(src.source_id, unknown);
+            let src = &m.src;
+            p.rating = number(&src.image, "rating").clamp(0, 5) as u8;
+            p.flag = match number(&src.image, "pick") {
+                1 => Flag::Pick,
+                -1 => Flag::Reject,
+                _ => Flag::None,
+            };
+            p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
+            if !text(&src.image, "captureTime").is_empty() {
+                p.captured = Some(text(&src.image, "captureTime").into());
+            }
+            if !src.keywords.is_empty() {
+                p.meta.keywords = src.keywords.clone();
+            }
+            let path = src.path.clone();
+            if !keep_develop {
+                match m.settings_for(Shape::of(&p)) {
+                    Some(Ok((partial, unknown))) => {
+                        p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
+                        p.edited = Some(now.clone());
+                        if !unknown.is_empty() {
+                            self.unmapped.insert(source_id, unknown);
+                        }
                     }
+                    Some(Err(e)) => self.warnings.push(format!("image {source_id} settings: {e}")),
+                    None => {}
                 }
-                Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
+            }
+            if keep_develop {
+                (p.develop, p.edited) = previous_develop;
+            }
+            // A missing original isn't read, so its Local record isn't promoted by the file import:
+            // the catalog import still joins the library, and a virtual copy inherits that.
+            let was_local = p.local;
+            p.local = false;
+            if let Some(old) = s.catalog.photo(p.id) {
+                if old.kind != p.kind {
+                    // Repair older imports with existing reversible operations. Removing just the
+                    // record leaves album/stack membership intact; the enclosing batch is atomic.
+                    let mut repaired = (**old).clone();
+                    repaired.kind = p.kind;
+                    ops.extend([Op::RemovePhoto { id: p.id }, Op::AddPhoto { photo: Box::new(repaired) }]);
+                }
+                if was_local && self.promoted.insert(p.id) {
+                    self.imported += 1;
+                    ops.push(Op::SetLocal { id: p.id, local: false });
+                }
+                ops.extend([
+                    Op::SetRating { id: p.id, rating: p.rating },
+                    Op::SetFlag { id: p.id, flag: p.flag },
+                    Op::SetLabel { id: p.id, label: p.label },
+                    Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
+                    Op::SetCaptured { id: p.id, captured: p.captured.clone() },
+                ]);
+                ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
+            } else {
+                self.imported += 1;
+                ops.push(Op::AddPhoto { photo: Box::new(p.clone()) });
+            }
+            self.by_path.entry(key(&path)).or_insert(p.id);
+            if copy_masters.contains(&source_id) {
+                planned.insert(p.id, p);
             }
         }
-        if keep_develop {
-            (p.develop, p.edited) = previous_develop;
+        if !ops.is_empty() {
+            s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
         }
-        // Missing files bypass normal-file preparation, including its Local promotion.
-        // Import still joins the library, and a virtual copy must inherit that membership.
-        let was_local = p.local;
-        p.local = false;
-        let photo_id = p.id;
-        // Only virtual-copy masters need a second owned photo while operations are staged.
-        // Keeping every photo here doubled the new-record working set on large catalogs.
-        if copy_masters.contains(&src.source_id) {
-            planned.insert(photo_id, p.clone());
-        }
-        if let Some(old) = s.catalog.photo(p.id) {
-            if old.kind != p.kind {
-                // Repair older imports with existing reversible operations. Removing just the
-                // record leaves album/stack membership intact; the enclosing batch is atomic.
-                let mut repaired = (**old).clone();
-                repaired.kind = p.kind;
-                ops.extend([Op::RemovePhoto { id: p.id }, Op::AddPhoto { photo: Box::new(repaired) }]);
-            }
-            if was_local && promoted.insert(p.id) {
-                imported += 1;
-                ops.push(Op::SetLocal { id: p.id, local: false });
-            }
-            ops.extend([
-                Op::SetRating { id: p.id, rating: p.rating },
-                Op::SetFlag { id: p.id, flag: p.flag },
-                Op::SetLabel { id: p.id, label: p.label },
-                Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
-                Op::SetCaptured { id: p.id, captured: p.captured.clone() },
-            ]);
-            ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
-        } else {
-            imported += 1;
-            ops.push(Op::AddPhoto { photo: Box::new(p) });
-        }
-        by_path.entry(key(&src.path)).or_insert(photo_id);
+        Ok(())
     }
-    let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings);
-    if !ops.is_empty() {
-        s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
+
+    /// Finish: the collections become albums (only when every photo was added: `complete`), and
+    /// the report. (The import's undo steps are one: [`ImportSteps`].)
+    pub(crate) fn finish(
+        &mut self,
+        s: &mut crate::Session,
+        collections: &[Row],
+        members: &[Row],
+        complete: bool,
+        archive: Option<&Path>,
+    ) -> crate::Result<Value> {
+        let mut albums = HashMap::new();
+        let mut ops = Vec::new();
+        if complete {
+            for collection in collections {
+                if number(collection, "systemOnly") != 0 {
+                    continue;
+                }
+                let collection_key = format!("{}:{}", key(&self.source), number(collection, "id_local"));
+                let id = self
+                    .index
+                    .collections
+                    .get(&collection_key)
+                    .copied()
+                    .map(lightcraft_catalog::AlbumId)
+                    .filter(|id| s.catalog.album(*id).is_some())
+                    .unwrap_or_else(|| s.catalog.alloc_album_id());
+                self.index.collections.insert(collection_key, id.0);
+                albums.insert(number(collection, "id_local"), id);
+            }
+            let parents: HashMap<_, _> = collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+            let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
+            for member in members {
+                grouped_members.entry(number(member, "collection")).or_default().push(member);
+            }
+            for members in grouped_members.values_mut() {
+                members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
+            }
+            let mut ordered: Vec<_> = collections.iter().collect();
+            ordered.sort_by_key(|r| {
+                let mut depth = 0;
+                let mut at = number(r, "parent");
+                while at != 0 && depth < 64 {
+                    depth += 1;
+                    at = parents.get(&at).copied().unwrap_or(0);
+                }
+                depth
+            });
+            for collection in ordered {
+                let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
+                let mut album = Album::new(id, text(collection, "name"));
+                album.parent = albums.get(&number(collection, "parent")).copied();
+                album.folder = text(collection, "creationId").contains("group");
+                if text(collection, "creationId").contains("smart") {
+                    self.warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
+                }
+                if !album.folder {
+                    album.photos = grouped_members
+                        .get(&number(collection, "id_local"))
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| self.ids.get(&number(r, "image")).copied())
+                        .collect();
+                }
+                if s.catalog.album(id).is_some() {
+                    // Reimport preserves the user's album name/hierarchy, merges only new membership.
+                    if let Some(old) = s.catalog.album(id).filter(|a| !a.folder && !a.is_smart()) {
+                        let mut photos = old.photos.clone();
+                        let mut seen: HashSet<_> = photos.iter().copied().collect();
+                        for photo in album.photos {
+                            if seen.insert(photo) {
+                                photos.push(photo);
+                            }
+                        }
+                        ops.push(Op::SetAlbumPhotos { id, photos });
+                    }
+                } else {
+                    ops.push(Op::AddAlbum { album });
+                }
+            }
+        }
+        if !ops.is_empty() {
+            s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
+        }
+        let mut report = json!({
+            "source": self.source,
+            "photos": self.ids.len(),
+            "imported": self.imported,
+            "library": s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),
+            "collections": albums.len(),
+            "preservedExistingEdits": self.preserved,
+            "inRecentlyDeleted": self.in_trash.len(),
+            "missing": self.missing,
+            "failed": self.failed,
+            "warnings": self.warnings,
+            "skipped": self.skipped,
+            "unmapped": self.unmapped,
+            "archive": archive,
+            "mapping": self.ids,
+        });
+        if !complete {
+            report["cancelled"] = json!(true);
+        }
+        Ok(report)
     }
-    s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
-    Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
-        index: index.clone(),
-    })
+}
+
+/// An import's undo steps as one. The steps a batch takes fold into the import's step while that
+/// is still on top of the undo stack; a step taken in between (an edit made while the import runs,
+/// or an undo) stays apart, and the import goes on in a new step. Counted by commits, not by the
+/// stack's length, which stops growing at its cap.
+#[derive(Debug, Default)]
+pub(crate) struct ImportSteps {
+    /// The undo stack's length and the session's commits right after the import's last step.
+    top: Option<(usize, u64)>,
+}
+
+impl ImportSteps {
+    /// Run `f`, folding the undo steps it takes into the import's.
+    pub(crate) fn run<T>(&mut self, s: &mut crate::Session, f: impl FnOnce(&mut crate::Session) -> crate::Result<T>) -> crate::Result<T> {
+        let on_top = self.top == Some((s.undo.len(), s.commits()));
+        let commits0 = s.commits();
+        let result = f(s);
+        let taken = usize::try_from(s.commits().wrapping_sub(commits0)).unwrap_or(usize::MAX);
+        if taken > 0 {
+            s.merge_undo(taken.saturating_add(usize::from(on_top)).min(s.undo.len()), "Import Lightroom Catalog");
+            self.top = Some((s.undo.len(), s.commits()));
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+fn apply(s: &mut crate::Session, mut data: CatalogImport, update_existing: bool) -> crate::Result<Value> {
+    // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
+    refuse_non_media(&mut data);
+    validate(&data).map_err(error)?;
+    let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
+    let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
+    let index = load_index(index_path.as_deref())?;
+    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
+    let mut steps = ImportSteps::default();
+    let existing: HashMap<_, _> =
+        s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
+    let paths: Vec<_> = data
+        .photos
+        .iter()
+        .filter(|p| number(&p.image, "masterImage") == 0 && !existing.contains_key(&key(&p.path)) && p.original_is_file())
+        .map(|p| p.path.clone())
+        .collect();
+    let missing_sources: HashSet<String> =
+        data.photos.iter().filter(|p| number(&p.image, "masterImage") == 0).filter(|p| !p.original_is_file()).map(|p| key(&p.path)).collect();
+    let files = steps.run(s, |s| crate::import::import(s, &paths, crate::import::ImportMode::Add))?;
+    let now = (s.clock)();
+    let mut apply = LightroomApply::new(s, data.source.clone(), update_existing, index, data.warnings.clone(), now.clone());
+    apply.skipped = data.skipped.clone();
+    let mut probe = Photo::new(PhotoId(0), Source::File { path: String::new() }, "", "", 0, 0, &now);
+    let photos = data
+        .photos
+        .into_iter()
+        .map(|src| {
+            probe.format = text(&src.image, "fileFormat").to_string();
+            MappedPhoto::new(src, Shape::of(&probe))
+        })
+        .collect();
+    steps.run(s, |s| apply.batch(s, photos, files, &missing_sources))?;
+    let report = steps.run(s, |s| apply.finish(s, &data.collections, &data.members, true, archive_path.as_deref()))?;
+    if let Some(path) = index_path {
+        s.persist()?;
+        let bytes = serde_json::to_vec(&apply.index).map_err(|e| error(e.to_string()))?;
+        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))?;
+    }
+    Ok(report)
 }
 
 #[cfg(test)]

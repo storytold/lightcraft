@@ -1,7 +1,7 @@
 use super::load::{load_vec, load_vec_pair, load_vec_reduced};
 use super::preview::{fit_box, fs_preview_loader, preview_orientation};
-use super::probe::probe_bytes;
-use super::{Arc, DenoiseSpec, FileLoader, FileProbe, Filter, PairLoader, ReducedLoader, fit};
+use super::probe::{describe, probe_bytes, raw_probe};
+use super::{Arc, DenoiseSpec, FileLoader, FileProbe, Filter, MediaKind, PairLoader, ProbeInfo, ReducedLoader, fit};
 
 /// The file's first [`lightcraft_raw::PREVIEW_PREFIX`] bytes (or the whole file when it is shorter),
 /// which is what every format [`lightcraft_raw::bounded_preview`] covers keeps its pointer in.
@@ -75,21 +75,132 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
-    let probe: FileProbe = Arc::new(|path: &str| {
-        use std::io::Read;
-        // one open, then everything from the open file: its size and modification time are not
-        // round trips of their own (on a network share each of them is one)
-        let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-        let meta = file.metadata().ok();
-        let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
-        let _permit = crate::memory::work_gate().acquire(len);
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-        let mut info = probe_bytes(path, &bytes)?;
-        info.file_modified = meta.as_ref().and_then(modified_iso);
-        Ok(info)
-    });
-    (loader, probe)
+    (loader, Arc::new(probe_file))
+}
+
+/// Probe a whole file (its bytes are read once, and hashed).
+pub(super) fn probe_file(path: &str) -> Result<ProbeInfo, String> {
+    use std::io::Read;
+    // one open, then everything from the open file: its size and modification time are not
+    // round trips of their own (on a network share each of them is one)
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let meta = file.metadata().ok();
+    let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
+    let _permit = crate::memory::work_gate().acquire(len);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    let mut info = probe_bytes(path, &bytes)?;
+    info.file_modified = meta.as_ref().and_then(modified_iso);
+    Ok(info)
+}
+
+/// Files smaller than this are probed whole: one read of them costs about what a partial read does.
+pub(super) const PARTIAL_MIN: u64 = 4 << 20;
+/// Nor are files beyond this read in part (a buffer of the file's length is set aside).
+const PARTIAL_MAX: u64 = 4 << 30;
+/// The first read of a partial probe: most raw headers fit in it.
+const PARTIAL_PREFIX: u64 = 512 << 10;
+/// Rounds of further reads before giving up on a partial probe.
+const PARTIAL_ROUNDS: usize = 16;
+/// Reading more than this many tenths of a file in part is slower than one read of all of it.
+const PARTIAL_SHARE: u64 = 6;
+
+/// The probe of an import that adds files where they are (a Lightroom catalog's originals): a raw
+/// is described from its headers ([`lightcraft_raw::sparse`]), so its pixel data, nearly all of its
+/// bytes, is never read, and it gets no content hash; a raw shown from its embedded preview (a
+/// coding not decoded yet) is read with that preview. Anything else — other formats, raws whose
+/// description needs their samples (NEF, ORF, PEF), a partial read that fails or would read most of
+/// the file — is probed whole, with its hash.
+pub fn fs_header_probe() -> FileProbe {
+    Arc::new(|path: &str| {
+        let info = match probe_partial(path) {
+            Ok(Some(info)) => Ok(info),
+            Ok(None) | Err(_) => probe_file(path),
+        };
+        // the file's buffer (and any whole-file copy) is gone: give its pages back, as a load does
+        crate::memory::release();
+        info
+    })
+}
+
+/// [`fs_header_probe`]'s partial read: `None` when the file has to be probed whole.
+pub(super) fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
+    use lightcraft_raw::sparse::{Ranges, header_plan, preview_plan};
+    let mut file = std::fs::File::open(path)?;
+    // (its size and modification time from the open file: no round trips of their own)
+    let meta = file.metadata()?;
+    let len = meta.len();
+    if !(PARTIAL_MIN..=PARTIAL_MAX).contains(&len) {
+        return Ok(None);
+    }
+    let Ok(size) = usize::try_from(len) else { return Ok(None) };
+    // (counted at its full size: some readers copy the whole buffer)
+    let _permit = crate::memory::work_gate().acquire(size);
+    // zero-filled pages are only allocated once written or read, so the bytes never read cost nothing
+    let mut buf = vec![0u8; size];
+    let mut loaded = Ranges::new();
+    load_range(&mut file, &mut buf, &mut loaded, 0, PARTIAL_PREFIX.min(len))?;
+    if read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, header_plan)? != Planned::Ready {
+        return Ok(None);
+    }
+    // what the raw reader says; reading the preview below doesn't change it
+    let raw = raw_probe(&buf);
+    // a raw shown from its embedded preview (a coding not decoded yet): read the preview first
+    if matches!(raw, Some(Err(_))) && read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, preview_plan)? != Planned::Ready {
+        return Ok(None);
+    }
+    let info = describe(path, &buf, raw, false).ok().filter(|i| i.kind == MediaKind::Raw);
+    Ok(info.map(|info| ProbeInfo { file_modified: modified_iso(&meta), ..info }))
+}
+
+/// What reading a file in part came to ([`read_planned`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Planned {
+    /// Everything the plan's readers look at is loaded.
+    Ready,
+    /// Read the whole file instead.
+    Whole,
+}
+
+/// Load into `buf` (the file's full length, its `loaded` ranges read) what `plan` names, round by
+/// round, until it is [`HeaderPlan::Ready`](lightcraft_raw::sparse::HeaderPlan::Ready). `Whole`
+/// when the plan says so, when more than `share` tenths of the file would be read, or after `rounds`.
+pub(super) fn read_planned(
+    file: &mut std::fs::File,
+    buf: &mut [u8],
+    loaded: &mut lightcraft_raw::sparse::Ranges,
+    rounds: usize,
+    share: u64,
+    plan: fn(&[u8], &lightcraft_raw::sparse::Ranges) -> lightcraft_raw::sparse::HeaderPlan,
+) -> std::io::Result<Planned> {
+    use lightcraft_raw::sparse::HeaderPlan;
+    let total = buf.len() as u64;
+    for _ in 0..rounds {
+        match plan(buf, loaded) {
+            HeaderPlan::Need(more) => {
+                if loaded.total().saturating_add(more.total()).saturating_mul(10) > total.saturating_mul(share) {
+                    return Ok(Planned::Whole);
+                }
+                for &(start, end) in more.spans() {
+                    load_range(file, buf, loaded, start, end)?;
+                }
+            }
+            HeaderPlan::Ready => return Ok(Planned::Ready),
+            HeaderPlan::Whole(_) => return Ok(Planned::Whole),
+        }
+    }
+    Ok(Planned::Whole)
+}
+
+/// Read the file's bytes `[start, end)` into the same place of `buf`.
+fn load_range(file: &mut std::fs::File, buf: &mut [u8], loaded: &mut lightcraft_raw::sparse::Ranges, start: u64, end: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let range = usize::try_from(start).ok().zip(usize::try_from(end).ok()).and_then(|(a, b)| buf.get_mut(a..b));
+    let Some(range) = range else { return Err(std::io::ErrorKind::InvalidInput.into()) };
+    file.seek(SeekFrom::Start(start))?;
+    file.read_exact(range)?;
+    loaded.insert(start, end);
+    Ok(())
 }
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
@@ -126,6 +237,7 @@ impl crate::Session {
         self.media.file_loader = Some(l);
         self.media.reduced_loader = Some(fs_reduced_loader());
         self.media.file_probe = Some(p);
+        self.media.header_probe = Some(fs_header_probe());
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
         #[cfg(target_os = "macos")]

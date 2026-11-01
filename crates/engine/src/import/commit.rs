@@ -1,6 +1,6 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
-use super::job::{Prepared, PreparedItem, ReadyFile};
+use super::job::{OnDemandHash, Prepared, PreparedItem, ReadyFile};
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -205,6 +205,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     }
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
+    // hashes computed on demand (to compare a new file with photos added from their headers) are kept
+    // (the photo's proxy moves to its new key with it: `carried`)
+    let carried = keep_on_demand_hashes(s, &prepared.hashes, &mut ops);
     for it in prepared.items {
         match it {
             PreparedItem::Promote(id) => {
@@ -315,10 +318,47 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         placed.iter().for_each(crate::import_move::rollback);
         return Err(e);
     }
+    carry_smart_previews(s, &carried);
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
     Ok(report)
+}
+
+/// The ops that keep the content hashes computed on demand ([`OnDemandHash`]), each only on the
+/// file it was taken of (not one relinked or changed since); returns each photo before and after,
+/// for [`carry_smart_previews`].
+fn keep_on_demand_hashes(s: &Session, hashes: &[OnDemandHash], ops: &mut Vec<Op>) -> Vec<(Photo, Photo)> {
+    let mut carried = Vec::new();
+    for OnDemandHash { id, path, size, hash } in hashes {
+        let same_file = |p: &&std::sync::Arc<Photo>| {
+            p.content_hash.is_none() && p.file_size == *size && matches!(&p.source, Source::File { path: now } if now == path)
+        };
+        if let Some(p) = s.catalog.photo(*id).filter(same_file) {
+            let before = Photo::clone(p);
+            carried.push((before.clone(), Photo { content_hash: Some(hash.clone()), ..before }));
+            ops.push(Op::SetContent {
+                id: *id,
+                width: p.width,
+                height: p.height,
+                file_size: p.file_size,
+                content_hash: Some(hash.clone()),
+                preview_only: p.preview_only.clone(),
+                preview_checked: p.preview_checked.clone(),
+            });
+        }
+    }
+    carried
+}
+
+/// Move each photo's smart preview to the key its new content hash gives it (after the commit).
+fn carry_smart_previews(s: &Session, carried: &[(Photo, Photo)]) {
+    let Some(dir) = s.media.smart_dir.as_deref() else { return };
+    for (before, after) in carried {
+        if let Err(e) = crate::smart::carry_over(dir, before, after) {
+            log::warn!("import: smart preview of photo {}: {e}", before.id.0);
+        }
+    }
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is
