@@ -64,7 +64,7 @@ libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
 # formats
-quick-xml = "0.41"
+quick-xml = "0.42"
 miniz_oxide = "0.9"
 
 # codecs
@@ -79,7 +79,7 @@ tiff = "0.11"
 image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
-jixel = "=0.3.4" # BSD-3-Clause OR Apache-2.0, pure-Rust JPEG XL encoder (export; port of libjxl-tiny)
+jixel = "=0.5.2" # BSD-3-Clause OR Apache-2.0, pure-Rust JPEG XL encoder (export; port of libjxl-tiny)
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
 # HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly
@@ -89,8 +89,8 @@ avif-serialize = "0.8.6"
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
 # SAM 3 inference (lightcraft-segment). 0.9.2: later releases pull `tokenizers` with the
 # Oniguruma C library into candle-core, and the product is pure Rust.
-candle-core = { version = "=0.9.2", default-features = false }
-candle-nn = { version = "=0.9.2", default-features = false }
+candle-core = { version = "=0.11.0", default-features = false }
+candle-nn = { version = "=0.11.0", default-features = false }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "wgsl"] }
 pollster = "1"
 
