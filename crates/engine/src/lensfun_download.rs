@@ -140,7 +140,13 @@ pub fn recover(dir: &Path) {
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let Ok(_lock) = DirLock::take(dir) else { return };
+    let _lock = match DirLock::take(dir) {
+        Ok(lock) => lock,
+        Err(e) => {
+            log::warn!("lens database: the previous database is not put back now: {e}");
+            return;
+        }
+    };
     recover_locked(dir);
 }
 
@@ -353,10 +359,18 @@ fn run(dir: &Path, mirrors: &[String], files: &[Pin], shared: &Shared) {
 /// `LockFileEx` on Windows), held by the open file. The system lets go of it when the file closes, on drop or when the
 /// process ends however it ends, so an app that crashed never leaves the folder locked and no age guess is needed.
 /// The file itself stays (empty): removing it would let a second app lock a new file of the same name while the first
-/// still holds the old one.
+/// still holds the old one. Dropping it unlocks explicitly: a process another thread is spawning holds a copy of the
+/// file until it execs, and on Unix the lock would last as long as that copy.
 #[cfg(not(target_arch = "wasm32"))]
 struct DirLock {
-    _file: std::fs::File,
+    file: std::fs::File,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for DirLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -374,7 +388,7 @@ impl DirLock {
             .open(&path)
             .map_err(|e| format!("could not create {}: {e}", path.display()))?;
         match file.try_lock() {
-            Ok(()) => Ok(DirLock { _file: file }),
+            Ok(()) => Ok(DirLock { file }),
             Err(std::fs::TryLockError::WouldBlock) => Err("the lens database is already downloading (in another LightCraft window)".into()),
             Err(std::fs::TryLockError::Error(e)) => Err(format!("could not lock {}: {e}", path.display())),
         }
@@ -423,11 +437,12 @@ from https://github.com/lensfun/lensfun, downloaded by LightCraft.
 #[cfg(not(target_arch = "wasm32"))]
 fn publish(staged: &Path, dir: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> Result<(), String> {
     let previous = beside(dir, PREVIOUS);
-    // left by a swap that ended after its second move
-    if previous.exists() {
+    let had = dir.exists();
+    // left by a swap that ended after its second move: `dir` is the database, so this copy can go. Without `dir`
+    // (a recovery that couldn't put it back) it may be the only whole database: kept until the new one is in place
+    if had && previous.exists() {
         std::fs::remove_dir_all(&previous).map_err(|e| format!("could not remove {}: {e}", previous.display()))?;
     }
-    let had = dir.exists();
     if had {
         rename(dir, &previous).map_err(|e| format!("could not move the old lens database aside ({}): {e}", dir.display()))?;
     }
@@ -438,7 +453,9 @@ fn publish(staged: &Path, dir: &Path, rename: impl Fn(&Path, &Path) -> std::io::
         }
         return Err(format!("could not move the new lens database into {}: {e}", dir.display()));
     }
-    if had && let Err(e) = std::fs::remove_dir_all(&previous) {
+    if previous.exists()
+        && let Err(e) = std::fs::remove_dir_all(&previous)
+    {
         log::warn!("lens database: could not remove the previous database {}: {e}", previous.display());
     }
     Ok(())
@@ -516,6 +533,77 @@ mod tests {
         drop(held);
         recover(&dir);
         assert!(complete(&dir) && !previous.exists(), "an interrupted swap is put back");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(beside(&dir, LOCK));
+    }
+
+    /// The lock holds across processes: while another process (another LightCraft) holds the folder, a download
+    /// here is refused; once that process is gone (killed, like a crash), the system has let go and it may start.
+    #[test]
+    fn another_process_holding_the_folder_refuses_a_download_here() {
+        let dir = scratch("lock-child");
+        let ready = dir.join("child-locked");
+        let exe = std::env::current_exe().unwrap();
+        let mut child = std::process::Command::new(exe)
+            .args(["--exact", "lensfun_download::tests::lock_holder_child", "--ignored", "--test-threads=1"])
+            .env("LC_LENSFUN_LOCK_CHILD_DIR", &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !ready.exists() {
+            assert!(child.try_wait().unwrap().is_none(), "the child exited before locking");
+            assert!(std::time::Instant::now() < deadline, "the child never locked");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let here = DirLock::take(&dir);
+        let refused = here.as_ref().is_err_and(|e| e.contains("already downloading"));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(refused, "{:?}", here.as_ref().err());
+        drop(DirLock::take(&dir).expect("the system let go of the dead process's lock"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(beside(&dir, LOCK));
+    }
+
+    /// Run by [`another_process_holding_the_folder_refuses_a_download_here`] in a child process: take the folder's
+    /// lock, say so, and wait to be killed.
+    #[test]
+    #[ignore = "helper process for another_process_holding_the_folder_refuses_a_download_here"]
+    fn lock_holder_child() {
+        let Some(dir) = std::env::var_os("LC_LENSFUN_LOCK_CHILD_DIR") else { return };
+        let dir = PathBuf::from(dir);
+        let _held = DirLock::take(&dir).unwrap();
+        std::fs::write(dir.join("child-locked"), b"").unwrap();
+        std::thread::sleep(Duration::from_secs(120));
+    }
+
+    /// A swap into a folder that is missing, with the previous database still beside it (a recovery that couldn't
+    /// put it back), keeps that previous database until the new one is in place: when the new one can't be moved
+    /// in, the previous one is still there for the next start to put back.
+    #[test]
+    fn a_failed_swap_keeps_the_only_whole_database() {
+        let dir = scratch("keep-previous");
+        std::fs::remove_dir_all(&dir).unwrap();
+        let previous = beside(&dir, PREVIOUS);
+        std::fs::create_dir_all(&previous).unwrap();
+        std::fs::write(previous.join(MARKER), "older").unwrap();
+        let staged = beside(&dir, STAGING);
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join(MARKER), COMMIT).unwrap();
+        let err = publish(&staged, &dir, |_, _| Err(std::io::Error::other("in use"))).unwrap_err();
+        assert!(err.contains("in use"), "{err}");
+        assert!(complete(&previous), "the previous database is kept");
+        recover(&dir);
+        assert_eq!(std::fs::read_to_string(dir.join(MARKER)).unwrap(), "older", "and the next start puts it back");
+        // a swap that works into a missing folder removes the previous copy once the new one is in place
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&previous).unwrap();
+        std::fs::write(previous.join(MARKER), "older").unwrap();
+        publish(&staged, &dir, |from, to| std::fs::rename(from, to)).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(MARKER)).unwrap(), COMMIT);
+        assert!(!previous.exists());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(beside(&dir, LOCK));
     }
