@@ -31,9 +31,10 @@ impl LightcraftApp {
 
     /// Whether a picture was missing in frame `pass` or the one before, and background work waits
     /// for it: not in the engine's release window of a long hold
-    /// ([`lightcraft_engine::prep::pictures_busy`], so a view that keeps asking never starves it).
+    /// ([`lightcraft_engine::prep::pictures_released`], so a view that keeps asking never starves
+    /// it). The engine's hold running out doesn't end this frame-based one.
     pub fn pictures_busy(&self, pass: u64) -> bool {
-        self.pictures_missing_pass.is_some_and(|p| pass.saturating_sub(p) <= 1) && lightcraft_engine::prep::pictures_busy()
+        self.pictures_missing_pass.is_some_and(|p| pass.saturating_sub(p) <= 1) && !lightcraft_engine::prep::pictures_released()
     }
 
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation

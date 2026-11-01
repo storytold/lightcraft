@@ -316,6 +316,14 @@ pub fn pictures_busy() -> bool {
     held_at(clock_ms(), 0, PICTURES_UNTIL.load(Ordering::Relaxed), HOLD_SINCE.load(Ordering::Relaxed))
 }
 
+/// Whether a picture is still missing on screen but background work runs anyway: the
+/// [`RELEASE_MS`] window of a long hold. Not when the hold has simply run out (a frontend keeping
+/// its own, shorter grace then keeps it; CodeRabbit on #3080).
+pub fn pictures_released() -> bool {
+    let (now, until) = (clock_ms(), PICTURES_UNTIL.load(Ordering::Relaxed));
+    now < until && !held_at(now, 0, until, HOLD_SINCE.load(Ordering::Relaxed))
+}
+
 /// Wait while something on screen lacks its first picture (for background work that doesn't render:
 /// it waits for the pictures, not for the full render). `true`: `stop()` said so
 /// meanwhile. Waits at most `max`.

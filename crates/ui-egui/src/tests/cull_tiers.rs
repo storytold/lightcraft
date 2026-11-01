@@ -38,8 +38,10 @@ fn culling(n: u64) -> (Headless, Decodes) {
     let f = first.clone();
     s.media.file_loader = Some(Arc::new(move |_, _| {
         f.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(Instant::now);
-        // a 45 MP raw: held (one decode at a time here; the others queue behind the lock)
-        let _ = held.lock().map(|r| r.recv_timeout(Duration::from_secs(30)));
+        // a 45 MP raw: held until the test lets it go (dropping `Decodes` disconnects the channel,
+        // so the decode ends with the test, also when it fails; one decode at a time here, the
+        // others queue behind the lock)
+        let _ = held.lock().map(|r| r.recv());
         Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))
     }));
     for id in 1..=n {
