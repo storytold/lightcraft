@@ -1598,14 +1598,9 @@ fn a_cancelled_export_stops_within_a_second() {
     let items = crate::export::prepare_batch(&mut s, &batch, &o).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
-    let cancelled_at = Arc::new(std::sync::Mutex::new(None));
-    let at = cancelled_at.clone();
-    // cancel while the first photos are still rendering
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        *at.lock().unwrap() = Some(std::time::Instant::now());
-        flag.store(true, Ordering::Relaxed);
-    });
+    // cancel as the third photo is about to start, while the first ones are still rendering (a
+    // batch event, not a timer: review of PR #3532)
+    let mut cancelled_at: Option<std::time::Instant> = None;
     let mut written = 0;
     let mut write = |_: &str, _: &[u8]| {
         written += 1;
@@ -1620,11 +1615,17 @@ fn a_cancelled_export_stops_within_a_second() {
         &mut write,
         &|_| false,
         false,
-        &mut |_, _| !c.load(Ordering::Relaxed),
+        &mut |i, _| {
+            if i >= 2 && cancelled_at.is_none() {
+                cancelled_at = Some(std::time::Instant::now());
+                flag.store(true, Ordering::Relaxed);
+            }
+            !c.load(Ordering::Relaxed)
+        },
         Some(cancel.clone()),
     )
     .unwrap();
-    let after = cancelled_at.lock().unwrap().expect("cancelled").elapsed();
+    let after = cancelled_at.expect("cancelled").elapsed();
     assert!(after < std::time::Duration::from_millis(1500), "returned {after:?} after the cancel");
     assert!(files.len() < 12 && written == files.len(), "{} files, {written} written", files.len());
 }
