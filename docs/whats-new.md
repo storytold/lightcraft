@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Import Copy and cross-volume photo moves write in larger batches
+- Copying photos to a network share no longer sends each small read as a separate destination write. Import Copy and
+  cross-volume photo moves buffer up to 1 MiB at a time, then explicitly flush before syncing and verifying the copy.
+  If that flush fails, the copy fails; a move keeps its source unless the destination is written and verified.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

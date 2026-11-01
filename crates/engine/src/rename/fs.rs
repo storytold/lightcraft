@@ -144,7 +144,7 @@ impl MoveFs for RealFs {
         let copied = (|| {
             let mut from = std::fs::File::open(a)?;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
-            std::io::copy(&mut from, &mut f)?;
+            crate::file_copy::copy_buffered(&mut from, &mut f)?;
             f.sync_all()
         })();
         let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));

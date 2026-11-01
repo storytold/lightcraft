@@ -38,6 +38,7 @@ pub mod face_tiles;
 mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
+mod file_copy;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
