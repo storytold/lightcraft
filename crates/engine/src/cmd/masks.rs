@@ -548,7 +548,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Mask Model Status",
             [],
             None,
-            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, and the download's progress → {available, installed, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
+            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, where it runs and how long the last photo took, and the download's progress → {available, installed, dir, loaded, busy, analyzing, runOn (auto | cpu: segment.settings), backend: {device (what runs the backbone: a GPU's name, Metal GPU or CPU; null until loaded), runtime (wgpu|candle), heads (CPU|Metal GPU, and which of the parts after the backbone the GPU accelerator runs, e.g. `CPU; the necks on the GPU`), fallback (why the backbone is not on the GPU), encodeMs (last backbone run), analyzeMs (last photo's analysis before the first click)}, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
             super::always,
             |s, _| {
                 let g = &s.segmenter;
@@ -560,12 +560,30 @@ pub fn specs() -> Vec<CommandSpec> {
                     "loaded": g.loaded(),
                     "busy": g.busy(),
                     "analyzing": g.analyzing(),
+                    "runOn": g.run_on().name(),
+                    "backend": g.backend(),
                     "sizeBytes": crate::segment::MODEL_BYTES,
                     "license": crate::segment::LICENSE_NAME,
                     "licenseUrl": crate::segment::LICENSE_URL,
                     "mirrors": g.mirrors().len(),
                     "download": g.download_status(),
                 }))
+            }
+        ),
+        cmd!(
+            query "segment.settings",
+            "AI Mask Settings",
+            [],
+            None,
+            "{runOn?: auto | cpu} → {runOn} — where SAM 3 runs (Settings ▸ Performance ▸ AI masks): `auto` (the default) the GPU when there is one (Metal on macOS; elsewhere candle on the CPU: this build has no wgpu kernels for SAM 3 yet), `cpu` all of it on the CPU on every platform (for a GPU that can't run it). Local inference only: a remote worker (`LIGHTCRAFT_SAM3_REMOTE`) runs on its Mac's Metal device either way. Kept with the app's settings; a loaded model moves at its next request",
+            super::always,
+            |s, p| {
+                let c = "segment.settings";
+                if let Some(v) = p.get("runOn") {
+                    let run_on = v.as_str().and_then(crate::segment::RunOn::parse).ok_or_else(|| bad(c, "`runOn` must be auto or cpu"))?;
+                    s.segmenter.set_run_on(run_on).map_err(ai_err)?;
+                }
+                Ok(json!({"runOn": s.segmenter.run_on().name()}))
             }
         ),
         cmd!(

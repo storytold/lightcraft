@@ -117,12 +117,57 @@ pub struct DownloadStatus {
     pub finished: bool,
 }
 
+/// Where SAM 3 runs (Settings ▸ Performance ▸ AI masks; `segment.settings {runOn}`, kept in
+/// [`Segmenter::settings_file`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunOn {
+    /// The GPU when there is one: Metal on macOS, elsewhere the image encoder through wgpu unless
+    /// the GPU is switched off ("Use the GPU for rendering", `LIGHTCRAFT_GPU=0`, …).
+    #[default]
+    Auto,
+    /// The CPU for all of it, on every platform (on macOS candle's CPU device instead of Metal).
+    Cpu,
+}
+
+impl RunOn {
+    pub fn parse(name: &str) -> Option<RunOn> {
+        match name {
+            "auto" => Some(RunOn::Auto),
+            "cpu" => Some(RunOn::Cpu),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RunOn::Auto => "auto",
+            RunOn::Cpu => "cpu",
+        }
+    }
+}
+
+/// Why the model runs on the CPU when [`RunOn::Cpu`] is chosen (`segment.model.status` →
+/// `backend.fallback`).
+pub const CPU_CHOSEN: &str = "the CPU is chosen in Settings (AI masks)";
+
+/// The settings file's contents (`sam3-settings.json`).
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Settings {
+    /// `auto` or `cpu` (`None` or anything else: `auto`).
+    run_on: Option<String>,
+}
+
 /// The model (on its worker thread), the download, and AI mask requests in flight.
 pub struct Segmenter {
     /// Where the `facebook/sam3` files live (set by the app; `None`: no AI masks).
     pub dir: Option<PathBuf>,
     /// The user's list of download mirrors (one base URL per line), if any.
     pub mirrors_file: Option<PathBuf>,
+    /// Where [`Segmenter::run_on`] is kept (`<config>/models/sam3-settings.json` in the app; `None`:
+    /// only for this session).
+    pub settings_file: Option<PathBuf>,
+    run_on: RunOn,
     /// Run requests in the background and apply them in [`Session::segment_poll`] (the
     /// desktop app); otherwise commands wait for their result (CLI, MCP, tests).
     pub background: bool,
@@ -143,6 +188,8 @@ impl Default for Segmenter {
         Segmenter {
             dir: None,
             mirrors_file: None,
+            settings_file: None,
+            run_on: RunOn::Auto,
             background: false,
             pending: None,
             messages: Vec::new(),
@@ -159,6 +206,33 @@ impl Default for Segmenter {
 impl Segmenter {
     /// Whether this build can compute AI masks at all.
     pub const AVAILABLE: bool = cfg!(feature = "sam");
+
+    /// Where SAM 3 runs: the user's choice.
+    pub fn run_on(&self) -> RunOn {
+        self.run_on
+    }
+
+    /// Read the choice of where SAM 3 runs from [`Segmenter::settings_file`] (a missing or damaged
+    /// file is [`RunOn::Auto`]).
+    pub fn load_settings(&mut self) {
+        let read = self.settings_file.as_deref().and_then(|f| crate::denoise::read_capped(f, 4096));
+        let st: Settings = read.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        self.run_on = st.run_on.as_deref().and_then(RunOn::parse).unwrap_or_default();
+    }
+
+    /// Choose where SAM 3 runs, and keep the choice in [`Segmenter::settings_file`]. A loaded model
+    /// moves at its next request (it loads again).
+    pub fn set_run_on(&mut self, run_on: RunOn) -> Result<(), String> {
+        if let Some(f) = &self.settings_file {
+            if let Some(parent) = f.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+            }
+            let st = Settings { run_on: Some(run_on.name().to_string()) };
+            crate::denoise::write_atomic(f, &serde_json::to_vec_pretty(&st).map_err(|e| e.to_string())?)?;
+        }
+        self.run_on = run_on;
+        Ok(())
+    }
 
     pub fn remote_endpoint(&self) -> Option<String> {
         #[cfg(feature = "sam")]
@@ -190,6 +264,28 @@ impl Segmenter {
         return self.worker.encoding();
         #[cfg(not(feature = "sam"))]
         false
+    }
+
+    /// Where the model runs and how long the last photo took (`segment.model.status` → `backend`):
+    /// `{device, runtime, heads, fallback, encodeMs, analyzeMs}` (see `worker::Backend`; `device`
+    /// is `null` until the model first loads, and `fallback` then says whether the GPU is switched
+    /// off), or `null` in a build without AI masks.
+    pub fn backend(&self) -> serde_json::Value {
+        #[cfg(feature = "sam")]
+        {
+            let mut b = self.worker.backend();
+            if b.device.is_none() {
+                b.fallback = match self.run_on {
+                    RunOn::Cpu => Some(CPU_CHOSEN.into()),
+                    // macOS: Metal, unless the environment switches the GPU off (the preference is wgpu's)
+                    RunOn::Auto if cfg!(target_os = "macos") => lightcraft_gpu::env_off_reason().map(Into::into),
+                    RunOn::Auto => lightcraft_gpu::switched_off(),
+                };
+            }
+            serde_json::to_value(b).unwrap_or_default()
+        }
+        #[cfg(not(feature = "sam"))]
+        serde_json::Value::Null
     }
 
     /// Whether a zoomed-in detail pass is queued or running.
@@ -431,7 +527,8 @@ impl Session {
                 job
             }
         };
-        Ok(worker::Job { dir, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
+        let cpu = self.segmenter.run_on == RunOn::Cpu;
+        Ok(worker::Job { dir, cpu, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
     }
 
     /// Send a request and wait for its result (CLI, MCP, tests; or when not in background mode).

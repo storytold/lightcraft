@@ -8,24 +8,33 @@
 //! counters are decremented by drop guards, so they can't stay stuck. The model is unloaded
 //! after [`IDLE_UNLOAD`] without requests (it holds several GB).
 //!
-//! Where the model can run on the GPU (Metal on macOS), a job that fails there (a panic or an
-//! error from candle, e.g. a kernel the GPU's compiler can't build, issue #1974) frees the
-//! model and runs once more on the CPU. When that works, the model stays on the CPU for the rest
-//! of the session and the job's outcome says so; when it fails too, the GPU wasn't the cause and
-//! the next job uses it again. `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` keep the model on
-//! the CPU from the start.
+//! Where the model runs ([`Placement`]): on macOS candle runs all of it on the GPU through Metal.
+//! Elsewhere candle runs on the CPU, and the backbone (most of the work) can run on the GPU through an
+//! accelerator ([`GPU_BACKBONE`]: none in this build yet, so it runs in candle as before), unless the GPU is switched off (`LIGHTCRAFT_GPU=0`,
+//! `LIGHTCRAFT_GPU_BACKEND=off`, or Settings ▸ Performance ▸ Use the GPU for rendering, as for AI
+//! Denoise and faces); a GPU that can't be used or fails on a photo leaves the backbone to the CPU.
+//! Settings ▸ Performance ▸ AI masks ▸ CPU ([`Job::cpu`]) puts all of it on the CPU, on every
+//! platform, and so do `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` (macOS included, as
+//! for AI Denoise and the face models).
+//!
+//! Where candle runs the model on the GPU (Metal on macOS), a job that fails there (a panic or an
+//! error from candle, e.g. a kernel the GPU's compiler can't build, issue #1974) frees the model
+//! and runs once more on the CPU. When that works, the model stays on the CPU for the rest of the
+//! session and the job's outcome says so; when it fails too, the GPU wasn't the cause and the next
+//! job uses it again. (The wgpu backbone elsewhere falls back to candle by itself, part by part.)
+//! [`Backend`] tells the session where it ran and how long the last photo took.
 
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use lightcraft_develop::SegMask;
 use lightcraft_segment::{
-    Encoded, Sam3,
+    BackboneAccel, Device, Encoded, Sam3, WeightReader,
     remote::{self, Operation, Request, text_logits},
 };
 
@@ -62,6 +71,8 @@ pub enum Kind {
 pub struct Job {
     /// The model folder.
     pub dir: PathBuf,
+    /// The user chose the CPU for SAM 3 (Settings ▸ Performance ▸ AI masks).
+    pub cpu: bool,
     /// Which photo and look the request is about (the encode cache's key).
     pub key: u64,
     /// Renders the model input when the cache doesn't hold `key` (always for a detail pass).
@@ -86,29 +97,6 @@ pub struct Outcome {
 /// The notice of the job after which the model runs on the CPU.
 pub const GPU_FAILED: &str =
     "The GPU couldn't run the AI mask model, so it runs on the CPU until LightCraft restarts (slower). Details are in the log.";
-
-/// Where the model is loaded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Placement {
-    /// On the GPU when there is one (Metal on macOS); a job that fails there is retried on the CPU.
-    Gpu,
-    /// On the CPU: this build has no GPU path, the environment switches the GPU off, or the model
-    /// failed on it.
-    Cpu,
-}
-
-impl Placement {
-    fn initial() -> Self {
-        if !lightcraft_segment::GPU_BUILD {
-            return Placement::Cpu;
-        }
-        if let Some(why) = lightcraft_gpu::env_off_reason() {
-            log::info!("SAM 3 runs on the CPU ({why})");
-            return Placement::Cpu;
-        }
-        Placement::Gpu
-    }
-}
 
 /// Why a job failed.
 #[derive(Debug)]
@@ -156,6 +144,154 @@ pub struct Shared {
     pub loaded: AtomicBool,
     /// Loading the model or encoding a photo right now (the slow parts).
     pub encoding: AtomicBool,
+    /// Where the model runs and how long the last photo took.
+    pub backend: Mutex<Backend>,
+}
+
+/// Where the model runs, and how long the last photo took (`segment.model.status` → `backend`,
+/// Settings ▸ Performance ▸ AI masks).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backend {
+    /// What the backbone (the 32-layer ViT, most of the work) runs on: a GPU's name ("NVIDIA
+    /// GeForce RTX 5070 (Vulkan)"), "Metal GPU" or "CPU". `None` until the model first loads.
+    pub device: Option<String>,
+    /// What runs the backbone: "wgpu" (LightCraft's GPU kernels) or "candle".
+    pub runtime: Option<String>,
+    /// What runs the rest (the necks and the click and text heads): "CPU" or "Metal GPU", with the parts the GPU
+    /// accelerator runs ("CPU; the necks on the GPU").
+    pub heads: Option<String>,
+    /// Why the backbone runs on the CPU where it could use the GPU: the GPU is switched off, there
+    /// is no usable one, or it failed on a photo.
+    pub fallback: Option<String>,
+    /// The last photo's backbone run, in milliseconds.
+    pub encode_ms: Option<u64>,
+    /// The last photo's whole analysis before the first click (backbone and click features), in
+    /// milliseconds.
+    pub analyze_ms: Option<u64>,
+}
+
+/// Where the model runs on this machine.
+#[derive(Clone, Debug, PartialEq)]
+enum Placement {
+    /// All of it in candle on its best device (Metal on macOS).
+    Best,
+    /// The backbone on the GPU (wgpu), the rest in candle on the CPU.
+    GpuBackbone,
+    /// All of it in candle on the CPU: the CPU is chosen, or the GPU is switched off (why).
+    Cpu(String),
+}
+
+/// Where the model runs, for candle's best device being the CPU (`best_is_cpu`), the GPU switched
+/// off (`switched_off`: why) or not, and the CPU chosen in Settings (`cpu`) or not. The choice wins
+/// on every platform; the GPU switches only govern the wgpu backbone (macOS keeps Metal).
+fn placement(best_is_cpu: bool, switched_off: Option<String>, cpu: bool) -> Placement {
+    match (cpu, best_is_cpu, switched_off) {
+        (true, _, _) => Placement::Cpu(super::CPU_CHOSEN.into()),
+        (false, false, _) => Placement::Best,
+        (false, true, None) => Placement::GpuBackbone,
+        (false, true, Some(why)) => Placement::Cpu(why),
+    }
+}
+
+/// Where the model is to run now: [`placement`], unless candle's GPU failed on it this session (`failed`: why;
+/// the CPU until LightCraft restarts) or the environment switches the GPU off (`LIGHTCRAFT_GPU=0`,
+/// `LIGHTCRAFT_GPU_BACKEND=off`), which keeps it off Metal too.
+fn wanted(best_is_cpu: bool, cpu: bool, failed: Option<&str>) -> Placement {
+    if cpu {
+        return placement(best_is_cpu, None, true);
+    }
+    if let Some(why) = failed {
+        return Placement::Cpu(why.into());
+    }
+    if let Some(why) = lightcraft_gpu::env_off_reason() {
+        return Placement::Cpu(why.into());
+    }
+    match placement(best_is_cpu, lightcraft_gpu::switched_off(), false) {
+        // without a GPU backbone in this build, candle's best device runs it all
+        Placement::GpuBackbone if GPU_BACKBONE.is_none() => Placement::Best,
+        p => p,
+    }
+}
+
+/// Whether a model loaded for `loaded` runs somewhere else than `wanted` (it must load again), candle's best device
+/// being the CPU or not (`best_is_cpu`). Two reasons for the CPU are the same place, and so is candle's best device
+/// when that is the CPU.
+fn moves(loaded: &Placement, wanted: &Placement, best_is_cpu: bool) -> bool {
+    #[derive(PartialEq)]
+    enum Runs {
+        Cpu,
+        Metal,
+        Wgpu,
+    }
+    let runs = |p: &Placement| match p {
+        Placement::Best if best_is_cpu => Runs::Cpu,
+        Placement::Best => Runs::Metal,
+        Placement::GpuBackbone => Runs::Wgpu,
+        Placement::Cpu(_) => Runs::Cpu,
+    };
+    runs(loaded) != runs(wanted)
+}
+
+/// Builds the GPU backbone from the checkpoint (tests use fakes).
+type MakeAccel = fn(&WeightReader) -> Result<Box<dyn BackboneAccel>, String>;
+
+/// The GPU backbone of this build: none yet (its wgpu kernels come separately), so where candle has no GPU the
+/// model runs in candle on the CPU, as before.
+const GPU_BACKBONE: Option<MakeAccel> = None;
+
+fn no_accelerator(_: &WeightReader) -> Result<Box<dyn BackboneAccel>, String> {
+    Err("this build has no GPU backbone".into())
+}
+
+/// Load the model in `dir` as `placement` says, on `best` (candle's best device).
+fn load(dir: &Path, best: Device, placement: &Placement, make: MakeAccel) -> lightcraft_segment::Result<Sam3> {
+    match placement {
+        Placement::Best => Sam3::load_on(dir, best),
+        Placement::Cpu(_) => Sam3::load_on(dir, Device::Cpu),
+        Placement::GpuBackbone => Sam3::load_accelerated(dir, Device::Cpu, make),
+    }
+}
+
+/// Note where the model `m`, just loaded for `placement`, runs.
+fn note_loaded(shared: &Shared, m: &Sam3, placement: &Placement) {
+    let mut b = shared.backend.lock().unwrap_or_else(PoisonError::into_inner);
+    *b = Backend {
+        device: Some(m.backbone_device()),
+        runtime: Some(if m.accelerated() { "wgpu" } else { "candle" }.into()),
+        heads: Some(m.heads_device()),
+        fallback: match placement {
+            Placement::Cpu(why) => Some(why.clone()),
+            _ => m.backbone_fallback(),
+        },
+        encode_ms: None,
+        analyze_ms: None,
+    };
+}
+
+/// Note where the backbone ran a photo (it may have moved to the CPU on the way) and, when it
+/// succeeded, how long it took (`encode`).
+fn note_run(shared: &Shared, m: &Sam3, encode: Option<Duration>) {
+    let mut b = shared.backend.lock().unwrap_or_else(PoisonError::into_inner);
+    b.device = Some(m.backbone_device());
+    b.runtime = Some(if m.accelerated() { "wgpu" } else { "candle" }.into());
+    b.heads = Some(m.heads_device());
+    if let Some(why) = m.backbone_fallback() {
+        b.fallback = Some(why);
+    }
+    if let Some(d) = encode {
+        b.encode_ms = Some(millis(d));
+    }
+}
+
+/// Note where the backbone ran a detail pass (a zoomed-in region): not how long it took, since the last photo's
+/// times are its whole analysis and the backbone run in it.
+fn note_detail(shared: &Shared, m: &Sam3) {
+    note_run(shared, m, None);
+}
+
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -218,6 +354,11 @@ impl Worker {
         !self.dead() && self.shared.loaded.load(Ordering::SeqCst)
     }
 
+    /// Where the model runs (ran, once unloaded) and how long the last photo took.
+    pub fn backend(&self) -> Backend {
+        self.shared.backend.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
     /// Queue `job`; returns at once.
     pub fn submit(&mut self, job: Job) -> Result<(), String> {
         if self.dead() {
@@ -237,7 +378,7 @@ impl Worker {
         // (re)start the thread
         let (tx, rx) = mpsc::channel();
         let shared = self.shared.clone();
-        match std::thread::Builder::new().name("sam3".into()).spawn(move || run(&rx, &shared, IDLE_UNLOAD, Placement::initial())) {
+        match std::thread::Builder::new().name("sam3".into()).spawn(move || run(&rx, &shared, IDLE_UNLOAD, lightcraft_segment::GPU_BUILD)) {
             Ok(t) => {
                 self.thread = Some(t);
                 self.tx = Some(tx.clone());
@@ -255,6 +396,8 @@ impl Worker {
 #[derive(Default)]
 struct State {
     model: Option<(PathBuf, Sam3)>,
+    /// Where the model was loaded to run, and whether candle's best device was the CPU then.
+    placement: Option<(Placement, bool)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<remote::Client>,
 }
@@ -269,8 +412,12 @@ fn supersedes(later: &Job, job: &Job) -> bool {
     }
 }
 
-fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement: Placement) {
+/// The worker's loop. `metal`: candle may run the model on a GPU here (macOS), so a job that fails is retried on
+/// the CPU.
+fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, metal: bool) {
     let mut state = State::default();
+    // why the model runs on the CPU for the rest of the session: it failed on the GPU and works on the CPU
+    let mut gpu_failed: Option<String> = None;
     let mut queue: VecDeque<Job> = VecDeque::new();
     loop {
         if queue.is_empty() {
@@ -300,24 +447,26 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None });
             continue;
         }
-        // what a retry on the CPU needs (running the job takes them)
-        let retry = (placement == Placement::Gpu && remote::configured().is_none()).then(|| (job.kind.clone(), job.render.clone()));
-        let mut result = attempt(&mut state, shared, &mut job, placement);
+        // on candle's GPU: what a retry on the CPU needs (running the job takes them)
+        let on_gpu = metal && gpu_failed.is_none() && !job.cpu && lightcraft_gpu::env_off_reason().is_none() && remote::configured().is_none();
+        let retry = on_gpu.then(|| (job.kind.clone(), job.render.clone()));
+        let mut result = attempt(&mut state, shared, &mut job, gpu_failed.as_deref());
         let mut notice = None;
-        let gpu_failed = match &result {
+        let failed_why = match &result {
             Err(Failure::Model(why)) => Some(why.clone()),
             _ => None,
         };
-        if let (Some(why), Some((kind, render))) = (gpu_failed, retry) {
+        if let (Some(why), Some((kind, render))) = (failed_why, retry) {
             // the GPU may be the cause (e.g. a kernel its compiler can't build, issue #1974): free
             // the model there and try once on the CPU
             log::warn!("SAM 3 failed on the GPU ({why}); trying the CPU");
             state = State::default();
             (job.kind, job.render) = (kind, render);
-            match attempt(&mut state, shared, &mut job, Placement::Cpu) {
+            let reason = format!("the GPU couldn't run it ({why}); the CPU until LightCraft restarts");
+            match attempt(&mut state, shared, &mut job, Some(&reason)) {
                 Ok(r) => {
                     log::warn!("SAM 3 runs on the CPU from now on: it failed on the GPU and works on the CPU");
-                    placement = Placement::Cpu;
+                    gpu_failed = Some(reason);
                     notice = Some(GPU_FAILED.to_string());
                     result = Ok(r);
                 }
@@ -338,10 +487,10 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
     }
 }
 
-/// Run `job` with the model on `placement`. A panic is a [`Failure::Model`] and drops what the
-/// model kept.
-fn attempt(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
-    match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(state, shared, job, placement))) {
+/// Run `job`, on the CPU when `failed` says the GPU failed this session. A panic is a [`Failure::Model`] and drops
+/// what the model kept.
+fn attempt(state: &mut State, shared: &Shared, job: &mut Job, failed: Option<&str>) -> Result<Option<SegMask>, Failure> {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(state, shared, job, failed))) {
         Ok(r) => r,
         Err(p) => {
             let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
@@ -353,19 +502,38 @@ fn attempt(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     }
 }
 
-/// The model for `dir`, loading it on `placement` when needed.
-fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, placement: Placement) -> Result<&'a mut Sam3, Failure> {
-    if state.model.as_ref().is_none_or(|(d, _)| d != dir) {
+/// The model for `dir`, loading it when needed (and again when the GPU was switched on or off, or
+/// the CPU chosen or not: `cpu`; `failed`: the GPU failed this session, see [`wanted`]).
+fn model<'a>(state: &'a mut State, shared: &Shared, dir: &Path, cpu: bool, failed: Option<&str>) -> Result<&'a mut Sam3, Failure> {
+    let now = state.placement.as_ref().map(|(_, best_is_cpu)| wanted(*best_is_cpu, cpu, failed));
+    let stale = state.placement.as_ref().zip(now.as_ref()).is_some_and(|((p, best_is_cpu), now)| moves(p, now, *best_is_cpu));
+    if let (false, Some((p, _)), Some(now)) = (stale, state.placement.as_mut(), now) {
+        // the same device for another reason (the choice, a GPU switch): the model stays, the reason it shows changes
+        if *p != now {
+            shared.backend.lock().unwrap_or_else(PoisonError::into_inner).fallback = match &now {
+                Placement::Cpu(why) => Some(why.clone()),
+                _ => None,
+            };
+            *p = now;
+        }
+    }
+    if stale || state.model.as_ref().is_none_or(|(d, _)| d != dir) {
         state.model = None;
+        state.placement = None;
         state.cache = None;
         let _busy = Flag::raise(&shared.encoding);
         let t = web_time::Instant::now();
-        let m = match placement {
-            Placement::Gpu => Sam3::load(dir)?,
-            Placement::Cpu => Sam3::load_cpu(dir)?,
-        };
-        log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
+        // with the CPU chosen (or forced) candle's best device isn't asked for (on macOS that sets up Metal):
+        // it counts as Metal on macOS and the CPU elsewhere when the choice changes back
+        let skip = cpu || failed.is_some() || lightcraft_gpu::env_off_reason().is_some();
+        let best = if skip { Device::Cpu } else { lightcraft_segment::best_device() };
+        let best_is_cpu = if skip { !cfg!(target_os = "macos") } else { best.is_cpu() };
+        let placement = wanted(best_is_cpu, cpu, failed);
+        let m = load(dir, best, &placement, GPU_BACKBONE.unwrap_or(no_accelerator))?;
+        log::info!("SAM 3 loaded in {:?}: the backbone on the {}, the rest on the {}", t.elapsed(), m.backbone_device(), m.heads_device());
+        note_loaded(shared, &m, &placement);
         state.model = Some((dir.to_path_buf(), m));
+        state.placement = Some((placement, best_is_cpu));
         shared.loaded.store(true, Ordering::SeqCst);
     }
     state.model.as_mut().map(|(_, m)| m).ok_or_else(|| "the model did not load".into())
@@ -390,17 +558,33 @@ fn render(job: &mut Job) -> Result<Input, String> {
 }
 
 /// The model and the encoded photo `job.key` (rendering and encoding it when needed).
-fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<(&'a mut Sam3, &'a mut Encoded), Failure> {
-    model(state, shared, &job.dir, placement)?;
+fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, failed: Option<&str>) -> Result<(&'a mut Sam3, &'a mut Encoded), Failure> {
+    model(state, shared, &job.dir, job.cpu, failed)?;
     if state.cache.as_ref().is_none_or(|(k, _)| *k != job.key) {
         state.cache = None;
         let input = render(job)?;
         let _busy = Flag::raise(&shared.encoding);
         let m = state.model.as_mut().map(|(_, m)| m).ok_or("the model did not load")?;
         let t = web_time::Instant::now();
-        let mut enc = m.encode(&input.rgb, input.w, input.h)?;
+        let enc = m.encode(&input.rgb, input.w, input.h);
+        let encode = t.elapsed();
+        note_run(shared, m, None);
+        let mut enc = enc?;
         m.prepare_clicks(&mut enc)?;
-        log::info!("SAM 3 encoded {}×{} in {:?}", input.w, input.h, t.elapsed());
+        let analyze = t.elapsed();
+        // both times together, once the whole analysis worked: never one photo's encoder with another's total
+        {
+            let mut b = shared.backend.lock().unwrap_or_else(PoisonError::into_inner);
+            (b.encode_ms, b.analyze_ms) = (Some(millis(encode)), Some(millis(analyze)));
+        }
+        log::info!(
+            "SAM 3 analyzed {}×{} in {analyze:?}: backbone {encode:?} on the {}, click features {:?} on the {}",
+            input.w,
+            input.h,
+            m.backbone_device(),
+            analyze.saturating_sub(encode),
+            m.heads_device()
+        );
         state.cache = Some((job.key, enc));
     }
     let State { model, cache, .. } = state;
@@ -457,7 +641,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     }))
 }
 
-fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
+fn run_job(state: &mut State, shared: &Shared, job: &mut Job, failed: Option<&str>) -> Result<Option<SegMask>, Failure> {
     if let Some(endpoint) = remote::configured() {
         let result = remote_job(state, shared, job, &endpoint);
         if result.is_err() {
@@ -468,33 +652,38 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     let side = lightcraft_segment::MASK_SIDE;
     match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => {
-            encoded(state, shared, job, placement)?;
+            encoded(state, shared, job, failed)?;
             Ok(None)
         }
         Kind::Clicks(clicks) => {
-            let (m, enc) = encoded(state, shared, job, placement)?;
+            let (m, enc) = encoded(state, shared, job, failed)?;
             let p = m.segment_clicks(enc, &clicks)?;
             Ok(Some(SegMask::from_logits(side, &p.logits)))
         }
         Kind::Text(text) => {
-            let (m, enc) = encoded(state, shared, job, placement)?;
-            Ok(text_logits(m, enc, &text)?.map(|l| SegMask::from_logits(side, &l)))
+            let (m, enc) = encoded(state, shared, job, failed)?;
+            let logits = text_logits(m, enc, &text)?;
+            // the text heads may have moved to the CPU on the way (a failure on the GPU)
+            shared.backend.lock().unwrap_or_else(PoisonError::into_inner).heads = Some(m.heads_device());
+            Ok(logits.map(|l| SegMask::from_logits(side, &l)))
         }
         #[cfg(test)]
         #[allow(clippy::panic)]
         Kind::Panic => panic!("a test panic"),
         #[cfg(test)]
         #[allow(clippy::panic)]
-        Kind::FailOnGpu { panic } => match placement {
-            Placement::Gpu if panic => panic!("a test panic on the GPU"),
-            Placement::Gpu => Err(Failure::Model("a test error on the GPU".into())),
-            Placement::Cpu => Ok(None),
+        Kind::FailOnGpu { panic } => match failed.is_some() || job.cpu {
+            false if panic => panic!("a test panic on the GPU"),
+            false => Err(Failure::Model("a test error on the GPU".into())),
+            true => Ok(None),
         },
         Kind::Detail { prompt, region } => {
             let input = render(job)?;
-            let m = model(state, shared, &job.dir, placement)?;
+            let m = model(state, shared, &job.dir, job.cpu, failed)?;
             let t = web_time::Instant::now();
-            let mut enc = m.encode(&input.rgb, input.w, input.h)?;
+            let enc = m.encode(&input.rgb, input.w, input.h);
+            note_detail(shared, m);
+            let mut enc = enc?;
             let (rw, rh) = (region[2] - region[0], region[3] - region[1]);
             if !(rw > 0.0 && rh > 0.0) {
                 return Ok(None);
@@ -527,7 +716,7 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+        Job { dir, cpu: false, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
     }
 
     #[test]
@@ -560,79 +749,13 @@ mod tests {
         jtx.send(job(Tag::Wait, &tx)).unwrap();
         shared.pending.store(2, Ordering::SeqCst);
         drop(jtx);
-        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu);
+        run(&jrx, &shared, Duration::from_secs(60), false);
         let first = rx.recv().unwrap();
         assert!(first.result.unwrap_err().contains("failed unexpectedly"));
         let second = rx.recv().unwrap();
         assert!(second.result.is_err(), "the next job still runs");
         assert_eq!(shared.pending.load(Ordering::SeqCst), 0, "counters reset");
         assert!(!shared.encoding.load(Ordering::SeqCst));
-    }
-
-    /// Run `kinds` in turn on a worker that starts on `placement`; their outcomes.
-    fn run_kinds(placement: Placement, kinds: Vec<Kind>) -> Vec<Outcome> {
-        let (tx, rx) = mpsc::channel();
-        let (jtx, jrx) = mpsc::channel();
-        let shared = Shared::default();
-        shared.pending.store(kinds.len(), Ordering::SeqCst);
-        for kind in kinds {
-            let mut j = job(Tag::Wait, &tx);
-            j.kind = kind;
-            jtx.send(j).unwrap();
-        }
-        drop(jtx);
-        run(&jrx, &shared, Duration::from_secs(60), placement);
-        assert_eq!(shared.pending.load(Ordering::SeqCst), 0, "counters reset");
-        assert!(!shared.encoding.load(Ordering::SeqCst));
-        rx.try_iter().collect()
-    }
-
-    #[test]
-    fn a_job_that_panics_on_the_gpu_runs_on_the_cpu_and_so_do_the_next_ones() {
-        // issue #1974: candle panics compiling a Metal kernel the GPU's compiler can't build
-        let out = run_kinds(Placement::Gpu, vec![Kind::FailOnGpu { panic: true }, Kind::FailOnGpu { panic: true }]);
-        assert_eq!(out.len(), 2);
-        assert!(matches!(out[0].result, Ok(None)), "retried on the CPU: {:?}", out[0].result.as_ref().err());
-        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
-        assert!(matches!(out[1].result, Ok(None)), "the next job starts on the CPU");
-        assert_eq!(out[1].notice, None, "said once");
-    }
-
-    #[test]
-    fn a_model_error_on_the_gpu_is_retried_on_the_cpu_too() {
-        let out = run_kinds(Placement::Gpu, vec![Kind::FailOnGpu { panic: false }]);
-        assert!(matches!(out[0].result, Ok(None)));
-        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
-    }
-
-    #[test]
-    fn a_job_that_fails_on_the_cpu_too_keeps_the_gpu() {
-        let out = run_kinds(Placement::Gpu, vec![Kind::Panic, Kind::FailOnGpu { panic: true }]);
-        assert!(out[0].result.as_ref().unwrap_err().contains("failed unexpectedly"));
-        assert_eq!(out[0].notice, None);
-        // not the GPU's fault: the next job tries the GPU first again
-        assert!(matches!(out[1].result, Ok(None)));
-        assert_eq!(out[1].notice.as_deref(), Some(GPU_FAILED));
-    }
-
-    #[test]
-    fn a_worker_on_the_cpu_never_tries_the_gpu() {
-        // no GPU in this build, or LIGHTCRAFT_GPU=0 / LIGHTCRAFT_GPU_BACKEND=off
-        let out = run_kinds(Placement::Cpu, vec![Kind::FailOnGpu { panic: true }]);
-        assert!(matches!(out[0].result, Ok(None)));
-        assert_eq!(out[0].notice, None);
-        if !lightcraft_segment::GPU_BUILD {
-            assert_eq!(Placement::initial(), Placement::Cpu);
-        }
-    }
-
-    #[test]
-    fn missing_model_files_are_not_retried_on_the_cpu() {
-        let out = run_kinds(Placement::Gpu, vec![Kind::Prepare]);
-        assert!(out[0].result.as_ref().unwrap_err().contains("not found"));
-        assert_eq!(out[0].notice, None);
-        let missing = lightcraft_segment::Error::Missing(PathBuf::from("models"));
-        assert!(matches!(Failure::from(missing), Failure::Other(_)));
     }
 
     #[test]
@@ -652,10 +775,298 @@ mod tests {
         drop(jtx);
         let shared = Shared::default();
         shared.pending.store(3, Ordering::SeqCst);
-        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu);
+        run(&jrx, &shared, Duration::from_secs(60), false);
         let out: Vec<Outcome> = rx.try_iter().collect();
         assert_eq!(out.len(), 3);
         assert!(out[0].superseded && out[1].superseded && !out[2].superseded);
         assert_eq!(shared.pending.load(Ordering::SeqCst), 0);
+    }
+
+    /// A model folder whose checkpoint holds no tensors: it loads with an accelerator, never in candle.
+    #[allow(clippy::unwrap_used)]
+    fn empty_model(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-sam3-worker-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut st = 2u64.to_le_bytes().to_vec();
+        st.extend_from_slice(b"{}");
+        std::fs::write(dir.join(lightcraft_segment::WEIGHTS_FILE), st).unwrap();
+        std::fs::write(dir.join("vocab.json"), "{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), "").unwrap();
+        dir
+    }
+
+    /// A GPU backbone that answers with zeros, or fails on every photo.
+    struct FakeGpu(bool);
+
+    impl BackboneAccel for FakeGpu {
+        fn forward(&self, _: &[f32]) -> Result<Vec<f32>, String> {
+            if self.0 { Err("device lost".into()) } else { Ok(vec![0.0; 1024 * 72 * 72]) }
+        }
+        fn device(&self) -> String {
+            "Fake GPU (Vulkan)".into()
+        }
+    }
+
+    fn fake_gpu(_: &WeightReader) -> Result<Box<dyn BackboneAccel>, String> {
+        Ok(Box::new(FakeGpu(false)))
+    }
+
+    fn failing_gpu(_: &WeightReader) -> Result<Box<dyn BackboneAccel>, String> {
+        Ok(Box::new(FakeGpu(true)))
+    }
+
+    fn no_gpu(_: &WeightReader) -> Result<Box<dyn BackboneAccel>, String> {
+        Err("no GPU adapter".into())
+    }
+
+    #[allow(clippy::panic)]
+    fn never(_: &WeightReader) -> Result<Box<dyn BackboneAccel>, String> {
+        panic!("the GPU backbone was built")
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn backend(shared: &Shared) -> Backend {
+        shared.backend.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn the_backbone_goes_to_the_gpu_only_where_candle_has_none_and_the_gpu_is_on() {
+        // macOS: candle runs everything on Metal, as before (the GPU switches are wgpu's)
+        assert_eq!(placement(false, None, false), Placement::Best);
+        assert_eq!(placement(false, Some("disabled by LIGHTCRAFT_GPU=0".into()), false), Placement::Best);
+        // elsewhere: the backbone on the GPU unless it is switched off
+        assert_eq!(placement(true, None, false), Placement::GpuBackbone);
+        let off = "disabled by the GPU rendering preference (app.gpu)";
+        assert_eq!(placement(true, Some(off.into()), false), Placement::Cpu(off.into()));
+    }
+
+    #[test]
+    fn the_cpu_chosen_in_settings_wins_on_every_platform() {
+        let chosen = Placement::Cpu(super::super::CPU_CHOSEN.into());
+        // macOS (Metal) and elsewhere, the GPU on or off
+        for best_is_cpu in [false, true] {
+            for off in [None, Some("disabled by LIGHTCRAFT_GPU=0".to_string())] {
+                assert_eq!(placement(best_is_cpu, off.clone(), true), chosen, "{best_is_cpu} {off:?}");
+            }
+        }
+        assert_eq!(super::super::CPU_CHOSEN, "the CPU is chosen in Settings (AI masks)");
+    }
+
+    #[test]
+    fn switching_the_gpu_or_the_choice_reloads_only_a_model_it_moves() {
+        let cpu = |why: &str| Placement::Cpu(why.into());
+        let chosen = || placement(true, None, true);
+        // the GPU switch: Metal stays; the wgpu backbone goes to the CPU and back
+        assert!(!moves(&Placement::Best, &placement(false, Some("off".into()), false), false));
+        assert!(moves(&Placement::GpuBackbone, &placement(true, Some("off".into()), false), true));
+        assert!(moves(&cpu("off"), &placement(true, None, false), true));
+        // without a GPU backbone candle's best device is the CPU: the GPU switch moves nothing
+        assert!(!moves(&Placement::Best, &cpu("off"), true));
+        assert!(!moves(&cpu("off"), &Placement::Best, true));
+        // the choice: Metal (macOS) or the GPU backbone to the CPU and back
+        assert!(moves(&Placement::Best, &placement(false, None, true), false));
+        assert!(moves(&placement(false, None, true), &placement(false, None, false), false));
+        assert!(moves(&Placement::GpuBackbone, &chosen(), true));
+        // the CPU for one reason or the other: it stays loaded
+        assert!(!moves(&cpu("disabled by LIGHTCRAFT_GPU=0"), &chosen(), true));
+        assert!(!moves(&chosen(), &cpu("disabled by LIGHTCRAFT_GPU=0"), false));
+        assert!(!moves(&Placement::GpuBackbone, &placement(true, None, false), true));
+    }
+
+    #[test]
+    fn with_the_cpu_chosen_the_gpu_backbone_is_never_built() {
+        let dir = empty_model("chosen");
+        // candle loads on the CPU (and fails: the checkpoint is empty), without touching the GPU
+        assert!(load(&dir, Device::Cpu, &placement(true, None, true), never).is_err());
+        assert!(load(&dir, Device::Cpu, &placement(false, None, true), never).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_gpu_backbone_loads_and_reports_where_it_runs() {
+        let dir = empty_model("gpu");
+        let m = load(&dir, Device::Cpu, &Placement::GpuBackbone, fake_gpu).unwrap();
+        let shared = Shared::default();
+        note_loaded(&shared, &m, &Placement::GpuBackbone);
+        let b = backend(&shared);
+        assert_eq!(
+            (b.device.as_deref(), b.runtime.as_deref(), b.heads.as_deref(), b.fallback.as_deref()),
+            (Some("Fake GPU (Vulkan)"), Some("wgpu"), Some("CPU"), None)
+        );
+        let enc = m.encode(&[0; 8 * 8 * 3], 8, 8);
+        note_run(&shared, &m, enc.is_ok().then_some(Duration::from_millis(812)));
+        assert_eq!(backend(&shared).encode_ms, Some(812));
+        let json = serde_json::to_value(backend(&shared)).unwrap();
+        assert_eq!(json["device"], "Fake GPU (Vulkan)");
+        assert_eq!(json["encodeMs"], 812);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn with_the_gpu_switched_off_the_gpu_backbone_is_never_built() {
+        let dir = empty_model("off");
+        let off = Placement::Cpu("disabled by LIGHTCRAFT_GPU_BACKEND=off".into());
+        // candle loads (and fails: the checkpoint is empty), without touching the GPU
+        assert!(load(&dir, Device::Cpu, &off, never).is_err());
+        assert!(load(&dir, Device::Cpu, &Placement::Best, never).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_gpu_that_cannot_be_used_leaves_the_backbone_to_the_cpu() {
+        let dir = empty_model("nogpu");
+        // without an adapter candle loads the backbone (failing here only for the empty checkpoint)
+        let e = load(&dir, Device::Cpu, &Placement::GpuBackbone, no_gpu).err().unwrap();
+        assert!(!e.to_string().contains("no GPU adapter"), "{e}");
+        // a GPU that fails on a photo: the CPU takes over, and the status says why
+        let m = load(&dir, Device::Cpu, &Placement::GpuBackbone, failing_gpu).unwrap();
+        let shared = Shared::default();
+        note_loaded(&shared, &m, &Placement::GpuBackbone);
+        assert_eq!(backend(&shared).runtime.as_deref(), Some("wgpu"));
+        let enc = m.encode(&[0; 8 * 8 * 3], 8, 8);
+        note_run(&shared, &m, enc.is_ok().then_some(Duration::from_millis(1)));
+        let b = backend(&shared);
+        assert_eq!((b.device.as_deref(), b.runtime.as_deref()), (Some("CPU"), Some("candle")));
+        assert!(b.fallback.as_deref().is_some_and(|f| f.contains("device lost")), "{b:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_environment_switches_and_a_failed_gpu_keep_the_model_on_the_cpu_also_on_macos() {
+        // candle's GPU failed this session: the CPU, with the reason, wherever candle has a GPU or not
+        for best_is_cpu in [false, true] {
+            assert_eq!(wanted(best_is_cpu, false, Some("the GPU couldn't run it")), Placement::Cpu("the GPU couldn't run it".into()));
+        }
+        // the CPU chosen in Settings still says so
+        assert_eq!(wanted(false, true, Some("x")), Placement::Cpu(super::super::CPU_CHOSEN.into()));
+        // otherwise as `placement`, with the environment switches deciding for Metal too
+        let want = match lightcraft_gpu::env_off_reason() {
+            Some(why) => Placement::Cpu(why.into()),
+            None => Placement::Best,
+        };
+        assert_eq!(wanted(false, false, None), want);
+    }
+
+    /// Run `kinds` in turn on a worker where candle has a GPU (`metal`) or not, the CPU chosen or not; their outcomes.
+    fn run_kinds(metal: bool, cpu: bool, kinds: Vec<Kind>) -> Vec<Outcome> {
+        let (tx, rx) = mpsc::channel();
+        let (jtx, jrx) = mpsc::channel();
+        let shared = Shared::default();
+        shared.pending.store(kinds.len(), Ordering::SeqCst);
+        for kind in kinds {
+            let mut j = job(Tag::Wait, &tx);
+            j.kind = kind;
+            j.cpu = cpu;
+            jtx.send(j).unwrap();
+        }
+        drop(jtx);
+        run(&jrx, &shared, Duration::from_secs(60), metal);
+        assert_eq!(shared.pending.load(Ordering::SeqCst), 0, "counters reset");
+        assert!(!shared.encoding.load(Ordering::SeqCst));
+        rx.try_iter().collect()
+    }
+
+    /// The tests of the CPU fallback assume the GPU isn't switched off in the environment (it never is tried then).
+    fn gpu_allowed() -> bool {
+        let ok = lightcraft_gpu::env_off_reason().is_none();
+        if !ok {
+            lightcraft_testkit::skip!(Gpu, "the GPU is switched off in the environment");
+        }
+        ok
+    }
+
+    #[test]
+    fn a_job_that_panics_on_the_gpu_runs_on_the_cpu_and_so_do_the_next_ones() {
+        if !gpu_allowed() {
+            return;
+        }
+        // issue #1974: candle panics compiling a Metal kernel the GPU's compiler can't build
+        let out = run_kinds(true, false, vec![Kind::FailOnGpu { panic: true }, Kind::FailOnGpu { panic: true }]);
+        assert_eq!(out.len(), 2);
+        assert!(matches!(out[0].result, Ok(None)), "retried on the CPU: {:?}", out[0].result.as_ref().err());
+        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
+        assert!(matches!(out[1].result, Ok(None)), "the next job starts on the CPU");
+        assert_eq!(out[1].notice, None, "said once");
+    }
+
+    #[test]
+    fn a_model_error_on_the_gpu_is_retried_on_the_cpu_too() {
+        if !gpu_allowed() {
+            return;
+        }
+        let out = run_kinds(true, false, vec![Kind::FailOnGpu { panic: false }]);
+        assert!(matches!(out[0].result, Ok(None)));
+        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
+    }
+
+    #[test]
+    fn a_job_that_fails_on_the_cpu_too_keeps_the_gpu() {
+        if !gpu_allowed() {
+            return;
+        }
+        let out = run_kinds(true, false, vec![Kind::Panic, Kind::FailOnGpu { panic: true }]);
+        assert!(out[0].result.as_ref().unwrap_err().contains("failed unexpectedly"), "reported as before");
+        assert_eq!(out[0].notice, None);
+        // the next job still starts on the GPU, fails there and works on the CPU
+        assert!(matches!(out[1].result, Ok(None)));
+        assert_eq!(out[1].notice.as_deref(), Some(GPU_FAILED));
+    }
+
+    #[test]
+    fn missing_model_files_are_not_retried_on_the_cpu() {
+        let out = run_kinds(true, false, vec![Kind::Prepare]);
+        assert!(out[0].result.as_ref().unwrap_err().contains("not found"));
+        assert_eq!(out[0].notice, None);
+    }
+
+    #[test]
+    fn a_worker_on_the_cpu_never_tries_the_gpu() {
+        // the CPU chosen in Settings, and a build where candle has no GPU
+        for (metal, cpu) in [(true, true), (false, true)] {
+            let out = run_kinds(metal, cpu, vec![Kind::FailOnGpu { panic: true }]);
+            assert!(matches!(out[0].result, Ok(None)));
+            assert_eq!(out[0].notice, None);
+        }
+        // no GPU path (not macOS): a failure is reported, not retried
+        let out = run_kinds(false, false, vec![Kind::FailOnGpu { panic: false }]);
+        assert!(out[0].result.is_err());
+        assert_eq!(out[0].notice, None);
+    }
+
+    #[test]
+    fn a_cpu_model_kept_for_another_reason_shows_that_reason() {
+        let dir = empty_model("reason");
+        let shared = Shared::default();
+        let mut state = State::default();
+        let chosen = Placement::Cpu(super::super::CPU_CHOSEN.into());
+        // loaded with the CPU chosen (put there by hand: the empty checkpoint doesn't load)
+        state.placement = Some((chosen.clone(), true));
+        shared.backend.lock().unwrap().fallback = Some(super::super::CPU_CHOSEN.into());
+        // the choice goes back to Automatic while the CPU stays for another reason: the new reason shows (the reload
+        // that follows here is only because no model was in memory)
+        let why = "the GPU couldn't run it";
+        let _ = model(&mut state, &shared, &dir, false, Some(why));
+        assert_eq!(backend(&shared).fallback.as_deref(), Some(why));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_detail_pass_leaves_the_last_photos_times_alone() {
+        let dir = empty_model("detail");
+        let m = load(&dir, Device::Cpu, &Placement::GpuBackbone, failing_gpu).unwrap();
+        let shared = Shared::default();
+        note_loaded(&shared, &m, &Placement::GpuBackbone);
+        {
+            let mut b = shared.backend.lock().unwrap();
+            (b.encode_ms, b.analyze_ms) = (Some(812), Some(900));
+        }
+        // the zoomed-in region: the GPU fails on it, and the status says where the backbone runs now
+        let _ = m.encode(&[0; 8 * 8 * 3], 8, 8);
+        note_detail(&shared, &m);
+        let b = backend(&shared);
+        assert_eq!((b.device.as_deref(), b.runtime.as_deref()), (Some("CPU"), Some("candle")));
+        assert!(b.fallback.as_deref().is_some_and(|f| f.contains("device lost")), "{b:?}");
+        assert_eq!((b.encode_ms, b.analyze_ms), (Some(812), Some(900)), "the last photo's times");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
