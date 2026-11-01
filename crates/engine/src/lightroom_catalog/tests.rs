@@ -405,6 +405,236 @@ fn a_reimport_counts_each_trashed_match_once() {
     assert_eq!(r["imported"], 0, "{r}");
     assert!(ids.iter().all(|id| s.catalog.photo(*id).unwrap().deleted));
 }
+/// The import report's warnings about `album`.
+fn warnings_naming(r: &Value, album: &str) -> Vec<String> {
+    r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.starts_with(&format!("{album}:"))).map(String::from).collect()
+}
+fn album_named<'a>(s: &'a crate::Session, name: &str) -> &'a lightcraft_catalog::Album {
+    s.catalog.albums().find(|a| a.name == name).unwrap_or_else(|| panic!("no album {name}"))
+}
+/// A LightCraft album nests only in a folder. A collection Lightroom keeps inside a plain collection used to fail the
+/// whole batch with "parent must be an existing folder", taking every album with it (#2165, #2532).
+#[test]
+fn a_collection_inside_a_plain_collection_joins_the_set_above_it() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Picks","creationId":"com.adobe.ag.library.collection"})));
+    data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 3);
+    assert_eq!(s.catalog.photos().count(), 2);
+    let travel = album_named(&s, "Travel").id;
+    assert_eq!(album_named(&s, "Keepers").parent, Some(travel));
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert_eq!(album_named(&s, "Picks").parent, Some(travel));
+    assert_eq!(album_named(&s, "Picks").photos.len(), 1);
+    let w = warnings_naming(&r, "Picks");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("Keepers") && w[0].contains("into “Travel”"), "{w:?}");
+    assert!(warnings_naming(&r, "Keepers").is_empty());
+}
+/// Lightroom Classic saves a print, book, slideshow or web gallery inside a collection; with no set above it, the
+/// creation lands at the top level.
+#[test]
+fn a_creation_saved_inside_a_top_level_collection_lands_at_the_top_level() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":12,"name":"Loose","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":13,"parent":12,"name":"Poster","creationId":"com.adobe.ag.print"})));
+    data.collections.push(row(json!({"id_local":14,"parent":10,"name":"Album Book","creationId":"com.adobe.ag.layout.book"})));
+    data.members.push(row(json!({"collection":13,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 5);
+    let poster = album_named(&s, "Poster");
+    assert_eq!((poster.parent, poster.folder, poster.photos.len()), (None, false, 1));
+    assert_eq!(album_named(&s, "Album Book").parent, Some(album_named(&s, "Travel").id));
+    let w = warnings_naming(&r, "Poster");
+    assert!(w.len() == 1 && w[0].contains("Loose") && w[0].contains("at the top level"), "{w:?}");
+    assert_eq!(warnings_naming(&r, "Album Book").len(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+}
+/// A parent that's gone from the catalog or system-only (Quick Collection, an unsaved print…) isn't imported; the
+/// album lands at the top level, and the report says why it isn't where Lightroom had it.
+#[test]
+fn a_collection_whose_parent_is_missing_or_system_only_lands_at_the_top_level_with_a_warning() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":99,"name":"Orphan","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":5,"name":"quick collection","creationId":"com.adobe.ag.library.collection","systemOnly":1})));
+    data.collections.push(row(json!({"id_local":12,"parent":5,"name":"Stray","creationId":"com.adobe.ag.print"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 4);
+    assert_eq!(album_named(&s, "Orphan").parent, None);
+    assert_eq!(album_named(&s, "Stray").parent, None);
+    assert!(s.catalog.albums().all(|a| a.name != "quick collection"));
+    let w = warnings_naming(&r, "Orphan");
+    assert!(w.len() == 1 && w[0].contains("isn't in the catalog"), "{w:?}");
+    let w = warnings_naming(&r, "Stray");
+    assert!(w.len() == 1 && w[0].contains("quick collection") && w[0].contains("at the top level"), "{w:?}");
+    assert_eq!(album_named(&s, "Keepers").parent, Some(album_named(&s, "Travel").id));
+}
+/// Imports `data` keeping `index` between imports, as a library on disk does.
+fn import_indexed(s: &mut crate::Session, data: CatalogImport, index: &mut ImportIndex) -> crate::Result<Value> {
+    let undo0 = s.undo.len();
+    let missing_sources = HashSet::new();
+    let context =
+        ApplyPrepared { update_existing: false, files: Default::default(), index, archive_path: None, missing_sources: &missing_sources, undo0 };
+    apply_prepared(s, data, context).map(|applied| applied.report)
+}
+/// The sample with “Picks”, a collection Lightroom keeps inside the plain collection “Keepers”.
+fn with_picks() -> CatalogImport {
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Picks","creationId":"com.adobe.ag.library.collection"})));
+    data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+    data
+}
+/// Importing the catalog again finds the moved album where the first import put it, adds nothing twice and doesn't
+/// warn again: the album is already in the library.
+#[test]
+fn a_relocated_collection_keeps_its_place_on_reimport_without_duplicates_or_a_second_warning() {
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    let first = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(warnings_naming(&first, "Picks").len(), 1);
+    let second = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(second["collections"], 3);
+    assert_eq!(s.catalog.albums().count(), 3);
+    assert_eq!(album_named(&s, "Picks").parent, Some(album_named(&s, "Travel").id));
+    assert_eq!(album_named(&s, "Picks").photos.len(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert!(warnings_naming(&second, "Picks").is_empty(), "{second}");
+}
+/// Albums the user moved after an import stay where the user put them when the catalog is imported again.
+#[test]
+fn an_album_the_user_moved_keeps_its_place_on_reimport() {
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    for name in ["Picks", "Keepers"] {
+        let id = album_named(&s, name).id;
+        s.commit("Move Album", Op::MoveAlbum { id, parent: None }).unwrap();
+    }
+    let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(s.catalog.albums().count(), 3);
+    assert_eq!(album_named(&s, "Picks").parent, None);
+    assert_eq!(album_named(&s, "Keepers").parent, None);
+    assert!(warnings_naming(&r, "Picks").is_empty() && warnings_naming(&r, "Keepers").is_empty(), "{r}");
+}
+/// A collection new since the last import goes into the set's album, and the warning names that album as the
+/// library calls it now, not by its Lightroom name.
+#[test]
+fn a_relocation_warning_names_the_set_as_the_user_renamed_it() {
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    import_indexed(&mut s, sample(), &mut index).unwrap();
+    let travel = album_named(&s, "Travel").id;
+    s.commit("Rename Album", Op::RenameAlbum { id: travel, name: "Trips".into() }).unwrap();
+    let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(album_named(&s, "Picks").parent, Some(travel));
+    let w = warnings_naming(&r, "Picks");
+    assert!(w.len() == 1 && w[0].contains("inside “Keepers”") && w[0].ends_with("imported into “Trips” (Lightroom collection 11)"), "{w:?}");
+}
+/// The album an earlier import made for a Lightroom set may no longer be a folder (here: an index that names a plain
+/// album). A collection in that set lands at the top level, and the warning says why without calling the set
+/// something it isn't.
+#[test]
+fn a_set_whose_album_is_not_a_folder_puts_its_collections_at_the_top_level() {
+    let mut s = crate::Session::new();
+    let plain = s.catalog.alloc_album_id();
+    s.commit("New Album", Op::AddAlbum { album: Album::new(plain, "Travel picks") }).unwrap();
+    let mut index = ImportIndex::default();
+    index.collections.insert(format!("{}:9", key("test.lrcat")), plain.0);
+    let r = import_indexed(&mut s, sample(), &mut index).unwrap();
+    assert_eq!(s.catalog.albums().count(), 2);
+    assert!(!s.catalog.album(plain).unwrap().folder);
+    let keepers = album_named(&s, "Keepers");
+    assert_eq!((keepers.parent, keepers.photos.len()), (None, 2));
+    let w = warnings_naming(&r, "Keepers");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("“Travel” is the album “Travel picks”") && w[0].contains("isn't a folder"), "{w:?}");
+    assert!(!w[0].contains("isn't a collection set") && w[0].ends_with("at the top level (Lightroom collection 10)"), "{w:?}");
+}
+/// Only the outermost set inside a plain collection moves; the sets and creations inside it keep their places.
+#[test]
+fn sets_nested_under_a_plain_collection_keep_their_own_nesting() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":12,"name":"Loose","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":13,"parent":12,"name":"Outer","creationId":"com.adobe.ag.library.group"})));
+    data.collections.push(row(json!({"id_local":14,"parent":13,"name":"Inner","creationId":"com.adobe.ag.library.group"})));
+    data.collections.push(row(json!({"id_local":15,"parent":14,"name":"Poster","creationId":"com.adobe.ag.print"})));
+    data.members.push(row(json!({"collection":15,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 6);
+    let outer = album_named(&s, "Outer");
+    assert_eq!((outer.parent, outer.folder), (None, true));
+    let inner = album_named(&s, "Inner");
+    assert_eq!((inner.parent, inner.folder), (Some(outer.id), true));
+    assert_eq!(album_named(&s, "Poster").parent, Some(inner.id));
+    assert_eq!(album_named(&s, "Poster").photos.len(), 1);
+    let w = warnings_naming(&r, "Outer");
+    assert!(w.len() == 1 && w[0].contains("inside “Loose”") && w[0].ends_with("at the top level (Lightroom collection 13)"), "{w:?}");
+    assert!(warnings_naming(&r, "Inner").is_empty() && warnings_naming(&r, "Poster").is_empty(), "{r}");
+}
+/// The album counter saturates: one at its end hands every collection the same id. The second collection used to be
+/// dropped without a word while the report counted it; the import now stops and names it.
+#[test]
+fn an_exhausted_album_counter_stops_the_import_naming_the_collection() {
+    let mut s = crate::Session::new();
+    s.commit("New Album", Op::AddAlbum { album: Album::new(lightcraft_catalog::AlbumId(u64::MAX - 1), "Last") }).unwrap();
+    let err = apply(&mut s, sample(), false).unwrap_err().to_string();
+    assert!(err.contains("“Keepers”") && err.contains("no unused album id"), "{err}");
+    assert_eq!(s.catalog.albums().count(), 1);
+    assert!(s.catalog.is_empty());
+}
+/// A collection listed twice imports once. A different collection under the same Lightroom id used to stop the import;
+/// like any bad record it now costs only itself (#1588): it is left out with a warning naming both, and its photos go
+/// to the first.
+#[test]
+fn a_collection_listed_twice_imports_once_and_a_conflicting_one_is_skipped_with_a_warning() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(data.collections[1].clone());
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 2);
+    assert_eq!(s.catalog.albums().filter(|a| a.name == "Keepers").count(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    // shallower than the first, so a depth-ordered pass would meet it first
+    data.collections.push(row(json!({"id_local":10,"parent":0,"name":"Rejects","creationId":"collection"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "{r}");
+    assert_eq!(r["collections"], 2, "{r}");
+    assert!(s.catalog.albums().all(|a| a.name != "Rejects"));
+    let keepers = album_named(&s, "Keepers");
+    assert_eq!(keepers.photos.len(), 2);
+    assert!(keepers.parent.is_some(), "the first row's place is kept");
+    assert_eq!(
+        r["warnings"],
+        json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
+    );
+    assert_eq!(s.undo.len(), 1);
+}
+/// A damaged index that names one existing album for two collections gives the second an album of its own rather
+/// than merging its photos into the first's.
+#[test]
+fn an_index_naming_one_album_for_two_collections_gives_the_second_its_own() {
+    let mut s = crate::Session::new();
+    let old = s.catalog.alloc_album_id();
+    s.commit("New Album", Op::AddAlbum { album: Album::new(old, "Old") }).unwrap();
+    let mut index = ImportIndex::default();
+    for lr in [10, 11] {
+        index.collections.insert(format!("{}:{lr}", key("test.lrcat")), old.0);
+    }
+    let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(r["collections"], 3);
+    assert_eq!(s.catalog.album(old).unwrap().photos.len(), 2, "Keepers merges into the album the index names");
+    let picks = album_named(&s, "Picks");
+    assert_ne!(picks.id, old);
+    assert_eq!(picks.photos.len(), 1);
+}
 #[test]
 fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     let mut s = crate::Session::new();

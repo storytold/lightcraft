@@ -110,7 +110,14 @@ fields are reported. Lightroom's `ProcessVersion` is not mapped: newly imported 
 LightCraft's latest rendering process, and photos already in the library keep theirs
 ([process-versions.md](process-versions.md)). When a recovery archive is saved, it retains source settings/history/snapshots
 and original smart-collection rules. Smart collections become regular albums with current
-membership. Archived history and snapshots are source data, not native LightCraft history yet.
+membership, and so do saved prints, books, slideshows and web galleries (with the photos they hold). A LightCraft
+album nests only inside a folder (a Lightroom collection set). A collection or creation Lightroom keeps elsewhere,
+such as a print saved inside a plain collection, or one whose parent is system-only or gone from the catalog, joins the
+nearest collection set above it, or the top level, and the result names it under warnings (issues #2165, #2532).
+Quick Collection and unsaved creations are system-only and not imported; publish collections live in tables the
+importer doesn't read. A collection the catalog lists twice imports once; a different collection with the id of an
+earlier one is left out with a warning naming both, and the photos listed under that id go to the first. Archived
+history and snapshots are source data, not native LightCraft history yet.
 A Custom white balance on a raw LightCraft develops relative to its as-shot look (ARW, NEF, RW2,
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin: the catalog keeps no
 as-shot white for Custom photos, so the photo stays As Shot and `Temperature, Tint` are reported
