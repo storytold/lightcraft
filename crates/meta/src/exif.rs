@@ -379,6 +379,9 @@ pub(crate) mod tests {
         let undefined_long = rw2_iso_tiff(None, Some(Value::Undefined(vec![98])), None, None);
         assert_eq!(try_read_exif(&undefined_long).unwrap().iso, None);
 
+        let negative_signed_short = rw2_iso_tiff(Some(Value::SLong(vec![-1])), None, None, None);
+        assert_eq!(try_read_exif(&negative_signed_short).unwrap().iso, None);
+
         let malformed = rw2_iso_tiff(Some(Value::Short(vec![0])), Some(Value::Long(vec![0])), None, None);
         assert_eq!(try_read_exif(&malformed).unwrap().iso, None);
     }
