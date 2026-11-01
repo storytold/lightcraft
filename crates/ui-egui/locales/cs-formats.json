@@ -317,5 +317,13 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "No duplicate photos found among {photos} photos.": "Mezi {photos} fotografiemi nebyly nalezeny žádné duplicity.",
+  "{groups} groups among {photos} photos · {delete} to delete": "Skupin: {groups} mezi {photos} fotografiemi · ke smazání: {delete}",
+  "Group {n} · {count} photos · {kind}": "Skupina {n} · fotografií: {count} · {kind}",
+  "Hashed {done} of {total} photos": "Zpracováno {done} z {total} fotografií",
+  "visually identical, {bits} bits apart": "vizuálně shodné, vzdálenost {bits} bitů",
+  "{groups} groups among {photos} photos · {unticked} unticked": "Skupin: {groups} mezi {photos} fotografiemi · nezaškrtnuto: {unticked}",
+  "Delete {unticked} unticked": "Smazat nezaškrtnuté: {unticked}",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Tím se smaže {unticked} fotografií z {groups} skupin, ať jste se na ně podívali, nebo ne."
 }

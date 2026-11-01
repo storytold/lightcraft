@@ -30,6 +30,8 @@ pub mod denoise;
 pub mod devices;
 pub mod display;
 pub mod doc_path;
+#[cfg(not(target_arch = "wasm32"))]
+mod dupes;
 mod errors;
 pub mod export;
 pub mod face_download;
@@ -294,6 +296,9 @@ pub struct Session {
     /// Reading focus points for photos imported before they were read (`photo.readFocusPoints`, `focus.pump`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) focus_scan: focus_scan::FocusScan,
+    /// Find Duplicate Photos: the hashes made so far and the running job (`library.findDuplicates`, `duplicates.pump`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) dupes: dupes::Dupes,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -482,6 +487,8 @@ impl Session {
             faces: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            dupes: Default::default(),
             clipboard: None,
             meta_clipboard: None,
             browse: None,

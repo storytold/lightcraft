@@ -317,5 +317,13 @@
   "Panel layout could not be restored: {error}": "No se pudo restablecer la disposición de paneles: {error}",
   "Panel move was not applied: {error}": "No se aplicó el movimiento del panel: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
+  "No duplicate photos found among {photos} photos.": "No se encontraron fotos duplicadas entre {photos} fotos.",
+  "{groups} groups among {photos} photos · {delete} to delete": "{groups} grupos entre {photos} fotos · {delete} para eliminar",
+  "Group {n} · {count} photos · {kind}": "Grupo {n} · {count} fotos · {kind}",
+  "Hashed {done} of {total} photos": "{done} de {total} fotos analizadas",
+  "visually identical, {bits} bits apart": "visualmente idénticas, a {bits} bits",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} grupos entre {photos} fotos · {unticked} sin marcar",
+  "Delete {unticked} unticked": "Eliminar {unticked} sin marcar",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Esto elimina {unticked} fotos de {groups} grupos, los hayas revisado o no."
 }

@@ -13,6 +13,28 @@ impl Dialog {
     }
 }
 
+/// One group of the same picture in the Find Duplicate Photos window.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DuplicateGroup {
+    /// The members are byte-identical files (else visually identical).
+    pub exact: bool,
+    /// The most bits two members' hashes differ in (0 for exact groups): how sure the match is.
+    #[serde(default)]
+    pub max_distance: u32,
+    /// Best first, as the finder ranked them.
+    pub photos: Vec<DuplicatePhoto>,
+}
+
+/// A photo in a duplicate group: ticked (`keep`) it stays, unticked it is deleted on confirm. `why` is the finder's
+/// reason the keeper beats it (empty for the keeper).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DuplicatePhoto {
+    pub id: u64,
+    pub keep: bool,
+    #[serde(default)]
+    pub why: String,
+}
+
 /// A face's name being typed in the loupe: which face, and what has been typed so far.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NameEdit {
@@ -173,6 +195,29 @@ pub enum Dialog {
         pick_best: bool,
         burst_gap: f32,
         similarity: f32,
+    },
+    /// Photo ▸ Find Duplicate Photos…: the groups the finder found once `done` (it shows the run's progress until
+    /// then), each photo ticked to keep or unticked to delete; `photos`: how many the run looked at; `error`: why the
+    /// run couldn't start.
+    Duplicates {
+        groups: Vec<DuplicateGroup>,
+        done: bool,
+        #[serde(default)]
+        photos: u64,
+        #[serde(default)]
+        error: Option<String>,
+        /// How alike photos must be (bits of hash distance: 2 strict, 6 normal, 10 loose) and whether they must share
+        /// a capture time; Search Again runs the finder with them.
+        #[serde(default = "default_distance")]
+        distance: u32,
+        #[serde(default = "yes")]
+        same_moment: bool,
+        /// Find was pressed: the run is going or done, and the settings are locked.
+        #[serde(default)]
+        started: bool,
+        /// "Delete unticked in every group" was pressed once: the window asks before doing it.
+        #[serde(default)]
+        armed: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -344,6 +389,11 @@ pub enum Dialog {
     /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
     /// as they are made.
     ViewOptions,
+}
+
+/// The Find Duplicate Photos window's normal strictness (bits of hash distance).
+pub fn default_distance() -> u32 {
+    6
 }
 
 fn yes() -> bool {

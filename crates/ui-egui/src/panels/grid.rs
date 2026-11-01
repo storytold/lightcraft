@@ -879,6 +879,8 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
                 if parts.is_empty() { "—".to_string() } else { parts.join(" · ") }
             }
             "date" => photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| crate::i18n::tr("No date").into()),
+            // pixels and bytes: what tells copies of one picture apart at a glance
+            "size" => format!("{}×{} · {}", photo.width, photo.height, crate::dialogs::dupes::human_size(photo.file_size)),
             _ => photo.file_name.rsplit_once('.').map(|(n, _)| n.to_string()).unwrap_or(photo.file_name.clone()),
         };
         p.text(pos2(r.left() + 8.0, r.top() + 12.0), Align2::LEFT_CENTER, name, t.font(10.5), t.text_dim);

@@ -12,6 +12,7 @@ mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
 mod denoise;
+mod dupes;
 mod export;
 mod face_models;
 #[cfg(not(target_arch = "wasm32"))]

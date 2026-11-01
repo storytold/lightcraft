@@ -317,5 +317,13 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "No duplicate photos found among {photos} photos.": "{photos} 枚の写真に重複は見つかりませんでした。",
+  "{groups} groups among {photos} photos · {delete} to delete": "{photos} 枚中 {groups} グループ · 削除 {delete} 枚",
+  "Group {n} · {count} photos · {kind}": "グループ {n} · {count} 枚 · {kind}",
+  "Hashed {done} of {total} photos": "{total} 枚中 {done} 枚を処理",
+  "visually identical, {bits} bits apart": "見た目が同一、ハッシュ差 {bits} ビット",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{photos} 枚中 {groups} グループ · 未チェック {unticked} 枚",
+  "Delete {unticked} unticked": "未チェック {unticked} 枚を削除",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "確認したかどうかにかかわらず、{groups} グループから {unticked} 枚の写真を削除します。"
 }

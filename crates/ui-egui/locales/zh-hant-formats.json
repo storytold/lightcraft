@@ -317,5 +317,13 @@
   "Panel layout could not be restored: {error}": "無法還原面板配置：{error}",
   "Panel move was not applied: {error}": "面板移動未套用：{error}",
   "{name} is installed": "{name} 已安裝",
-  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟"
+  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
+  "No duplicate photos found among {photos} photos.": "在 {photos} 張照片中未發現重複照片。",
+  "{groups} groups among {photos} photos · {delete} to delete": "{photos} 張照片中有 {groups} 組 · 待刪除 {delete} 張",
+  "Group {n} · {count} photos · {kind}": "第 {n} 組 · {count} 張照片 · {kind}",
+  "Hashed {done} of {total} photos": "已處理 {done}/{total} 張照片",
+  "visually identical, {bits} bits apart": "視覺上相同，相差 {bits} 位元",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{photos} 張照片中有 {groups} 組 · 未勾選 {unticked} 張",
+  "Delete {unticked} unticked": "刪除未勾選的 {unticked} 張",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "這會從 {groups} 組中刪除 {unticked} 張照片，無論你是否看過。"
 }

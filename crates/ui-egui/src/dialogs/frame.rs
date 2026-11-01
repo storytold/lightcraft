@@ -210,5 +210,6 @@ pub(super) fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::WhatsNew
             | Dialog::ManageEffects { .. }
             | Dialog::ViewOptions
+            | Dialog::Duplicates { .. }
     ) || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.up_to_date())
 }
