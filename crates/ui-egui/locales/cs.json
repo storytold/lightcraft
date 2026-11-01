@@ -257,6 +257,7 @@
   "Auto-Tag from Tracklog…": "Doplnit polohu ze záznamu trasy…",
   "Add Locations": "Doplnit polohy",
   "Automatic": "Automatické",
+  "Tested": "Otestováno",
   "tested": "otestováno",
   "Automatic renders the Detail view at the size it is shown, up to the photo's own pixels. Choose a size to cap it: smaller is faster.": "Automatický režim vykresluje detail podle velikosti zobrazení, nejvýše v rozlišení fotografie. Zvolením velikosti nastavíte limit: menší je rychlejší.",
   "Automatic uses the graphics card where it is faster than the processor: both are timed on this computer the first time a photo is made.": "Automatický režim používá grafickou kartu tam, kde je rychlejší než procesor: při prvním zpracování fotografie se na tomto počítači změří obě možnosti.",
