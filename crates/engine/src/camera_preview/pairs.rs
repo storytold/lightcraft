@@ -18,6 +18,14 @@ pub(super) fn luma(p: [f64; 3]) -> f64 {
     p[0] * 0.2627 + p[1] * 0.6780 + p[2] * 0.0593
 }
 
+/// Colourfulness of `p` with luminance `y` as the chroma table keys it (`lightcraft_pipeline::tone::chroma_key`).
+pub(super) fn chroma_key(p: [f64; 3], y: f64) -> f64 {
+    if y.is_nan() || y <= 0.0 {
+        return 0.0;
+    }
+    p.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f64>().sqrt()
+}
+
 /// The finish stage's tone map and chroma curve (`lightcraft_pipeline::finish`).
 pub(super) fn displayed(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
     let scene = scene.map(|v| v.max(0.0));
@@ -26,7 +34,8 @@ pub(super) fn displayed(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
         return [0.0; 3];
     }
     let o = f64::from(tone.apply(y as f32));
-    let k = f64::from(tone.chroma_scale(o as f32));
+    let key = if tone.chroma_by_sat() { chroma_key(scene, y) as f32 } else { 0.0 };
+    let k = f64::from(tone.chroma_scale(o as f32, key));
     scene.map(|v| o + (v * o / y - o) * k)
 }
 
@@ -486,7 +495,13 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, 
     if lightcraft_pipeline::profiling() {
         eprintln!(
             "[profile] camera look partial (tone{}{}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
-            if look.tone.chroma().iter().any(|k| *k != 1.0) { ", chroma" } else { "" },
+            if look.tone.chroma_sat().is_some() {
+                ", chroma by saturation"
+            } else if look.tone.has_chroma() {
+                ", chroma"
+            } else {
+                ""
+            },
             if matrix != Mat3::IDENTITY { ", damped matrix" } else { "" },
             (before / samples.max(1) as f64).sqrt(),
             (after / samples.max(1) as f64).sqrt(),
