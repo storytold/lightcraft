@@ -1105,7 +1105,8 @@ fn thin_spot_points(pts: &[Point], size: f64, (w, h): (f64, f64)) -> Vec<Point> 
     let spacing = size / 4.0;
     let mut out: Vec<Point> = Vec::with_capacity(pts.len().min(64));
     for &q in pts {
-        if out.last().is_none_or(|&last| dist(last, q) >= spacing) {
+        // `> 0.0` as well: with a zero size an exact repeat would otherwise count as a step
+        if out.last().is_none_or(|&last| dist(last, q) > 0.0 && dist(last, q) >= spacing) {
             out.push(q);
         }
     }
@@ -1229,5 +1230,39 @@ mod tests {
         assert!(thin_spot_points(&[], 0.05, (3.0, 2.0)).is_empty());
         // a zero-sized photo doesn't divide by zero
         assert_eq!(thin_spot_points(&[one[0], Point::new(0.6, 0.6)], 0.05, (0.0, 0.0)).len(), 1);
+    }
+
+    /// A long straight stroke keeps about one point per spacing, leaves no gap wider than a spacing plus one
+    /// recorded step (two spacings at the end), and still ends where the stroke ended, also after a hold there.
+    #[test]
+    fn a_long_stroke_is_thinned_without_gaps() {
+        let step = 0.0008;
+        let mut pts: Vec<Point> = (0..=1000).map(|i| Point::new(0.1 + step * f64::from(i), 0.5)).collect();
+        // the pointer rests at the end for a few frames
+        pts.extend([*pts.last().unwrap(); 5]);
+        let (size, dims) = (0.04, (3.0, 2.0));
+        let thin = thin_spot_points(&pts, size, dims);
+        // 0.8 long-edge units at one point per 0.01, plus the first
+        assert!((70..=82).contains(&thin.len()), "{}", thin.len());
+        assert_eq!(thin.first(), pts.first());
+        assert_eq!(thin.last(), pts.last());
+        let gaps: Vec<f64> = thin.windows(2).map(|w| w[1].x - w[0].x).collect();
+        let spacing = size / 4.0;
+        for &gap in &gaps[..gaps.len() - 1] {
+            assert!(gap > 0.0 && gap <= spacing + step + 1e-12, "gap {gap}");
+        }
+        // the end takes the place of the last point kept, so the last gap may reach two spacings
+        let end_gap = gaps[gaps.len() - 1];
+        assert!(end_gap > 0.0 && end_gap < 2.0 * spacing + step, "end gap {end_gap}");
+    }
+
+    /// A zero or tiny brush thins nothing but exact repeats: every distinct point is kept, in order.
+    #[test]
+    fn a_zero_or_tiny_size_keeps_every_distinct_point() {
+        let pts: Vec<Point> = (0..50).map(|i| Point::new(0.2 + 0.001 * f64::from(i), 0.3)).collect();
+        let doubled: Vec<Point> = pts.iter().flat_map(|&q| [q, q]).collect();
+        for size in [0.0, 1e-9] {
+            assert_eq!(thin_spot_points(&doubled, size, (3.0, 2.0)), pts, "size {size}");
+        }
     }
 }
