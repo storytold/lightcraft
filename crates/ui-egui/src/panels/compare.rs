@@ -2,7 +2,7 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
@@ -286,7 +286,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
-        p.rect_filled(img.intersect(img_area), 0.0, Tokens::get(ui.ctx()).skeleton);
+        p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
@@ -296,7 +296,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     }
     let active = app.session.selection.active == Some(id);
     if active {
-        p.rect_stroke(display.intersect(img_area.shrink(1.0)), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        super::grid::selection_ring(&p, &t, display.intersect(img_area.shrink(3.0)), lightcraft_engine::SelectionState::Active);
     }
     // Compare and Reference are where sharpness is judged: as in the loupe, say when what is on
     // screen isn't the render on its way (a thumbnail, the last render after an edit, a magnified

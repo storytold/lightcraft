@@ -119,6 +119,29 @@ pub(super) fn watermark_preview(
     crate::widgets::register(ui, "image:exportWatermarkPreview", r.rect);
 }
 
+/// The 16-bit note: LZW's byte dictionary does worse on 16-bit samples than storing them, so
+/// 16-bit LZW TIFFs came out 10-33 % larger than uncompressed ones (issue #2882).
+pub(crate) const TIFF_LZW_NOTE_16: &str =
+    "At 16 bit, LZW is often larger than no compression, and larger and slower than ZIP. Use it only if other software needs LZW.";
+/// The note at 8 bit and 32-bit float: one 8-bit file in #2882 was larger with LZW too.
+pub(crate) const TIFF_LZW_NOTE: &str =
+    "LZW is usually larger and slower than ZIP, and can be larger than no compression. Use it only if other software needs LZW.";
+
+/// The note shown under Compression when a TIFF export uses LZW (none otherwise). The export
+/// keeps LZW: some software reads only LZW TIFFs.
+pub(crate) fn tiff_lzw_note(o: &lightcraft_engine::export::ExportOptions) -> Option<&'static str> {
+    use lightcraft_engine::export::{ExportFormat, OutputDepth, TiffCompression};
+    if o.format != ExportFormat::Tiff || o.tiff_compression != TiffCompression::Lzw {
+        return None;
+    }
+    Some(if o.effective_depth() == OutputDepth::U16 { TIFF_LZW_NOTE_16 } else { TIFF_LZW_NOTE })
+}
+
+/// [`tiff_lzw_note`] for an export preset's params: the hint on presets that write LZW TIFFs.
+pub(crate) fn preset_lzw_note(params: &serde_json::Value) -> Option<&'static str> {
+    tiff_lzw_note(&lightcraft_engine::export::ExportOptions::from_json(params))
+}
+
 /// The Export dialog's choices as `app.export` params (without the folder).
 pub(super) fn export_dialog_params(
     opts: &lightcraft_engine::export::ExportOptions,
@@ -179,11 +202,12 @@ pub(super) const QUALITY: ControlSpec = spec("export.quality", "Quality", 1.0, 1
 
 pub(super) const LIMIT_KB: ControlSpec = spec("export.limitKb", "Limit file size (KB, 0 = off)", 0.0, 20_000.0, 0.0, 10.0);
 
-const SIZE_PX: ControlSpec = spec("export.sizePx", "Pixels", 16.0, 20_000.0, 2048.0, 16.0);
+// whole pixels: a typed size is snapped to the step, and 1080 or 1350 must stay what was typed
+const SIZE_PX: ControlSpec = spec("export.sizePx", "Pixels", 16.0, 20_000.0, 2048.0, 1.0);
 
-const SIZE_W: ControlSpec = spec("export.sizeW", "Width (px)", 16.0, 20_000.0, 2048.0, 16.0);
+const SIZE_W: ControlSpec = spec("export.sizeW", "Width (px)", 16.0, 20_000.0, 2048.0, 1.0);
 
-const SIZE_H: ControlSpec = spec("export.sizeH", "Height (px)", 16.0, 20_000.0, 2048.0, 16.0);
+const SIZE_H: ControlSpec = spec("export.sizeH", "Height (px)", 16.0, 20_000.0, 2048.0, 1.0);
 
 const SIZE_MP: ControlSpec = ControlSpec { decimals: 1, ..spec("export.sizeMp", "Megapixels", 0.1, 100.0, 12.0, 0.1) };
 
@@ -298,5 +322,111 @@ mod watermark_position_tests {
         for anchor in anchors {
             assert_eq!(WM_POSITIONS.iter().filter(|(position, _)| *position == anchor).count(), 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tiff_lzw_note_tests {
+    use std::time::Duration;
+
+    use lightcraft_engine::export::{ExportFormat, ExportOptions, TiffCompression};
+    use serde_json::json;
+
+    use super::{TIFF_LZW_NOTE, TIFF_LZW_NOTE_16, export_dialog_params, preset_lzw_note, tiff_lzw_note};
+    use crate::headless::Headless;
+    use crate::state::Dialog;
+    use crate::{LightcraftApp, Services};
+
+    const T: Duration = Duration::from_secs(20);
+
+    fn tiff(compression: TiffCompression, bit_depth: Option<u8>) -> ExportOptions {
+        ExportOptions { format: ExportFormat::Tiff, tiff_compression: compression, bit_depth, ..Default::default() }
+    }
+
+    // Issue #2882: the note shows for LZW only, worded more strongly at 16 bit (TIFF's default depth)
+    #[test]
+    fn lzw_gets_a_note_stronger_at_16_bit() {
+        assert_eq!(tiff_lzw_note(&tiff(TiffCompression::Lzw, None)), Some(TIFF_LZW_NOTE_16), "TIFF defaults to 16-bit");
+        assert_eq!(tiff_lzw_note(&tiff(TiffCompression::Lzw, Some(16))), Some(TIFF_LZW_NOTE_16));
+        assert_eq!(tiff_lzw_note(&tiff(TiffCompression::Lzw, Some(8))), Some(TIFF_LZW_NOTE));
+        assert_eq!(tiff_lzw_note(&tiff(TiffCompression::Lzw, Some(32))), Some(TIFF_LZW_NOTE));
+        for compression in [TiffCompression::None, TiffCompression::Deflate, TiffCompression::PackBits] {
+            for depth in [None, Some(8), Some(16), Some(32)] {
+                assert_eq!(tiff_lzw_note(&tiff(compression, depth)), None, "{compression:?} {depth:?}");
+            }
+        }
+        // the setting only matters for TIFF: a JPEG preset that carries it gets no note
+        let jpeg = ExportOptions { format: ExportFormat::Jpeg, tiff_compression: TiffCompression::Lzw, ..Default::default() };
+        assert_eq!(tiff_lzw_note(&jpeg), None);
+        assert!(TIFF_LZW_NOTE_16.contains("16 bit") && TIFF_LZW_NOTE.contains("other software needs LZW"));
+    }
+
+    // Presets that write LZW TIFFs carry the same hint; the built-in ones don't write LZW
+    #[test]
+    fn presets_with_lzw_get_the_same_hint() {
+        assert_eq!(preset_lzw_note(&json!({"format": "tiff", "tiffCompression": "lzw"})), Some(TIFF_LZW_NOTE_16));
+        assert_eq!(preset_lzw_note(&json!({"format": "tiff", "tiffCompression": "LZW", "bitDepth": 8})), Some(TIFF_LZW_NOTE));
+        assert_eq!(preset_lzw_note(&json!({"format": "tiff", "tiffCompression": "zip"})), None);
+        assert_eq!(preset_lzw_note(&json!({"format": "tiff"})), None, "ZIP is the default");
+        for p in lightcraft_engine::export::builtin_presets() {
+            assert_eq!(preset_lzw_note(&p.params), None, "{}", p.name);
+        }
+    }
+
+    // The note never changes the choice: the dialog exports exactly the compression picked
+    #[test]
+    fn the_dialog_keeps_lzw_as_picked() {
+        for depth in [None, Some(8), Some(16), Some(32)] {
+            let o = tiff(TiffCompression::Lzw, depth);
+            let params = export_dialog_params(&o, true, &Default::default(), 0);
+            assert_eq!(ExportOptions::from_json(&params).tiff_compression, TiffCompression::Lzw, "{depth:?}: {params}");
+        }
+    }
+
+    fn set(h: &mut Headless, compression: TiffCompression, bit_depth: Option<u8>) {
+        if let Some(Dialog::Export { opts, .. }) = &mut h.app.ui.dialog {
+            opts.format = ExportFormat::Tiff;
+            opts.tiff_compression = compression;
+            opts.bit_depth = bit_depth;
+        } else {
+            panic!("no Export dialog");
+        }
+        h.settle(T);
+    }
+
+    fn note_rect(h: &Headless) -> Option<egui::Rect> {
+        h.app.widgets.iter().find(|(w, _)| w == "note:exportTiffLzw").map(|(_, r)| *r)
+    }
+
+    fn widget(h: &Headless, id: &str) -> egui::Rect {
+        h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
+    }
+
+    // Scenario: in the Export dialog, picking LZW for a TIFF shows the note under Compression; ZIP
+    // and None show none, and the choice stays LZW
+    #[test]
+    fn export_dialog_shows_the_lzw_note_under_compression() {
+        let services = Services { png: None, write_shared: Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(()))), ..Default::default() };
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+        h.settle(T);
+        let r = h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(T);
+        for compression in [TiffCompression::Deflate, TiffCompression::None] {
+            set(&mut h, compression, None);
+            assert!(note_rect(&h).is_none(), "{compression:?} has no note");
+        }
+        for depth in [None, Some(8), Some(32)] {
+            set(&mut h, TiffCompression::Lzw, depth);
+            let note = note_rect(&h).unwrap_or_else(|| panic!("LZW at {depth:?} shows the note"));
+            // under the Compression choice, inside the dialog
+            assert!(note.top() >= widget(&h, "button:exportTiffCompression-1").bottom() - 1.0, "{note:?}");
+            assert!(widget(&h, "dialog:window").contains_rect(note), "{note:?}");
+            let Some(Dialog::Export { opts, .. }) = &h.app.ui.dialog else { panic!("dialog closed") };
+            assert_eq!(opts.tiff_compression, TiffCompression::Lzw, "the note leaves the choice alone");
+        }
+        set(&mut h, TiffCompression::Deflate, None);
+        assert!(note_rect(&h).is_none(), "back to ZIP: the note goes");
     }
 }
