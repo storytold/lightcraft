@@ -449,6 +449,12 @@ mod tests {
         let p = Photo::new(PhotoId(1), Source::File { path: link.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
         c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
         std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o300)).unwrap();
+        if std::fs::read_dir(d.join("lib")).is_ok() {
+            std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let _ = std::fs::remove_dir_all(&d);
+            lightcraft_testkit::skip!(System, "a -wx folder can still be listed here (running as root?), so the per-entry fallback can't be tested");
+            return;
+        }
         let refused = OriginalGuard::new(&c).check(&real);
         std::fs::set_permissions(d.join("lib"), std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(refused.unwrap_err().contains("original of IMG_1.jpg"));
