@@ -72,9 +72,53 @@ enum Val<'a> {
     Fixed32(u32),
 }
 
-/// A parsed message: its fields in file order.
-#[derive(Debug, Default)]
-struct Msg<'a>(Vec<(u64, Val<'a>)>);
+/// A message, checked to be well formed: its bytes. Fields are read from them on demand, so a message costs no memory
+/// beyond the file, however many fields it packs.
+#[derive(Clone, Copy, Debug, Default)]
+struct Msg<'a>(&'a [u8]);
+
+/// The fields of a message in file order; ends after the first malformed field.
+struct Fields<'a> {
+    b: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Iterator for Fields<'a> {
+    type Item = Result<(u64, Val<'a>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.b.len() {
+            return None;
+        }
+        let field = field(self.b, &mut self.pos);
+        if field.is_err() {
+            self.pos = self.b.len();
+        }
+        Some(field)
+    }
+}
+
+fn field<'a>(b: &'a [u8], pos: &mut usize) -> Result<(u64, Val<'a>)> {
+    let key = varint(b, pos)?;
+    let (num, wire) = (key >> 3, key & 7);
+    let take = |pos: &mut usize, n: usize| -> Result<&'a [u8]> {
+        let end = pos.checked_add(n).ok_or_else(|| corrupt("field length"))?;
+        let s = b.get(*pos..end).ok_or_else(|| corrupt("field past the end of its message"))?;
+        *pos = end;
+        Ok(s)
+    };
+    let val = match wire {
+        0 => Val::Varint(varint(b, pos)?),
+        1 => Val::Fixed64(u64::from_le_bytes(take(pos, 8)?.try_into().map_err(|_| corrupt("fixed64"))?)),
+        2 => {
+            let n = usize::try_from(varint(b, pos)?).map_err(|_| corrupt("field length"))?;
+            Val::Bytes(take(pos, n)?)
+        }
+        5 => Val::Fixed32(u32::from_le_bytes(take(pos, 4)?.try_into().map_err(|_| corrupt("fixed32"))?)),
+        w => return Err(corrupt(&format!("wire type {w}"))),
+    };
+    Ok((num, val))
+}
 
 fn varint(b: &[u8], pos: &mut usize) -> Result<u64> {
     let mut v = 0u64;
@@ -99,34 +143,15 @@ fn corrupt(what: &str) -> RawError {
 
 impl<'a> Msg<'a> {
     fn parse(b: &'a [u8]) -> Result<Msg<'a>> {
-        let mut fields = Vec::new();
-        let mut pos = 0;
-        while pos < b.len() {
-            let key = varint(b, &mut pos)?;
-            let (num, wire) = (key >> 3, key & 7);
-            let take = |pos: &mut usize, n: usize| -> Result<&'a [u8]> {
-                let end = pos.checked_add(n).ok_or_else(|| corrupt("field length"))?;
-                let s = b.get(*pos..end).ok_or_else(|| corrupt("field past the end of its message"))?;
-                *pos = end;
-                Ok(s)
-            };
-            let val = match wire {
-                0 => Val::Varint(varint(b, &mut pos)?),
-                1 => Val::Fixed64(u64::from_le_bytes(take(&mut pos, 8)?.try_into().map_err(|_| corrupt("fixed64"))?)),
-                2 => {
-                    let n = usize::try_from(varint(b, &mut pos)?).map_err(|_| corrupt("field length"))?;
-                    Val::Bytes(take(&mut pos, n)?)
-                }
-                5 => Val::Fixed32(u32::from_le_bytes(take(&mut pos, 4)?.try_into().map_err(|_| corrupt("fixed32"))?)),
-                w => return Err(corrupt(&format!("wire type {w}"))),
-            };
-            fields.push((num, val));
+        for field in (Fields { b, pos: 0 }) {
+            field?;
         }
-        Ok(Msg(fields))
+        Ok(Msg(b))
     }
 
     fn all(&self, num: u64) -> impl Iterator<Item = Val<'a>> + '_ {
-        self.0.iter().filter(move |(n, _)| *n == num).map(|(_, v)| *v)
+        // `parse` checked every field, so none of them is an error here
+        Fields { b: self.0, pos: 0 }.map_while(Result::ok).filter(move |(n, _)| *n == num).map(|(_, v)| v)
     }
 
     fn varint(&self, num: u64) -> Option<u64> {
@@ -147,12 +172,17 @@ impl<'a> Msg<'a> {
     }
 
     /// All sub-messages `num`; malformed nested messages are corrupt input.
-    fn subs(&self, num: u64) -> Result<Vec<Msg<'a>>> {
-        self.all(num).filter_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None }).map(Msg::parse).collect()
+    fn subs(&self, num: u64) -> impl Iterator<Item = Result<Msg<'a>>> + '_ {
+        self.all(num).filter_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None }).map(Msg::parse)
     }
 
+    /// The first sub-message `num`, once every one of them is checked.
     fn sub(&self, num: u64) -> Result<Option<Msg<'a>>> {
-        Ok(self.subs(num)?.into_iter().next())
+        let mut first = None;
+        for m in self.subs(num) {
+            first = first.or(Some(m?));
+        }
+        Ok(first)
     }
 }
 
@@ -260,12 +290,26 @@ fn mat3(m: &Msg) -> Option<Mat3> {
     Some(Mat3([[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]]))
 }
 
+/// Calls `f` with each of module `id`'s calibration records (kind-0 field 13), in file order.
+fn calibration<'a>(headers: &[&Block<'a>], id: u64, mut f: impl FnMut(Msg<'a>) -> Result<()>) -> Result<()> {
+    for b in headers {
+        for c in b.msg.subs(13) {
+            let c = c?;
+            if c.varint(1) == Some(id) {
+                f(c)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The module's colour matrices (XYZ → camera) and forward matrices under standard A and D65, from its calibration
 /// records.
-fn colour(calibration: &[Msg]) -> Result<ColorData> {
+fn colour(headers: &[&Block], id: u64) -> Result<ColorData> {
     let mut color = ColorData::default();
-    for cal in calibration {
-        for c in cal.subs(2)? {
+    calibration(headers, id, |cal| {
+        for c in cal.subs(2) {
+            let c = c?;
             let slot = match c.varint(1) {
                 Some(ILLUMINANT_A) => 0,
                 Some(ILLUMINANT_D65) => 1,
@@ -276,7 +320,8 @@ fn colour(calibration: &[Msg]) -> Result<ColorData> {
             color.color_matrix[slot] = Some(matrix);
             color.forward_matrix[slot] = Some(forward);
         }
-    }
+        Ok(())
+    })?;
     // one illuminant alone sits in the first slot, as a single-illuminant DNG has it
     if color.color_matrix[0].is_none() {
         color.illuminant = [color.illuminant[1], 0];
@@ -288,18 +333,24 @@ fn colour(calibration: &[Msg]) -> Result<ColorData> {
 
 /// The module's vignetting gains, from its calibration records, as an `OpcodeList2` gain map over the
 /// `width x height` frame (the grid nearest `lens_position`).
-fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usize) -> Result<Option<Opcode>> {
-    let mut grids: Vec<(u64, Msg)> = Vec::new();
-    for c in calibration {
+fn vignetting(headers: &[&Block], id: u64, lens_position: u64, width: usize, height: usize) -> Result<Option<Opcode>> {
+    // the grid nearest the lens position, the first of equally near ones
+    let mut nearest: Option<(u64, Msg)> = None;
+    calibration(headers, id, |c| {
         if let Some(v) = c.sub(4)? {
-            for g in v.subs(2)? {
+            for g in v.subs(2) {
+                let g = g?;
                 if let Some(grid) = g.sub(2)? {
-                    grids.push((g.varint(1).unwrap_or(0), grid));
+                    let off = g.varint(1).unwrap_or(0).abs_diff(lens_position);
+                    if nearest.is_none_or(|(best, _)| off < best) {
+                        nearest = Some((off, grid));
+                    }
                 }
             }
         }
-    }
-    let Some((_, grid)) = grids.iter().min_by_key(|(at, _)| at.abs_diff(lens_position)) else { return Ok(None) };
+        Ok(())
+    })?;
+    let Some((_, grid)) = nearest else { return Ok(None) };
     let (Some(cols), Some(rows)) = (grid.varint(1).and_then(|v| usize::try_from(v).ok()), grid.varint(2).and_then(|v| usize::try_from(v).ok()))
     else {
         return Ok(None);
@@ -363,26 +414,21 @@ fn capture_time(m: &Msg) -> Result<Option<lightcraft_meta::DateTime>> {
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let blocks = blocks(bytes)?;
     let headers: Vec<&Block> = blocks.iter().filter(|b| b.kind == 0).collect();
-    let mut modules = Vec::new();
+    // the lowest-numbered colour module, the first of equally numbered ones
+    let mut colour_module: Option<Module> = None;
     for b in &headers {
-        for msg in b.msg.subs(12)? {
-            if let Some(m) = module(b.bytes, b.msg_at, &msg)? {
-                modules.push(m);
+        for msg in b.msg.subs(12) {
+            if let Some(m) = module(b.bytes, b.msg_at, &msg?)?.filter(|m| m.red.is_some())
+                && colour_module.as_ref().is_none_or(|best| m.id < best.id)
+            {
+                colour_module = Some(m);
             }
         }
     }
-    let m = modules
-        .iter()
-        .filter(|m| m.red.is_some())
-        .min_by_key(|m| m.id)
-        .ok_or_else(|| RawError::Unsupported("LRI without a colour module of 10-bit packed samples".into()))?;
+    let m = colour_module.ok_or_else(|| RawError::Unsupported("LRI without a colour module of 10-bit packed samples".into()))?;
     let (w, h) = (m.width, m.height);
     let n = w.checked_mul(h).filter(|n| *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let (rx, ry) = m.red.unwrap_or_default();
-    let mut calibration = Vec::new();
-    for b in &headers {
-        calibration.extend(b.msg.subs(13)?.into_iter().filter(|c| c.varint(1) == Some(m.id)));
-    }
     let mut sensor = None;
     for b in &headers {
         if let Some(s) = b.msg.sub(16)? {
@@ -394,10 +440,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     }
     let black = sensor.as_ref().and_then(|s| s.f32(1)).filter(|v| (0.0..1023.0).contains(v)).unwrap_or(DEFAULT_BLACK);
     let white = sensor.as_ref().and_then(|s| s.f32(2)).filter(|v| *v > black && *v <= 1023.0).unwrap_or(DEFAULT_WHITE);
-    let mut color = colour(&calibration)?;
+    let mut color = colour(&headers, m.id)?;
     color.as_shot_neutral = as_shot_neutral(&blocks)?;
     let mut opcodes = OpcodeLists::default();
-    opcodes.list2.extend(vignetting(&calibration, m.lens_position, w, h)?);
+    opcodes.list2.extend(vignetting(&headers, m.id, m.lens_position, w, h)?);
     let data = if mode == Mode::Full {
         let mut d = vec![0u16; n];
         use rayon::prelude::*;
@@ -644,6 +690,21 @@ mod tests {
         let w = 8;
         let data = pack10(&[100; 8 * 2]);
         let f = block(&module_msg(1, w, 2, HEADER as u64, (-1, -1)), &data, 0);
+        assert!(matches!(crate::decode(&f), Err(RawError::Unsupported(_))));
+    }
+
+    /// A message packed with two-byte fields once grew 16-fold in memory as parsed fields (and its nested records
+    /// again as vectors of messages); a message is now its bytes, read in place.
+    #[test]
+    fn a_message_of_many_fields_costs_no_memory_of_its_own() {
+        assert_eq!(std::mem::size_of::<Msg>(), std::mem::size_of::<&[u8]>());
+        // 4 Mi fields of field 1 = 0, then nested calibration records of the same kind, and no module
+        let flood: Vec<u8> = [0x08, 0x00].repeat(4 << 20);
+        let records: Vec<u8> = bytes(13, &[0x08, 0x00]).repeat(1 << 20);
+        let f = block(&[flood, records].concat(), &[], 0);
+        let m = Msg::parse(&f[HEADER..]).unwrap();
+        assert_eq!(m.all(1).count(), 4 << 20);
+        assert_eq!(m.subs(13).count(), 1 << 20);
         assert!(matches!(crate::decode(&f), Err(RawError::Unsupported(_))));
     }
 
