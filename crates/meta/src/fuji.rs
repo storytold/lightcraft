@@ -81,6 +81,9 @@ fn mentions_fuji(text: &str) -> bool {
 
 /// Recipe in a JPEG, RAF, or TIFF-structured EXIF block already in memory.
 pub fn recipe_from_bytes(bytes: &[u8]) -> Option<FujiRecipe> {
+    if Tiff::sniff(bytes).is_some() {
+        return recipe_from_exif(bytes);
+    }
     let exif = crate::embedded(bytes).exif?;
     recipe_from_exif(&exif)
 }

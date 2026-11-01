@@ -71,10 +71,19 @@ pub(crate) enum Plan {
 pub(crate) struct Recipes {
     entries: VecDeque<(RecipeKey, Outcome)>,
     inflight: Option<RecipeKey>,
+    discard_inflight: bool,
     wanted: Option<RecipeKey>,
 }
 
 impl Recipes {
+    /// A relink may replace a file without changing its key. Its old worker must not refill the cache.
+    pub(crate) fn forget(&mut self, key: &RecipeKey) {
+        self.entries.retain(|(old, _)| old != key);
+        if self.inflight.as_ref() == Some(key) {
+            self.discard_inflight = true;
+        }
+    }
+
     /// What the Info panel should do for `photo` in `library` at egui time `now`.
     pub(crate) fn plan(&mut self, library: u64, photo: &Photo, now: f64) -> Plan {
         if let Some(view) = photo.meta.fuji_recipe.as_ref().and_then(RecipeView::from_recipe) {
@@ -120,6 +129,7 @@ impl Recipes {
             self.wanted = None;
         }
         self.inflight = Some(key.clone());
+        self.discard_inflight = false;
         true
     }
 
@@ -137,7 +147,9 @@ impl Recipes {
             return;
         }
         let Some(key) = self.inflight.take() else { return };
-        self.remember(key, Outcome::Failed(now));
+        if !std::mem::take(&mut self.discard_inflight) {
+            self.remember(key, Outcome::Failed(now));
+        }
     }
 
     /// Store `result` when it still belongs to the open library. The photo the user moved on to,
@@ -149,10 +161,11 @@ impl Recipes {
         library_now: u64,
         now: f64,
     ) -> Option<RecipeKey> {
-        if self.inflight.as_ref() == Some(key) {
-            self.inflight = None;
+        if self.inflight.as_ref() != Some(key) {
+            return None;
         }
-        if key.library == library_now {
+        self.inflight = None;
+        if !std::mem::take(&mut self.discard_inflight) && key.library == library_now {
             let outcome = match result {
                 Ok(recipe) => match recipe.as_ref().and_then(RecipeView::from_recipe) {
                     Some(view) => Outcome::Ready(view),
@@ -375,6 +388,52 @@ mod tests {
         }
         assert!(matches!(cache.plan(1, &photo(1, "C:/old.jpg", "JPEG"), 1.0), Plan::Start(_)));
         assert!(matches!(cache.plan(2, &photo(10, "C:/0.jpg", "JPEG"), 1.0), Plan::Hidden));
+    }
+
+    #[test]
+    fn same_path_relink_forgets_only_that_file_including_a_late_read() {
+        let path = std::env::temp_dir().join(format!("lc-fuji-relink-{}.jpg", std::process::id()));
+        std::fs::write(&path, b"replacement").unwrap();
+        for command in ["photo.relink", "photo.locate"] {
+            for (pending, moved) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+                let original = if moved { path.with_extension("old.jpg") } else { path.clone() };
+                let shot = photo(1, original.to_str().unwrap(), "JPEG");
+                let other = photo(2, "C:/other.jpg", "JPEG");
+                for ph in [&shot, &other] {
+                    app.session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(ph.clone()) }).unwrap();
+                }
+                app.session.selection.active = Some(shot.id);
+                let generation = app.session.library_generation();
+                let k = key(generation, &shot);
+                let other_key = key(generation, &other);
+                app.recipes.reserve(&other_key);
+                app.recipes.finish(&other_key, Ok(Some(recipe("Eterna"))), generation, 0.0);
+                if moved {
+                    let destination = key(generation, &photo(3, path.to_str().unwrap(), "JPEG"));
+                    app.recipes.reserve(&destination);
+                    app.recipes.finish(&destination, Ok(Some(recipe("Acros"))), generation, 0.0);
+                }
+                app.recipes.reserve(&k);
+                if !pending {
+                    app.recipes.finish(&k, Ok(Some(recipe("Classic Chrome"))), generation, 0.0);
+                }
+                assert!(app.run(command, serde_json::json!({"id": 1, "path": path.with_extension("missing")})).is_err());
+                if !pending {
+                    assert!(matches!(app.recipes.plan(generation, &shot, 1.0), Plan::Show(_)), "failed relink keeps the cache");
+                }
+                app.run(command, serde_json::json!({"id": 1, "path": path})).unwrap();
+                let relinked = app.session.catalog.photo(shot.id).unwrap().clone();
+                assert_eq!(key(generation, &relinked) == k, !moved, "no probe changed the hash or size");
+                if pending {
+                    assert!(matches!(app.recipes.plan(generation, &relinked, 1.0), Plan::Wait));
+                    app.recipes.finish(&k, Ok(Some(recipe("Classic Chrome"))), generation, 1.0);
+                }
+                assert!(matches!(app.recipes.plan(generation, &relinked, 2.0), Plan::Start(_)), "{command}, pending={pending}, moved={moved}");
+                assert!(matches!(app.recipes.plan(generation, &other, 2.0), Plan::Show(view) if view.text.contains("Eterna")));
+            }
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     trait Tap {

@@ -213,7 +213,24 @@ impl LightcraftApp {
         } else {
             params
         };
+        let relink_photo = if id == "photo.relink" {
+            params.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(self.session.active())
+        } else {
+            None
+        };
+        let recipe_key = |session: &Session| {
+            relink_photo
+                .and_then(|photo| session.catalog.photo(photo))
+                .and_then(|photo| crate::fuji_recipe::RecipeKey::from_photo(session.library_generation(), photo))
+        };
+        let old_recipe_key = recipe_key(&self.session);
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        if r.is_ok() || r.as_ref().is_err_and(|e| e.kind == ErrorKind::NotSaved) {
+            // A relink can replace bytes without changing the path, hash or size, even if saving failed.
+            for key in old_recipe_key.into_iter().chain(recipe_key(&self.session)) {
+                self.recipes.forget(&key);
+            }
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
