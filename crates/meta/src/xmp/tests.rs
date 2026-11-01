@@ -179,6 +179,22 @@ fn non_positive_iso_is_ignored() {
 }
 
 #[test]
+fn negative_xmp_pixel_width_is_ignored() {
+    let read = |attrs: &str| {
+        let x = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" {attrs}/>
+            </rdf:RDF>"#
+        );
+        parse_xmp(&x).unwrap().metadata.width
+    };
+
+    assert_eq!(read(r#"tiff:ImageWidth="-1""#), None);
+    assert_eq!(read(r#"tiff:ImageWidth="-1" exif:PixelXDimension="640""#), Some(640));
+    assert_eq!(read(r#"exif:PixelXDimension="-1""#), None);
+}
+
+#[test]
 fn malformed_inputs() {
     assert!(parse_xmp("<a><b></a>").is_ok() || parse_xmp("<a><b></a>").is_err());
     assert_eq!(parse_xmp("").unwrap().metadata, Metadata::default());
@@ -482,4 +498,31 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
     assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
     assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
+}
+
+#[test]
+fn entity_rejects_signed_numeric_references() {
+    assert_eq!(entity("#+65"), None);
+    assert_eq!(entity("#x+41"), None);
+    assert_eq!(entity("#65"), Some('A'));
+    assert_eq!(entity("#x41"), Some('A'));
+}
+
+#[test]
+fn malformed_capture_time_falls_back_and_keeps_raw_property() {
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" exif:DateTimeOriginal="2026-01-01T" xmp:CreateDate="2026-01-02T10:00:00Z"/></rdf:RDF></x:xmpmeta>"#;
+    let parsed = parse_xmp(packet).unwrap();
+    assert_eq!(
+        parsed.metadata.capture_time.map(|d| (d.year, d.month, d.day, d.hour, d.minute, d.second, d.offset_minutes)),
+        Some((2026, 1, 2, 10, 0, 0, Some(0)))
+    );
+    assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
+}
+
+#[test]
+fn malformed_capture_time_without_fallback_is_not_projected() {
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:DateTimeOriginal="2026-01-01T"/></rdf:RDF></x:xmpmeta>"#;
+    let parsed = parse_xmp(packet).unwrap();
+    assert_eq!(parsed.metadata.capture_time, None);
+    assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
 }
