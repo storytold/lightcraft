@@ -189,12 +189,7 @@ pub(super) fn prefetch_near(app: &mut LightcraftApp, c: &WindowCtx, windows: &[(
     // (a window made ahead for a view since left: given up, its view is gone from `region_tiles`)
     let tiles = &app.region_tiles;
     app.renderer.drop_near_unless(|key| tiles.contains_key(&(false, key)));
-    if c.interacting
-        || c.holding
-        || app.renderer.is_pending(Slot::Region)
-        || app.renderer.is_pending(Slot::RegionNear)
-        || app.renderer.pan_tile_count() + 1 >= crate::render::PAN_TILES
-    {
+    if c.interacting || c.holding || app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionNear) {
         return;
     }
     let (fw, fh) = view.full;
@@ -254,7 +249,8 @@ pub(super) fn draw_pan_tiles(p: &egui::Painter, app: &LightcraftApp, c: &WindowC
 }
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
-/// drag, an earlier draft of it). The rect it was drawn in (screen points), if it was.
+/// drag, an earlier draft of it). The rect it was drawn in (screen points), if it was and is sharp
+/// (a full-quality window).
 pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) -> Option<Rect> {
     let tex = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id)?;
     let tile = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting))?;
@@ -262,5 +258,6 @@ pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx,
     let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-    Some(dst.intersect(p.clip_rect()))
+    // (a drag's draft is drawn, but is not sharp)
+    app.renderer.is_full_window(tex.key).then(|| dst.intersect(p.clip_rect()))
 }

@@ -702,7 +702,7 @@ impl Renderer {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
-        if matches!(slot, Slot::Region | Slot::RegionNear) {
+        if matches!(slot, Slot::Region | Slot::RegionBefore | Slot::RegionNear) {
             self.remember_window(job.key, job.request.quality != lightcraft_pipeline::Quality::Draft);
             if slot == Slot::Region {
                 self.window_renders += 1;
@@ -748,8 +748,8 @@ impl Renderer {
                 .pan_tiles
                 .iter()
                 .map(|t| t.key)
-                .chain([Slot::Region, Slot::RegionNear].iter().filter_map(|s| self.wanted(*s)))
-                .chain(self.textures.get(&Slot::Region).map(|t| t.key))
+                .chain([Slot::Region, Slot::RegionBefore, Slot::RegionNear].iter().filter_map(|s| self.wanted(*s)))
+                .chain([Slot::Region, Slot::RegionBefore].iter().filter_map(|s| self.textures.get(s).map(|t| t.key)))
                 .collect();
             self.full_windows.retain(|k| used.contains(k));
         }

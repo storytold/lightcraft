@@ -269,7 +269,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else {
         Vec::new()
     };
-    let windows = request_windows(app, &window_ctx, window_views);
+    let windows = request_windows(app, &window_ctx, window_views.clone());
     // a still, sharp zoomed view makes the windows around it ahead, so a pan finds them sharp
     // (hovering a preset or profile asks for no windows)
     prefetch_near(app, &window_ctx, &windows);
@@ -322,7 +322,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         sharp_rects.extend(draw_pan_tiles(&p.with_clip_rect(clip), app, &window_ctx, v, view));
         sharp_rects.extend(draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view));
     }
-    app.loupe_sharp = sharp_share(&windows, canvas, &sharp_rects);
+    app.loupe_sharp = sharp_share(&window_views, canvas, &sharp_rects);
     if let Some((bg, g)) = before_badge {
         paint_badge(&p, bg, g);
         register(ui, "canvas:beforeLabel", bg);
@@ -595,12 +595,13 @@ fn status_pill(
 /// Soft proofing: a paper-white surround and the proof's name, as Lightroom shows it.
 /// The share (0..1) of the photo on screen in the window views that `sharp` (screen rects) cover:
 /// each view's own visible part of the photo, weighted by its area (the gap between the panes of
-/// a Before/After shows no photo). `None` without windows.
-fn sharp_share(windows: &[(WindowView, crate::region::RegionView)], canvas: Rect, sharp: &[Rect]) -> Option<f32> {
-    if windows.is_empty() {
+/// a Before/After shows no photo). A view whose window is missing counts as not sharp. `None`
+/// when no view wants a window.
+fn sharp_share(views: &[WindowView], canvas: Rect, sharp: &[Rect]) -> Option<f32> {
+    if views.is_empty() {
         return None;
     }
-    let areas: Vec<Rect> = windows.iter().map(|(v, _)| v.visible.intersect(v.img).intersect(canvas)).filter(|r| r.is_positive()).collect();
+    let areas: Vec<Rect> = views.iter().map(|v| v.visible.intersect(v.img).intersect(canvas)).filter(|r| r.is_positive()).collect();
     if areas.is_empty() {
         return Some(1.0);
     }
