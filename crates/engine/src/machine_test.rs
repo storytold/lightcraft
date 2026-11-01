@@ -36,6 +36,9 @@ pub struct TestRun {
     pub gpu_waits: u64,
     /// The most device memory held at once (bytes).
     pub gpu_peak: u64,
+    /// Photos of a GPU run that fell back to the processor (`gpuFallback`): such a run is not
+    /// counted as the GPU's (review of PR #3506).
+    pub gpu_fallbacks: usize,
 }
 
 /// What the test found and chose. Stored with the install's settings and shown in Settings ▸
@@ -246,9 +249,11 @@ fn export_round(
         return Err(format!("the test export failed: {e}"));
     }
     let (mem1, _) = crate::memory::export_gate().waits();
+    let gpu_fallbacks = gpu_fallbacks(&files);
     Ok(TestRun {
         lanes,
-        gpu,
+        // (a run whose photos fell back to the processor measured the processor)
+        gpu: gpu && gpu_fallbacks == 0,
         mix: gpu && mix,
         photos: files.len(),
         seconds,
@@ -256,7 +261,13 @@ fn export_round(
         memory_waits: mem1.saturating_sub(mem0),
         gpu_waits: crate::gpu::batch_usage().waits.saturating_sub(gpu0),
         gpu_peak: crate::gpu::memory().peak,
+        gpu_fallbacks,
     })
+}
+
+/// Files of an export that fell back from the GPU to the processor.
+fn gpu_fallbacks(files: &[serde_json::Value]) -> usize {
+    files.iter().filter(|f| f.get("gpuFallback").is_some()).count()
 }
 
 /// What limits the best run, in plain words.
@@ -448,6 +459,14 @@ mod tests {
         let e = s.execute("app.testMachine", &serde_json::json!({"quick": true, "apply": false})).unwrap_err().to_string();
         assert!(e.contains("already being tested"), "{e}");
         drop(other);
+    }
+
+    /// Review of PR #3506: a run whose photos fell back to the processor is not the GPU's.
+    #[test]
+    fn a_run_whose_photos_fell_back_is_not_the_gpus() {
+        let files = [serde_json::json!({"file": "a.jpg"}), serde_json::json!({"file": "b.jpg", "gpuFallback": "device lost"})];
+        assert_eq!(gpu_fallbacks(&files), 1);
+        assert_eq!(gpu_fallbacks(&files[..1]), 0);
     }
 
     /// Review of PR #3499: a flag that isn't true or false is refused before anything runs
