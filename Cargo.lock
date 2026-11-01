@@ -3624,6 +3624,7 @@ dependencies = [
  "ravif",
  "rayon",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tiff",
  "zune-core",

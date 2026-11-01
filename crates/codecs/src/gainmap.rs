@@ -16,6 +16,9 @@
 //! `min + (max − min) · (code / 255)^(1 / gamma)`, scaled by a weight in 0..1 that depends on how
 //! much headroom the display has between `base_headroom` and `alternate_headroom`.
 
+/// Legacy Apple gain-map reconstruction (separate from ISO / Ultra HDR).
+pub mod apple;
+
 use crate::encode::{EncodeImage, EncodeMeta, Samples, jpeg_app_segments, xmp_segment};
 use crate::{ChromaSubsampling, Error, Format, Result, jpeg, jpeg_par};
 
