@@ -1,5 +1,5 @@
 //! Where the camera focused: the autofocus point a camera records in its maker notes, as a box on the
-//! upright photo ([`FocusPoint`]). Sony only for now.
+//! upright photo ([`FocusPoint`]). Sony (below) and Canon ([`crate::focus_canon`]: CR3, CR2, JPEG).
 //!
 //! **Sony** (the MakerNote IFD: header-less in ARWs, after a `SONY DSC` header in JPEGs). Tag identities and value names come from the public ExifTool
 //! tag-name documentation (Sony table); every layout below was confirmed on real ILCE-1 (α1) and
@@ -81,17 +81,26 @@ impl FocusPoint {
 /// tags differently (or not mean the same by them): it shows no focus point until its files are checked.
 pub const SONY_MODELS: &[&str] = &["ILCE-1", "ILCE-7SM3"];
 
+/// Canon bodies (Exif Model) whose AF record has been checked against real files: the R5 C's CR3s
+/// (Face + Tracking and Flexizone frames), the 5D Mark IV's and 6D's CR2s (the selected point). Other
+/// bodies are expected to write the same record but show no point until their files are checked.
+pub const CANON_MODELS: &[&str] = &["Canon EOS R5 C", "Canon EOS 5D Mark IV", "Canon EOS 6D"];
+
 /// Whether a camera as the catalog names it (`"SONY ILCE-1"`: the Exif Make, a space, the Model) is
 /// one whose files can carry a focus point, so a photo from any other camera is never opened to look.
 pub fn camera_supported(camera: &str) -> bool {
     let camera = camera.trim();
+    if is_canon(camera) {
+        // the catalog's name repeats the make ("Canon Canon EOS R5 C"); the model is what follows it
+        return canon_model_checked(camera) || camera.get(5..).is_some_and(canon_model_checked);
+    }
     camera.get(..4).is_some_and(|m| m.eq_ignore_ascii_case("SONY")) && camera.rsplit(' ').next().is_some_and(|model| SONY_MODELS.contains(&model))
 }
 
 /// Names what [`read`] decodes (its bodies), so a record of "looked, found nothing" made by this
 /// decoder is not trusted by one that knows more bodies.
 pub fn decoder_tag() -> String {
-    format!("sony-v1:{}", SONY_MODELS.join(","))
+    format!("sony-v1:{};canon-v1:{}", SONY_MODELS.join(","), CANON_MODELS.join(","))
 }
 
 const FOCUS_MODE: u16 = 0x201b;
@@ -109,6 +118,18 @@ const DEFAULT_SIDE: f64 = 0.03;
 /// `data` is the TIFF stream the maker note's offsets refer to (a whole raw, or an Exif block).
 pub fn read(data: &[u8], tiff: &Tiff, make: Option<&str>, model: Option<&str>, orientation: Option<Orientation>) -> Option<FocusPoint> {
     let make = make?;
+    if is_canon(make) {
+        if !canon_model_checked(model?) {
+            return None;
+        }
+        // CR2 and Canon JPEGs: a header-less maker-note IFD, offsets relative to the TIFF header
+        let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+        let mn = makernote::parse_makernote(data, e.offset, e.count() as u64, tiff.order, make)?;
+        if !matches!(mn.kind, makernote::MakerNoteKind::Plain) {
+            return None;
+        }
+        return crate::focus_canon::canon(&mn.ifd, orientation.unwrap_or_default());
+    }
     if !make.to_ascii_uppercase().starts_with("SONY") || !SONY_MODELS.contains(&model?.trim()) {
         return None;
     }
@@ -119,6 +140,28 @@ pub fn read(data: &[u8], tiff: &Tiff, make: Option<&str>, model: Option<&str>, o
         return None;
     }
     sony(&mn.ifd, mn.order, orientation.unwrap_or_default())
+}
+
+/// Whether `make` (Exif Make, or a catalog camera name starting with it) is Canon's.
+fn is_canon(make: &str) -> bool {
+    make.trim().get(..5).is_some_and(|m| m.eq_ignore_ascii_case("CANON"))
+}
+
+/// Whether `model` (Exif Model) is one of [`CANON_MODELS`].
+fn canon_model_checked(model: &str) -> bool {
+    let model = model.trim();
+    CANON_MODELS.iter().any(|m| m.eq_ignore_ascii_case(model))
+}
+
+/// The focus point of a CR3 (`bytes`: the file, or at least its `moov` box): the Canon maker note
+/// in its `CMT3` block. `make` and `model` are the file's Exif Make and Model.
+pub fn cr3_focus(bytes: &[u8], make: Option<&str>, model: Option<&str>, orientation: Option<Orientation>) -> Option<FocusPoint> {
+    if !make.is_some_and(is_canon) || !model.is_some_and(canon_model_checked) {
+        return None;
+    }
+    let c = crate::cr3::parse_cr3(bytes)?;
+    let note = Tiff::parse(c.cmt.get(2).copied().flatten()?).ok()?;
+    crate::focus_canon::canon(note.ifds.first()?, orientation.unwrap_or_default())
 }
 
 fn byte(ifd: &Ifd, tag: u16) -> Option<u8> {

@@ -3848,6 +3848,7 @@ dependencies = [
  "chrono",
  "lightcraft-geom",
  "lightcraft-heif",
+ "lightcraft-testkit",
  "lightcraft-tiff",
  "proptest",
  "quick-xml 0.41.0",
