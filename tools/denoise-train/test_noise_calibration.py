@@ -70,6 +70,31 @@ class CalibrateFit(unittest.TestCase):
         self.assertGreater(a, 0.0)
 
 
+class CalibrateCommandLine(unittest.TestCase):
+    def test_the_helpers_utf8_output_is_read_as_utf8_whatever_the_locale(self):
+        # a camera name with "Á" (UTF-8 C3 81: 0x81 is undefined in cp1252, so a locale decode fails or garbles)
+        tmp = Tmp()
+        try:
+            d = tmp.dir.name
+            out = rawdump_output(3200, 6.6e-4, 1.25e-6, make="Cámara", model="Á1")
+            raw_bytes = json.dumps(out, ensure_ascii=False).encode("utf-8")
+            helper = tmp.write(f"import sys\nsys.stdout.buffer.write({raw_bytes!r})\n", "helper.py")
+            if os.name == "nt":
+                exe = tmp.write(f'@"{sys.executable}" "{helper}" %*\r\n', "rawdump.cmd")
+            else:
+                exe = tmp.write(f'#!/bin/sh\nexec "{sys.executable}" "{helper}" "$@"\n', "rawdump")
+                os.chmod(exe, 0o755)
+            os.makedirs(os.path.join(d, "raws"))
+            open(os.path.join(d, "raws", "a.dng"), "w").close()
+            cal = os.path.join(d, "cal.json")
+            argv = ["calibrate_noise.py", "--rawdump", exe, "--out", cal, os.path.join(d, "raws")]
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                self.assertIsNone(C.main())
+            self.assertEqual([e["camera"] for e in T.load_calibration(cal)], ["Cámara Á1"])
+        finally:
+            tmp.dir.cleanup()
+
+
 class LoadCalibration(unittest.TestCase):
     def setUp(self):
         self.tmp = Tmp()

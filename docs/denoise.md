@@ -27,7 +27,8 @@ progress, cancellation, size limits and SHA-256 verification.
 
 **LightCraft Denoise (Bayer) 0.1.0** is a U-Net (7.8 M weights, 31 MB `.onnx`) trained by LightCraft
 contributors with the open tools in `tools/denoise-train` on 705 clean low-ISO raws from raw.pixls.us, each
-CC0, with synthetic sensor noise calibrated on real cameras (numbers only). Its weights are licensed
+CC0, with synthetic sensor noise whose read-noise relation was set by hand from a Canon EOS R5 C calibration
+(numbers only; `train.py --noise-cal` can now train on a calibration file directly, which 0.1.0 did not). Its weights are licensed
 **MIT OR Apache-2.0**, like LightCraft, so any use, commercial work included, is allowed. The `lightcraft-model`
 Cargo feature offers it as a download (Settings ▸ AI Denoise); the desktop app turns that feature on.
 
