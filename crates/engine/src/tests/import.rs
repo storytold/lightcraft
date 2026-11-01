@@ -2029,6 +2029,216 @@ fn expand_stops_at_the_walk_limits() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// `levels` folders named `d` nested below `root` (created); the innermost one's path.
+fn nested(root: &Path, levels: usize) -> std::path::PathBuf {
+    let mut dir = root.to_path_buf();
+    for _ in 0..levels {
+        dir = dir.join("d");
+    }
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Expanding folders reports what the walks left out — files of an unsupported type, a walk that
+/// stopped at a bound — and returns the same files as `expand_within`; a file named on its own is
+/// attempted whatever its extension and is not counted as unsupported.
+#[test]
+fn expand_report_counts_what_the_walks_left_out() {
+    use crate::import::{expand_report, expand_within};
+    let d = temp_dir("expand-report");
+    write_png(&d.join("a.png"), 1);
+    write_png(&d.join("sub/b.png"), 2);
+    std::fs::write(d.join("notes.txt"), "x").unwrap();
+    std::fs::write(d.join("sub/readme.md"), "x").unwrap();
+    std::fs::write(d.join("sub/.hidden.txt"), "x").unwrap();
+    let named = temp_dir("expand-report-named");
+    std::fs::write(named.join("odd.dat"), "x").unwrap();
+    let paths = [d.to_string_lossy().to_string(), named.join("odd.dat").to_string_lossy().to_string()];
+    let limits = crate::walk::Limits::default();
+
+    let e = expand_report(&paths, None, limits);
+    assert_eq!(e.files.len(), 3, "both photos and the named file: {:?}", e.files);
+    assert_eq!((e.unsupported, e.unreadable, e.truncated), (2, 0, false), "notes.txt and readme.md; the hidden file is not counted: {e:?}");
+    assert_eq!(expand_within(&paths, None, limits), (e.files.clone(), false), "expand_within is the same walk");
+
+    // stopping one level down: the second folder is never listed, so its files are not counted
+    let e = expand_report(&paths[..1], None, crate::walk::Limits { max_depth: 1, max_entries: 1000 });
+    assert_eq!((e.files.len(), e.unsupported, e.truncated), (1, 1, true), "{e:?}");
+    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::remove_dir_all(&named);
+}
+
+/// A scan says that its folder walk stopped at the depth limit (there may be more photos), and
+/// does not when the tree ends within it.
+#[test]
+fn scan_with_reports_a_walk_that_stopped_at_a_bound() {
+    use crate::import::{ScanInput, ScanProgress, scan_with};
+    let scan = |dir: &Path| {
+        let mut s = Session::new().with_fs();
+        let (input, paths) = ScanInput::new(&mut s, &[dir.to_string_lossy().to_string()]);
+        scan_with(input, &paths, &ScanProgress::default())
+    };
+    // the deepest folder a walk lists is one level above the limit; one more folder is never entered
+    let cut = temp_dir("scan-cut");
+    write_png(&cut.join("top.png"), 1);
+    write_png(&nested(&cut, crate::walk::MAX_DEPTH - 1).join("last.png"), 2);
+    nested(&cut, crate::walk::MAX_DEPTH);
+    let out = scan(&cut);
+    assert_eq!(out.candidates.len(), 2, "what was reached is still returned");
+    assert_eq!((out.truncated, out.unreadable, out.unsupported), (true, 0, 0));
+
+    let whole = temp_dir("scan-whole");
+    write_png(&whole.join("top.png"), 1);
+    write_png(&nested(&whole, crate::walk::MAX_DEPTH - 1).join("last.png"), 2);
+    let out = scan(&whole);
+    assert_eq!(out.candidates.len(), 2);
+    assert_eq!((out.truncated, out.unreadable, out.unsupported), (false, 0, 0));
+    let _ = std::fs::remove_dir_all(&cut);
+    let _ = std::fs::remove_dir_all(&whole);
+}
+
+/// A folder this process is not allowed to list, until it is dropped (Unix: no permissions;
+/// Windows: a deny entry for Everyone on listing it).
+struct Unlistable(std::path::PathBuf);
+
+impl Unlistable {
+    /// `None` when the folder can still be listed (the super-user ignores permissions) or the
+    /// means to deny it is missing: the test then has nothing to check.
+    fn new(dir: &Path) -> Option<Unlistable> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).ok()?;
+        }
+        #[cfg(windows)]
+        {
+            let denied = std::process::Command::new("icacls").arg(dir).args(["/deny", "*S-1-1-0:(RD)"]).output();
+            if !denied.is_ok_and(|o| o.status.success()) {
+                return None;
+            }
+        }
+        // from here the folder is restored on drop, whatever the test does
+        let guard = Unlistable(dir.to_path_buf());
+        std::fs::read_dir(dir).is_err().then_some(guard)
+    }
+}
+
+impl Drop for Unlistable {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("icacls").arg(&self.0).args(["/remove:d", "*S-1-1-0"]).output();
+        }
+    }
+}
+
+/// A folder the scan can't list is counted — by the scan and by `library.importPreview` — and the
+/// photos around it are still found.
+#[test]
+fn an_unlistable_folder_is_reported_by_the_scan() {
+    use crate::import::{ScanInput, ScanProgress, scan_with};
+    let src = temp_dir("unlistable");
+    write_png(&src.join("a.png"), 1);
+    write_png(&src.join("locked").join("b.png"), 2);
+    let Some(locked) = Unlistable::new(&src.join("locked")) else {
+        eprintln!("skipped: this process can still list a folder it was denied");
+        let _ = std::fs::remove_dir_all(&src);
+        return;
+    };
+    let mut s = Session::new().with_fs();
+    let (input, paths) = ScanInput::new(&mut s, &[src.to_string_lossy().to_string()]);
+    let out = scan_with(input, &paths, &ScanProgress::default());
+    assert_eq!(out.candidates.len(), 1, "only the photo outside the folder");
+    assert_eq!((out.unreadable, out.unsupported, out.truncated), (1, 0, false));
+    let r = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((r["scanned"].clone(), r["skipped"].clone()), (json!(1), json!({"unreadable": 1, "unsupported": 0})), "{r}");
+    drop(locked);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// `library.importPreview` reports the walk's diagnostics next to the keys it always returned, and
+/// still leaves its probes for the import that follows.
+#[test]
+fn import_preview_reports_what_the_scan_skipped() {
+    let src = temp_dir("preview-diag");
+    write_png(&src.join("a.png"), 1);
+    write_png(&src.join("sub/b.png"), 2);
+    std::fs::write(src.join("notes.txt"), b"not a photo").unwrap();
+    std::fs::write(src.join("sub/readme.md"), b"x").unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((r["scanned"].clone(), r["duplicates"].clone()), (json!(2), json!(0)), "{r}");
+    assert_eq!(ids(&r, "candidates"), 2, "{r}");
+    assert_eq!(r["scanLimited"], false, "{r}");
+    assert_eq!(r["skipped"], json!({"unreadable": 0, "unsupported": 2}), "notes.txt and readme.md are reported: {r}");
+    for f in [src.join("a.png"), src.join("sub").join("b.png")] {
+        let key = f.to_string_lossy().to_string();
+        assert!(s.import_probes.contains_key(&key), "the probe of {key} is kept for the import: {:?}", s.import_probes.keys());
+    }
+    // a second preview reuses them: a file that has not changed is not read again
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (counted, probe) = (reads.clone(), s.media.file_probe.clone().unwrap());
+    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        probe(path)
+    }));
+    let again = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(again["scanned"], 2, "{again}");
+    assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 0, "the first preview's probes are reused");
+
+    // a file named on its own is tried, not reported as skipped
+    let r = s.execute("library.importPreview", &json!({"paths": [src.join("notes.txt").to_string_lossy()]})).unwrap();
+    assert_eq!((r["scanned"].clone(), r["skipped"]["unsupported"].clone()), (json!(1), json!(0)), "{r}");
+
+    // a walk that stopped at the depth limit says so
+    let deep = temp_dir("preview-deep");
+    write_png(&deep.join("top.png"), 3);
+    nested(&deep, crate::walk::MAX_DEPTH);
+    let r = s.execute("library.importPreview", &json!({"paths": [deep.to_string_lossy()]})).unwrap();
+    assert_eq!((r["scanned"].clone(), r["scanLimited"].clone()), (json!(1), json!(true)), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&deep);
+}
+
+/// XMP sidecars are read with their photos, so they are not "skipped": the expansion, the scan and
+/// `library.importPreview` count them (in any letter case, in subfolders too) as nothing, and still
+/// count every other file that is not a photo.
+#[test]
+fn xmp_sidecars_are_not_counted_as_unsupported() {
+    use crate::import::{ScanInput, ScanProgress, expand_report, scan_with};
+    let mut s = Session::new().with_fs();
+    // sidecars beside a photo, a sidecar without one, in any case, one deeper; plus a text file
+    let mixed = temp_dir("sidecars-mixed");
+    write_png(&mixed.join("a.png"), 1);
+    std::fs::write(mixed.join("a.xmp"), b"x").unwrap();
+    std::fs::write(mixed.join("b.XMP"), b"x").unwrap();
+    std::fs::create_dir_all(mixed.join("sub")).unwrap();
+    std::fs::write(mixed.join("sub").join("c.Xmp"), b"x").unwrap();
+    std::fs::write(mixed.join("c.txt"), b"x").unwrap();
+    // only photos and sidecars
+    let tidy = temp_dir("sidecars-only");
+    write_png(&tidy.join("a.png"), 2);
+    std::fs::write(tidy.join("a.xmp"), b"x").unwrap();
+    std::fs::write(tidy.join("b.XMP"), b"x").unwrap();
+    for (dir, unsupported) in [(&mixed, 1usize), (&tidy, 0)] {
+        let path = dir.to_string_lossy().to_string();
+        let e = expand_report(std::slice::from_ref(&path), None, crate::walk::Limits::default());
+        assert_eq!((e.files.len(), e.unsupported), (1, unsupported), "expand_report {e:?}");
+        let (input, paths) = ScanInput::new(&mut s, std::slice::from_ref(&path));
+        let out = scan_with(input, &paths, &ScanProgress::default());
+        assert_eq!((out.candidates.len(), out.unsupported), (1, unsupported), "scan_with");
+        let r = s.execute("library.importPreview", &json!({"paths": [path]})).unwrap();
+        assert_eq!((r["scanned"].clone(), r["skipped"]["unsupported"].clone()), (json!(1), json!(unsupported)), "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&mixed);
+    let _ = std::fs::remove_dir_all(&tidy);
+}
+
 /// Raw containers LightCraft cannot decode but shows by their embedded JPEG are picked up from a folder
 /// (the extensions are in `import::EXTENSIONS`; the files differ so none is a duplicate) and import as preview only.
 #[test]

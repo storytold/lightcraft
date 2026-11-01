@@ -161,6 +161,8 @@
   "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.": "Змін не вдалося записати на диск: {n}{0:.0}: {e}\nЯкщо вийти зараз, їх буде втрачено.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "Змін збережено в пам’яті, але не записано на диск: {n}{:.0}: {e}\nLightCraft повторює спроби автоматично; вихід зараз призведе до їхньої втрати.{:.0}",
   "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry": "Змін збережено в пам’яті, але не записано на диск: {n}{:.0}: {e} — LightCraft повторить спробу",
+  "{n} file{} skipped (not a supported photo type)": "Пропущено файлів (непідтримуваний тип фото): {n}{:.0}",
+  "{n} folder{} could not be read": "Папок, які не вдалося прочитати: {n}{:.0}",
   "{n} found · {sel} selected": "Знайдено: {n} · вибрано: {sel}",
   "{n} photos": "Фото: {n}",
   "{n} photos in {} are hidden by the filters above": "Фільтри вище приховують фото в «{}»: {n}",

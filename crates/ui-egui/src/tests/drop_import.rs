@@ -1199,7 +1199,7 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
     // the browse finds one photo of its own and imports it
     let Ok(tx) = scan.downcast::<std::sync::mpsc::Sender<ScanOutput>>() else { panic!("the stalled scan's sender") };
     let found = ImportCandidate { path: dir.path("trip/a.png"), ..Default::default() };
-    tx.send(ScanOutput { candidates: vec![found], probes: Default::default() }).unwrap();
+    tx.send(ScanOutput { candidates: vec![found], probes: Default::default(), truncated: false, unreadable: 0, unsupported: 0 }).unwrap();
     drop(tx);
     assert!(h.step_until(T, |h| h.app.import.is_some()), "the browse starts its import");
     assert!(h.step_until(T, |h| h.app.import.is_none()), "and it ends");

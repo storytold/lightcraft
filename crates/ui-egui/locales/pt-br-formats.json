@@ -121,6 +121,8 @@
   "{name} On": "{name} ativado",
   "{name} — double-click to reset it": "{name} — clique duas vezes para redefinir",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} alteração{:.0} salva na memória mas não gravada no disco: {e}\nO LightCraft tenta novamente automaticamente; encerrar agora perderia {}.",
+  "{n} file{} skipped (not a supported photo type)": "Arquivos ignorados (tipo de foto sem suporte): {n}{:.0}",
+  "{n} folder{} could not be read": "Pastas que não puderam ser lidas: {n}{:.0}",
   "{n} found · {sel} selected": "{n} encontradas · {sel} selecionadas",
   "{n} photos": "{n} fotos",
   "{n} photos in {} are hidden by the filters above": "{n} fotos em {} estão ocultas pelos filtros acima",

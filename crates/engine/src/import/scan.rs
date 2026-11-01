@@ -1,4 +1,4 @@
-use super::files::{Seen, expand, probe_all, reusable_probes};
+use super::files::{Seen, expand_report, probe_all, reusable_probes};
 use super::types::ImportCandidate;
 use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
@@ -77,6 +77,12 @@ pub struct ScanProgress {
 pub struct ScanOutput {
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
+    /// A folder walk stopped at a depth or entry bound: there may be more photos ([`Expansion`]).
+    pub truncated: bool,
+    /// Folders whose contents couldn't be listed.
+    pub unreadable: usize,
+    /// Files inside the folders that are not a supported photo type (XMP sidecars not counted).
+    pub unsupported: usize,
 }
 
 impl ScanInput {
@@ -104,20 +110,32 @@ impl ScanInput {
 /// against the library and earlier candidates). Nothing is added; the probes are kept for the
 /// import that follows.
 pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
+    scan_report(s, paths).candidates
+}
+
+/// [`scan`] keeping what the walks left out. The probes are already kept in the session for the
+/// import that follows, so `probes` of the output is empty.
+pub fn scan_report(s: &mut Session, paths: &[String]) -> ScanOutput {
     let (input, paths) = ScanInput::new(s, paths);
-    let out = scan_with(input, &paths, &ScanProgress::default());
-    s.import_probes = out.probes;
-    out.candidates
+    let mut out = scan_with(input, &paths, &ScanProgress::default());
+    s.import_probes = std::mem::take(&mut out.probes);
+    out
 }
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
 pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let files = expand(paths, input.skip.as_deref());
-    scan_files(input, files, progress)
+    let expansion = expand_report(paths, input.skip.as_deref(), crate::walk::Limits::default());
+    let mut out = scan_files(input, expansion.files, progress);
+    out.truncated = expansion.truncated;
+    out.unreadable = expansion.unreadable;
+    out.unsupported = expansion.unsupported;
+    out
 }
 
-/// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]).
+/// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]). The walks'
+/// diagnostics ([`ScanOutput::truncated`] and friends) are left empty: who expanded the paths has
+/// them ([`expand_report`]).
 pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
     use std::sync::atomic::Ordering::Relaxed;
     let by_path = library_files(&input.library, &files);
@@ -178,5 +196,6 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    // (the walks' diagnostics are [`scan_with`]'s: these files were found already)
+    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 }
 }
