@@ -295,8 +295,7 @@ fn main() -> eframe::Result {
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
     let saved_card = prefs.as_ref().map(|u| u.settings.gpu_card.clone()).unwrap_or_default();
-    let gpu_crash =
-        gpu_crash_check(in_memory, &saved_card).or_else(|| gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory).map(GpuCrash::gpu_off));
+    let gpu_crash = GpuCrash::with_lost(gpu_crash_check(in_memory, &saved_card), gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
     let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && !gpu_crash.as_ref().is_some_and(|c| c.gpu_off);
     lightcraft_engine::gpu::set_enabled(gpu_on);
     // the graphics card for editing, before anything can create the device (a card that crashed

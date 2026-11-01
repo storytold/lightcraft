@@ -145,7 +145,7 @@ an agent testing on one card never touches the other.
 - **Status**: `helper_status()` (`off`, `none`, `notStarted`, `starting`, `ready`, `lost`, `failed`, with
   the name and why); `app.gpu` → `helper`, `batchUsage {editing, helper}`; `ui.inspect` →
   `perf.gpuHelper`, `perf.batchUsage`. Measured: the same render on the RTX 4070 SUPER and the RTX 5070
-  differs by at most 1 level (mean 0.0000; `crates/gpu/tests/devices.rs`).
+  differs by at most 2 levels (`crates/gpu/tests/devices.rs` asserts at most 2; one measured pair showed 2).
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
 default, `Auto`, loads whichever `dxcompiler.dll` the DLL search path finds first. LightCraft ships
@@ -265,8 +265,9 @@ walks the drive.
   `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
   guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
   proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
-  space or a display). These render on the CPU: high-bit-depth exports and Visualize HDR (both
-  need float output), soft proofs to an output device's profile (a printer or paper profile), and
+  space or a display). These render on the CPU: 16-bit and linear-float exports and Visualize HDR
+  (the float outputs the GPU doesn't make; a gain map export's HDR rendition, `OutputDepth::F32Hdr`, renders
+  on the GPU, below), soft proofs to an output device's profile (a printer or paper profile), and
   photos with a content-aware Fill spot (no GPU kernel for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole

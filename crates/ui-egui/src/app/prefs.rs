@@ -41,10 +41,6 @@ impl LightcraftApp {
             }
             self.last_screen = screen;
         }
-        // input this frame: batch work leaves the editing card to the interface for a moment (§8)
-        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
-            lightcraft_engine::gpu::note_interaction();
-        }
         #[cfg(not(target_arch = "wasm32"))]
         for e in lightcraft_engine::gpu::events_after(self.gpu_event_seen) {
             self.gpu_event_seen = self.gpu_event_seen.max(e.seq);
@@ -77,6 +73,11 @@ impl LightcraftApp {
             }
         }
         if self.gpu_applied != Some(self.ui.settings.gpu) {
+            // (GPU rendering turned on: the second card is set again on the next pass, as a named
+            // card can't be found while the cards aren't listed; review of PR #3544)
+            if self.gpu_applied.is_some() && self.ui.settings.gpu {
+                self.gpu_helper_applied = None;
+            }
             self.gpu_applied = Some(self.ui.settings.gpu);
             let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu, "wait": false}));
             // GPU device + kernels off the UI thread, once the window is up and only when GPU

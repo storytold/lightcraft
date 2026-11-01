@@ -38,6 +38,10 @@ pub struct TestRun {
     pub gpu_waits: u64,
     /// The most device memory held at once (bytes).
     pub gpu_peak: u64,
+    /// Photos of a GPU run that fell back to the processor (`gpuFallback`): such a run measured
+    /// neither setting, so [`best_run`] never picks it while a clean run exists (review of PR
+    /// #3506 / #3511).
+    pub gpu_fallbacks: usize,
 }
 
 /// What the test found and chose. Stored with the install's settings and shown in Settings ▸
@@ -108,8 +112,12 @@ pub fn lane_choices(cores: usize, quick: bool) -> Vec<usize> {
 
 /// The fastest run, preferring fewer lanes (less memory) when within 3 % of it.
 pub fn best_run(runs: &[TestRun]) -> Option<&TestRun> {
-    let top = runs.iter().map(|r| r.photos_per_min).fold(0.0f64, f64::max);
-    runs.iter().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu, r.mix))
+    // runs whose photos fell back to the processor measured a mix of both: left out while
+    // another run is clean
+    let clean = runs.iter().any(|r| r.gpu_fallbacks == 0);
+    let counted = || runs.iter().filter(move |r| !clean || r.gpu_fallbacks == 0);
+    let top = counted().map(|r| r.photos_per_min).fold(0.0f64, f64::max);
+    counted().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu, r.mix))
 }
 
 /// Lane counts a caller gave, each held to 1..=[`crate::export::MAX_EXPORT_LANES`], once each in
@@ -206,10 +214,15 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
         tick("Both graphics cards")?;
         helper_run = Some(run.clone());
         runs.push(run);
+    } else if helper {
+        // not tried when the processor alone won, but still a step of the total (review of PR #3506)
+        tick("Both graphics cards")?;
     }
     // the second card stays on unless it was clearly slower (it also keeps the editing card free
     // for the photo being edited)
-    let helper_slower = helper_run.as_ref().is_some_and(|h| h.photos_per_min < one_card.photos_per_min * 0.97);
+    // (a round whose photos fell back to the processor didn't measure the two cards: review of
+    // PR #3511)
+    let helper_slower = helper_run.as_ref().is_some_and(|h| h.gpu_fallbacks > 0 || h.photos_per_min < one_card.photos_per_min * 0.97);
     let best = match helper_run {
         Some(h) if !helper_slower => h,
         _ => one_card,
@@ -301,8 +314,10 @@ fn export_round(
         return Err(format!("the test export failed: {e}"));
     }
     let (mem1, _) = crate::memory::export_gate().waits();
+    let gpu_fallbacks = gpu_fallbacks(&files);
     Ok(TestRun {
         lanes,
+        // (as asked; a run whose photos fell back counts them, and best_run leaves it out)
         gpu,
         mix: gpu && mix,
         helper: gpu && helper,
@@ -312,7 +327,13 @@ fn export_round(
         memory_waits: mem1.saturating_sub(mem0),
         gpu_waits: gpu_waits().saturating_sub(gpu0),
         gpu_peak: crate::gpu::memory().peak,
+        gpu_fallbacks,
     })
+}
+
+/// Files of an export that fell back from the GPU to the processor.
+fn gpu_fallbacks(files: &[serde_json::Value]) -> usize {
+    files.iter().filter(|f| f.get("gpuFallback").is_some()).count()
 }
 
 /// What limits the best run, in plain words.
@@ -517,6 +538,22 @@ mod tests {
         let e = s.execute("app.testMachine", &serde_json::json!({"quick": true, "apply": false})).unwrap_err().to_string();
         assert!(e.contains("already being tested"), "{e}");
         drop(other);
+    }
+
+    /// Review of PR #3506 / #3511: a run whose photos fell back to the processor is counted, and
+    /// never chosen while a clean run exists (it would apply a setting it didn't measure).
+    #[test]
+    fn a_run_whose_photos_fell_back_is_not_the_gpus() {
+        let files = [serde_json::json!({"file": "a.jpg"}), serde_json::json!({"file": "b.jpg", "gpuFallback": "device lost"})];
+        assert_eq!(gpu_fallbacks(&files), 1);
+        assert_eq!(gpu_fallbacks(&files[..1]), 0);
+        let run = |gpu, ppm, gpu_fallbacks| TestRun { lanes: 4, gpu, photos_per_min: ppm, gpu_fallbacks, ..Default::default() };
+        // the fastest run fell back: the clean GPU run is chosen, GPU exports stay on
+        let runs = [run(true, 10.0, 0), run(true, 14.0, 2), run(false, 9.0, 0)];
+        assert_eq!(best_run(&runs).map(|r| (r.gpu, r.photos_per_min)), Some((true, 10.0)));
+        // every run fell back: the fastest of them
+        let runs = [run(true, 10.0, 1), run(true, 14.0, 2)];
+        assert_eq!(best_run(&runs).map(|r| r.photos_per_min), Some(14.0));
     }
 
     /// Review of PR #3499: a flag that isn't true or false is refused before anything runs

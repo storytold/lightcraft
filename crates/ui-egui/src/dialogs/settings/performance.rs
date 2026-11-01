@@ -122,8 +122,16 @@ fn gpu_card_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// else the one named `in_use`.
 pub(crate) fn editing_card_key(cards: &[lightcraft_engine::gpu::CardInfo], saved: &str, in_use: Option<&str>) -> Option<String> {
     let usable = || cards.iter().filter(|c| c.usable);
+    // a key without its `#n`: the same model (as the engine falls back to an identical card when
+    // the saved one's number is gone; review of PR #3511)
+    // (only a number of 1 or more after the `#`, as the engine reads keys: review of PR #3511)
+    let model = |k: &str| match k.rsplit_once('#') {
+        Some((m, n)) => n.trim().parse::<u32>().ok().filter(|n| *n >= 1).map(|_| m.to_string()),
+        None => Some(k.to_string()),
+    };
     usable()
         .find(|c| !saved.is_empty() && c.key == saved)
+        .or_else(|| usable().find(|c| model(saved).is_some_and(|m| model(&c.key).as_deref() == Some(m.as_str()))))
         .or_else(|| usable().find(|c| c.drives_screen))
         .or_else(|| usable().find(|c| Some(c.name.as_str()) == in_use))
         .map(|c| c.key.clone())
@@ -567,6 +575,18 @@ mod tests {
         // one card: Automatic finds none
         let o = super::gpu_helper_choices(&cards[..1], Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"), "");
         assert_eq!(o[1].1, "Automatic (no other card found)");
+        // identical cards, the saved one's number gone: the engine edits on the first identical
+        // card, so that one is left out of the second card's choices
+        let twins = [
+            card("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1", "NVIDIA GeForce RTX 5070", true, true),
+            card("dx12:10de:2684:NVIDIA GeForce RTX 4090#1", "NVIDIA GeForce RTX 4090", false, true),
+            card("dx12:10de:2684:NVIDIA GeForce RTX 4090#2", "NVIDIA GeForce RTX 4090", false, true),
+        ];
+        let editing = super::editing_card_key(&twins, "dx12:10de:2684:NVIDIA GeForce RTX 4090#3", None);
+        assert_eq!(editing.as_deref(), Some("dx12:10de:2684:NVIDIA GeForce RTX 4090#1"));
+        // a key the engine can't read is no model match: the screen's card edits
+        let editing = super::editing_card_key(&twins, "dx12:10de:2684:NVIDIA GeForce RTX 4090#bad", None);
+        assert_eq!(editing.as_deref(), Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"));
         let ready = lightcraft_engine::gpu::HelperStatus { state: "ready", name: Some("NVIDIA GeForce RTX 4070 SUPER".into()), reason: None };
         assert_eq!(super::gpu_helper_line(&ready), "Helping now: NVIDIA GeForce RTX 4070 SUPER");
     }

@@ -377,6 +377,18 @@ fn gpu_crash_marker_is_reported_once() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// A lost device is read even when the last launch also crashed starting a chosen card: the GPU
+/// goes off and both notices are shown (review of PR #3506).
+#[test]
+fn a_lost_device_counts_alongside_a_start_up_crash() {
+    let crash = GpuCrash { notice: "card".into(), gpu_off: false, reset_card: true, helper_off: false };
+    let both = GpuCrash::with_lost(Some(crash.clone()), Some("lost".into())).unwrap();
+    assert!(both.gpu_off && both.reset_card && both.notice.contains("card") && both.notice.contains("lost"), "{both:?}");
+    assert_eq!(GpuCrash::with_lost(Some(crash.clone()), None), Some(crash));
+    assert!(GpuCrash::with_lost(None, Some("lost".into())).unwrap().gpu_off);
+    assert_eq!(GpuCrash::with_lost(None, None), None);
+}
+
 /// A crash while starting a card chosen for editing, or the second card, costs only that
 /// choice next time; any other crash in the driver turns the GPU off as before.
 #[test]

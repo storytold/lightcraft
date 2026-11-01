@@ -193,7 +193,8 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
     if running(app) {
         return Err(crate::i18n::tr("The test is already running").to_string());
     }
-    if app.export.is_some() {
+    // (also a slideshow's or another export that only has its activity row: review of PR #3544)
+    if app.export.is_some() || app.session.activity.list().iter().any(|t| t.kind == "export") {
         return Err(crate::i18n::tr("Wait for the export to finish, then test this computer").to_string());
     }
     let photos = match paths {
@@ -244,10 +245,17 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
 /// on a hung network share can't hold the test; nothing found in time: the demo photos).
 #[cfg(not(target_arch = "wasm32"))]
 fn find_on_disk(candidates: Vec<String>, stop: impl Fn() -> bool + Clone + Send + 'static) -> Vec<String> {
+    // one search at a time: a search still held by a hung share is not joined by another (the
+    // test uses the demo photos meanwhile; review of PR #3506)
+    let Some(scanning) = Scanning::start() else {
+        log::warn!("test my machine: the last search for the library's photos hasn't returned; using the demo photos");
+        return Vec::new();
+    };
     let deadline = std::time::Instant::now() + LOOK_FOR;
     let (ftx, frx) = channel();
     let scan_stop = stop.clone();
     let spawned = std::thread::Builder::new().name("machine-test-scan".into()).spawn(move || {
+        let _scanning = scanning;
         let _ = ftx.send(on_disk(candidates, 4, deadline, &scan_stop, |p| std::path::Path::new(p).is_file()));
     });
     if let Err(e) = spawned {
@@ -256,6 +264,33 @@ fn find_on_disk(candidates: Vec<String>, stop: impl Fn() -> bool + Clone + Send 
     }
     // a little past the scan's own deadline, for the lookup in progress at it
     wait_for_scan(&frx, deadline + std::time::Duration::from_millis(500), &stop)
+}
+
+/// A search for the library's photos in progress (one at a time); dropped when it ends, also
+/// when its thread can't start.
+#[cfg(not(target_arch = "wasm32"))]
+struct Scanning(&'static std::sync::atomic::AtomicBool);
+
+#[cfg(not(target_arch = "wasm32"))]
+static SCANNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Scanning {
+    fn start() -> Option<Scanning> {
+        Scanning::start_on(&SCANNING)
+    }
+
+    /// (a flag of its own in tests, so a search another test started can't hold it)
+    fn start_on(flag: &'static std::sync::atomic::AtomicBool) -> Option<Scanning> {
+        (!flag.swap(true, Ordering::AcqRel)).then_some(Scanning(flag))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Scanning {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// The scan's result, waited for until `until` in short steps, so a stop is seen at once (review
@@ -534,6 +569,7 @@ mod tests {
 
     /// Review of PR #3499: the library's photos are looked at on the test's thread, newest first,
     /// and only as many as the test needs.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_newest_photos_on_disk_are_tested() {
         let c: Vec<String> = (1..=6).map(|i| format!("p{i}.nef")).collect();
@@ -567,6 +603,15 @@ mod tests {
         assert_eq!((kept.len(), kept.first().map(String::as_str), kept.last().map(String::as_str)), (512, Some("r1488.cr3"), Some("r1999.cr3")));
         assert_eq!(newest(all.iter().take(3), MAX_CANDIDATES), ["r0.cr3", "r1.cr3", "r2.cr3"]);
         assert!(newest(all.iter(), 0).is_empty());
+        // one search at a time: a second can't start while the first is held (review of PR #3506)
+        {
+            // (its own flag: a search another test started holds the app's; review of PR #3499)
+            static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            let first = Scanning::start_on(&FLAG).unwrap();
+            assert!(Scanning::start_on(&FLAG).is_none(), "a second search while the first is held");
+            drop(first);
+            assert!(Scanning::start_on(&FLAG).is_some(), "free again once it ended");
+        }
         // a stop during the wait for a scan that hangs is seen at once (review of PR #3499)
         let (_tx, rx) = channel::<Vec<String>>();
         let t = std::time::Instant::now();
@@ -596,5 +641,17 @@ mod tests {
         let e = crate::export_task::start_print(&mut app, &serde_json::json!({"path": pdf})).unwrap_err();
         assert_eq!(e, crate::export_task::MACHINE_TEST_RUNNING);
         assert!(!dir.exists(), "nothing written");
+    }
+
+    /// Review of PR #3544: the test doesn't start while an export that only has its activity row
+    /// runs (a slideshow's).
+    #[test]
+    fn the_test_waits_for_a_slideshow_export() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let export = app.session.activity.start("export", "Exporting the slideshow", Cancel::No);
+        let e = start_with(&mut app, Some(Vec::new()), true, false).unwrap_err();
+        assert!(e.contains("Wait for the export"), "{e}");
+        assert!(app.machine.is_none());
+        drop(export);
     }
 }
