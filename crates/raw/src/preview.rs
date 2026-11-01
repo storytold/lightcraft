@@ -138,12 +138,21 @@ fn is_jxl(b: &[u8]) -> bool {
     b.starts_with(&[0xff, 0x0a]) || b.starts_with(&[0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a])
 }
 
+/// The bytes a file's own (offset, length) pair names, cut at the file's end; `None` when the offset
+/// lies past it. Both numbers come from the file: never cast them (a `u64` offset past 4 GiB would
+/// wrap to a small, wrong one on a 32-bit build) nor add them unchecked.
+fn file_span(data: &[u8], offset: u64, len: u64) -> Option<&[u8]> {
+    let start = usize::try_from(offset).ok()?;
+    let end = usize::try_from(offset.saturating_add(len)).unwrap_or(usize::MAX).min(data.len());
+    data.get(start..end)
+}
+
 fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>) {
     // whole JPEG files stored as an undefined-type tag value (e.g. Panasonic `JpgFromRaw` 0x002e)
     for e in &ifd.entries {
         if matches!(e.value, lightcraft_tiff::Value::Undefined(_))
             && e.count() > 1024
-            && let Some(s) = data.get(e.offset as usize..(e.offset.saturating_add(e.count() as u64) as usize).min(data.len()))
+            && let Some(s) = file_span(data, e.offset, e.count() as u64)
             && s.starts_with(&[0xff, 0xd8])
         {
             out.push(s);
@@ -151,7 +160,7 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>)
     }
     if let (Some(off), Some(len)) = (ifd.u64(t::JPEG_INTERCHANGE_FORMAT), ifd.u64(t::JPEG_INTERCHANGE_FORMAT_LENGTH)) {
         let off = off.saturating_add(base);
-        if let Some(s) = data.get(off as usize..(off.saturating_add(len) as usize).min(data.len())) {
+        if let Some(s) = file_span(data, off, len) {
             out.push(s);
         }
     }
