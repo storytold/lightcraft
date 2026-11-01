@@ -79,9 +79,15 @@ pub fn dir() -> Option<PathBuf> {
     std::env::var_os("LIGHTCRAFT_CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
 }
 
+/// Canonical model key shared by metadata, pairs and profile lookup. Case and interior
+/// whitespace are significant: distinct Exif model strings must stay distinct.
+pub(crate) fn model_key(model: &str) -> &str {
+    model.trim()
+}
+
 /// File name of `model`'s profile: letters, digits, `-` and `_` kept, anything else `_`.
 pub fn file_name(model: &str) -> String {
-    let name: String = model.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let name: String = model_key(model).chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     format!("{name}.json")
 }
 
@@ -128,7 +134,7 @@ fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
 
 /// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
-    let model = model.trim();
+    let model = model_key(model);
     if model.is_empty() {
         return None;
     }
@@ -139,7 +145,7 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     let path = dir().map(|d| d.join(file_name(model)));
     let profile = match path {
         Some(path) if path.is_file() => match load(&path) {
-            Ok(p) if p.model.trim() == model => Some(Arc::new(p)),
+            Ok(p) if model_key(&p.model) == model => Some(Arc::new(p)),
             Ok(p) => {
                 eprintln!("lightcraft: ignoring camera profile {}: it is for {:?}, not {model:?}", path.display(), p.model);
                 None
@@ -238,7 +244,7 @@ impl Pool {
         // the warp the camera applied to its JPEG)
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-        let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
+        let Some(model) = raw.metadata.model.as_deref().map(model_key).filter(|m| !m.is_empty()) else { return Ok(None) };
         let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         // subsampled in scan order (evenly over the frame), then put in value order
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
@@ -256,6 +262,7 @@ impl Pool {
     /// Add photos read from a pairs file (their pairs put in [`canonical_order`]).
     pub fn add_photos(&mut self, mut photos: Vec<PhotoPairs>) {
         for photo in &mut photos {
+            photo.model = model_key(&photo.model).to_owned();
             canonical_order(&mut photo.pairs);
         }
         self.photos.extend(photos);
@@ -412,6 +419,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
 
         assert_ne!(before_key, after_key, "a changed profile must not reuse the previous render cache");
+    }
+
+    #[test]
+    fn metadata_pairs_and_profile_lookup_share_model_keys() {
+        let model = BUNDLED[0].0;
+        let padded = format!(" \t{model}\r\n");
+        assert_eq!(model_key(&padded), model);
+        assert_eq!(file_name(&padded), file_name(model));
+        assert_eq!(get(&padded), get(model));
+        assert!(get(model).is_some());
+        let photos = synthetic(&padded, 5, 7);
+        let mut pool = Pool::default();
+        pool.add_photos(photos.clone());
+        assert_eq!(pool.files(), [(model.to_owned(), 5)]);
+        let bytes = crate::camera_pairs::write(&photos.iter().collect::<Vec<_>>()).unwrap();
+        let mut imported = Pool::default();
+        imported.add_pairs_file(&bytes, "test").unwrap();
+        assert_eq!(imported.files(), pool.files());
+        assert_eq!(imported.photos(), pool.photos());
+        assert_eq!(imported.add_pairs_file(&bytes, "repeat").unwrap(), 5);
+        assert_eq!(imported.files(), pool.files());
+        assert_ne!(model_key("Model A"), model_key("model a"));
+        assert_ne!(model_key("Model  A"), model_key("Model A"));
     }
 
     #[test]
