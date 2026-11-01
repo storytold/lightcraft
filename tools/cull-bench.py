@@ -16,11 +16,25 @@ measured on the frames it draws), so they exclude the control channel's round tr
 import json, os, socket, statistics, sys, threading, time
 
 USAGE = __doc__.strip().splitlines()[2]
-if len(sys.argv) < 3 or not sys.argv[1].isdigit():
+if len(sys.argv) < 3 or not sys.argv[1].isdigit() or not 0 < int(sys.argv[1]) < 65536:
     sys.exit(USAGE)
 PORT = int(sys.argv[1])
 FOLDER = sys.argv[2]
 args = sys.argv[3:]
+# a run takes minutes: a misspelt option, or an option where a value belongs, stops it now
+VALUED = {"--steps", "--hold-ms", "--label", "--size"}
+FLAGS = {"--skip-browse", "--overwrite"}
+_i = 0
+while _i < len(args):
+    a = args[_i]
+    if a in VALUED:
+        if _i + 1 >= len(args) or args[_i + 1].startswith("--"):
+            sys.exit(f"{a} needs a value; {USAGE}")
+        _i += 2
+    elif a in FLAGS:
+        _i += 1
+    else:
+        sys.exit(f"unknown option {a!r}; {USAGE}")
 def opt(name, default):
     """The value after option `name` (as `default`'s type), `default` when it isn't given; a
     missing or unreadable value stops with the usage line."""
@@ -35,6 +49,8 @@ def opt(name, default):
         sys.exit(f"{name} {args[i]!r}: not a {type(default).__name__}; {USAGE}")
 STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
+if STEPS < 1 or HOLD_MS < 1:
+    sys.exit(f"--steps and --hold-ms must be 1 or more; {USAGE}")
 LABEL = opt("--label", "run")
 OVERWRITE = "--overwrite" in args
 # a run takes minutes: refuse an existing result (or a link there, even a dangling one) before it
