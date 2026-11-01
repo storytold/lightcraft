@@ -543,10 +543,11 @@ mod tests {
     }
 
     /// The crop rectangle comes from settings (a sidecar, a preset, `develop.merge`,
-    /// `render --settings`), and a turned crop is deliberately left unclipped to 0..1
-    /// (`DevelopSettings::keep_in_range`), so a hostile or typo'd one can name more pixels than the
-    /// photo has. It must not lift the ceiling with them: the exemption stops at the photo's area,
-    /// so the fit below lands at 512 megapixels, not at the ~2 gigapixels the crop names.
+    /// `render --settings`), so a hostile or typo'd one can name far more pixels than the photo
+    /// has. It must not lift the ceiling with them: `CropGeometry::bounded` clips the rect to the
+    /// turned photo's bounding box (so the aspect the fit preserves is the bounded crop's own, not
+    /// the photo's), the exemption stops at the photo's area, and the fit lands at 512 megapixels
+    /// — not at the ~2 gigapixels the raw crop names.
     #[test]
     fn an_out_of_bounds_crop_cannot_lift_the_ceiling_past_the_photo() {
         let mut s = DevelopSettings::default();
@@ -554,8 +555,8 @@ mod tests {
         s.crop.geometry.angle = 5.0;
         let f = Frame::new(8, 4, &s, true);
         let (w, h) = f.fit(200_000, 100_000);
-        assert!((w as i64 - 32_000).abs() <= 1 && (h as i64 - 16_000).abs() <= 1, "{w}×{h}");
-        assert!((w * h) as f64 <= MAX_RENDER_PIXELS * 1.001, "{} px", w * h);
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS, "{} px", w * h);
+        assert!((w * h) as f64 >= MAX_RENDER_PIXELS * 0.999, "{} px", w * h);
     }
 
     /// A straightened crop may be wider than the photo itself while its corners still lie inside
