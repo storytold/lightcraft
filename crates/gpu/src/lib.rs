@@ -93,7 +93,16 @@ pub fn in_one_turn<R>(src_px: usize, out_px: usize, f: impl FnOnce() -> R) -> R 
 /// pixels from a source of `src_px`. A gain map export's HDR rendition adds nothing to it: it
 /// renders from the stages the SDR render left, and measured, its peak is the SDR export's.
 pub fn export_job_bytes(src_px: usize, out_px: usize) -> u64 {
-    gate::job_bytes(src_px, out_px)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        gate::job_bytes(src_px, out_px)
+    }
+    // (no export gate on the web)
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src_px, out_px);
+        0
+    }
 }
 
 /// Batch renders don't start for `d` from now: the window needs the GPU (it resizes, a frame was
