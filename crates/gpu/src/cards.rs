@@ -233,15 +233,22 @@ pub struct Resolution {
 /// usable cards are picked; among several the variable matches, in the order of
 /// [`crate::backend::choose_named_adapter`], and the choice is logged once.
 pub fn resolve_card(entries: &[AdapterEntry], variable: Option<&str>, saved: Option<&AdapterKey>) -> Resolution {
-    let mut missing = None;
-    if let Some(w) = variable.map(str::trim).filter(|w| !w.is_empty()) {
-        let (choice, candidates) = named_choice(entries, w);
-        let (warn, line) = crate::backend::named_choice_note(w, &choice, &candidates);
+    let Some(w) = variable.map(str::trim).filter(|w| !w.is_empty()) else { return resolve_unnamed(entries, saved) };
+    let (choice, candidates) = named_choice(entries, w);
+    let (warn, line) = crate::backend::named_choice_note(w, &choice, &candidates);
+    if let Some(i) = choice.index {
         crate::backend::log_once(warn, &line);
-        if let Some(i) = choice.index {
-            return Resolution { index: Some(i), how: How::Variable, missing };
-        }
+        return Resolution { index: Some(i), how: How::Variable, missing: None };
     }
+    // (the line names what is used instead: the saved card, the screen's, or wgpu's pick)
+    let r = resolve_unnamed(entries, saved);
+    crate::backend::log_once(warn, &fallback_line(&line, &r, entries));
+    r
+}
+
+/// [`resolve_card`] without the variable: the saved card, else the screen's, else wgpu's pick.
+fn resolve_unnamed(entries: &[AdapterEntry], saved: Option<&AdapterKey>) -> Resolution {
+    let mut missing = None;
     if let Some(k) = saved {
         let found = entries.iter().position(|e| e.usable && e.key == *k).or_else(|| entries.iter().position(|e| e.usable && e.key.same_model(k)));
         if let Some(i) = found {
@@ -252,6 +259,17 @@ pub fn resolve_card(entries: &[AdapterEntry], variable: Option<&str>, saved: Opt
     match entries.iter().position(|e| e.usable && e.drives_screen) {
         Some(i) => Resolution { index: Some(i), how: How::Screen, missing },
         None => Resolution { index: None, how: How::Default, missing },
+    }
+}
+
+/// `line` (a name that picked no card, "…; using the default choice") ending with what `r` uses.
+fn fallback_line(line: &str, r: &Resolution, entries: &[AdapterEntry]) -> String {
+    let head = line.strip_suffix("; using the default choice").unwrap_or(line);
+    let name = r.index.and_then(|i| entries.get(i)).map_or("?", |e| e.name.as_str());
+    match r.how {
+        How::Chosen => format!("{head}; using the card chosen in Settings ({name})"),
+        How::Screen => format!("{head}; using the screen's card ({name})"),
+        How::Variable | How::Default => format!("{head}; using the default choice"),
     }
 }
 
@@ -555,6 +573,18 @@ mod tests {
         assert_eq!(resolve_card(&e, Some("g"), None).index, Some(1));
         // only the unusable card: the default choice
         assert_eq!(resolve_card(&e, Some("old"), None), Resolution { index: None, how: How::Default, missing: None });
+        // the log names what is used instead of a name that picked nothing
+        let line = "gpu: LIGHTCRAFT_GPU_ADAPTER=radeon names none of the graphics cards (A, B); using the default choice";
+        let two = entries_from(&two_cards(), Some(&screen_5070()));
+        let saved = resolve_card(&two, Some("radeon"), Some(&two[1].key));
+        assert_eq!(
+            fallback_line(line, &saved, &two),
+            "gpu: LIGHTCRAFT_GPU_ADAPTER=radeon names none of the graphics cards (A, B); using the card chosen in Settings (NVIDIA GeForce RTX 4070 SUPER)"
+        );
+        let screen = resolve_card(&two, Some("radeon"), None);
+        assert!(fallback_line(line, &screen, &two).ends_with("using the screen's card (NVIDIA GeForce RTX 5070)"));
+        let none = Resolution { index: None, how: How::Default, missing: None };
+        assert_eq!(fallback_line(line, &none, &two), line);
     }
 
     /// Decision 4: a chosen card that isn't there falls back to Automatic and the choice is kept.
