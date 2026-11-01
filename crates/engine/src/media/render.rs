@@ -270,11 +270,24 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                // a clipping preview tests sRGB values, like the histogram: rendered in sRGB, then
+                // converted for the display below
+                let clip_view = self.request.overlay.is_clipping();
+                let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
+                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu);
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
                 let display = match (&self.display, self.request.display) {
+                    // a diagnostic view: the histogram stays the photo's (taken before the overlay
+                    // was drawn), and nothing goes to the view cache
+                    (Some(d), Some(_)) if self.request.overlay != lightcraft_pipeline::Overlay::None => {
+                        let converted = if clip_view { d.profile.from_srgb(&mut rendered.image) } else { d.profile.correct(&mut rendered.image) };
+                        if let Err(e) = converted {
+                            log::warn!("display profile: {e}");
+                        }
+                        Some(d.id())
+                    }
                     (Some(d), Some(_)) => {
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
                         let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);

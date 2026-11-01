@@ -49,6 +49,16 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     label_width(ui, text, egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
+/// A text box of the Settings window, shown: Esc in it gives its text back and is used up by
+/// that, so Settings stays open (a second Esc, with nothing being edited, closes it).
+pub(super) fn field(ui: &mut egui::Ui, field: crate::text_field::TextField<'_>) -> crate::text_field::TextFieldResponse {
+    let shown = field.show(ui);
+    if shown.cancelled() {
+        crate::widgets::take_escape(ui.ctx());
+    }
+    shown
+}
+
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
     ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));

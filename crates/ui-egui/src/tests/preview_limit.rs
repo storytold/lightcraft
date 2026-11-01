@@ -706,6 +706,217 @@ mod in_the_loupe {
         assert_eq!(region.full.0.max(region.full.1), native);
     }
 
+    #[derive(Default)]
+    struct PinchWork {
+        jobs: Vec<(Slot, lightcraft_engine::media::RenderJob)>,
+        finished: Vec<(Slot, lightcraft_engine::media::RenderResult, f64)>,
+    }
+
+    struct PinchOffload(std::rc::Rc<std::cell::RefCell<PinchWork>>);
+
+    impl crate::render::RenderOffload for PinchOffload {
+        fn try_start(&mut self, slot: Slot, job: lightcraft_engine::media::RenderJob) -> Option<lightcraft_engine::media::RenderJob> {
+            self.0.borrow_mut().jobs.push((slot, job));
+            None
+        }
+
+        fn finished(&mut self) -> Vec<(Slot, lightcraft_engine::media::RenderResult, f64)> {
+            std::mem::take(&mut self.0.borrow_mut().finished)
+        }
+    }
+
+    // Complete the first pinch-step render only after later steps have superseded it. Running
+    // real jobs through the offload makes the worker order explicit without timing sleeps.
+    #[test]
+    fn pinch_display_fit_keeps_the_request_key_until_the_hold_expires() {
+        let (mut h, native) = demo_detail_in([1400.0, 900.0]);
+        assert!(h.settle(SETTLE), "the starting render must be complete");
+        let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
+        let (original_key, original_size) = (main.key, main.size);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.canvas_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        let mut keys = std::collections::HashSet::new();
+        for _ in 0..40 {
+            assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+            keys.insert(h.app.renderer.wanted(Slot::Main));
+            assert!(h.app.region_view.is_none());
+        }
+        let first = work.borrow().jobs.iter().position(|(slot, _)| *slot == Slot::Main);
+        if let Some(i) = first {
+            let (slot, job) = work.borrow_mut().jobs.remove(i);
+            let result = job.run();
+            assert!(result.rendered.is_ok());
+            work.borrow_mut().finished.push((slot, result, 0.0));
+            h.app.renderer.poll(&h.view.ctx, &mut h.app.session);
+        }
+        h.step();
+        let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
+        assert_eq!(main.size, original_size, "the whole-frame render keeps its size even when workers finish during the pinch");
+        assert_eq!(keys, std::collections::HashSet::from([Some(original_key)]), "a held gesture must not schedule new fits");
+        for _ in 0..60 {
+            h.step();
+        }
+        // Finish the final requests at the chosen frame, without advancing time while they run.
+        let jobs = std::mem::take(&mut work.borrow_mut().jobs);
+        for (slot, job) in jobs {
+            let result = job.run();
+            assert!(result.rendered.is_ok());
+            work.borrow_mut().finished.push((slot, result, 0.0));
+        }
+        h.step();
+        let region = h.app.region_view.expect("the final window arrives after the hold expires");
+        assert_eq!(region.full.0.max(region.full.1), native);
+        assert_eq!(h.app.renderer.textures.get(&Slot::Region).unwrap().key, region.key);
+        assert!(!h.app.renderer.is_pending(Slot::Main) && !h.app.renderer.is_pending(Slot::Region));
+        assert_ne!(h.app.renderer.wanted(Slot::Main), Some(original_key));
+    }
+
+    fn complete_pinch_jobs(h: &mut Headless, work: &std::rc::Rc<std::cell::RefCell<PinchWork>>) {
+        let jobs = std::mem::take(&mut work.borrow_mut().jobs);
+        for (slot, job) in jobs {
+            let result = job.run();
+            assert!(result.rendered.is_ok());
+            work.borrow_mut().finished.push((slot, result, 0.0));
+        }
+        h.step();
+    }
+
+    fn drawn_fit(h: &Headless) -> (usize, usize) {
+        let rect = h.app.image_rect.unwrap();
+        let ppp = h.view.ctx.pixels_per_point();
+        ((rect.width() * ppp).round() as usize, (rect.height() * ppp).round() as usize)
+    }
+
+    #[test]
+    fn pinch_display_fit_refreshes_main_and_before_after_a_short_pinch() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        assert!(h.settle(SETTLE));
+        let slots = [Slot::Main, Slot::Before];
+        let keys = slots.map(|slot| h.app.renderer.wanted(slot).unwrap());
+        let initial_fit = drawn_fit(&h);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        for _ in 0..2 {
+            assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+            assert_eq!(slots.map(|slot| h.app.renderer.wanted(slot).unwrap()), keys);
+        }
+        let final_fit = drawn_fit(&h);
+        assert!(final_fit.0 > initial_fit.0 && final_fit.1 > initial_fit.1, "the image still follows the gesture");
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        assert!(work.borrow().jobs.iter().all(|(slot, _)| !slots.contains(slot)), "no new Main or Before job during the hold");
+        for _ in 0..20 {
+            h.step();
+        }
+        for slot in slots {
+            let work = work.borrow();
+            let jobs: Vec<_> = work.jobs.iter().filter(|(s, _)| *s == slot).collect();
+            assert_eq!(jobs.len(), 1, "one final render for {slot:?}");
+            assert_eq!(jobs[0].1.display_fit, Some(final_fit));
+        }
+        complete_pinch_jobs(&mut h, &work);
+        for slot in slots {
+            let tex = h.app.renderer.textures.get(&slot).unwrap();
+            assert!(tex.size[0].abs_diff(final_fit.0) <= 1 && tex.size[1].abs_diff(final_fit.1) <= 1, "{slot:?}: {:?} vs {final_fit:?}", tex.size);
+            assert!(!h.app.renderer.is_pending(slot));
+        }
+        assert!(h.app.region_view.is_none(), "a short pinch still fits in the whole-frame render");
+    }
+
+    #[test]
+    fn pinch_display_fit_does_not_follow_the_old_photo() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        assert!(h.settle(SETTLE));
+        let old = h.app.session.active().unwrap();
+        let next = h.app.session.visible_cloned().into_iter().find(|id| *id != old).unwrap();
+        let initial_fit = drawn_fit(&h);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        assert_eq!(h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [next.0]}}), T)["ok"], true);
+        assert_eq!(h.app.session.active(), Some(next));
+        assert!(!h.app.size_hold.holding(h.view.ctx.input(|i| i.time)), "the new photo resets the hold");
+        let fit = drawn_fit(&h);
+        assert_ne!(fit, initial_fit, "the fixture must distinguish the two fits");
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Main).unwrap().1.clone();
+        assert_eq!(job.photo, next);
+        assert_eq!(job.display_fit, Some(fit));
+        complete_pinch_jobs(&mut h, &work);
+        assert_eq!(h.app.renderer.textures.get(&Slot::Main).unwrap().photo, next);
+    }
+
+    #[test]
+    fn pinch_display_fit_is_shared_with_a_hover_during_the_hold() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        assert_eq!(h.request("engine.execute", json!({"command": "panel.profiles"}), T)["ok"], true);
+        assert!(h.settle(SETTLE));
+        let initial_fit = drawn_fit(&h);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+        assert_eq!(h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), T)["ok"], true);
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        let job = work.borrow().jobs.iter().find(|(slot, _)| *slot == Slot::Hover).unwrap().1.clone();
+        assert_eq!(job.display_fit, Some(initial_fit), "hover uses the held Main fit");
+        complete_pinch_jobs(&mut h, &work);
+        let held_key = h.app.renderer.wanted(Slot::Hover).unwrap();
+        assert_eq!(h.app.loupe_shown.map(|shown| shown.1), Some("hover"));
+        for _ in 0..20 {
+            h.step();
+        }
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Hover).unwrap().1.clone();
+        assert_eq!(job.display_fit, Some(drawn_fit(&h)));
+        assert_ne!(job.key, held_key);
+        complete_pinch_jobs(&mut h, &work);
+        assert!(!h.app.renderer.is_pending(Slot::Hover));
+    }
+
+    #[test]
+    fn pinch_display_fit_keeps_edits_live_and_refits_changed_crop_geometry() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        assert!(h.settle(SETTLE));
+        let initial_fit = drawn_fit(&h);
+        let initial_key = h.app.renderer.wanted(Slot::Main).unwrap();
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+        for (control, value) in [("light.exposure", 0.75), ("crop.angle", -30.0)] {
+            assert_eq!(h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T)["ok"], true);
+        }
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Main).unwrap().1.clone();
+        assert_eq!(job.settings.light.exposure, 0.75);
+        assert_eq!(job.settings.crop.geometry.angle, -30.0);
+        assert!(job.request.apply_crop);
+        assert_ne!(job.key, initial_key, "holding sizes does not suppress edits");
+        assert_eq!(job.display_fit, Some(initial_fit));
+        complete_pinch_jobs(&mut h, &work);
+        let final_fit = drawn_fit(&h);
+        assert_ne!(final_fit, initial_fit);
+        for _ in 0..20 {
+            h.step();
+        }
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Main).unwrap().1.clone();
+        assert_eq!(job.display_fit, Some(final_fit));
+        assert_eq!(job.settings.light.exposure, 0.75);
+        assert_eq!(job.settings.crop.geometry.angle, -30.0);
+        let key = job.key;
+        complete_pinch_jobs(&mut h, &work);
+        assert_eq!(h.app.renderer.textures.get(&Slot::Main).unwrap().key, key);
+        assert!(!h.app.renderer.is_pending(Slot::Main));
+    }
+
     // Given a picture on screen that is not the frame (an unsupported raw's embedded JPEG cropped
     // differently, #280), no window is rendered: its coordinates are the frame's
     #[test]
