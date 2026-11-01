@@ -528,6 +528,7 @@ impl Session {
             minimum_embedded_edge,
             latest: Vec::new(),
             fit: None,
+            draft: None,
             small: Some(Box::new(small)),
         })
     }

@@ -191,6 +191,7 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
         minimum_embedded_edge: None,
         latest: Vec::new(),
         fit: None,
+        draft: None,
         small: None,
     };
     let r = quick.run();
@@ -218,6 +219,7 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
             minimum_embedded_edge: None,
             latest: Vec::new(),
             fit: None,
+            draft: None,
             small: None,
         };
         // the user discards the cache while the job is on its way
@@ -236,6 +238,7 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
             minimum_embedded_edge: None,
             latest: Vec::new(),
             fit: None,
+            draft: None,
             small: None,
         };
         assert!(quick.run().rendered.is_ok());

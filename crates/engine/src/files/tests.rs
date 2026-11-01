@@ -1682,11 +1682,19 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     let q = s.quick_view_job(id, 1600, true).unwrap().run();
     assert_eq!(q.quick, Some(QuickSource::Last));
     assert_eq!(q.rendered.unwrap().image.width, 48, "the loupe's last render");
-    // a raw edited before anything of it was rendered: no stand-in in the grid (its render is
-    // its first picture), the loupe's is a thumbnail render with its settings
+    // a raw edited before anything of it was rendered: a fast draft with its settings from the
+    // camera JPEG, in the grid and the loupe (cropped as edited, never the camera JPEG itself)
     s.media.rendered.clear();
-    assert!(s.quick_thumb_job(&job).is_none());
-    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Small));
+    let q = s.quick_thumb_job(&job).unwrap().run();
+    assert_eq!((q.quick, q.key), (Some(QuickSource::Draft), job.key));
+    assert!(q.rendered.is_ok());
+    let mut d = (*s.catalog.photo(id).unwrap().develop).clone();
+    d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 1.0 };
+    s.set_develop(id, d, "Crop").unwrap();
+    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    assert_eq!(q.quick, Some(QuickSource::Draft));
+    let img = q.rendered.unwrap().image;
+    assert!(img.width * 2 < img.height * 2 && img.width > 0, "the crop applied: {}x{}", img.width, img.height);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

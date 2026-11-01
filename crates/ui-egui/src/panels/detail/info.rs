@@ -351,6 +351,7 @@ pub(super) fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static s
         QuickSource::Embedded => "embedded",
         QuickSource::Small => "small",
         QuickSource::Last => "last",
+        QuickSource::Draft => "draft",
     }
 }
 

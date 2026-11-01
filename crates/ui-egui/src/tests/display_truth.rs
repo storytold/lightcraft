@@ -156,3 +156,31 @@ fn an_unedited_raw_still_shows_its_camera_jpeg_first() {
     let mut seen = Vec::new();
     assert!(frames(&mut h, Duration::from_secs(3), &mut seen, |h| h.app.loupe_shown == Some((PhotoId(2), "embedded"))), "{seen:?}");
 }
+
+/// An edited raw that was never rendered (edited by a preset at import, synced before it was ever
+/// seen): its first picture is a fast draft with its settings made from the camera JPEG, at once,
+/// in the loupe and the grid, never the camera JPEG itself, while the raw is decoded.
+#[test]
+fn an_edited_raw_never_rendered_shows_a_draft_of_its_edit_at_once() {
+    let mut h = raws(6, Duration::from_millis(1500));
+    for id in 1..=6 {
+        let mut d = (*h.app.session.catalog.photo(PhotoId(id)).unwrap().develop).clone();
+        d.light.exposure = 0.8;
+        d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.25, y0: 0.0, x1: 0.75, y1: 1.0 };
+        h.app.session.set_develop(PhotoId(id), d, "Preset").unwrap();
+    }
+    exec(&mut h, "library.select", json!({"ids": [2]}));
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let mut seen = Vec::new();
+    assert!(frames(&mut h, Duration::from_secs(1), &mut seen, |h| h.app.loupe_shown == Some((PhotoId(2), "draft"))), "{seen:?}");
+    assert!(!seen.iter().any(|(_, s)| *s == "embedded"), "the camera JPEG: {seen:?}");
+    // the filmstrip cells too: drafts, no camera JPEG
+    let film = frames(&mut h, Duration::from_secs(2), &mut seen, |h| h.app.thumb_first.summary().empty_now == 0);
+    assert!(film, "filmstrip cells empty: {:?}", h.app.thumb_first.summary());
+    for id in 1..=6 {
+        if let Some(t) = h.app.renderer.thumb(PhotoId(id)) {
+            assert_ne!(t.quick, Some(lightcraft_engine::media::QuickSource::Embedded), "photo {id}'s cell");
+        }
+    }
+}

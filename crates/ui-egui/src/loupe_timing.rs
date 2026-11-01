@@ -75,7 +75,7 @@ pub fn is_full_size(source: &str) -> bool {
 }
 
 fn full_size(source: &str) -> bool {
-    matches!(source, "embedded" | "cached" | "render" | "preview" | "last")
+    matches!(source, "embedded" | "cached" | "render" | "preview" | "last" | "draft")
 }
 
 impl LoupeTiming {

@@ -1,7 +1,7 @@
 use super::render::fit_cached;
 use super::render::{RenderJob, RenderResult};
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel};
-use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
+use super::source::{DecodedSource, PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef};
+use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgb32f, Rgba8, Serialize, Source, SourceInfo};
 
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +16,10 @@ pub enum QuickSource {
     /// The photo's latest render, made with earlier settings (an edited photo whose render for its
     /// current settings is on its way: its edit as last seen, never the unedited camera JPEG).
     Last,
+    /// A fast draft of an edited raw with its settings, developed from the camera's JPEG instead of
+    /// the sensor data (crop, tone and colour edits as they will look, white balance as shot): what an
+    /// edited photo that was never rendered shows at once, until its render arrives.
+    Draft,
 }
 
 /// Something to show *now* for a photo while its real render is prepared. Tried in order: cached
@@ -50,6 +54,9 @@ pub struct QuickJob {
     /// Shrink a picture taken from the caches to fit this (a loupe view standing in for a grid
     /// thumbnail is not kept at 2 000 px for a 256 px cell).
     pub fit: Option<(usize, usize)>,
+    /// A fast draft of an edited raw with its settings ([`QuickSource::Draft`]): the camera JPEG at
+    /// (path, loader, max edge) developed by this job, tried after `latest` and before `small`.
+    pub draft: Option<(String, PreviewLoader, usize, Box<RenderJob>)>,
 }
 
 impl QuickJob {
@@ -104,6 +111,11 @@ impl QuickJob {
                 return done(rendered(fitted(img)), Some(QuickSource::Last));
             }
         }
+        if let Some((path, loader, edge, job)) = self.draft.as_ref()
+            && let Some(r) = draft_from_camera_jpeg(path, loader, *edge, job)
+        {
+            return RenderResult { request_id, key, quick: Some(QuickSource::Draft), ..r };
+        }
         let mut embedded_fallback = None;
         if let Some((path, loader, edge)) = &self.embedded {
             let kept =
@@ -141,6 +153,48 @@ impl QuickJob {
         }
         done(Err("no quick preview".into()), None)
     }
+}
+
+/// The longest edge a draft from the camera JPEG is developed at ([`QuickSource::Draft`]).
+pub const DRAFT_EDGE: usize = 1600;
+
+/// Develop `job` (an edited raw's render job) from its camera JPEG (`loader` at `path`, at most
+/// `edge` px) instead of its sensor data: a draft with its settings, white balance as shot (the
+/// JPEG's colours are the camera's, on no Kelvin scale). `None`: the JPEG can't be read, or the
+/// render failed.
+fn draft_from_camera_jpeg(path: &str, loader: &PreviewLoader, edge: usize, job: &RenderJob) -> Option<RenderResult> {
+    let jpeg = loader(path, edge.clamp(1, DRAFT_EDGE))?;
+    if jpeg.width == 0 || jpeg.height == 0 {
+        return None;
+    }
+    let lin: Vec<f32> = (0..=255u8).map(|v| lightcraft_color::transfer::srgb_to_linear(f32::from(v) / 255.0)).collect();
+    let to_working = lightcraft_color::SRGB.to_space(&lightcraft_color::WORKING);
+    let px = |c: u8| lin.get(usize::from(c)).copied().unwrap_or(0.0);
+    let data = jpeg.data.iter().map(|p| to_working.apply_f32([px(p[0]), px(p[1]), px(p[2])])).collect();
+    let image = Rgb32f { width: jpeg.width, height: jpeg.height, data };
+    let info = SourceInfo {
+        raw: false,
+        as_shot_temp: 6500.0,
+        as_shot_tint: 0.0,
+        relative_wb: true,
+        native_long: job.info.native_long,
+        ..Default::default()
+    };
+    let mut settings = (*job.settings).clone();
+    settings.wb = lightcraft_develop::WhiteBalance::default();
+    let mut job = job.clone();
+    job.source = SourceRef::Loaded(Box::new(DecodedSource::new(Arc::new(image), Some(info.clone()))));
+    job.info = info;
+    job.settings = Arc::new(settings);
+    job.cache = None;
+    job.view_cache = None;
+    job.latest = None;
+    job.stages = None;
+    job.preview_cut = None;
+    let mut r = job.draft().run();
+    r.loaded = None;
+    r.source_key = None;
+    r.rendered.is_ok().then_some(r)
 }
 
 /// The thumbnail cache's key for the camera JPEG standing for the thumbnail of cache key `k`.

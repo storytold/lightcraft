@@ -1,4 +1,4 @@
-use super::quick::{QuickJob, content_key, embedded_thumb_key, latest_thumb_key, latest_view_key, source_info};
+use super::quick::{DRAFT_EDGE, QuickJob, content_key, embedded_thumb_key, latest_thumb_key, latest_view_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
@@ -379,8 +379,16 @@ impl crate::Session {
         } else {
             vec![(self.media.rendered.clone(), latest_view_key(&p, apply_crop)), (self.media.rendered.clone(), latest_thumb_key(&p))]
         };
-        let embedded =
-            self.embedded_stand_in_of(&p).filter(|_| as_shot).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
+        let camera_jpeg = self.embedded_stand_in_of(&p);
+        // an edited raw never rendered: a fast draft with its settings from the camera JPEG
+        let draft = match (&camera_jpeg, as_shot) {
+            (Some((path, l)), false) => {
+                let e = max_edge.clamp(1, DRAFT_EDGE);
+                self.render_job(id, e, e, false, apply_crop).map(|j| (path.clone(), l.clone(), e, Box::new(j)))
+            }
+            _ => None,
+        };
+        let embedded = camera_jpeg.filter(|_| as_shot).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
             let generation = cache.generation();
@@ -397,6 +405,7 @@ impl crate::Session {
             minimum_embedded_edge: None,
             latest,
             fit: None,
+            draft,
             small: apply_crop.then(|| Box::new(small)),
         })
     }
@@ -423,6 +432,7 @@ impl crate::Session {
             minimum_embedded_edge: None,
             latest: Vec::new(),
             fit: None,
+            draft: None,
             small: None,
         })
     }
@@ -445,9 +455,17 @@ impl crate::Session {
             let c = self.media.rendered.clone();
             let latest = vec![(c.clone(), latest_thumb_key(&p)), (c.clone(), latest_view_key(&p, true))];
             let exact = job.cache.clone();
-            if !exact.iter().any(|(c, k)| c.has(*k)) && !latest.iter().any(|(c, k)| c.has(*k)) {
-                return None;
-            }
+            // nothing of it rendered yet: a fast draft with its settings from the camera JPEG (a raw), else
+            // its render is its first picture
+            let draft = if !exact.iter().any(|(c, k)| c.has(*k)) && !latest.iter().any(|(c, k)| c.has(*k)) {
+                let jpeg = self.embedded_stand_in_of(&p)?;
+                let mut j = job.clone();
+                j.cache = None;
+                j.latest = None;
+                Some((jpeg.0, jpeg.1, edge, Box::new(j)))
+            } else {
+                None
+            };
             return Some(QuickJob {
                 request_id: 0,
                 photo: job.photo,
@@ -459,6 +477,7 @@ impl crate::Session {
                 minimum_embedded_edge: None,
                 latest,
                 fit: Some((edge, edge)),
+                draft,
                 small: None,
             });
         }
@@ -476,6 +495,7 @@ impl crate::Session {
             minimum_embedded_edge: None,
             latest: Vec::new(),
             fit: None,
+            draft: None,
             small: Some(Box::new(job.clone())),
         })
     }
