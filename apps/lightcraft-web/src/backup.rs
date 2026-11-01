@@ -93,9 +93,9 @@ where
     Fut: std::future::Future<Output = Result<(), String>>,
 {
     let private = dir.len() <= 128
-        && dir.strip_prefix("library-restored-").is_some_and(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        });
+        && dir
+            .strip_prefix("library-restored-")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'));
     if !private || active == Some(dir.as_bytes()) {
         return Err("refusing to remove an active or non-staged library".into());
     }
@@ -442,20 +442,24 @@ mod tests {
     fn staged_cleanup_refuses_active_or_foreign_library_paths() {
         for dir in ["library", "library-restored-", "../library-restored-other", "library-restored-other/../library"] {
             let mut removed = Vec::new();
-            assert!(run_ready(discard_staged_library(dir, None, |key| {
-                removed.push(key);
-                std::future::ready(Ok(()))
-            }))
-            .is_err());
+            assert!(
+                run_ready(discard_staged_library(dir, None, |key| {
+                    removed.push(key);
+                    std::future::ready(Ok(()))
+                }))
+                .is_err()
+            );
             assert!(removed.is_empty());
         }
         let dir = "library-restored-active-1";
         let mut removed = Vec::new();
-        assert!(run_ready(discard_staged_library(dir, Some(dir.as_bytes()), |key| {
-            removed.push(key);
-            std::future::ready(Ok(()))
-        }))
-        .is_err());
+        assert!(
+            run_ready(discard_staged_library(dir, Some(dir.as_bytes()), |key| {
+                removed.push(key);
+                std::future::ready(Ok(()))
+            }))
+            .is_err()
+        );
         assert!(removed.is_empty());
     }
 
