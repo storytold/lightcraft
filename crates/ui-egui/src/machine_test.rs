@@ -27,15 +27,29 @@ pub fn apply(st: &AppSettings) {
     // (the GPU and the processor at once when the last test found it faster)
     lightcraft_engine::export::set_export_mix(!st.export_cpu_only && st.machine_test.as_ref().is_some_and(|m| m.mix));
     lightcraft_engine::gpu::set_batch_limits(Some(u64::from(st.gpu_export_mb) << 20).filter(|b| *b > 0), gpu_jobs(st));
+    // the second card as the last test found it: left alone when it made exports slower, else
+    // sharing them with the jobs it holds (the test puts its own routing back when it ends)
+    let (cards, helper_jobs) = helper_choice(st);
+    lightcraft_engine::export::set_export_cards(cards);
+    lightcraft_engine::gpu::set_batch_limits_for(lightcraft_engine::gpu::Role::Helper, None, helper_jobs);
+}
+
+/// The second card's part in exports from the last test: the cards to use and the helper's jobs
+/// (`None`: automatic; no test yet: both cards, automatic).
+fn helper_choice(st: &AppSettings) -> (lightcraft_engine::export::ExportCards, Option<usize>) {
+    use lightcraft_engine::export::ExportCards;
+    let m = st.machine_test.as_ref();
+    let cards = if m.is_some_and(|m| m.helper_slower) { ExportCards::Editing } else { ExportCards::Both };
+    (cards, m.map(|m| m.helper_jobs).filter(|j| *j > 0))
 }
 
 /// What [`apply`] reads from the settings: a change in any of it is applied (the four export
 /// settings, and what the last test found, which `ui.set` may change alone).
-pub type Tuning = (u32, bool, u32, u32, Option<(usize, bool, usize)>);
+pub type Tuning = (u32, bool, u32, u32, Option<(usize, bool, usize, usize, bool)>);
 
 /// The settings' [`Tuning`].
 pub fn tuning(st: &AppSettings) -> Tuning {
-    let tested = st.machine_test.as_ref().map(|m| (m.lanes, m.mix, m.gpu_jobs));
+    let tested = st.machine_test.as_ref().map(|m| (m.lanes, m.mix, m.gpu_jobs, m.helper_jobs, m.helper_slower));
     (st.export_lanes, st.export_cpu_only, st.gpu_export_mb, st.gpu_export_jobs, tested)
 }
 
@@ -207,6 +221,24 @@ mod tests {
             m.lanes = 6;
         }
         assert_ne!(tuning(&st), first, "another report's lanes");
+        let lanes = tuning(&st);
+        if let Some(m) = st.machine_test.as_mut() {
+            m.helper_slower = true;
+        }
+        assert_ne!(tuning(&st), lanes, "another report's second-card choice");
+    }
+
+    /// Review of PR #3506: the second card's choice from the last test is applied (the test puts
+    /// its own temporary routing back when it ends).
+    #[test]
+    fn the_tests_second_card_choice_is_applied() {
+        use lightcraft_engine::export::ExportCards;
+        let mut st = AppSettings::default();
+        assert_eq!(helper_choice(&st), (ExportCards::Both, None), "no test yet: both cards");
+        st.machine_test = Some(MachineReport { helper: Some("Second".into()), helper_jobs: 3, ..Default::default() });
+        assert_eq!(helper_choice(&st), (ExportCards::Both, Some(3)));
+        st.machine_test = Some(MachineReport { helper: Some("Second".into()), helper_jobs: 3, helper_slower: true, ..Default::default() });
+        assert_eq!(helper_choice(&st).0, ExportCards::Editing, "a slower second card is left alone");
     }
 
     /// Review of PR #3499: a test that ends while the full-screen preview is up is applied then,

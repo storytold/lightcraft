@@ -11,16 +11,19 @@ pub(crate) fn adapter_memory(info: &wgpu::AdapterInfo) -> Option<u64> {
     if info.device_type != wgpu::DeviceType::DiscreteGpu {
         return None;
     }
-    // asked once per card name: the listing of the cards and each device on them ask again
-    static SEEN: std::sync::Mutex<Vec<(String, Option<u64>)>> = std::sync::Mutex::new(Vec::new());
-    if let Some((_, b)) = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(n, _)| *n == info.name) {
+    // asked once per card (name and PCI ids): the listing of the cards and each device on them ask
+    // again; two cards of one name and ids get one answer, which the probe gives only when they agree
+    type Seen = Vec<((String, u32, u32), Option<u64>)>;
+    static SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(Vec::new());
+    let key = (info.name.clone(), info.vendor, info.device);
+    if let Some((_, b)) = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
         return *b;
     }
     let found = probe(&info.name, info.vendor, info.device);
     if let Some(b) = found {
         log::info!("gpu: {} has {} MiB of memory", info.name, b >> 20);
     }
-    SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((info.name.clone(), found));
+    SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((key, found));
     found
 }
 
