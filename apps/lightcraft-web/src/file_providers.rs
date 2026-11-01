@@ -140,6 +140,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         if bytes.length() > MAX_BYTES {
             return Err(error("file exceeds the provider limit"));
         }
+        h.check_open(&request, &name, bytes.length() as usize).map_err(error)?;
         h.open(request, name, bytes.to_vec()).map_err(error)?;
         wake_later(&wake);
         Ok(())

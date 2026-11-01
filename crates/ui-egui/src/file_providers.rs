@@ -140,6 +140,25 @@ impl State {
             })
     }
 
+    fn check_open(&self, request: &str, name: &str, bytes_len: usize) -> Result<(), String> {
+        if bytes_len > MAX_BYTES || !valid_name(name) {
+            return Err("file exceeds the provider limit or has an invalid name".into());
+        }
+        if !self.reads.contains_key(request) {
+            return Err("unknown or completed provider read".into());
+        }
+        let queued = self.commands.iter().fold(0usize, |n, c| {
+            n.saturating_add(match c {
+                Command::Open { bytes, .. } => bytes.len(),
+                _ => 0,
+            })
+        });
+        if self.commands.len() >= MAX_PENDING || queued.saturating_add(bytes_len) > MAX_BYTES {
+            return Err("file provider open queue is full".into());
+        }
+        Ok(())
+    }
+
     fn flush_finished(&mut self) {
         while let Some(terminal) = self.finished.front().cloned() {
             if self.event(terminal.metadata, None).is_err() {
@@ -373,20 +392,15 @@ impl Host {
         Ok(request)
     }
 
+    /// Reject unavailable reads and capacity failures before the platform copies a payload.
+    /// Admission is rechecked under the same lock as consuming the request in `open`.
+    pub fn check_open(&self, request: &str, name: &str, bytes_len: usize) -> Result<(), String> {
+        self.state().check_open(request, name, bytes_len)
+    }
+
     pub fn open(&self, request: String, name: String, bytes: Vec<u8>) -> Result<(), String> {
-        if bytes.len() > MAX_BYTES || !valid_name(&name) {
-            return Err("file exceeds the provider limit or has an invalid name".into());
-        }
         let mut s = self.state();
-        let queued = s.commands.iter().fold(0usize, |n, c| {
-            n.saturating_add(match c {
-                Command::Open { bytes, .. } => bytes.len(),
-                _ => 0,
-            })
-        });
-        if s.commands.len() >= MAX_PENDING || queued.saturating_add(bytes.len()) > MAX_BYTES {
-            return Err("file provider open queue is full".into());
-        }
+        s.check_open(&request, &name, bytes.len())?;
         let resource = s.reads.remove(&request).ok_or("unknown or completed provider read")?;
         s.opening.insert(request.clone(), resource.clone());
         s.commands.push(Command::Open { request, resource, name, bytes });

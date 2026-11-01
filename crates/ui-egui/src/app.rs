@@ -792,4 +792,24 @@ mod provider_library_tests {
         assert!(menus.contains("Recent — Storage"));
         assert!(menus.contains("Recent on this device"));
     }
+
+    #[test]
+    fn provider_recent_refuses_a_library_switch_before_requesting_its_bytes() {
+        let mut app = LightcraftApp::new(Session::new(), Services::default());
+        let host = Host::default();
+        host.set_session("light-recents-guard-0001".into()).unwrap();
+        let connection = host.connect("storage".into(), "Storage".into(), "account-1".into()).unwrap();
+        host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.zip".into(), updated_at: String::new() }]).unwrap();
+        app.file_provider = Some(host.clone());
+        app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "general".into() });
+        assert!(app.run("file.providerRecent", json!({"resourceId":"one"})).is_err());
+        assert!(host.take_events().is_empty(), "a refused replacement must not ask the host to fetch any bytes");
+        assert!(!host.busy());
+        app.ui.dialog = None;
+        app.run("file.providerRecent", json!({"resourceId":"one"})).unwrap();
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "openRequest");
+        assert_eq!(events[0].metadata["resourceId"], "one");
+    }
 }

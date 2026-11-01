@@ -123,11 +123,38 @@ fn same_resource_alias_is_invalidated_but_homonymous_files_are_not() {
 fn save_as_never_overwrites_binding_by_filename() {
     let (host, _) = connected();
     host.bind(&capture(1, 1), "one".into());
-    let id = request(&host, 1);
+    host.choose(1, 1, "Library.zip".into(), true).unwrap();
+    let dialog = host.take_events().remove(0).metadata;
+    assert_eq!(dialog["saveAs"], true);
+    assert!(dialog["resourceId"].is_null());
+    let id = dialog["requestId"].as_str().unwrap().to_owned();
     host.resolve_dialog(&id, "provider", "").unwrap();
-    host.take_commands();
-    host.capture(&id, Capture { save_as: true, ..capture(1, 2) }, vec![]).unwrap();
-    assert!(host.take_events().remove(0).metadata["resourceId"].is_null());
+    let Command::Save { request: resolved, doc, destination, name, save_as } = host.take_commands().remove(0) else {
+        panic!("expected the resolved Save As command");
+    };
+    assert_eq!(resolved, id);
+    assert_eq!(doc, 1);
+    assert_eq!(destination, "provider");
+    assert!(save_as);
+    host.capture(&id, Capture { doc, revision: 2, name, save_as }, vec![1, 2, 3]).unwrap();
+    let event = host.take_events().remove(0);
+    assert_eq!(event.metadata["type"], "save");
+    assert!(event.metadata["resourceId"].is_null());
+    assert_eq!(event.bytes, Some(vec![1, 2, 3]));
+    host.result(id, "saved".into(), "two".into()).unwrap();
+    let Command::Result { capture, resource, status } = host.take_commands().remove(0) else {
+        panic!("expected the acknowledged Save As capture");
+    };
+    assert!(capture.save_as);
+    assert_eq!((capture.doc, capture.revision), (1, 2));
+    assert_eq!(resource, "two");
+    assert_eq!(status, "saved");
+    host.bind(&capture, resource);
+    let resources = host.snapshot()["resources"].clone();
+    assert!(resources.as_array().unwrap().iter().any(|r| r["id"] == "one"), "Save As leaves the old resource intact");
+    let next = request(&host, 1);
+    assert_eq!(host.state().bindings.get(&1).unwrap().resource, "two");
+    host.resolve_dialog(&next, "cancel", "").unwrap();
 }
 
 #[test]
@@ -147,6 +174,46 @@ fn provider_open_is_correlated_and_committed_after_decode() {
 }
 
 #[test]
+fn open_preflight_rejects_invalid_requests_and_payloads_without_consuming_the_read() {
+    let (host, connection) = connected();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Library.zip".into(), updated_at: String::new() }]).unwrap();
+    let read = host.request_open("one").unwrap();
+    host.take_events();
+    assert!(host.check_open("unknown", "Library.zip", 0).is_err());
+    assert!(host.check_open(&read, "../Library.zip", 0).is_err());
+    assert!(host.check_open(&read, "Library.zip", super::MAX_BYTES + 1).is_err());
+    host.check_open(&read, "Library.zip", 1).unwrap();
+    assert!(host.take_commands().is_empty(), "preflight never admits or consumes the read");
+    host.open(read.clone(), "Library.zip".into(), vec![7]).unwrap();
+    assert!(host.check_open(&read, "Library.zip", 1).is_err());
+    assert!(host.open(read, "Library.zip".into(), vec![7]).is_err());
+}
+
+#[test]
+fn open_preflight_counts_queued_bytes_and_open_revalidates_command_capacity() {
+    let (host, connection) = connected();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Library.zip".into(), updated_at: String::new() }]).unwrap();
+    let first = host.request_open("one").unwrap();
+    let second = host.request_open("one").unwrap();
+    host.take_events();
+    host.open(first.clone(), "Library.zip".into(), vec![7]).unwrap();
+    assert!(host.check_open(&second, "Library.zip", super::MAX_BYTES).is_err(), "the existing byte counts against the aggregate cap");
+    host.check_open(&second, "Library.zip", 1).unwrap();
+    host.take_commands();
+    host.opened(&first, None, "test cancelled");
+    host.take_events();
+    for doc in 1..=super::MAX_PENDING as u64 {
+        let id = request(&host, doc);
+        host.resolve_dialog(&id, "provider", "").unwrap();
+    }
+    assert!(host.check_open(&second, "Library.zip", 1).is_err());
+    assert!(host.open(second.clone(), "Library.zip".into(), vec![8]).is_err(), "open rechecks capacity after a successful preflight");
+    host.take_commands();
+    host.open(second, "Library.zip".into(), vec![8]).unwrap();
+    assert!(matches!(host.take_commands().remove(0), Command::Open { bytes, .. } if bytes == [8]));
+}
+
+#[test]
 fn metadata_limits_are_atomic() {
     let (host, connection) = connected();
     let resource = Resource { id: "one".into(), name: "Library.zip".into(), updated_at: String::new() };
@@ -158,11 +225,37 @@ fn metadata_limits_are_atomic() {
 }
 
 #[test]
-fn closed_documents_retire_choices_but_not_acks() {
+fn closed_documents_retire_unresolved_choices() {
     let (host, _) = connected();
     let id = request(&host, 1);
     host.publish_documents(json!([]), &[]);
     assert!(host.resolve_dialog(&id, "provider", "").is_err());
+    assert!(!host.busy());
+}
+
+#[test]
+fn closed_document_keeps_its_capture_result_reachable_without_binding_the_new_document() {
+    let (host, _) = connected();
+    let id = request(&host, 1);
+    host.resolve_dialog(&id, "provider", "").unwrap();
+    host.take_commands();
+    host.capture(&id, capture(1, 23), vec![1, 2, 3]).unwrap();
+    assert_eq!(host.take_events().remove(0).metadata["type"], "save");
+    host.bind(&capture(2, 7), "two".into());
+    let documents = json!([{"documentId":"2", "revision":7}]);
+    host.publish_documents(documents.clone(), &[2]);
+    assert!(host.pending_for(1), "the closed document still owns the already transported capture");
+    host.result(id.clone(), "saved".into(), "one".into()).unwrap();
+    assert!(host.result(id, "saved".into(), "one".into()).is_err(), "a stale or duplicate ACK cannot be consumed again");
+    let Command::Result { capture, resource, status } = host.take_commands().remove(0) else {
+        panic!("expected the closed document's acknowledged capture");
+    };
+    assert_eq!((capture.doc, capture.revision), (1, 23), "the result must not be retargeted to the new document");
+    assert_eq!(resource, "one");
+    assert_eq!(status, "saved");
+    assert_eq!(host.snapshot()["documents"], documents);
+    assert!(!host.bound(1), "the application must reject the closed document before admitting the binding");
+    assert_eq!(host.state().bindings.get(&2).unwrap().resource, "two");
     assert!(!host.busy());
 }
 
