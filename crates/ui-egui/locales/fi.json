@@ -2356,5 +2356,13 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "AI masks": "Tekoälymaskit",
+  "Device": "Laite",
+  "Last photo": "Viimeisin kuva",
+  "Remote worker": "Etätyöskentelijä",
+  "Run on": "Suorita",
+  "Automatic (GPU when available)": "Automaattinen (GPU, jos saatavilla)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Kohde- ja Kuvaile-maskit analysoivat jokaisen kuvan kerran, näytönohjaimella, ellei Suoritin ole valittuna tai ”Käytä GPU:ta renderöintiin” ole pois päältä. Suorittimella se kestää paljon kauemmin.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automaattinen suorittaa mallin Macin näytönohjaimella. Valitse Suoritin, jos tekoälymaskit epäonnistuvat siellä; suorittimella ne kestävät paljon kauemmin."
 }

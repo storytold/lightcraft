@@ -2389,5 +2389,13 @@
   "Top bar": "頂部列",
   "Tool strip": "工具列",
   "Bottom bar": "底部列",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）",
+  "AI masks": "AI 遮色片",
+  "Device": "裝置",
+  "Last photo": "上一張照片",
+  "Remote worker": "遠端工作程序",
+  "Run on": "執行位置",
+  "Automatic (GPU when available)": "自動（有 GPU 時使用）",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "「物件」和「描述」遮色片對每張照片只分析一次；除非選擇了 CPU 或關閉了「使用 GPU 算繪」，否則在顯示卡上進行。在處理器上分析要慢得多。",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "「自動」會在 Mac 的顯示卡上執行模型。如果 AI 遮色片在那裡失敗，請選擇 CPU；在處理器上會慢得多。"
 }
