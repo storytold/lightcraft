@@ -317,5 +317,35 @@
   "Panel layout could not be restored: {error}": "Nie udało się przywrócić układu paneli: {error}",
   "Panel move was not applied: {error}": "Przeniesienie panelu nie zostało zastosowane: {error}",
   "{name} is installed": "{name} jest zainstalowany",
-  "{name} is installed and in use: face recognition is on": "{name} jest zainstalowany i używany: rozpoznawanie twarzy jest włączone"
+  "{name} is installed and in use: face recognition is on": "{name} jest zainstalowany i używany: rozpoznawanie twarzy jest włączone",
+  "Destination: {path}": "Miejsce docelowe: {path}",
+  "Estimated total size: {size}": "Szacowany łączny rozmiar: {size}",
+  "Free space: {size}": "Wolne miejsce: {size}",
+  "Smart preview folder change failed: {error}": "Nie udało się zmienić folderu podglądów inteligentnych: {error}",
+  "could not check smart preview storage: {e}": "nie można sprawdzić miejsca na podglądy inteligentne: {e}",
+  "free space is unavailable for {path} on this platform": "na tej platformie nie można sprawdzić wolnego miejsca dla {path}",
+  "Photos: {count}": {
+    "one": "Zdjęcia: {count}",
+    "few": "Zdjęcia: {count}",
+    "many": "Zdjęcia: {count}",
+    "other": "Zdjęcia: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "Podglądy inteligentne: {count} · {size:.1} MiB",
+    "few": "Podglądy inteligentne: {count} · {size:.1} MiB",
+    "many": "Podglądy inteligentne: {count} · {size:.1} MiB",
+    "other": "Podglądy inteligentne: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". Zachowane istniejące podglądy: {count}",
+    "few": ". Zachowane istniejące podglądy: {count}",
+    "many": ". Zachowane istniejące podglądy: {count}",
+    "other": ". Zachowane istniejące podglądy: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
+    "few": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
+    "many": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
+    "other": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}."
+  }
 }

@@ -494,6 +494,7 @@ impl Session {
         let small = crate::media::RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
+            cache_owner: std::sync::Arc::downgrade(&self.media.rendered),
             source_key: None,
             photo: id,
             level,

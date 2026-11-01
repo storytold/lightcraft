@@ -58,8 +58,9 @@ impl CameraColourModel<'_> {
         lightcraft_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
     }
 
-    /// [`Self::rebuild_highlights`] for a binned image whose clipped channels `mask` tells
-    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]).
+    /// [`Self::rebuild_highlights`] for an image whose clipped channels `mask` tells: binned
+    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]) or demosaiced at full size
+    /// ([`lightcraft_raw::RawImage::develop_balanced_masked`]).
     pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) {
         lightcraft_raw::highlight::reconstruct_masked(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mask);
     }

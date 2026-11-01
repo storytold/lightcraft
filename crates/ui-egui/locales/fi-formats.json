@@ -317,5 +317,37 @@
   "Panel layout could not be restored: {error}": "Paneelien asettelua ei voitu palauttaa: {error}",
   "Panel move was not applied: {error}": "Paneelin siirtoa ei otettu käyttöön: {error}",
   "{name} is installed": "{name} on asennettu",
-  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä"
+  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä",
+  "Photos: {count}": {
+    "one": "Kuvia: {count}",
+    "few": "Kuvia: {count}",
+    "many": "Kuvia: {count}",
+    "other": "Kuvia: {count}"
+  },
+  "Estimated total size: {size}": "Arvioitu kokonaiskoko: {size}",
+  "Destination: {path}": "Kohde: {path}",
+  "Free space: {size}": "Vapaa tila: {size}",
+  ". {kept} existing previews kept unchanged": ". Ennallaan säilytettyjä esikatseluja: {kept}",
+  "{count} smart preview{} · {:.1} MiB": "Älyesikatseluja: {count} · {1:.1} MiB{0:.0}",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Älyesikatselukansio vaihdettu. {count} lähdetiedostoa ei voitu poistaa.",
+    "few": "Älyesikatselukansio vaihdettu. {count} lähdetiedostoa ei voitu poistaa.",
+    "many": "Älyesikatselukansio vaihdettu. {count} lähdetiedostoa ei voitu poistaa.",
+    "other": "Älyesikatselukansio vaihdettu. {count} lähdetiedostoa ei voitu poistaa."
+  },
+  "Smart preview folder change failed: {error}": "Älyesikatselukansion vaihto epäonnistui: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} nykyinen esikatselu säilytettiin ennallaan",
+    "few": ". {count} nykyistä esikatselua säilytettiin ennallaan",
+    "many": ". {count} nykyistä esikatselua säilytettiin ennallaan",
+    "other": ". {count} nykyistä esikatselua säilytettiin ennallaan"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} älyesikatselu · {size:.1} MiB",
+    "few": "{count} älyesikatselua · {size:.1} MiB",
+    "many": "{count} älyesikatselua · {size:.1} MiB",
+    "other": "{count} älyesikatselua · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "Älyesikatselujen tallennustilaa ei voitu tarkistaa: {e}",
+  "free space is unavailable for {path} on this platform": "Kohteen {path} vapaata tilaa ei voi tarkistaa tällä alustalla"
 }

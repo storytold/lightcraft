@@ -8,6 +8,7 @@ use super::{
     TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
     merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
+use crate::smart_previews;
 
 mod control;
 mod frame;
@@ -108,6 +109,7 @@ impl LightcraftApp {
             scan: None,
             waiting_import: Default::default(),
             sync: None,
+            smart_preview_space: None,
             sync_owns_changes: false,
             sync_run: None,
             lightroom: None,
@@ -194,6 +196,9 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        if let Some(result) = smart_previews::intercept(self, id, &params) {
+            return result.map_err(CommandError::from);
+        }
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }
@@ -415,6 +420,10 @@ impl LightcraftApp {
                         crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
                     }
                 };
+                let kept = b.kept.load(Ordering::Relaxed);
+                if kept > 0 {
+                    msg.push_str(&crate::i18n::tr_format!(". {count} existing previews kept unchanged", count = kept));
+                }
                 if failed > 0 {
                     msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
                 }

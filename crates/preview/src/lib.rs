@@ -52,6 +52,8 @@ pub struct PreviewCache {
     #[cfg(not(target_arch = "wasm32"))]
     writer: Mutex<Option<std::sync::mpsc::Sender<Write>>>,
     queued: Arc<AtomicUsize>,
+    /// Clears removing disk files now ([`Self::clear`]): while one is, no disk file is read.
+    clearing: AtomicUsize,
 }
 
 impl PreviewCache {
@@ -68,6 +70,7 @@ impl PreviewCache {
             #[cfg(not(target_arch = "wasm32"))]
             writer: Mutex::new(None),
             queued: Arc::new(AtomicUsize::new(0)),
+            clearing: AtomicUsize::new(0),
         }
     }
 
@@ -78,7 +81,12 @@ impl PreviewCache {
 
     /// Memory LRU + disk cache in `dir` (at most `disk_bytes`).
     pub fn with_disk(mem_bytes: usize, dir: &Path, disk_bytes: u64) -> PreviewCache {
-        Self::new(mem_bytes, Some(DiskCache::new(dir, disk_bytes)))
+        Self::with_disk_namespace(mem_bytes, dir, disk_bytes, 0)
+    }
+
+    /// Memory LRU plus a persistent disk namespace. Construction does no filesystem I/O.
+    pub fn with_disk_namespace(mem_bytes: usize, dir: &Path, disk_bytes: u64, namespace: u64) -> PreviewCache {
+        Self::new(mem_bytes, Some(DiskCache::with_namespace(dir, disk_bytes, namespace)))
     }
 
     pub fn disk(&self) -> Option<&DiskCache> {
@@ -102,6 +110,10 @@ impl PreviewCache {
         }
         if let Some(v) = self.mem.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Some(v.clone());
+        }
+        // (a file not removed yet may be from before the clear)
+        if self.clearing.load(Ordering::SeqCst) > 0 {
+            return None;
         }
         let img = Arc::new(self.disk.as_ref()?.get(key)?);
         self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img.clone(), cost(&img));
@@ -191,16 +203,30 @@ impl PreviewCache {
     }
 
     /// Drop everything (memory and disk). Does nothing once [`Self::retire`]d.
+    ///
+    /// The generation moves on and memory empties under the generation lock, briefly; the disk files go after it is
+    /// released, so readers of the generation (the app, every frame) never wait for the drive, however many files
+    /// there are. Jobs of the old generation can no longer write (they check it under that lock), and until the
+    /// files are gone no disk file is read, so none from before the clear is served. Returns once they are gone (a
+    /// proxy run removes its crash marker only then). A thumbnail of the new generation written meanwhile may be
+    /// removed too, and is rendered again.
     pub fn clear(&self) {
-        let mut generation = self.generation.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // a retired cache no longer owns its directory (its replacement may)
-        let Some(g) = generation.as_mut() else { return };
-        // (never reaches u64::MAX, which stands for "retired")
-        *g = g.wrapping_add(1) % u64::MAX;
-        self.mem.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        {
+            let mut generation = self.generation.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // a retired cache no longer owns its directory (its replacement may)
+            let Some(g) = generation.as_mut() else { return };
+            // (never reaches u64::MAX, which stands for "retired")
+            *g = g.wrapping_add(1) % u64::MAX;
+            self.mem.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            if self.disk.is_none() {
+                return;
+            }
+            self.clearing.fetch_add(1, Ordering::SeqCst);
+        }
         if let Some(d) = &self.disk {
             d.clear();
         }
+        self.clearing.fetch_sub(1, Ordering::SeqCst);
     }
 
     /// Stop this cache object for good, leaving its disk files alone: called when another cache

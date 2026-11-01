@@ -69,9 +69,11 @@ const TAG_TEXT: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 
 pub struct DiskCache {
     dir: PathBuf,
+    /// Persisted by the library together with changes to the proxy source folder.
+    namespace: u64,
     /// Bytes the cache may hold (changed in place by [`DiskCache::set_budget`]).
     budget: AtomicU64,
-    /// Bytes on disk (`None` until first scanned).
+    /// Bytes on disk (`None` until scanned, and again after a clear).
     total: Mutex<Option<u64>>,
     pub hits: AtomicU64,
     pub misses: AtomicU64,
@@ -82,8 +84,15 @@ pub struct DiskCache {
 
 impl DiskCache {
     pub fn new(dir: &Path, budget: u64) -> DiskCache {
+        Self::with_namespace(dir, budget, 0)
+    }
+
+    /// Select a persistent cache namespace without scanning or changing any files. Old
+    /// namespaces share this directory and its budget; normal pruning removes their files.
+    pub fn with_namespace(dir: &Path, budget: u64, namespace: u64) -> DiskCache {
         DiskCache {
             dir: dir.to_path_buf(),
+            namespace,
             budget: AtomicU64::new(budget),
             total: Mutex::new(None),
             hits: AtomicU64::new(0),
@@ -95,6 +104,10 @@ impl DiskCache {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    pub fn namespace(&self) -> u64 {
+        self.namespace
     }
 
     /// Bytes the cache may hold.
@@ -113,6 +126,13 @@ impl DiskCache {
     }
 
     fn named(&self, key: Hash128, ext: &str) -> PathBuf {
+        // Namespace zero preserves existing libraries' cache keys. Every committed folder
+        // switch gets a new value, even when returning to a previously used folder.
+        let key = if self.namespace == 0 {
+            key
+        } else {
+            crate::Hasher128::new().str("thumbnail namespace").u64(self.namespace).update(&key.0.to_le_bytes()).finish()
+        };
         let hex = key.to_string();
         // (32 hex digits: the first two are there)
         self.dir.join(hex.get(..2).unwrap_or("00")).join(format!("{hex}.{ext}"))
@@ -153,7 +173,10 @@ impl DiskCache {
                 // Recency for pruning, without a write for every read: it is remembered here for
                 // this session, and only a file that was not used for a long while has its date
                 // brought forward (for the sessions after).
-                self.read.lock().unwrap_or_else(|e| e.into_inner()).insert(key.0);
+                // Prune identifies files by their stored stem, including the namespace.
+                if let Some(key) = key_of(&p) {
+                    self.read.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+                }
                 let now = std::time::SystemTime::now();
                 let unused = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|at| now.duration_since(at).ok());
                 if unused.is_some_and(|d| d > STALE)
@@ -371,10 +394,17 @@ impl DiskCache {
     }
 
     pub fn clear(&self) {
-        for (p, _, _) in self.scan() {
+        let files = self.scan();
+        #[cfg(test)]
+        crate::tests::during_clear(self);
+        for (p, _, _) in files {
             let _ = std::fs::remove_file(p);
         }
-        *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(0);
+        // A thumbnail written while the files go (not in the listing) outlives the clear, so the
+        // size is unknown, not zero: the next check scans the nearly empty folder. A writer
+        // updates the total under the same lock as its file replacement, so none can put back
+        // a total from before this.
+        *self.total.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -443,4 +473,43 @@ pub fn decode_jpeg(bytes: &[u8]) -> Option<Rgba8> {
     }
     let data = px.as_chunks::<3>().0.iter().take(w * h).map(|c| [c[0], c[1], c[2], 255]).collect();
     Some(Rgba8 { width: w, height: h, data })
+}
+
+#[cfg(test)]
+mod namespace_regressions {
+    use super::*;
+
+    #[test]
+    fn namespaced_reads_keep_prune_priority_and_retire_removed_keys() {
+        for namespace in [0, 17] {
+            let dir = std::env::temp_dir().join(format!("lc-prune-namespace-{}-{namespace}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let cache = DiskCache::with_namespace(&dir, u64::MAX, namespace);
+            let (read, unused) = (Hash128(101), Hash128(202));
+            let image = Rgba8::new(32, 24);
+            cache.put(read, &image);
+            cache.put(unused, &image);
+            assert!(cache.get(read).is_some());
+            for (key, secs) in [(read, 100), (unused, 200)] {
+                std::fs::File::options()
+                    .write(true)
+                    .open(cache.path(key))
+                    .unwrap()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+                    .unwrap();
+            }
+            cache.set_budget(cache.size() - 1);
+            cache.prune();
+            let kept_read = cache.path(read).exists();
+            let removed_unused = !cache.path(unused).exists();
+            cache.set_budget(0);
+            cache.prune();
+            let read_keys_empty = cache.read.lock().unwrap().is_empty();
+            assert!(
+                kept_read && removed_unused && read_keys_empty,
+                "namespace {namespace}: kept_read={kept_read}, removed_unused={removed_unused}, read_keys_empty={read_keys_empty}"
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
 }

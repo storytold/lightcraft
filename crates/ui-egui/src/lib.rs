@@ -42,6 +42,7 @@ pub mod reload;
 pub mod render;
 pub mod shortcuts;
 pub mod sidebar;
+mod smart_previews;
 pub mod softpaint;
 pub mod space_hand;
 pub mod state;
@@ -316,6 +317,7 @@ pub struct LightcraftApp {
     pub waiting_import: panels::library_problem::WaitingImport,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
+    pub(crate) smart_preview_space: Option<smart_previews::SpaceCheck>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
