@@ -872,6 +872,10 @@ fn upright_hint_asks_for_the_lines_guided_needs() {
     };
     let tilted = Analysis { horizontal: vec![line(10.0, -0.2), line(10.0, 0.2)], ..Analysis::default() };
     assert_eq!(guided_hint(Upright::Auto, &tilted), "one line along what should be level");
+    // the same tilt found from vertical lines only (posts 10° off, no horizon): one upright line, as
+    // one vertical guide levels too (CodeRabbit, #2966)
+    let leaning = Analysis { vertical: vec![line(100.0, -0.2), line(100.0, 0.2)], ..Analysis::default() };
+    assert_eq!(guided_hint(Upright::Auto, &leaning), "one line along what should be upright");
     // Auto stopped by converging posts too steep for it: a level line can't straighten them (CodeRabbit, #2966)
     let steep = Analysis { vertical_vp: Some([0.0, 0.3, 1.0]), ..Analysis::default() };
     assert_eq!(guided_hint(Upright::Auto, &steep), "two lines along what should be vertical");

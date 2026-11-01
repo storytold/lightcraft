@@ -390,6 +390,14 @@ fn level_angle(vert: &[Segment], horiz: &[Segment]) -> Option<f64> {
 
 /// [`level_angle`] that only answers for at most `max` degrees, backed by at least `min_lines`
 /// agreeing segments.
+/// Whether levelling goes by the vertical lines: the horizontal ones lead unless there are none or
+/// their length is under half the verticals'.
+fn levels_by_vertical(vert: &[Segment], horiz: &[Segment]) -> bool {
+    let lh: f64 = horiz.iter().map(Segment::len).sum();
+    let lv: f64 = vert.iter().map(Segment::len).sum();
+    !(lh >= lv * 0.5 && lh > 0.0)
+}
+
 pub(crate) fn level_angle_within(vert: &[Segment], horiz: &[Segment], max: f64, min_lines: usize) -> Option<f64> {
     let dev = |s: &Segment, vertical: bool| {
         let (dx, dy) = (s.b.x - s.a.x, s.b.y - s.a.y);
@@ -405,9 +413,8 @@ pub(crate) fn level_angle_within(vert: &[Segment], horiz: &[Segment], max: f64, 
         };
         if vertical { -a } else { a }
     };
-    let lh: f64 = horiz.iter().map(Segment::len).sum();
-    let lv: f64 = vert.iter().map(Segment::len).sum();
-    let (set, vertical) = if lh >= lv * 0.5 && lh > 0.0 { (horiz, false) } else { (vert, true) };
+    let vertical = levels_by_vertical(vert, horiz);
+    let set = if vertical { vert } else { horiz };
     if set.is_empty() {
         return None;
     }
@@ -700,8 +707,9 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
 
 /// What to draw in Guided when `mode` falls short on `a` ("Try Guided: draw …"). Guided works from the guides
 /// alone, not from lines the mode found, and one guide of a kind only levels ([`solve_guided`]): Full needs two of
-/// each family, Vertical two vertical ones, and levelling one line. Auto follows why it stopped: a horizon tilted
-/// more than it levels ([`Reject::TooTilted`]) takes one level guide; a vertical correction too steep for it
+/// each family, Vertical two vertical ones, and levelling one line. Auto follows why it stopped: a tilt more than
+/// it levels ([`Reject::TooTilted`]) takes one guide of the family it levelled by (a level line for a horizon, an
+/// upright one when only vertical lines were found); a vertical correction too steep for it
 /// ([`Reject::TooSteep`]) needs two vertical guides, as one level line can't straighten converging posts; with too
 /// few or unusable lines either can help, so it names both.
 pub fn guided_hint(mode: Upright, a: &Analysis) -> &'static str {
@@ -710,6 +718,7 @@ pub fn guided_hint(mode: Upright, a: &Analysis) -> &'static str {
         Upright::Full => "two lines along what should be vertical and two along what should be horizontal",
         Upright::Level => "a line along what should be level or upright",
         Upright::Auto => match auto(a) {
+            Err(Reject::TooTilted) if levels_by_vertical(&a.vertical, &a.horizontal) => "one line along what should be upright",
             Err(Reject::TooTilted) => "one line along what should be level",
             Err(Reject::TooSteep) => VERTICAL,
             _ => "two lines along what should be vertical, or one line along what should be level",
