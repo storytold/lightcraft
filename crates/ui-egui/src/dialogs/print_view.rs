@@ -286,12 +286,17 @@ fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSet
     });
 }
 
+/// "12 photos" above the print settings.
+fn photo_count(photos: usize) -> String {
+    crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)
+}
+
 fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
     let ctx = ui.ctx().clone();
     let l = &st.layout;
     let unit = st.guides.units;
     ui.spacing_mut().item_spacing.y = 5.0;
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
+    ui.label(egui::RichText::new(photo_count(photos)).color(t.text_dim));
 
     templates_section(app, ui, t, pu);
 

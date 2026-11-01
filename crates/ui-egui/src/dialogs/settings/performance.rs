@@ -89,6 +89,12 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     smart_previews(app, ui, t);
 }
 
+/// "12 smart previews · 3.4 MB" under the smart previews folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn smart_previews_size(count: u64, bytes: u64) -> String {
+    crate::i18n::tr_format!("{count} smart preview{} · {:.1} MB", if count == 1 { "" } else { "s" }, bytes as f64 / 1048576.0, count = count)
+}
+
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
 /// the effective folder, what is in it, and choosing another one.
 #[cfg(not(target_arch = "wasm32"))]
@@ -127,16 +133,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     let (count, bytes) = (loc["count"].as_u64().unwrap_or(0), loc["bytes"].as_u64().unwrap_or(0));
     if available {
-        hint(
-            ui,
-            t,
-            &crate::i18n::tr_format!(
-                "{count} smart preview{} · {:.1} MB",
-                if count == 1 { "" } else { "s" },
-                bytes as f64 / 1048576.0,
-                count = count
-            ),
-        );
+        hint(ui, t, &smart_previews_size(count, bytes));
     } else {
         hint(
             ui,

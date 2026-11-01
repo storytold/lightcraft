@@ -364,6 +364,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.greek", Locale::El),
     ];
     // One command per language, and every command reachable from the menu table.
     assert_eq!(commands.len(), Locale::ALL.len());
@@ -1175,15 +1176,19 @@ fn assert_polish_counts() {
     for n in [0, 1, 2, 3, 4, 5, 12, 21, 22, 25, 111] {
         let s = if n == 1 { "" } else { "s" };
         assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("Zaimportowane zdjęcia: {n}"));
-        for (one, many, noun) in [
-            ("photo waiting", "photos waiting", "Oczekujące zdjęcia"),
-            ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
-            ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
-        ] {
-            assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
-        }
+        assert_polish_noun_counts(n);
         assert_eq!(tr_format!("Delete {n} Photos", n = n), format!("Usuń zdjęcia ({n})"));
         assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("Ustawienia: {n}"));
+    }
+}
+
+fn assert_polish_noun_counts(n: usize) {
+    for (one, many, noun) in [
+        ("photo waiting", "photos waiting", "Oczekujące zdjęcia"),
+        ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
+        ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
+    ] {
+        assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
     }
 }
 

@@ -1436,34 +1436,7 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "file.exportMaskEffects" => file_export_mask_effects_command(app, ctx, id, p),
-        "file.exportPresets" => {
-            let group = p.get("group").and_then(Value::as_str).map(str::to_string);
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => Some(x.to_string()),
-                None => {
-                    let name = format!("{}.lcpreset", group.as_deref().unwrap_or("LightCraft Presets"));
-                    let req = PickRequest::save(crate::i18n::tr("Export Presets"), crate::i18n::tr("LightCraft Preset"), &["lcpreset"], name.clone());
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
-                        Picked::Now(v) => v.into_iter().next(),
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            let Some(path) = path else { return Some(Ok(Value::Null)) };
-            let mut params = json!({"path": path});
-            if let Some(g) = group {
-                params["group"] = json!(g);
-            }
-            if let Some(ids) = p.get("ids") {
-                params["ids"] = ids.clone();
-            }
-            let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
-            if let Ok(v) = &r {
-                app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
-            }
-            r
-        }
+        "file.exportPresets" => file_export_presets_command(app, ctx, id, p),
         "file.importCurvePresets" => file_import_curve_presets_command(app, ctx, id, p),
         _ => return None,
     };
@@ -2165,6 +2138,36 @@ fn file_export_mask_effects_command(app: &mut LightcraftApp, ctx: &egui::Context
     match &r {
         Ok(v) => app.toast(ctx, crate::i18n::tr_format!("Exported {} effect preset{}", v["count"], if v["count"] == 1 { "" } else { "s" })),
         Err(e) => app.toast_error(ctx, e.clone()),
+    }
+    r
+}
+
+/// The `file.exportPresets` command.
+fn file_export_presets_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    let group = p.get("group").and_then(Value::as_str).map(str::to_string);
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => Some(x.to_string()),
+        None => {
+            let name = format!("{}.lcpreset", group.as_deref().unwrap_or("LightCraft Presets"));
+            let req = PickRequest::save(crate::i18n::tr("Export Presets"), crate::i18n::tr("LightCraft Preset"), &["lcpreset"], name.clone());
+            match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
+                Picked::Now(v) => v.into_iter().next(),
+                Picked::Later => return Ok(Value::Null),
+                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+            }
+        }
+    };
+    let Some(path) = path else { return Ok(Value::Null) };
+    let mut params = json!({"path": path});
+    if let Some(g) = group {
+        params["group"] = json!(g);
+    }
+    if let Some(ids) = p.get("ids") {
+        params["ids"] = ids.clone();
+    }
+    let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
+    if let Ok(v) = &r {
+        app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
     }
     r
 }
