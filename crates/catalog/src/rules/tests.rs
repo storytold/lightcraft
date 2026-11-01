@@ -610,12 +610,15 @@ fn rule_dates_have_one_reading() {
         "2026-08-14 10:00-05:00",
         "2026-08-14T10:00:00.",
         "2026-08-14T10:00:00+2",
+        "2026-08-14T10:00:00+99:99",
+        "2026-08-14T10:00:00+18:01",
     ] {
         let p = rule("is", json!(v)).check(&cat);
         assert_eq!(p.first().map(|p| p.issue), Some(Issue::NeedsDate), "{v}");
     }
     assert_eq!(rule_date("2026-10-01 10:00"), Ok("2026-10-01T10:00".to_string()));
     assert_eq!(rule_date("2026"), Ok("2026".to_string()));
+    assert!(rule("is", json!("2026-08-14T10:00:00+18:00")).check(&cat).is_empty());
 }
 
 /// The field menu shows every rule field once: at the top level or in exactly one group,
