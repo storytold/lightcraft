@@ -230,6 +230,9 @@ mod tests {
         // the terms and the status name every site the file may come from (CodeRabbit on #2929)
         assert_eq!(hosts(k.download.as_ref().unwrap()), "github.com or radfilms.com.au");
         assert_eq!(hosts(d), "example.org");
+        // an address's user name and password are never shown with its host
+        assert_eq!(host("https://user:secret@example.org/m.onnx"), "example.org");
+        assert_eq!(host("https://example.org?x=1"), "example.org");
         // the same file wherever it comes from: both end in its name
         assert!(both.iter().all(|u| u.ends_with(&format!("/{}", d.file_name))));
         assert!(!lightcraft_bayer().manifest.licence.notice.contains("  "), "one space between words");
@@ -249,8 +252,13 @@ pub struct Download {
     pub sha256: String,
 }
 
+/// The host an `https://` address names, for display: never any `user:password@` in front of it (an address given in
+/// `LIGHTCRAFT_DENOISE_MODEL_URL` could carry one, and the model list and download status show the host).
 pub fn host(url: &str) -> &str {
-    url.strip_prefix("https://").and_then(|r| r.split('/').next()).unwrap_or("")
+    url.strip_prefix("https://")
+        .and_then(|r| r.split(['/', '?', '#']).next())
+        .map(|authority| authority.rsplit_once('@').map_or(authority, |(_, host)| host))
+        .unwrap_or("")
 }
 
 /// Every site `d` may come from, in the order they are tried ("github.com or radfilms.com.au"), so the terms and the
