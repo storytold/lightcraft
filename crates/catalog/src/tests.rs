@@ -568,6 +568,9 @@ fn fuji_recipe_is_not_serialized_when_unknown_and_round_trips() {
     assert!(json.contains("fuji_recipe_known") && json.contains("Classic Chrome"), "{json}");
     let back: Meta = serde_json::from_str(&json).unwrap();
     assert_eq!(back, with);
+    let absent = Meta { fuji_recipe_known: true, ..m };
+    let back: Meta = serde_json::from_str(&serde_json::to_string(&absent).unwrap()).unwrap();
+    assert!(back.fuji_recipe_known && back.fuji_recipe.is_none(), "known absence must survive reopening");
 }
 
 // ---- random sort: Given a seed, the order is a stable, reproducible shuffle of the matching photos
