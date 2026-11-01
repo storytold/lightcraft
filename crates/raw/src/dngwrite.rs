@@ -175,6 +175,43 @@ fn rat_vec(v: &[f64]) -> Value {
     Value::Rational(v.iter().map(|&x| rational(x)).collect())
 }
 
+/// `WhiteLevel` can only hold whole numbers, so float data whose white level isn't one (a float DNG
+/// from another writer, say) is rescaled to white = 1 — samples, black levels and black deltas — the
+/// way the DNG spec expects float data to be stored. `None` when the white levels already fit.
+fn float_white_rescaled(raw: &RawImage) -> Result<Option<RawImage>> {
+    let RawData::F32(data) = &raw.data else { return Ok(None) };
+    let cpp = raw.cpp.max(1);
+    let whites: Vec<f32> = (0..cpp).map(|s| raw.white_at(s)).collect();
+    if whites.iter().all(|w| w.is_finite() && *w >= 1.0 && w.fract() == 0.0 && *w <= u32::MAX as f32) {
+        return Ok(None);
+    }
+    if whites.iter().any(|w| !w.is_finite() || *w <= 0.0) {
+        return Err(RawError::Corrupt(format!("float raw with white level {whites:?}")));
+    }
+    let uniform = whites.iter().all(|w| *w == whites[0]);
+    let b = &raw.black;
+    if !uniform && (!b.delta_h.is_empty() || !b.delta_v.is_empty()) {
+        return Err(RawError::Unsupported("float raw with per-sample fractional white levels and black-level deltas".into()));
+    }
+    let white = |i: usize| whites.get(i % cpp).copied().unwrap_or(1.0);
+    let n = b.repeat_rows.max(1).saturating_mul(b.repeat_cols.max(1)).saturating_mul(cpp);
+    let values = if uniform {
+        b.values.iter().map(|v| v / whites[0]).collect()
+    } else {
+        (0..n).map(|i| b.values.get(i).or_else(|| b.values.first()).copied().unwrap_or(0.0) / white(i)).collect()
+    };
+    let mut out = raw.clone();
+    out.data = RawData::F32(data.iter().enumerate().map(|(i, v)| v / white(i)).collect());
+    out.black = crate::BlackLevel {
+        values,
+        delta_h: b.delta_h.iter().map(|v| v / whites[0]).collect(),
+        delta_v: b.delta_v.iter().map(|v| v / whites[0]).collect(),
+        ..b.clone()
+    };
+    out.white = vec![1.0; cpp];
+    Ok(Some(out))
+}
+
 /// Serialise `raw` as a DNG.
 pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     raw.validate()?;
@@ -185,6 +222,14 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
             &lossy
         }
         _ => raw,
+    };
+    let rescaled;
+    let raw = match float_white_rescaled(raw)? {
+        Some(r) => {
+            rescaled = r;
+            &rescaled
+        }
+        None => raw,
     };
     let (w, h, cpp) = (raw.width, raw.height, raw.cpp);
     let mut ifd = IfdBuilder::new();
@@ -241,12 +286,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if !b.delta_v.is_empty() {
         ifd.set(t::BLACK_LEVEL_DELTA_V, Value::SRational(b.delta_v.iter().map(|&v| srational(v as f64)).collect()));
     }
+    // SHORT or LONG only (DNG 1.7): a RATIONAL here is ignored by libtiff and stricter readers
     let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(0.0, u32::MAX as f32) as u32).collect();
-    if matches!(raw.data, RawData::F32(_)) {
-        ifd.set(t::WHITE_LEVEL, rat_vec(&(0..cpp).map(|s| raw.white_at(s) as f64).collect::<Vec<_>>()));
-    } else {
-        ifd.set(t::WHITE_LEVEL, Value::Long(white));
-    }
+    ifd.set(t::WHITE_LEVEL, Value::Long(white));
     let a = raw.active_area;
     ifd.set(t::ACTIVE_AREA, Value::Long(vec![a.y as u32, a.x as u32, (a.y + a.height) as u32, (a.x + a.width) as u32]));
     ifd.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![raw.crop.x as u32, raw.crop.y as u32]));
@@ -605,5 +647,53 @@ mod tests {
         assert_eq!(hostile, write_dng(&raw, &opts(2048)).expect("the cap itself writes"), "u32::MAX is clamped to the cap");
         assert_ne!(hostile, write_dng(&raw, &opts(256)).expect("a normal tile writes"), "the clamp is not a no-op");
         assert_eq!(crate::probe(&hostile), Some(RawFormat::Dng), "the clamped output is still a DNG");
+    }
+
+    fn white_level(dng: &[u8]) -> Value {
+        let tiff = lightcraft_tiff::Tiff::parse(dng).expect("the DNG parses");
+        tiff.ifds[0].value(t::WHITE_LEVEL).cloned().expect("WhiteLevel is written")
+    }
+
+    /// #3191: float DNGs (HDR merge, Render to DNG) wrote `WhiteLevel` as RATIONAL, which the DNG
+    /// spec doesn't allow and libtiff ignores ("Incompatible type for WhiteLevel").
+    #[test]
+    fn float_white_level_is_written_as_long() {
+        let dng = write_rendered_dng(2, 2, &[0.25; 12], &lightcraft_color::SRGB, &Default::default(), None).expect("writes");
+        assert_eq!(white_level(&dng), Value::Long(vec![1, 1, 1]));
+    }
+
+    /// A float white level that isn't a whole number can't be stored as LONG, so the samples and black
+    /// level are rescaled to white = 1 and decode to the same normalized values.
+    #[test]
+    fn a_fractional_float_white_level_is_rescaled_to_one() {
+        let full = Rect::new(0, 0, 2, 1);
+        let raw = RawImage {
+            format: RawFormat::Dng,
+            width: 2,
+            height: 1,
+            cpp: 1,
+            data: RawData::F32(vec![0.05, 0.4]),
+            cfa: None,
+            bits: 32,
+            black: BlackLevel::uniform(0.05),
+            white: vec![0.5],
+            active_area: full,
+            crop: full,
+            orientation: lightcraft_geom::Orientation::Normal,
+            color: crate::ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            metadata: Default::default(),
+            lens_metadata: Default::default(),
+        };
+        let dng = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 16, half: false }, ..Default::default() })
+            .expect("writes");
+        assert_eq!(white_level(&dng), Value::Long(vec![1]));
+        let back = crate::decode(&dng).expect("decodes");
+        let RawData::F32(got) = &back.data else { panic!("float data expected") };
+        assert_eq!(got, &vec![0.1, 0.8]);
+        assert!((back.black.values[0] - 0.1).abs() < 1e-6, "black rescaled with the data: {:?}", back.black.values);
     }
 }
