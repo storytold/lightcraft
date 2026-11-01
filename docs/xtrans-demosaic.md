@@ -45,7 +45,7 @@ sides) holds all three colours with one common centroid. Binning each block into
 a third of the resolution with no interpolation at all: real sensor, real lens, real noise floor.
 `xtrans_truth` does this for every X-Trans raw in a folder (as-shot white balance, exposure normalised, blocks with a
 clipped sample marked invalid). The raws are the CC0 Fujifilm files of the pinned corpus (`cargo xtask corpus
---download`, or only the `Fujifilm` entries of `RAW_SAMPLES` in `xtask/src/main.rs`): 38 usable scenes from about 25
+--download`, or only the `Fujifilm` entries of `RAW_SAMPLES` in `xtask/src/raw_samples.rs`): 38 usable scenes from about 25
 bodies, X-Trans I to V.
 
 `xtrans_bench` re-mosaics each scene under three illuminants (camera RGB = balanced ÷ gains) and three noise levels,
