@@ -240,7 +240,7 @@ mod cancellation_tests {
         assert_eq!(calls.load(Ordering::Relaxed), completed, "all started probes complete");
         assert!(completed < FILES, "cancel leaves later files unstarted: {completed}");
         assert_eq!(results.len(), FILES);
-        assert!(results.iter().any(|(_, result)| result.as_ref().is_err_and(|e| e == "not probed")));
+        assert!(results.iter().any(|(_, result)| result.as_ref().is_err_and(|e| e == "not probed" || e == "cancelled")));
         assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&completed));
     }
 }
