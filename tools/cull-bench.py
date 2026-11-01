@@ -51,6 +51,11 @@ STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
 if STEPS < 1 or HOLD_MS < 1:
     sys.exit(f"--steps and --hold-ms must be 1 or more; {USAGE}")
+# the app keeps its last 256 loupe steps; a run uses 1 (first open) + 11 (stepping) + STEPS + 1
+# (the hold): more than that would lose the run's own first steps
+KEPT_STEPS = 256
+if 1 + 11 + STEPS + 1 > KEPT_STEPS:
+    sys.exit(f"--steps {STEPS}: the app keeps {KEPT_STEPS} loupe steps, so at most {KEPT_STEPS - 13}; {USAGE}")
 LABEL = opt("--label", "run")
 OVERWRITE = "--overwrite" in args
 # a run takes minutes: refuse an existing result (or a link there, even a dangling one) before it
@@ -100,11 +105,13 @@ def wait(pred, timeout=120, every=0.0):
 
 # the app keeps the latest 256 finished steps: a list already that long gives no cursor (its oldest
 # steps leave as new ones come), so the run would report no timings
-KEPT_STEPS = 256
-def steps_cursor():
+def steps_cursor(room):
+    """The app's loupe-step count now, before a phase that adds up to `room` steps: stops when the
+    app's history (it keeps the last KEPT_STEPS) would drop some of them, so a partial phase is
+    never reported."""
     n = len(inspect()["perf"]["loupeSteps"]["steps"])
-    if n >= KEPT_STEPS:
-        sys.exit(f"the app has kept {n} loupe steps already: restart it so this run's steps can be told apart")
+    if n + room > KEPT_STEPS:
+        sys.exit(f"the app has kept {n} loupe steps already and this needs {room} more of its {KEPT_STEPS}: restart it, or use fewer --steps")
     return n
 
 def steps_since(n0):
@@ -185,14 +192,14 @@ ids = inspect().get("selection") or []
 if not ids:
     sys.exit(f"{FOLDER}: no photos visible to open in the loupe; check the filters")
 ex("library.select", {"ids": [ids[0]]})
-n0 = steps_cursor()
+n0 = steps_cursor(1)
 ex("view.detail")
 wait(lambda s: loupe(s).get("source") in ("render", "cached") and not loupe(s).get("pending"), 120)
 first_cur = inspect()["perf"]["loupeSteps"]["current"]
 out["loupe_first"] = first_cur
 
 # --- deliberate stepping: a step, then rest until it is sharp ---------------------------------------
-n0 = steps_cursor()
+n0 = steps_cursor(11)
 for i in range(10):
     ex("library.next")
     wait(lambda s: loupe(s).get("source") in ("render", "cached") and not loupe(s).get("pending"), 60)
@@ -210,7 +217,7 @@ out["step_rest"] = {
 
 # --- held arrow: a key every HOLD_MS ---------------------------------------------------------------
 wait(lambda s: loupe(s).get("source") in ("render", "cached") and not loupe(s).get("pending"), 60)
-n0 = steps_cursor()
+n0 = steps_cursor(STEPS + 1)
 conns = [Conn() for _ in range(4)]
 t0 = time.perf_counter() + 0.05
 sender_errors = []
