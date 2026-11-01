@@ -786,7 +786,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 v.push(item("app.export", json!({"preset": p.name, "background": true}), p.name, None, sel, None));
             }
             v.push(MenuNode::Separator);
-            v.push(item("dialog.export", Value::Null, "Custom…", None, sel, None));
+            v.push(item("dialog.export", Value::Null, "Export Custom…", None, sel, None));
             v
         }
         "Add to Album" => {
