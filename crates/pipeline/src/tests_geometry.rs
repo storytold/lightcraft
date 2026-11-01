@@ -432,6 +432,28 @@ fn upright_analysis_is_resolution_independent() {
     assert_eq!(lazy.data, stored.data);
 }
 
+/// Raw decoding keeps negative channels; Upright analyses a dark noisy frame as it did when decoding clipped them at
+/// zero (resampled as they are, they lowered the luminance and changed the correction found).
+#[test]
+fn upright_analysis_clips_negative_channels_first() {
+    let shot = lightcraft_develop::Geometry { vertical: 30.0, rotate: 1.5, ..Default::default() };
+    let grid = keystoned_grid(1200, 800, crate::transform::manual(&shot), 80.0);
+    // ±0.04 of noise per channel, a hash of the position
+    let noise = |i: usize, c: usize| {
+        let h = ((i * 7919 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.08 - 0.04
+    };
+    let mut signed = grid.clone();
+    for (i, p) in signed.data.iter_mut().enumerate() {
+        *p = std::array::from_fn(|c| p[c] * 0.02 + noise(i, c));
+    }
+    let clipped = signed.map(|p| p.map(|v| v.max(0.0)));
+    assert!(signed.data.iter().flatten().filter(|v| **v < 0.0).count() > signed.data.len() / 4, "the frame has few negatives");
+    let (info, s) = (SourceInfo::default(), DevelopSettings::default());
+    let (a, b) = (crate::upright::analysis_plane(&signed, &info, &s), crate::upright::analysis_plane(&clipped, &info, &s));
+    assert!(a.data == b.data, "negative channels change Upright's analysis image");
+}
+
 /// Regression: Upright Auto must not invent perspective in natural scenes (conical trees, ridgelines, a level
 /// water line) — the demo library has no buildings, so Auto should stay close to identity everywhere.
 #[test]
