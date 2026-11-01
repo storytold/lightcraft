@@ -151,9 +151,11 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
 thread_local! {
     /// Full-size JPEG encodes [`fit_jpeg`] made on this thread so far (tests: at most two per photo).
     pub(crate) static FIT_ENCODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The quality of each of those encodes, in order.
+    pub(crate) static FIT_QUALITIES: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The JPEG of `img` at the highest quality up to `quality` whose file (`encode(q)`: the whole
+/// The JPEG of `img` at about the highest quality up to `quality` whose file (`encode(q)`: the whole
 /// file at quality q, `fixed` of its bytes, metadata and any gain map, don't change with q) fits within `kb` KB, in two full-size
 /// encodes (note 28: a binary search made seven or eight of a 6000 px photo, ~30 s per photo).
 ///
@@ -162,6 +164,12 @@ thread_local! {
 /// size, and the second encode is at the quality that curve says fits, with a margin. Should the
 /// photo still not fit (rare: the mosaic misjudged it), the curve is corrected by that encode and
 /// a lower quality tried, until quality 1.
+///
+/// The quality is a prediction, not a search: the margin can leave it a quality or two below the
+/// highest that would fit (a few percent of the file size), and a higher quality is not tried
+/// once one fits. That is the trade for two encodes instead of seven or eight. The gain map of an
+/// HDR JPEG is part of `fixed`, encoded once at the export's quality: one channel at half the
+/// photo's width and height by default, so lowering its quality would gain little.
 fn fit_jpeg(
     img: &Rgba8,
     quality: u8,
@@ -173,7 +181,10 @@ fn fit_jpeg(
     let limit = (kb as usize).saturating_mul(1024);
     let mut full = |q: u8| {
         #[cfg(test)]
-        FIT_ENCODES.with(|c| c.set(c.get() + 1));
+        {
+            FIT_ENCODES.with(|c| c.set(c.get() + 1));
+            FIT_QUALITIES.with(|v| v.borrow_mut().push(q));
+        }
         encode(q)
     };
     let quality = quality.clamp(1, 100);
