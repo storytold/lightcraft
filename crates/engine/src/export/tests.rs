@@ -1525,6 +1525,47 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
 
+/// Review of PR #3499: twelve large photos exported side by side never hold more than the export
+/// share of the computer's memory ([`crate::memory::export_gate`]): on a 16 GB machine, twelve
+/// full-size 45 MP exports (~2 GB of working memory each) run at most three at once, the others
+/// wait their turn, and all of them finish.
+#[test]
+fn twelve_large_photos_wait_for_the_export_memory() {
+    use crate::media::SourceLevel;
+    use std::sync::{Arc, Mutex};
+    let gb = 1usize << 30;
+    let share = crate::memory::export_share_of(3 * gb / 2, Some(16 * gb));
+    let each = render_weight(8256 * 5504, 8256, SourceLevel::Full, 8256 * 5504);
+    let fit = share / each;
+    assert_eq!(fit, 3, "{share} / {each}");
+    let gate = Arc::new(crate::memory::WorkGate::new(share));
+    let seen = Arc::new(Mutex::new((0usize, 0usize, 0usize))); // running, most at once, most bytes held
+    let lanes: Vec<_> = (0..12)
+        .map(|_| {
+            let (gate, seen) = (gate.clone(), seen.clone());
+            std::thread::spawn(move || {
+                let _held = gate.acquire(each);
+                {
+                    let mut s = seen.lock().unwrap();
+                    s.0 += 1;
+                    s.1 = s.1.max(s.0);
+                    s.2 = s.2.max(gate.usage().0);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                seen.lock().unwrap().0 -= 1;
+            })
+        })
+        .collect();
+    for l in lanes {
+        l.join().unwrap();
+    }
+    let (running, most, bytes) = *seen.lock().unwrap();
+    assert_eq!(running, 0, "all twelve finished");
+    assert!((1..=fit).contains(&most), "at most {fit} at once, saw {most}");
+    assert!(bytes <= share, "{bytes} held > {share}");
+    assert_eq!(gate.usage().0, 0);
+}
+
 /// The gain map's linear SDR (a table of the 256 levels) is each sample decoded on its own.
 #[test]
 fn the_linear_sdr_table_is_exact() {

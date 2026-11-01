@@ -216,7 +216,7 @@ fn export_share(budget: usize) -> usize {
 /// if that is more: the budget is the caches' (at most 1.5 GiB by default), and an export's photos
 /// are transient. With only 3 GiB, a 45 MP gain map export (~4 GB of working memory each) ran one
 /// photo at a time however many lanes there were.
-fn export_share_of(budget: usize, ram: Option<usize>) -> usize {
+pub(crate) fn export_share_of(budget: usize, ram: Option<usize>) -> usize {
     let by_ram = ram.map_or(0, |r| r / 100 * EXPORT_RAM_PERCENT);
     budget.saturating_mul(2).max(by_ram)
 }
