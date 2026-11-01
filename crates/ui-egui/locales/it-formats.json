@@ -325,5 +325,14 @@
   "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "{n} photos in view · {slides} slides · {time}": "{n} photos in view · {slides} slides · {time}",
+  "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
+  "Signed in as {name}": "Accesso eseguito come {name}",
+  "Signed in to Flickr as {name}": "Accesso a Flickr eseguito come {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Carica su Flickr come {name} – foto: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Foto caricate su Flickr: {ok} di {total}{:.0}",
+  " · {} not added to the album": " · non aggiunte all'album: {}",
+  " · the album couldn't be made: {}": " · impossibile creare l'album: {}",
+  " · new album “{}”": " · nuovo album «{}»"
 }

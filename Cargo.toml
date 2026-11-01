@@ -49,6 +49,7 @@ lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
 # HEIC/HEIF: the shared decoder (moved from crates/heif; craft-libs#784).
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
+lightcraft-flickr = { path = "crates/flickr" }
 lightcraft-segment = { path = "crates/segment" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }

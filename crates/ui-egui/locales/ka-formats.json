@@ -328,5 +328,12 @@
   "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
   "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}",
+  "Signed in as {name}": "შესული ხართ როგორც {name}",
+  "Signed in to Flickr as {name}": "Flickr-ში შესული ხართ როგორც {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Flickr-ზე ატვირთვა როგორც {name} – ფოტო: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Flickr-ზე ატვირთულია ფოტო: {ok} / {total}{:.0}",
+  " · {} not added to the album": " · ალბომს არ დაემატა: {}",
+  " · the album couldn't be made: {}": " · ალბომის შექმნა ვერ მოხერხდა: {}",
+  " · new album “{}”": " · ახალი ალბომი „{}“"
 }
