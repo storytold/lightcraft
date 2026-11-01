@@ -85,6 +85,12 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
 
+/// Paint Overlay's own level: where a painted corner settles, as a fraction of white. Not 0 or 1,
+/// because the paint has a density of its own and never quite reaches the base, which is the
+/// black-point lift (and the bright-side cap) that makes this style flatten a corner instead of
+/// scaling it.
+const PAINT_LEVEL: f32 = 0.08;
+
 #[inline]
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     // A degenerate frame (zero-width crop) maps pixels to NaN/inf coordinates: no grain there.
@@ -447,15 +453,23 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 if t > 0.0 {
                     let lum = luminance_2020(d).clamp(0.0, 1.0);
                     if v.amount < 0.0 {
-                        let mut f = 1.0 + v.amount * t;
-                        if v.style == VignetteStyle::HighlightPriority {
-                            f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
-                        }
                         if v.style == VignetteStyle::PaintOverlay {
-                            d = d.map(|c| c * (1.0 - (-v.amount) * t) + 0.0);
+                            // paint the corner: it settles on the paint's own level instead of scaling towards zero
+                            let k = (-v.amount) * t;
+                            d = d.map(|c| c * (1.0 - k) + PAINT_LEVEL * k);
                         } else {
+                            let mut f = 1.0 + v.amount * t;
+                            if v.style == VignetteStyle::HighlightPriority {
+                                f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
+                            }
                             d = d.map(|c| c * f);
                         }
+                    } else if v.style == VignetteStyle::PaintOverlay {
+                        let k = v.amount * t;
+                        let flat = 1.0 - PAINT_LEVEL;
+                        // never pulls a pixel down, so anything brighter than the paint (HDR highlights included)
+                        // is left alone
+                        d = d.map(|c| c + (flat - c).max(0.0) * k);
                     } else if hdr {
                         // lighten towards SDR white; never pull HDR highlights down to it
                         d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
