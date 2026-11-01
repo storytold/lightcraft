@@ -418,7 +418,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let yl = luminance_2020(c);
             let o = fp.tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let k = fp.tone.chroma_scale(o);
+            let key = if fp.tone.chroma_by_sat() { crate::tone::chroma_key(c, yl) } else { 0.0 };
+            let k = fp.tone.chroma_scale(o, key);
             if k != 1.0 {
                 d = d.map(|v| o + (v - o) * k);
             }

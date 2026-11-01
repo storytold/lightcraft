@@ -18,17 +18,36 @@ fn tone_apply(y: f32) -> f32 {
     return v;
 }
 
-// The camera chroma curve follows the tone LUT in `aux` (`ToneMap::chroma_scale`).
-fn chroma_scale(o: f32) -> f32 {
-    let f = clamp(o, 0.0, 1.0) * f32(CHROMA_N - 1u);
-    let i = min(u32(f), CHROMA_N - 2u);
-    let t = f - f32(i);
-    let a = aux[TONE_N + i];
-    let b = aux[TONE_N + i + 1u];
+// The camera chroma table (`CHROMA_SAT_N` curves of `CHROMA_N`) follows the tone LUT in `aux`, then its
+// saturation nodes (`ToneMap::chroma_scale`; without a table the curves are all the same).
+fn chroma_curve(s: u32, i: u32, t: f32) -> f32 {
+    let a = aux[TONE_N + s * CHROMA_N + i];
+    let b = aux[TONE_N + s * CHROMA_N + i + 1u];
     if (a == b) {
         return a;
     }
     return a + (b - a) * t;
+}
+
+fn chroma_scale(o: f32, key_in: f32) -> f32 {
+    let f = clamp(o, 0.0, 1.0) * f32(CHROMA_N - 1u);
+    let i = min(u32(f), CHROMA_N - 2u);
+    let t = f - f32(i);
+    let nodes = TONE_N + CHROMA_N * CHROMA_SAT_N;
+    let key = clamp(key_in, aux[nodes], aux[nodes + CHROMA_SAT_N - 1u]);
+    var j = 0u;
+    for (var s = 1u; s < CHROMA_SAT_N - 1u; s++) {
+        if (key >= aux[nodes + s]) {
+            j = s;
+        }
+    }
+    let lo = chroma_curve(j, i, t);
+    let hi = chroma_curve(j + 1u, i, t);
+    if (lo == hi) {
+        return lo;
+    }
+    let u = (key - aux[nodes + j]) / (aux[nodes + j + 1u] - aux[nodes + j]);
+    return lo + (hi - lo) * u;
 }
 
 fn encode_srgb(v: f32) -> f32 {
@@ -455,10 +474,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let yl = lum2020(c);
     let o = tone_apply(yl);
     var d = vec3<f32>(0.0);
+    var key = 0.0;
     if (yl > 1e-9) {
         d = c * o / yl;
+        key = length(c / yl - vec3<f32>(1.0));
     }
-    let k = chroma_scale(o);
+    let k = chroma_scale(o, key);
     if (k != 1.0) {
         d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
     }
