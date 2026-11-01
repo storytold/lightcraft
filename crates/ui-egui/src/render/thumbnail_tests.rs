@@ -1443,3 +1443,17 @@ fn work_prepared_ahead_takes_batch_turns_at_the_gpu() {
     assert!(!Turn::Background.run(lightcraft_engine::gpu::is_batch), "nor a thumbnail's on screen");
     assert!(!lightcraft_engine::gpu::is_batch(), "and the thread is back to view work after");
 }
+
+#[test]
+fn stand_ins_take_the_turn_of_their_thumbnail() {
+    use crate::render::{LAST_TURN, Turn};
+    let background = crate::panels::grid::BACKGROUND_THUMB_PRIORITY;
+    for (priority, turn) in [(background + 10, Turn::Background), (background, Turn::Batch)] {
+        let (p, quick) = queued_quick_thumbnail(PhotoId(1));
+        let mut r = Renderer { pool: JobPool::new(0), ..Default::default() };
+        LAST_TURN.with(|t| t.set(None));
+        r.request_quick(Slot::ThumbQuick(p.id), quick, priority);
+        assert_eq!(r.pool.run_inline(1), 1);
+        assert_eq!(LAST_TURN.with(std::cell::Cell::get), Some(turn), "a stand-in at priority {priority}");
+    }
+}

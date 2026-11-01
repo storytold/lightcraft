@@ -344,6 +344,12 @@ pub(crate) enum Turn {
     Batch,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The turn the last job run on this thread took (tests: which turn a caller gave its job).
+    pub(crate) static LAST_TURN: std::cell::Cell<Option<Turn>> = const { std::cell::Cell::new(None) };
+}
+
 impl Turn {
     /// The turn of a job for `slot` at `priority`.
     pub(crate) fn of(slot: Slot, priority: u32) -> Turn {
@@ -357,6 +363,8 @@ impl Turn {
 
     /// Run `f` (a job's render, on its worker thread) in this turn.
     pub(crate) fn run<R>(self, f: impl FnOnce() -> R) -> R {
+        #[cfg(test)]
+        LAST_TURN.with(|t| t.set(Some(self)));
         match self {
             Turn::View => f(),
             Turn::Background => lightcraft_engine::memory::in_background(f),
@@ -796,7 +804,8 @@ impl Renderer {
         );
         let key = job.key;
         let display = self.display.clone();
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
+        let turn = Turn::of(slot, priority);
+        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| turn.run(|| job.run()), &display)));
     }
 
     /// Render a slideshow title screen into `slot` (once per screen key, like [`Self::request`]):
