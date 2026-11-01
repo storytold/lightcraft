@@ -62,6 +62,10 @@ class CalibrateFit(unittest.TestCase):
             self.assertAlmostEqual(e[pl]["a"] / (6.6e-4 * rel), 1.0, delta=1e-6)
             self.assertAlmostEqual(e[pl]["b"] / 1.25e-6, 1.0, delta=1e-3)
 
+    def test_build_calibration_reads_a_one_pass_iterator(self):
+        cal = C.build_calibration(iter([rawdump_output(3200, 6.6e-4, 1.25e-6), None]))
+        self.assertEqual(cal["Testcam One"]["3200"]["photos"], 1)
+
     def test_a_fit_below_zero_read_noise_is_refitted_with_none(self):
         # variance falling under a*m in the shadows would fit b < 0: the file gets b = 0 and a positive slope
         pts = [(m, 1e-4 * m - 2e-7) for m in (0.01, 0.02, 0.05, 0.1, 0.3, 0.6)]
@@ -88,9 +92,17 @@ class CalibrateCommandLine(unittest.TestCase):
             open(os.path.join(d, "raws", "a.dng"), "w").close()
             cal = os.path.join(d, "cal.json")
             argv = ["calibrate_noise.py", "--rawdump", exe, "--out", cal, os.path.join(d, "raws")]
-            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch.object(C.subprocess, "run", wraps=C.subprocess.run) as run, \
+                    mock.patch.object(C, "build_calibration", wraps=C.build_calibration) as build:
                 self.assertIsNone(C.main())
             self.assertEqual([e["camera"] for e in T.load_calibration(cal)], ["Cámara Á1"])
+            # decoded as UTF-8 by request, not by a UTF-8 locale happening to be set (CodeRabbit on #2932)
+            self.assertEqual(run.call_args.kwargs.get("encoding"), "utf-8")
+            # the measurements are folded in as they arrive, never all held (CodeRabbit on #2929)
+            (arg,), _ = build.call_args
+            self.assertNotIsInstance(arg, (list, tuple))
+            self.assertIs(iter(arg), arg, "an iterator, read once")
         finally:
             tmp.dir.cleanup()
 
@@ -143,6 +155,10 @@ class LoadCalibration(unittest.TestCase):
         self.bad(self.entry(B={"a": 1e-4, "b": -1e-7}), "B b is -1e-07; it must be at least 0")
         self.bad(self.entry(G2={"a": "1e-4", "b": 0}), "not a number")
         self.bad(self.entry(G2={"a": True, "b": 0}), "not a number")
+        # finite as a Python float, but infinity or 0 in the float32 noise tables (CodeRabbit on #2929)
+        self.bad(self.entry(R={"a": 1e40, "b": 0}), "outside the float32 range")
+        self.bad(self.entry(R={"a": 1e-3, "b": 1e40}), "outside the float32 range")
+        self.bad(self.entry(R={"a": 1e-50, "b": 0}), "outside the float32 range")
 
     def test_a_plane_the_calibration_left_out_takes_the_others_mean_and_says_so(self):
         doc = self.entry()
@@ -157,6 +173,16 @@ class LoadCalibration(unittest.TestCase):
         e = {"camera": "c", "iso": 100, "a": [1e-4] * 4, "b": [0.0] * 4, "filled": []}
         with self.assertRaises(T.CalibrationError):
             T.NoiseModel([e])
+
+    def test_with_every_patch_measured_no_read_noise_relation_is_fitted_or_reported(self):
+        # (CodeRabbit on #2929: at --cal-share 1 the relation is never used, so b = 0 everywhere is fine)
+        e = {"camera": "c", "iso": 100, "a": [1e-4] * 4, "b": [0.0] * 4, "filled": []}
+        m = T.NoiseModel([e], share=1.0, source="cal.json")
+        self.assertIn("every patch uses a measured entry exactly", m.describe()[0])
+        self.assertNotIn("fitted relation", m.describe()[0])
+        self.assertIsNone(m.summary()["read_c"])
+        a4, b4 = m.sample(torch.full((8,), 3e-3), torch.Generator().manual_seed(1))
+        self.assertTrue(torch.all(a4 == torch.tensor(1e-4)) and torch.all(b4 == 0))
 
     def test_a_cal_share_outside_0_to_1_is_an_error(self):
         for share in (-0.1, 1.5, float("nan")):
@@ -217,6 +243,23 @@ class NoiseFromCalibration(unittest.TestCase):
 
 
 class TrainCommandLine(unittest.TestCase):
+    def test_zero_checkpoint_validation_or_log_intervals_are_refused_at_start(self):
+        # (CodeRabbit on #2929: `step % 0` stopped the run after its first step)
+        tmp = Tmp()
+        try:
+            out = os.path.join(tmp.dir.name, "run")
+            for flag in ("--ckpt", "--val-every", "--log-every"):
+                argv = ["train.py", "--data", tmp.dir.name, "--out", out, "--device", "cpu", flag, "0"]
+                err = io.StringIO()
+                with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err), \
+                        self.assertRaises(SystemExit) as cm:
+                    T.main()
+                self.assertEqual(cm.exception.code, 2)
+                self.assertIn(f"{flag} must be at least 1", err.getvalue())
+            self.assertFalse(os.path.exists(out))
+        finally:
+            tmp.dir.cleanup()
+
     def test_a_bad_calibration_stops_train_py_before_anything_is_written(self):
         tmp = Tmp()
         try:

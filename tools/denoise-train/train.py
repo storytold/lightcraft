@@ -147,6 +147,10 @@ def _number(v, where, positive):
         raise CalibrationError(f"{where} is {v}, not a finite number")
     if v < 0 or (positive and v == 0):
         raise CalibrationError(f"{where} is {v}; it must be {'above' if positive else 'at least'} 0")
+    # the noise tables are float32: a larger value would become infinity there, a positive one this small 0
+    f32 = torch.finfo(torch.float32)
+    if v > f32.max or 0 < v < f32.tiny:
+        raise CalibrationError(f"{where} is {v}, outside the float32 range training uses")
     return v
 
 
@@ -231,7 +235,9 @@ class NoiseModel:
         self.entries = entries or []
         self.source = source
         self.share = share if self.entries else 0.0
-        self.c = fit_read_c(self.entries) if self.entries else R5C_READ_C
+        # (every patch taking a measured entry never uses the relation, so it isn't fitted: a calibration with no
+        # read noise anywhere is fine then)
+        self.c = fit_read_c(self.entries) if self.entries and self.share < 1.0 else R5C_READ_C
         self.table_a = torch.tensor([e["a"] for e in self.entries], dtype=torch.float32) if self.entries else None
         self.table_b = torch.tensor([e["b"] for e in self.entries], dtype=torch.float32) if self.entries else None
 
@@ -244,9 +250,12 @@ class NoiseModel:
         if not self.entries:
             return ["noise: no --noise-cal given; synthetic noise uses the built-in EOS R5 C read-noise relation "
                     f"b = {self.c:.4g} a^2"]
-        lines = [f"noise: calibration {self.source}: {len(self.entries)} camera/ISO entries; "
-                 f"{self.share:.0%} of patches use a measured entry exactly, the rest the fitted relation "
-                 f"b = {self.c:.4g} a^2 (built-in EOS R5 C: {R5C_READ_C:.4g})"]
+        head = f"noise: calibration {self.source}: {len(self.entries)} camera/ISO entries; "
+        if self.share < 1.0:
+            lines = [head + f"{self.share:.0%} of patches use a measured entry exactly, the rest the fitted relation "
+                     f"b = {self.c:.4g} a^2 (built-in EOS R5 C: {R5C_READ_C:.4g})"]
+        else:
+            lines = [head + "every patch uses a measured entry exactly"]
         for e in self.entries:
             note = f"; {', '.join(e['filled'])} not measured, mean of the others used" if e["filled"] else ""
             lines.append(f"noise:   {e['camera']} ISO {e['iso']}: a = {sum(e['a']) / 4:.3e}, "
@@ -255,7 +264,7 @@ class NoiseModel:
 
     def summary(self):
         """A JSON-able record of the noise source, for log.jsonl."""
-        return {"source": self.source, "share": self.share, "read_c": self.c,
+        return {"source": self.source, "share": self.share, "read_c": self.c if self.share < 1.0 else None,
                 "entries": [{k: e[k] for k in ("camera", "iso", "a", "b", "filled")} for e in self.entries]}
 
     def sample(self, a, g):
@@ -418,8 +427,9 @@ def main():
     ap.add_argument("--device", default="cuda", help="cuda (default) or cpu (slow; for a smoke test)")
     ap.add_argument("--log-every", type=int, default=200, help="steps between loss lines")
     a = ap.parse_args()
-    if a.log_every < 1:
-        ap.error("--log-every must be at least 1")
+    for flag, v in (("--log-every", a.log_every), ("--ckpt", a.ckpt), ("--val-every", a.val_every)):
+        if v < 1:
+            ap.error(f"{flag} must be at least 1")
     # a bad calibration stops the run here, before any training, with what is wrong in it
     try:
         noise = NoiseModel.from_file(a.noise_cal, a.cal_share) if a.noise_cal else NoiseModel(share=a.cal_share)

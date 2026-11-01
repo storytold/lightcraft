@@ -89,11 +89,12 @@ fn urls_or_default(set: Option<&str>) -> Vec<String> {
     }
 }
 
-/// Whether an authority (`host`, `host:port`, `[v6]` or `[v6]:port`) has a host and, if it names a port, a number
-/// from 1 to 65535.
+/// Whether an authority (`host`, `host:port`, `[v6]` or `[v6]:port`) has a host (inside brackets, an IPv6 address)
+/// and, if it names a port, a number from 1 to 65535.
 fn port_ok(authority: &str) -> bool {
     let (host, port) = match authority.strip_prefix('[') {
         Some(rest) => match rest.split_once(']') {
+            Some((v6, _)) if v6.parse::<std::net::Ipv6Addr>().is_err() => return false,
             Some((v6, after)) => match after {
                 "" => (v6, None),
                 _ => match after.strip_prefix(':') {
@@ -260,6 +261,8 @@ mod tests {
             "https://[::1]x/m.onnx",
             "https://[::1]:x/m.onnx",
             "https://:443/m.onnx",
+            "https://[not-ipv6]/m.onnx",
+            "https://[]/m.onnx",
         ] {
             assert_eq!(urls_or_default(Some(bad)), both, "{bad}");
         }
