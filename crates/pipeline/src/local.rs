@@ -406,13 +406,28 @@ pub fn detail_free(l: &Plane, r: usize) -> Plane {
         return l.clone();
     }
     let (w, h) = (l.width, l.height);
-    let fine = median_hv(l, r);
     let (lw, lh) = (w.div_ceil(BASE_COARSE_STEP).max(1), h.div_ceil(BASE_COARSE_STEP).max(1));
-    let coarse = resize(&median_hv(&resize(l, lw, lh, Filter::Box), r), w, h, Filter::Bilinear);
-    let mut out = Plane::new(w, h);
+    if (lw, lh) == (w, h) {
+        // nothing to downscale: both medians are the same
+        return median_hv(l, r);
+    }
+    let lo = median_hv(&resize(l, lw, lh, Filter::Box), r);
+    // The bilinear enlargement of `lo` (`resize`'s horizontal pass, then its vertical pass taken
+    // row by row with the same sums) is clamped into `out` as it is made, not stored.
+    let wide = resize(&lo, w, lh, Filter::Bilinear);
+    let wy = lightcraft_raster::resample::weights(lh, h, Filter::Bilinear);
+    let mut out = median_hv(l, r);
     for_rows(&mut out.data, w, |y, row| {
-        for (((o, &v), &a), &b) in row.iter_mut().zip(l.row(y)).zip(fine.row(y)).zip(coarse.row(y)) {
-            *o = clamp_between(v, a, b);
+        let Some((y0, ws)) = wy.get(y) else { return };
+        let mut coarse = vec![0.0f32; w];
+        for (k, &wt) in ws.iter().enumerate() {
+            let Some(t) = wide.data.get((y0 + k) * w..(y0 + k + 1) * w) else { continue };
+            for (c, &v) in coarse.iter_mut().zip(t) {
+                *c += v * wt;
+            }
+        }
+        for ((o, &v), &c) in row.iter_mut().zip(l.row(y)).zip(&coarse) {
+            *o = clamp_between(v, *o, c);
         }
     });
     out
@@ -946,6 +961,50 @@ mod tests {
 #[cfg(test)]
 mod fast_tests {
     use super::*;
+
+    /// [`detail_free`] enlarges the coarse median as it clamps; the result is the plain
+    /// composition of `resize` and [`median_hv`], bit for bit.
+    #[test]
+    fn detail_free_matches_its_reference() {
+        use lightcraft_raster::resample::{Filter, resize};
+        for (w, h) in [(1, 1), (2, 1), (3, 3), (4, 7), (61, 47), (200, 31)] {
+            let p = Plane::from_fn(w, h, |x, y| ((x * 37 + y * 101) % 23) as f32 * 0.4 - 4.0 + if (x / 5 + y / 7) % 2 == 0 { 2.0 } else { 0.0 });
+            for r in [1, 2, 5, 10] {
+                let fine = median_hv(&p, r);
+                let (lw, lh) = (w.div_ceil(BASE_COARSE_STEP), h.div_ceil(BASE_COARSE_STEP));
+                let coarse = resize(&median_hv(&resize(&p, lw, lh, Filter::Box), r), w, h, Filter::Bilinear);
+                let want: Vec<u32> = (0..w * h).map(|i| clamp_between(p.data[i], fine.data[i], coarse.data[i]).to_bits()).collect();
+                let got: Vec<u32> = detail_free(&p, r).data.iter().map(|v| v.to_bits()).collect();
+                assert_eq!(got, want, "{w}×{h} r={r}");
+            }
+        }
+    }
+
+    /// CPU highlights/shadows base timings on the #3460 frame size:
+    /// `cargo test --release -p lightcraft-pipeline bench_tone_base_cpu -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_tone_base_cpu() {
+        let (w, h) = (6960, 4640);
+        let r = base_detail_radius(w as f64);
+        let p = Plane::from_fn(w, h, |x, y| ((x * 7 + y * 13) % 1000) as f32 / 250.0 - 6.0 + if (x / 40 + y / 40) % 2 == 0 { 1.0 } else { 0.0 });
+        let sigma = 0.015 * w as f32;
+        let time = |name: &str, f: &dyn Fn() -> Plane| {
+            let mut ts: Vec<f64> = (0..5)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    std::hint::black_box(f());
+                    t.elapsed().as_secs_f64() * 1e3
+                })
+                .collect();
+            ts.sort_by(f64::total_cmp);
+            eprintln!("{name:<20} min {:.1} ms  median {:.1} ms", ts[0], ts[2]);
+        };
+        time("median_hv", &|| median_hv(&p, r));
+        time("detail_free", &|| detail_free(&p, r));
+        time("guided_fast", &|| guided_fast(&p, sigma, BASE_EPS));
+        time("tone_base", &|| tone_base(&p, sigma, r));
+    }
 
     /// The previous fast path, including its two materialized coefficient resizes.
     fn resized_reference(p: &Plane, sigma: f32, eps: f32) -> Plane {

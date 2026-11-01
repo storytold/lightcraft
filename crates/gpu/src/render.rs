@@ -318,6 +318,9 @@ fn guided_coeffs(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: 
     gaussian(cx, &ab, w, h, 2, sigma)
 }
 
+/// Pixels per thread along the pass of `median_h` / `median_v` (`MED_K` in `blur.wgsl`).
+const MEDIAN_K: usize = 4;
+
 /// Separable median of a plane (`local::median_hv`).
 fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     if r == 0 || w * h == 0 {
@@ -325,9 +328,9 @@ fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     }
     let pr = [w as u32, h as u32, 1, r.min(local::BASE_DETAIL_MAX) as u32];
     let tmp = cx.gpu.buffer(w * h);
-    cx.run("median_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
+    cx.run("median_h", &pr, &[Some(p), Some(&tmp)], groups2(w.div_ceil(MEDIAN_K), h, [16, 16]));
     let out = cx.gpu.buffer(w * h);
-    cx.run("median_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
+    cx.run("median_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h.div_ceil(MEDIAN_K), [16, 16]));
     out
 }
 
@@ -1281,6 +1284,74 @@ mod tests {
             map(cx, "log_lum_k", w * h, &[], [Some(&src), None, None], &o);
         });
         time("guided sigma=1.75", &mut |cx| drop(guided(cx, &src, w, h, 1.75, 0.01)));
+    }
+
+    /// The tiled median kernels select exactly what the CPU's sorted window does: edge tiles,
+    /// planes smaller than a tile or a window, every radius and many ties.
+    #[test]
+    fn median_matches_cpu_bit_for_bit() {
+        let Some(gpu) = crate::device() else { return lightcraft_testkit::skip!(Gpu, "no GPU adapter") };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for (w, h) in [(1, 1), (2, 3), (5, 70), (70, 5), (63, 65), (130, 67), (200, 129)] {
+            // a coarse level set gives ties; a smooth ramp and fine noise give distinct values
+            let mut p = Plane::new(w, h);
+            for (i, o) in p.data.iter_mut().enumerate() {
+                let (x, y) = (i % w, i / w);
+                *o = match (next() % 3, next()) {
+                    (0, v) => (v % 7) as f32 * 0.5 - 2.0,
+                    (1, v) => (x + 2 * y) as f32 * 0.01 + (v % 100) as f32 * 1e-4,
+                    (_, v) => (v % 10_000) as f32 * 1e-3 - 5.0,
+                };
+            }
+            let src = gpu.upload(&p.data);
+            for r in 1..=local::BASE_DETAIL_MAX {
+                let mut cx = Cx::new(gpu);
+                let out = median_hv(&mut cx, &src, w, h, r);
+                let got: Vec<f32> = cx.read(&out, w * h);
+                let want = local::median_hv(&p, r);
+                let bad = got.iter().zip(&want.data).position(|(g, c)| g.to_bits() != c.to_bits());
+                assert!(bad.is_none(), "{w}×{h} r={r}: pixel {bad:?}");
+            }
+        }
+    }
+
+    /// Highlights/shadows base timings on the #3460 frame size:
+    /// `cargo test --release -p lightcraft-gpu bench_tone_base -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_tone_base() {
+        let Some(gpu) = crate::device() else { return eprintln!("no gpu: {:?}", crate::unavailable_reason()) };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let (w, h) = (6960, 4640);
+        let r = local::base_detail_radius(w as f64);
+        eprintln!("{} ({:?}) r={r}", gpu.info.name, gpu.info.backend);
+        let l: Vec<f32> = (0..w * h).map(|i: usize| ((i.wrapping_mul(2_654_435_761)) % 1000) as f32 / 250.0 - 6.0).collect();
+        let src = gpu.upload(&l);
+        let time = |name: &str, f: &mut dyn FnMut(&mut Cx<'_>)| {
+            let mut ts = Vec::new();
+            for _ in 0..9 {
+                let mut cx = Cx::new(gpu);
+                cx.sync();
+                let t = std::time::Instant::now();
+                f(&mut cx);
+                cx.sync();
+                ts.push(t.elapsed().as_secs_f64() * 1e3);
+            }
+            ts.sort_by(f64::total_cmp);
+            eprintln!("{name:<40} min {:.1} ms  median {:.1} ms", ts[0], ts[4]);
+        };
+        let sigma = 0.015 * w as f32;
+        time("median_hv", &mut |cx| drop(median_hv(cx, &src, w, h, r)));
+        time("detail_free", &mut |cx| drop(detail_free(cx, &src, w, h, r)));
+        time("guided_fast", &mut |cx| drop(guided_fast(cx, &src, w, h, sigma, local::BASE_EPS)));
+        time("tone_base", &mut |cx| drop(tone_base(cx, &src, w, h, sigma, r)));
     }
 
     #[test]
