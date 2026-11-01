@@ -436,6 +436,26 @@ fn a_preview_rendered_for_a_discarded_cache_fails_the_photo() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A forced build renders a photo itself even when another build was rendering it and made its previews
+/// (CodeRabbit on #3080): the other build's result is not taken as this one's.
+#[test]
+fn a_forced_build_renders_a_photo_another_build_was_rendering() {
+    let (mut s, root, ids) = library("forced-shared", 1);
+    s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "edge": 300, "wait": true})).unwrap();
+    let jobs = crate::cmd::previews::jobs_for(&mut s, ids[0], Some(300));
+    let held = crate::cmd::previews::hold_building(ids[0].0, &jobs).expect("nobody renders it now");
+    s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "edge": 300, "force": true})).unwrap();
+    let b = s.preview_build.clone().expect("the build");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(b.done.load(Ordering::Relaxed), 0, "not counted while the other build holds it");
+    drop(held);
+    assert!(wait_finished(&b));
+    let counts =
+        (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed), b.shared.load(Ordering::Relaxed), b.skipped.load(Ordering::Relaxed));
+    assert_eq!(counts, (1, 0, 0, 0), "rendered here, not taken from the other build");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// A photo another build is rendering is not counted until that render is over: here the other build never
 /// made its previews, so this build renders it (CodeRabbit on #3080).
 #[test]
