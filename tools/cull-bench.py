@@ -208,11 +208,18 @@ out["zoom100_region"] = loupe(st).get("region")
 ex("view.zoomFit")
 
 # --- rating / flagging latency (control round trip; the app's own time is in persistence) --------
+# one photo, named on every call: the folder's filter may hide a new rating, and an id-less rating
+# would then move the selection and rate the next photo; its own rating is put back afterwards
+target = ex("photo.inspect")
+target_id, target_rating = target["id"], target.get("rating") or 0
 rate = []
-for i in range(20):
-    t0 = time.perf_counter()
-    ex("photo.rate", {"rating": (i % 5) + 1})
-    rate.append((time.perf_counter() - t0) * 1000)
+try:
+    for i in range(20):
+        t0 = time.perf_counter()
+        ex("photo.rate", {"rating": (i % 5) + 1, "ids": [target_id]})
+        rate.append((time.perf_counter() - t0) * 1000)
+finally:
+    ex("photo.rate", {"rating": target_rating, "ids": [target_id]})
 out["rate_cmd_ms_client"] = stats(rate)
 info = ex("library.info")
 out["persistence"] = {k: v for k, v in (info.get("persistence") or {}).items() if k in ("appends", "lastAppendMs", "maxAppendMs")}
