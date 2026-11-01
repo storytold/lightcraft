@@ -2389,5 +2389,8 @@
   "Top bar": "頂部列",
   "Tool strip": "工具列",
   "Bottom bar": "底部列",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）",
+  "Dock to panel": "嵌入右側面板",
+  "Mask Adjustments": "遮色片調整",
+  "Drag to reorder": "拖曳以調整順序"
 }

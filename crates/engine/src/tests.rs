@@ -1419,6 +1419,87 @@ fn quick_develop_adds_to_each_photo() {
 }
 
 #[test]
+fn mask_components_move_without_changing_content_and_undo_once() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "sky", "name": "Untouched"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+    s.execute("mask.addComponent", &json!({"kind": "brush", "op": "subtract"})).unwrap();
+    s.execute("mask.component", &json!({"component": 1, "action": "rename", "name": "Cleanup"})).unwrap();
+    s.execute("mask.component", &json!({"component": 1, "action": "invert"})).unwrap();
+    s.execute("mask.addComponent", &json!({"kind": "radial", "op": "intersect"})).unwrap();
+    let before = active_dev(&s);
+    let undo = s.undo.len();
+    let r = s.execute("mask.component", &json!({"component": 1, "action": "move", "delta": -1})).unwrap();
+    assert_eq!((r["from"].as_u64(), r["to"].as_u64()), (Some(1), Some(0)));
+    let mut moved = before.clone();
+    moved.masks[1].components.swap(0, 1);
+    assert_eq!(active_dev(&s), moved);
+    assert_eq!(s.undo.len(), undo + 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s), before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s), moved);
+    s.execute("mask.component", &json!({"component": 0, "action": "move", "delta": 1})).unwrap();
+    assert_eq!(active_dev(&s), before);
+    let undo = s.undo.len();
+    for (component, delta) in [(0, -1), (2, 1)] {
+        let r = s.execute("mask.component", &json!({"component": component, "action": "move", "delta": delta})).unwrap();
+        assert_eq!(r["from"], r["to"]);
+    }
+    for params in [
+        json!({"component": 1, "action": "move"}),
+        json!({"component": 1, "action": "move", "delta": 0}),
+        json!({"component": 1, "action": "move", "delta": 2}),
+        json!({"component": 1, "action": "move", "delta": "up"}),
+        json!({"component": 1, "action": "move", "delta": i64::MIN}),
+        json!({"component": u64::MAX, "action": "move", "delta": -1}),
+        json!({"id": 999, "component": 0, "action": "move", "delta": 1}),
+    ] {
+        assert!(s.execute("mask.component", &params).is_err(), "{params}");
+    }
+    assert_eq!(active_dev(&s), before);
+    assert_eq!(s.undo.len(), undo, "bounds and invalid moves add no history");
+}
+
+#[test]
+fn mask_component_reorder_to_index_is_one_undo_step() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+    for kind in ["brush", "radial", "luminanceRange"] {
+        s.execute("mask.addComponent", &json!({"kind": kind, "op": "subtract"})).unwrap();
+    }
+    let before = active_dev(&s);
+    let undo = s.undo.len();
+    for (from, to) in [(0, 3), (3, 0), (1, 3), (3, 1)] {
+        let old = active_dev(&s);
+        let r = s.execute("mask.component", &json!({"component": from, "action": "move", "to": to})).unwrap();
+        assert_eq!((r["from"].as_u64(), r["to"].as_u64()), (Some(from), Some(to)));
+        let mut moved = old.clone();
+        let component = moved.masks[0].components.remove(from as usize);
+        moved.masks[0].components.insert(to as usize, component);
+        assert_eq!(active_dev(&s), moved);
+        assert_eq!(s.undo.len(), undo + 1);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(active_dev(&s), old);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(active_dev(&s), moved);
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+    s.execute("mask.component", &json!({"component": 0, "action": "move", "to": 0})).unwrap();
+    for params in [
+        json!({"component": 0, "action": "move", "to": -1}),
+        json!({"component": 0, "action": "move", "to": 4}),
+        json!({"component": 0, "action": "move", "to": u64::MAX}),
+        json!({"component": 0, "action": "move", "to": "last"}),
+        json!({"component": 0, "action": "move", "to": 1, "delta": 1}),
+    ] {
+        assert!(s.execute("mask.component", &params).is_err(), "{params}");
+    }
+    assert_eq!(active_dev(&s), before);
+    assert_eq!(s.undo.len(), undo);
+}
+
+#[test]
 fn mask_components_invert_duplicate_rename_change_mode_and_delete() {
     use lightcraft_develop::MaskOp;
     let mut s = demo();
@@ -1646,6 +1727,47 @@ fn undo_and_redo_show_the_photo_they_change() {
     let before = s.selection.clone();
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.selection, before, "a step over several photos keeps the selection");
+}
+
+#[test]
+fn brush_strokes_target_the_requested_component_and_reject_invalid_targets_atomically() {
+    use lightcraft_develop::MaskShape;
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+    s.execute("mask.addComponent", &json!({"kind": "radial", "op": "add"})).unwrap();
+    s.execute("mask.addComponent", &json!({"kind": "brush", "op": "subtract"})).unwrap();
+    let before = active_dev(&s);
+    for component in [json!(-1), json!(1), json!(99), json!("0")] {
+        assert!(s.execute("mask.brushStroke", &json!({"component": component, "points": [[0.5, 0.5]]})).is_err());
+        assert_eq!(active_dev(&s), before);
+        assert_eq!(s.active_mask, Some(1));
+    }
+    s.execute("mask.brushStroke", &json!({"component": 0, "points": [[0.5, 0.5]], "density": 38})).unwrap();
+    let after = active_dev(&s);
+    let MaskShape::Brush { strokes } = &after.masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1);
+    assert_eq!(strokes[0].density, 38.0);
+    assert_eq!(after.masks[0].components[1..], before.masks[0].components[1..]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s), before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s), after);
+    // Omitting the target remains compatible with existing CLI and MCP callers.
+    s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2]]})).unwrap();
+    let d = active_dev(&s);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[2].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1);
+    // The upstream Shift-click connector and pressure must use this same explicit target.
+    let other = d.masks[0].components[2].clone();
+    let connected = s.execute("mask.brushStroke", &json!({"component": 0, "points": [[0.8, 0.5]], "connect": true, "pressure": [0.4]})).unwrap();
+    assert_eq!(connected["connected"], true);
+    let connected_dev = active_dev(&s);
+    assert_eq!(connected_dev.masks[0].components[2], other);
+    let MaskShape::Brush { strokes } = &connected_dev.masks[0].components[0].shape else { panic!("brush") };
+    assert!(strokes.len() > 1);
+    let last = strokes.last().unwrap();
+    assert_eq!(last.points.last(), Some(&lightcraft_geom::Point::new(0.8, 0.5)));
+    assert!((last.pressure_at(last.points.len() - 1) - 0.4).abs() < 0.001);
 }
 
 #[test]

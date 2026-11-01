@@ -640,3 +640,57 @@ fn an_export_develops_from_a_source_twice_its_size() {
     }
     assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }
+
+#[test]
+fn mask_thumbnail_jobs_keep_coverage_separate_from_photo_previews() {
+    use lightcraft_develop::{Mask, MaskComponent, MaskShape};
+    use lightcraft_geom::Point;
+    use lightcraft_pipeline::{MaskView, Overlay};
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let mut settings = (*s.develop_of(id).unwrap()).clone();
+    settings.masks = vec![Mask {
+        id: 7,
+        components: vec![MaskComponent {
+            name: None,
+            op: lightcraft_develop::MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.2, 0.2), end: Point::new(0.8, 0.8) },
+        }],
+        ..Default::default()
+    }];
+    s.set_develop(id, settings.clone(), "Mask").unwrap();
+    let photo_job = s.thumb_job(id, 96).unwrap();
+    let (cache, photo_cache_key) = photo_job.cache.clone().unwrap();
+    let photo = photo_job.run().rendered.unwrap().image;
+    let job = s.mask_thumbnail_job(id, 7, 96).unwrap();
+    let key = job.key;
+    let thumb_cache_key = job.cache.as_ref().unwrap().1;
+    assert_ne!(thumb_cache_key, photo_cache_key);
+    assert!(job.view_cache.is_none());
+    assert_eq!(job.level, SourceLevel::Thumb);
+    assert_eq!(key, s.mask_thumbnail_job(id, 7, 96).unwrap().key);
+    assert_ne!(key, s.mask_thumbnail_job(id, 8, 96).unwrap().key);
+    assert_ne!(key, s.mask_thumbnail_job(id, 7, 128).unwrap().key);
+    let mut overlay_job = job.clone().with_overlay(Overlay::Mask { id: 7, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 10 });
+    overlay_job.cache = None;
+    let overlay = overlay_job.run().rendered.unwrap().image;
+    let result = job.run();
+    s.accept(&result);
+    let thumb = result.rendered.unwrap().image;
+    assert_eq!(thumb, overlay, "the thumbnail uses the canvas's actual coverage");
+    assert_eq!(thumb.width.max(thumb.height), 96);
+    assert_eq!(cache.get(photo_cache_key).as_deref(), Some(&photo), "never overwrite the normal photo thumbnail");
+    assert_eq!(cache.get(thumb_cache_key).as_deref(), Some(&thumb));
+    assert_eq!(s.mask_thumbnail_job(id, 7, 96).unwrap().run().rendered.unwrap().image, thumb);
+    assert_eq!(s.develop_of(id).as_deref(), Some(&settings));
+    settings.masks[0].invert = true;
+    settings.masks[0].id = u32::MAX;
+    s.set_develop(id, settings, "Invert").unwrap();
+    let changed = s.mask_thumbnail_job(id, u32::MAX, 96).unwrap();
+    assert_ne!(changed.key, key);
+    let inverted = changed.run().rendered.unwrap().image;
+    assert!(thumb.data.iter().zip(&inverted.data).all(|(a, b)| (u16::from(a[0]) + u16::from(b[0])).abs_diff(255) <= 1));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(s.mask_thumbnail_job(id, 7, 96).unwrap().key, key, "undo reuses the old result");
+}
