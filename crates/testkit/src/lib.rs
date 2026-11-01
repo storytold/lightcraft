@@ -20,6 +20,11 @@
 //! `cargo xtask ci` lists the skips by need and reason in its summary and in
 //! `target/ci/report.json`. A test that runs part of its checks (e.g. only the CPU half) records
 //! the part it could not run the same way.
+//!
+//! A log that can't be written loses the entry, not the run: [`record`] warns and the test goes
+//! on. A run that relies on the log being complete sets [`SKIP_LOG_REQUIRED_ENV`]`=1` as well
+//! (`cargo xtask ci`'s `gpu-software` step, which fails on any GPU skip it didn't expect): then
+//! a skip that can't be logged (the variable unset, the file missing or unwritable) fails its test.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -29,6 +34,10 @@ use std::path::Path;
 
 /// The environment variable naming the file skips are appended to (JSON lines).
 pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
+
+/// `1`: every skip must reach the [`SKIP_LOG_ENV`] file, which must already exist (the run
+/// creates it); a skip that can't be logged fails its test instead of warning.
+pub const SKIP_LOG_REQUIRED_ENV: &str = "LIGHTCRAFT_SKIP_LOG_REQUIRED";
 
 /// What a skipped test needed and didn't find.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,24 +85,38 @@ macro_rules! skip {
 }
 
 /// What [`skip!`] calls: print the note and append it to the skip log, if one is set. Never fails
-/// the test: a log that can't be written loses the entry, not the run.
+/// the test, unless [`SKIP_LOG_REQUIRED_ENV`] asks for a complete log and it can't be written.
 pub fn record(need: Need, reason: &str, file: &str, line: u32) {
     eprintln!("skipped ({}): {reason}", need.as_str());
     let log = std::env::var_os(SKIP_LOG_ENV).filter(|p| !p.is_empty());
-    if let Some(log) = log {
-        let thread = std::thread::current();
-        let binary = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| binary_name(&s.to_string_lossy()).to_owned()));
-        let entry = entry(need, reason, thread.name().unwrap_or(""), binary.as_deref().unwrap_or(""), file, line);
-        append(Path::new(&log), &entry);
+    let required = std::env::var_os(SKIP_LOG_REQUIRED_ENV).is_some_and(|v| v == "1");
+    let thread = std::thread::current();
+    let binary = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| binary_name(&s.to_string_lossy()).to_owned()));
+    let entry = entry(need, reason, thread.name().unwrap_or(""), binary.as_deref().unwrap_or(""), file, line);
+    log_entry(log.as_deref().map(Path::new), required, &entry);
+}
+
+/// Append `entry` to `log`; when it can't be (or there is no log), warn, or with `required` fail
+/// the test, whose skip would otherwise go unseen by a run that checks the log.
+#[allow(clippy::panic, reason = "test code: in strict mode a skip that can't be logged must fail the skipping test")]
+fn log_entry(log: Option<&Path>, required: bool, entry: &str) {
+    let written = match log {
+        Some(log) => append(log, entry, !required),
+        None if required => Err(format!("{SKIP_LOG_REQUIRED_ENV}=1 but {SKIP_LOG_ENV} is not set")),
+        None => Ok(()),
+    };
+    match written {
+        Err(e) if required => panic!("{e} ({SKIP_LOG_REQUIRED_ENV}=1: this skip must be logged)"),
+        Err(e) => eprintln!("{e}"),
+        Ok(()) => {}
     }
 }
 
-/// Append one line in a single write, so lines from parallel tests don't interleave.
-fn append(path: &Path, line: &str) {
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
-    if let Err(e) = file.and_then(|mut f| f.write_all(line.as_bytes())) {
-        eprintln!("{SKIP_LOG_ENV}: can't append to {}: {e}", path.display());
-    }
+/// Append one line in a single write, so lines from parallel tests don't interleave; `create`:
+/// the file may be created (else it must exist).
+fn append(path: &Path, line: &str, create: bool) -> Result<(), String> {
+    let file = std::fs::OpenOptions::new().create(create).append(true).open(path);
+    file.and_then(|mut f| f.write_all(line.as_bytes())).map_err(|e| format!("{SKIP_LOG_ENV}: can't append to {}: {e}", path.display()))
 }
 
 /// A test binary's name without the hash cargo appends (`equivalence-0123abcd` → `equivalence`).
@@ -175,7 +198,7 @@ mod tests {
         let threads: Vec<_> = (0..8)
             .map(|i| {
                 let log = log.clone();
-                std::thread::spawn(move || append(&log, &entry(Need::Gpu, &format!("no GPU {i}"), "t", "b", "f.rs", i)))
+                std::thread::spawn(move || append(&log, &entry(Need::Gpu, &format!("no GPU {i}"), "t", "b", "f.rs", i), true).unwrap())
             })
             .collect();
         for t in threads {
@@ -189,6 +212,33 @@ mod tests {
 
     #[test]
     fn a_missing_log_directory_does_not_fail_the_test() {
-        append(Path::new("/nonexistent-lightcraft-dir/skips.jsonl"), "{}\n");
+        assert!(append(Path::new("/nonexistent-lightcraft-dir/skips.jsonl"), "{}\n", true).is_err());
+        log_entry(Some(Path::new("/nonexistent-lightcraft-dir/skips.jsonl")), false, "{}\n");
+        log_entry(None, false, "{}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "can't append to /nonexistent-lightcraft-dir/skips.jsonl")]
+    fn a_required_log_that_cant_be_written_fails_the_test() {
+        log_entry(Some(Path::new("/nonexistent-lightcraft-dir/skips.jsonl")), true, "{}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "LIGHTCRAFT_SKIP_LOG is not set")]
+    fn a_required_log_must_be_named() {
+        log_entry(None, true, "{}\n");
+    }
+
+    #[test]
+    fn a_required_log_must_already_exist() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-testkit-required-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let log = dir.join("skips.jsonl");
+        assert!(append(&log, "{}\n", false).is_err(), "strict mode doesn't create a log the run didn't prepare");
+        assert!(!log.exists());
+        std::fs::write(&log, "").unwrap();
+        log_entry(Some(&log), true, "{\"need\":\"gpu\"}\n");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "{\"need\":\"gpu\"}\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
