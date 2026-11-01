@@ -36,6 +36,15 @@ pub(super) fn crop_overlay(
     if resp.hovered() && ui.input(|i| i.modifiers.command) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
+    // an untouched photo shows the remembered ratio's box, which the first drag (or Return) applies
+    let preview;
+    let d = match app.crop_tool_preview() {
+        Some(geometry) => {
+            preview = DevelopSettings { crop: lightcraft_develop::Crop { geometry, ..d.crop }, ..d.clone() };
+            &preview
+        }
+        None => d,
+    };
     let quad = frame_crop_quad(d, frame);
     let pts: Vec<Pos2> = quad.iter().map(|q| map.screen(*q)).collect();
     let p = ui.painter();

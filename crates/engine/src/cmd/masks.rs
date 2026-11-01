@@ -1,17 +1,14 @@
 //! Masking and Remove (spot) commands on the active photo.
 
-use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode};
+use lightcraft_develop::{
+    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
+};
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
-
-/// A colour-range mask compares every pixel against every sample, so render and export cost is
-/// pixels x samples. The interactive sampler stops at 5; automation (`mask.add`/`mask.update`)
-/// passed its `samples` array straight through, so a few hundred samples on a large render hung.
-const MAX_COLOR_RANGE_SAMPLES: usize = 64;
 
 /// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
 fn cap_color_range_samples(shape: &mut MaskShape) {
@@ -1025,6 +1022,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     catchlight: None,
                 };
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                if s.develop_of(id).is_some_and(|d| d.red_eye.len() >= MAX_RED_EYES) {
+                    return Err(bad(c, format!("at most {MAX_RED_EYES} red eye corrections")));
+                }
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 dd.red_eye.push(eye);
                 let n = dd.red_eye.len();
