@@ -81,6 +81,16 @@ impl DevelopSettings {
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().chain(local).flatten() {
             *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
+        // a mask's local Color Mixer: the global mixer's sliders' range (a huge value is inf in f32)
+        for m in &mut self.masks {
+            for i in 0..MIXER_BANDS.len() {
+                if let Some(b) = m.mixer.band_mut(i) {
+                    for v in [&mut b.hue, &mut b.sat, &mut b.lum] {
+                        *v = if v.is_finite() { v.clamp(-100.0, 100.0) } else { 0.0 };
+                    }
+                }
+            }
+        }
         let g = &mut self.crop.geometry;
         g.angle = if g.angle.is_finite() { g.angle.clamp(-45.0, 45.0) } else { 0.0 };
         if g.angle == 0.0 {
@@ -398,6 +408,12 @@ mod tests {
         // and so do a mask's local Curves
         let m = base.merged(&json!({"masks": [{"id": 1, "curve": {"blue": [{"x": 2, "y": -1}, {"x": 0.5, "y": 0.5}]}}]})).unwrap();
         assert_eq!(m.masks[0].curve.blue, vec![lightcraft_geom::Point::new(1.0, 0.0), lightcraft_geom::Point::new(0.5, 0.5)]);
+        // and a mask's local Color Mixer stays in its sliders' −100..100
+        let m = base
+            .merged(&json!({"masks": [{"id": 1, "mixer": {"yellow": {"hue": 1e308, "sat": -1e308, "lum": 150}, "blue": {"hue": -20}}}]}))
+            .unwrap();
+        let y = m.masks[0].mixer.yellow;
+        assert_eq!((y.hue, y.sat, y.lum, m.masks[0].mixer.blue.hue), (100.0, -100.0, 100.0, -20.0));
         // a crop with no area is left out, as XMP import leaves out one whose edges are inverted
         for rect in
             [json!({"x0": 0.9, "x1": 0.1, "y0": 0, "y1": 1}), json!({"x0": 1e308, "x1": -1e308, "y0": 0, "y1": 1}), json!({"x0": 0.5, "x1": 0.5})]
