@@ -371,11 +371,12 @@ pub fn resolve_helper(entries: &[AdapterEntry], primary: Option<usize>, choice: 
     match choice {
         HelperChoice::Off => None,
         HelperChoice::Same => primary.filter(|i| entries.get(*i).is_some_and(|e| e.usable)),
-        HelperChoice::Card(k) => entries
-            .iter()
-            .position(|e| e.usable && e.key == *k)
-            .or_else(|| entries.iter().position(|e| e.usable && e.key.same_model(k)))
-            .filter(other),
+        // the exact card (never the editing card), else an identical one that isn't the editing
+        // card (review of PR #3511: the first identical card may be the editing card)
+        HelperChoice::Card(k) => match entries.iter().position(|e| e.usable && e.key == *k) {
+            Some(i) => Some(i).filter(other),
+            None => (0..entries.len()).filter(other).find(|i| entries.get(*i).is_some_and(|e| e.usable && e.key.same_model(k))),
+        },
         HelperChoice::Named(n) => {
             (0..entries.len()).filter(other).find(|i| entries.get(*i).is_some_and(|e| e.usable && crate::backend::adapter_name_matches(n, &e.name)))
         }
@@ -649,6 +650,13 @@ mod tests {
         assert_eq!(resolve_helper(&e, Some(0), &HelperChoice::Card(e[0].key.clone()), false), None);
         assert_eq!(resolve_helper(&e, Some(0), &HelperChoice::Card(e[2].key.clone()), false), None, "not usable");
         assert_eq!(resolve_helper(&e, Some(0), &HelperChoice::Named("4070".into()), true), Some(1));
+        // two identical cards, the saved #3 gone: the identical card that isn't the editing one
+        let mut twins = vec![e[1].clone(), e[1].clone()];
+        twins[1].key.index = 2;
+        let gone = AdapterKey { index: 3, ..e[1].key.clone() };
+        assert_eq!(resolve_helper(&twins, Some(0), &HelperChoice::Card(gone.clone()), false), Some(1));
+        assert_eq!(resolve_helper(&twins, Some(1), &HelperChoice::Card(gone), false), Some(0));
+        assert_eq!(resolve_helper(&twins, Some(0), &HelperChoice::Card(twins[0].key.clone()), false), None, "the editing card itself");
         assert_eq!(resolve_helper(&e, Some(0), &HelperChoice::Named("5070".into()), false), None);
         // a second device on the editing card (tests on one card)
         assert_eq!(resolve_helper(&e, Some(0), &HelperChoice::Same, false), Some(0));

@@ -141,7 +141,7 @@ pub struct AppSettings {
     #[serde(deserialize_with = "lenient")]
     pub gpu_card: String,
     /// Second graphics card (`app.gpu {helper}`): "" = Automatic (another card, when there is one), "off", or a card's key.
-    #[serde(deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient_helper")]
     pub gpu_helper: String,
     /// Use Windows DirectComposition to prevent VRR flicker; applies at next launch.
     pub compose_window: bool,
@@ -442,6 +442,13 @@ fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::Deserialize
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
+/// `gpuHelper`: a value that isn't text is the default, no second card (as text, "" would be
+/// Automatic; review of PR #3511).
+fn lenient_helper<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_str().map_or_else(|| "off".to_string(), str::to_string))
+}
+
 fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let values = Vec::<String>::deserialize(d)?;
     let mut seen = std::collections::BTreeSet::new();
@@ -481,6 +488,19 @@ mod loupe_info_tests {
             serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
         assert_eq!(newer.loupe_info, LoupeInfo::default());
         assert!(!newer.film_names, "the rest of the settings are still read");
+    }
+
+    /// A second-card choice that isn't text reads as no second card, never as Automatic.
+    #[test]
+    fn an_odd_second_card_choice_is_no_second_card() {
+        for odd in [serde_json::json!(5), serde_json::json!(null), serde_json::json!({"a": 1}), serde_json::json!(true)] {
+            let s: AppSettings = serde_json::from_value(serde_json::json!({"gpuHelper": odd})).unwrap();
+            assert_eq!(s.gpu_helper, "off", "{odd}");
+        }
+        let auto: AppSettings = serde_json::from_value(serde_json::json!({"gpuHelper": ""})).unwrap();
+        assert_eq!(auto.gpu_helper, "", "Automatic as saved");
+        let missing: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert_eq!(missing.gpu_helper, "off");
     }
 
     /// Show message when loading or rendering photos is on until it is turned off, and is saved

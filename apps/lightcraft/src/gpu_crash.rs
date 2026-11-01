@@ -65,12 +65,28 @@ impl GpuCrash {
     pub(crate) fn gpu_off(notice: String) -> GpuCrash {
         GpuCrash { notice, gpu_off: true, reset_card: false, helper_off: false }
     }
+
+    /// The start-up crash check's result and the lost-device check's together: both are read on
+    /// every launch, a lost device turns GPU rendering off, and both notices are shown (review of
+    /// PR #3506).
+    pub(crate) fn with_lost(crash: Option<GpuCrash>, lost: Option<String>) -> Option<GpuCrash> {
+        match (crash, lost) {
+            (Some(mut c), Some(l)) => {
+                c.gpu_off = true;
+                c.notice = format!("{}\n\n{l}", c.notice);
+                Some(c)
+            }
+            (c, None) => c,
+            (None, Some(l)) => Some(GpuCrash::gpu_off(l)),
+        }
+    }
 }
 
 /// [`GpuCrash`] from what the crash marker recorded: when every scope it names was a device of a
 /// card chosen in the settings (`saved_card`) or of the second card, only those choices are
-/// dropped and the GPU stays on; anything else (Automatic's card, listing the cards, AI kernels)
-/// turns GPU rendering off, as before.
+/// dropped and the GPU stays on; anything else (Automatic's card, listing the cards, the editing
+/// card's AI kernels) turns GPU rendering off, as before (a crash in the second card's AI work
+/// names the second card, so only it goes).
 pub(crate) fn gpu_crash_from(what: &str, saved_card: &str) -> GpuCrash {
     use lightcraft_engine::gpu::{backend, cards::AdapterKey};
     let saved = AdapterKey::parse(saved_card);

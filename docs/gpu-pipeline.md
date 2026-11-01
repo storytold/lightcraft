@@ -92,7 +92,8 @@ screen is connected to (Automatic), wgpu's high-performance pick.
   device being started (`[card=<key>; role=editing|helper]`, one line per driver-work scope running), so
   the next launch drops only that choice — the editing card back to Automatic, or the second card off —
   and keeps the GPU on (`apps/lightcraft/src/gpu_crash.rs` `gpu_crash_from`). A crash in any other driver work
-  (Automatic's card, listing the cards, AI kernels) turns GPU rendering off as before.
+  (Automatic's card, listing the cards, the editing card's AI kernels) turns GPU rendering off as before; a crash
+  in the second card's AI work turns only that card off (below).
 
 
 ### The second graphics card (batch work on another card)
@@ -139,7 +140,7 @@ an agent testing on one card never touches the other.
 - **Status**: `helper_status()` (`off`, `none`, `notStarted`, `starting`, `ready`, `lost`, `failed`, with
   the name and why); `app.gpu` → `helper`, `batchUsage {editing, helper}`; `ui.inspect` →
   `perf.gpuHelper`, `perf.batchUsage`. Measured: the same render on the RTX 4070 SUPER and the RTX 5070
-  differs by at most 1 level (mean 0.0000; `crates/gpu/tests/devices.rs`).
+  differs by at most 2 levels (`crates/gpu/tests/devices.rs` asserts at most 2; one measured pair showed 2).
 
 ### AI on the second graphics card (dual-GPU PR 5)
 
