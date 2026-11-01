@@ -66,7 +66,10 @@ def main():
         # (a file that hangs, a helper that can't start or output that isn't JSON skips that file, not the batch)
         try:
             p = subprocess.run([a.rawdump, "noise", f], capture_output=True, text=True, timeout=600)
-            return json.loads(p.stdout) if p.returncode == 0 else None
+            if p.returncode != 0:
+                print(f"skipped {f}: rawdump exit {p.returncode}: {p.stderr.strip()}", file=sys.stderr, flush=True)
+                return None
+            return json.loads(p.stdout)
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
             print(f"skipped {f}: {e}", file=sys.stderr, flush=True)
             return None
