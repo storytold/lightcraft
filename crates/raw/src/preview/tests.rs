@@ -726,4 +726,31 @@ fn a_preview_cut_short_by_the_end_of_the_file_is_not_taken() {
     // whole, its length overstated past the file's end: still the largest
     let whole = with_tail(&big, declared);
     assert_eq!(embedded_preview(&whole).as_deref(), Some(&big[..]), "a whole JPEG with an overstated length is kept");
+    // an end marker inside an APP1 payload is not the JPEG's end: cut short, still not taken
+    let mut with_app = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x08, 0x12, 0xff, 0xd9, 0x34, 0x56, 0x78];
+    with_app.extend_from_slice(&big[2..]);
+    let declared = with_app.len() as u32 + 64;
+    let cut = with_tail(&with_app[..with_app.len() / 2], declared);
+    assert_eq!(embedded_preview(&cut).as_deref(), Some(&small[..]), "an FF D9 in APP1 doesn't make a cut JPEG whole");
+    // whole, with other bytes after it up to the file's end: kept, cut at its own end marker
+    let mut tail = with_app.clone();
+    tail.extend_from_slice(&[0x11, 0xff, 0xd9, 0x22]);
+    let whole = with_tail(&tail, declared);
+    assert_eq!(embedded_preview(&whole).as_deref(), Some(&with_app[..]), "a whole JPEG is cut at its own end");
+}
+
+/// The walk to a JPEG's end refuses what isn't one and never runs past the bytes it has.
+#[test]
+fn the_end_of_a_jpeg_is_its_own_end_marker() {
+    use super::jpeg_end;
+    assert_eq!(jpeg_end(&[0x12, 0x34, 0xff, 0xd9]), None, "not a JPEG");
+    assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xd9]), Some(4));
+    // a stuffed zero and a restart marker in the scan data, then the end
+    assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0x55, 0xff, 0x00, 0xff, 0xd3, 0x66, 0xff, 0xd9]), Some(14));
+    // a segment length of 0 or 1, or one running past the end
+    assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xe1, 0x00, 0x01, 0xff, 0xd9]), None);
+    assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xe1, 0xff, 0xff, 0xff, 0xd9]), None);
+    for n in 0..12 {
+        assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xe1, 0x00, 0x04, 0xff, 0xd9, 0x55, 0xff, 0xff, 0xff][..n]), None, "{n} bytes");
+    }
 }

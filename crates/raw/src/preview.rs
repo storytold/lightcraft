@@ -141,17 +141,51 @@ fn is_jxl(b: &[u8]) -> bool {
 /// The bytes a file's own (offset, length) pair names, cut at the file's end; `None` when the offset
 /// lies past it. Both numbers come from the file: never cast them (a `u64` offset past 4 GiB would
 /// wrap to a small, wrong one on a 32-bit build) nor add them unchecked. A span the file's end cuts
-/// short is kept only while it still holds a JPEG's end marker (an overstated length with the whole
-/// JPEG inside): a truncated JPEG passes the frame-header check, would win as the largest preview
-/// and then fail to decode (CodeRabbit on #3077).
+/// short is kept only when it is a JPEG whose own end marker is inside it (an overstated length with
+/// the whole JPEG inside), cut at that marker: a truncated JPEG passes the frame-header check, would
+/// win as the largest preview and then fail to decode (CodeRabbit on #3077). An `FF D9` inside an
+/// APP payload doesn't count, and bytes that don't start a JPEG are refused without a scan.
 fn file_span(data: &[u8], offset: u64, len: u64) -> Option<&[u8]> {
     let start = usize::try_from(offset).ok()?;
     let wanted = usize::try_from(offset.saturating_add(len)).unwrap_or(usize::MAX);
     let span = data.get(start..wanted.min(data.len()))?;
-    if wanted > data.len() && !span.windows(2).any(|w| w == [0xff, 0xd9]) {
-        return None;
+    if wanted > data.len() {
+        return span.get(..jpeg_end(span)?);
     }
     Some(span)
+}
+
+/// Where the JPEG at the start of `s` ends (just past its end marker), walking its marker segments:
+/// a segment's payload is skipped by its stated length (so an `FF D9` inside APP data isn't taken
+/// for the end), entropy-coded bytes one at a time (stuffed `FF 00` and restart markers included).
+/// `None` when `s` isn't a JPEG or ends first. Each step moves forward, so it ends within `s`.
+fn jpeg_end(s: &[u8]) -> Option<usize> {
+    if !s.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut i = 2usize;
+    loop {
+        match (s.get(i), s.get(i.checked_add(1)?)) {
+            (None, _) | (Some(&0xff), None) => return None,
+            (Some(&0xff), Some(&m)) => match m {
+                0xd9 => return i.checked_add(2),
+                // fill byte
+                0xff => i += 1,
+                // stuffed zero, restart marker, TEM: no length follows
+                0x00 | 0x01 | 0xd0..=0xd7 => i = i.checked_add(2)?,
+                _ => {
+                    let (&hi, &lo) = (s.get(i.checked_add(2)?)?, s.get(i.checked_add(3)?)?);
+                    let len = usize::from(u16::from_be_bytes([hi, lo]));
+                    if len < 2 {
+                        return None;
+                    }
+                    i = i.checked_add(2)?.checked_add(len)?;
+                }
+            },
+            // entropy-coded data
+            (Some(_), _) => i += 1,
+        }
+    }
 }
 
 fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>) {
