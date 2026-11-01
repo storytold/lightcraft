@@ -316,19 +316,18 @@ fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rg
     (apply(&sensor), apply(&clipped))
 }
 
-/// Colour training pairs of one raw for a camera profile: white-balanced camera RGB (with the
-/// baseline exposure) → its camera JPEG (linear Rec.2020). `None` for formats with their own
-/// colour matrices, other files or unusable previews.
 /// What one photo contributes to a camera profile ([`profile_samples`]), in white-balanced camera RGB.
 pub(crate) struct ProfileSamples {
     /// Colour pairs: camera RGB → the camera JPEG's linear Rec.2020 (empty when the photo has too little colour).
     pub colour: Vec<([f64; 3], [f64; 3])>,
     /// Tone samples: camera RGB → the camera JPEG's luminance, dark pixels included (as the photo's own toe fit takes
-    /// them, [`fit_tone_with_shadows`]).
+    /// them, [`fit_tone_with_shadows`](super::pairs::fit_tone_with_shadows)).
     pub tone: Vec<([f64; 3], f64)>,
 }
 
-/// A raw's colour and tone samples for a pooled camera profile (`lightcraft-cli calibrate`).
+/// A raw's colour and tone samples for a pooled camera profile (`lightcraft-cli calibrate`): white-balanced camera
+/// RGB (with the baseline exposure) → its camera JPEG (linear Rec.2020). `None` for formats with their own colour
+/// matrices, other files or unusable previews.
 pub(crate) fn profile_samples(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeometry>) -> Option<ProfileSamples> {
     if !file_local_look(raw.format) || lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
@@ -382,7 +381,7 @@ pub(crate) fn fit_profile_tone(samples: &[([f64; 3], f64)], matrix: &Mat3) -> Op
 }
 
 /// `photo`'s tone curve where its JPEG taught it, `pooled`'s past that: from the photo's last knot it fades over
-/// [`EXTEND_FADE_EV`] from its own level onto the camera's pooled curve, instead of the bounded shoulder
+/// 1 EV (`EXTEND_FADE_EV`) from its own level onto the camera's pooled curve, instead of the bounded shoulder
 /// ([`CameraTone::apply`]) whose rate comes from the photo's last two knots. A dark photo's curve ends in the shadows,
 /// and that shoulder rendered it, pushed back up, 4-7 L* darker than a properly exposed photo of the same scene.
 /// `photo` unchanged when the pooled curve doesn't reach on past it.
