@@ -7,16 +7,23 @@
 //! it respects the same switches as GPU rendering (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference)
 //! and the crash sentinel around device creation. A model's weights are uploaded once, on first use, and stay on the
 //! device while the accelerator (one per loaded model) lives. Every failure is an `Err`, never a panic.
+//!
+//! There is such a device on each card ([`crate::ai`]); new models go to the second graphics card when there is one
+//! (the face scan is background work, and the card for editing stays free for the window), else the editing card. A
+//! device that fails stops being used on its card only.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytemuck::{Pod, Zeroable};
 use lightcraft_faces::net::program::{Arg, Binary, INPUT, Op, Program, Unary};
 use lightcraft_faces::net::{Accelerator, ConvJob};
 use wgpu::util::DeviceExt;
+
+pub use crate::Role;
+use crate::ai::{Broken, PerCard};
 
 /// Longest wait for one convolution before the device is given up on.
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,6 +46,8 @@ struct Dev {
     ops: Ops,
     /// Bound where a kernel has fewer operands than bindings.
     dummy: wgpu::Buffer,
+    card: Role,
+    broken: &'static Broken,
 }
 
 /// The kernels of `wgsl/faces_ops.wgsl`.
@@ -54,42 +63,30 @@ struct Ops {
     gemv: wgpu::ComputePipeline,
 }
 
-static DEV: OnceLock<Result<Dev, String>> = OnceLock::new();
-static BROKEN: AtomicBool = AtomicBool::new(false);
-static BROKEN_WHY: Mutex<Option<String>> = Mutex::new(None);
+/// The face device on each card ([`crate::ai`]): the helper first.
+static DEVS: PerCard<Dev> = PerCard::new();
 
-fn mark_broken(why: &str) {
-    let mut w = BROKEN_WHY.lock().unwrap_or_else(PoisonError::into_inner);
-    if w.is_none() {
-        *w = Some(why.to_string());
-    }
-    BROKEN.store(true, Ordering::Relaxed);
-}
-
-/// Why the GPU stopped being used for faces (a device error), if it did.
+/// Why the GPU stopped being used for faces on the editing card (a device error), if it did.
 pub fn broken_reason() -> Option<String> {
-    BROKEN.load(Ordering::Relaxed).then(|| BROKEN_WHY.lock().unwrap_or_else(PoisonError::into_inner).clone().unwrap_or_else(|| "device error".into()))
+    DEVS.broken_reason(Role::Primary)
 }
 
-fn dev() -> Result<&'static Dev, String> {
-    if let Some(why) = broken_reason() {
-        return Err(format!("stopped after a GPU failure: {why}"));
-    }
-    if let Some(why) = crate::switched_off() {
-        return Err(why);
-    }
-    let _work = match DEV.get() {
-        Some(_) => None,
-        None => Some(crate::exit::enter().ok_or("the app is closing")?),
-    };
-    DEV.get_or_init(create_device).as_ref().map_err(|e| e.clone())
+/// Why `card` stopped being used for faces, if it did.
+pub fn broken_reason_on(card: Role) -> Option<String> {
+    DEVS.broken_reason(card)
 }
 
-fn create_device() -> Result<Dev, String> {
-    let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
-    crate::backend::with_init_marker(backends, || {
-        std::panic::catch_unwind(|| make_device(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
-    })
+fn dev(card: Role) -> Result<&'static Dev, String> {
+    DEVS.get(card, "faces", |adapter, broken, _| make_device(adapter, card, broken))
+}
+
+/// The device for a new face model ([`crate::ai::wanted`]: the second graphics card first, so a scan leaves the card
+/// for editing to the window), else the editing card's.
+fn dev_for_work() -> Result<&'static Dev, String> {
+    match crate::ai::wanted() {
+        Role::Helper => dev(Role::Helper).or_else(|e| dev(Role::Primary).map_err(|_| e)),
+        Role::Primary => dev(Role::Primary),
+    }
 }
 
 fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
@@ -101,13 +98,7 @@ fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntr
     }
 }
 
-fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = backends;
-    desc.backend_options = crate::backend::backend_options();
-    desc.flags = crate::backend::instance_flags_from_env(desc.flags);
-    let instance = wgpu::Instance::new(desc);
-    let adapter = crate::backend::pick_adapter(&instance, backends)?;
+fn make_device(adapter: wgpu::Adapter, card: Role, broken: &'static Broken) -> Result<Dev, String> {
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(format!("software adapter ({}) skipped: the CPU is faster", info.name));
@@ -121,18 +112,22 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
         return Err(format!("{} is too limited for the face kernels", info.name));
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("lightcraft-faces"),
+        label: Some(match card {
+            Role::Primary => "lightcraft-faces",
+            Role::Helper => "lightcraft-faces-helper",
+        }),
         required_limits: limits.clone(),
         ..Default::default()
     }))
     .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
-    device.on_uncaptured_error(Arc::new(|e| {
-        log::error!("gpu (faces): {e}");
-        mark_broken(&format!("device error: {e}"));
+    let which = card.id();
+    device.on_uncaptured_error(Arc::new(move |e| {
+        log::error!("gpu (faces, {which} card): {e}");
+        broken.mark(&format!("device error: {e}"));
     }));
-    device.set_device_lost_callback(|reason, msg| {
-        log::error!("gpu (faces): device lost ({reason:?}): {msg}");
-        mark_broken(&format!("device lost ({reason:?}): {msg}"));
+    device.set_device_lost_callback(move |reason, msg| {
+        log::error!("gpu (faces, {which} card): device lost ({reason:?}): {msg}");
+        broken.mark(&format!("device lost ({reason:?}): {msg}"));
     });
     use wgpu::BufferBindingType::{Storage, Uniform};
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -185,14 +180,19 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
         usage: wgpu::BufferUsages::STORAGE,
         mapped_at_creation: false,
     });
-    log::info!("gpu (faces): {} ({:?})", info.name, info.backend);
-    Ok(Dev { device, queue, info, limits, layout, tiled, direct, reduce, ops, dummy })
+    log::info!("gpu (faces, {which} card): {} ({:?})", info.name, info.backend);
+    Ok(Dev { device, queue, info, limits, layout, tiled, direct, reduce, ops, dummy, card, broken })
 }
 
 /// The adapter face scans would use ("AMD Radeon RX 7900 XTX (Vulkan)"), or why they cannot use one. Creates the
 /// device on first use.
 pub fn adapter() -> Result<String, String> {
-    dev().map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
+    dev_for_work().map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
+}
+
+/// [`adapter`] on `card`.
+pub fn adapter_on(card: Role) -> Result<String, String> {
+    dev(card).map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
 }
 
 #[repr(C)]
@@ -234,9 +234,19 @@ pub struct FaceGpu {
     resident: AtomicU64,
 }
 
-/// A GPU accelerator for one face model, or why there is none (GPU off, missing or broken).
+/// A GPU accelerator for one face model, or why there is none (GPU off, missing or broken): on the second graphics
+/// card when there is one ([`crate::ai::preferred`]), else the editing card.
 pub fn accelerator() -> Result<Arc<FaceGpu>, String> {
-    Ok(Arc::new(FaceGpu { dev: dev()?, layers: Mutex::new(HashMap::new()), consts: Mutex::new(HashMap::new()), resident: AtomicU64::new(0) }))
+    accelerator_with(dev_for_work()?)
+}
+
+/// [`accelerator`] on `card` (no fallback to the other card).
+pub fn accelerator_on(card: Role) -> Result<Arc<FaceGpu>, String> {
+    accelerator_with(dev(card)?)
+}
+
+fn accelerator_with(dev: &'static Dev) -> Result<Arc<FaceGpu>, String> {
+    Ok(Arc::new(FaceGpu { dev, layers: Mutex::new(HashMap::new()), consts: Mutex::new(HashMap::new()), resident: AtomicU64::new(0) }))
 }
 
 fn u32_of(v: usize) -> Result<u32, String> {
@@ -270,13 +280,18 @@ struct Turn {
 }
 
 impl Turn {
-    fn take() -> Turn {
+    /// A turn for a model on `card`: the pace's share holds the editing card back for the window; the helper draws no
+    /// window, so there it only limits the runs at once.
+    fn take(card: Role) -> Turn {
         let mut p = PACE.lock().unwrap_or_else(PoisonError::into_inner);
         while p.running >= p.concurrent {
             p = PACE_FREED.wait_timeout(p, Duration::from_millis(200)).map(|(g, _)| g).unwrap_or_else(|e| e.into_inner().0);
         }
         p.running += 1;
-        Turn { share: p.share, started: std::time::Instant::now() }
+        let share = if card == Role::Helper { 1.0 } else { p.share };
+        drop(p);
+        crate::ai::background_turn(card);
+        Turn { share, started: std::time::Instant::now() }
     }
 }
 
@@ -514,11 +529,11 @@ impl FaceGpu {
             return Err(format!("the GPU ran out of memory: {e}"));
         }
         if let Some(e) = validation {
-            mark_broken(&format!("device error: {e}"));
+            self.dev.broken.mark(&format!("device error: {e}"));
             return Err(format!("the GPU reported an error: {e}"));
         }
         if let Err(e) = waited {
-            mark_broken(&format!("the GPU did not finish a face model: {e}"));
+            self.dev.broken.mark(&format!("the GPU did not finish a face model: {e}"));
             return Err(format!("the GPU did not finish: {e}"));
         }
         match rx.recv_timeout(Duration::from_secs(10)) {
@@ -564,7 +579,7 @@ impl FaceGpu {
             return Ok(None);
         }
         let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
-        let _turn = Turn::take();
+        let _turn = Turn::take(self.dev.card);
         let d = self.dev;
         let scopes = self.scopes();
         let input = d.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -661,7 +676,7 @@ impl FaceGpu {
             return Ok(None);
         }
         let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
-        let _turn = Turn::take();
+        let _turn = Turn::take(self.dev.card);
         let scopes = self.scopes();
         let staging = self.staging(total_bytes);
         let mut enc = d.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("faces program") });
@@ -763,10 +778,10 @@ impl FaceGpu {
     }
 }
 
-/// Run `f`, turning a panic into a broken device.
-fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+/// Run `f`, turning a panic into a broken device (`broken`).
+fn guarded<T>(broken: &Broken, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
-        mark_broken("a face model on the GPU panicked");
+        broken.mark("a face model on the GPU panicked");
         Err("the GPU runner gave up".into())
     })
 }
@@ -777,23 +792,23 @@ impl Accelerator for FaceGpu {
     }
 
     fn conv(&self, job: &ConvJob) -> Result<Option<Vec<f32>>, String> {
-        if let Some(why) = broken_reason() {
+        if let Some(why) = self.dev.broken.reason() {
             return Err(format!("the GPU is not used any more: {why}"));
         }
         if crate::switched_off().is_some() || job.macs() < MIN_MACS {
             return Ok(None);
         }
-        guarded(|| self.run(job))
+        guarded(self.dev.broken, || self.run(job))
     }
 
     fn run_program(&self, program: &Program, inputs: &[&[f32]]) -> Result<Option<Vec<Vec<Vec<f32>>>>, String> {
-        if let Some(why) = broken_reason() {
+        if let Some(why) = self.dev.broken.reason() {
             return Err(format!("the GPU is not used any more: {why}"));
         }
         if crate::switched_off().is_some() || PER_CONV.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        guarded(|| self.program(program, inputs))
+        guarded(self.dev.broken, || self.program(program, inputs))
     }
 }
 

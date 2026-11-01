@@ -132,6 +132,30 @@ an agent testing on one card never touches the other.
   the name and why); `app.gpu` → `helper`, `batchUsage {editing, helper}`; `ui.inspect` →
   `perf.gpuHelper`, `perf.batchUsage`. Measured: the same render on the RTX 4070 SUPER and the RTX 5070
   differs by at most 1 level (mean 0.0000; `crates/gpu/tests/devices.rs`).
+
+### AI on the second graphics card (dual-GPU PR 5)
+
+The AI models keep devices of their own, one on each card they use (`lightcraft_gpu::ai`, per `Role`: `Primary`
+the editing card, `Helper` the second graphics card as above; turned off there, AI work stays on the editing card). Background AI work goes to the helper first, so the card for editing stays
+free for the photo being edited (decision §8 of 31 Oct 2026):
+
+- **AI Denoise** sets up every card for the model (each checked against the CPU on the check tile and timed), and a
+  batch makes one photo on each card that works at once, the helper first (`Model::lanes`; one photo at a light pace,
+  when the user is working). One photo's tiles stay on its card (decision 7: no tile split yet). `denoise.status` →
+  `device.cards` lists each card's state, times and photos. A card that errs, is lost or gets three tiles wrong is
+  given up on alone: its tiles run on the CPU, later photos go to the other card, then the CPU.
+- **Faces** (the face scan's models) and **AI mask matrix products** (`LIGHTCRAFT_AI_GPU=1`) create their device on
+  the helper when there is one (one copy of the weights, on one card), else on the editing card; a helper device that
+  fails falls back to the editing card's. The face scan's GPU pace only holds the editing card back (the helper draws
+  no window).
+- Each background submission (a denoise tile, a face model run) calls `ai::background_turn(role)`: on the editing card
+  it waits while `interface_busy()` (the §8 gate above), on the second card it never waits. Interactive AI mask
+  requests don't wait.
+- A crash creating an AI device or compiling its kernels on the helper names the helper in the crash marker, so the
+  next launch turns only the helper off.
+- Not in this base: SAM 3 on wgpu (upstream #2533–#2537); its device should follow the same `ai::Card` choice when it
+  lands. AI devices don't move when the card choice changes in Settings until the next launch.
+
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
 default, `Auto`, loads whichever `dxcompiler.dll` the DLL search path finds first. LightCraft ships

@@ -29,6 +29,9 @@ use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_raster::Rgb32f;
 
+/// Which graphics card the AI models run on.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ai;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
 /// The graphics cards, and which one renders what.
@@ -1788,7 +1791,7 @@ fn sync_helper_now() {
 /// The second card's adapter now ([`cards::resolve_helper`]), with its key and the instance it
 /// lives on; `Err`: there is none to use, and why.
 #[cfg(not(target_arch = "wasm32"))]
-fn helper_pick(backends: wgpu::Backends) -> Result<(wgpu::Adapter, Option<cards::AdapterKey>, wgpu::Instance), String> {
+pub(crate) fn helper_pick(backends: wgpu::Backends) -> Result<(wgpu::Adapter, Option<cards::AdapterKey>, wgpu::Instance), String> {
     let choice = cards::helper_choice();
     let pins = backend::wanted_adapter().is_some();
     match &choice {

@@ -3,7 +3,7 @@ use super::model::Model;
 use super::model::STACK;
 use super::products::{Active, JobSpec, MakeError, Progress, eligible, make_product, product_key, product_path, products_in};
 use super::settings::{DIR, SETTINGS_TTL, installed_models, read_settings};
-use super::state::{AUTO_LOOK, Failure, MAX_QUEUE, Outcome, Pace, PhotoState, Running};
+use super::state::{AUTO_LOOK, Failure, MAX_LANES, MAX_QUEUE, Outcome, Pace, PhotoState, Running};
 use super::{
     Arc, DenoiseSpec, DevelopSettings, HashMap, HashSet, MakeProduct, Mutex, Ordering, PairLoader, Path, PathBuf, Photo, PhotoId, PoisonError,
     Selection, Session, Source, Value, json, product,
@@ -54,7 +54,7 @@ impl Session {
             fingerprint,
             model: Arc::new(Mutex::new(None)),
         });
-        if let Some(r) = self.denoise.running.take() {
+        for r in self.denoise.running.drain(..) {
             r.progress.cancel_now();
         }
         self.denoise.queue.clear();
@@ -74,13 +74,13 @@ impl Session {
     pub(crate) fn denoise_reindex(&mut self) {
         self.denoise.dirty = false;
         self.denoise.reindexed = Some((self.catalog.revision, web_time::Instant::now()));
-        let running = self.denoise.running.as_ref().map(|r| r.photo);
+        let running: Vec<PhotoId> = self.denoise.running.iter().map(|r| r.photo).collect();
         let mut now: HashMap<PhotoId, DenoiseSpec> = HashMap::new();
         if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
             let names: HashSet<String> =
                 products_in(&dir).into_iter().filter_map(|(p, _, _)| p.file_stem().and_then(|s| s.to_str()).map(str::to_string)).collect();
             if !names.is_empty() {
-                for p in self.catalog.photos().filter(|p| eligible(p) && running != Some(p.id)) {
+                for p in self.catalog.photos().filter(|p| eligible(p) && !running.contains(&p.id)) {
                     let key = product_key(&active.fingerprint, p);
                     if names.contains(&key) {
                         now.insert(p.id, DenoiseSpec { product: product_path(&dir, &key), key, make: None });
@@ -114,7 +114,7 @@ impl Session {
     /// file is on disk while the job still counts as running. Finding it here would make the photo Ready while the session
     /// is busy with it (#719); [`Self::denoise_poll`] makes it Ready in the pump that takes the job's result instead.
     fn denoise_check_photo(&mut self, id: PhotoId) {
-        if self.denoise.running.as_ref().is_some_and(|r| r.photo == id) {
+        if self.denoise.running.iter().any(|r| r.photo == id) {
             return;
         }
         let Some(p) = self.catalog.photo(id).cloned() else { return };
@@ -154,11 +154,11 @@ impl Session {
         if self.media.denoise.spec(id).is_some() {
             return PhotoState::Ready;
         }
-        if let Some(r) = self.denoise.running.as_ref().filter(|r| r.photo == id) {
+        if let Some(r) = self.denoise.running.iter().find(|r| r.photo == id) {
             return PhotoState::Running { done: r.progress.done.load(Ordering::Relaxed), total: r.progress.total.load(Ordering::Relaxed) };
         }
         if let Some(ahead) = self.denoise.queue.iter().position(|q| *q == id) {
-            return PhotoState::Queued { ahead: ahead + usize::from(self.denoise.running.is_some()) };
+            return PhotoState::Queued { ahead: ahead + self.denoise.running.len() };
         }
         let key = self.denoise_spec(p).map(|s| s.1);
         match self.denoise.failed.get(&id) {
@@ -180,7 +180,7 @@ impl Session {
             if !eligible(&p) || self.media.denoise.spec(*id).is_some() || self.denoise.queue.contains(id) {
                 continue;
             }
-            if self.denoise.running.as_ref().is_some_and(|r| r.photo == *id) || self.denoise.queue.len() >= MAX_QUEUE {
+            if self.denoise.running.iter().any(|r| r.photo == *id) || self.denoise.queue.len() >= MAX_QUEUE {
                 continue;
             }
             let Some((_, key)) = self.denoise_spec(&p) else { continue };
@@ -199,12 +199,10 @@ impl Session {
         added
     }
 
-    /// Stop the job that is running, and with `all` forget everything that waits.
+    /// Stop the jobs that are running (`photo`'s only, when given), and with `all` forget everything that waits.
     pub(crate) fn denoise_cancel(&mut self, photo: Option<PhotoId>, all: bool) -> usize {
         let mut n = 0;
-        if let Some(r) = &self.denoise.running
-            && photo.is_none_or(|p| p == r.photo)
-        {
+        for r in self.denoise.running.iter().filter(|r| photo.is_none_or(|p| p == r.photo)) {
             r.progress.cancel_now();
             n += 1;
         }
@@ -246,8 +244,8 @@ impl Session {
         })
     }
 
-    /// Start the next queued photo on its own thread.
-    fn denoise_start_next(&mut self, parallel: usize) {
+    /// Start the next queued photo on its own thread; `false` when nothing was started.
+    fn denoise_start_next(&mut self, parallel: usize) -> bool {
         while let Some(id) = self.denoise.queue.pop_front() {
             let Some(p) = self.catalog.photo(id).cloned() else { continue };
             if !eligible(&p) || self.media.denoise.spec(id).is_some() {
@@ -276,22 +274,45 @@ impl Session {
             });
             match started {
                 Ok(_) => {
-                    self.denoise.running = Some(Running { photo: id, key, product, progress, outcome, started: web_time::Instant::now() });
+                    self.denoise.running.push(Running { photo: id, key, product, progress, outcome, started: web_time::Instant::now() });
                 }
                 Err(e) => {
                     self.denoise.failed.insert(id, Failure { key, why: format!("could not start the denoiser: {e}"), unsupported: false });
                     continue;
                 }
             }
-            return;
+            return true;
+        }
+        false
+    }
+
+    /// Photos that may be made at once now: one per graphics card the loaded model works on (one before it is loaded
+    /// and its cards set up), and only one at a light pace (the user is working: the second graphics card's photo).
+    fn denoise_lanes(&self, pace: Pace) -> usize {
+        if matches!(pace, Pace::Pause | Pace::Light) {
+            return 1;
+        }
+        let model = self.denoise.active.as_ref().and_then(|a| a.model.lock().unwrap_or_else(PoisonError::into_inner).clone());
+        model.map_or(1, |m| m.lanes(self.denoise.settings.run_on())).clamp(1, MAX_LANES)
+    }
+
+    /// Take in the running jobs' results.
+    fn denoise_poll(&mut self) {
+        let mut i = 0;
+        while let Some(r) = self.denoise.running.get(i) {
+            let outcome = r.outcome.lock().unwrap_or_else(PoisonError::into_inner).take();
+            match outcome {
+                Some(o) => {
+                    let r = self.denoise.running.remove(i);
+                    self.denoise_finished(r, o);
+                }
+                None => i += 1,
+            }
         }
     }
 
-    /// Take in the running job's result.
-    fn denoise_poll(&mut self) {
-        let Some(r) = &self.denoise.running else { return };
-        let Some(outcome) = r.outcome.lock().unwrap_or_else(PoisonError::into_inner).take() else { return };
-        let Some(r) = self.denoise.running.take() else { return };
+    /// Record how job `r` ended.
+    fn denoise_finished(&mut self, r: Running, outcome: Outcome) {
         match outcome {
             Outcome::Done => {
                 self.denoise.made += 1;
@@ -400,9 +421,11 @@ impl Session {
             self.denoise_enqueue(&others, false, false);
             self.denoise_enqueue(&open, true, false);
         }
-        if self.denoise.running.is_none() && pace != Pace::Pause {
+        if pace != Pace::Pause {
             let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-            self.denoise_start_next(pace.parallel(cores, cap));
+            let lanes = self.denoise_lanes(pace);
+            // each photo's tiles run on its own card: the threads are not split between them
+            while self.denoise.running.len() < lanes && self.denoise_start_next(pace.parallel(cores, cap)) {}
         }
     }
 
@@ -424,7 +447,7 @@ impl Session {
 
     /// Is a picture being made, or waiting for its turn with a model to make it? (Headless runs wait for this.)
     pub fn denoise_busy(&self) -> bool {
-        self.denoise.running.is_some() || (!self.denoise.queue.is_empty() && self.denoise.active.is_some())
+        !self.denoise.running.is_empty() || (!self.denoise.queue.is_empty() && self.denoise.active.is_some())
     }
 
     /// Keep AI Denoise's row in the activity stack up to date (each `denoise.pump`): there while a photo is being made or
@@ -440,29 +463,31 @@ impl Session {
             t.set_unit(crate::activity::Unit::Percent);
             t
         });
-        match &self.denoise.running {
-            Some(r) => {
-                task.progress(r.progress.done.load(Ordering::Relaxed) as u64, r.progress.total.load(Ordering::Relaxed) as u64);
-                task.detail(self.catalog.photo(r.photo).map_or("", |p| p.file_name.as_str()));
-            }
-            None => {
-                task.progress(0, 0);
-                task.detail("");
-            }
-        }
+        // the tiles of every photo being made (one per graphics card), named by the one started first
+        let (done, total) = self.denoise.running.iter().fold((0u64, 0u64), |(d, t), r| {
+            (d.saturating_add(r.progress.done.load(Ordering::Relaxed) as u64), t.saturating_add(r.progress.total.load(Ordering::Relaxed) as u64))
+        });
+        task.progress(done, total);
+        task.detail(self.denoise.running.first().and_then(|r| self.catalog.photo(r.photo)).map_or("", |p| p.file_name.as_str()));
     }
 
-    /// Seconds the running job has been going, and its progress.
+    /// Seconds the job started first has been going, and its progress; with two photos being made (one on each
+    /// graphics card) `photos` lists both, the same way.
     pub(crate) fn denoise_running_json(&self) -> Value {
-        match &self.denoise.running {
-            Some(r) => json!({
+        let one = |r: &Running| {
+            json!({
                 "photo": r.photo.0,
                 "done": r.progress.done.load(Ordering::Relaxed),
                 "total": r.progress.total.load(Ordering::Relaxed),
                 "seconds": r.started.elapsed().as_secs_f64(),
-            }),
-            None => Value::Null,
+            })
+        };
+        let Some(first) = self.denoise.running.first() else { return Value::Null };
+        let mut v = one(first);
+        if let (true, Some(o)) = (self.denoise.running.len() > 1, v.as_object_mut()) {
+            o.insert("photos".into(), self.denoise.running.iter().map(one).collect());
         }
+        v
     }
 
     pub(crate) fn denoise_made(&self) -> u64 {
@@ -472,7 +497,7 @@ impl Session {
     /// The running job's product path and key (tests stand in for the worker's save).
     #[cfg(test)]
     pub(crate) fn denoise_running_product(&self) -> Option<(PathBuf, String)> {
-        self.denoise.running.as_ref().map(|r| (r.product.clone(), r.key.clone()))
+        self.denoise.running.first().map(|r| (r.product.clone(), r.key.clone()))
     }
 
     /// What an export of photo `id` with `settings` needs for its Denoise amount: its denoised picture, made now when the

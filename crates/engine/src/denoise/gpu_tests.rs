@@ -31,6 +31,26 @@ fn model(name: &str, tile: u64) -> (Arc<dyn Model>, lightcraft_denoise::runtime:
     let cpu = lightcraft_denoise::runtime::CpuRunner::load(&path, &manifest).unwrap();
     (loaded, cpu, path)
 }
+/// The two cards' sides: the editing card `editing`, no second card.
+fn one_card(editing: Result<GpuSide, String>) -> [CardSide; 2] {
+    two_cards(Err(lightcraft_gpu::ai::NO_HELPER.into()), editing)
+}
+
+/// The two cards' sides, set up as given.
+fn two_cards(helper: Result<GpuSide, String>, editing: Result<GpuSide, String>) -> [CardSide; 2] {
+    use lightcraft_gpu::Role;
+    let side = |card, g| {
+        let s = CardSide::new(card);
+        let _ = s.gpu.set(g);
+        s
+    };
+    [side(Role::Helper, helper), side(Role::Primary, editing)]
+}
+
+/// A network on `cpu` with these cards.
+fn with_cards(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, cards: [CardSide; 2]) -> Network {
+    Network { cpu: cpu.clone(), path: path.to_path_buf(), tile: 32, cards, picking: Mutex::new(()), last_threads: AtomicUsize::new(0), remote: None }
+}
 
 fn worst(want: &[f32], got: &[f32]) -> f32 {
     assert_eq!(want.len(), got.len());
@@ -60,6 +80,35 @@ fn a_tile_on_the_card_is_the_cpus_tile() {
         other => panic!("the first photo decides where the work runs, not {other:?}"),
     }
     assert!(!path.with_file_name(GPU_SETUP_MARKER).exists(), "a set-up that ended leaves no marker");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+/// Each graphics card is set up on its own and passes the check tile against the CPU ([`GPU_AGREE`]); the two cards'
+/// answers on a test tile agree as closely. A card that isn't here (no second card: `LIGHTCRAFT_GPU_HELPER=same`
+/// makes one on the same card) is skipped.
+#[test]
+fn each_card_passes_the_check_tile() {
+    let (_, cpu, path) = model("eachcard", 64);
+    let (input, _) = lightcraft_denoise::runtime::test_tile(64);
+    let want = cpu.run(&input).unwrap();
+    let mut answers = Vec::new();
+    for card in lightcraft_gpu::ai::BACKGROUND_ORDER {
+        match make_gpu(&cpu, &path, 64, card) {
+            Ok(g) => {
+                let got = g.runner.run(&input).unwrap();
+                let off = disagreement(&want, &got);
+                eprintln!("{} card: {} — check tile {:.1} ms (CPU {:.0} ms), off by {off:.1e}", card.id(), g.adapter, g.card_ms, g.cpu_ms);
+                assert!(off <= GPU_AGREE, "{}: {off:e}", g.adapter);
+                answers.push(got);
+            }
+            Err(why) => lightcraft_testkit::skip!(Gpu, "AI Denoise on the {} card: {why}", card.id()),
+        }
+        assert!(!path.with_file_name(setup_marker(card)).exists(), "a set-up that ended leaves no marker");
+    }
+    if let [a, b] = answers.as_slice() {
+        let off = disagreement(a, b);
+        eprintln!("the two cards differ by {off:.1e}");
+        assert!(off <= GPU_AGREE);
+    }
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -112,7 +161,7 @@ fn a_remote_server_shares_the_tiles_and_drops_out_when_it_cannot() {
     // a local card faster than the server there and back (here a stand-in that takes no time): nothing is shared,
     // the photo never waits for the slower server, and the status says why
     let mut net = with_remote(&path, 64, &addr, &sha);
-    net.gpu = OnceLock::from(Ok(GpuSide { runner: Box::new(cpu.clone()), adapter: "Fast card".into(), card_ms: 1e-6, cpu_ms: 1000.0 }));
+    net.cards = one_card(Ok(GpuSide { runner: Box::new(cpu.clone()), adapter: "Fast card".into(), card_ms: 1e-6, cpu_ms: 1000.0 }));
     let (_, at_once) = net.runner(RunOn::Gpu, 8);
     assert_eq!(at_once, GPU_PARALLEL, "no server slots");
     let d = net.device(RunOn::Gpu);
@@ -172,16 +221,7 @@ impl TileRunner for Garbage {
 fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card() {
     let (_, cpu, path) = model("garbage", 64);
     let card = GpuSide { runner: Box::new(Garbage(AtomicUsize::new(0))), adapter: "Test card".into(), card_ms: 1.0, cpu_ms: 1000.0 };
-    let model = Network {
-        cpu: cpu.clone(),
-        path: path.clone(),
-        tile: 32,
-        gpu: OnceLock::from(Ok(card)),
-        fallbacks: AtomicUsize::new(0),
-        last_threads: AtomicUsize::new(0),
-        remote: None,
-        local_card: AtomicBool::new(true),
-    };
+    let model = with_cards(&cpu, &path, one_card(Ok(card)));
     let (input, _) = lightcraft_denoise::runtime::test_tile(64);
     let want = cpu.run(&input).unwrap();
     let (runner, at_once) = model.runner(RunOn::Auto, 8);
@@ -197,21 +237,103 @@ fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card() 
     assert_eq!(at_once, 8, "the next photo runs on the CPU, even with the card chosen");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+/// A card that runs the CPU's model and counts its tiles.
+struct Counting(lightcraft_denoise::runtime::CpuRunner, Arc<AtomicUsize>);
+
+impl TileRunner for Counting {
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, RunError> {
+        self.1.fetch_add(1, Ordering::Relaxed);
+        self.0.run(input)
+    }
+}
+
+fn counting(cpu: &lightcraft_denoise::runtime::CpuRunner, name: &str) -> (GpuSide, Arc<AtomicUsize>) {
+    let n = Arc::new(AtomicUsize::new(0));
+    (GpuSide { runner: Box::new(Counting(cpu.clone(), n.clone())), adapter: name.into(), card_ms: 1.0, cpu_ms: 1000.0 }, n)
+}
+
+/// Decision 7 (31 Oct 2026): photos of a batch run on both cards at once, the second graphics card first, each
+/// photo's tiles on its own card, with the CPU's answers.
+#[test]
+fn two_photos_run_on_two_cards_the_helper_first() {
+    let (_, cpu, path) = model("twocards", 64);
+    let ((helper, on_helper), (editing, on_editing)) = (counting(&cpu, "Helper card"), counting(&cpu, "Editing card"));
+    let net = with_cards(&cpu, &path, two_cards(Ok(helper), Ok(editing)));
+    assert_eq!(net.lanes(RunOn::Gpu), 2, "a photo on each card");
+    assert_eq!(net.lanes(RunOn::Cpu), 1, "the processor chosen: one photo at a time");
+    let (input, _) = lightcraft_denoise::runtime::test_tile(64);
+    let want = cpu.run(&input).unwrap();
+    let (first, at_once) = net.runner(RunOn::Gpu, 16);
+    assert_eq!(at_once, GPU_PARALLEL);
+    assert_eq!(first.run(&input).unwrap(), want);
+    assert_eq!((on_helper.load(Ordering::Relaxed), on_editing.load(Ordering::Relaxed)), (1, 0), "the first photo takes the helper");
+    let (second, _) = net.runner(RunOn::Gpu, 16);
+    assert_eq!(second.run(&input).unwrap(), want);
+    assert_eq!(on_editing.load(Ordering::Relaxed), 1, "the second photo takes the free card");
+    let d = net.device(RunOn::Gpu);
+    assert_eq!((d["kind"].as_str(), d["adapter"].as_str()), (Some("gpu"), Some("Helper card")), "{d}");
+    let cards = d["cards"].as_array().unwrap();
+    assert_eq!(
+        cards.iter().map(|c| (c["card"].as_str().unwrap(), c["photos"].as_u64().unwrap())).collect::<Vec<_>>(),
+        [("helper", 1), ("editing", 1)]
+    );
+    drop(first);
+    let (third, _) = net.runner(RunOn::Gpu, 16);
+    third.run(&input).unwrap();
+    assert_eq!(on_helper.load(Ordering::Relaxed), 2, "a card given back takes the next photo");
+    drop((second, third));
+    assert!(net.cards.iter().all(|c| c.photos.load(Ordering::Relaxed) == 0), "every card was given back");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A second graphics card that gets tiles wrong: its tiles are the CPU's, and after three it gets no more photos;
+/// the card for editing takes them, and the batch never loses a tile.
+#[test]
+fn a_broken_helper_leaves_the_work_to_the_editing_card_and_the_cpu() {
+    let (_, cpu, path) = model("brokenhelper", 64);
+    let garbage = Arc::new(AtomicUsize::new(0));
+    struct Shared(Arc<AtomicUsize>);
+    impl TileRunner for Shared {
+        fn run(&self, input: &[f32]) -> Result<Vec<f32>, RunError> {
+            Garbage(AtomicUsize::new(0)).run(input).inspect(|_| {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            })
+        }
+    }
+    let helper = GpuSide { runner: Box::new(Shared(garbage.clone())), adapter: "Broken card".into(), card_ms: 1.0, cpu_ms: 1000.0 };
+    let (editing, on_editing) = counting(&cpu, "Editing card");
+    let net = with_cards(&cpu, &path, two_cards(Ok(helper), Ok(editing)));
+    let (input, _) = lightcraft_denoise::runtime::test_tile(64);
+    let want = cpu.run(&input).unwrap();
+    let (photo, _) = net.runner(RunOn::Gpu, 8);
+    for _ in 0..GPU_MAX_FALLBACKS + 2 {
+        assert_eq!(photo.run(&input).unwrap(), want, "a wrong tile is the CPU's tile");
+    }
+    assert_eq!(garbage.load(Ordering::Relaxed), GPU_MAX_FALLBACKS, "after three wrong tiles the card is not asked again");
+    drop(photo);
+    assert_eq!(net.lanes(RunOn::Gpu), 1, "one card left");
+    let (next, at_once) = net.runner(RunOn::Gpu, 8);
+    assert_eq!(at_once, GPU_PARALLEL, "the next photo still runs on a card");
+    assert_eq!(next.run(&input).unwrap(), want);
+    assert_eq!((garbage.load(Ordering::Relaxed), on_editing.load(Ordering::Relaxed)), (GPU_MAX_FALLBACKS, 1), "on the editing card");
+    let d = net.device(RunOn::Gpu);
+    assert_eq!(d["adapter"], "Editing card", "{d}");
+    let helper = d["cards"].as_array().unwrap().iter().find(|c| c["card"] == "helper").cloned().unwrap();
+    assert!(helper["reason"].as_str().is_some_and(|r| r.contains("tiles wrong")), "{d}");
+    // both broken: the CPU does it all
+    net.cards[1].fallbacks.store(GPU_MAX_FALLBACKS, Ordering::Relaxed);
+    drop(next);
+    let (cpu_only, at_once) = net.runner(RunOn::Gpu, 8);
+    assert_eq!((at_once, cpu_only.run(&input).unwrap()), (8, want));
+    assert_eq!(net.device(RunOn::Gpu)["kind"], "cpu");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
 
 #[test]
 fn a_slow_card_is_left_out_unless_it_is_chosen() {
     let (_, cpu, path) = model("slow", 64);
     let slow = GpuSide { runner: Box::new(cpu.clone()), adapter: "Slow card".into(), card_ms: 490.0, cpu_ms: 1400.0 };
-    let model = Network {
-        cpu,
-        path: path.clone(),
-        tile: 32,
-        gpu: OnceLock::from(Ok(slow)),
-        fallbacks: AtomicUsize::new(0),
-        last_threads: AtomicUsize::new(0),
-        remote: None,
-        local_card: AtomicBool::new(true),
-    };
+    let model = with_cards(&cpu, &path, one_card(Ok(slow)));
     assert_eq!(model.runner(RunOn::Auto, 16).1, 16, "sixteen threads beat it");
     let device = model.device(RunOn::Auto);
     assert_eq!((device["kind"].as_str(), device["reason"].as_str()), (Some("cpu"), Some("it is faster than Slow card on this computer")));
@@ -229,9 +351,13 @@ fn a_set_up_marker_left_behind_keeps_the_card_off() {
     let marker = path.with_file_name(GPU_SETUP_MARKER);
     std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
     let (_, at_once) = model.runner(RunOn::Gpu, 4);
-    assert_eq!(at_once, 4, "the CPU does the work");
-    let device = model.device(RunOn::Gpu);
-    assert_eq!((device["kind"].as_str(), device["reason"].as_str()), (Some("cpu"), Some(GPU_CRASHED)), "{device}");
+    let all = model.device(RunOn::Gpu);
+    // a second graphics card (when this machine has one) is not the card that crashed: it may do the work
+    let device = all["cards"].as_array().and_then(|c| c.iter().find(|c| c["card"] == "editing")).cloned().unwrap_or(all.clone());
+    if all["cards"].is_null() {
+        assert_eq!(at_once, 4, "the CPU does the work");
+    }
+    assert_eq!((device["kind"].as_str(), device["reason"].as_str()), (Some("cpu"), Some(GPU_CRASHED)), "{all}");
     assert_eq!(device["retry"], true, "the interface offers to try again");
     assert!(marker.exists(), "it stays until the user chooses where denoise runs");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());

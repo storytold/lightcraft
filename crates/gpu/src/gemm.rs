@@ -7,13 +7,19 @@
 //! It has a device of its own (like denoise), respects the same switches (`LIGHTCRAFT_GPU`,
 //! `LIGHTCRAFT_GPU_BACKEND`, the GPU preference, `LIGHTCRAFT_GPU_ADAPTER`) and the crash sentinel
 //! around device creation, and a device that errs or is lost stops being used.
+//!
+//! The device is on the second graphics card when there is one ([`crate::ai::preferred`]): the
+//! models' weights (up to ~900 MB) are uploaded to one card only, and the card for editing stays
+//! free for the photo being edited. When the helper's device fails, the editing card's is used.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use bytemuck::{Pod, Zeroable};
+
+pub use crate::Role;
+use crate::ai::{Broken, PerCard};
 
 /// Longest wait for one product before the device is given up on.
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -101,66 +107,38 @@ struct Dev {
     max_binding: u64,
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    broken: &'static Broken,
+    /// The weights on this device.
+    cache: Mutex<Cache>,
 }
 
-static DEV: OnceLock<Result<Dev, String>> = OnceLock::new();
-static BROKEN: AtomicBool = AtomicBool::new(false);
-static BROKEN_WHY: Mutex<Option<String>> = Mutex::new(None);
+/// The matrix device on each card ([`crate::ai`]).
+static DEVS: PerCard<Dev> = PerCard::new();
 
-fn mark_broken(why: &str) {
-    let mut w = BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner());
-    if w.is_none() {
-        *w = Some(why.to_string());
-    }
-    BROKEN.store(true, Ordering::Relaxed);
-}
-
-/// Why matrix products stopped using the GPU (a device error), if they did.
+/// Why matrix products stopped using the GPU on the editing card (a device error), if they did.
 pub fn broken_reason() -> Option<String> {
-    BROKEN.load(Ordering::Relaxed).then(|| BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into()))
+    DEVS.broken_reason(Role::Primary)
 }
 
-fn dev() -> Result<&'static Dev, String> {
-    if let Some(why) = broken_reason() {
-        return Err(format!("stopped after a GPU failure: {why}"));
+/// Why matrix products stopped using `card`, if they did.
+pub fn broken_reason_on(card: Role) -> Option<String> {
+    DEVS.broken_reason(card)
+}
+
+fn dev(card: Role) -> Result<&'static Dev, String> {
+    DEVS.get(card, "AI masks", |adapter, broken, _| make_device(adapter, card, broken))
+}
+
+/// The device this thread's products go to ([`crate::ai::wanted`]: the helper first): the helper's
+/// when it works, else the editing card's.
+fn dev_for_work() -> Result<&'static Dev, String> {
+    match crate::ai::wanted() {
+        Role::Helper => dev(Role::Helper).or_else(|e| dev(Role::Primary).map_err(|_| e)),
+        Role::Primary => dev(Role::Primary),
     }
-    if let Some(why) = crate::switched_off() {
-        return Err(why);
-    }
-    let _work = match DEV.get() {
-        Some(_) => None,
-        None => Some(crate::exit::enter().ok_or("LightCraft is closing")?),
-    };
-    DEV.get_or_init(create_device).as_ref().map_err(|e| e.clone())
 }
 
-fn create_device() -> Result<Dev, String> {
-    let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
-    crate::backend::with_init_marker(backends, || {
-        std::panic::catch_unwind(|| make_device(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
-    })
-}
-
-fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = backends;
-    desc.backend_options = crate::backend::backend_options();
-    desc.flags = crate::backend::instance_flags_from_env(desc.flags);
-    let instance = wgpu::Instance::new(desc);
-    let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
-    let adapter = match &wanted {
-        Some(w) => pollster::block_on(instance.enumerate_adapters(backends))
-            .into_iter()
-            .find(|a| {
-                let i = a.get_info();
-                i.device_type != wgpu::DeviceType::Cpu && i.name.to_lowercase().contains(w.as_str())
-            })
-            .ok_or_else(|| format!("no GPU adapter named like `{w}`"))?,
-        None => pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?,
-    };
+fn make_device(adapter: wgpu::Adapter, card: Role, broken: &'static Broken) -> Result<Dev, String> {
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(format!("software adapter ({}) skipped: the CPU is faster", info.name));
@@ -170,18 +148,22 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
         return Err(format!("{} is too limited for the matrix kernel", info.name));
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("lightcraft-ai-masks"),
+        label: Some(match card {
+            Role::Primary => "lightcraft-ai-masks",
+            Role::Helper => "lightcraft-ai-masks-helper",
+        }),
         required_limits: limits.clone(),
         ..Default::default()
     }))
     .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
-    device.on_uncaptured_error(std::sync::Arc::new(|e| {
-        log::error!("gpu (AI masks): {e}");
-        mark_broken(&format!("device error: {e}"));
+    let which = card.id();
+    device.on_uncaptured_error(std::sync::Arc::new(move |e| {
+        log::error!("gpu (AI masks, {which} card): {e}");
+        broken.mark(&format!("device error: {e}"));
     }));
-    device.set_device_lost_callback(|reason, msg| {
-        log::error!("gpu (AI masks): device lost ({reason:?}): {msg}");
-        mark_broken(&format!("device lost ({reason:?}): {msg}"));
+    device.set_device_lost_callback(move |reason, msg| {
+        log::error!("gpu (AI masks, {which} card): device lost ({reason:?}): {msg}");
+        broken.mark(&format!("device lost ({reason:?}): {msg}"));
     });
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("gemm"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
     let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
@@ -213,13 +195,19 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
         cache: None,
     });
     let max_binding = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
-    log::info!("gpu (AI masks): {} ({:?})", info.name, info.backend);
-    Ok(Dev { device, queue, info, max_binding, pipeline, layout })
+    log::info!("gpu (AI masks, {which} card): {} ({:?})", info.name, info.backend);
+    Ok(Dev { device, queue, info, max_binding, pipeline, layout, broken, cache: Mutex::new(Cache::default()) })
 }
 
-/// The adapter AI masks would use, or why they can't use one. Creates the device on first use.
+/// The adapter AI masks would use (the helper first), or why they can't use one. Creates the
+/// device on first use.
 pub fn adapter() -> Result<String, String> {
-    dev().map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
+    dev_for_work().map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
+}
+
+/// [`adapter`] on `card`.
+pub fn adapter_on(card: Role) -> Result<String, String> {
+    dev(card).map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
 }
 
 /// Weights on the GPU, by the caller's key.
@@ -228,8 +216,6 @@ struct Cache {
     weights: HashMap<u64, (wgpu::Buffer, usize, usize)>,
     bytes: u64,
 }
-
-static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 
 /// `a` (`rows × k`, row-major) times the weight matrix `key` (`k × n`, row-major; `weights` gives
 /// it the first time) on the GPU. `None` when the GPU can't do it (unavailable, too large, a
@@ -280,7 +266,7 @@ impl Drop for Scopes {
 }
 
 fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dyn Fn() -> Option<Vec<f32>>) -> Result<Vec<f32>, String> {
-    let d = dev()?;
+    let d = dev_for_work()?;
     let _work = crate::exit::enter().ok_or("LightCraft is closing")?;
     if rows == 0 || k == 0 || n == 0 || Some(a.len()) != rows.checked_mul(k) {
         return Err("bad shape".into());
@@ -303,7 +289,7 @@ fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dy
         pad: 0,
     };
     let scopes = Scopes::push(&d.device);
-    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = d.cache.lock().unwrap_or_else(|e| e.into_inner());
     if !cache.weights.get(&key).is_some_and(|(_, wk, wn)| (*wk, *wn) == (k, n)) {
         let w = weights().ok_or("the weights are not readable")?;
         if w.len() != k * n {
@@ -377,7 +363,7 @@ fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dy
     let (oom, error) = scopes.pop();
     if oom.is_some() || error.is_some() {
         // the weights may be what failed: never keep them for the next product
-        let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = d.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((old, ..)) = cache.weights.remove(&key) {
             cache.bytes = cache.bytes.saturating_sub(old.size());
         }
@@ -386,11 +372,11 @@ fn try_matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dy
         return Err(format!("the GPU ran out of memory: {e}"));
     }
     if let Some(e) = error {
-        mark_broken(&format!("device error: {e}"));
+        d.broken.mark(&format!("device error: {e}"));
         return Err(format!("the GPU reported an error: {e}"));
     }
     if let Err(e) = waited {
-        mark_broken(&format!("the GPU did not finish a matrix product: {e}"));
+        d.broken.mark(&format!("the GPU did not finish a matrix product: {e}"));
         return Err(format!("the GPU did not finish: {e}"));
     }
     match rx.recv_timeout(Duration::from_secs(10)) {
@@ -425,33 +411,38 @@ mod tests {
         c
     }
 
-    /// The kernel equals a plain product on odd sizes (partial tiles on every edge); the weights are
-    /// read once per key. Skipped without a usable GPU.
+    /// The kernel equals a plain product on odd sizes (partial tiles on every edge), on each card's
+    /// device; the weights are read once per key and card. A card without a device is skipped.
     #[test]
     fn matmul_matches_the_cpu() {
         // (creating the device writes the process-wide init marker the backend tests check)
-        if adapter().is_err() {
-            eprintln!("skipped: no GPU ({:?})", adapter().err());
-            return;
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for card in crate::ai::BACKGROUND_ORDER {
+            if let Err(e) = adapter_on(card) {
+                lightcraft_testkit::skip!(Gpu, "no matrix device on the {} card ({e})", card.id());
+                continue;
+            }
+            crate::ai::on_card(card, || {
+                for (m, k, n) in [(1, 1, 1), (67, 33, 129), (130, 257, 65), (512, 96, 384)] {
+                    let a: Vec<f32> = (0..m * k).map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0).collect();
+                    let w: Vec<f32> = (0..k * n).map(|i| ((i * 53 % 97) as f32 - 48.0) / 48.0).collect();
+                    let key = (m * 1_000_003 + k * 1009 + n) as u64;
+                    let reads = std::cell::Cell::new(0);
+                    let get = || {
+                        reads.set(reads.get() + 1);
+                        Some(w.clone())
+                    };
+                    let g = matmul(&a, m, k, n, key, &get).unwrap();
+                    let want = cpu(&a, &w, m, k, n);
+                    let err = g.iter().zip(&want).fold(0f32, |e, (x, y)| e.max((x - y).abs()));
+                    assert!(err < 1e-3, "{} card, {m}×{k}×{n}: {err}", card.id());
+                    matmul(&a, m, k, n, key, &get).unwrap();
+                    assert_eq!(reads.get(), 1, "weights uploaded once");
+                }
+                // shapes that don't add up are refused (the caller uses the CPU)
+                assert!(matmul(&[1.0; 5], 2, 3, 1, 9, &|| Some(vec![1.0; 3])).is_none());
+            });
         }
-        for (m, k, n) in [(1, 1, 1), (67, 33, 129), (130, 257, 65), (512, 96, 384)] {
-            let a: Vec<f32> = (0..m * k).map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0).collect();
-            let w: Vec<f32> = (0..k * n).map(|i| ((i * 53 % 97) as f32 - 48.0) / 48.0).collect();
-            let key = (m * 1_000_003 + k * 1009 + n) as u64;
-            let reads = std::cell::Cell::new(0);
-            let get = || {
-                reads.set(reads.get() + 1);
-                Some(w.clone())
-            };
-            let g = matmul(&a, m, k, n, key, &get).unwrap();
-            let want = cpu(&a, &w, m, k, n);
-            let err = g.iter().zip(&want).fold(0f32, |e, (x, y)| e.max((x - y).abs()));
-            assert!(err < 1e-3, "{m}×{k}×{n}: {err}");
-            matmul(&a, m, k, n, key, &get).unwrap();
-            assert_eq!(reads.get(), 1, "weights uploaded once");
-        }
-        // shapes that don't add up are refused (the caller uses the CPU)
-        assert!(matmul(&[1.0; 5], 2, 3, 1, 9, &|| Some(vec![1.0; 3])).is_none());
     }
 
     /// Throughput on a Swin-L-sized product (`cargo test -p lightcraft-gpu --release -- --ignored gemm_speed --nocapture`).

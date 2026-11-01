@@ -2,7 +2,9 @@
 //! WGSL compute kernels, one tile at a time, behind the same [`TileRunner`] interface the CPU runner has.
 //!
 //! The runner has a device of its own, so a denoise job and the interactive renders are separate contexts that the
-//! driver time-slices, and a failure of one never takes the other down. It respects the same switches as GPU rendering
+//! driver time-slices, and a failure of one never takes the other down. There is one such device on each card AI work
+//! uses ([`crate::ai`]: the editing card, the second graphics card), so a batch runs a photo on each; a device that
+//! fails stops being used on its card only. It respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference) and the same crash sentinel around device creation.
 //! `LIGHTCRAFT_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card (`backend::pick_adapter`,
 //! shared with the render device).
@@ -12,14 +14,16 @@
 //! interpreter in `lightcraft_denoise::reference` and, with the real model, against the pure-Rust CPU runner.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use bytemuck::{Pod, Zeroable};
 use lightcraft_denoise::net::{Net, Op};
 use lightcraft_denoise::run::{Error, TileRunner};
 use wgpu::util::DeviceExt;
+
+pub use crate::Role;
+use crate::ai::{Broken, PerCard};
 
 /// Longest wait for one tile's GPU work before the device is given up on.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -38,59 +42,33 @@ struct Dev {
     queue: wgpu::Queue,
     info: wgpu::AdapterInfo,
     limits: wgpu::Limits,
+    card: Role,
+    broken: &'static Broken,
+    /// The card's key (the crash marker names the helper's).
+    key: Option<crate::cards::AdapterKey>,
 }
 
-static DEV: OnceLock<Result<Dev, String>> = OnceLock::new();
-static BROKEN: AtomicBool = AtomicBool::new(false);
-static BROKEN_WHY: Mutex<Option<String>> = Mutex::new(None);
+/// The denoise device on each card ([`crate::ai`]): a batch runs photos on both at once.
+static DEVS: PerCard<Dev> = PerCard::new();
 
-fn mark_broken(why: &str) {
-    let mut w = BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner());
-    if w.is_none() {
-        *w = Some(why.to_string());
-    }
-    BROKEN.store(true, Ordering::Relaxed);
-}
-
-/// Why the GPU stopped being used for denoise (a device error), if it did.
+/// Why the GPU stopped being used for denoise on the editing card (a device error), if it did.
 pub fn broken_reason() -> Option<String> {
-    BROKEN.load(Ordering::Relaxed).then(|| BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into()))
+    broken_reason_on(Role::Primary)
 }
 
-fn dev() -> Result<&'static Dev, String> {
-    if let Some(why) = broken_reason() {
-        return Err(format!("stopped after a GPU failure: {why}"));
-    }
-    if let Some(why) = crate::switched_off() {
-        return Err(why);
-    }
-    // creating the device is GPU work too: not once the process is ending (issue #620)
-    let _work = match DEV.get() {
-        Some(_) => None,
-        None => Some(crate::exit::enter().ok_or(CLOSING)?),
-    };
-    DEV.get_or_init(create_device).as_ref().map_err(|e| e.clone())
+/// Why `card` stopped being used for denoise, if it did; the other card is not affected.
+pub fn broken_reason_on(card: Role) -> Option<String> {
+    DEVS.broken_reason(card)
+}
+
+fn dev(card: Role) -> Result<&'static Dev, String> {
+    DEVS.get(card, "denoise", |adapter, broken, key| make_device(adapter, card, broken, key))
 }
 
 /// Why nothing runs on the GPU once [`crate::begin_shutdown`] was called.
 const CLOSING: &str = "LightCraft is closing";
 
-fn create_device() -> Result<Dev, String> {
-    let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
-    crate::backend::with_init_marker(backends, || {
-        std::panic::catch_unwind(|| make_device(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
-    })
-}
-
-fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = backends;
-    // DX12 shaders compile with FXC (issue #471)
-    desc.backend_options = crate::backend::backend_options();
-    // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
-    desc.flags = crate::backend::instance_flags_from_env(desc.flags);
-    let instance = wgpu::Instance::new(desc);
-    let adapter = crate::backend::pick_adapter(&instance, backends)?;
+fn make_device(adapter: wgpu::Adapter, card: Role, broken: &'static Broken, key: Option<crate::cards::AdapterKey>) -> Result<Dev, String> {
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(format!("software adapter ({}) skipped: the CPU is faster", info.name));
@@ -106,27 +84,36 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
         return Err(format!("{} has too little workgroup memory for the denoise kernels", info.name));
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("lightcraft-denoise"),
+        label: Some(match card {
+            Role::Primary => "lightcraft-denoise",
+            Role::Helper => "lightcraft-denoise-helper",
+        }),
         required_limits: limits.clone(),
         ..Default::default()
     }))
     .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
-    device.on_uncaptured_error(std::sync::Arc::new(|e| {
-        log::error!("gpu (denoise): {e}");
-        mark_broken(&format!("device error: {e}"));
+    let which = card.id();
+    device.on_uncaptured_error(std::sync::Arc::new(move |e| {
+        log::error!("gpu (denoise, {which} card): {e}");
+        broken.mark(&format!("device error: {e}"));
     }));
-    device.set_device_lost_callback(|reason, msg| {
-        log::error!("gpu (denoise): device lost ({reason:?}): {msg}");
-        mark_broken(&format!("device lost ({reason:?}): {msg}"));
+    device.set_device_lost_callback(move |reason, msg| {
+        log::error!("gpu (denoise, {which} card): device lost ({reason:?}): {msg}");
+        broken.mark(&format!("device lost ({reason:?}): {msg}"));
     });
-    log::info!("gpu (denoise): {} ({:?})", info.name, info.backend);
-    Ok(Dev { device, queue, info, limits })
+    log::info!("gpu (denoise, {which} card): {} ({:?})", info.name, info.backend);
+    Ok(Dev { device, queue, info, limits, card, broken, key })
 }
 
-/// The adapter denoise would use ("NVIDIA GeForce RTX 4090 Laptop GPU (Dx12)"), or why it cannot use one. Creates the
-/// device on first use.
+/// The adapter denoise would use on the editing card ("NVIDIA GeForce RTX 4090 Laptop GPU (Dx12)"), or why it cannot
+/// use one. Creates the device on first use.
 pub fn adapter() -> Result<String, String> {
-    dev().map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
+    adapter_on(Role::Primary)
+}
+
+/// [`adapter`] on `card` (the helper: `Err` when there is no second graphics card).
+pub fn adapter_on(card: Role) -> Result<String, String> {
+    dev(card).map(|d| format!("{} ({:?})", d.info.name, d.info.backend))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -708,8 +695,13 @@ pub struct NetRunner {
 /// Put `net` on the GPU for `tile × tile` input cells, or say why it cannot be (no GPU, a layer or a size the kernels
 /// do not do, the device refusing the buffers). Creates the device on first use and compiles the kernels.
 pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
+    runner_on(Role::Primary, net, tile)
+}
+
+/// [`runner`] on `card`'s device (a device of its own on each card: a batch runs a photo on each).
+pub fn runner_on(card: Role, net: &Net, tile: usize) -> Result<NetRunner, String> {
     let _work = crate::exit::enter().ok_or(CLOSING)?;
-    let d = dev()?;
+    let d = dev(card)?;
     let max_binding = d.limits.max_storage_buffer_binding_size.min(d.limits.max_buffer_size).min(MAX_BUFFER);
     let (layout, layers) = plan(net, tile, max_binding)?;
     let scope = [
@@ -718,7 +710,7 @@ pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
         d.device.push_error_scope(wgpu::ErrorFilter::Internal),
     ];
     // the driver compiles the kernels here: a crash in it is reported at the next launch (issue #250)
-    let pipes = crate::backend::with_marker("denoise kernel compilation", || build_pipelines(d, &layout));
+    let pipes = crate::ai::with_card_marker("denoise kernel compilation", d.card, d.key.as_ref(), || build_pipelines(d, &layout));
     let weights: Vec<(wgpu::Buffer, wgpu::Buffer)> = layers
         .iter()
         .map(|l| {
@@ -759,6 +751,11 @@ impl NetRunner {
     /// The adapter this runner uses.
     pub fn adapter(&self) -> String {
         format!("{} ({:?})", self.shared.dev.info.name, self.shared.dev.info.backend)
+    }
+
+    /// The card this runner's device is on.
+    pub fn card(&self) -> Role {
+        self.shared.dev.card
     }
 
     /// How long each kernel took to build, e.g. `conv 64x64x16: 812 ms`.
@@ -852,11 +849,11 @@ impl NetRunner {
             return Err(Error::Runtime(format!("the GPU ran out of memory: {e}")));
         }
         if let Some(e) = internal.or(validation) {
-            mark_broken(&format!("device error: {e}"));
+            d.broken.mark(&format!("device error: {e}"));
             return Err(Error::Runtime(format!("the GPU reported an error: {e}")));
         }
         if let Err(e) = waited {
-            mark_broken(&format!("the GPU did not finish a tile: {e}"));
+            d.broken.mark(&format!("the GPU did not finish a tile: {e}"));
             return Err(Error::Runtime(format!("the GPU did not finish: {e}")));
         }
         match rx.recv_timeout(Duration::from_secs(10)) {
@@ -875,7 +872,7 @@ impl NetRunner {
 
 impl TileRunner for NetRunner {
     fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
-        if let Some(why) = broken_reason() {
+        if let Some(why) = self.shared.dev.broken.reason() {
             return Err(Error::Runtime(format!("the GPU is not used any more: {why}")));
         }
         if input.len() != self.shared.layout.in_floats {
@@ -883,6 +880,8 @@ impl TileRunner for NetRunner {
         }
         // one tile is one piece of GPU work: a photo's worth would outlast any wait at exit
         let Some(_work) = crate::exit::enter() else { return Err(Error::Runtime(CLOSING.into())) };
+        // denoise is background work: on the editing card it waits for the interface (decision §8)
+        crate::ai::background_turn(self.shared.dev.card);
         let w = self.take()?;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(&w, input)));
         match r {
@@ -898,7 +897,7 @@ impl TileRunner for NetRunner {
             }
             Err(_) => {
                 // a panic inside wgpu: this workspace is not given back, and the GPU is not used again
-                mark_broken("a denoise tile panicked");
+                self.shared.dev.broken.mark("a denoise tile panicked");
                 drop(w);
                 self.forget();
                 Err(Error::Runtime("the GPU runner gave up".into()))
@@ -1029,6 +1028,42 @@ mod tests {
         }
     }
 
+    /// Each card's own device gives the CPU's answer (a check tile within the bound denoise uses, 1e-3 of the
+    /// largest value), and the two cards agree with each other. Without a second card (`LIGHTCRAFT_GPU_HELPER=same`
+    /// makes one on the same card, `=4070` names one) the helper's part is skipped.
+    #[test]
+    fn each_card_gives_the_cpus_answer() {
+        let (tile, ch, depth, seed) = (64u64, 16u64, 3usize, 5u64);
+        let n = net(tile, ch, depth, seed);
+        let x = picture(4 * (tile * tile) as usize, seed);
+        let cpu = lightcraft_denoise::cpu::NetRunner::new(&n, tile as usize).unwrap().run(&x).unwrap();
+        let mut answers = Vec::new();
+        for card in crate::ai::BACKGROUND_ORDER {
+            let made = {
+                let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                runner_on(card, &n, tile as usize)
+            };
+            let g = match made {
+                Ok(g) => g,
+                Err(e) => {
+                    lightcraft_testkit::skip!(Gpu, "no denoise device on the {} card ({e})", card.id());
+                    continue;
+                }
+            };
+            assert_eq!(g.card(), card);
+            let got = g.run(&x).unwrap();
+            let e = worst(&got, &cpu);
+            eprintln!("{} card: {}: off by {e:e} of the output's size", card.id(), g.adapter());
+            assert!(e < 1e-3, "the {} card is off by {e:e}", card.id());
+            answers.push((g.adapter(), got));
+        }
+        if let [(a, x), (b, y)] = answers.as_slice() {
+            let e = worst(x, y);
+            eprintln!("{a} vs {b}: off by {e:e}");
+            assert!(e < 1e-3, "the cards differ by {e:e}");
+        }
+    }
+
     // Issue #479: several pixels loaded by different invocations shared a vec4,
     // so lane writes raced on Metal. Exercise a partial block repeatedly with new
     // inputs; stale shared-memory values must never leak into the next dispatch.
@@ -1145,7 +1180,7 @@ mod tests {
             .replace("{{BN}}", &bn.to_string())
             .replace("{{BK}}", &bk.to_string())
             .replace("{{B_VECS}}", &(bk * bn / 4).to_string());
-        let d = dev().unwrap();
+        let d = dev(Role::Primary).unwrap();
         let layout = conv_bgl(d);
         let started = std::time::Instant::now();
         let _ = pipeline(d, "probe", &src, &layout);
