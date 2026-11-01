@@ -33,3 +33,15 @@ The host owns authentication, per-user authorization, durable writes, conflicts,
 ## Validation
 
 Source regression fixtures cover opt-in defaults, save choices, separate resource identities, atomic library snapshots, content generations, overflow handling and archive bounds including the central directory. Execution results are recorded only after validation of the published source candidate.
+
+## Native UI preview
+
+The existing offscreen snapshot caller can explicitly install synthetic provider Recents:
+
+```sh
+cargo run -p lightcraft-cli -- snapshot --demo --file-provider-preview -o provider.png --size 1440x900
+```
+
+Use its normal --script control input to open File > Open Recent Library for a screenshot.
+Omitting --file-provider-preview keeps the original provider-free state. The flag supplies
+only public Host data to this snapshot run; it adds no transport, authentication or storage.

@@ -80,6 +80,7 @@ USAGE:
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
+        --file-provider-preview  synthetic provider Recents only; no storage or transport
   lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [OPTIONS] FILES…
       Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng next to the first file and
       prints the result as JSON. hdr-batch merges each bracket set among the files (photos taken
@@ -802,6 +803,21 @@ fn render(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Deterministic provider UI data for native screenshots, with no transport or storage adapter.
+fn snapshot_file_provider() -> Result<lightcraft_ui_egui::file_providers::Host, String> {
+    use lightcraft_ui_egui::file_providers::{Host, Resource};
+    let host = Host::default();
+    host.set_session("snapshot-provider-preview".into())?;
+    let connection = host.connect("snapshot-storage".into(), "Example Storage".into(), "preview-account".into())?;
+    let resources = ["Studio library.zip", "Landscape library.zip"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| Resource { id: format!("preview-{index}"), name: name.into(), updated_at: String::new() })
+        .collect();
+    host.set_resources(&connection, resources)?;
+    Ok(host)
+}
+
 fn snapshot(args: &[String]) -> Result<(), String> {
     use lightcraft_ui_egui::headless::Headless;
     use std::time::{Duration, Instant};
@@ -810,11 +826,13 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let mut output: Option<String> = None;
     let mut size = [1600.0f32, 1000.0];
     let mut scale = 1.0f32;
+    let mut file_provider_preview = false;
     let mut files = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--demo" => {}
+            "--file-provider-preview" => file_provider_preview = true,
             "--library" => library = Some(take_value(args, &mut i, "--library")?.to_string()),
             "--script" => script = Some(take_value(args, &mut i, "--script")?.to_string()),
             "-o" | "--output" => output = Some(take_value(args, &mut i, "-o")?.to_string()),
@@ -864,6 +882,10 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         ..Default::default()
     };
     let mut app = lightcraft_ui_egui::LightcraftApp::new(session, services);
+    if file_provider_preview {
+        app.file_provider = Some(snapshot_file_provider()?);
+        app.file_provider_document = 1;
+    }
     // Snapshot sessions promise no GPU: disable photo compute as well as the compositor
     // before the first frame can start background adapter discovery.
     // This UI state is session-local: the CLI neither loads nor saves desktop ui.json.
