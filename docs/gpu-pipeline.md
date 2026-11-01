@@ -51,10 +51,15 @@ Overrides (read once at launch):
   and the AI mask model (SAM 3 on Metal) on the CPU.
 - `LIGHTCRAFT_GPU_ADAPTER=<part of a card's name>` (any case, e.g. `4070`, `radeon`, `"rtx 4070 super"`):
   the graphics card for GPU rendering, AI Denoise and the face models, on a machine with more than one
-  (`backend::pick_adapter`). The first hardware card whose name contains it wins, in wgpu's order;
-  software adapters (WARP, llvmpipe) never. A name that matches no card is logged
+  (`backend::pick_adapter`). Of the hardware cards whose name contains it, the one whose whole name it
+  is wins, then dedicated before built-in before virtual cards, then wgpu's order
+  (`backend::choose_named_adapter`); the log says which when several match (`… matches 2 graphics
+  cards (…): using …`). Software renderers (WARP, llvmpipe) never: a name that matches only one is
+  logged as such. A name that matches no card is logged
   (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and
-  the default high-performance card is used. The window stays on the card that drives the screen,
+  the default high-performance card is used. Each line is logged once, though the render device, AI
+  Denoise and the face models each ask. Each of those makes its own wgpu instance and device, so
+  devices on different cards share no buffer, pipeline or queue. The window stays on the card that drives the screen,
   and rendering runs on a device of its own on the chosen card (the photo is copied to the screen's
   card); a build that lets rendering share the window's device does so only when the variable names
   the window's card (`backend::may_adopt_window_device`). The log's `gpu: LIGHTCRAFT_GPU_ADAPTER=…: using …` line names the card
