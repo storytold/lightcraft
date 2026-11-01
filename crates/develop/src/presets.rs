@@ -292,7 +292,15 @@ impl Preset {
     }
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it
     /// already has are skipped), their effect scaled by the amount.
+    ///
+    /// This knows nothing about the photo's source. A preset that names only one white balance number (or a
+    /// scale the photo is not on) needs the photo prepared against its as-shot white first, and the result put back
+    /// on the scale the photo is edited on: callers on a real photo go through the engine's
+    /// `apply_preset_to_photo`, which does that. A zero (or negative) `amount` returns `s` unchanged.
     pub fn apply(&self, s: &DevelopSettings, amount: f64) -> DevelopSettings {
+        if amount <= 0.0 {
+            return s.clone();
+        }
         let Some(masks) = self.settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
             return apply_partial(s, &self.settings, amount);
         };
@@ -481,6 +489,29 @@ mod tests {
         // the same scale blends
         let out = apply_partial(&photo, &kelvin, 0.5);
         assert_eq!((out.wb.scale, out.wb.temp, out.wb.tint), (crate::WbScale::Kelvin, 4600.0, 4.0));
+    }
+
+    #[test]
+    fn zero_amount_mask_preset_leaves_settings_unchanged_and_can_be_applied_later() {
+        let photo = DevelopSettings { masks: vec![crate::Mask { id: 9, name: "Existing".into(), ..Default::default() }], ..Default::default() };
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "User".into(),
+            settings: json!({"light": {"exposure": 1.0}, "masks": [{"name": "New", "adjust": {"amount": 80.0}}]}),
+            favorite: false,
+            builtin: false,
+        };
+        for amount in [0.0, -0.5] {
+            let unchanged = p.apply(&photo, amount);
+            assert_eq!(unchanged, photo);
+            let out = p.apply(&unchanged, 1.0);
+            assert_eq!(out.light.exposure, 1.0);
+            assert_eq!(out.masks.len(), 2);
+            assert_eq!(out.masks[0], photo.masks[0]);
+            assert_eq!(out.masks[1].name, "New");
+            assert_eq!(out.masks[1].adjust.amount, 80.0);
+        }
     }
 
     /// Every leaf of `v` that is not a number (and every list's length), by path.

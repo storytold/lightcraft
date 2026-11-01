@@ -470,3 +470,115 @@ fn one_field_wb_preset_apply_keeps_the_other_field_on_its_scale() {
     let back = (*s.develop_of(kelvin).unwrap()).clone();
     assert_eq!(back.wb, look.wb, "a preset made from the photo puts its whole white balance back: {:?} vs {:?}", back.wb, look.wb);
 }
+
+/// A preset applied to a photo goes through one function whether it is the `preset.apply` command, a thumbnail or
+/// hover preview, or an import: a hand-written preset naming one white balance number (either one, on either
+/// scale) gives the same settings in all three, on a photo edited in Kelvin and on one edited relative to its
+/// as-shot white. Before, the previews and import called the source-free `Preset::apply` directly, which stored
+/// the number without the photo's as-shot white.
+#[test]
+fn one_field_wb_preset_gives_the_same_result_in_command_preview_and_import() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    use lightcraft_develop::{Preset, WbMode, WbScale};
+    let as_shot = (4986.0, -2.0);
+    let photo = |camera: &str| {
+        let mut p = Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            Source::File { path: "/photos/one-field.arw".into() },
+            "one-field.arw",
+            "ARW",
+            64,
+            64,
+            "2026-01-01T00:00:00",
+        );
+        p.kind = MediaKind::Raw;
+        p.meta.camera = camera.into();
+        p.as_shot_wb = Some(as_shot);
+        p.develop = std::sync::Arc::new(p.camera_defaults());
+        p
+    };
+    let one_field = |name: &str, wb: serde_json::Value| Preset {
+        id: format!("user.{name}"),
+        name: name.into(),
+        group: "User".into(),
+        settings: json!({ "wb": wb }),
+        favorite: false,
+        builtin: false,
+    };
+    let presets = [
+        one_field("temp-only", json!({"temp": 5800.0})),
+        one_field("tint-only", json!({"tint": 9.0})),
+        // the reverse scale: numbers written in Kelvin on a photo edited relative to as shot, and the relative
+        // scale named outright on a photo edited in Kelvin
+        one_field("kelvin-temp", json!({"scale": "kelvin", "temp": 6500.0})),
+        one_field("kelvin-tint", json!({"scale": "kelvin", "tint": 6.0})),
+        one_field("relative-temp", json!({"scale": "legacy", "temp": 6800.0})),
+    ];
+    for (camera, kelvin_photo) in [("SONY ILCE-7M3", true), ("Nobody X1", false)] {
+        assert_eq!(photo(camera).relative_wb(), !kelvin_photo, "{camera}");
+        for preset in &presets {
+            let mut s = Session::new();
+            let p = photo(camera);
+            let id = p.id;
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+            s.presets.push(preset.clone());
+            let why = format!("{camera}, {}", preset.name);
+            let before = (*s.develop_of(id).unwrap()).clone();
+            assert_eq!(before.wb.mode, WbMode::AsShot, "{why}");
+
+            // preview / hover
+            let preview = crate::presets::apply_preset_to_photo(preset, &before, 1.0, &s.source_info(id));
+            // command
+            s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+            s.execute("preset.apply", &json!({"id": preset.id})).unwrap();
+            let command = (*s.develop_of(id).unwrap()).clone();
+            // import (the photo is not in a catalog yet)
+            let mut imported = p;
+            s.import_defaults.raw_preset = Some(preset.id.clone());
+            crate::import::apply_import_defaults(&s, &mut imported);
+
+            assert_eq!(preview, command, "{why}: preview and command");
+            assert_eq!(*imported.develop, command, "{why}: import and command");
+            assert_eq!(command.wb.mode, WbMode::Custom, "{why}: the preset's number replaces As Shot: {:?}", command.wb);
+            // a photo edited in Kelvin ends there; a relative one keeps the scale the preset names (as `develop.merge` does)
+            let want_scale = if kelvin_photo || preset.name.starts_with("kelvin") { WbScale::Kelvin } else { WbScale::Legacy };
+            assert_eq!(command.wb.scale, want_scale, "{why}: the photo stays on the scale it is edited on: {:?}", command.wb);
+            assert_ne!(command.wb, before.wb, "{why}");
+        }
+    }
+}
+
+/// Zero Amount changes nothing, and not by being applied and undone: the photo keeps As Shot mode and every
+/// setting, through the command and the preview, even for a preset whose preparation would write Custom values.
+#[test]
+fn zero_amount_preset_keeps_as_shot_mode_and_settings() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    use lightcraft_develop::{Preset, WbMode};
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/photos/zero.arw".into() }, "zero.arw", "ARW", 64, 64, "2026-01-01T00:00:00");
+    p.kind = MediaKind::Raw;
+    p.meta.camera = "SONY ILCE-7M3".into();
+    p.as_shot_wb = Some((4986.0, -2.0));
+    p.develop = std::sync::Arc::new(p.camera_defaults());
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let preset = Preset {
+        id: "user.zero".into(),
+        name: "Zero".into(),
+        group: "User".into(),
+        settings: json!({"wb": {"temp": 5800.0}, "light": {"exposure": 1.0}}),
+        favorite: false,
+        builtin: false,
+    };
+    s.presets.push(preset.clone());
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let before = (*s.develop_of(id).unwrap()).clone();
+    assert_eq!(before.wb.mode, WbMode::AsShot);
+    for amount in [0.0, -1.0, f64::NAN] {
+        assert_eq!(crate::presets::apply_preset_to_photo(&preset, &before, amount, &s.source_info(id)), before, "preview at {amount}");
+    }
+    s.execute("preset.apply", &json!({"id": preset.id, "amount": 0})).unwrap();
+    let after = (*s.develop_of(id).unwrap()).clone();
+    assert_eq!(after, before);
+    assert_eq!(after.wb.mode, WbMode::AsShot);
+}
