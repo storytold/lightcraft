@@ -11,16 +11,19 @@ pub(crate) fn adapter_memory(info: &wgpu::AdapterInfo) -> Option<u64> {
     if info.device_type != wgpu::DeviceType::DiscreteGpu {
         return None;
     }
-    // asked once per card name: the listing of the cards and each device on them ask again
-    static SEEN: std::sync::Mutex<Vec<(String, Option<u64>)>> = std::sync::Mutex::new(Vec::new());
-    if let Some((_, b)) = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(n, _)| *n == info.name) {
+    // asked once per card (name and PCI ids): the listing of the cards and each device on them ask
+    // again; two cards of one name and ids get one answer, which the probe gives only when they agree
+    type Seen = Vec<((String, u32, u32), Option<u64>)>;
+    static SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(Vec::new());
+    let key = (info.name.clone(), info.vendor, info.device);
+    if let Some((_, b)) = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
         return *b;
     }
     let found = probe(&info.name, info.vendor, info.device);
     if let Some(b) = found {
         log::info!("gpu: {} has {} MiB of memory", info.name, b >> 20);
     }
-    SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((info.name.clone(), found));
+    SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((key, found));
     found
 }
 
@@ -110,7 +113,9 @@ fn sysfs_memory(cards: impl Iterator<Item = SysfsCard>, vendor: u32, device: u32
 
 /// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
 /// another: a subkey's values are gathered under its path): the subkey whose `DriverDesc` is the
-/// name (else the largest any adapter reports). `HardwareInformation.qwMemorySize` is a QWORD;
+/// name, only when every subkey with that name reports one size (two cards of one model can't be
+/// told apart by name; `None` rather than another card's size), else, when none has the name, the
+/// largest any adapter reports. `HardwareInformation.qwMemorySize` is a QWORD;
 /// older drivers write `HardwareInformation.MemorySize` (a DWORD, wrong past 4 GiB: used only
 /// without the other).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -150,10 +155,14 @@ fn parse_registry(text: &str, name: &str) -> Option<u64> {
     }
     let memory = |k: &Key| k.qword.or(k.dword).filter(|b| *b >= 64 << 20);
     let wanted = name.trim().to_ascii_lowercase();
-    keys.iter()
-        .filter(|k| k.desc.as_deref().is_some_and(|d| d.trim().to_ascii_lowercase() == wanted))
-        .find_map(memory)
-        .or_else(|| keys.iter().filter_map(memory).max())
+    let named: Vec<&Key> = keys.iter().filter(|k| k.desc.as_deref().is_some_and(|d| d.trim().to_ascii_lowercase() == wanted)).collect();
+    match named.first() {
+        Some(first) => {
+            let b = memory(first)?;
+            named.iter().all(|k| memory(k) == Some(b)).then_some(b)
+        }
+        None => keys.iter().filter_map(memory).max(),
+    }
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -166,7 +175,8 @@ fn parse_hex(v: &str) -> Option<u64> {
 }
 
 /// `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits` lines (`name, MiB`):
-/// the card named `name`, else the largest.
+/// the cards named `name`, only when they all report one size (`None` rather than another card's),
+/// else, when none has the name, the largest.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_nvidia_smi(text: &str, name: &str) -> Option<u64> {
     let cards: Vec<(String, u64)> = text
@@ -177,7 +187,11 @@ fn parse_nvidia_smi(text: &str, name: &str) -> Option<u64> {
         })
         .collect();
     let wanted = name.trim().to_ascii_lowercase();
-    cards.iter().find(|(n, _)| *n == wanted || wanted.contains(n.as_str())).map(|c| c.1).or_else(|| cards.iter().map(|c| c.1).max())
+    let named: Vec<u64> = cards.iter().filter(|(n, _)| *n == wanted || wanted.contains(n.as_str())).map(|c| c.1).collect();
+    match named.first() {
+        Some(&b) => named.iter().all(|m| *m == b).then_some(b),
+        None => cards.iter().map(|c| c.1).max(),
+    }
 }
 
 #[cfg(test)]
@@ -271,5 +285,25 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         assert_eq!(parse_nvidia_smi(text, "NVIDIA GeForce GT 1030"), Some(2001 << 20));
         assert_eq!(parse_nvidia_smi(text, "nope"), Some(12227 << 20));
         assert_eq!(parse_nvidia_smi("No devices were found", "x"), None);
+    }
+
+    /// Review of PR #3506: two cards of one name are sized only when they agree, never by the
+    /// other's memory.
+    #[test]
+    fn same_named_cards_are_sized_only_when_they_agree() {
+        let two = "NVIDIA GeForce RTX 4070, 12282\nNVIDIA GeForce RTX 4070, 8188\n";
+        assert_eq!(parse_nvidia_smi(two, "NVIDIA GeForce RTX 4070"), None);
+        let same = "NVIDIA GeForce RTX 4070, 12282\nNVIDIA GeForce RTX 4070, 12282\n";
+        assert_eq!(parse_nvidia_smi(same, "NVIDIA GeForce RTX 4070"), Some(12282 << 20));
+        let key = |i: u32, name: &str, mem: Option<u64>| {
+            let m = mem.map(|b| format!("    HardwareInformation.qwMemorySize    REG_QWORD    {b:#x}\n")).unwrap_or_default();
+            format!("HKEY_X\\{i:04}\n    DriverDesc    REG_SZ    {name}\n{m}\n")
+        };
+        let differ = [key(0, "Card", Some(12 << 30)), key(1, "Card", Some(8 << 30))].concat();
+        assert_eq!(parse_registry(&differ, "Card"), None);
+        let one_silent = [key(0, "Card", Some(12 << 30)), key(1, "Card", None), key(2, "Other", Some(16 << 30))].concat();
+        assert_eq!(parse_registry(&one_silent, "Card"), None, "not the other card's either");
+        let agree = [key(0, "Card", Some(12 << 30)), key(1, "Card", Some(12 << 30))].concat();
+        assert_eq!(parse_registry(&agree, "Card"), Some(12 << 30));
     }
 }

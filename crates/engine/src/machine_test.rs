@@ -387,6 +387,10 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
                 Some(_) => return Err(bad(C, "paths must be a list of file paths")),
             };
             let quick = p.get("quick").and_then(Value::as_bool).unwrap_or(false);
+            // (an export running in the background would share the test's settings and skew it)
+            if s.activity.list().iter().any(|t| t.kind == "export") {
+                return Err(bad(C, "wait for the export to finish, then test this computer"));
+            }
             let guard = s.activity.start("benchmark", "Testing this computer", crate::activity::Cancel::Yes);
             let cancel = guard.cancel_flag();
             let r = run_test(&TestOptions { paths, quick, cancel: cancel.clone(), ..Default::default() }, &mut |done, total, what| {
@@ -461,6 +465,18 @@ pub fn bench_settings(plain: bool, hdr: bool) -> DevelopSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review of PR #3506: the test doesn't start while this session exports (the export would
+    /// share its settings and skew it).
+    #[test]
+    fn the_test_waits_for_a_running_export() {
+        let mut s = crate::Session::with_demo();
+        let export = s.activity.start("export", "Exporting", crate::activity::Cancel::No);
+        let e = s.execute("app.testMachine", &serde_json::json!({"quick": true, "apply": false})).unwrap_err().to_string();
+        assert!(e.contains("wait for the export"), "{e}");
+        assert!(s.activity.list().iter().all(|t| t.kind != "benchmark"), "no test row");
+        drop(export);
+    }
 
     #[test]
     fn lanes_to_try_follow_the_cores() {
