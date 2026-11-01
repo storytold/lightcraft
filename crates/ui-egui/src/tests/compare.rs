@@ -359,3 +359,37 @@ fn survey_rings_the_active_tile_in_the_theme_colour() {
         .count();
     assert_eq!(white, 0, "no white 2 pt frame");
 }
+
+/// Survey with three photos selected and the second active; returns the three ids.
+fn survey_of_three(h: &mut Headless) -> [u64; 3] {
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    let ids = [vis[0], vis[1], vis[2]];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids, "active": ids[1]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    ids
+}
+
+/// Move the pointer to `pos` and press and release the primary button there, with `modifiers`.
+fn click_with(h: &mut Headless, pos: egui::Pos2, modifiers: egui::Modifiers) {
+    h.app.synthetic.push(egui::Event::PointerMoved(pos));
+    h.settle(SETTLE);
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.settle(SETTLE);
+}
+
+/// ⌘/Ctrl-click on a survey tile takes it out of the survey, as in Lightroom Classic; a plain
+/// click only makes it active.
+#[test]
+fn survey_command_click_takes_the_photo_out() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let img = h.app.image_rect.expect("the active tile is laid out");
+    click_with(&mut h, img.center(), egui::Modifiers::NONE);
+    assert_eq!(h.app.session.selection.ids.len(), 3, "a plain click keeps the photo");
+    click_with(&mut h, img.center(), egui::Modifiers::COMMAND);
+    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
+    assert_eq!(sel, vec![a, c], "the ⌘/Ctrl-clicked photo left the survey (was {b})");
+}
