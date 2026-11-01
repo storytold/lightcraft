@@ -686,3 +686,44 @@ fn a_preview_pointer_past_the_end_of_the_file_finds_no_preview() {
         }
     }
 }
+
+/// A preview pointer whose length runs past the end of a file that cuts its JPEG short (no end
+/// marker) finds no preview, so a smaller whole one wins; an overstated length whose JPEG is whole
+/// inside the file still finds it (CodeRabbit on #3077).
+#[test]
+fn a_preview_cut_short_by_the_end_of_the_file_is_not_taken() {
+    let big = sized_jpeg(1600, 1200, 3, 4000);
+    let small = sized_jpeg(160, 120, 3, 100);
+    // the small JPEG as a strip, the big one pointed to at the end of the file
+    let with_tail = |tail: &[u8], declared: u32| {
+        let probe = {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(t::JPEG_INTERCHANGE_FORMAT, Value::Long(vec![0]));
+            ifd.set(t::JPEG_INTERCHANGE_FORMAT_LENGTH, Value::Long(vec![0]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![6]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![1]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![1]));
+            ifd.set_image(ImageData::Strips { rows_per_strip: 1, strips: vec![small.clone()] });
+            ifd
+        };
+        let at = TiffWriter::default().write(&[probe]).unwrap().len() as u32;
+        let mut ifd = IfdBuilder::new();
+        ifd.set(t::JPEG_INTERCHANGE_FORMAT, Value::Long(vec![at]));
+        ifd.set(t::JPEG_INTERCHANGE_FORMAT_LENGTH, Value::Long(vec![declared]));
+        ifd.set(t::COMPRESSION, Value::Short(vec![6]));
+        ifd.set(t::IMAGE_WIDTH, Value::Long(vec![1]));
+        ifd.set(t::IMAGE_LENGTH, Value::Long(vec![1]));
+        ifd.set_image(ImageData::Strips { rows_per_strip: 1, strips: vec![small.clone()] });
+        let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+        assert_eq!(file.len() as u32, at, "the pointer lands right after the TIFF");
+        file.extend_from_slice(tail);
+        file
+    };
+    let declared = big.len() as u32 + 64;
+    // cut short: half of the big JPEG, no end marker
+    let cut = with_tail(&big[..big.len() / 2], declared);
+    assert_eq!(embedded_preview(&cut).as_deref(), Some(&small[..]), "the truncated JPEG is not taken");
+    // whole, its length overstated past the file's end: still the largest
+    let whole = with_tail(&big, declared);
+    assert_eq!(embedded_preview(&whole).as_deref(), Some(&big[..]), "a whole JPEG with an overstated length is kept");
+}
