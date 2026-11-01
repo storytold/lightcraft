@@ -3659,5 +3659,7 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "16 ბიტზე LZW ხშირად უფრო დიდია, ვიდრე შეკუმშვის გარეშე, და უფრო დიდია, ვიდრე ZIP, თითქმის იგივე სიჩქარით. გამოიყენეთ მხოლოდ მაშინ, თუ სხვა პროგრამას LZW სჭირდება.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW ჩვეულებრივ უფრო დიდია, ვიდრე ZIP, და შეიძლება უფრო დიდი იყოს, ვიდრე შეკუმშვის გარეშე. გამოიყენეთ მხოლოდ მაშინ, თუ სხვა პროგრამას LZW სჭირდება."
 }

@@ -3573,5 +3573,7 @@
   "Top bar": "Barre supérieure",
   "Tool strip": "Barre d’outils",
   "Bottom bar": "Barre inférieure",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "En 16 bits, LZW est souvent plus lourd que sans compression, et plus lourd que ZIP pour une vitesse comparable. À utiliser seulement si un autre logiciel exige LZW.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW est généralement plus lourd que ZIP et peut l’être plus que sans compression. À utiliser seulement si un autre logiciel exige LZW."
 }

@@ -2389,5 +2389,7 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "16 位时，LZW 常常比不压缩还大，也比 ZIP 大，速度却差不多。仅在其他软件需要 LZW 时使用。",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW 通常比 ZIP 大，也可能比不压缩还大。仅在其他软件需要 LZW 时使用。"
 }
