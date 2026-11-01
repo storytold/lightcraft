@@ -332,7 +332,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Photos",
             [],
             None,
-            "{ids: [id], active?: id, mode?: replace|add|toggle|range} — every id must be a photo of the library",
+            "{ids: [id], active?: id, mode?: replace|add|toggle|range|click} — every id must be a photo of the library. As in Lightroom: toggle (⌘/Ctrl-click) and range (Shift-click, from the active photo) keep the active photo; click (a plain click) on a photo of a selection of several makes it the active one and keeps the selection, elsewhere it selects that photo alone",
             always,
             |s, p| {
                 let ids = crate::cmd::photo_ids(p, "library.select")?.unwrap_or_default();
@@ -345,6 +345,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("library.select", format!("no such photo {}", id.0)));
                 }
                 s.end_interaction()?;
+                let before = s.selection.clone();
                 match mode {
                     "replace" => {
                         // a repeated id is one photo: keep the first of each, in the order given
@@ -361,6 +362,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     "toggle" => ids.into_iter().for_each(|id| s.selection.toggle(id)),
+                    "click" => {
+                        if let Some(id) = ids.first() {
+                            s.selection.click(*id);
+                        }
+                    }
                     "range" => {
                         let vis = s.visible_cloned();
                         if let Some(id) = ids.first() {
@@ -369,16 +375,30 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     other => return Err(bad("library.select", format!("unknown mode `{other}`"))),
                 }
+                // a selection changed by hand is no longer "every photo of the view" (a click that only makes another
+                // selected photo the active one keeps it)
+                if s.selection.ids != before.ids {
+                    s.all_selected = None;
+                }
                 s.active_mask = None;
                 s.active_spot = None;
                 Ok(json!({"selected": s.selection.ids.len()}))
             }
         ),
-        cmd!("library.selectAll", "Select All", ["Edit"], Some("Cmd+A"), "{}", always, |s, _| {
-            let vis = s.visible_cloned();
-            s.selection = Selection { active: s.selection.active.filter(|a| vis.contains(a)).or(vis.first().copied()), ids: vis };
-            Ok(json!({"selected": s.selection.ids.len()}))
-        }),
+        cmd!(
+            "library.selectAll",
+            "Select All",
+            ["Edit"],
+            Some("Cmd+A"),
+            "{} — every photo of the view; photos that join the view later (an import still running) are selected too, until the selection or the view changes",
+            always,
+            |s, _| {
+                let vis = s.visible_cloned();
+                s.selection = Selection { active: s.selection.active.filter(|a| vis.contains(a)).or(vis.first().copied()), ids: vis };
+                s.all_selected = s.visible_view.clone();
+                Ok(json!({"selected": s.selection.ids.len()}))
+            }
+        ),
         cmd!(query "library.devices", "Cameras and Cards", [], None, "{} → [{name, path (its DCIM folder), root}] — mounted volumes with a DCIM folder", always, |_, _| {
             Ok(serde_json::to_value(crate::devices::devices_now()).unwrap_or_default())
         }),
@@ -428,6 +448,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("library.selectNone", "Deselect All", ["Edit"], Some("Cmd+Shift+A"), "{}", always, |s, _| {
             let a = s.selection.active;
             s.selection = Selection { ids: a.into_iter().collect(), active: a };
+            s.all_selected = None;
             ok()
         }),
         cmd!("library.next", "Next Photo", [], Some("Right"), "{}", always, |s, _| step(s, 1)),
