@@ -12,6 +12,7 @@ mod ico;
 mod layers;
 mod parity;
 mod stats;
+mod test;
 mod version;
 mod web;
 
@@ -58,6 +59,14 @@ commands:
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
                   LIGHTCRAFT_CI_LOCK=off to skip the lock)
+  test [-p PKG]... [--keep-going] [--doc] [-- ARGS]
+                  the workspace's tests (or PKG's) with ci's caps (build jobs by free RAM, at most 4 test
+                  threads, line-table debuginfo) in ci's machine-wide slot, instead of `cargo test`:
+                  builds every test target once, then runs each test binary with ARGS (a filter,
+                  --exact, --skip, --nocapture); stops at the first failing binary unless --keep-going
+                  (alias --no-fail-fast), which runs them all and names each that failed; --doc runs the
+                  doctests after them. LIGHTCRAFT_NEXTEST=1 runs the tests under cargo nextest
+                  (--test-threads N and --nocapture become its options; ARGS are its filters)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -81,6 +90,7 @@ fn main() -> ExitCode {
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci(&rest),
+        Some("test") => test::run(&rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("raw-frame") => cmd_raw_frame(&rest),
@@ -125,30 +135,79 @@ pub fn root() -> PathBuf {
 pub fn cargo() -> Command {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(root());
-    // Full Windows debuginfo plus one linker per CPU can exhaust RAM before any
-    // tests run. Scope these overridable defaults to CI, including parity/WASM
-    // subprocesses, without changing ordinary developer builds or GPU coverage.
-    if std::env::args().nth(1).as_deref() == Some("ci") {
-        static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-        let (build, threads) = JOBS.get_or_init(|| {
-            let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
-            let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
-            // More test threads barely shorten CI (a few heavy tests dominate) but make the
-            // wall-clock frame-budget tests flaky on a loaded machine.
-            (jobs.to_string(), jobs.min(4).to_string())
-        });
-        for (key, value) in [
-            ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
-            ("CARGO_BUILD_JOBS", build.as_str()),
-            ("RUST_TEST_THREADS", threads.as_str()),
-            ("NEXTEST_TEST_THREADS", threads.as_str()),
-        ] {
-            if std::env::var_os(key).is_none() {
-                c.env(key, value);
-            }
-        }
-    }
+    apply_ci_caps(&mut c);
     c
+}
+
+/// Whether this run gives the cargo and test processes it starts CI's resource caps
+/// ([`apply_ci_caps`]). Off until a subcommand opts in with [`use_ci_caps`].
+static CI_CAPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Opt this run into CI's resource caps: the subcommands that build and run the test suite (`ci`,
+/// `test`) call it first, so every cargo and test binary they start, including parity and WASM
+/// subprocesses, gets them. Ordinary developer builds keep their own settings.
+fn use_ci_caps() {
+    CI_CAPS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The environment defaults of a capped run, worked out once: line-table debuginfo, build jobs by
+/// available RAM ([`ci_jobs`]) and test threads at most 4.
+fn ci_caps() -> &'static [(&'static str, String); 4] {
+    static CAPS: std::sync::OnceLock<[(&'static str, String); 4]> = std::sync::OnceLock::new();
+    CAPS.get_or_init(|| {
+        let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
+        let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
+        // More test threads barely shorten CI (a few heavy tests dominate) but make the
+        // wall-clock frame-budget tests flaky on a loaded machine.
+        let threads = jobs.min(4).to_string();
+        [
+            ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only".to_owned()),
+            ("CARGO_BUILD_JOBS", jobs.to_string()),
+            ("RUST_TEST_THREADS", threads.clone()),
+            ("NEXTEST_TEST_THREADS", threads),
+        ]
+    })
+}
+
+/// The caps `c` gets: each of `caps` the environment doesn't set itself (`is_set`, normally
+/// [`caller_sets`]), so a caller's setting wins; see [`set_by_caller`] for an explicit
+/// `RUST_TEST_THREADS=4`.
+fn caps_to_set<'a>(caps: &'a [(&'static str, String)], is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'a str)> {
+    caps.iter().filter(|(key, _)| !is_set(key)).map(|(key, value)| (*key, value.as_str())).collect()
+}
+
+/// The variable `.cargo/config.toml` sets beside its `RUST_TEST_THREADS` default, to the same
+/// value (#3059). `cargo xtask` runs under that config, so it inherits the default like any cargo
+/// run; the marker tells it apart from a caller's own setting.
+const TEST_THREADS_DEFAULT_MARKER: &str = "LIGHTCRAFT_TEST_THREADS_DEFAULT";
+
+/// Whether the caller set `key` in the environment (`get` reads it), rather than leaving it unset
+/// or to the `RUST_TEST_THREADS` default of `.cargo/config.toml`: that one counts as unset when it
+/// equals the marker [`TEST_THREADS_DEFAULT_MARKER`] holds. So an explicit value other than the
+/// default (4) wins as-is, but an explicit `RUST_TEST_THREADS=4` can't be told apart from the
+/// default: `ci` and `xtask test` may lower it to their RAM-aware value (never raise it, as that is
+/// at most 4). Without the marker (xtask run outside cargo) every value is the caller's.
+fn set_by_caller(key: &str, get: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let Some(value) = get(key) else {
+        return false;
+    };
+    !(key == "RUST_TEST_THREADS" && get(TEST_THREADS_DEFAULT_MARKER).is_some_and(|default| default == value))
+}
+
+/// [`set_by_caller`] for this process's environment (an explicit `RUST_TEST_THREADS=4` counts as
+/// the config default).
+pub fn caller_sets(key: &str) -> bool {
+    set_by_caller(key, |k| std::env::var_os(k))
+}
+
+/// Give `c` CI's resource caps when this run opted in ([`use_ci_caps`]). Full Windows debuginfo
+/// plus one linker per CPU can exhaust RAM before any tests run, and one test thread per CPU
+/// can exhaust it while they run (#3057). A caller's setting wins ([`caller_sets`]), except that an
+/// explicit `RUST_TEST_THREADS=4` looks like the config default and may be lowered.
+fn apply_ci_caps(c: &mut Command) {
+    if CI_CAPS.load(std::sync::atomic::Ordering::Relaxed) {
+        c.envs(caps_to_set(ci_caps(), caller_sets));
+    }
 }
 
 pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
