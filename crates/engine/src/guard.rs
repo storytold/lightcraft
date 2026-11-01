@@ -65,6 +65,12 @@ mod tests {
     #[test]
     fn the_panic_log_is_made_for_its_owner_only() {
         let dir = std::env::temp_dir().join(format!("lightcraft-panic-log-{}", std::process::id()));
+        // A fresh private folder, so nothing left there (or planted by another user) is opened.
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut make = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut make, 0o700);
+        make.create(&dir).unwrap();
         let log = dir.join("logs").join("lightcraft-panics.log");
         writeln!(open_panic_log(&log).unwrap(), "one").unwrap();
         writeln!(open_panic_log(&log).unwrap(), "two").unwrap();
