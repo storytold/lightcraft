@@ -692,23 +692,50 @@ mod tests {
         assert_eq!(out, complete(w, h, ch, &dirty, &hole, &CompleteParams::default()).unwrap());
     }
 
+    /// Mean, standard deviation and mean absolute difference to the right-hand neighbour (the fine
+    /// grain) of the pixels inside (`inside`) or outside the hole; a neighbour pair counts when both
+    /// pixels are on that side.
+    fn stats(img: &[f32], hole: &[bool], w: usize, inside: bool) -> (f32, f32, f32) {
+        let v: Vec<f32> = img.iter().zip(hole).filter(|(_, h)| **h == inside).map(|(v, _)| *v).collect();
+        let m = v.iter().sum::<f32>() / v.len() as f32;
+        let sd = (v.iter().map(|x| (x - m).powi(2)).sum::<f32>() / v.len() as f32).sqrt();
+        let d: Vec<f32> = (0..img.len() - 1)
+            .filter(|&i| (i + 1) % w != 0 && hole[i] == inside && hole[i + 1] == inside)
+            .map(|i| (img[i + 1] - img[i]).abs())
+            .collect();
+        (m, sd, d.iter().sum::<f32>() / d.len() as f32)
+    }
+
     #[test]
     fn completion_keeps_the_grain() {
-        // Noise: a fill that averages its matches comes out much smoother than its surroundings.
+        // Noise: a fill that averages its matches comes out much smoother than its surroundings. The
+        // fill keeps the noise's statistics: its level, its spread and its pixel-to-pixel grain.
         let (w, h, ch) = (96, 96, 1);
         let mut rng = Rng::new(3);
         let clean: Vec<f32> = (0..w * h).map(|_| 0.4 + (rng.next() % 1000) as f32 / 1000.0 * 0.2).collect();
         let hole = disc(w, h, 48.0, 48.0, 14.0);
         let out = complete(w, h, ch, &clean, &hole, &CompleteParams::default()).unwrap();
-        let sd = |inside: bool| {
-            let v: Vec<f32> = out.iter().zip(&hole).filter(|(_, h)| **h == inside).map(|(v, _)| *v).collect();
-            let m = v.iter().sum::<f32>() / v.len() as f32;
-            (v.iter().map(|x| (x - m).powi(2)).sum::<f32>() / v.len() as f32).sqrt()
-        };
-        let (fill, around) = (sd(true), sd(false));
-        assert!(fill > 0.7 * around, "fill σ {fill}, surroundings σ {around}");
+        let ((m_fill, sd_fill, grain_fill), (m_around, sd_around, grain_around)) = (stats(&out, &hole, w, true), stats(&out, &hole, w, false));
+        assert!((m_fill - m_around).abs() < 0.02, "fill mean {m_fill}, surroundings {m_around}");
+        assert!((0.7..1.3).contains(&(sd_fill / sd_around)), "fill σ {sd_fill}, surroundings σ {sd_around}");
+        assert!((0.7..1.3).contains(&(grain_fill / grain_around)), "fill grain {grain_fill}, surroundings {grain_around}");
+        // averaging the matches (the vote's mean, as before) loses the grain
         let smooth = complete(w, h, ch, &clean, &hole, &CompleteParams { sharp_final: false, ..Default::default() }).unwrap();
-        assert_ne!(out, smooth);
+        let (_, _, grain_smooth) = stats(&smooth, &hole, w, true);
+        assert!(grain_smooth < grain_fill, "smooth grain {grain_smooth}, sharp {grain_fill}");
+    }
+
+    #[test]
+    fn completion_of_a_flat_area_is_flat() {
+        // A hole in a flat area, centred or at the frame's edge, is filled with the area's own value
+        // exactly, whatever was in it: the fill copies real pixels and adds nothing of its own.
+        let (w, h, ch) = (64, 48, 3);
+        let flat = [0.25f32, 0.5, 0.75];
+        for hole in [disc(w, h, 32.0, 24.0, 10.0), disc(w, h, 0.0, 10.0, 8.0)] {
+            let img: Vec<f32> = hole.iter().flat_map(|hh| if *hh { [0.9, 0.05, 0.3] } else { flat }).collect();
+            let out = complete(w, h, ch, &img, &hole, &CompleteParams::default()).unwrap();
+            assert!(out.chunks(ch).all(|p| p == flat), "a flat area's fill isn't flat");
+        }
     }
 
     #[test]
