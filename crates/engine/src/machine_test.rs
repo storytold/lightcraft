@@ -112,6 +112,18 @@ pub fn best_run(runs: &[TestRun]) -> Option<&TestRun> {
     runs.iter().filter(|r| r.photos_per_min >= top * 0.97).min_by_key(|r| (r.lanes, !r.gpu, r.mix))
 }
 
+/// Lane counts a caller gave, each held to 1..=[`crate::export::MAX_EXPORT_LANES`], once each in
+/// their order (review of PR #3499: a 0 or a huge number sized the runs and the report).
+fn explicit_lanes(given: &[usize]) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for n in given.iter().map(|n| (*n).clamp(1, crate::export::MAX_EXPORT_LANES)) {
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
 /// Run the test. `progress(done, total, what)` after each step; `false` stops it (`Err("cancelled")`).
 /// Changes nothing in the process: [`apply`] uses the result.
 pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) -> bool) -> Result<MachineReport, String> {
@@ -120,7 +132,7 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     let gpu = crate::gpu::available();
     // the second card, when the app's start-up made it (never waited for here)
     let helper = gpu && crate::gpu::helper_ready();
-    let lanes = if o.lanes.is_empty() { lane_choices(cores, o.quick) } else { o.lanes.clone() };
+    let lanes = if o.lanes.is_empty() { lane_choices(cores, o.quick) } else { explicit_lanes(&o.lanes) };
     // a session of its own, with the photos to export
     let (mut session, ids, source) = if o.paths.is_empty() {
         let s = crate::Session::with_demo();
@@ -130,6 +142,10 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     } else {
         let mut s = crate::Session::new().with_fs();
         let r = s.execute("library.import", &serde_json::json!({"paths": o.paths})).map_err(|e| e.to_string())?;
+        // (stopped while the photos were read in: no export round after it)
+        if o.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err("cancelled".into());
+        }
         let ids: Vec<_> =
             r["imported"].as_array().map(|a| a.iter().filter_map(|v| v.as_u64()).map(lightcraft_catalog::PhotoId).collect()).unwrap_or_default();
         let camera = ids.first().and_then(|id| s.catalog.photo(*id)).map(|p| camera_name(&p.meta.camera)).unwrap_or_default();
@@ -421,16 +437,23 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
         "{lanes?: number (0 = automatic), gpu?: bool, gpuJobs?: number (0 = automatic)} — photos exported side by side, the GPU for exports, exports sharing the GPU at once; returns what is in use",
         always, |_, p| {
             const C: &str = "app.exportTuning";
-            if let Some(v) = p.get("lanes") {
-                let n = v.as_u64().ok_or_else(|| bad(C, "lanes must be a number"))?;
-                crate::export::set_export_lanes(Some(n as usize).filter(|n| *n > 0));
+            if !(p.is_object() || p.is_null()) {
+                return Err(bad(C, "parameters must be an object"));
             }
-            if let Some(v) = p.get("gpu") {
-                crate::export::set_export_gpu(v.as_bool().ok_or_else(|| bad(C, "gpu must be true or false"))?);
+            // every field is read before any is applied: a refused request changes nothing
+            // (review of PR #3499)
+            let number = |k: &str| p.get(k).map(|v| v.as_u64().map(|n| usize::try_from(n).unwrap_or(usize::MAX)).ok_or_else(|| bad(C, format!("{k} must be a number")))).transpose();
+            let lanes = number("lanes")?;
+            let gpu = p.get("gpu").map(|v| v.as_bool().ok_or_else(|| bad(C, "gpu must be true or false"))).transpose()?;
+            let jobs = number("gpuJobs")?;
+            if let Some(n) = lanes {
+                crate::export::set_export_lanes(Some(n).filter(|n| *n > 0));
             }
-            if let Some(v) = p.get("gpuJobs") {
-                let n = v.as_u64().ok_or_else(|| bad(C, "gpuJobs must be a number"))?;
-                crate::gpu::set_batch_limits(None, Some(n as usize).filter(|n| *n > 0));
+            if let Some(g) = gpu {
+                crate::export::set_export_gpu(g);
+            }
+            if let Some(n) = jobs {
+                crate::gpu::set_batch_limits(None, Some(n).filter(|n| *n > 0));
             }
             Ok(tuning())
         }),
@@ -500,6 +523,7 @@ mod tests {
     /// (`"false"` read as absent would apply the test's result).
     #[test]
     fn odd_flags_are_refused() {
+        let _serial = crate::export::TUNING_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut s = crate::Session::with_demo();
         for p in [serde_json::json!({"apply": "false"}), serde_json::json!({"quick": "true"}), serde_json::json!({"quick": 1})] {
             let e = s.execute("app.testMachine", &p).unwrap_err().to_string();
@@ -509,7 +533,16 @@ mod tests {
         for p in [serde_json::json!([true]), serde_json::json!(false), serde_json::json!("apply")] {
             let e = s.execute("app.testMachine", &p).unwrap_err().to_string();
             assert!(e.contains("parameters must be an object"), "{p}: {e}");
+            // and app.exportTuning (CodeRabbit on PR #3506): nothing applied, an error instead
+            let e = s.execute("app.exportTuning", &p).unwrap_err().to_string();
+            assert!(e.contains("parameters must be an object"), "exportTuning {p}: {e}");
         }
+        assert!(s.execute("app.exportTuning", &serde_json::Value::Null).is_ok(), "no parameters: what is in use");
+        // a refused field leaves the valid ones before it unapplied
+        let before = crate::export::export_lanes_override();
+        assert!(s.execute("app.exportTuning", &serde_json::json!({"lanes": 3, "gpu": "yes"})).is_err());
+        assert_eq!(crate::export::export_lanes_override(), before, "lanes applied before gpu was refused");
+        assert_eq!(explicit_lanes(&[0, 2, 2, 999]), [1, 2, crate::export::MAX_EXPORT_LANES]);
         assert!(s.activity.list().iter().all(|t| t.kind != "benchmark"), "no test ran");
     }
 

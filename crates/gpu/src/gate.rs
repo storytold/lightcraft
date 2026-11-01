@@ -553,6 +553,25 @@ mod tests {
     const P: Role = Role::Primary;
     const H: Role = Role::Helper;
 
+    /// Review of PR #3532: a panic inside batch work or a turn leaves the thread's flags as they
+    /// were (the export guard catches the panic and the lane goes on with its next photo).
+    #[test]
+    fn a_panic_in_batch_work_leaves_the_thread_as_it_was() {
+        let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!is_batch());
+        let caught = std::panic::catch_unwind(|| as_batch(|| panic!("render")));
+        assert!(caught.is_err());
+        assert!(!is_batch(), "still batch work after the panic");
+        let caught = std::panic::catch_unwind(|| as_batch(|| in_one_turn(Role::Primary, 0, 1 << 30, &|| false, || panic!("render"))));
+        assert!(caught.is_err());
+        assert!(!is_batch() && IN_TURN.with(|c| c.get()).is_none(), "still in a turn after the panic");
+        // nested: the outer value comes back
+        as_batch(|| {
+            let _ = std::panic::catch_unwind(|| as_batch(|| panic!("inner")));
+            assert!(is_batch());
+        });
+    }
+
     #[test]
     fn job_memory_grows_with_the_pixels_and_never_overflows() {
         assert_eq!(job_bytes(0, 0), 0);

@@ -91,32 +91,48 @@ pub fn adopt(st: &mut AppSettings, r: &MachineReport) {
 
 /// Raw photos of the library the test may use, newest last: no file is looked at here, on the UI
 /// thread (a library on a slow or gone network share would hold the window); [`on_disk`] picks
-/// those that are there, on the test's thread.
+/// those that are there, on the test's thread. Only the newest [`MAX_CANDIDATES`] paths are copied
+/// (the walk itself is over the catalog in memory).
 fn sample_candidates(app: &LightcraftApp) -> Vec<String> {
-    app.session
-        .catalog
-        .photos()
-        .filter(|p| p.kind == lightcraft_engine::catalog::MediaKind::Raw)
-        .filter_map(|p| match &p.source {
-            lightcraft_engine::catalog::Source::File { path } => Some(path.clone()),
-            _ => None,
-        })
-        .collect()
+    let raws = app.session.catalog.photos().filter(|p| p.kind == lightcraft_engine::catalog::MediaKind::Raw).filter_map(|p| match &p.source {
+        lightcraft_engine::catalog::Source::File { path } => Some(path),
+        _ => None,
+    });
+    newest(raws, MAX_CANDIDATES)
+}
+
+/// Library photos the test looks for on disk, at most.
+const MAX_CANDIDATES: usize = 512;
+
+/// The last `n` of `all`, in their order, copied once each (the rest are only passed over).
+fn newest<'a>(all: impl Iterator<Item = &'a String>, n: usize) -> Vec<String> {
+    let mut ring: std::collections::VecDeque<&String> = std::collections::VecDeque::with_capacity(n.min(1024));
+    for p in all {
+        if n == 0 {
+            break;
+        }
+        if ring.len() == n {
+            ring.pop_front();
+        }
+        ring.push_back(p);
+    }
+    ring.into_iter().cloned().collect()
 }
 
 /// How long the test's thread looks for the library's photos before it uses those it found (and
 /// the demo photos when none): a library whose newest folders are on a gone share is not searched
-/// for minutes. The deadline is checked between photos: one lookup the OS holds on a hung share
-/// is not cut short, and the test (its row and ✕ meanwhile) goes on once it returns.
+/// for minutes. The search runs on a thread of its own, and the test waits for it this long at
+/// most: a lookup the OS holds on a hung share can't hold the test (that thread stops at its
+/// deadline once the lookup returns).
 const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The newest `n` of `candidates` (newest last) that are files on disk, in their order, looked for
 /// newest first until `n` are found or `deadline` passes: the user's own camera's decode is part of
-/// an export. Empty: the test uses the demo photos.
-fn on_disk(candidates: Vec<String>, n: usize, deadline: std::time::Instant, is_file: impl Fn(&str) -> bool) -> Vec<String> {
+/// an export, or until `stop` says the test was stopped. Empty: the test uses the demo photos.
+fn on_disk(candidates: Vec<String>, n: usize, deadline: std::time::Instant, stop: &dyn Fn() -> bool, is_file: impl Fn(&str) -> bool) -> Vec<String> {
     let mut v: Vec<String> = Vec::with_capacity(n);
     for p in candidates.into_iter().rev() {
-        if v.len() >= n || std::time::Instant::now() >= deadline {
+        if v.len() >= n || std::time::Instant::now() >= deadline || stop() {
             break;
         }
         if is_file(&p) {
@@ -190,10 +206,19 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
     let (tx, rx) = channel();
     let stop = cancel.clone();
     let work = move || {
+        let stopped = {
+            let cancel = cancel.clone();
+            move || cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
+        };
         let paths = match photos {
             Photos::Given(v) => v,
-            Photos::Library(c) => on_disk(c, 4, std::time::Instant::now() + LOOK_FOR, |p| std::path::Path::new(p).is_file()),
+            Photos::Library(c) => find_on_disk(c, stopped.clone()),
         };
+        // stopped while looking: not the demo photos (an empty list would mean those)
+        if stopped() {
+            let _ = tx.send(Err("cancelled".to_string()));
+            return;
+        }
         let r = run(paths, quick, stop, &mut |done, total, what| {
             row.progress(done as u64, total as u64);
             row.detail(what);
@@ -213,6 +238,46 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
     started?;
     app.machine = Some(MachineTask { rx, _guard: guard, apply });
     Ok(())
+}
+
+/// [`on_disk`] on a thread of its own, waited for [`LOOK_FOR`] at most (a file lookup the OS holds
+/// on a hung network share can't hold the test; nothing found in time: the demo photos).
+#[cfg(not(target_arch = "wasm32"))]
+fn find_on_disk(candidates: Vec<String>, stop: impl Fn() -> bool + Clone + Send + 'static) -> Vec<String> {
+    let deadline = std::time::Instant::now() + LOOK_FOR;
+    let (ftx, frx) = channel();
+    let scan_stop = stop.clone();
+    let spawned = std::thread::Builder::new().name("machine-test-scan".into()).spawn(move || {
+        let _ = ftx.send(on_disk(candidates, 4, deadline, &scan_stop, |p| std::path::Path::new(p).is_file()));
+    });
+    if let Err(e) = spawned {
+        log::warn!("test my machine: can't look for the library's photos: {e}");
+        return Vec::new();
+    }
+    // a little past the scan's own deadline, for the lookup in progress at it
+    wait_for_scan(&frx, deadline + std::time::Duration::from_millis(500), &stop)
+}
+
+/// The scan's result, waited for until `until` in short steps, so a stop is seen at once (review
+/// of PR #3499); nothing (the demo photos, or the caller sees the stop) otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_for_scan(rx: &Receiver<Vec<String>>, until: std::time::Instant, stop: &dyn Fn() -> bool) -> Vec<String> {
+    loop {
+        let now = std::time::Instant::now();
+        if stop() || now >= until {
+            return Vec::new();
+        }
+        match rx.recv_timeout((until - now).min(std::time::Duration::from_millis(100))) {
+            Ok(v) => return v,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Vec::new(),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn find_on_disk(_candidates: Vec<String>, _stop: impl Fn() -> bool + Clone + Send + 'static) -> Vec<String> {
+    Vec::new()
 }
 
 fn run(
@@ -326,7 +391,7 @@ mod tests {
         app.ui.settings.machine_test = Some(MachineReport { lanes: 3, helper_slower: true, ..Default::default() });
         app.logic(&ctx);
         assert!(app.ui.settings.machine_test.is_some(), "kept at startup");
-        app.ui.settings.gpu_helper = "off".into();
+        app.ui.settings.gpu_helper = String::new(); // Automatic (Off is the default)
         app.logic(&ctx);
         assert!(app.ui.settings.machine_test.is_none(), "another second card");
         app.ui.settings.machine_test = Some(MachineReport { lanes: 3, ..Default::default() });
@@ -478,14 +543,39 @@ mod tests {
             looked.borrow_mut().push(p.to_string());
             p != "p5.nef"
         };
-        assert_eq!(on_disk(c.clone(), 3, later, gone), ["p3.nef", "p4.nef", "p6.nef"]);
+        assert_eq!(on_disk(c.clone(), 3, later, &|| false, gone), ["p3.nef", "p4.nef", "p6.nef"]);
         assert_eq!(*looked.borrow(), ["p6.nef", "p5.nef", "p4.nef", "p3.nef"], "it stops once it has enough");
-        assert!(on_disk(c, 4, later, |_| false).is_empty(), "none there: the demo photos");
+        assert!(on_disk(c, 4, later, &|| false, |_| false).is_empty(), "none there: the demo photos");
         // the newest hundred are on a gone share: an older photo is still found
         let many: Vec<String> = (0..200).map(|i| format!("q{i}.nef")).collect();
-        assert_eq!(on_disk(many.clone(), 4, later, |p| p == "q7.nef"), ["q7.nef"]);
+        assert_eq!(on_disk(many.clone(), 4, later, &|| false, |p| p == "q7.nef"), ["q7.nef"]);
         // past the deadline: no more looking
-        assert!(on_disk(many, 4, std::time::Instant::now(), |_| true).is_empty());
+        assert!(on_disk(many.clone(), 4, std::time::Instant::now(), &|| false, |_| true).is_empty());
+        // stopped: no more looking either (CodeRabbit on PR #3511)
+        let n = std::cell::Cell::new(0);
+        assert!(
+            on_disk(many.clone(), 4, later, &|| n.get() >= 1, |_| {
+                n.set(n.get() + 1);
+                false
+            })
+            .is_empty()
+        );
+        assert_eq!(n.get(), 1, "one lookup, then the stop is seen");
+        // only the newest paths are copied from the library
+        let all: Vec<String> = (0..2000).map(|i| format!("r{i}.cr3")).collect();
+        let kept = newest(all.iter(), MAX_CANDIDATES);
+        assert_eq!((kept.len(), kept.first().map(String::as_str), kept.last().map(String::as_str)), (512, Some("r1488.cr3"), Some("r1999.cr3")));
+        assert_eq!(newest(all.iter().take(3), MAX_CANDIDATES), ["r0.cr3", "r1.cr3", "r2.cr3"]);
+        assert!(newest(all.iter(), 0).is_empty());
+        // a stop during the wait for a scan that hangs is seen at once (review of PR #3499)
+        let (_tx, rx) = channel::<Vec<String>>();
+        let t = std::time::Instant::now();
+        let stop_at = t + std::time::Duration::from_millis(150);
+        assert!(wait_for_scan(&rx, t + std::time::Duration::from_secs(30), &|| std::time::Instant::now() >= stop_at).is_empty());
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "{:?}", t.elapsed());
+        let (tx, rx) = channel();
+        tx.send(vec!["a.cr3".to_string()]).unwrap();
+        assert_eq!(wait_for_scan(&rx, t + std::time::Duration::from_secs(30), &|| false), ["a.cr3"]);
     }
 
     /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would

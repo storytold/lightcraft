@@ -342,15 +342,19 @@ impl PreparedExport {
                                 }
                                 hj.stages = Some(st);
                             }
-                            let hr = hj.run().rendered?;
+                            let hr = hj.run();
+                            // (an HDR-only fallback to the CPU is reported too: review of PR #3532)
+                            let fell_back = hr.gpu_fallback;
+                            let hr = hr.rendered?;
                             lap("HDR render", &mut t);
-                            Some(hr.deep.ok_or("the HDR render has no float samples")?)
+                            Some((hr.deep.ok_or("the HDR render has no float samples")?, fell_back))
                         }
                         None => None,
                     };
                     // the card that made the image (`None`: the processor did)
                     let device = lightcraft_gpu::take_rendered_on();
-                    Ok((r, hdr, gpu_fallback, device))
+                    let (hdr, hdr_fallback) = hdr.map_or((None, None), |(d, f)| (Some(d), f));
+                    Ok((r, hdr, gpu_fallback.or(hdr_fallback), device))
                 };
                 let (r, hdr, gpu_fallback, gpu_device) = if self.gpu && self.mix {
                     // the GPU and the processor at once: this photo takes a card that is free (the
@@ -393,10 +397,13 @@ impl PreparedExport {
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback, gpu_device })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
+                check()?;
                 let bytes = match &read {
                     Some(r) => r(&path)?,
                     None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
                 };
+                // (cancelled while the original was read: no decode or DNG write after it)
+                check()?;
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
                     if remove_location {

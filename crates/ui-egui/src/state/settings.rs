@@ -246,7 +246,9 @@ impl Default for AppSettings {
             import_dropped_directly: false,
             gpu: true,
             gpu_card: String::new(),
-            gpu_helper: String::new(),
+            // no second card until the user turns one on (review of #3506); `""` in an older
+            // settings file still reads as Automatic
+            gpu_helper: "off".to_string(),
             compose_window: false,
             preview_limit: 0,
             external_editor: String::new(),

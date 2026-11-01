@@ -47,10 +47,12 @@ fn probe(name: &str, _vendor: u32, _device: u32) -> Option<u64> {
     const KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
     let mut text = String::new();
     for value in ["DriverDesc", "HardwareInformation.qwMemorySize", "HardwareInformation.MemorySize"] {
-        let Ok(out) = std::process::Command::new("reg").args(["query", KEY, "/s", "/v", value]).creation_flags(CREATE_NO_WINDOW).output() else {
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(["query", KEY, "/s", "/v", value]).creation_flags(CREATE_NO_WINDOW);
+        let Some(out) = output_within(cmd, QUERY_TIME) else {
             continue;
         };
-        text.push_str(&String::from_utf8_lossy(&out.stdout));
+        text.push_str(&String::from_utf8_lossy(&out));
         text.push('\n');
     }
     parse_registry(&text, name)
@@ -59,8 +61,10 @@ fn probe(name: &str, _vendor: u32, _device: u32) -> Option<u64> {
 #[cfg(target_os = "linux")]
 fn probe(name: &str, vendor: u32, device: u32) -> Option<u64> {
     let nvidia = || {
-        let out = std::process::Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output().ok()?;
-        parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout), name)
+        let mut cmd = std::process::Command::new("nvidia-smi");
+        cmd.args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
+        let out = output_within(cmd, QUERY_TIME)?;
+        parse_nvidia_smi(&String::from_utf8_lossy(&out), name)
     };
     // NVIDIA's driver publishes no sysfs size: ask it first (an integrated AMD GPU's small
     // carve-out in sysfs is not this card's memory)
@@ -69,13 +73,61 @@ fn probe(name: &str, vendor: u32, device: u32) -> Option<u64> {
     {
         return Some(b);
     }
-    // amdgpu (and others) publish it in sysfs: the card with this adapter's PCI ids
-    let cards = (0..8).map(|i| {
-        let read = |file: &str| std::fs::read_to_string(format!("/sys/class/drm/card{i}/device/{file}")).ok();
+    // amdgpu (and others) publish it in sysfs: the card with this adapter's PCI ids (every
+    // `cardN` entry, not only the first few: review of PR #3532)
+    let entries =
+        std::fs::read_dir("/sys/class/drm").map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect::<Vec<_>>()).unwrap_or_default();
+    let cards = entries.into_iter().filter(|n| is_card_entry(n)).take(64).map(|n| {
+        let read = |file: &str| std::fs::read_to_string(format!("/sys/class/drm/{n}/device/{file}")).ok();
         let id = |file: &str| read(file).and_then(|v| parse_hex(v.trim())).and_then(|v| u32::try_from(v).ok());
         SysfsCard { vendor: id("vendor"), device: id("device"), memory: read("mem_info_vram_total").and_then(|s| s.trim().parse::<u64>().ok()) }
     });
     sysfs_memory(cards, vendor, device)
+}
+
+/// How long a memory query (`reg`, `nvidia-smi`) may take before it is given up on: a driver
+/// that doesn't answer can't hold the first GPU render (review of PR #3532).
+#[cfg(any(windows, target_os = "linux"))]
+const QUERY_TIME: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// `cmd`'s standard output, when it exits successfully within `limit`; else it is killed and
+/// `None` (the caller falls back to another source or a safe size).
+#[cfg(any(windows, target_os = "linux"))]
+fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    // read on a thread of its own, so a full pipe can't stop the query from exiting
+    let reader = std::thread::Builder::new()
+        .name("lc-gpu-query".into())
+        .spawn(move || {
+            let mut b = Vec::new();
+            let _ = stdout.read_to_end(&mut b);
+            b
+        })
+        .ok()?;
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => break None,
+        }
+    };
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        log::warn!("gpu: a graphics memory query took longer than {} s; using a safe size", limit.as_secs());
+        return None;
+    };
+    let out = reader.join().ok()?;
+    status.success().then_some(out)
+}
+
+/// Whether a `/sys/class/drm` entry is a card (`card0`, `card12`), not a connector (`card0-DP-1`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_card_entry(name: &str) -> bool {
+    name.strip_prefix("card").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -287,6 +339,39 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         .concat();
         assert_eq!(parse_registry(&text, "NVIDIA GeForce RTX 5070"), Some(0x2fc300000));
         assert_eq!(parse_registry(&text, "Meta Virtual Monitor"), Some(128 << 20));
+    }
+
+    #[test]
+    fn drm_card_entries_are_cards_only() {
+        assert!(is_card_entry("card0") && is_card_entry("card12"));
+        assert!(!is_card_entry("card0-DP-1") && !is_card_entry("card") && !is_card_entry("renderD128") && !is_card_entry("version"));
+    }
+
+    /// Review of PR #3532: a memory query that doesn't answer is given up on, not waited for.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn a_query_that_does_not_answer_is_given_up_on() {
+        let cmd = |args: &[&str]| {
+            #[cfg(windows)]
+            let mut c = std::process::Command::new("cmd");
+            #[cfg(windows)]
+            c.arg("/C");
+            #[cfg(not(windows))]
+            let mut c = std::process::Command::new("sh");
+            #[cfg(not(windows))]
+            c.arg("-c");
+            c.args(args);
+            c
+        };
+        let t = std::time::Instant::now();
+        #[cfg(windows)]
+        let slow = cmd(&["ping -n 20 127.0.0.1 >NUL"]);
+        #[cfg(not(windows))]
+        let slow = cmd(&["sleep 20"]);
+        assert_eq!(output_within(slow, std::time::Duration::from_millis(300)), None);
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        let out = output_within(cmd(&["echo 8192"]), std::time::Duration::from_secs(10)).unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("8192"));
     }
 
     #[test]
