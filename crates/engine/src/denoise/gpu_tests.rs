@@ -278,26 +278,51 @@ fn a_set_up_runs_beside_the_cpu_and_removes_its_marker() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Opens its gate when dropped, however the test ends.
+struct OpenOnDrop(Arc<AtomicBool>);
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 #[test]
 fn a_set_up_that_takes_too_long_is_given_up_on() {
     let dir = folder("slowsetup");
     let marker = dir.join(GPU_SETUP_MARKER);
-    let started = web_time::Instant::now();
-    let slow = || -> Result<(), String> {
-        std::thread::sleep(Duration::from_millis(600));
+    // a card whose set-up is stuck until the test opens the gate, which it does only after its checks
+    // (or when it fails: `release` opens it on drop, so the set-up thread doesn't spin on)
+    let gate = Arc::new(AtomicBool::new(false));
+    let release = OpenOnDrop(gate.clone());
+    let finished = Arc::new(AtomicBool::new(false));
+    let (g, f) = (gate.clone(), finished.clone());
+    let slow = move || -> Result<(), String> {
+        while !g.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        f.store(true, Ordering::SeqCst);
         Ok(())
     };
-    let r = set_up_card(&marker, Duration::from_millis(50), slow, || ());
+    // each call runs on a helper thread with the deadline on its answer: a set_up_card that waited
+    // for the stuck card fails the test there instead of hanging it
+    let answer = |limit: Duration, card: Box<dyn FnOnce() -> Result<(), String> + Send>, what: &str| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let m = marker.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(set_up_card(&m, limit, card, || ()));
+        });
+        lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), what)
+    };
+    let r = answer(Duration::from_millis(50), Box::new(slow), "set_up_card's answer while the card is stuck");
     assert!(r.as_ref().is_err_and(|e| e.contains("took longer") && worth_retrying(e)), "{r:?}");
-    assert!(started.elapsed() < Duration::from_millis(500), "the caller does not wait for the card");
+    assert!(!finished.load(Ordering::SeqCst), "the caller does not wait for the card");
     // while the first is still stuck, another set-up of the same model does not start a second one
-    let again = set_up_card(&marker, Duration::from_secs(5), || Ok(()), || ());
-    assert!(again.is_err_and(|e| e.contains("still setting up") && worth_retrying(&e)));
+    let again = answer(Duration::from_secs(5), Box::new(|| Ok(())), "a second set-up's answer while the first is stuck");
+    assert!(again.as_ref().is_err_and(|e| e.contains("still setting up") && worth_retrying(e)), "{again:?}");
     // once it ends its marker goes, and the card can be set up again
-    while marker.exists() {
-        assert!(started.elapsed() < Duration::from_secs(10), "the stuck set-up ended");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    drop(release);
+    lightcraft_testkit::wait_until(Duration::from_secs(10), "the stuck set-up ended and removed its marker", || !marker.exists());
     while SETTING_UP.lock().unwrap().iter().any(|m| m == &marker) {
         std::thread::sleep(Duration::from_millis(5));
     }

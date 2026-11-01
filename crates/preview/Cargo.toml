@@ -15,3 +15,6 @@ jpeg-encoder = { workspace = true }
 zune-jpeg = { workspace = true }
 zune-core = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }

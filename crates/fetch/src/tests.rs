@@ -102,7 +102,8 @@ fn handle(mut s: TcpStream, hits: &AtomicUsize) {
             // half the file, then nothing
             let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
             let _ = s.write_all(&body[..body.len() / 2]);
-            std::thread::sleep(Duration::from_secs(5));
+            // (stretched with the client's timeouts, so it stays well past the stall timeout)
+            std::thread::sleep(stretched(Duration::from_secs(5)));
         }
         "slow" => {
             let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
@@ -139,8 +140,16 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
+/// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the timeouts and bounds here sit on the
+/// test server's fixed pace (20 ms per kilobyte) and the client's fixed 250 ms poll.
+fn stretched(d: Duration) -> Duration {
+    lightcraft_testkit::scaled(d).max(d)
+}
+
+/// Short timeouts, stretched by `LIGHTCRAFT_TIME_SCALE` (a loaded machine can leave a working
+/// connection quiet for longer).
 fn quick() -> Options {
-    Options { connect_timeout: Duration::from_secs(2), stall_timeout: Duration::from_millis(600), attempts: 2, token_env: None }
+    Options { connect_timeout: stretched(Duration::from_secs(2)), stall_timeout: stretched(Duration::from_millis(600)), attempts: 2, token_env: None }
 }
 
 fn run(files: &[FileSpec<'_>], mirrors: &[String], dir: &Path, cancel: &AtomicBool) -> (Result<(), DownloadError>, Vec<Progress>) {
@@ -296,7 +305,8 @@ fn a_stalled_server_times_out_and_the_next_mirror_finishes() {
     let t = Instant::now();
     let (r, _) = run(&[pinned()], &[format!("{}/stall", srv.base), format!("{}/good", srv.base)], &dir, &AtomicBool::new(false));
     r.unwrap();
-    assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
+    // two stalled tries (600 ms each) and the good mirror, not two waits for the server to hang up (5 s each)
+    assert!(t.elapsed() < stretched(Duration::from_secs(4)), "{:?}", t.elapsed());
     assert_eq!(std::fs::read(dir.join("model.bin")).unwrap(), payload());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -307,14 +317,18 @@ fn cancel_stops_quickly_and_keeps_the_part_for_later() {
     let dir = tmp("cancel");
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
+    let part = part_path(&dir, "model.bin");
+    // cancel once part of the file is written (the slow server takes 6 s for the whole of it)
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(400));
+        lightcraft_testkit::wait_until(Duration::from_secs(30), "the first bytes of the part", || {
+            std::fs::metadata(&part).is_ok_and(|m| m.len() > 0)
+        });
         c.store(true, Ordering::SeqCst);
     });
     let t = Instant::now();
     let (r, _) = run(&[pinned()], &[format!("{}/slow", srv.base)], &dir, &cancel);
     assert_eq!(r, Err(DownloadError::Cancelled));
-    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    assert!(t.elapsed() < stretched(Duration::from_secs(3)), "{:?}", t.elapsed());
     assert!(!dir.join("model.bin").exists());
     let kept = std::fs::metadata(part_path(&dir, "model.bin")).map(|m| m.len()).unwrap_or(0);
     assert!(kept > 0 && kept < 300_000, "{kept}");

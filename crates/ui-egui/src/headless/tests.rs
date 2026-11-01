@@ -67,6 +67,7 @@ fn a_rejected_model_file_says_why_in_settings() {
     h.app.session.set_denoise_models_dir(Some(dir.join("denoise-models")));
     // without the runtime the button is disabled (the workspace build turns it on through the desktop app)
     if h.app.session.execute("denoise.models.list", &json!({})).unwrap()["runtime"] != true {
+        lightcraft_testkit::skip!(Feature, "denoise runtime unavailable: the workspace build turns it on");
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
@@ -95,6 +96,20 @@ fn a_rejected_model_file_says_why_in_settings() {
 
 use super::*;
 use std::sync::Arc;
+
+/// Every headless test is watched (issue #3062): one stuck past the watchdog's limit ends the
+/// test binary with its name instead of hanging it.
+#[test]
+fn a_headless_session_watches_its_test() {
+    let me = std::thread::current().name().unwrap_or_default().to_owned();
+    let mine = || lightcraft_testkit::watched().iter().filter(|t| **t == me).count();
+    assert_eq!(mine(), 0);
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+    let h = Headless::new(app, [400.0, 300.0], 1.0);
+    assert_eq!(mine(), 1);
+    drop(h);
+    assert_eq!(mine(), 0, "the watch ends with the session");
+}
 
 /// The pretend host has a clipboard, as a desktop does: text the UI copies lands in it, and a
 /// cut, copy or paste request (from a context menu) comes back as that event on the next frame.
@@ -3378,9 +3393,7 @@ fn browsing_the_same_folder_again_does_not_restart() {
     let (g, n) = (gate.clone(), started.clone());
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
         n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(60), "the test opens the probe's gate", || g.load(std::sync::atomic::Ordering::Relaxed));
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     let browse = |h: &mut Headless| h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
@@ -3497,9 +3510,7 @@ fn folder_scan_cancel_and_busy() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let g = gate.clone();
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(60), "the test opens the probe's gate", || g.load(std::sync::atomic::Ordering::Relaxed));
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);

@@ -20,12 +20,29 @@
 //! `cargo xtask ci` lists the skips by need and reason in its summary and in
 //! `target/ci/report.json`. A test that runs part of its checks (e.g. only the CPU half) records
 //! the part it could not run the same way.
+//!
+//! **Deadlines.** Stable libtest has no per-test timeout, so a wait with no limit hangs its binary
+//! with no message. Waits go through [`wait_until`] (a condition) and [`recv_within`] (a channel),
+//! which fail the test with what they waited for; a hand-made limit (a condvar's
+//! `wait_timeout_while`) uses [`scaled`]. Every limit is stretched by [`time_scale`]
+//! (`LIGHTCRAFT_TIME_SCALE`, default 1) on a slow or shared machine.
+//!
+//! **Watchdog.** [`watch`] registers the running test; a test still registered after
+//! `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30, × the time scale; `0` turns it off) makes
+//! the watchdog print the watched tests still running and end the binary (exit status 124). ui-egui's
+//! `Headless::new` calls it in that crate's unit tests. See [`watchdog`] for the defaults' reasons.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
+
+mod deadline;
+pub mod watchdog;
+
+pub use deadline::{MAX_TIME_SCALE, MIN_TIME_SCALE, TIME_SCALE_ENV, recv_within, scaled, time_scale, wait_until};
+pub use watchdog::{DEFAULT_WATCHDOG_MINUTES, WATCHDOG_ENV, WATCHDOG_EXIT_CODE, Watch, watch, watched};
 
 /// The environment variable naming the file skips are appended to (JSON lines).
 pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
@@ -74,6 +91,27 @@ macro_rules! skip {
         $crate::record($crate::Need::$need, &::std::format!($($arg)+), ::std::file!(), ::std::line!())
     };
 }
+
+/// Print a configuration note (`LIGHTCRAFT_TIME_SCALE`, the watchdog's settings) straight to the
+/// process's stderr. `eprintln!` would go to libtest's capture of the test that happened to read
+/// the setting first, shown only if that test fails. The write happens on a thread of its own and
+/// the caller waits for it at most [`NOTE_WAIT`]: a stuck test may hold stderr's lock, and the
+/// watchdog starting up must not wait for it. A note whose thread can't start is lost.
+pub(crate) fn note(line: &str) {
+    let line = line.to_owned();
+    let (done, written) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("lightcraft-testkit-note".into()).spawn(move || {
+        let _ = writeln!(std::io::stderr(), "{line}");
+        let _ = done.send(());
+    });
+    if spawned.is_ok() {
+        // long enough for an uncontended write, so the note isn't lost when the process ends soon after
+        let _ = written.recv_timeout(NOTE_WAIT);
+    }
+}
+
+/// How long [`note`] waits for its write.
+const NOTE_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// What [`skip!`] calls: print the note and append it to the skip log, if one is set. Never fails
 /// the test: a log that can't be written loses the entry, not the run.
@@ -139,6 +177,29 @@ fn escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A note doesn't wait for a stderr whose lock another thread holds (a stuck test): the
+    /// watchdog prints its configuration notes before it starts.
+    #[test]
+    fn a_note_does_not_wait_for_a_held_stderr() {
+        let (locked, is_locked) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _stderr = std::io::stderr().lock();
+            let _ = locked.send(());
+            // until the test is done (or fails: its sender is dropped then)
+            let _ = released.recv();
+        });
+        recv_within(&is_locked, std::time::Duration::from_secs(30), "the other thread holds stderr");
+        let (done, returned) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            note("lightcraft-testkit: a note written while another thread holds stderr");
+            let _ = done.send(());
+        });
+        recv_within(&returned, std::time::Duration::from_secs(30), "note() returns while stderr is held");
+        drop(release);
+        holder.join().unwrap();
+    }
 
     #[test]
     fn an_entry_is_one_json_line_with_its_text_escaped() {

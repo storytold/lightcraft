@@ -3747,6 +3747,7 @@ dependencies = [
 name = "lightcraft-fetch"
 version = "0.17.0"
 dependencies = [
+ "lightcraft-testkit",
  "log",
  "rustls",
  "rustls-rustcrypto",
@@ -3880,6 +3881,7 @@ version = "0.17.0"
 dependencies = [
  "jpeg-encoder",
  "lightcraft-raster",
+ "lightcraft-testkit",
  "log",
  "siphasher",
  "zune-core",
