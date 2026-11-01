@@ -474,7 +474,17 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let d = (f.data[i] - l.data[i]) * nr.k;
+                let delta = f.data[i] - l.data[i];
+                // Contrast holds edges: 0 leaves the blend unchanged, 100 keeps a residual past
+                // about 0.08 stops (#1129).
+                let contrast = (s.detail.nr_contrast / 100.0).clamp(0.0, 1.0) as f32;
+                let keep = if contrast == 0.0 {
+                    1.0
+                } else {
+                    let knee = 0.04 + (1.0 - contrast) * 0.2;
+                    1.0 - ((delta.abs() - knee) / knee).clamp(0.0, 1.0)
+                };
+                let d = delta * nr.k * keep;
                 let g = d.exp2();
                 *p = p.map(|v| v * g);
             }
@@ -825,6 +835,28 @@ mod tests {
             shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
         });
         assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
+    }
+
+    #[test]
+    fn nr_contrast_keeps_fine_texture() {
+        let src = Rgb32f::from_fn(48, 16, |x, y| {
+            let n = if (x + y) % 2 == 0 { 0.12 } else { -0.12 };
+            [0.3 + n; 3]
+        });
+        let mut flat = DevelopSettings::default();
+        flat.detail.nr_luminance = 100.0;
+        let mut held = flat.clone();
+        held.detail.nr_contrast = 100.0;
+        let mut a = src.clone();
+        let mut b = src.clone();
+        denoise(&mut a, &flat, 48, 48);
+        denoise(&mut b, &held, 48, 48);
+        let spread = |img: &Rgb32f| {
+            let row: Vec<f32> = (8..40).map(|x| img.get(x, 8)[0]).collect();
+            let mean = row.iter().sum::<f32>() / row.len() as f32;
+            row.iter().map(|v| (v - mean).abs()).sum::<f32>()
+        };
+        assert!(spread(&b) > spread(&a) * 1.4, "contrast {} vs flat {}", spread(&b), spread(&a));
     }
 
     #[test]
