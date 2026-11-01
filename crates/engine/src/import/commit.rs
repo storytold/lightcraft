@@ -263,6 +263,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
+                // (before the defaults: a folder being browsed gets no import-only default, AI Denoise from an ISO)
+                p.local = opts.local;
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
                     crate::sidecar::merge_into(&mut p, sc, &now);
@@ -289,7 +291,6 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
                 }
                 report.imported.push(id.0);
-                p.local = opts.local;
                 if opts.local {
                     // the state as browsed: a later change keeps the record from being forgotten
                     p.set_local_baseline();

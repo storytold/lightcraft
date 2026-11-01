@@ -295,6 +295,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     task.guard.count_failed(&format!("{name}: {}", f["error"].as_str().unwrap_or("error")));
                 }
             }
+            // a batch that failed as a whole says why in its summary too
+            if let Err(e) = &r {
+                task.guard.count_failed(e);
+            }
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());

@@ -48,9 +48,10 @@ pub struct ImportDefaults {
 }
 
 impl ImportDefaults {
-    /// Whether a new photo gets AI Denoise switched on ([`ImportDefaults::denoise_above_iso`]).
+    /// Whether a new photo gets AI Denoise switched on ([`ImportDefaults::denoise_above_iso`]). Not a photo of a
+    /// folder being browsed (`Photo::local`): it isn't imported, and no denoised picture is made for it.
     pub fn denoise_on_import(&self, p: &Photo) -> bool {
-        self.denoise_above_iso.is_some_and(|min| min > 0 && p.meta.iso.is_some_and(|iso| iso >= min)) && crate::denoise::eligible(p)
+        !p.local && self.denoise_above_iso.is_some_and(|min| min > 0 && p.meta.iso.is_some_and(|iso| iso >= min)) && crate::denoise::eligible(p)
     }
 }
 

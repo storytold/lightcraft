@@ -1007,6 +1007,8 @@ fn browsing_a_folder_makes_no_ai_denoise_pictures() {
     std::fs::write(folder.join("high.dng"), synthetic_dng_of(192, 160, "RGGB", data, None, meta)).unwrap();
     x.s.execute("library.browse", &json!({"path": folder.to_string_lossy()})).unwrap();
     let browsed = x.s.catalog.photos().find(|p| p.local).map(|p| p.id).expect("the browsed photo");
+    // ...and its switch stays off: no AI Denoise reads as on for a photo that has no denoised picture
+    assert_eq!(x.s.develop_of(browsed).unwrap().denoise_amount(), 0.0, "a browsed photo starts without AI Denoise");
     x.s.execute("library.select", &json!({"ids": [browsed.0]})).unwrap();
     for _ in 0..3 {
         x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
