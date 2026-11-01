@@ -552,7 +552,7 @@ impl Drop for BackgroundMark {
 /// second card first, always). The photo on screen, its drafts and the window's textures never
 /// run in here. A panic inside `f` is its error (`what` names the work), so the thread's routing
 /// is restored whatever happens. Without a second card (one card, or Settings ▸ Second graphics
-/// card: Don't use) it is batch work on the one card, as before.
+/// card: Off) it is batch work on the one card, as before.
 ///
 /// Work that renders photos one by one takes a turn per photo instead ([`background_photo`]).
 pub fn background_gpu<R>(what: &str, f: impl FnOnce() -> R) -> std::result::Result<R, String> {

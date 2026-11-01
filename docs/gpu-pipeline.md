@@ -99,8 +99,10 @@ screen is connected to (Automatic), wgpu's high-performance pick.
 
 Settings ▸ Performance ▸ **Second graphics card** (`gpuHelper` in `ui.json`, `app.gpu {helper}`,
 `LIGHTCRAFT_GPU_HELPER` overrides it) gives batch work — exports, previews, AI — a device of its own on
-another card, so the editing card stays free for the photo being edited. Automatic (the default) uses
-another card that can render, a dedicated one first (`cards::resolve_helper`); `off` uses none; a key or
+another card, so the editing card stays free for the photo being edited. **Off** is the default: no
+second card is used until the user picks one (a new settings file, and the engine without the app, say
+`off`; an older settings file's `""` still means Automatic). Automatic uses another card that can render,
+a dedicated one first (`cards::resolve_helper`); `off` uses none; a key or
 part of a name picks one; `same` makes a second device on the editing card (tests and benchmarks of the
 two-device logic on one card). While `LIGHTCRAFT_GPU_ADAPTER` is set, Automatic means no second card, so
 an agent testing on one card never touches the other.

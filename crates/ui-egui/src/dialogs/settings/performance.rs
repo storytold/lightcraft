@@ -129,8 +129,8 @@ pub(crate) fn editing_card_key(cards: &[lightcraft_engine::gpu::CardInfo], saved
         .map(|c| c.key.clone())
 }
 
-/// The choices for the second graphics card: Automatic (naming the card it uses), Don't use, each
-/// other card that can render, and a saved card that isn't there, as (setting, label).
+/// The choices for the second graphics card: Off (the default), Automatic (naming the card it
+/// uses), each other card that can render, and a saved card that isn't there, as (setting, label).
 pub(crate) fn gpu_helper_choices(cards: &[lightcraft_engine::gpu::CardInfo], editing: Option<&str>, saved: &str) -> Vec<(String, String)> {
     let others: Vec<&lightcraft_engine::gpu::CardInfo> = cards.iter().filter(|c| c.usable && Some(c.key.as_str()) != editing).collect();
     let auto = others.iter().find(|c| c.kind == "dedicated").or_else(|| others.iter().find(|c| c.kind != "virtual"));
@@ -140,7 +140,7 @@ pub(crate) fn gpu_helper_choices(cards: &[lightcraft_engine::gpu::CardInfo], edi
         Some(c) => format!("{} ({})", crate::i18n::tr("Automatic"), c.name),
         None => format!("{} ({})", crate::i18n::tr("Automatic"), crate::i18n::tr("no other card found")),
     };
-    let mut opts = vec![(String::new(), auto), ("off".to_string(), crate::i18n::tr("Don't use").to_string())];
+    let mut opts = vec![("off".to_string(), crate::i18n::tr("Off").to_string()), (String::new(), auto)];
     for c in &others {
         let twins = others.iter().filter(|o| o.name == c.name).count();
         let n = others.iter().take_while(|o| o.key != c.key).filter(|o| o.name == c.name).count() + 1;
@@ -451,15 +451,17 @@ mod tests {
         assert_eq!(editing.as_deref(), Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"), "Automatic edits on the screen's card");
         let o = super::gpu_helper_choices(&cards, editing.as_deref(), "");
         let labels: Vec<&str> = o.iter().map(|(_, l)| l.as_str()).collect();
-        assert_eq!(labels, ["Automatic (NVIDIA GeForce RTX 4070 SUPER)", "Don't use", "NVIDIA GeForce RTX 4070 SUPER"]);
-        assert_eq!((o[0].0.as_str(), o[1].0.as_str()), ("", "off"));
+        assert_eq!(labels, ["Off", "Automatic (NVIDIA GeForce RTX 4070 SUPER)", "NVIDIA GeForce RTX 4070 SUPER"]);
+        assert_eq!((o[0].0.as_str(), o[1].0.as_str()), ("off", ""));
+        // (review of #3506) no second card until the user picks one
+        assert_eq!(crate::state::AppSettings::default().gpu_helper, "off");
         // editing on the 4070: the 5070 helps
         let editing = super::editing_card_key(&cards, "dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1", None);
         let o = super::gpu_helper_choices(&cards, editing.as_deref(), "");
-        assert_eq!(o[0].1, "Automatic (NVIDIA GeForce RTX 5070)");
+        assert_eq!(o[1].1, "Automatic (NVIDIA GeForce RTX 5070)");
         // one card: Automatic finds none
         let o = super::gpu_helper_choices(&cards[..1], Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"), "");
-        assert_eq!(o[0].1, "Automatic (no other card found)");
+        assert_eq!(o[1].1, "Automatic (no other card found)");
         let ready = lightcraft_engine::gpu::HelperStatus { state: "ready", name: Some("NVIDIA GeForce RTX 4070 SUPER".into()), reason: None };
         assert_eq!(super::gpu_helper_line(&ready), "Helping now: NVIDIA GeForce RTX 4070 SUPER");
     }

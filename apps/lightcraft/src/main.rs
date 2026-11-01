@@ -306,7 +306,8 @@ fn main() -> eframe::Result {
         log::warn!("gpu: the graphics card in the settings: {e}");
     }
     // the second graphics card likewise (one that crashed starting last time: not used)
-    let saved_helper = prefs.as_ref().map(|u| u.settings.gpu_helper.clone()).unwrap_or_default();
+    // (no settings file: the default, no second card)
+    let saved_helper = prefs.as_ref().map_or_else(|| lightcraft_ui_egui::state::AppSettings::default().gpu_helper, |u| u.settings.gpu_helper.clone());
     let helper = if gpu_crash.as_ref().is_some_and(|c| c.helper_off) { "off" } else { saved_helper.as_str() };
     if let Err(e) = lightcraft_engine::gpu::set_helper(helper) {
         log::warn!("gpu: the second graphics card in the settings: {e}");
