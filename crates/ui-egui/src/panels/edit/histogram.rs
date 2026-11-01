@@ -7,7 +7,7 @@ use super::{
 
 // ------------------------------------------------------------------------------ histogram
 
-/// The current photo's existing preview histogram, shared by Histogram and Tone Curve.
+/// The current photo's output histogram (separate from the Tone Curve's input).
 pub(super) fn preview_histogram(app: &LightcraftApp, id: PhotoId) -> Option<lightcraft_raster::Histogram> {
     app.renderer
         .textures

@@ -64,6 +64,8 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// Input of the selected Tone Curve. Strict request identity, no displayed texture.
+    CurveHistogram,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
@@ -237,6 +239,10 @@ pub struct Renderer {
     pub textures: HashMap<Slot, Tex>,
     /// The last [`Slot::HdrHistogram`] result: (photo, job key, histogram).
     pub live_hdr_histogram: Option<(PhotoId, u64, Histogram)>,
+    /// Current curve diagnostic: photo, request key and unquantized input histogram.
+    pub curve_histogram: Option<(PhotoId, u64, Histogram)>,
+    /// Last diagnostic job, so idle frames do not clone and hash the full edit again.
+    curve_input_request: Option<(u64, lightcraft_engine::pipeline::curve_input::CurveInput, RenderJob)>,
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
@@ -341,6 +347,8 @@ impl Renderer {
             pending: HashMap::new(),
             textures: HashMap::new(),
             live_hdr_histogram: None,
+            curve_histogram: None,
+            curve_input_request: None,
             last_main_ms: 0.0,
             completed: 0,
             discarded: 0,
@@ -515,6 +523,7 @@ impl Renderer {
                 | Slot::CompareRegion(_)
                 | Slot::Second
                 | Slot::Slide(_)
+                | Slot::CurveHistogram
         )
     }
 
@@ -522,6 +531,20 @@ impl Renderer {
     /// the display profile in use.
     pub fn job_for(&self, slot: Slot, job: RenderJob) -> RenderJob {
         if Self::renders_for_display(slot) { job.with_display(self.display.clone()) } else { job }
+    }
+
+    pub fn curve_input_job(&mut self, job: RenderJob, input: lightcraft_engine::pipeline::curve_input::CurveInput) -> RenderJob {
+        if let Some((key, channel, prepared)) = &self.curve_input_request
+            && *key == job.key
+            && *channel == input
+            && prepared.origin == job.origin
+        {
+            return prepared.clone();
+        }
+        let key = job.key;
+        let prepared = job.with_curve_input(input);
+        self.curve_input_request = Some((key, input, prepared.clone()));
+        prepared
     }
 
     /// The display profile in use (id).
@@ -558,7 +581,10 @@ impl Renderer {
         if let Some(&(k, p)) = self.pending.get(&slot) {
             return k != key || (p != priority && self.is_queued(slot));
         }
-        if self.textures.get(&slot).is_some_and(|t| t.key == key) || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev) {
+        if (slot == Slot::CurveHistogram && self.curve_histogram.as_ref().is_some_and(|h| h.1 == key))
+            || self.textures.get(&slot).is_some_and(|t| t.key == key)
+            || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev)
+        {
             return false;
         }
         true
@@ -604,7 +630,7 @@ impl Renderer {
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
         );
         // (an offload keeps its own per-view stage caches; the flag tells it to)
-        let job = if slot.is_view() { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
+        let job = if slot.is_view() || slot == Slot::CurveHistogram { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
         if self.offload.is_some() {
             self.seq += 1;
             self.queue.retain(|q| q.slot != slot);
@@ -753,6 +779,8 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.curve_histogram = None;
+        self.curve_input_request = None;
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1082,6 +1110,11 @@ impl Renderer {
                 }
             };
             if matches!(slot, Slot::Prefetch(_)) {
+                continue;
+            }
+            if slot == Slot::CurveHistogram {
+                self.curve_histogram = Some((r.photo, r.key, rendered.histogram));
+                changed = true;
                 continue;
             }
             if slot == Slot::HdrHistogram {

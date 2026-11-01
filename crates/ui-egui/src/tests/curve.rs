@@ -12,8 +12,12 @@ const T: Duration = Duration::from_secs(20);
 
 /// Detail view with the Edit panel's Curve flyout open on `channel`.
 fn curve_open(channel: &str) -> Headless {
+    curve_open_with(lightcraft_engine::Session::with_demo(), channel)
+}
+
+fn curve_open_with(session: lightcraft_engine::Session, channel: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LightcraftApp::new(session, services);
     let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -588,4 +592,113 @@ fn the_four_regions_tile_the_graph() {
         assert!(r >= prev, "the regions never go backwards: {r} after {prev}");
         prev = r;
     }
+}
+
+/// Keep native decode and render jobs, but bound the fixture's work: settling a whole demo library
+/// also waits for unrelated procedural thumbnails and neighbour previews on slow CI machines.
+fn curve_input_open() -> Headless {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use std::sync::Arc;
+
+    let mut session = lightcraft_engine::Session::new();
+    let mut files = std::collections::HashMap::new();
+    for id in 1..=2 {
+        let path = format!("curve-{id}.png");
+        let pixels = lightcraft_raster::Rgba8::from_fn(64, 48, |x, y| [(x * 3 + 20) as u8, (y * 4 + 10) as u8, (id * 60) as u8, 255]);
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&pixels), &Default::default()).unwrap();
+        files.insert(path.clone(), bytes);
+        let photo = Photo::new(PhotoId(id), Source::File { path: path.clone() }, &path, "PNG", 64, 48, "2026-10-22");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    }
+    session.media.file_loader = Some(Arc::new(move |path, edge| {
+        let bytes = files.get(path).ok_or_else(|| format!("unknown curve fixture: {path}"))?;
+        lightcraft_engine::files::load_bytes(bytes, edge)
+    }));
+    session.execute("library.select", &json!({"ids": [1], "active": 1})).unwrap();
+    curve_open_with(session, "master")
+}
+
+#[test]
+fn curve_input_backdrop_stays_steady_while_its_output_and_upstream_edits_change() {
+    use crate::render::Slot;
+    let mut h = curve_input_open();
+    assert!(h.settle(T), "curve fixture still pending: {:?}", h.app.renderer.pending_slots());
+    let before = h.app.renderer.curve_histogram.clone().unwrap();
+    let output = h.app.renderer.textures.get(&Slot::Main).unwrap().histogram.clone();
+    exec(&mut h, "develop.curve", json!({"channel":"master", "points":[[0,0],[0.25,0.7],[1,1]]}));
+    assert!(h.settle(T));
+    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&before));
+    assert_ne!(h.app.renderer.textures.get(&Slot::Main).unwrap().histogram, output);
+    assert!(h.painted_text().iter().any(|s| s == "Sampled input"));
+    click_widget(&mut h, "curveChannel:red", 1);
+    assert!(h.settle(T));
+    let red = h.app.renderer.curve_histogram.clone().unwrap();
+    assert_ne!(red.1, before.1);
+    assert_ne!(red.2, before.2, "red's input includes the changed master curve");
+    exec(&mut h, "develop.set", json!({"control":"light.exposure", "value":1}));
+    assert!(h.settle(T));
+    assert_ne!(h.app.renderer.curve_histogram.as_ref().unwrap().2, red.2);
+    click_widget(&mut h, "curveChannel:parametric", 1);
+    assert!(h.settle(T));
+    let parametric = h.app.renderer.curve_histogram.clone().unwrap();
+    exec(&mut h, "develop.set", json!({"control":"curve.shadows", "value":60}));
+    assert!(h.settle(T));
+    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&parametric));
+}
+
+#[test]
+fn curve_input_shows_loading_failure_and_no_photo_without_reusing_a_backdrop() {
+    use crate::headless::RenderGate;
+    use crate::render::Slot;
+    use std::{cell::Cell, rc::Rc};
+    let mut h = curve_input_open();
+    assert!(h.settle(T), "curve fixture still pending: {:?}", h.app.renderer.pending_slots());
+    assert!(h.painted_text().iter().any(|t| t == "Sampled input"));
+    let before = h.app.renderer.curve_histogram.clone().expect("a real input histogram before the gate");
+    assert_eq!(Some(before.0), h.app.session.active());
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(RenderGate::failing(open.clone(), |s| s == Slot::CurveHistogram)));
+    exec(&mut h, "develop.set", json!({"control":"light.exposure", "value":1}));
+    h.step();
+    assert!(h.app.renderer.is_pending(Slot::CurveHistogram));
+    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&before), "the old result remains cached while its replacement is pending");
+    assert!(h.painted_text().iter().any(|t| t == "Loading input histogram..."));
+    assert!(!h.painted_text().iter().any(|t| t == "Sampled input"));
+    exec(&mut h, "library.select", json!({"ids":[2], "active":2}));
+    h.step();
+    assert!(h.app.renderer.is_pending(Slot::CurveHistogram));
+    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&before), "the old result remains cached while its replacement is pending");
+    assert!(h.painted_text().iter().any(|t| t == "Loading input histogram..."));
+    assert!(!h.painted_text().iter().any(|t| t == "Sampled input"));
+    open.set(true);
+    assert!(h.settle(T));
+    assert!(!h.app.renderer.is_pending(Slot::CurveHistogram));
+    assert!(h.app.renderer.failure_of(Slot::CurveHistogram, lightcraft_catalog::PhotoId(2)).is_some());
+    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&before), "a failed replacement must not expose the cached backdrop");
+    assert!(h.painted_text().iter().any(|t| t == "Input histogram unavailable"));
+    assert!(!h.painted_text().iter().any(|t| t == "Sampled input"));
+    exec(&mut h, "library.select", json!({"ids":[]}));
+    assert!(h.settle(T));
+    assert!(h.app.session.active().is_none());
+    assert!(!h.painted_text().iter().any(|t| t.contains("input histogram") || t == "Sampled input"));
+}
+
+#[test]
+fn review_unknown_curve_channel_uses_point_input_and_default_stays_parametric() {
+    let mut h = curve_input_open();
+    exec(&mut h, "develop.set", json!({"control":"curve.shadows", "value":60}));
+    assert!(h.settle(T));
+    let point = h.app.renderer.curve_histogram.clone().unwrap();
+    h.app.ui.curve_channel = "unknown-saved-channel".into();
+    h.step();
+    assert!(h.settle(T));
+    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&point), "unknown channels draw the Point curve and must sample its input");
+    h.app.ui.curve_channel = crate::state::UiState::default().curve_channel;
+    assert_eq!(h.app.ui.curve_channel, "parametric");
+    h.step();
+    assert!(h.settle(T));
+    let parametric = h.app.renderer.curve_histogram.clone().unwrap();
+    assert_ne!(parametric.1, point.1);
+    assert_ne!(parametric.2, point.2);
+    assert!(h.painted_text().iter().any(|s| s == "Sampled input"));
 }
