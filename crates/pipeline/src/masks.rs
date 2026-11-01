@@ -590,7 +590,8 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
         if emitted >= max {
             break;
         }
-        let q = to_out(*p);
+        // (a point the warp can't place lays no dab, rather than one at its unwarped place)
+        let Some(q) = to_out(*p) else { continue };
         let before = dabs.len();
         if push_dabs_within(&mut dabs, &mut emitted, prev, q, r, max) {
             let pq = s.pressure_at(i);

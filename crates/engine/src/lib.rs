@@ -1024,15 +1024,17 @@ impl Session {
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
         let mut settings = settings;
-        // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on
+        // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
+        // masks this edit kept, under the photo's settings before it (a geometry edit then moves
+        // the photo, not them); masks it brought in (paste, sync, a preset, a history step, a
+        // sidecar), under the settings they came with, where they render now
         if settings.masks.iter().any(|m| !m.on_photo) {
             let before = match &self.interaction {
                 Some(i) if i.photo == id => Some(i.original.clone()),
                 _ => self.develop_of(id),
             };
-            if let Some(b) = before {
-                self.attach_masks(id, &b, &mut settings);
-            }
+            let drawn = before.filter(|b| b.masks == settings.masks).unwrap_or_else(|| Arc::new(settings.clone()));
+            self.attach_masks(id, &drawn, &mut settings);
         }
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
@@ -1049,17 +1051,23 @@ impl Session {
         if d.masks.iter().all(|m| m.on_photo) {
             return;
         }
-        let Some(p) = self.catalog.photo(id) else { return };
-        let frame = lightcraft_pipeline::geometry::Frame::with_lens(
-            p.width.max(1) as usize,
-            p.height.max(1) as usize,
-            &drawn.effective(),
-            false,
-            p.embedded_lens.as_ref(),
-        );
+        let Some(frame) = self.mask_frame(id, drawn) else { return };
         for m in &mut d.masks {
             lightcraft_pipeline::mask_space::attach(m, &frame);
         }
+    }
+
+    /// The uncropped frame of photo `id` under settings `d`, with its lens: where mask
+    /// coordinates go through its warp ([`lightcraft_pipeline::geometry::Frame::for_mask`]).
+    pub(crate) fn mask_frame(&self, id: PhotoId, d: &DevelopSettings) -> Option<lightcraft_pipeline::geometry::Frame> {
+        let p = self.catalog.photo(id)?;
+        Some(lightcraft_pipeline::geometry::Frame::with_lens(
+            p.width.max(1) as usize,
+            p.height.max(1) as usize,
+            &d.effective(),
+            false,
+            p.embedded_lens.as_ref(),
+        ))
     }
 
     pub fn begin_interaction(&mut self, label: &str) -> Result<()> {

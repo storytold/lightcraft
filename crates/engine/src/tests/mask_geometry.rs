@@ -111,3 +111,64 @@ fn a_mask_saved_before_reads_as_an_old_mask() {
     assert!(written.get("on_photo").is_none(), "{written}");
     assert_eq!(serde_json::to_value(Mask::default()).unwrap()["on_photo"], json!(true));
 }
+
+/// Old masks an edit brings in (paste, sync, a preset, a history step, a sidecar) go onto the
+/// photo from the settings they came with, where they render now, not from the photo's settings
+/// before the edit (review of #3550).
+#[test]
+fn old_masks_an_edit_brings_in_go_onto_the_photo_from_the_settings_they_came_with() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    // the photo now: no Transform
+    let before = active_dev(&s);
+    // what comes in: a Transform and an old mask drawn under it
+    let p = Point::new(0.3, 0.4);
+    let mut incoming = before.clone();
+    incoming.geometry.vertical = 30.0;
+    incoming.geometry.rotate = 5.0;
+    let mut m = radial_at(p);
+    m.on_photo = false;
+    incoming.masks = vec![m];
+    s.set_develop(id, incoming.clone(), "Paste Settings").unwrap();
+    let now = active_dev(&s);
+    assert!(now.masks[0].on_photo);
+    let photo = s.catalog.photo(id).unwrap();
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(photo.width as usize, photo.height as usize, &incoming, false, None);
+    let back = frame.for_mask(true).mask_to_norm(centre(&now).0);
+    assert!((back.x - p.x).abs() < 1e-6 && (back.y - p.y).abs() < 1e-6, "renders where it did under its own settings: {back:?}");
+}
+
+/// A click on an old Object mask goes onto the photo with the mask before the model reads it: the
+/// stored clicks and the new one are then in the same coordinates (review of #3550).
+#[test]
+fn a_click_on_an_old_object_mask_goes_onto_the_photo_with_it() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let mut d = active_dev(&s);
+    d.geometry.vertical = 30.0;
+    d.geometry.rotate = 5.0;
+    let p = Point::new(0.3, 0.4);
+    d.masks = vec![Mask {
+        id: 1,
+        on_photo: false,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Object { hint: vec![p], exclude: Vec::new(), seg: None, detail: Vec::new(), edge: 0.0 },
+        }],
+        ..Default::default()
+    }];
+    s.catalog.apply(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(d.clone()), label: "Old".into(), edited: None }).unwrap();
+    s.active_mask = Some(1);
+    // (no model: the command fails at the model, after the mask went onto the photo)
+    s.segmenter.dir = Some(std::env::temp_dir().join("lightcraft-no-model-mask-geometry"));
+    let _ = s.execute("mask.objectPoint", &json!({"x": 0.6, "y": 0.5}));
+    let now = active_dev(&s);
+    assert!(now.masks[0].on_photo);
+    let photo = s.catalog.photo(id).unwrap();
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(photo.width as usize, photo.height as usize, &d, false, None);
+    let MaskShape::Object { hint, .. } = &now.masks[0].components[0].shape else { panic!() };
+    let want = frame.for_mask(true).norm_to_mask(p);
+    assert!((hint[0].x - want.x).abs() < 1e-9 && (hint[0].y - want.y).abs() < 1e-9, "{hint:?} vs {want:?}");
+}

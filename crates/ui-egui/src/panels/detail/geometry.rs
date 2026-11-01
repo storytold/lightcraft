@@ -29,6 +29,11 @@ impl CanvasMap {
     pub(crate) fn for_mask(&self, on_photo: bool) -> CanvasMap {
         CanvasMap { on_photo, ..self.clone() }
     }
+    /// Whether `norm` / `screen` go through a lens or perspective warp (a mask's coordinates on a
+    /// warped photo).
+    pub(crate) fn warped(&self) -> bool {
+        self.on_photo && self.warp.is_some()
+    }
     /// [`Self::for_mask`] for the mask `id` of `d` (none, or a new mask: on the photo).
     pub(crate) fn for_mask_id(&self, d: &lightcraft_develop::DevelopSettings, id: Option<u32>) -> CanvasMap {
         self.for_mask(id.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.on_photo))
@@ -441,5 +446,30 @@ mod mask_map_tests {
         d.masks.push(lightcraft_develop::Mask { id: 7, on_photo: false, ..Default::default() });
         assert!(close(m.for_mask_id(&d, None).norm(q), on));
         assert!(close(m.for_mask_id(&d, Some(7)).norm(q), plain));
+    }
+
+    /// A linear gradient's guides on a warped photo follow its bands through the warp: every
+    /// point drawn is on the band through the gradient's start or end (review of #3550).
+    #[test]
+    fn a_linear_gradients_guides_follow_the_warp() {
+        let mut d = DevelopSettings::default();
+        d.geometry.vertical = 35.0;
+        d.optics.distortion = 50.0;
+        let frame = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&frame, Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 300.0))).for_mask(true);
+        assert!(m.warped());
+        let (start, end) = (Point::new(0.3, 0.3), Point::new(0.5, 0.6));
+        // (long-edge units: the frame is 400 × 300)
+        let (sx, sy) = (1.0, 0.75);
+        let dd = ((end.x - start.x) * sx, (end.y - start.y) * sy);
+        let t = |q: Point| ((q.x - start.x) * sx * dd.0 + (q.y - start.y) * sy * dd.1) / (dd.0 * dd.0 + dd.1 * dd.1);
+        for (at, want) in [(start, 0.0), (end, 1.0)] {
+            let guide = super::super::masks::linear_guide(&m, start, end, at);
+            assert!(guide.len() > 2, "drawn in steps");
+            for g in guide.iter().filter(|g| m.rect.expand(-2.0).contains(**g)) {
+                let got = t(m.norm(*g));
+                assert!((got - want).abs() < 1e-3, "{g:?}: band {got}, want {want}");
+            }
+        }
     }
 }

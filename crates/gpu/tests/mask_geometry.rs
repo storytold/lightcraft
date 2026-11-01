@@ -89,6 +89,17 @@ fn geometries() -> Vec<(&'static str, Box<dyn Fn(&mut DevelopSettings)>)> {
             }),
         ),
         ("distortion", Box::new(|s: &mut DevelopSettings| s.optics.distortion = 40.0)),
+        (
+            // Rotate Right: the photo and its masks turn together (`photo.rotateRight`)
+            "quarter turn",
+            Box::new(|s: &mut DevelopSettings| {
+                let turn = lightcraft_geom::Orientation::Normal.rotated(true);
+                s.orientation = s.orientation.rotated(true);
+                for m in &mut s.masks {
+                    lightcraft_pipeline::mask_space::turn(m, turn);
+                }
+            }),
+        ),
     ]
 }
 

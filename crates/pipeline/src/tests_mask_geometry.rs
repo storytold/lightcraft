@@ -109,6 +109,17 @@ pub(crate) fn geometries() -> Vec<(&'static str, Box<dyn Fn(&mut DevelopSettings
             }),
         ),
         ("distortion", Box::new(|s: &mut DevelopSettings| s.optics.distortion = 40.0)),
+        (
+            // Rotate Right: the photo and its masks turn together (`photo.rotateRight`)
+            "quarter turn",
+            Box::new(|s: &mut DevelopSettings| {
+                let turn = lightcraft_geom::Orientation::Normal.rotated(true);
+                s.orientation = s.orientation.rotated(true);
+                for m in &mut s.masks {
+                    crate::mask_space::turn(m, turn);
+                }
+            }),
+        ),
     ]
 }
 
@@ -179,4 +190,27 @@ fn an_old_mask_stays_where_it_was_drawn_on_the_corrected_frame() {
 #[test]
 fn an_ai_mask_stays_on_the_content_under_every_geometry_change() {
     check("object", subject());
+}
+
+/// A brush point the warp can't place lays no dab, rather than one at its unwarped place, which
+/// can be far from the stroke (review of #3550).
+#[test]
+fn a_brush_point_the_warp_cannot_place_lays_no_dab() {
+    let mut s = DevelopSettings::default();
+    s.geometry.vertical = -100.0;
+    s.geometry.horizontal = -100.0;
+    s.optics.distortion = 100.0;
+    s.geometry.scale = 70.0;
+    let frame = crate::geometry::Frame::new(1000, 1500, &s, true).for_mask(true).into_owned();
+    let (w, h) = frame.fit(1000, 1500);
+    let warp = frame.mask_warp().cloned().expect("a warp");
+    // a point on the photo the inverse can't reach (found by search, so the test doesn't depend on
+    // the solver's exact limits)
+    let lost = (0..200 * 200)
+        .map(|i| Point::new((i % 200) as f64 / 199.0, (i / 200) as f64 / 199.0))
+        .find(|p| warp.from_source(Point::new(p.x * frame.ow, p.y * frame.oh)).is_none());
+    let lost = lost.expect("these settings leave points the inverse can't reach");
+    let stroke = BrushStroke { points: vec![lost], size: 0.01, ..Default::default() };
+    let dabs = crate::masks::brush_dabs_within(&stroke, &frame, w, h, 1000);
+    assert!(dabs.dabs.is_empty(), "{lost:?} laid {:?}", dabs.dabs);
 }

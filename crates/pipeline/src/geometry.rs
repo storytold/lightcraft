@@ -256,11 +256,15 @@ impl Frame {
         }
     }
 
-    /// Mask coordinates → output pixel (the inverse of [`Frame::out_to_mask`]).
-    pub fn mask_to_out(&self, out_w: usize, out_h: usize) -> impl Fn(Point) -> Point + use<> {
+    /// Mask coordinates → output pixel (the inverse of [`Frame::out_to_mask`]); `None` for a
+    /// point the warp can't invert (far outside a strong one), which has no place in the output.
+    pub fn mask_to_out(&self, out_w: usize, out_h: usize) -> impl Fn(Point) -> Option<Point> + use<> {
         let to_out = self.norm_to_out(out_w, out_h);
         let (warp, ow, oh) = (self.mask_warp().cloned(), self.ow, self.oh);
-        move |n: Point| to_out.apply(mask_to_norm(warp.as_ref(), ow, oh, n))
+        move |n: Point| match &warp {
+            Some(w) => w.from_source(Point::new(n.x * ow, n.y * oh)).map(|t| to_out.apply(Point::new(t.x / ow, t.y / oh))),
+            None => Some(to_out.apply(n)),
+        }
     }
 
     /// Normalized coordinates of this frame's transformed image → mask coordinates.
