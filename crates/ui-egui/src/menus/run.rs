@@ -574,7 +574,7 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         "app.clearRecentLibraries" => crate::panels::settings::recent_libraries(app, &json!({"clear": true})),
         "app.displayProfile" => crate::panels::settings::display_profile(app, p),
         "file.saveLibrary" | "file.saveLibraryAs" => {
-            let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or("No file provider is registered");
+            let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or_else(|| "No file provider is registered".to_owned());
             host.and_then(|host| {
                 let name = host.filename(app.file_provider_document).unwrap_or_else(|| "LightCraft library.zip".into());
                 host.choose(app.file_provider_document, app.file_provider_revision, name, id == "file.saveLibraryAs")?;
@@ -583,7 +583,7 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             })
         }
         "file.providerRecent" => {
-            let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or("No file provider is registered");
+            let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or_else(|| "No file provider is registered".to_owned());
             host.and_then(|host| {
                 let resource = p.get("resourceId").and_then(Value::as_str).ok_or("Missing provider resource ID")?;
                 let request = host.request_open(resource)?;

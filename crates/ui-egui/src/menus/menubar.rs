@@ -736,10 +736,10 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     .flatten()
                     .filter_map(|r| Some(item("file.providerRecent", json!({"resourceId":r["id"].as_str()?}), r["name"].as_str()?, None, can, None)))
                     .collect();
-                return vec![
+                return Some(vec![
                     MenuNode::Submenu { label: format!("Recent — {label}"), children: external },
                     MenuNode::Submenu { label: "Recent on this device".into(), children: v },
-                ];
+                ]);
             }
             v
         }
