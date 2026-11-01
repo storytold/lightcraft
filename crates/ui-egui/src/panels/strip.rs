@@ -1,5 +1,5 @@
 //! The tool strip: one horizontal row of tool icons at the top of the right-hand panel, under the
-//! histogram (Edit, Crop, Remove, Masking …, rarely used tools in its "…" menu), as Lightroom
+//! histogram (Edit, Crop, Remove, Masking â€¦, rarely used tools in its "â€¦" menu), as Lightroom
 //! Classic has it, so the panel keeps the whole width for its sliders. While the
 //! panel is closed, the same tools stand in a vertical strip at the window's right edge, to open it
 //! again.
@@ -85,8 +85,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Height of the horizontal tool row.
+/// Height of one line of the horizontal tool row.
 pub const ROW_H: f32 = 30.0;
+
+/// The narrowest a tool button in the row gets (pt): a hit target of at least 24 Ã— 24, so a
+/// narrow panel wraps the row onto a second line instead of shrinking the buttons below it.
+pub const ROW_BUTTON_MIN: f32 = 24.0;
+
+/// The widest a tool button in the row gets (pt).
+const ROW_BUTTON_MAX: f32 = 30.0;
+const ROW_GAP: f32 = 2.0;
+const ROW_SIDE: f32 = 8.0;
 
 /// The tools in the horizontal row: id (`icon:{id}`), icon, panel, tooltip, enabled without a photo.
 const ROW_TOOLS: [(&str, Icon, RightPanel, &str, bool); 8] = [
@@ -100,40 +109,82 @@ const ROW_TOOLS: [(&str, Icon, RightPanel, &str, bool); 8] = [
     ("info", Icon::Info, RightPanel::Info, "Info (I)", false),
 ];
 
+/// How the row's `count` buttons fit a panel `w` wide: buttons per line, lines, and the button
+/// width. One line while the buttons can be at least [`ROW_BUTTON_MIN`] wide, else as many lines
+/// as that takes (a panel too narrow for even one keeps one button a line).
+pub(crate) fn row_fit(w: f32, count: usize) -> (usize, usize, f32) {
+    let count = count.max(1);
+    let room = if w.is_finite() { (w - 2.0 * ROW_SIDE).max(0.0) } else { 0.0 };
+    // (a cast of a finite, non-negative number of buttons; at least one a line)
+    let fits = (((room + ROW_GAP) / (ROW_BUTTON_MIN + ROW_GAP)).floor() as usize).clamp(1, count);
+    let lines = count.div_ceil(fits);
+    // the lines share the buttons evenly, so the last isn't a lone one
+    let per_line = count.div_ceil(lines);
+    let bw = ((room - ROW_GAP * (per_line as f32 - 1.0)) / per_line as f32).clamp(ROW_BUTTON_MIN, ROW_BUTTON_MAX);
+    (per_line, lines, bw)
+}
+
+/// One button of the horizontal row.
+#[derive(Clone, Copy)]
+enum RowItem {
+    Tool(usize),
+    Presets,
+    More,
+}
+
 /// The horizontal tool row at the top of the right-hand panel (under the histogram): the tools,
-/// Presets, and "…" with the rarely used ones (Red Eye) and About. Same widget ids as the
-/// vertical strip (`icon:edit` …), so scripts and shortcuts don't change.
+/// Presets, and "â€¦" with the rarely used ones (Red Eye) and About. Same widget ids as the
+/// vertical strip (`icon:edit` â€¦), so scripts and shortcuts don't change. On a panel too narrow
+/// for every button at [`ROW_BUTTON_MIN`] it wraps onto a second line (Tab and screen readers go
+/// through it left to right, line by line).
 pub fn row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let has_photo = app.session.active().is_some();
-    // the tools, Presets, …
-    let count = ROW_TOOLS.len() + 2;
+    // the tools, Presets, â€¦
+    let items: Vec<RowItem> = (0..ROW_TOOLS.len()).map(RowItem::Tool).chain([RowItem::Presets, RowItem::More]).collect();
     let w = ui.available_width();
-    let (r, _) = ui.allocate_exact_size(vec2(w, ROW_H), egui::Sense::hover());
+    let (per_line, lines, bw) = row_fit(w, items.len());
+    let (r, _) = ui.allocate_exact_size(vec2(w, ROW_H * lines as f32), egui::Sense::hover());
     crate::widgets::register(ui, "toolRow", r);
-    let gap = 2.0;
-    let side = 8.0;
-    let bw = ((w - 2.0 * side - gap * (count as f32 - 1.0)) / count as f32).clamp(12.0, 30.0);
-    let total = bw * count as f32 + gap * (count as f32 - 1.0);
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(egui::Rect::from_center_size(r.center(), vec2(total, ROW_H)))
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    let ui = &mut child;
+    let mut outer = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Center)));
     // the same toolbar as the strip at the window's edge, standing in the panel now
-    crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
-    ui.spacing_mut().item_spacing.x = gap;
+    crate::widgets::announce_region(&outer, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
     let sz = vec2(bw, ROW_H - 4.0);
-    for (id, icon, panel, tip, without_photo) in ROW_TOOLS {
-        let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-        if icon_button(ui, id, icon, sz, on, has_photo || without_photo, tip).clicked() {
-            let _ = app.run(&format!("panel.{id}"), json!({}));
+    for (line, chunk) in items.chunks(per_line).enumerate() {
+        let n = chunk.len() as f32;
+        let total = bw * n + ROW_GAP * (n - 1.0);
+        let line_rect = egui::Rect::from_min_size(egui::pos2(r.left(), r.top() + ROW_H * line as f32), vec2(r.width(), ROW_H));
+        let mut child = outer.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_center_size(line_rect.center(), vec2(total, ROW_H)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing.x = ROW_GAP;
+        for item in chunk {
+            match *item {
+                RowItem::Tool(i) => {
+                    let Some(&(id, icon, panel, tip, without_photo)) = ROW_TOOLS.get(i) else { continue };
+                    let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
+                    if icon_button(ui, id, icon, sz, on, has_photo || without_photo, tip).clicked() {
+                        let _ = app.run(&format!("panel.{id}"), json!({}));
+                    }
+                }
+                RowItem::Presets => {
+                    if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+                        let _ = app.run("panel.presets", json!({}));
+                    }
+                }
+                RowItem::More => more_menu(app, ui, sz, has_photo),
+            }
         }
     }
-    if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
-        let _ = app.run("panel.presets", json!({}));
-    }
+    let p = ui.painter();
+    p.hline(r.x_range(), r.bottom() - 0.5, egui::Stroke::new(1.0, t.divider));
+}
+
+/// The row's "â€¦" button and its menu: Red Eye and About.
+fn more_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, sz: egui::Vec2, has_photo: bool) {
     let more = icon_button(ui, "more", Icon::More, sz, app.ui.right == RightPanel::RedEye, true, "More tools");
     egui::Popup::menu(&more).show(|ui| {
         let r = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Red Eye")));
@@ -147,8 +198,6 @@ pub fn row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.ui.dialog = Some(crate::state::Dialog::About);
         }
     });
-    let p = ui.painter();
-    p.hline(r.x_range(), r.bottom() - 0.5, egui::Stroke::new(1.0, t.divider));
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {
