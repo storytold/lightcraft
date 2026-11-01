@@ -3,7 +3,7 @@
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
+use lightcraft_develop::{DevelopSettings, LocalAdjustments, PointCurves, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
@@ -18,6 +18,61 @@ use crate::{Prepared, SourceInfo, for_rows};
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Entries per tone-curve table ([`curve_luts`], [`local_curve_luts`]; the GPU kernel reads tables of this size).
+pub const CURVE_LUT_N: usize = crate::curve::PARAM_LUT;
+
+/// A point curve as a table over `0..1`.
+fn point_lut(p: &[Point]) -> Lut1 {
+    MonotoneCurve::new(&p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>()).to_lut(CURVE_LUT_N)
+}
+
+/// A mask's local Curve as per-channel tables on encoded values (the RGB curve, then each colour
+/// channel's own, as in the Tone Curve), or `None` while every channel is linear. The CPU stage
+/// and the GPU kernel both take their tables from here.
+pub fn local_curve_luts(c: &PointCurves) -> Option<[Lut1; 3]> {
+    if c.is_identity() {
+        return None;
+    }
+    let lut = |p: &[Point]| (!ToneCurve::point_curve_is_identity(p)).then(|| point_lut(p));
+    let master = lut(&c.master);
+    let per = [&c.red, &c.green, &c.blue];
+    Some(std::array::from_fn(|i| match (lut(per[i]), &master) {
+        (Some(ch), Some(m)) => ch.compose(m),
+        (Some(ch), None) => ch,
+        (None, Some(m)) => m.clone(),
+        (None, None) => Lut1::identity(CURVE_LUT_N),
+    }))
+}
+
+/// Curve tables `l` on encoded values `e`; for HDR renders (`hdr`) a value above SDR white continues with
+/// slope 1 from the curve's end point.
+#[inline]
+fn eval_curves(l: &[Lut1; 3], e: [f32; 3], hdr: bool) -> [f32; 3] {
+    if hdr {
+        std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+    } else {
+        [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+    }
+}
+
+/// The masks' local Color Mixers on display-linear Rec.2020 colour `d` of pixel `i`: each mask's at its
+/// opacity there, in mask order, on OkLCh (as the global mixer); `d` itself when none covers it. The GPU kernel
+/// (`finish.wgsl`) computes the same.
+#[inline]
+fn local_mix(d: [f32; 3], i: usize, mixers: &[(&crate::masks::Evaluated, &crate::colorops::MixerK)]) -> [f32; 3] {
+    use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+    let mut lch: Option<[f32; 3]> = None;
+    for (m, k) in mixers {
+        let a = m.alpha.data.get(i).copied().unwrap_or(0.0).min(1.0);
+        if a.is_nan() || a <= 0.0 {
+            continue;
+        }
+        let v = lch.unwrap_or_else(|| lab_to_lch(oklab_from_2020(d)));
+        lch = Some(k.apply_scaled(v, a));
+    }
+    lch.map_or(d, |v| oklab_to_2020(lch_to_lab(v)))
 }
 
 /// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
@@ -37,7 +92,7 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     if !parametric && !master && !chans.iter().any(|b| *b) {
         return None;
     }
-    const N: usize = 1024;
+    const N: usize = CURVE_LUT_N;
     let mut base = crate::curve::ParametricCurve::new(c).to_lut();
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
@@ -379,6 +434,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let p_lut = fp.lut.clone();
     let FinishParams { curves, vig, to_out, out_luma, grain, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
+    let local_curves: Vec<_> = p.masks.iter().filter_map(|m| Some((m, m.curve.as_ref()?))).collect();
+    // the masks' local Color Mixers (none in black and white, as the global mixer's colours are gone there)
+    let local_mixers: Vec<_> = if fp.ops.bw.is_some() { Vec::new() } else { p.masks.iter().filter_map(|m| Some((m, m.mixer.as_ref()?))).collect() };
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
@@ -430,6 +488,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- colour
             d = fp.ops.apply(d, l_sat, l_hue);
+            // --- the masks' local Color Mixers, in mask order, each at its mask's opacity (after the global colour tools)
+            d = local_mix(d, i, &local_mixers);
             if let Some((dir, amt)) = local.tint {
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
@@ -511,14 +571,18 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             };
             if let Some(l) = curves {
                 let e0 = e;
-                e = if hdr {
-                    // above SDR white the curves continue with slope 1 from their end point
-                    std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
-                } else {
-                    [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
-                };
+                e = eval_curves(l, e, hdr);
                 if fp.refine_sat < 1.0 {
                     e = refine_saturation(e0, e, fp.refine_sat);
+                }
+            }
+            // --- the masks' local Curves, in mask order, each weighted by its mask (feather, Amount, invert and
+            // combined components are all in the alpha)
+            for (m, l) in &local_curves {
+                let a = m.alpha.data[i];
+                if a > 0.0 {
+                    let c = eval_curves(l, e, hdr);
+                    e = std::array::from_fn(|k| e[k] + (c[k] - e[k]) * a);
                 }
             }
             if let Some((amt, cell, rough, seed)) = *grain {

@@ -1,12 +1,13 @@
 //! Parameter blocks: the per-pixel stage's [`FinishParams`] packed into the 32-bit words the
 //! `finish` kernel reads (`F_*` constants, generated from [`FIELDS`]), plus its auxiliary tables.
 
+use lightcraft_color::spline::Lut1;
 use lightcraft_develop::VignetteStyle;
-use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::colorops::{MixerK, POINT_WORDS};
+use lightcraft_pipeline::finish::{CURVE_LUT_N, FinishParams, MASK_TERMS, srgb_lut};
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
-pub const CURVE_N: u32 = 1024;
+pub const CURVE_N: u32 = CURVE_LUT_N as u32;
 
 /// Field name and number of 32-bit words.
 const FIELDS: &[(&str, usize)] = &[
@@ -17,6 +18,12 @@ const FIELDS: &[(&str, usize)] = &[
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
+    // the masks' local Curves: a slot per mask (its table set, or −1), then the table sets
+    ("LCURVE_OFF", 1),
+    ("LCURVES", 1),
+    // the masks' local Color Mixers: a slot per mask (its mixer, or −1), then the mixers' words
+    ("LMIX_OFF", 1),
+    ("LMIXES", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -146,8 +153,16 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
+/// mask terms | local-curve slots | local-curve LUTs | local-mixer slots | local mixers) for `fp` with `masks` (their
+/// local adjustments' terms), `curves` (their local Curves, [`lightcraft_pipeline::finish::local_curve_luts`]) and
+/// `mixers` (their local Color Mixers), both in the same order.
+pub fn finish_block(
+    fp: &FinishParams,
+    masks: &[[f32; MASK_TERMS]],
+    curves: &[Option<[Lut1; 3]>],
+    mixers: &[Option<MixerK>],
+    present: &Present,
+) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -163,6 +178,36 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for m in masks {
         aux.extend_from_slice(m);
     }
+    // one slot per mask (the kernel reads `NMASK` of them), then each local Curve's three tables
+    let lcurve_off = aux.len();
+    let mut next = 0.0f32;
+    for k in 0..masks.len() {
+        match curves.get(k) {
+            Some(Some(_)) => {
+                aux.push(next);
+                next += 1.0;
+            }
+            _ => aux.push(-1.0),
+        }
+    }
+    for l in curves.iter().take(masks.len()).flatten().flatten() {
+        aux.extend_from_slice(&l.v);
+    }
+    // one slot per mask, then each local Color Mixer's words (none in black and white, as on the CPU)
+    let lmix_off = aux.len();
+    let mixers: Vec<Option<&MixerK>> = (0..masks.len()).map(|k| mixers.get(k).and_then(Option::as_ref).filter(|_| fp.ops.bw.is_none())).collect();
+    let mut nmix = 0.0f32;
+    for m in &mixers {
+        if m.is_some() {
+            aux.push(nmix);
+            nmix += 1.0;
+        } else {
+            aux.push(-1.0);
+        }
+    }
+    for m in mixers.iter().flatten() {
+        aux.extend_from_slice(&m.words());
+    }
 
     let mut p = Block::new();
     p.u("W", fp.w as u32);
@@ -172,6 +217,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.u("LCURVE_OFF", lcurve_off as u32);
+    p.b("LCURVES", next > 0.0);
+    p.u("LMIX_OFF", lmix_off as u32);
+    p.b("LMIXES", nmix > 0.0);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);

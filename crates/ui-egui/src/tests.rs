@@ -54,6 +54,7 @@ mod lifecycle_037;
 mod lightroom_destination;
 mod lights_out;
 mod mask_effects;
+mod mask_mixer;
 mod masking;
 mod masking_layout;
 mod menubar;

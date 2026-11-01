@@ -39,12 +39,16 @@ fn encode_srgb(v: f32) -> f32 {
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
 }
 
-fn curve(ch: u32, x: f32) -> f32 {
-    let o = pu(F_CURVE_OFF) + ch * CURVE_N;
+// The curve table at `o` in `aux` (`Lut1::eval`).
+fn lut_at(o: u32, x: f32) -> f32 {
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+fn curve(ch: u32, x: f32) -> f32 {
+    return lut_at(pu(F_CURVE_OFF) + ch * CURVE_N, x);
 }
 
 fn band_weights(h: f32) -> array<f32, 8> {
@@ -98,6 +102,60 @@ fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(l, c, h);
 }
 
+// `colorops::mixer_apply`: the colour mixer's band shifts (hue, sat, lum) on OkLCh `lch` at `strength`.
+fn mixer_apply(mh: array<f32, 8>, ms: array<f32, 8>, ml: array<f32, 8>, lch: vec3<f32>, strength: f32) -> vec3<f32> {
+    let w = band_weights(lch.z);
+    var dh = 0.0;
+    var ds = 0.0;
+    var dl = 0.0;
+    for (var i = 0u; i < 8u; i++) {
+        dh += w[i] * mh[i];
+        ds += w[i] * ms[i];
+        dl += w[i] * ml[i];
+    }
+    let chroma_w = min(lch.y / 0.12, 1.0);
+    let h = lch.z + dh * strength * chroma_w;
+    let c = lch.y * max(1.0 + ds * strength, 0.0);
+    let l = lch.x + dl * strength * chroma_w * sqrt(max(lch.x, 0.05));
+    return vec3<f32>(l, c, h);
+}
+
+// `finish::local_mix`: the masks' local Color Mixers on display-linear `d` of pixel `i`, each at its mask's opacity,
+// in mask order (`nm` masks, `n` pixels per alpha plane).
+fn local_mix(d: vec3<f32>, i: u32, n: u32, nm: u32) -> vec3<f32> {
+    let so = pu(F_LMIX_OFF);
+    var lch = vec3<f32>(0.0);
+    var any = false;
+    for (var m = 0u; m < nm; m++) {
+        let slot = aux[so + m];
+        let a = min(masks[m * n + i], 1.0);
+        if (slot < 0.0 || !(a > 0.0)) {
+            continue;
+        }
+        if (!any) {
+            let lab = oklab(d);
+            let c = sqrt(lab.y * lab.y + lab.z * lab.z);
+            // a neutral pixel has no hue: atan2(0, 0) is undefined in WGSL; the CPU's gives 0
+            lch = vec3<f32>(lab.x, c, select(atan2(lab.z, lab.y), 0.0, c == 0.0));
+            any = true;
+        }
+        var mh: array<f32, 8>;
+        var ms: array<f32, 8>;
+        var ml: array<f32, 8>;
+        let o = so + nm + u32(slot) * MIXER_WORDS;
+        for (var j = 0u; j < 8u; j++) {
+            mh[j] = aux[o + j];
+            ms[j] = aux[o + 8u + j];
+            ml[j] = aux[o + 16u + j];
+        }
+        lch = mixer_apply(mh, ms, ml, lch, a);
+    }
+    if (!any) {
+        return d;
+    }
+    return oklab_inv(vec3<f32>(lch.x, lch.y * cos(lch.z), lch.y * sin(lch.z)));
+}
+
 // `ColorOps::apply`.
 fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
@@ -110,19 +168,18 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     // GPUs, which a later lightening such as the vignette then shows); the CPU's atan2 gives 0
     var h = select(atan2(lab0.z, lab0.y), 0.0, c == 0.0);
     if (pu(F_MIXER) != 0u) {
-        let w = band_weights(h);
-        var dh = 0.0;
-        var ds = 0.0;
-        var dl = 0.0;
+        var mh: array<f32, 8>;
+        var ms: array<f32, 8>;
+        var ml: array<f32, 8>;
         for (var i = 0u; i < 8u; i++) {
-            dh += w[i] * pf(F_MIX_HUE + i);
-            ds += w[i] * pf(F_MIX_SAT + i);
-            dl += w[i] * pf(F_MIX_LUM + i);
+            mh[i] = pf(F_MIX_HUE + i);
+            ms[i] = pf(F_MIX_SAT + i);
+            ml[i] = pf(F_MIX_LUM + i);
         }
-        let chroma_w = min(c / 0.12, 1.0);
-        h += dh * chroma_w;
-        c *= max(1.0 + ds, 0.0);
-        l += dl * chroma_w * sqrt(max(l, 0.05));
+        let r = mixer_apply(mh, ms, ml, vec3<f32>(l, c, h), 1.0);
+        l = r.x;
+        c = r.y;
+        h = r.z;
     }
     for (var k = 0u; k < pu(F_NPC); k++) {
         let r = point_color(k, vec3<f32>(l, c, h));
@@ -470,6 +527,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- colour
     d = color_ops(d, lt[11], lt[12]);
+    // --- the masks' local Color Mixers, in mask order, each at its mask's opacity (`finish::local_mix`)
+    if (pu(F_LMIXES) != 0u) {
+        d = local_mix(d, i, n, nm);
+    }
     if (tint_on) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
@@ -542,6 +603,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let rs = pf(F_REFINE_SAT);
         if (rs < 1.0) {
             e = refine_saturation(e0, e, rs);
+        }
+    }
+    // --- the masks' local Curves, in mask order, each weighted by its mask (`finish::local_curve_luts`)
+    if (pu(F_LCURVES) != 0u) {
+        let so = pu(F_LCURVE_OFF);
+        for (var m = 0u; m < nm; m++) {
+            let slot = aux[so + m];
+            let a = masks[m * n + i];
+            if (slot < 0.0 || a <= 0.0) {
+                continue;
+            }
+            let o = so + nm + u32(slot) * 3u * CURVE_N;
+            let c = vec3<f32>(lut_at(o, e.x), lut_at(o + CURVE_N, e.y), lut_at(o + 2u * CURVE_N, e.z));
+            e = e + (c - e) * a;
         }
     }
     if (pu(F_GRAIN) != 0u) {

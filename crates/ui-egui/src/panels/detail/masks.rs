@@ -346,6 +346,14 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
     }
     mask_keys(app, ui, map, d, &grips);
     object_marks(app, p, map, d, active);
+    // the selected mask's Color Mixer targeted adjustment: a vertical drag moves the bands of the colour there
+    if let Some(target) = app.ui.tool.strip_prefix(crate::panels::mask_mixer::MIXER_TOOL).map(str::to_string) {
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        super::targeted_drag(app, resp, map, &target, "mask.mixerTargeted");
+        return;
+    }
     // Colour Range "Pick": the Masking panel owns the loupe's clicks (general_interaction
     // never runs while it is open), so the eyedropper is handled here too.
     if app.ui.tool == "colorRange" {

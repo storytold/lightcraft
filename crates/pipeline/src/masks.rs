@@ -6,6 +6,7 @@
 //! AI shapes (Sky, Subject, Background, People) use the segmentation [`Mattes`] the source carries
 //! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic.
 
+use lightcraft_color::spline::Lut1;
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
 use lightcraft_raster::{Image, Plane, Rgb32f};
@@ -130,6 +131,10 @@ pub struct Evaluated {
     pub id: u32,
     pub alpha: Plane,
     pub adjust: LocalAdjustments,
+    /// The mask's local Curve as tables ([`crate::finish::local_curve_luts`]); `None` while it is linear.
+    pub curve: Option<[Lut1; 3]>,
+    /// The mask's local Color Mixer, resolved ([`crate::colorops::MixerK`]); `None` while it is neutral.
+    pub mixer: Option<crate::colorops::MixerK>,
 }
 
 #[inline]
@@ -144,7 +149,13 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
+        .map(|m| Evaluated {
+            id: m.id,
+            alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes),
+            adjust: m.adjust,
+            curve: crate::finish::local_curve_luts(&m.curve),
+            mixer: (!m.mixer.is_neutral()).then(|| crate::colorops::MixerK::new(&m.mixer)),
+        })
         .collect()
 }
 

@@ -3,6 +3,9 @@
 
 use crate::journal::{LOG, SNAPSHOT, VERSION, encode_record};
 use crate::*;
+use lightcraft_develop::{DevelopSettings, Mask};
+use lightcraft_geom::Point;
+use std::sync::Arc;
 
 fn photo(c: &mut Catalog) -> Op {
     let id = c.alloc_photo_id();
@@ -95,6 +98,62 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(p.preview_checked, "");
     assert_eq!(r.upgraded_from, Some(6));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
+/// A photo with one mask carrying a local Curve (RGB + blue points), as a `SetDevelop` op.
+fn mask_curve_develop(c: &mut Catalog) -> (PhotoId, Op) {
+    let id = c.photos().next().unwrap().id;
+    let mut settings = DevelopSettings::default();
+    let mut mask = Mask { id: 1, ..Mask::default() };
+    mask.curve.master = vec![Point { x: 0.0, y: 0.0 }, Point { x: 0.5, y: 0.62 }, Point { x: 1.0, y: 1.0 }];
+    mask.curve.blue = vec![Point { x: 0.0, y: 0.1 }, Point { x: 1.0, y: 1.0 }];
+    settings.masks.push(mask);
+    (id, Op::SetDevelop { id, settings: Arc::new(settings), label: "Mask curve".into(), edited: None })
+}
+
+/// v10 added `Mask.curve`. A v9 library (masks without a curve) opens as it was and is rewritten
+/// as v10; a v10 library with a mask curve keeps the curve across an unrelated op and the next
+/// snapshot. (Builds that don't know `Mask.curve` refuse a v10 library: `newer_snapshot_is_refused_untouched`.)
+#[test]
+fn mask_curve_survives_open_op_and_snapshot() {
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    c.apply(op).unwrap();
+    let id = c.photos().next().unwrap().id;
+    let mut plain = DevelopSettings::default();
+    plain.masks.push(Mask { id: 1, ..Mask::default() });
+    c.apply(Op::SetDevelop { id, settings: Arc::new(plain), label: "Mask".into(), edited: None }).unwrap();
+
+    // v9: a mask without a curve is upgraded to the current format
+    assert!(!serde_json::to_string(&c.photo(id).unwrap().develop.masks[0]).unwrap().contains("curve"), "an empty curve isn't written");
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert_eq!(loaded.to_snapshot(), c.to_snapshot());
+
+    // the current format: a mask curve is kept across an unrelated op and a snapshot
+    let (_, op) = mask_curve_develop(&mut c);
+    c.apply(op).unwrap();
+    let want = c.photo(id).unwrap().develop.masks[0].curve.clone();
+    assert!(!want.is_empty());
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":3,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(loaded.photo(id).unwrap().develop.masks[0].curve, want);
+    let mut loaded = loaded;
+    let op = Op::SetRating { id, rating: 5 };
+    j.append(std::slice::from_ref(&op)).unwrap();
+    loaded.apply(op).unwrap();
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    let (_, reread, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!((r.replayed, r.upgraded_from), (0, None));
+    assert_eq!(reread.photo(id).unwrap().rating, 5);
+    assert_eq!(reread.photo(id).unwrap().develop.masks[0].curve, want);
 }
 
 #[test]
@@ -238,8 +297,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v11: `Mask.mixer` (a mask's local Color Mixer, in the develop settings).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
