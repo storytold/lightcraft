@@ -215,7 +215,7 @@ impl WebApp {
                     }
                 }
                 Command::Open { request, name, bytes, .. } => {
-                    if let Err(error) = self.begin_provider_open(&mut bridge, &request, name, bytes) {
+                    if let Err(error) = self.begin_provider_open(&mut bridge, &request, name, bytes, ctx) {
                         bridge.host.opened(&request, None, &error);
                         crate::safety::notice(error);
                     }
@@ -338,8 +338,8 @@ impl WebApp {
         });
     }
 
-    fn begin_provider_open(&mut self, bridge: &mut Bridge, request: &str, name: String, bytes: Vec<u8>) -> Result<(), String> {
-        self.app.can_replace_provider_library()?;
+    fn begin_provider_open(&mut self, bridge: &mut Bridge, request: &str, name: String, bytes: Vec<u8>, ctx: &egui::Context) -> Result<(), String> {
+        self.app.can_admit_provider_library(ctx)?;
         if bridge.loading
             || bridge.host.pending_for(self.app.file_provider_document)
             || self.frozen.get()

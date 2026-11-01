@@ -1,4 +1,4 @@
-use super::{GESTURE_TIMEOUT_MS, InjectedDrop, InjectedPress, LightcraftApp, drop_overlay, import, panels};
+use super::{GESTURE_TIMEOUT_MS, InjectedDrop, InjectedPress, LightcraftApp, drop_overlay, import, panels, widgets};
 
 impl LightcraftApp {
     /// Preserve the currently queued handles while a prompt or blocking library window owns
@@ -126,6 +126,7 @@ impl LightcraftApp {
     /// keeps that batch in flight until a completed UI pass consumed it. It never injects while
     /// the fonts are not installed (the pass would draw nothing and the events would be lost).
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        widgets::library_input::note_raw(ctx, raw);
         let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
         if !self.drop_pending.is_empty() {
             raw.dropped_files = std::mem::take(&mut self.drop_pending)
@@ -262,6 +263,7 @@ impl LightcraftApp {
         for gesture in &mut self.pending_gestures {
             gesture.deadline_ms = now + GESTURE_TIMEOUT_MS;
         }
+        widgets::library_input::note_raw(ctx, raw);
         self.synthetic_in_flight = true;
     }
 }

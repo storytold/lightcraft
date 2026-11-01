@@ -586,7 +586,7 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             let host = app.file_provider.as_ref().filter(|h| h.enabled()).ok_or_else(|| "No file provider is registered".to_owned());
             host.and_then(|host| {
                 let resource = p.get("resourceId").and_then(Value::as_str).ok_or("Missing provider resource ID")?;
-                app.can_replace_provider_library()?;
+                app.can_replace_provider_library(ctx)?;
                 let request = host.request_open(resource)?;
                 ctx.request_repaint();
                 Ok(json!({"requestId":request}))

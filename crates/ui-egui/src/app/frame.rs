@@ -352,6 +352,7 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        widgets::library_input::finish_pass(ctx);
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);

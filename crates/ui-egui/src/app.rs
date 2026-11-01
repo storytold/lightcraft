@@ -674,10 +674,37 @@ pub(crate) fn sam_download_ended(download: &lightcraft_engine::segment::Download
 
 impl LightcraftApp {
     /// A platform's asynchronous provider read cannot replace a library with pending input.
-    pub fn can_replace_provider_library(&self) -> Result<(), String> {
+    pub fn can_replace_provider_library(&self, ctx: &egui::Context) -> Result<(), String> {
         panels::settings::can_switch_library(self)?;
         if self.export.is_some() || self.ui.dialog.is_some() || self.session.unsaved().is_some() {
             return Err("Finish the current dialog/export and save pending library changes before opening a provider library".into());
+        }
+        if self.session.interaction.is_some()
+            || self.ui.dragging_control.is_some()
+            || self.ui.dragging_photos.is_some()
+            || self.hover_preview.is_some()
+            || ctx.text_edit_focused()
+            || widgets::library_input::has_draft(ctx)
+        {
+            return Err("Finish or cancel the current text edit, gesture or preview before opening a provider library".into());
+        }
+        Ok(())
+    }
+
+    /// Delivery can happen before widgets consume this frame's input. The menu uses the same
+    /// editing guard, without mistaking its own intentional click for unprocessed delivery input.
+    /// An outstanding provider read is deliberately not part of this guard.
+    pub fn can_admit_provider_library(&self, ctx: &egui::Context) -> Result<(), String> {
+        self.can_replace_provider_library(ctx)?;
+        if widgets::library_input::pending_raw(ctx)
+            || !self.synthetic.is_empty()
+            || self.synthetic_in_flight
+            || !self.pending_gestures.is_empty()
+            || self.pointer_cleanup
+            || !self.dropped_files.is_empty()
+            || !self.drop_pending.is_empty()
+        {
+            return Err("Wait for pending input to finish before opening a provider library".into());
         }
         Ok(())
     }
@@ -813,3 +840,6 @@ mod provider_library_tests {
         assert_eq!(events[0].metadata["resourceId"], "one");
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod provider_input_tests;
