@@ -610,6 +610,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Review of PR #3427: the quit's removal never waits for a driver call that is stuck. Device
+    /// creation blocks on its own thread (as `App::on_exit` finds it after its 2 s wait for
+    /// background work ran out); the quit on the UI thread still removes the marker at once, and
+    /// the stuck call returning later writes nothing. Also: a quit before any device creation,
+    /// after it, and with a marker that can't be removed (a folder in its place) do nothing harmful.
+    #[test]
+    fn the_quit_removes_the_marker_while_a_driver_call_is_stuck() {
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!("lc-gpu-stuck-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let slot = Arc::new(Mutex::new(Some(m.clone())));
+        let active = Arc::new(Mutex::new(0));
+        let (armed_tx, armed_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let driver = {
+            let (slot, active) = (slot.clone(), active.clone());
+            std::thread::spawn(move || {
+                with_marker_in(&slot, &active, "device creation", || {
+                    let _ = armed_tx.send(());
+                    // the driver call that doesn't return
+                    let _ = go_rx.recv_timeout(std::time::Duration::from_secs(30));
+                })
+            })
+        };
+        armed_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(m.exists(), "armed");
+        let t = std::time::Instant::now();
+        release_on(&slot, &active);
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "the quit didn't wait for the driver call");
+        assert!(!m.exists(), "removed while the call is stuck");
+        go_tx.send(()).unwrap();
+        driver.join().unwrap();
+        assert!(!m.exists(), "the call returning later writes nothing");
+        assert_eq!(*active.lock().unwrap(), 0);
+
+        // a quit before any device creation: nothing to remove, and none is written after it
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        release_on(&slot, &active);
+        assert!(!with_marker_in(&slot, &active, "device creation", || m.exists()));
+        // a quit after device creation returned: the scope already removed it
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "device creation", || {});
+        assert!(!m.exists());
+        release_on(&slot, &active);
+        // a marker that can't be removed (a folder in its place): logged, no panic
+        std::fs::create_dir_all(&m).unwrap();
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "device creation", || release_on(&slot, &active));
+        assert!(m.is_dir(), "left as it was");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Two LightCraft instances share one configuration (and so one marker file). Instance A arms,
     /// then instance B starts its own device creation and overwrites the marker; A's orderly quit,
     /// or A's scope ending, must leave B's marker so a crash of B is still reported. Before the
