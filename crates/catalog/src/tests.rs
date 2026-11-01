@@ -1021,6 +1021,12 @@ fn history_handles_loaded_revisions_failed_batches_and_retention() {
     let before = c.revision;
     c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 3 }, Op::RenameAlbum { id: album, name: "Journey".into() }] }).unwrap();
     assert_eq!(c.touched_since(before), None);
+    // the keyword list changes no photo: what was touched stays known, and the list is said to have changed
+    let before = c.revision;
+    c.apply(Op::SetKeyword { path: "travel|Rome".into(), info: Some(Default::default()) }).unwrap();
+    assert_eq!(c.touched_since(before), Some(vec![]));
+    assert_eq!(c.aspects_since(before), Some(Aspects::KEYWORD_LIST));
+    assert_eq!(c.aspects_since(c.revision), Some(Aspects::NONE), "and from after it, not");
     // more ops than are remembered: the oldest are answered with "anything"
     let long_ago = c.revision;
     for i in 0..9000u32 {
@@ -1060,6 +1066,13 @@ fn an_op_that_fails_leaves_no_touched_photos_behind() {
     assert!(c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 5 }, Op::SetRating { id: missing, rating: 1 }] }).is_err());
     assert_eq!(c.revision, start);
     assert_eq!(c.touched_since(start), Some(vec![]));
+    assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    // a keyword op that fails, alone or inside a batch that is rolled back, does not say the keyword list changed
+    assert!(c.apply(Op::SetKeyword { path: " | ".into(), info: Some(Default::default()) }).is_err());
+    assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    let ok = Op::SetKeyword { path: "travel|Rome".into(), info: Some(Default::default()) };
+    assert!(c.apply(Op::Batch { ops: vec![ok, Op::SetRating { id: missing, rating: 1 }] }).is_err());
+    assert_eq!(c.revision, start);
     assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
     assert_eq!(c.photo(a).map(|p| p.rating), Some(0));
     // a batch that ends in a failed removal of a photo that exists

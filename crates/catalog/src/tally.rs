@@ -3,8 +3,8 @@
 //! A smart album's count asks every photo whether its rules hold. Asked again after every edit, that is a pass over
 //! the library for each smart album each time a keyword is given. [`AlbumTally`] remembers which photos each smart
 //! album holds, and after a small edit asks only the photos the edit touched ([`Catalog::touched_since`]). An op
-//! that changes more than photos of its own (an album's rules or photos, a stack, the keyword list) has it counted
-//! whole again, as before.
+//! that changes more than photos of its own (an album's rules or photos, a stack) has to be counted whole again
+//! ([`AlbumTally::of`]): the caller decides where (the app does it off the UI thread).
 
 use std::collections::{HashMap, HashSet};
 
@@ -168,27 +168,24 @@ impl AlbumTally {
         self.revision
     }
 
-    /// Bring the counts up to `cat` as it is now. `true` when that was done from the photos the ops since touched
-    /// (or nothing had changed), `false` when every photo was asked again.
+    /// Bring the counts up to `cat` as it is now from the photos the ops since touched. `true` when that was done (or
+    /// nothing had changed); `false` when it can't be, and every photo has to be asked again ([`AlbumTally::of`]):
+    /// the counts are then left as they were.
     ///
     /// `cat` has to be the catalog the counts were made of, further along. Another catalog is told apart only by
-    /// its revisions: a library that is loaded takes a range of its own (and then everything is counted again), but
-    /// two catalogs both counting from 0 look like one.
+    /// its revisions: a library that is loaded takes a range of its own (and then nothing is followed), but two
+    /// catalogs both counting from 0 look like one.
     pub fn update(&mut self, cat: &Catalog) -> bool {
         if self.revision == cat.revision {
             return true;
         }
-        let followed = match (cat.touched_since(self.revision), cat.aspects_since(self.revision)) {
+        match (cat.touched_since(self.revision), cat.aspects_since(self.revision)) {
             (Some(touched), Some(changed)) if touched.len() <= MAX_FOLLOWED => {
                 self.follow(cat, &touched, changed);
                 true
             }
             _ => false,
-        };
-        if !followed {
-            *self = AlbumTally::of(cat);
         }
-        followed
     }
 
     /// The counts after ops that touched only `touched`: each smart album asks those photos again; an album of
