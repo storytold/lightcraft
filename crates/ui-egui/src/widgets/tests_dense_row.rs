@@ -246,3 +246,96 @@ fn corners_are_at_most_half_the_earlier_radius() {
         assert!(v.window_corner_radius.nw <= RADIUS_PANEL && v.menu_corner_radius.nw <= RADIUS_PANEL, "{kind:?}");
     }
 }
+
+/// Puts the UI language back to English when a test that changed it ends (also when it fails).
+struct Language;
+
+impl Language {
+    fn set(language: crate::i18n::Locale) -> Self {
+        crate::i18n::set_language(language);
+        Language
+    }
+}
+
+impl Drop for Language {
+    fn drop(&mut self) {
+        crate::i18n::set_language(crate::i18n::Locale::En);
+    }
+}
+
+/// FredApps on #3155: the name column is as wide as the longest name of its group in the language
+/// on screen ("Dunst entfernen" in German, "Dehaze" in English), measured in the row's own font.
+#[test]
+fn the_name_column_fits_the_longest_name_in_the_current_language() {
+    let ids = ["effects.texture", "effects.clarity", "effects.dehaze"];
+    let column = |language: crate::i18n::Locale| {
+        let _language = Language::set(language);
+        let mut view = HeadlessView::new();
+        let specs: Vec<ControlSpec> = ids.iter().map(|id| *controls::find(id).unwrap()).collect();
+        let mut longest = 0.0f32;
+        let mut registry = Vec::new();
+        for frame in 0..3 {
+            view.run(HeadlessView::raw_input(vec2(320.0, 200.0), 1.0, f64::from(frame) * 0.02, vec![]), |ui| {
+                super::begin_slider_group(ui, "effects");
+                for spec in &specs {
+                    slider(ui, spec, 0.0, true, None);
+                }
+                // the longest name in this language, in the row's own font
+                let font = crate::theme::Tokens::get(ui.ctx()).font(super::ROW_FONT);
+                longest = specs
+                    .iter()
+                    .map(|s| ui.painter().layout_no_wrap(crate::i18n::tr(s.label).to_string(), font.clone(), egui::Color32::WHITE).size().x.ceil())
+                    .fold(0.0f32, f32::max);
+            });
+            // (the registry keeps every frame's rects: the last frame's are the ones to check)
+            registry = take_registry(&view.ctx);
+        }
+        let widths: Vec<f32> = ids
+            .iter()
+            .map(|id| registry.iter().find(|(r, _)| *r == format!("sliderLabel:{id}")).map(|(_, r)| r.width()).unwrap_or_else(|| panic!("no {id}")))
+            .collect();
+        for w in &widths {
+            assert!((w - longest.max(super::NAME_MIN)).abs() < 0.5, "{language:?}: column {w} for a longest name of {longest}: {widths:?}");
+        }
+        longest
+    };
+    let (en, de) = (column(crate::i18n::Locale::En), column(crate::i18n::Locale::De));
+    assert!(de > en + 10.0, "the German column is the wider one: {de} against {en}");
+}
+
+/// FredApps on #3155: a name too long for its column is cut with an ellipsis, and hovering it
+/// shows the whole name.
+#[test]
+fn a_name_too_long_for_its_column_ends_in_an_ellipsis_and_shows_whole_on_hover() {
+    let long = "Highlights Luminance Saturation Balance";
+    let spec = *controls::find("light.exposure").unwrap();
+    let mut view = HeadlessView::new();
+    let mut label: Option<Rect> = None;
+    let mut texts = Vec::new();
+    let mut cut = None;
+    let mut moved = false;
+    for frame in 0..60 {
+        // the pointer comes to rest on the name once (a move every frame would keep the tooltip away)
+        let events = match label {
+            Some(l) if !moved => {
+                moved = true;
+                vec![Event::PointerMoved(l.center())]
+            }
+            _ => vec![],
+        };
+        view.run(HeadlessView::raw_input(vec2(220.0, 200.0), 1.0, f64::from(frame) * 0.05, events), |ui| {
+            slider(ui, &spec, 0.0, true, Some(long));
+        });
+        texts = view.painted_text();
+        cut = view.painted_shapes().into_iter().find_map(|shape| match shape {
+            egui::epaint::Shape::Text(t) if t.galley.job.text == long => Some((t.galley.elided, t.galley.size().x)),
+            _ => None,
+        });
+        label = take_registry(&view.ctx).into_iter().find(|(id, _)| id == "sliderLabel:light.exposure").map(|(_, r)| r);
+    }
+    let label = label.expect("the name's rect");
+    assert!(label.width() < 220.0 * 0.5, "the column is capped: {label:?}");
+    let (elided, drawn_w) = cut.expect("the name is drawn");
+    assert!(elided && drawn_w <= label.width() + 0.5, "the name is cut with an ellipsis to its column: {drawn_w} in {label:?}");
+    assert!(texts.iter().any(|t| t != long && t.contains(long)), "hovering shows the whole name (with the reset hint): {texts:?}");
+}
