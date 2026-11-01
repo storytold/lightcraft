@@ -238,7 +238,8 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
 fn read_video_original(path: &str) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-    let size = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
+    let before = file.metadata().map_err(|e| format!("{path}: {e}"))?;
+    let size = before.len();
     crate::files::check_buffered_original_size(size).map_err(|e| format!("{path}: {e}"))?;
     let len = usize::try_from(size).map_err(|_| format!("{path}: original is too large for this platform"))?;
     let mut bytes = Vec::new();
@@ -246,7 +247,11 @@ fn read_video_original(path: &str) -> Result<Vec<u8>, String> {
     bytes.resize(len, 0);
     file.read_exact(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
     let mut extra = [0u8; 1];
-    if file.read(&mut extra).map_err(|e| format!("{path}: {e}"))? != 0 {
+    let after = file.metadata().map_err(|e| format!("{path}: {e}"))?;
+    if file.read(&mut extra).map_err(|e| format!("{path}: {e}"))? != 0
+        || after.len() != size
+        || after.modified().map_err(|e| format!("{path}: {e}"))? != before.modified().map_err(|e| format!("{path}: {e}"))?
+    {
         return Err(format!("{path}: original changed during export; retry when the file is no longer being written"));
     }
     Ok(bytes)

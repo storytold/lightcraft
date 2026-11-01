@@ -124,6 +124,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             let is_video = app.session.catalog.photo(*id).is_some_and(|p| p.is_video());
             if thumb.is_none() {
                 paint_missing_frame(p, &t, img_area, is_video, failed);
+                // No picture to outline, but the cell is still selected (a clip, or a frame
+                // that has not arrived yet).
+                crate::panels::grid::selection_ring(p, &t, img_area, state);
             }
             let has_thumb = thumb.is_some();
             if let Some(tex) = thumb {

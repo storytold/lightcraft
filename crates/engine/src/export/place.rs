@@ -31,14 +31,28 @@ pub fn copy_original(source: &str, destination: &str, remove_location: bool) -> 
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    lightcraft_catalog::safe_file::write_atomic_nosync_with(target, &mut |out| {
-        let n = std::io::copy(&mut (&mut file).take(before.len()), out)?;
-        let after = file.metadata()?;
-        if n != before.len() || after.len() != before.len() || after.modified()? != before.modified()? {
-            return Err(std::io::Error::other("original changed during export; retry when the file is no longer being written"));
-        }
-        Ok(())
-    })
+    lightcraft_catalog::safe_file::write_atomic_nosync_with_check(
+        target,
+        &mut |out| {
+            let n = std::io::copy(&mut (&mut file).take(before.len()), out)?;
+            let after = file.metadata()?;
+            if n != before.len() || after.len() != before.len() || after.modified()? != before.modified()? {
+                return Err(std::io::Error::other("original changed during export; retry when the file is no longer being written"));
+            }
+            Ok(())
+        },
+        // The check sees the bytes that would be published, not just the source: a file that
+        // gained a location between the first check and the copy never reaches its destination.
+        &mut |tmp| {
+            if remove_location {
+                let mut copied = std::fs::File::open(tmp)?;
+                let len = copied.metadata()?.len();
+                let metadata = crate::files::read_video_metadata_from(&mut copied, len, source).map_err(std::io::Error::other)?;
+                lightcraft_meta::verify_video_location_absent(&metadata).map_err(|e| std::io::Error::other(format!("{destination}: {e}")))?;
+            }
+            Ok(())
+        },
+    )
     .map_err(|e| format!("{destination}: {e}"))
 }
 
@@ -78,6 +92,23 @@ fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String> {
 /// The path of the sidecar with extension `ext` of the exported file `main`.
 fn sidecar_path(main: &str, ext: &str) -> String {
     std::path::Path::new(main).with_extension(ext).to_string_lossy().to_string()
+}
+
+/// How large a previous sidecar may be to keep a copy for restoring after a failed export.
+const MAX_SIDECAR_BACKUP: u64 = 16 * 1024 * 1024;
+
+/// Put the sidecars a failed export replaced back, or remove the ones it created.
+fn restore_sidecars(write: &mut dyn FnMut(&str, &[u8]) -> Result<(), String>, previous: &[(String, Option<Vec<u8>>)]) {
+    for (path, bytes) in previous {
+        match bytes {
+            Some(bytes) => {
+                let _ = write(path, bytes);
+            }
+            None => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 /// Where a batch's files go: each photo's path (destination folder, subfolder, conflict policy,
@@ -203,16 +234,38 @@ impl<'a> Placer<'a> {
             for f in &files {
                 guard.check(std::path::Path::new(f))?;
             }
-            if let Some((source, remove_location)) = &original {
-                let copier = copy.as_mut().ok_or("this destination cannot stream an Original video")?;
-                byte_count = copier(source, &path, *remove_location)?;
-            } else {
-                write(&path, &e.bytes)?;
-            }
+            // Keep the previous sidecars in memory so a failure after replacing some (or after
+            // replacing the clip) can put the group back together instead of pairing a new clip
+            // with old metadata, or the reverse.
+            let previous: Vec<(String, Option<Vec<u8>>)> = files
+                .iter()
+                .skip(1)
+                .filter_map(|sc| match std::fs::metadata(sc) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some((sc.clone(), None)),
+                    // Only a small file is backed up; anything else is left as it is rather than
+                    // removed by a later restore that cannot put it back.
+                    Ok(m) if m.is_file() && m.len() <= MAX_SIDECAR_BACKUP => std::fs::read(sc).ok().map(|bytes| (sc.clone(), Some(bytes))),
+                    _ => None,
+                })
+                .collect();
+            // Sidecars first: a metadata write failure leaves the previous clip untouched.
             let mut sidecars = Vec::new();
             for ((_, bytes), sc) in e.sidecars.iter().zip(files.iter().skip(1)) {
-                write(sc, bytes)?;
+                if let Err(e) = write(sc, bytes) {
+                    restore_sidecars(&mut *write, &previous);
+                    return Err(e);
+                }
                 sidecars.push(sc.clone());
+            }
+            let main: Result<(), String> = if let Some((source, remove_location)) = &original {
+                let copier = copy.as_mut().ok_or("this destination cannot stream an Original video")?;
+                copier(source, &path, *remove_location).map(|n| byte_count = n)
+            } else {
+                write(&path, &e.bytes)
+            };
+            if let Err(e) = main {
+                restore_sidecars(&mut *write, &previous);
+                return Err(e);
             }
             Ok((path, files, sidecars))
         });

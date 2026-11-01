@@ -525,7 +525,10 @@ impl Photo {
             return true;
         }
         // a record the probe read as another format is that format, whatever its name says (a JPEG
-        // saved as .mp4 is an image)
+        // saved as .mp4 is an image, and so is a raw)
+        if self.kind == MediaKind::Raw {
+            return false;
+        }
         if self.kind == MediaKind::Image && !self.format.is_empty() && !EXTENSIONS.iter().any(|e| self.format.eq_ignore_ascii_case(e)) {
             return false;
         }
@@ -614,6 +617,11 @@ mod video_tests {
 
         let m4v = Photo::new(PhotoId(4), Source::File { path: "/p/a.m4v".into() }, "a.m4v", "", 10, 10, "2026-10-01T00:00:00");
         assert!(m4v.is_video());
+
+        let raw = Photo::new(PhotoId(5), Source::File { path: "/p/a.mp4".into() }, "a.mp4", "ARW", 10, 10, "2026-10-01T00:00:00");
+        let mut raw = raw;
+        raw.kind = MediaKind::Raw;
+        assert!(!raw.is_video(), "a raw file named .mp4 is still a raw, not a video");
     }
 }
 

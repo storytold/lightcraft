@@ -801,6 +801,36 @@ fn export_sidecars_follow_the_conflict_policy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A sidecar that cannot be replaced must not leave the new clip beside the old metadata: the
+/// clip is only published once its sidecars are written, and an earlier group is restored.
+#[test]
+fn a_failed_sidecar_write_keeps_the_previous_clip_and_metadata() {
+    use crate::export::{Conflict, Destination};
+    let (mut s, id, dir, _src, _) = library_with_jpeg("export-sidecar-failure");
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let to = Destination { dir: out.to_string_lossy().to_string(), exact: None };
+    let o = ExportOptions { format: ExportFormat::Original, naming: "{name}".into(), conflict: Conflict::Overwrite, ..Default::default() };
+    disk_batch(&mut s, id, &o, &to).unwrap();
+    let (clip, side) = (out.join("IMG_1.jpg"), out.join("IMG_1.xmp"));
+    let (previous_clip, previous_side) = (std::fs::read(&clip).unwrap(), std::fs::read(&side).unwrap());
+    let err = crate::export::export_batch(
+        &mut s,
+        &[id],
+        &o,
+        &to,
+        &mut |path, bytes| {
+            if path.ends_with(".xmp") { Err("injected sidecar failure".to_string()) } else { crate::export::write_file(path, bytes) }
+        },
+        &|p| std::path::Path::new(p).exists(),
+    )
+    .unwrap_err();
+    assert!(err.contains("injected sidecar failure"), "{err}");
+    assert_eq!(std::fs::read(&clip).unwrap(), previous_clip, "the clip is not replaced when its metadata cannot be");
+    assert_eq!(std::fs::read(&side).unwrap(), previous_side);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #93: the native writer truncated the target first; a failure mid-write (full disk,
 /// unplugged drive) now leaves the previous file intact and no partial one.
 #[test]

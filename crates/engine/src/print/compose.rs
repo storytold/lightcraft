@@ -678,6 +678,9 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
     }
     let style = CellStyle::of(&settings, ppi);
     let mut items = Vec::new();
+    // Photos a cell really places: Picture Package draws only the first, a custom cell its own,
+    // and a still repeated in several cells counts once.
+    let mut placed = std::collections::BTreeSet::new();
     for (page, cells) in plan.iter().enumerate() {
         for (rect, id) in cells {
             let Some(cell) = px_rect(rect, ppi, pw, ph) else { continue };
@@ -689,6 +692,7 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
             let p = place(nw as f64, nh as f64, aw, ah, style.fill, style.rotate).ok_or("a photo has no size")?;
             let (rw, rh) = p.unturned();
             let job = session.export_job(*id, rw, rh, OutputSpace::Rec2020, OutputDepth::U16)?;
+            placed.insert(*id);
             items.push(Item { page, name, cell, key: (id.0, rw, rh), job });
         }
     }
@@ -701,7 +705,7 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
         marks: Marks::of(&settings, ppi, pw, ph),
         color: settings.job.color.clone(),
         skipped,
-        photos: printable.len(),
+        photos: placed.len(),
     })
 }
 

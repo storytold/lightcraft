@@ -383,7 +383,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
         general_cursor(app, ui, &resp, img_rect, main_area);
     }
-    if !navigating {
+    // A video card is not the picture: a crop overlay would draw handles on a frame that is not
+    // there. The other tools (masks, remove, red eye) have no video surface either but keep their
+    // existing navigation guard.
+    if !navigating && !(shown == "video" && right == RightPanel::Crop) {
         let tv = ToolView { right, map: &map, frame: &frame, d: &d, id, split, native, aspect };
         tool_interaction(app, ui, &resp, &tv, &Views { img_rect, target_rect, before_img, before_target, areas: &areas, main_area, canvas });
     }

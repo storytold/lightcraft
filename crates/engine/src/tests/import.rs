@@ -3039,7 +3039,15 @@ fn video_metadata_after_thousands_of_fragments_is_read_without_the_payloads() {
     fragmented.extend_from_slice(&file[ftyp_len..]);
     let mut reader = std::io::Cursor::new(&fragmented);
     let metadata = crate::files::read_video_metadata_from(&mut reader, fragmented.len() as u64, "fragmented.mp4").unwrap();
-    assert_eq!(metadata, file, "fragment boxes are skipped; only the original metadata is retained");
+    // `moof` can hold metadata (and is needed for the fail-closed location check); the media
+    // payload boxes are still skipped.
+    let mut expected = file[..ftyp_len].to_vec();
+    for _ in 0..2048 {
+        expected.extend_from_slice(&8u32.to_be_bytes());
+        expected.extend_from_slice(b"moof");
+    }
+    expected.extend_from_slice(&file[ftyp_len..]);
+    assert_eq!(metadata, expected, "fragment payloads are skipped; moof metadata is retained");
     assert_eq!(lightcraft_meta::probe_video(&metadata).unwrap().duration, Some(84.5));
 }
 
@@ -3107,6 +3115,25 @@ fn a_file_named_mp4_that_is_not_a_container_is_probed_as_what_it_is() {
     assert_eq!(ids(&r, "imported"), 1, "{r}");
     let p = s.catalog.photos().next().unwrap();
     assert!(!p.is_video(), "an image misnamed .mp4 is not a video in the catalog");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A raw file whose name says .mp4 is catalogued as the raw its bytes are, and never becomes a
+/// video through the extension alone.
+#[test]
+fn a_raw_named_mp4_is_probed_as_a_raw_not_a_video() {
+    let src = temp_dir("raw-misnamed-video");
+    let path = src.join("really-a-raw.mp4");
+    std::fs::write(&path, crate::tests::xmp::synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+    let mut s = Session::new().with_fs();
+    let candidates = crate::import::scan(&mut s, &[src.to_string_lossy().into_owned()]);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].kind, lightcraft_catalog::MediaKind::Raw, "{:?}", candidates[0].error);
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.kind, lightcraft_catalog::MediaKind::Raw);
+    assert!(!p.is_video(), "a raw named .mp4 is not a video in the catalog");
     let _ = std::fs::remove_dir_all(&src);
 }
 

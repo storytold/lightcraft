@@ -509,7 +509,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         c.height,
         c.format,
         c.file_size as f64 / 1e6,
-        c.captured.as_deref().map(|d| format!("\n{}", d.get(..19).unwrap_or(d).replace('T', " "))).unwrap_or_default()
+        c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
     );
     let resp = resp.on_hover_text(tip);
     if resp.clicked() && ok {

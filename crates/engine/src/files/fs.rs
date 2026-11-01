@@ -93,13 +93,6 @@ pub fn looks_like_video_container(head: &[u8]) -> bool {
         .contains(&kind)
 }
 
-/// Read metadata boxes (ftyp, moov, meta, uuid) of an ISO-BMFF container into a bounded buffer
-/// without reading large media payloads (mdat). Capped at 64 MB.
-fn read_video_metadata_boxes(path: &str, file_len: u64) -> Result<Vec<u8>, String> {
-    let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-    read_video_metadata_from(&mut f, file_len, path)
-}
-
 /// Validate one top-level video box header, shared by native and asynchronous browser readers.
 pub fn video_box_info(header: &[u8], at: u64, file_len: u64) -> Result<([u8; 4], u64), String> {
     let head: [u8; 8] = header.get(..8).and_then(|b| b.try_into().ok()).ok_or("truncated video box header")?;
@@ -121,7 +114,7 @@ pub fn video_box_info(header: &[u8], at: u64, file_len: u64) -> Result<([u8; 4],
 
 /// Boxes retained for metadata probing and fail-closed location verification.
 pub fn is_video_metadata_box(kind: &[u8; 4]) -> bool {
-    matches!(kind, b"moov" | b"ftyp" | b"meta" | b"uuid" | b"udta" | b"\xa9xyz" | b"loci" | b"XMP_")
+    matches!(kind, b"moov" | b"moof" | b"ftyp" | b"meta" | b"uuid" | b"udta" | b"\xa9xyz" | b"loci" | b"XMP_")
 }
 
 /// Stage metadata from an already opened original, keeping verification and copy on one handle.
@@ -167,10 +160,10 @@ pub(crate) fn read_video_metadata_from(f: &mut (impl std::io::Read + std::io::Se
     Ok(out)
 }
 
-/// Compute the content hash of `path` incrementally in 64 KB chunks, matching `lightcraft_preview::hash_bytes`.
-fn hash_file_stream(path: &str) -> Result<String, String> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+/// Compute the content hash incrementally in 64 KB chunks, matching `lightcraft_preview::hash_bytes`.
+fn hash_file_stream(f: &mut std::fs::File, path: &str) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    f.seek(SeekFrom::Start(0)).map_err(|e| format!("{path}: {e}"))?;
     let mut hasher = lightcraft_preview::Hasher128::new();
     let mut buf = vec![0u8; 1 << 16];
     loop {
@@ -183,9 +176,10 @@ fn hash_file_stream(path: &str) -> Result<String, String> {
     Ok(hasher.finish().to_string())
 }
 
-/// Probe a video file using bounded box reads and incremental hashing.
-fn probe_video_file(path: &str, file_len: u64) -> Result<ProbeInfo, String> {
-    let meta_bytes = read_video_metadata_boxes(path, file_len)?;
+/// Probe a video file using bounded box reads and incremental hashing, all from one open handle:
+/// the catalog cannot combine boxes and a hash from two different versions of the file.
+fn probe_video_file(f: &mut std::fs::File, path: &str, file_len: u64) -> Result<ProbeInfo, String> {
+    let meta_bytes = read_video_metadata_from(f, file_len, path)?;
     if meta_bytes.is_empty() {
         return Err("no metadata boxes found".into());
     }
@@ -207,7 +201,7 @@ fn probe_video_file(path: &str, file_len: u64) -> Result<ProbeInfo, String> {
         "MP4" | "MOV" | "M4V" => ext_upper(&name),
         _ => "MP4".to_string(),
     };
-    let content_hash = Some(hash_file_stream(path)?);
+    let content_hash = Some(hash_file_stream(f, path)?);
     Ok(ProbeInfo {
         width: w,
         height: h,
@@ -249,7 +243,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let weight = if bounded_video { len.min(64 * 1024 * 1024) } else { len };
         let _permit = crate::memory::work_gate().acquire(weight);
         let mut info = if bounded_video {
-            probe_video_file(path, u64::try_from(len).unwrap_or(u64::MAX))?
+            probe_video_file(&mut file, path, u64::try_from(len).unwrap_or(u64::MAX))?
         } else {
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;

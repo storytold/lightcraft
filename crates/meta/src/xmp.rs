@@ -155,8 +155,8 @@ impl XmpData {
                 if self.values.get(root).is_some_and(has_text) || values.iter().any(|value| !value.trim().is_empty()) {
                     return true;
                 }
-                // `values` retains only the last occurrence of a top-level field across RDF
-                // descriptions, whereas flattened child properties retain every occurrence.
+                // `values` keeps the first text-bearing occurrence across RDF descriptions, while
+                // flattened child properties retain every occurrence.
                 if self.properties.iter().any(|(candidate, nested_values)| {
                     candidate.strip_prefix(root).is_some_and(|suffix| suffix.starts_with('/'))
                         && nested_values.iter().any(|value| !value.trim().is_empty())
@@ -202,6 +202,26 @@ impl XmpValue {
             other => std::slice::from_ref(other),
         }
     }
+}
+
+/// Whether a structured value holds any non-blank text. A tree larger than the parser's node
+/// budget counts as text-bearing (the conservative answer for a privacy check).
+fn value_has_text(value: &XmpValue) -> bool {
+    let mut pending = vec![value];
+    let mut visited = 0usize;
+    while let Some(value) = pending.pop() {
+        visited = visited.saturating_add(1);
+        if visited > MAX_NODES {
+            return true;
+        }
+        match value {
+            XmpValue::Text(text) if !text.trim().is_empty() => return true,
+            XmpValue::Array(items) => pending.extend(items.iter()),
+            XmpValue::Struct(fields) => pending.extend(fields.values()),
+            XmpValue::Text(_) => {}
+        }
+    }
+    false
 }
 
 fn node_struct(n: &Node) -> XmpValue {
@@ -624,7 +644,21 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     for d in descs {
         collect_description(d, "", &mut props, &mut key_budget, &mut dropped);
         if let XmpValue::Struct(m) = node_struct(d) {
-            values.extend(m);
+            // A later description can repeat a property with an empty value (an IPTC location
+            // struct with a blank `rdf:li`, say). Keep the earlier text-bearing value: otherwise
+            // the empty one would hide the place an export's Remove Location must refuse.
+            for (key, value) in m {
+                match values.entry(key) {
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        if !value_has_text(slot.get()) && value_has_text(&value) {
+                            slot.insert(value);
+                        }
+                    }
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(value);
+                    }
+                }
+            }
         }
     }
     let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());

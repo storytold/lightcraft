@@ -13,8 +13,10 @@ use crate::{Gps, Metadata};
 
 /// Maximum box nesting depth to avoid recursion attacks.
 const MAX_DEPTH: usize = 8;
-/// Maximum number of boxes to inspect.
-const MAX_BOXES: usize = 1024;
+/// Maximum number of boxes to inspect: the top-level budget native import and the streaming
+/// Original copy allow (`MAX_VIDEO_TOP_LEVEL_BOXES` in the engine), so a fragmented clip accepted
+/// by import can still be probed and verified before it is published.
+const MAX_BOXES: usize = 1_000_000;
 /// XMP UUID in ISO-BMFF `uuid` boxes: be7acfcb-97a9-42e8-9c71-999491e3afac (XMP Specification Part 3).
 const XMP_UUID: [u8; 16] = [0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac];
 /// Difference in seconds between the Apple/Mac epoch (1904-01-01 00:00:00 UTC) and the Unix epoch
@@ -589,7 +591,7 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
                     );
                 }
             }
-            b"moov" | b"udta" | b"trak" | b"mdia" => verify_location_boxes(b.body, budget, depth + 1)?,
+            b"moov" | b"udta" | b"trak" | b"mdia" | b"moof" | b"traf" => verify_location_boxes(b.body, budget, depth + 1)?,
             b"meta" => {
                 let body = meta_children(b.body).ok_or("can't verify video location: truncated metadata")?;
                 // `keys` names the `ilst` items: only a location key that holds a value refuses.
@@ -664,6 +666,24 @@ fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
                 }
                 saw_ilst = true;
                 for item in read_boxes_strict(b.body, budget)? {
+                    // `ilst` can hold QuickTime atoms by name as well as mdta index items. A
+                    // `©xyz` item carries the same place string as `udta`: an empty value names
+                    // no place, anything else refuses the copy.
+                    if &item.kind == b"\xa9xyz" {
+                        for data in read_boxes_strict(item.body, budget)? {
+                            if &data.kind != b"data" {
+                                return Err("can't verify video location: unreadable location metadata value".into());
+                            }
+                            let value = data.body.get(8..).ok_or("can't verify video location: truncated metadata value")?;
+                            if !value.iter().all(u8::is_ascii_whitespace) {
+                                return Err(
+                                    "can't remove embedded GPS or embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
+                                        .into(),
+                                );
+                            }
+                        }
+                        continue;
+                    }
                     items.push((u32::from_be_bytes(item.kind) as usize, item.body));
                 }
             }
@@ -755,9 +775,15 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     b"trak" => {
                         if let Some(t) = parse_trak(child.body, &mut budget, 0, &mut meta, &mut xmp)
                             && t.is_video
-                            && (primary_track.is_none() || (t.width > 0 && t.height > 0))
                         {
-                            primary_track = Some(t);
+                            // The main video is the track showing the largest picture; an
+                            // auxiliary track (a thumbnail, a preview) may come later and must
+                            // not replace it. Ties keep the first track.
+                            let area = |t: &TrackInfo| u64::from(t.width).saturating_mul(u64::from(t.height));
+                            let larger = primary_track.as_ref().is_none_or(|p| area(&t) > area(p));
+                            if larger {
+                                primary_track = Some(t);
+                            }
                         }
                     }
                     // A fragmented movie (`empty_moov`: the file is a series of fragments) writes
@@ -1061,6 +1087,71 @@ mod tests {
         }
     }
 
+    /// `ilst` items named `©xyz` (rather than the mdta index form) carry a place too.
+    #[test]
+    fn location_verification_checks_ilst_quicktime_location_items() {
+        let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
+        let with_xyz = |value: &str| {
+            let mut data = 1u32.to_be_bytes().to_vec();
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data.extend_from_slice(value.as_bytes());
+            let mut data_box = Vec::new();
+            write_box(&mut data_box, b"data", &data);
+            let mut item = Vec::new();
+            write_box(&mut item, b"\xa9xyz", &data_box);
+            let mut ilst = Vec::new();
+            write_box(&mut ilst, b"ilst", &item);
+            let mut meta_body = vec![0u8; 4];
+            meta_body.extend_from_slice(&ilst);
+            let mut meta = Vec::new();
+            write_box(&mut meta, b"meta", &meta_body);
+            let mut udta = Vec::new();
+            write_box(&mut udta, b"udta", &meta);
+            with_trak_children(&clean, &udta)
+        };
+        assert!(verify_video_location_absent(&with_xyz("")).is_ok(), "an empty ilst ©xyz names no place");
+        let error = verify_video_location_absent(&with_xyz("+37.7749-122.4194/")).unwrap_err();
+        assert!(error.contains("location metadata"), "{error}");
+    }
+
+    /// Fragmented movies carry metadata inside `moof`/`traf`; verification must look there too.
+    #[test]
+    fn location_verification_checks_fragmented_movie_metadata() {
+        let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
+        let with_moof = |body: &[u8]| {
+            let mut moof_body = Vec::new();
+            write_box(&mut moof_body, b"traf", body);
+            let mut moof = Vec::new();
+            write_box(&mut moof, b"moof", &moof_body);
+            let mut bytes = clean.clone();
+            bytes.extend_from_slice(&moof);
+            bytes
+        };
+        assert!(verify_video_location_absent(&with_moof(b"")).is_ok());
+        let mut text = (19u16).to_be_bytes().to_vec();
+        text.extend_from_slice(&0u16.to_be_bytes());
+        text.extend_from_slice(b"+37.7749-122.4194/");
+        let mut udta = Vec::new();
+        write_box(&mut udta, b"udta", &{
+            let mut atom = Vec::new();
+            write_box(&mut atom, b"\xa9xyz", &text);
+            atom
+        });
+        let error = verify_video_location_absent(&with_moof(&udta)).unwrap_err();
+        assert!(error.contains("location metadata"), "{error}");
+    }
+
+    /// The main picture is the largest video track; a later auxiliary track does not replace it.
+    #[test]
+    fn probe_keeps_the_largest_video_track() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        for (width, height, expected) in [(320, 240, (1920, 1080)), (2560, 1440, (2560, 1440))] {
+            let bytes = with_extra_track(&file, width, height);
+            let meta = probe_video(&bytes).expect("valid video");
+            assert_eq!((meta.width, meta.height), expected, "added {width}x{height}");
+        }
+    }
+
     #[test]
     fn location_verification_refuses_incomplete_or_excessive_metadata() {
         let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
@@ -1291,6 +1382,22 @@ mod tests {
         let mut body = bytes.get(trak_at + 8..trak_at + trak_len).expect("trak body").to_vec();
         body.extend_from_slice(children);
         write_box(&mut out, b"trak", &body);
+        let moov_len = u32::try_from(out.len() - ftyp_len).expect("small fixture");
+        out.get_mut(ftyp_len..ftyp_len + 4).expect("moov size")[..].copy_from_slice(&moov_len.to_be_bytes());
+        out
+    }
+
+    /// Append a second video track (a copy of the fixture's `trak`, resized) to the synthetic movie.
+    fn with_extra_track(bytes: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let ftyp_len = be32(bytes, 0).expect("ftyp size") as usize;
+        let trak_at = bytes.windows(4).position(|w| w == b"trak").expect("trak") - 4;
+        let trak_len = be32(bytes, trak_at).expect("trak size") as usize;
+        let mut second = bytes.get(trak_at..trak_at + trak_len).expect("trak body").to_vec();
+        // `trak` header (8) + `tkhd` header (8) + the v0 body's width/height offsets (76/80).
+        second.get_mut(92..96).expect("track width")[..].copy_from_slice(&(width << 16).to_be_bytes());
+        second.get_mut(96..100).expect("track height")[..].copy_from_slice(&(height << 16).to_be_bytes());
+        let mut out = bytes.get(..trak_at + trak_len).expect("movie ending at its track").to_vec();
+        out.extend_from_slice(&second);
         let moov_len = u32::try_from(out.len() - ftyp_len).expect("small fixture");
         out.get_mut(ftyp_len..ftyp_len + 4).expect("moov size")[..].copy_from_slice(&moov_len.to_be_bytes());
         out

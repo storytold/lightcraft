@@ -1089,7 +1089,10 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
     }
     let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
     let w = g.size().x + 26.0;
-    // (a cell smaller than the pill still keeps it inside its own picture)
+    // A pill wider than the cell's margins would spill over its neighbours: skip it instead.
+    if w > img_rect.width() - 10.0 {
+        return;
+    }
     let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
     let y = (img_rect.bottom() - 24.0 - 20.0).max(img_rect.top() + 4.0);
     let br = Rect::from_min_size(pos2(x, y), vec2(w, 17.0));

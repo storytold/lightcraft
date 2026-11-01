@@ -895,6 +895,8 @@ type Reply = (js_sys::Function, js_sys::Function);
 thread_local! {
     /// Commands from JavaScript ([`command`]), run on the next frame.
     static INBOX: std::cell::RefCell<Vec<(String, String, Reply)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Commands waiting for their videos to load from browser storage (an export's Originals).
+    static PENDING_COMMANDS: std::cell::RefCell<VecDeque<(String, String, Reply)>> = const { std::cell::RefCell::new(VecDeque::new()) };
     static CTX: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -928,10 +930,57 @@ impl WebApp {
         })
     }
 
-    fn run_inbox(&mut self) {
-        let inbox = INBOX.with(|q| std::mem::take(&mut *q.borrow_mut()));
-        for (id, params, (resolve, reject)) in inbox {
-            let r = match crate::automation::params(&params) {
+    /// Prefetch the originals of every video a synchronous export will copy, and say whether they are
+    /// all in [`VIDEO_BLOBS`]. An explicit `ids` list is not the selection, so `load_originals`
+    /// would otherwise not prefetch those clips; retrying the command next frame lets that load
+    /// finish, while a failed load is left to the export's own error.
+    fn export_videos_loaded(&self, p: &serde_json::Value) -> bool {
+        use lightcraft_engine::catalog::PhotoId;
+        let ids: Vec<PhotoId> = match p.get("ids") {
+            Some(serde_json::Value::Array(ids)) => ids.iter().filter_map(|id| id.as_u64().map(PhotoId)).collect(),
+            Some(_) => return true,
+            None => self.app.session.selection.ids.iter().copied().chain(self.app.session.selection.active).collect(),
+        };
+        let mut ready = true;
+        for id in ids {
+            let Some(photo) = self.app.session.catalog.photo(id) else { continue };
+            let Source::File { path } = &photo.source else { continue };
+            if !photo.is_video() {
+                continue;
+            }
+            let Some(hash) = crate::store::hash_of_path(path) else { continue };
+            if VIDEO_BLOBS.with(|b| b.borrow().contains_key(hash)) || self.originals.has_failed(path) {
+                continue;
+            }
+            self.originals.prefetch(path);
+            ready = false;
+        }
+        ready
+    }
+
+    fn run_inbox(&mut self, ctx: &egui::Context) {
+        let mut queue = PENDING_COMMANDS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        queue.extend(INBOX.with(|q| std::mem::take(&mut *q.borrow_mut())));
+        let mut retry = VecDeque::new();
+        // Later commands wait behind one whose videos are still loading, so their order on screen
+        // stays the order JavaScript sent them in.
+        let mut blocked = false;
+        for (id, params, (resolve, reject)) in queue {
+            if blocked {
+                retry.push_back((id, params, (resolve, reject)));
+                continue;
+            }
+            let parsed = crate::automation::params(&params);
+            if let Ok(p) = &parsed
+                && matches!(id.as_str(), "app.export" | "app.exportPrevious")
+                && !self.export_videos_loaded(p)
+            {
+                retry.push_back((id, params, (resolve, reject)));
+                blocked = true;
+                ctx.request_repaint();
+                continue;
+            }
+            let r = match parsed {
                 Err(e) => Err(format!("{id}: {e}")),
                 Ok(_) if id == "web.stats" => Ok(self.web_stats()),
                 Ok(params) => self.app.run(&id, params),
@@ -941,6 +990,7 @@ impl WebApp {
                 Err(e) => reject.call1(&JsValue::NULL, &e.into()),
             };
         }
+        PENDING_COMMANDS.with(|q| *q.borrow_mut() = retry);
     }
 }
 
@@ -952,7 +1002,7 @@ impl eframe::App for WebApp {
             let now = self.app.tick_now();
             self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
         }
-        self.run_inbox();
+        self.run_inbox(ctx);
         self.load_originals(ctx);
         if let Some(w) = &self.workers {
             // `library.preferences ▸ cacheMb` is read by the session; the worker index prunes on
