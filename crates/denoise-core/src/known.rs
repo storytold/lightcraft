@@ -76,16 +76,39 @@ pub fn lightcraft_bayer_urls() -> Vec<String> {
     urls_or_default(std::env::var(LIGHTCRAFT_BAYER_URL_ENV).ok().as_deref())
 }
 
-/// (An address with a `user:password@` is not taken: the download refuses one, and the address replaces both sources.)
+/// (An address with a `user:password@`, or a port that isn't a number from 1 to 65535, is not taken: the download
+/// refuses one, and the address would replace both sources.)
 fn urls_or_default(set: Option<&str>) -> Vec<String> {
     let usable = |u: &str| {
         let authority = u.strip_prefix("https://").and_then(|r| r.split(['/', '?', '#']).next()).unwrap_or("");
-        !authority.is_empty() && !authority.contains('@') && !u.contains(char::is_whitespace)
+        !authority.is_empty() && !authority.contains('@') && !u.contains(char::is_whitespace) && port_ok(authority)
     };
     match set.map(str::trim) {
         Some(u) if usable(u) => vec![u.to_string()],
         _ => vec![LIGHTCRAFT_BAYER_URL.to_string(), LIGHTCRAFT_BAYER_FALLBACK_URL.to_string()],
     }
+}
+
+/// Whether an authority (`host`, `host:port`, `[v6]` or `[v6]:port`) has a host and, if it names a port, a number
+/// from 1 to 65535.
+fn port_ok(authority: &str) -> bool {
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(rest) => match rest.split_once(']') {
+            Some((v6, after)) => match after {
+                "" => (v6, None),
+                _ => match after.strip_prefix(':') {
+                    Some(p) => (v6, Some(p)),
+                    None => return false,
+                },
+            },
+            None => return false,
+        },
+        None => match authority.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (authority, None),
+        },
+    };
+    !host.is_empty() && port.is_none_or(|p| p.bytes().all(|b| b.is_ascii_digit()) && matches!(p.parse::<u16>(), Ok(1..)))
 }
 /// SHA-256 and size of that `.onnx` (`tools/denoise-train/export.py` prints both).
 #[cfg(any(feature = "lightcraft-model", test))]
@@ -94,7 +117,8 @@ const LIGHTCRAFT_BAYER_SHA256: &str = "abd3c4cdea163b27439cefae8972a21755510bce1
 const LIGHTCRAFT_BAYER_BYTES: u64 = 31_091_398;
 
 /// LightCraft's own Bayer denoiser: a U-Net trained by LightCraft contributors with `tools/denoise-train` on CC0 raw
-/// samples from raw.pixls.us with synthetic, calibrated sensor noise. The weights are MIT OR Apache-2.0, like
+/// samples from raw.pixls.us with synthetic sensor noise (a read-noise relation fitted by hand to an EOS R5 C
+/// calibration). The weights are MIT OR Apache-2.0, like
 /// LightCraft; the download is the `.onnx` itself.
 #[cfg(any(feature = "lightcraft-model", test))]
 fn lightcraft_bayer() -> Known {
@@ -225,6 +249,23 @@ mod tests {
         assert_eq!(urls_or_default(Some("https://")), both);
         assert_eq!(urls_or_default(Some("https://a b")), both);
         assert_eq!(urls_or_default(Some("https://user:secret@example.org/m.onnx")), both, "no credentials in the address");
+        // a port the download would refuse falls back to both sources (CodeRabbit on #2932)
+        for bad in [
+            "https://example.org:bad/m.onnx",
+            "https://example.org:/m.onnx",
+            "https://example.org:0/m.onnx",
+            "https://example.org:65536/m.onnx",
+            "https://example.org:+443/m.onnx",
+            "https://[::1/m.onnx",
+            "https://[::1]x/m.onnx",
+            "https://[::1]:x/m.onnx",
+            "https://:443/m.onnx",
+        ] {
+            assert_eq!(urls_or_default(Some(bad)), both, "{bad}");
+        }
+        for good in ["https://example.org:8443/m.onnx", "https://[::1]/m.onnx", "https://[::1]:8443/m.onnx", "https://example.org?x=1"] {
+            assert_eq!(urls_or_default(Some(good)), vec![good.to_string()], "{good}");
+        }
         // (not `lightcraft_bayer()`: it reads LIGHTCRAFT_DENOISE_MODEL_URL, which a maintainer testing a copy of
         // their own may have set)
         let k = lightcraft_bayer_from(urls_or_default(None));
