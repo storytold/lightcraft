@@ -20,6 +20,7 @@ use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register,
 mod curve;
 mod grading;
 mod histogram;
+mod lens_blur;
 mod mixer;
 mod sliders;
 
@@ -30,6 +31,7 @@ pub(crate) use grading::wheel_pointer_frame_end;
 pub(crate) use grading::{WheelGrab, WheelLock, WheelMods, wheel_pick};
 pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
+use lens_blur::lens_blur;
 use mixer::{mixer, point_color};
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
@@ -354,6 +356,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, "optics.caRed", true);
             control(app, ui, d, "optics.caBlue", true);
         }
+        ui.add_space(8.0);
+    });
+    section(app, ui, &d, "lensBlur", "Lens Blur", |app, ui, d| {
+        lens_blur(app, ui, d);
         ui.add_space(8.0);
     });
     // Lightroom Classic's Calibration panel (the cloud app hides it): last, like there.

@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
 use crate::{Result, Session, media::SourceLevel};
 
+/// Strokes one Lens Blur refinement brush keeps (a document can't grow without bound).
+const MAX_LENS_BLUR_STROKES: usize = 2000;
+
 fn active(s: &Session, c: &str) -> Result<PhotoId> {
     s.active().ok_or_else(|| bad(c, "no active photo"))
 }
@@ -430,6 +433,150 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
+        cmd!(
+            "lensBlur.brushStroke",
+            "Lens Blur Brush Stroke",
+            [],
+            None,
+            "{mode: \"focus\"|\"blur\", points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?: 0..100, flow?: 1..100, amount?: 1..100 (how far the stroke refines), erase?: bool, autoMask?: bool, pressure?: [p,…] 0..1 per point} — Lens Blur Brush Refinement: Focus strokes stay sharp, Blur strokes are blurred",
+            has_active,
+            |s, p| {
+                const C: &str = "lensBlur.brushStroke";
+                let focus = match str_param(p, "mode") {
+                    Some("focus") => true,
+                    Some("blur") => false,
+                    _ => return Err(bad(C, "`mode` must be \"focus\" or \"blur\"")),
+                };
+                let points: Vec<Point> = p
+                    .get("points")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| bad(C, "missing points"))?
+                    .iter()
+                    .filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                    .filter(|q| q.x.is_finite() && q.y.is_finite())
+                    .collect();
+                if points.is_empty() {
+                    return Err(bad(C, "a stroke needs at least one point"));
+                }
+                let d = lightcraft_develop::BrushStroke::default();
+                let num = |key: &str, def: f64, lo: f64, hi: f64| {
+                    let v = f64_or(p, key, def);
+                    if v.is_finite() { v.clamp(lo, hi) } else { def }
+                };
+                let stroke = lightcraft_develop::BrushStroke {
+                    pressure: super::masks::pressure_list(p.get("pressure"), points.len())?,
+                    points,
+                    size: num("size", d.size, 0.001, 0.5),
+                    feather: num("feather", d.feather, 0.0, 100.0),
+                    flow: num("flow", d.flow, 1.0, 100.0),
+                    density: num("amount", d.density, 1.0, 100.0),
+                    erase: bool_or(p, "erase", false),
+                    auto_mask: bool_or(p, "autoMask", false),
+                };
+                edit(s, C, if focus { "Lens Blur Focus Brush" } else { "Lens Blur Blur Brush" }, |d| {
+                    let strokes = if focus { &mut d.lens_blur.focus_strokes } else { &mut d.lens_blur.blur_strokes };
+                    if strokes.len() >= MAX_LENS_BLUR_STROKES {
+                        return Err(bad(C, format!("at most {MAX_LENS_BLUR_STROKES} strokes per brush: Reset the brush first")));
+                    }
+                    strokes.push(stroke);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "lensBlur.findSubject",
+            "Find Subject",
+            [],
+            None,
+            "{} — selects the photo's subject with an Object mask (SAM 3) clicked where the camera focused, when the file records it, else at the likeliest subject; Lens Blur is switched on and keeps that mask in focus → {mask, point: [x,y], from: \"camera\"|\"photo\", pending?}",
+            has_active,
+            |s, _| {
+                const C: &str = "lensBlur.findSubject";
+                let id = active(s, C)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let camera = s.catalog.photo(id).and_then(|p| p.meta.focus.clone());
+                let (point, from) = match camera {
+                    // stored on the upright photo: the user's Rotate / Flip on top, as masks are
+                    Some(f) => {
+                        let r = d.orientation.map_norm_rect(f.rect);
+                        (Point::new((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0), "camera")
+                    }
+                    None => {
+                        let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
+                        let info = s.source_info(id);
+                        let p = lightcraft_pipeline::lens_blur::subject_point(&src, &d, info.mattes.as_deref())
+                            .ok_or_else(|| bad(C, "the photo has no picture to look for a subject in"))?;
+                        (p, "photo")
+                    }
+                };
+                if !(point.x.is_finite() && point.y.is_finite()) {
+                    return Err(bad(C, "the camera's focus point is not usable"));
+                }
+                let point = Point::new(point.x.clamp(0.0, 1.0), point.y.clamp(0.0, 1.0));
+                // an Object waiting for the subject (the photo is analyzed meanwhile); the
+                // segmenter fills it with the people / animals the focus falls on, or the object
+                // at the point
+                let mut out = s.execute("mask.add", &json!({"kind": "object", "name": "Lens Blur Subject"}))?;
+                let mask = out
+                    .get("activeMask")
+                    .and_then(Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or_else(|| bad(C, "the subject mask was not created"))?;
+                let focus = (from == "camera").then_some(point);
+                if let Err(e) = s.segment_subject_later(id, mask, 0, point, focus) {
+                    // nothing half-made: the empty mask goes again
+                    let _ = s.execute("edit.undo", &json!({}));
+                    return Err(crate::EngineError::Other(e));
+                }
+                out["pending"] = json!(s.segmenter.background);
+                edit(s, C, "Lens Blur Subject", |d| {
+                    // a mask that only says what is in focus: no adjustments of its own
+                    if let Some(m) = d.masks.iter_mut().find(|m| m.id == mask) {
+                        m.adjust = lightcraft_develop::LocalAdjustments::default();
+                    }
+                    let b = &mut d.lens_blur;
+                    b.enabled = true;
+                    if b.amount <= 0.0 || !b.amount.is_finite() {
+                        b.amount = 50.0;
+                    }
+                    b.focus_mask = Some(mask);
+                    d.set_section_enabled("lensBlur", true);
+                    Ok(())
+                })?;
+                if let Some(o) = out.as_object_mut() {
+                    o.insert("mask".into(), json!(mask));
+                    o.insert("point".into(), json!([point.x, point.y]));
+                    o.insert("from".into(), json!(from));
+                }
+                Ok(out)
+            }
+        ),
+        cmd!(
+            "lensBlur.brushReset",
+            "Reset Lens Blur Brush",
+            [],
+            None,
+            "{mode?: \"focus\"|\"blur\"} — removes that brush's strokes (both brushes without `mode`)",
+            has_active,
+            |s, p| {
+                const C: &str = "lensBlur.brushReset";
+                let (focus, blur) = match str_param(p, "mode") {
+                    None => (true, true),
+                    Some("focus") => (true, false),
+                    Some("blur") => (false, true),
+                    Some(_) => return Err(bad(C, "`mode` must be \"focus\" or \"blur\"")),
+                };
+                edit(s, C, "Reset Lens Blur Brush", |d| {
+                    if focus {
+                        d.lens_blur.focus_strokes.clear();
+                    }
+                    if blur {
+                        d.lens_blur.blur_strokes.clear();
+                    }
+                    Ok(())
+                })
+            }
+        ),
         cmd!("develop.sectionEnabled", "Toggle Section", [], None, "{section: string, enabled: bool}", has_active, |s, p| {
             let sec = str_param(p, "section").ok_or_else(|| bad("develop.sectionEnabled", "missing section"))?.to_string();
             let on = bool_or(p, "enabled", true);

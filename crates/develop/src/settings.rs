@@ -845,6 +845,25 @@ pub struct LocalAdjustments {
     pub noise: f64,
     pub moire: f64,
     pub defringe: f64,
+    /// Lens Blur inside the mask, 0..100 (`lightcraft_pipeline::lens_blur`): disc (bokeh) blur
+    /// whose radius follows the mask's strength. Omitted while 0, so masks without it keep their
+    /// JSON (and hash).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub lens_blur: f64,
+    /// The mask's Lens Blur block switched off (its values kept).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lens_blur_off: bool,
+    /// Blur what the mask leaves out instead of what it selects (the mask's other adjustments
+    /// still go where it selects).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lens_blur_outside: bool,
+    /// Brighter bokeh highlights in the mask's blur, 0..100.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub lens_blur_boost: f64,
+    /// How gradually the mask's blur grows away from what stays sharp, 0..100 (0: it follows the
+    /// mask's own edge).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub lens_blur_transition: f64,
     /// Colour overlay (hue degrees, saturation 0..100); sat 0 = none.
     pub color_hue: f64,
     pub color_sat: f64,
@@ -872,6 +891,11 @@ impl Default for LocalAdjustments {
             noise: 0.0,
             moire: 0.0,
             defringe: 0.0,
+            lens_blur: 0.0,
+            lens_blur_off: false,
+            lens_blur_outside: false,
+            lens_blur_boost: 0.0,
+            lens_blur_transition: 0.0,
             color_hue: 0.0,
             color_sat: 0.0,
             amount: 100.0,
@@ -1127,13 +1151,157 @@ impl Default for RedEye {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Lens Blur: a shallow depth of field added after the fact (`lightcraft_pipeline::lens_blur`).
+/// What stays sharp is the photo's subject, or the selection of the mask [`LensBlur::focus_mask`]
+/// names; everything else gets disc-shaped (bokeh) blur up to [`LensBlur::amount`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LensBlur {
     pub enabled: bool,
+    /// Blur of what is out of focus, 0..100 (100: a disc of 3.5 % of the long edge).
     pub amount: f64,
+    /// Reserved for a depth map (not rendered yet).
     pub focal_distance: f64,
+    /// Reserved for a depth map (not rendered yet).
     pub focal_range: f64,
+    /// How much brighter the out-of-focus highlights turn into bokeh discs, 0..100. Omitted while
+    /// 0, so settings without it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub boost: f64,
+    /// The id of the mask whose selection stays in focus (any mask, shown or hidden); `None`, or a
+    /// mask that no longer exists: the photo's subject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_mask: Option<u32>,
+    /// Brush Refinement, Focus brush: strokes painted in focus (their strength: how far; erase
+    /// strokes take it back). Omitted while empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub focus_strokes: Vec<BrushStroke>,
+    /// Brush Refinement, Blur brush: strokes painted out of focus, over the focus and the Focus
+    /// brush. Omitted while empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blur_strokes: Vec<BrushStroke>,
+    /// How gradually the blur grows away from what is in focus, 0..100: 0 a sharp cut at the
+    /// focus's edge, higher a longer ramp (a stand-in for depth until there is a depth map).
+    /// Omitted at its default, so settings without it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "LensBlur::is_default_transition")]
+    pub transition: f64,
+    /// What stays in focus without a focus mask: the subject estimate, or a fixed shape in the
+    /// middle of the framing. Omitted while automatic.
+    #[serde(skip_serializing_if = "FocusShape::is_auto")]
+    pub shape: FocusShape,
+    /// Where a fixed shape sits and how large it is, once moved or resized on the photo; `None`:
+    /// the shape's preset, in the middle of the crop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<FocusArea>,
+}
+
+/// A fixed focus shape on the photo: an upright ellipse.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FocusArea {
+    /// Normalized (uncropped, oriented) photo coordinates, as mask shapes.
+    pub center: Point,
+    /// Half-width and half-height, in units of the photo's long edge.
+    pub rx: f64,
+    pub ry: f64,
+}
+
+impl FocusArea {
+    /// Smallest and largest radius (long-edge units).
+    pub const MIN_RADIUS: f64 = 0.02;
+    pub const MAX_RADIUS: f64 = 1.0;
+
+    /// Usable values: finite, the radii within range, the centre no farther than a photo's width
+    /// outside it. A hostile value falls back to the middle and the default size.
+    pub fn sanitized(self) -> FocusArea {
+        let r = |v: f64, d: f64| if v.is_finite() { v.clamp(Self::MIN_RADIUS, Self::MAX_RADIUS) } else { d };
+        let c = |v: f64| if v.is_finite() { v.clamp(-1.0, 2.0) } else { 0.5 };
+        FocusArea { center: Point::new(c(self.center.x), c(self.center.y)), rx: r(self.rx, 0.22), ry: r(self.ry, 0.22) }
+    }
+}
+
+impl LensBlur {
+    /// The fixed focus shape in effect, if any: the moved / resized [`LensBlur::area`], else the
+    /// shape's preset centred on `crop_center`. `None` for [`FocusShape::Auto`].
+    pub fn focus_area(&self, crop_center: Point) -> Option<FocusArea> {
+        let (rx, ry) = self.shape.radii()?;
+        Some(self.area.unwrap_or(FocusArea { center: crop_center, rx, ry }).sanitized())
+    }
+}
+
+/// The focus area [`LensBlur`] uses when no mask says what is in focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FocusShape {
+    /// A circle.
+    Round,
+    /// An oval lying down (landscape).
+    Wide,
+    /// An oval standing up (portrait).
+    Tall,
+    /// The photo's subject, estimated (person mattes, else a saliency heuristic). Also what a
+    /// shape this build doesn't know reads as (so it is last: serde's `other`).
+    #[default]
+    #[serde(other)]
+    Auto,
+}
+
+impl FocusShape {
+    pub const ALL: [FocusShape; 4] = [FocusShape::Auto, FocusShape::Round, FocusShape::Wide, FocusShape::Tall];
+
+    /// Whether this is the default (Auto: no fixed shape), for skipping it in the JSON.
+    fn is_auto(&self) -> bool {
+        *self == FocusShape::Auto
+    }
+
+    /// The fixed shape's half-width and half-height, in units of the photo's long edge; `None`
+    /// for [`FocusShape::Auto`].
+    pub fn radii(self) -> Option<(f64, f64)> {
+        match self {
+            FocusShape::Auto => None,
+            FocusShape::Round => Some((0.22, 0.22)),
+            FocusShape::Wide => Some((0.32, 0.17)),
+            FocusShape::Tall => Some((0.17, 0.32)),
+        }
+    }
+
+    /// The name shown on the shape's button (translated by the UI).
+    pub fn label(self) -> &'static str {
+        match self {
+            FocusShape::Auto => "Auto",
+            FocusShape::Round => "Round",
+            FocusShape::Wide => "Horizontal",
+            FocusShape::Tall => "Vertical",
+        }
+    }
+}
+
+impl LensBlur {
+    /// [`LensBlur::transition`]'s default.
+    pub const DEFAULT_TRANSITION: f64 = 50.0;
+
+    /// Whether `v` is [`Self::DEFAULT_TRANSITION`], for skipping it in the JSON.
+    fn is_default_transition(v: &f64) -> bool {
+        *v == Self::DEFAULT_TRANSITION
+    }
+}
+
+impl Default for LensBlur {
+    /// Off, with the default Transition and everything else empty.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            amount: 0.0,
+            focal_distance: 0.0,
+            focal_range: 0.0,
+            boost: 0.0,
+            focus_mask: None,
+            focus_strokes: Vec::new(),
+            blur_strokes: Vec::new(),
+            transition: Self::DEFAULT_TRANSITION,
+            shape: FocusShape::Auto,
+            area: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -18,4 +18,10 @@ fn validates_images_and_prompt_boundaries() {
     assert!(request(4, 3, Operation::Clicks(vec![[0.5, f32::NAN, 1.0]])).validate().is_err());
     assert!(request(4, 3, Operation::Clicks(vec![[0.5, 0.5, 0.0]])).validate().is_err());
     assert!(request(4, 3, Operation::Text(" ".into())).validate().is_err());
+    // Find Subject: with or without the camera's focus point, which must lie in the photo
+    assert!(request(4, 3, Operation::Subject(None)).validate().is_ok());
+    assert!(request(4, 3, Operation::Subject(Some([0.3, 0.7]))).validate().is_ok());
+    for bad in [[1.5, 0.5], [0.5, -0.1], [f32::NAN, 0.5], [0.5, f32::INFINITY]] {
+        assert!(request(4, 3, Operation::Subject(Some(bad))).validate().is_err(), "{bad:?}");
+    }
 }

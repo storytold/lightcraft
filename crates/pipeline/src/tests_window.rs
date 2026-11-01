@@ -6,7 +6,7 @@ use lightcraft_develop::{DevelopSettings, controls};
 use lightcraft_geom::{Orientation, Rect};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
-use crate::{PixelWindow, RenderRequest, SourceInfo, render};
+use crate::{OutputDepth, PixelWindow, RenderRequest, SourceInfo, render};
 
 const W: usize = 960;
 const H: usize = 640;
@@ -420,6 +420,73 @@ fn auto_mask_strokes_match_the_whole_render() {
         ..Default::default()
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
+}
+
+// Given a lens blur, a window (zoomed view) blurs right up to its edges as the whole render does:
+// it is rendered with the blur's reach around it
+#[test]
+fn lens_blur_matches_the_whole_render_up_to_the_window_edges() {
+    lens_blur_window_matches(OutputDepth::U8);
+    lens_blur_window_matches(OutputDepth::U16);
+}
+
+/// A high-bit-depth window grows for the lens blur too, and is cut back to the request.
+fn lens_blur_window_matches(depth: OutputDepth) {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let radial = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.15, ry: 0.2, angle: 0.0, feather: 30.0, invert: false };
+    let mut s = DevelopSettings {
+        masks: vec![Mask {
+            id: 4,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: radial }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    s.lens_blur.enabled = true;
+    s.lens_blur.amount = 80.0;
+    s.lens_blur.boost = 40.0;
+    s.lens_blur.focus_mask = Some(4);
+    let deep = |win: Option<PixelWindow>| {
+        let r = render(&scene(), &SourceInfo::default(), &s, &RenderRequest { window: win, depth, ..RenderRequest::fit(W, H) });
+        if let Some(d) = &r.deep {
+            assert_eq!((d.width, d.height), (r.image.width, r.image.height));
+        }
+        r.image
+    };
+    let (f, w) = (deep(None), deep(Some(MID)));
+    assert_eq!((w.width, w.height), (MID.w, MID.h));
+    let (max, mean) = compare_inset(&f, &w, MID, 0);
+    assert!(max <= 6 && mean <= 0.4, "max {max}, mean {mean:.3}");
+    // and the blur shows: the whole render differs from the one without it
+    let mut off = s.clone();
+    off.lens_blur.enabled = false;
+    let (_, mean) = compare_inset(&full(&off), &f, PixelWindow { x: 0, y: 0, w: f.width, h: f.height }, 0);
+    assert!(mean > 1.0, "{mean:.3}");
+}
+
+/// With the automatic subject focus (no focus mask, no fixed shape, no person matte) a window
+/// focuses where the whole render does: the estimate comes from the whole photo, not from the
+/// pixels the window holds.
+#[test]
+fn lens_blur_on_the_estimated_subject_matches_the_whole_render() {
+    let mut s = DevelopSettings::default();
+    s.lens_blur.enabled = true;
+    s.lens_blur.amount = 80.0;
+    // a sharp cut: the window then grows only by the blur's radius, less than the estimate reads
+    s.lens_blur.transition = 0.0;
+    for depth in [OutputDepth::U8, OutputDepth::U16] {
+        let r = |win: Option<PixelWindow>| {
+            render(&scene(), &SourceInfo::default(), &s, &RenderRequest { window: win, depth, ..RenderRequest::fit(W, H) }).image
+        };
+        // a window at the middle and one at an edge, where the estimate's neighbourhood is cut off
+        for win in [MID, PixelWindow { x: 0, y: 0, w: 300, h: 220 }] {
+            let (f, w) = (r(None), r(Some(win)));
+            assert_eq!((w.width, w.height), (win.w, win.h));
+            let (max, mean) = compare_inset(&f, &w, win, 0);
+            assert!(max <= 6 && mean <= 0.4, "{depth:?} {win:?}: max {max}, mean {mean:.3}");
+        }
+    }
 }
 
 /// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:
