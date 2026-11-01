@@ -542,6 +542,22 @@ fn a_bad_build_request_leaves_the_background_build_running() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// CodeRabbit on #3544: a build asked for whose worker can't start fails without stopping or
+/// replacing the background preparation that is running.
+#[test]
+fn a_build_that_cant_start_leaves_the_background_build_running() {
+    let _hold = crate::prep::TestHold::new();
+    let (mut s, root, ids) = library("prep-no-thread", 3);
+    s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "background": true})).unwrap();
+    let b = s.preview_build.clone().expect("the background build");
+    assert!(b.running());
+    crate::cmd::previews::test_gate::fail_next_spawn();
+    assert!(s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids)})).is_err(), "the worker didn't start");
+    assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
+    assert!(s.preview_build.as_ref().is_some_and(|now| std::sync::Arc::ptr_eq(now, &b)), "and is still the session's build");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// CodeRabbit on #3080: a background build that can't start isn't tried again on every tick; the
 /// view tries again once [`crate::prep::RETRY_AFTER`] has passed.
 #[test]
@@ -554,6 +570,8 @@ fn a_build_that_cant_start_waits_before_trying_again() {
     }
     assert!(s.preview_build.is_none(), "the start failed");
     assert!(s.prep.retry_at.is_some());
+    // the app is told when to look again (a frame is asked for then)
+    assert!(s.prep_retry_in().is_some_and(|d| d <= crate::prep::RETRY_AFTER && d > crate::prep::RETRY_AFTER / 2));
     s.prep_tick(mode, Some(ids[2]), false);
     assert!(s.preview_build.is_none(), "not tried again at once");
     // the wait is over
