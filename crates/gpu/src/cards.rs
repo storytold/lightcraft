@@ -111,6 +111,17 @@ impl AdapterKind {
         }
     }
 
+    /// The order among several cards a name matches ([`crate::backend::kind_rank`]).
+    pub fn rank(self) -> u8 {
+        match self {
+            AdapterKind::Dedicated => 0,
+            AdapterKind::BuiltIn => 1,
+            AdapterKind::Virtual => 2,
+            AdapterKind::Other => 3,
+            AdapterKind::Software => 4,
+        }
+    }
+
     /// `dedicated`, `builtIn`, `virtual`, `software`, `other` (the `app.gpu` reply).
     pub fn id(self) -> &'static str {
         match self {
@@ -219,15 +230,17 @@ pub struct Resolution {
 
 /// Which of `entries` edits: `variable` (`LIGHTCRAFT_GPU_ADAPTER`, part of a name, any case), else
 /// the `saved` card (exactly, else the same model), else the screen's, else wgpu's pick. Only
-/// usable cards are picked.
+/// usable cards are picked; among several the variable matches, in the order of
+/// [`crate::backend::choose_named_adapter`], and the choice is logged once.
 pub fn resolve_card(entries: &[AdapterEntry], variable: Option<&str>, saved: Option<&AdapterKey>) -> Resolution {
     let mut missing = None;
     if let Some(w) = variable.map(str::trim).filter(|w| !w.is_empty()) {
-        if let Some(i) = entries.iter().position(|e| e.usable && crate::backend::adapter_name_matches(w, &e.name)) {
+        let (choice, candidates) = named_choice(entries, w);
+        let (warn, line) = crate::backend::named_choice_note(w, &choice, &candidates);
+        crate::backend::log_once(warn, &line);
+        if let Some(i) = choice.index {
             return Resolution { index: Some(i), how: How::Variable, missing };
         }
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        log::warn!("gpu: LIGHTCRAFT_GPU_ADAPTER={w} names none of the graphics cards ({}); using the default choice", names.join(", "));
     }
     if let Some(k) = saved {
         let found = entries.iter().position(|e| e.usable && e.key == *k).or_else(|| entries.iter().position(|e| e.usable && e.key.same_model(k)));
@@ -240,6 +253,17 @@ pub fn resolve_card(entries: &[AdapterEntry], variable: Option<&str>, saved: Opt
         Some(i) => Resolution { index: Some(i), how: How::Screen, missing },
         None => Resolution { index: None, how: How::Default, missing },
     }
+}
+
+/// What the name `w` picks among `entries` ([`crate::backend::choose_named_adapter`]), leaving out
+/// hardware cards that can't be used (too few storage buffers).
+fn named_choice<'a>(entries: &'a [AdapterEntry], w: &str) -> (crate::backend::NamedChoice, Vec<crate::backend::Candidate<'a>>) {
+    let candidates: Vec<crate::backend::Candidate<'a>> =
+        entries.iter().map(|e| crate::backend::Candidate { name: &e.name, rank: e.kind.rank(), software: e.kind == AdapterKind::Software }).collect();
+    let mut choice = crate::backend::choose_named_adapter(w, &candidates);
+    choice.matches.retain(|i| entries.get(*i).is_some_and(|e| e.usable));
+    choice.index = choice.matches.first().copied();
+    (choice, candidates)
 }
 
 /// What the settings say about the second graphics card.
@@ -510,6 +534,27 @@ mod tests {
         // the software renderer is never picked, by name or by key
         assert_eq!(resolve_card(&e, Some("basic render"), None).how, How::Screen);
         assert_eq!(resolve_card(&e, None, Some(&e[2].key)).missing, Some(e[2].key.clone()));
+        // a name both cards have: the first in wgpu's order (both dedicated)
+        assert_eq!(resolve_card(&e, Some("070"), None), Resolution { index: Some(0), how: How::Variable, missing: None });
+    }
+
+    /// A fake laptop list: the variable picks among several matches in the defined order (dedicated
+    /// before built-in, whatever wgpu lists first), and never a card that can't be used.
+    #[test]
+    fn the_variable_picks_among_several_cards_in_a_defined_order() {
+        use wgpu::DeviceType::{DiscreteGpu, IntegratedGpu};
+        let laptop = vec![
+            (info("Intel(R) Iris(R) Xe Graphics", 0x8086, 0x9a49, IntegratedGpu), 64, None),
+            (info("NVIDIA GeForce RTX 4060 Laptop GPU", 0x10de, 0x28e0, DiscreteGpu), 64, Some(8 << 30)),
+            (info("NVIDIA Old Graphics", 0x10de, 0x0001, DiscreteGpu), 4, None),
+        ];
+        let e = entries_from(&laptop, None);
+        // "graphics" is in all three: the old card can't be used, so the built-in one
+        assert_eq!(resolve_card(&e, Some("graphics"), None).index, Some(0));
+        // "g": dedicated before built-in
+        assert_eq!(resolve_card(&e, Some("g"), None).index, Some(1));
+        // only the unusable card: the default choice
+        assert_eq!(resolve_card(&e, Some("old"), None), Resolution { index: None, how: How::Default, missing: None });
     }
 
     /// Decision 4: a chosen card that isn't there falls back to Automatic and the choice is kept.

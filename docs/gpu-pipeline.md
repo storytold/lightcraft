@@ -51,12 +51,17 @@ Overrides (read once at launch):
   and the AI mask model (SAM 3 on Metal) on the CPU.
 - `LIGHTCRAFT_GPU_ADAPTER=<part of a card's name>` (any case, e.g. `4070`, `radeon`, `"rtx 4070 super"`):
   the graphics card for editing renders, AI Denoise and the face and mask models, on a machine with more
-  than one; it wins over the card chosen in Settings (below). The first usable card whose name contains it
-  wins, in wgpu's order; software adapters (WARP, llvmpipe) never. A name that matches no card is logged
+  than one; it wins over the card chosen in Settings (below). Of the usable cards whose name contains it,
+  the one whose whole name it is wins, then dedicated before built-in before virtual cards, then wgpu's
+  order (`backend::choose_named_adapter`, `cards::resolve_card`); the log says which when several match
+  (`… matches 2 graphics cards (…): using …`). Software renderers (WARP, llvmpipe) never: a name that
+  matches only one is logged as such. A name that matches no card is logged
   (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and the
-  default choice is used. While it is set, Automatic uses no second card (agents and test runs stay on the
-  one card they name; `LIGHTCRAFT_GPU_HELPER` still names one outright). Handy to keep test runs or a long
-  export off the card the screens hang on.
+  default choice is used. Each line is logged once, though every device asks. Each device makes its own
+  wgpu instance and device, so devices on different cards share no buffer, pipeline or queue. While it is
+  set, Automatic uses no second card (agents and test runs stay on the one card they name;
+  `LIGHTCRAFT_GPU_HELPER` still names one outright). Handy to keep test runs or a long export off the card
+  the screens hang on.
 
 ### Choosing the graphics card (two or more cards)
 

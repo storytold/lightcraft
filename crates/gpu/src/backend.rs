@@ -187,10 +187,113 @@ pub fn adapter_name_matches(wanted: &str, name: &str) -> bool {
     !wanted.is_empty() && name.to_lowercase().contains(&wanted)
 }
 
-/// Which of `adapters` (name and kind, in wgpu's order) `wanted` picks: the first hardware one whose
-/// name matches. Software adapters (WARP, llvmpipe) are never picked: the CPU pipeline is faster.
+/// One adapter as [`choose_named_adapter`] sees it, in wgpu's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Candidate<'a> {
+    pub name: &'a str,
+    /// Order among several matching cards, lower first ([`kind_rank`]).
+    pub rank: u8,
+    /// A software renderer (WARP, llvmpipe): never picked, the CPU pipeline is faster.
+    pub software: bool,
+}
+
+impl<'a> Candidate<'a> {
+    /// A candidate from an adapter's name and kind.
+    pub fn of(name: &'a str, kind: wgpu::DeviceType) -> Candidate<'a> {
+        Candidate { name, rank: kind_rank(kind), software: kind == wgpu::DeviceType::Cpu }
+    }
+}
+
+/// The order among cards that all match: dedicated, built-in, virtual, other, software.
+pub fn kind_rank(kind: wgpu::DeviceType) -> u8 {
+    match kind {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    }
+}
+
+/// What a `LIGHTCRAFT_GPU_ADAPTER` name picks among the candidates ([`choose_named_adapter`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NamedChoice {
+    /// The card used (the first of `matches`), `None`: the default choice.
+    pub index: Option<usize>,
+    /// Every hardware card whose name matches, in the defined order.
+    pub matches: Vec<usize>,
+    /// Software renderers whose name matches (never used).
+    pub software: Vec<usize>,
+}
+
+/// Which of `candidates` (in wgpu's order) `wanted` picks: of the hardware cards whose name
+/// contains it (any case), the one whose whole name it is, then dedicated before built-in before
+/// virtual cards ([`kind_rank`]), then wgpu's order. Software renderers are never picked.
+pub fn choose_named_adapter(wanted: &str, candidates: &[Candidate<'_>]) -> NamedChoice {
+    let w = wanted.trim().to_lowercase();
+    let hits = || candidates.iter().enumerate().filter(|(_, c)| adapter_name_matches(&w, c.name));
+    let software: Vec<usize> = hits().filter(|(_, c)| c.software).map(|(i, _)| i).collect();
+    let mut ranked: Vec<(bool, u8, usize)> =
+        hits().filter(|(_, c)| !c.software).map(|(i, c)| (c.name.trim().to_lowercase() != w, c.rank, i)).collect();
+    // (the index last: equal ones keep wgpu's order)
+    ranked.sort_unstable();
+    let matches: Vec<usize> = ranked.into_iter().map(|(_, _, i)| i).collect();
+    NamedChoice { index: matches.first().copied(), matches, software }
+}
+
+/// The log line for `choice` (warning: `true`): which card the name picked and why, or why none.
+pub fn named_choice_note(wanted: &str, choice: &NamedChoice, candidates: &[Candidate<'_>]) -> (bool, String) {
+    let name = |i: &usize| candidates.get(*i).map_or("?", |c| c.name);
+    let list = |v: &[usize]| v.iter().map(name).collect::<Vec<_>>().join(", ");
+    match (choice.index, choice.matches.len()) {
+        (Some(i), 1) => (false, format!("gpu: LIGHTCRAFT_GPU_ADAPTER={wanted}: using {}", name(&i))),
+        (Some(i), n) => (
+            false,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} matches {n} graphics cards ({}): using {} (a card's whole name first, then dedicated before built-in cards, then the system's order); give more of the name to pick another",
+                list(&choice.matches),
+                name(&i)
+            ),
+        ),
+        (None, _) if !choice.software.is_empty() => (
+            true,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} names only a software renderer ({}), never used: the processor is faster; using the default choice",
+                list(&choice.software)
+            ),
+        ),
+        (None, _) => {
+            let all: Vec<&str> = candidates.iter().map(|c| c.name).collect();
+            (true, format!("gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} names none of the graphics cards ({}); using the default choice", all.join(", ")))
+        }
+    }
+}
+
+/// Lines already logged by [`log_once`] (each device that picks a card asks again).
+static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Log `line` (as a warning when `warn`) the first time only; whether it was logged now.
+pub fn log_once(warn: bool, line: &str) -> bool {
+    let mut seen = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.iter().any(|l| l == line) {
+        return false;
+    }
+    // (a handful of distinct lines in a run; the cap only bounds a pathological caller)
+    if seen.len() < 64 {
+        seen.push(line.to_string());
+    }
+    if warn {
+        log::warn!("{line}");
+    } else {
+        log::info!("{line}");
+    }
+    true
+}
+
+/// Which of `adapters` (name and kind, in wgpu's order) `wanted` picks ([`choose_named_adapter`]).
 pub fn find_named_adapter<'a>(wanted: &str, adapters: impl IntoIterator<Item = (&'a str, wgpu::DeviceType)>) -> Option<usize> {
-    adapters.into_iter().position(|(name, kind)| kind != wgpu::DeviceType::Cpu && adapter_name_matches(wanted, name))
+    let candidates: Vec<Candidate<'a>> = adapters.into_iter().map(|(n, k)| Candidate::of(n, k)).collect();
+    choose_named_adapter(wanted, &candidates).index
 }
 
 /// A compute instance on `backends`, with LightCraft's backend options and flags.
@@ -238,11 +341,6 @@ pub(crate) fn pick_editing(instance: &wgpu::Instance, backends: Backends, automa
     let (all, entries) = enumerate(instance, backends);
     let saved = if automatic { None } else { crate::cards::card() };
     let resolution = crate::cards::resolve_card(&entries, wanted_adapter().as_deref(), saved.as_ref());
-    if resolution.how == crate::cards::How::Variable
-        && let Some(e) = resolution.index.and_then(|i| entries.get(i))
-    {
-        log::info!("gpu: LIGHTCRAFT_GPU_ADAPTER: using {}", e.name);
-    }
     picked_at(instance, backends, all, entries, resolution)
 }
 
@@ -599,6 +697,64 @@ pub(crate) mod tests {
         assert_eq!(find_named_adapter("basic render", two), None, "a software adapter is never picked");
         assert_eq!(find_named_adapter("intel", [("Intel(R) UHD Graphics 770", IntegratedGpu)]), Some(0));
         assert_eq!(find_named_adapter("4070", [] as [(&str, wgpu::DeviceType); 0]), None);
+    }
+
+    /// A fake adapter list (a laptop: built-in card first, a dedicated one, WARP; and two of a
+    /// kind): no match, several matches, software, and the one log line each gives.
+    #[test]
+    fn a_fake_adapter_list_picks_in_a_defined_order() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, VirtualGpu};
+        let laptop = [
+            Candidate::of("Intel(R) Iris(R) Xe Graphics", IntegratedGpu),
+            Candidate::of("NVIDIA GeForce RTX 4060 Laptop GPU", DiscreteGpu),
+            Candidate::of("Microsoft Basic Render Driver", Cpu),
+        ];
+        // no match: the default choice, and a warning that lists the cards
+        let none = choose_named_adapter("radeon", &laptop);
+        assert_eq!(none, NamedChoice::default());
+        let (warn, line) = named_choice_note("radeon", &none, &laptop);
+        assert!(warn && line.contains("names none") && line.contains("RTX 4060 Laptop GPU") && line.contains("default choice"), "{line}");
+        // several: dedicated before built-in although the built-in card comes first in wgpu's order
+        let g = choose_named_adapter("g", &laptop);
+        assert_eq!((g.index, g.matches.clone()), (Some(1), vec![1, 0]));
+        let (warn, line) = named_choice_note("g", &g, &laptop);
+        assert!(!warn && line.contains("matches 2") && line.contains("using NVIDIA GeForce RTX 4060 Laptop GPU"), "{line}");
+        // one: says which
+        let one = choose_named_adapter("iris", &laptop);
+        assert_eq!(one.index, Some(0));
+        assert_eq!(
+            named_choice_note("iris", &one, &laptop),
+            (false, "gpu: LIGHTCRAFT_GPU_ADAPTER=iris: using Intel(R) Iris(R) Xe Graphics".to_string())
+        );
+        // a software renderer: never, and the warning says so
+        let warp = choose_named_adapter("basic render", &laptop);
+        assert_eq!((warp.index, warp.software.clone()), (None, vec![2]));
+        let (warn, line) = named_choice_note("basic render", &warp, &laptop);
+        assert!(warn && line.contains("only a software renderer"), "{line}");
+        // a card's whole name beats a longer name that contains it, wherever it is listed
+        let twins = [
+            Candidate::of("NVIDIA GeForce RTX 4070 SUPER", DiscreteGpu),
+            Candidate::of("NVIDIA GeForce RTX 4070", DiscreteGpu),
+            Candidate::of("Virtual RTX 4070", VirtualGpu),
+        ];
+        assert_eq!(choose_named_adapter("nvidia geforce rtx 4070", &twins).matches, vec![1, 0]);
+        // same kind: wgpu's order; virtual after dedicated
+        assert_eq!(choose_named_adapter("4070", &twins).matches, vec![0, 1, 2]);
+        // the same card on two backends (Vulkan and GL on Linux): the first listed
+        let both = [Candidate::of("AMD Radeon RX 7800 XT", DiscreteGpu), Candidate::of("AMD Radeon RX 7800 XT", DiscreteGpu)];
+        assert_eq!(choose_named_adapter("7800", &both).index, Some(0));
+        assert_eq!(choose_named_adapter("7800", &[]), NamedChoice::default());
+    }
+
+    /// The render device, the denoise network's and the face detector's each ask for a card: the
+    /// line about it is logged once, not three times.
+    #[test]
+    fn a_choice_is_logged_once() {
+        let line = "gpu: LIGHTCRAFT_GPU_ADAPTER=test-only-name names none of the graphics cards (); using the default choice";
+        assert!(log_once(true, line));
+        assert!(!log_once(true, line));
+        assert!(!log_once(false, line));
+        assert!(log_once(true, &format!("{line} (another)")));
     }
 
     #[test]
