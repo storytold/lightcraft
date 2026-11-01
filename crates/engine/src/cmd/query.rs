@@ -369,7 +369,7 @@ mod gpu_card_tests {
     fn app_gpu_reports_and_takes_the_second_graphics_card() {
         let mut s = Session::with_demo();
         let r = s.execute("app.gpu", &json!({"wait": false})).unwrap();
-        assert_eq!(r["helper"]["choice"], "auto", "{r}");
+        assert_eq!(r["helper"]["choice"], "off", "the second card is Off until it is turned on: {r}");
         assert!(r["helper"]["state"].is_string(), "{r}");
         assert!(r["batchUsage"]["editing"]["limitJobs"].is_number() && r["batchUsage"]["helper"]["jobs"].is_number(), "{r}");
         let r = s.execute("app.gpu", &json!({"helper": "off", "wait": false})).unwrap();
@@ -379,5 +379,7 @@ mod gpu_card_tests {
         assert!(s.execute("app.gpu", &json!({"helper": false, "wait": false})).is_err());
         let r = s.execute("app.gpu", &json!({"helper": "auto", "wait": false})).unwrap();
         assert_eq!(r["helper"]["choice"], "auto", "{r}");
+        // (back to the default for the other tests in this process)
+        s.execute("app.gpu", &json!({"helper": "off", "wait": false})).unwrap();
     }
 }
