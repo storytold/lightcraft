@@ -3,7 +3,8 @@ use super::preview::embedded_preview_size;
 use super::{MediaKind, Meta, Orientation, ProbeInfo};
 
 pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
-    let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
+    let exposure_time = m.exposure_time.filter(|t| t.is_finite() && *t > 0.0);
+    let shutter = exposure_time.and_then(lightcraft_meta::format_exposure_time).unwrap_or_default();
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
     let meta = Meta {
         camera,
@@ -12,6 +13,7 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         focal_mm: m.focal_length.map(|f| f as f32),
         aperture: m.f_number.map(|f| f as f32),
         shutter,
+        exposure_time,
         iso: m.iso,
         location: m.sublocation.clone().unwrap_or_default(),
         city: m.city.clone().unwrap_or_default(),

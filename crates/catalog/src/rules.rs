@@ -1097,6 +1097,8 @@ impl Rule {
             "captureDate" => date_op(op, p.captured.as_deref(), value),
             "importDate" => date_op(op, Some(&p.imported), value),
             "editDate" => date_op(op, p.edited.as_deref(), value),
+            // (the shown shutter text, not the exact time kept for export: a rule matches the value the
+            // photo shows, `1/3` or `0.3571`, at every op, including `is` and the edges of a range)
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),
             "iso" => num_op(op, m.iso.map(|v| v as f64), value),
             "aperture" => num_op(op, m.aperture.map(f32_as_decimal), value),

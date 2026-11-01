@@ -774,3 +774,19 @@ fn file_path_contains_finds_every_piece_of_a_long_path() {
         }
     }
 }
+
+#[test]
+fn shutter_speed_rules_match_the_shown_value() {
+    let cat = Catalog::new();
+    let mut p = photo(1);
+    let m =
+        |p: &Photo, op: &str, value: serde_json::Value| rs(json!({"rules": [{"field": "shutterSpeed", "op": op, "value": value}]})).matches(p, &cat);
+    p.meta.exposure_time = Some(1.0 / 2.8);
+    p.meta.shutter = "0.3571".into();
+    assert!(m(&p, "is", json!("0.3571")) && !m(&p, "isNot", json!("0.3571")), "1/2.8 s is the 0.3571 it shows");
+    assert!(m(&p, "lte", json!("0.3571")) && m(&p, "gte", json!("0.3571")));
+    p.meta.exposure_time = Some(3333.0 / 10000.0);
+    p.meta.shutter = "1/3".into();
+    assert!(m(&p, "is", json!("1/3")) && !m(&p, "isNot", json!("1/3")), "3333/10000 s is the 1/3 it shows");
+    assert!(m(&p, "gte", json!("1/3")) && m(&p, "lte", json!("1/3")) && !m(&p, "lt", json!("1/3")));
+}

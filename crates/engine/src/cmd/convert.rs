@@ -235,6 +235,16 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
+        m.exposure_time = src.exposure_time;
+    } else if m.exposure_time.is_none()
+        && let Some(t) = src.exposure_time
+        && (m.shutter.trim() == src.shutter || legacy_shutter_text(t).is_some_and(|old| m.shutter.trim() == old))
+    {
+        // a photo imported before the exact time was kept: its shutter text is still the one import
+        // wrote then (rounded: 0.4 s as `1/2`, 2.5 s as `2`), so it takes the file's exact time and the
+        // text shown for it now; a shutter speed typed by hand that the file doesn't give is kept
+        m.shutter = src.shutter.clone();
+        m.exposure_time = Some(t);
     }
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
@@ -252,6 +262,12 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
         ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
     }
     ops
+}
+
+/// The shutter text an import wrote before the exact exposure time was kept (#1619): whole seconds at
+/// one second and over, otherwise `1/n` with `n` rounded. Only for recognising such a text again.
+fn legacy_shutter_text(t: f64) -> Option<String> {
+    (t.is_finite() && t > 0.0).then(|| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) })
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -428,6 +444,39 @@ mod tests {
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    /// Reload from Disk repairs a shutter speed an older import rounded (0.4 s stored as `1/2`, with no
+    /// exact time): the photo takes the file's exact time and today's text. A shutter speed set by hand
+    /// that is not what an import wrote, and one that already has its exact time, are kept.
+    #[test]
+    fn reload_repairs_a_shutter_speed_an_older_import_rounded() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 6000, 4000, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        for (t, legacy, shown) in [(0.4, "1/2", "0.4"), (2.5, "2", "2.5"), (1.0 / 2.8, "1/3", "0.3571"), (1.0 / 250.0, "1/250", "1/250")] {
+            info.meta.exposure_time = Some(t);
+            info.meta.shutter = lightcraft_meta::format_exposure_time(t).unwrap();
+            ph.meta.shutter = legacy.into();
+            ph.meta.exposure_time = None;
+            let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+            let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{t}: {ops:?}") };
+            assert_eq!((meta.shutter.as_str(), meta.exposure_time), (shown, Some(t)), "{t}");
+            assert_eq!(meta.shutter_seconds(), Some(t), "{t}");
+            // repaired → nothing more to do
+            ph.meta = (**meta).clone();
+            assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "{t}");
+        }
+        // typed by hand, not what any import wrote for this file
+        info.meta.exposure_time = Some(0.4);
+        info.meta.shutter = "0.4".into();
+        ph.meta.shutter = "1/8".into();
+        ph.meta.exposure_time = None;
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a hand-set shutter speed is kept");
+        // already has an exact time (the text was edited afterwards): kept
+        ph.meta.shutter = "1/2".into();
+        ph.meta.exposure_time = Some(0.4);
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a photo with an exact time is left alone");
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
