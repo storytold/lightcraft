@@ -678,6 +678,8 @@
   "Find Duplicate Photos…": "Tìm ảnh trùng lặp…",
   "Keep": "Giữ lại",
   "Looking for duplicate photos…": "Đang tìm ảnh trùng lặp…",
+  "Find": "Tìm",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Chặt tìm cùng một ảnh ở kích thước hoặc nén khác; Lỏng còn chấp nhận chỉnh sửa nhẹ. Tìm sẽ duyệt toàn bộ thư viện.",
   "Strict": "Chặt",
   "Normal": "Bình thường",
   "Loose": "Lỏng",

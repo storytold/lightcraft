@@ -755,6 +755,8 @@
   "Find Duplicate Photos…": "重複した写真を検索…",
   "Keep": "残す",
   "Looking for duplicate photos…": "重複した写真を検索中…",
+  "Find": "検索",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "「厳密」は同じ写真の別サイズや別圧縮を、「ゆるい」は軽い編集も見つけます。検索はライブラリ全体を調べます。",
   "Strict": "厳密",
   "Normal": "標準",
   "Loose": "ゆるい",

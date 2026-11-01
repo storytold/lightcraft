@@ -962,6 +962,8 @@
   "Find Duplicate Photos…": "Знайти дубльовані фото…",
   "Keep": "Залишити",
   "Looking for duplicate photos…": "Пошук дубльованих фото…",
+  "Find": "Знайти",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Суворий знаходить те саме фото в іншому розмірі чи стисненні; Вільний — і з легкими правками. Знайти переглядає всю бібліотеку.",
   "Strict": "Суворий",
   "Normal": "Звичайний",
   "Loose": "Вільний",

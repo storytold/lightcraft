@@ -639,6 +639,8 @@
   "Find Duplicate Photos…": "Найти дубликаты фото…",
   "Keep": "Оставить",
   "Looking for duplicate photos…": "Поиск дубликатов фото…",
+  "Find": "Найти",
+  "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.": "Строгое находит то же фото в другом размере или сжатии; Свободное — и с лёгкими правками. Найти просматривает всю библиотеку.",
   "Strict": "Строгое",
   "Normal": "Обычное",
   "Loose": "Свободное",

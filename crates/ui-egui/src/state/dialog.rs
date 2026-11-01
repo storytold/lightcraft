@@ -212,6 +212,9 @@ pub enum Dialog {
         distance: u32,
         #[serde(default = "yes")]
         same_moment: bool,
+        /// Find was pressed: the run is going or done, and the settings are locked.
+        #[serde(default)]
+        started: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
