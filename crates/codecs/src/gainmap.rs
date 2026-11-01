@@ -488,7 +488,7 @@ pub fn apply(base: &mut [[f32; 3]], width: usize, height: usize, gain: &GainImag
         || gain.width == 0
         || gain.height == 0
         || !matches!(gain.channels, 1 | 3)
-        || gain.data.len() < gain.width * gain.height * gain.channels
+        || gain_samples(gain).is_none_or(|n| gain.data.len() < n)
     {
         return Err(Error::Encode("gain map: base and gain map sizes don't match".into()));
     }
@@ -576,11 +576,17 @@ pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, qualit
     encode_with_gain(base, &gain_jpeg, quality, sub, meta)
 }
 
+/// Samples a gain map of its size holds (`None` when that overflows: a hostile size, never a
+/// wrapped product; review of PR #3529).
+fn gain_samples(gain: &GainImage) -> Option<usize> {
+    gain.width.checked_mul(gain.height)?.checked_mul(gain.channels)
+}
+
 /// The gain map image of a gain map JPEG, encoded at `quality` with its metadata: made once and
 /// joined to its primary image by [`encode_with_gain`] (an export that fits a file size limit
 /// encodes the primary again, never the map).
 pub fn encode_gain(gain: &GainImage, m: &GainMapMeta, quality: u8) -> Result<Vec<u8>> {
-    if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain.data.len() < gain.width * gain.height * gain.channels {
+    if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain_samples(gain).is_none_or(|n| gain.data.len() < n) {
         return Err(Error::Encode("gain map image is malformed".into()));
     }
     if !m.is_valid() || m.multichannel != (gain.channels == 3) {
@@ -827,6 +833,15 @@ mod tests {
         if let Some(t) = jpeg::embedded_thumbnail(&file, 32, 16) {
             assert_ne!(t.source, crate::ThumbnailSource::MpfPreview);
         }
+    }
+
+    /// Review of PR #3529: a gain map whose size overflows is an error, never a wrapped product.
+    #[test]
+    fn a_gain_map_of_hostile_size_is_an_error() {
+        let gain = GainImage { width: usize::MAX / 2, height: 4, channels: 3, data: vec![0; 16] };
+        assert!(encode_gain(&gain, &GainMapMeta::default(), 90).is_err());
+        assert_eq!(gain_samples(&gain), None);
+        assert_eq!(gain_samples(&GainImage { width: 4, height: 2, channels: 3, data: Vec::new() }), Some(24));
     }
 
     #[test]
