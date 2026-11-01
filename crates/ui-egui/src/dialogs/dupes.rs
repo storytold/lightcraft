@@ -23,8 +23,10 @@ const THUMB_H: f32 = 100.0;
 const CARD_H: f32 = 190.0;
 /// Thumbnail requests from the window come before the grid's off-screen prefetch.
 const THUMB_PRIORITY: u32 = 20;
-/// The window's width: what the screen leaves, up to this.
-const MAX_WIDTH: f32 = 1180.0;
+/// The narrowest the window lays out for (it can be resized wider).
+const MIN_WIDTH: f32 = 560.0;
+/// What the button row under the list takes.
+const BUTTON_ROW: f32 = 52.0;
 /// The strictness choices: bits of hash distance.
 const STRICTNESS: [(&str, u32); 3] = [("Strict", 2), ("Normal", 6), ("Loose", 10)];
 
@@ -144,10 +146,9 @@ fn apply(app: &mut LightcraftApp, dlg: &mut Dialog, action: Action) {
 
 /// The window's body.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    // as wide as the screen allows, so the cards wrap instead of running off it
-    let width = (ui.ctx().content_rect().width() - 160.0).clamp(560.0, MAX_WIDTH);
-    ui.set_min_width(width);
-    ui.set_max_width(width);
+    // the window is resizable: the cards wrap to whatever width it has
+    let width = ui.available_width().max(MIN_WIDTH);
+    ui.set_min_width(MIN_WIDTH);
     if controls(ui, t, dlg) {
         search(app, dlg);
     }
@@ -191,11 +192,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     );
     let mut action = bulk_row(ui, t, groups, armed, unticked);
     ui.add_space(6.0);
-    let height = super::list_height(ui, (ui.ctx().content_rect().height() - 360.0).clamp(300.0, 1200.0));
+    // the list takes what the window leaves above its button row
+    let height = (ui.available_height() - BUTTON_ROW).max(200.0);
     // rows of a known number of cards: the layout's own wrapping trusted the window's width, which the window
     // takes from its content, so nothing ever wrapped and the cards ran off the screen
     let per_row = ((width - 24.0) / (THUMB_W + 8.0 + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
-    egui::ScrollArea::vertical().max_height(height).max_width(width).auto_shrink([false, true]).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).max_width(width).auto_shrink([false, false]).show(ui, |ui| {
         for (n, g) in groups.iter_mut().enumerate() {
             if let Some(a) = group_header(ui, t, n, g) {
                 action = Some(a);
