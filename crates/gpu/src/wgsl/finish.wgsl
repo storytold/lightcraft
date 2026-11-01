@@ -243,7 +243,7 @@ const BAYER_8X8 = array<f32, 64>(
 
 fn enc8(v: f32, d: f32) -> u32 {
     let y = clamp(v, 0.0, 1.0) * 255.0;
-    if (y >= 254.5) {
+    if (y >= 254.9) {
         return 255u;
     }
     return u32(clamp(y + d, 0.0, 255.0));

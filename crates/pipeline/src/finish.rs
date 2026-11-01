@@ -805,7 +805,9 @@ fn bayer_dither_offset(x: usize, y: usize) -> f32 {
 #[inline]
 fn enc(v: f32, dither: f32) -> u8 {
     let y = v.clamp(0.0, 1.0) * 255.0;
-    if y >= 254.5 {
+    // Guard against floating point rounding error (e.g. sRGB <-> Rec.2020 matrix conversion)
+    // where numerical white (1.0) evaluates to ~254.95.
+    if y >= 254.9 {
         return 255;
     }
     (y + dither).clamp(0.0, 255.0) as u8
@@ -886,5 +888,25 @@ mod tests {
         assert_eq!(count_128, 32);
         assert_eq!(count_129, 32);
         assert_eq!(sum, 32 * 128 + 32 * 129);
+
+        // Fractional highlight level: 254.5 / 255.0 should dither equally between 254 and 255
+        let v = 254.5 / 255.0;
+        let mut sum_hl = 0u32;
+        let mut count_254 = 0;
+        let mut count_255 = 0;
+        for y in 0..8 {
+            for x in 0..8 {
+                let val = enc(v, bayer_dither_offset(x, y));
+                sum_hl += val as u32;
+                if val == 254 {
+                    count_254 += 1;
+                } else if val == 255 {
+                    count_255 += 1;
+                }
+            }
+        }
+        assert_eq!(count_254, 32);
+        assert_eq!(count_255, 32);
+        assert_eq!(sum_hl, 32 * 254 + 32 * 255);
     }
 }
