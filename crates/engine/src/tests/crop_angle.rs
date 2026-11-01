@@ -218,6 +218,20 @@ fn turning_a_crop_dragged_in_from_a_corner_keeps_that_crop() {
     assert!(r.width() > 0.97 * made.width(), "0.25° keeps nearly all of it: {r:?} from {made:?}");
 }
 
+/// `from` is the crop a drag started from, not a way around the smallest crop `crop.set` enforces
+/// (PR #1876 review). A hostile or buggy caller must not persist a sliver through it.
+#[test]
+fn a_from_rect_below_the_smallest_crop_is_rejected() {
+    let mut s = Session::with_demo();
+    let before = geometry(&s);
+    let err = s.execute("crop.straighten", &json!({"angle": 5.0, "from": {"rect": [0.5, 0.5, 0.505, 0.505], "angle": 0.0}})).unwrap_err();
+    assert!(err.to_string().contains("smallest crop"), "{err}");
+    assert!(close(geometry(&s), before), "a rejected drag changes nothing");
+
+    let r = geometry(&s).rect;
+    s.execute("crop.straighten", &json!({"angle": 5.0, "from": {"rect": [r.x0, r.y0, r.x1, r.y1], "angle": 0.0}})).unwrap();
+}
+
 #[test]
 fn a_crop_shrunk_by_straightening_grows_back_towards_0() {
     // issue #1388: slide the Straighten slider out and back, in one drag or in several
