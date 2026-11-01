@@ -89,6 +89,7 @@ mod temp_slider;
 mod text_prompt;
 mod titlebar;
 mod tool_overlay;
+mod type_roles;
 mod unsaved;
 mod view_cost;
 mod wb_selector;

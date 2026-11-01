@@ -1625,7 +1625,9 @@ fn export_apple_photos_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOpti
             )
         });
         ui.label(
-            egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos.")).size(11.0).color(t.text_dim),
+            egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos."))
+                .font(t.caption())
+                .color(t.text_dim),
         );
     }
 }
