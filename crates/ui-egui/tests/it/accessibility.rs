@@ -158,7 +158,6 @@ fn slider_value(h: &Harness<'_, LightcraftApp>, name: &str) -> Option<f64> {
         .and_then(|n| n.numeric_value())
 }
 
-/// A screen reader's Increment on a develop slider moves it one step, as an arrow key does.
 /// A slider that shows a short name under its caption ("Amount" under Grain) is announced by its
 /// full name, which still says what it changes without the caption.
 #[test]
@@ -175,6 +174,7 @@ fn short_named_sliders_are_announced_by_their_full_name() {
     assert_eq!(sliders.iter().filter(|s| *s == "Amount").count(), 1, "only AI Denoise is announced as Amount: {sliders:?}");
 }
 
+/// A screen reader's Increment on a develop slider moves it one step, as an arrow key does.
 #[test]
 fn screen_reader_increment_moves_a_slider() {
     let mut h = harness(ViewMode::Detail, RightPanel::Edit);
