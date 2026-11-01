@@ -22,7 +22,8 @@ pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
 /// pixel count is never held to the ceiling, so a full-size render of a photo larger than this is
 /// unaffected. [`Frame::fit`] scales an over-ceiling output down to it instead of allocating it: a
 /// request box far beyond the photo aborted the process on allocation, which `catch_unwind` cannot
-/// catch (issue #3320).
+/// catch (issue #3320). The size `fit` returns is held to the ceiling in whole pixels: never more
+/// pixels than it allows, never smaller than 1 × 1.
 pub const MAX_RENDER_PIXELS: f64 = 512e6;
 
 /// The geometric frame of a render.
@@ -198,7 +199,10 @@ impl Frame {
     /// own pixel count when larger) is scaled down to it, both sides by the same factor, so the
     /// aspect survives: every size the ceiling allows is returned exactly as before the ceiling
     /// existed, and a request box far beyond the photo comes back at the ceiling instead of being
-    /// allocated, which aborted the process (issue #3320).
+    /// allocated, which aborted the process (issue #3320). For an aspect more extreme than the
+    /// ceiling's own (a side would sit at a single pixel) the limit wins and the aspect gives way,
+    /// as in the export path: the whole-pixel size returned is never more pixels than the ceiling
+    /// allows and never smaller than 1 × 1.
     pub fn fit(&self, max_w: usize, max_h: usize) -> (usize, usize) {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
@@ -218,13 +222,32 @@ impl Frame {
         let px = w * h;
         let (w, h) = if px > ceiling {
             let k = (ceiling / px).sqrt();
-            // (at least one pixel a side, as the engine's resize does: for an aspect more extreme
-            // than the ceiling itself the limit wins and the sides stay whole pixels)
+            // (at least one pixel a side, as the engine's resize does)
             ((w * k).max(1.0), (h * k).max(1.0))
         } else {
             (w, h)
         };
-        ((w.round() as usize).max(1), (h.round() as usize).max(1))
+        let (mut w, mut h) = ((w.round() as usize).max(1), (h.round() as usize).max(1));
+        // the whole-pixel result is held to the ceiling too: rounding can put the last fraction of
+        // a pixel back on top of it, and in an aspect more extreme than the ceiling's own a side
+        // sits at its one-pixel floor while the other stays over (a bounded 45° strip of a
+        // 1000000512 × 512 photo is 7·10⁸ × 0.5 px of aspect against a 1-px floor). There the
+        // limit wins and the aspect gives way, as in the export path.
+        let px = w as f64 * h as f64;
+        if px > ceiling {
+            let k = (ceiling / px).sqrt();
+            let (sw, sh) = ((w as f64 * k).floor(), (h as f64 * k).floor());
+            // a side scaled under one pixel keeps that floor and leaves the rest of the budget to
+            // the other (then the aspect is more extreme than the ceiling's own)
+            (w, h) = if sw < 1.0 {
+                (1, ceiling as usize)
+            } else if sh < 1.0 {
+                (ceiling as usize, 1)
+            } else {
+                (sw as usize, sh as usize)
+            };
+        }
+        (w, h)
     }
 
     /// The most pixels this frame's render may have: [`MAX_RENDER_PIXELS`], or this frame's own
@@ -557,6 +580,11 @@ mod tests {
         let (w, h) = f.fit(200_000, 100_000);
         assert!((w * h) as f64 <= MAX_RENDER_PIXELS, "{} px", w * h);
         assert!((w * h) as f64 >= MAX_RENDER_PIXELS * 0.999, "{} px", w * h);
+        // the fit keeps the *bounded* crop's aspect (~1.7766, not the photo's 2:1): pinned so a
+        // `bounded` that stops clipping (or is dropped from `Frame::new`) runs this red
+        let r = s.crop.geometry.bounded(8.0, 4.0).rect_px(8.0, 4.0);
+        assert!((r.width() / r.height() - 1.776_6).abs() < 0.001, "bounded aspect: {}", r.width() / r.height());
+        assert!(((w as f64) / (h as f64) - r.width() / r.height()).abs() / (r.width() / r.height()) < 0.01, "the bounded crop's aspect: {w}×{h}");
     }
 
     /// A straightened crop may be wider than the photo itself while its corners still lie inside
@@ -592,7 +620,38 @@ mod tests {
         let f = Frame::new(8, 4, &s, true); // 2:1, 32 px of its own
         let (w, h) = f.fit(32_002, 16_001);
         assert!((w as i64 - 32_000).abs() <= 1 && (h as i64 - 16_000).abs() <= 1, "{w}×{h}");
-        assert!((w * h) as f64 <= MAX_RENDER_PIXELS, "{} px", w * h);
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS * 1.001, "{} px", w * h);
         assert!(((w as f64) / (h as f64) - 2.0).abs() < 0.01, "the frame's 2:1 aspect: {w}×{h}");
+    }
+
+    /// A bounded crop can still be a legal sliver: a 45° strip across a 1000000512 × 512 photo
+    /// is 707107143 × 0.5 px, an aspect of ~7·10⁸ held against the one-pixel floor. There the
+    /// floor used to win over the ceiling — 601,696,649 × 1 px, 17.5% past 512 megapixels — so
+    /// the whole-pixel result is held to the ceiling now: the limit wins and the aspect gives
+    /// way, as in the export path. (A Frame is pure math: building one allocates no pixels.)
+    #[test]
+    fn an_extreme_aspect_sliver_stays_within_the_ceiling() {
+        let mut s = DevelopSettings::default();
+        let (nw, nh) = (707_107_143.0, 0.5);
+        s.crop.geometry.rect = Rect::new(0.5 - nw / 2.0 / 1e9, 0.5 - nh / 2.0 / 512.0, 0.5 + nw / 2.0 / 1e9, 0.5 + nh / 2.0 / 512.0);
+        s.crop.geometry.angle = 45.0;
+        let f = Frame::new(1_000_000_000, 512, &s, true);
+        let (w, h) = f.fit(1_000_000_000, 1_000_000_000);
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS, "{} px", w * h);
+        assert!((w * h) as f64 >= MAX_RENDER_PIXELS * 0.999, "the ceiling's budget is used: {} px", w * h);
+        assert!(w >= 1 && h >= 1, "{w}×{h}");
+    }
+
+    /// Rounding the two scaled sides to whole pixels can put the last fraction of a pixel back
+    /// on top of the ceiling: a 1:16 frame asked for a square box scaled to 5657 × 90510, and
+    /// the rounds landed at 512,015,070 px — a hair past 512 megapixels. The whole-pixel result
+    /// is held to the ceiling too.
+    #[test]
+    fn a_box_that_rounds_back_over_the_ceiling_is_clamped_under_it() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(8, 128, &s, true); // 1:16, 1024 px of its own
+        let (w, h) = f.fit(91_906, 91_906);
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS, "{} px", w * h);
+        assert!(w >= 1 && h >= 1, "{w}×{h}");
     }
 }
