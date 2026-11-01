@@ -29,14 +29,22 @@ fn main() {
     let mut s = Session::new().with_fs();
     if let Err(e) = s.open_library(&dir, false) {
         eprintln!("{dir}: {e}");
-        return;
+        std::process::exit(1);
     }
     let t0 = Instant::now();
     let ms = move || t0.elapsed().as_secs_f64() * 1e3;
     if let Ok(patch) = std::env::var("CULL_PREP") {
-        let v: Value = serde_json::from_str(&patch).unwrap_or(Value::Null);
-        let r = s.execute("prefs.setBackgroundPrep", &json!({"settings": {"culling": v}}));
-        eprintln!("prep {patch}: {:?}", r.map(|v| v["settings"]["culling"].to_string()));
+        // (a run with other settings than the ones asked for would time the wrong thing)
+        let set = serde_json::from_str::<Value>(&patch)
+            .map_err(|e| e.to_string())
+            .and_then(|v| s.execute("prefs.setBackgroundPrep", &json!({"settings": {"culling": v}})).map_err(|e| e.to_string()));
+        match set {
+            Ok(v) => eprintln!("prep {patch}: {}", v["settings"]["culling"]),
+            Err(e) => {
+                eprintln!("CULL_PREP={patch}: {e}");
+                std::process::exit(1);
+            }
+        }
     }
     match s.execute("library.browse", &json!({"path": folder})) {
         Ok(v) => eprintln!("{:9.1} browse: {v}", ms()),

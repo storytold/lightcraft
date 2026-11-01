@@ -336,7 +336,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     // --- LightCraft's loupe render (2560 px) from a cold source --------------------------------
-    // (a photo with no loupe job, or whose render fails, counts as failed)
+    // (a photo with no loupe job, or whose render fails, counts as failed). A folder of 80 photos
+    // or fewer has no photos the stages above didn't read: its sample is labelled warm
+    // (CodeRabbit on #3080)
+    let warm = ids.len() <= 80;
     let timed: Vec<Option<f64>> = sample_after(&ids, 80, 5)
         .iter()
         .map(|id| {
@@ -348,8 +351,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         })
         .collect();
     let ms: Vec<f64> = timed.iter().flatten().copied().collect();
-    let st = with_failed(&ms, timed.len().saturating_sub(ms.len()));
-    line("loupe render 2560 px (cold)", &st);
+    let mut st = with_failed(&ms, timed.len().saturating_sub(ms.len()));
+    st["warm"] = json!(warm);
+    line(if warm { "loupe render 2560 px (warm: photos the stages above read)" } else { "loupe render 2560 px (cold)" }, &st);
     out["loupeRender"] = st;
 
     // --- rating: a culling pass of keypresses ---------------------------------------------------
