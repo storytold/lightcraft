@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (test deadlines and the test watchdog, `lightcraft-testkit`) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -83,10 +83,19 @@ time, skips) and `target/ci/summary.md` (Markdown for a PR; `--summary-md` print
 no host name, user name or absolute path, and nothing is uploaded. `--hardware` adds a step that runs
 the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`).
 
+libtest has no per-test timeout, so a test wait never goes without a limit: `lightcraft_testkit::wait_until`
+(a condition, polled with backoff) and `recv_within` (a channel) fail the test with what they waited for,
+and a hand-made limit uses `scaled`. `LIGHTCRAFT_TIME_SCALE` (default 1, clamped to 0.1–1000) stretches
+every limit at once on a slow machine. `lightcraft_testkit::watch()` registers the running test with a
+per-process watchdog (ui-egui's `Headless::new` does it in that crate's unit tests): once a watched test
+has run for `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30 × the time scale; `0` or `off` disables
+it) it prints the watched tests still running and exits with status 124, so a hung run ends with names.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Quality gates: test deadlines (`wait_until`, `recv_within`, `LIGHTCRAFT_TIME_SCALE`) and the test watchdog |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |
