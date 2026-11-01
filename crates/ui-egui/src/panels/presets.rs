@@ -114,7 +114,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             register(ui, "presetMenu:thumbnails", r.rect);
             ui.separator();
             if ui.button(crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Import Presets…")).clicked() {
-                let _ = app.run("file.importPresets", json!({}));
+                let _ = app.run("file.importPresets", json!({"from": "panel"}));
             }
             let any_user = app.session.presets.iter().any(|p| !p.builtin);
             if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
