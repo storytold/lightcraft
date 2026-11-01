@@ -92,9 +92,6 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     smart_previews(app, ui, t);
 }
 
-/// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
-/// the effective folder, what is in it, and choosing another one.
-#[cfg(not(target_arch = "wasm32"))]
 /// The disk cache's "In use": its size once counted, "counting…" while the first count of the
 /// folder runs on a thread of its own (`PreviewCache::disk_size_now` is `Some(None)` meanwhile),
 /// "memory only" without a disk cache.
@@ -106,6 +103,9 @@ fn in_use_text(used: Option<Option<u64>>) -> String {
     }
 }
 
+/// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
+/// the effective folder, what is in it, and choosing another one.
+#[cfg(not(target_arch = "wasm32"))]
 fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // listing a big folder every frame would be slow: refresh every 2 s and after a change
     let cache = egui::Id::unique("smart-location");
