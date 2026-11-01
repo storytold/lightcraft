@@ -3,12 +3,17 @@ use super::info::label_badge_rect;
 use super::{Affine, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json, pos2, vec2};
 
 /// Screen ↔ normalized-image mapping for the displayed frame.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct CanvasMap {
     pub(super) rect: Rect,
     to_norm: Affine,
     from_norm: Affine,
     k: f32,
+    /// The frame's lens / perspective warp (with the oriented size it works in), when it moves
+    /// pixels: a mask on the photo (`Mask::on_photo`) has its coordinates before it.
+    warp: Option<std::sync::Arc<(lightcraft_pipeline::optics::Warp, f64, f64)>>,
+    /// Whether `norm` / `screen` speak a mask's coordinates on the photo ([`CanvasMap::for_mask`]).
+    on_photo: bool,
 }
 
 impl CanvasMap {
@@ -16,12 +21,33 @@ impl CanvasMap {
         let k = 8.0f32;
         let (w, h) = ((rect.width() * k).round().max(1.0) as usize, (rect.height() * k).round().max(1.0) as usize);
         let to_norm = frame.out_to_norm(w, h);
-        CanvasMap { rect, to_norm, from_norm: to_norm.inverse().unwrap_or(Affine::IDENTITY), k }
+        let warp = frame.warp.as_ref().filter(|w| w.moves_pixels()).map(|w| std::sync::Arc::new((w.clone(), frame.ow, frame.oh)));
+        CanvasMap { rect, to_norm, from_norm: to_norm.inverse().unwrap_or(Affine::IDENTITY), k, warp, on_photo: false }
+    }
+    /// The mapping for a mask's coordinates: on the photo before lens corrections, Upright and
+    /// Transform (`on_photo`, every mask made now), or an old mask's on the corrected frame.
+    pub(crate) fn for_mask(&self, on_photo: bool) -> CanvasMap {
+        CanvasMap { on_photo, ..self.clone() }
+    }
+    /// [`Self::for_mask`] for the mask `id` of `d` (none, or a new mask: on the photo).
+    pub(crate) fn for_mask_id(&self, d: &lightcraft_develop::DevelopSettings, id: Option<u32>) -> CanvasMap {
+        self.for_mask(id.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.on_photo))
     }
     pub fn norm(&self, p: Pos2) -> Point {
-        self.to_norm.apply(Point::new(((p.x - self.rect.left()) * self.k) as f64, ((p.y - self.rect.top()) * self.k) as f64))
+        let n = self.to_norm.apply(Point::new(((p.x - self.rect.left()) * self.k) as f64, ((p.y - self.rect.top()) * self.k) as f64));
+        match self.warp.as_deref().filter(|_| self.on_photo) {
+            Some((w, ow, oh)) => {
+                let s = w.to_source(Point::new(n.x * ow, n.y * oh), 1);
+                Point::new(s.x / ow, s.y / oh)
+            }
+            None => n,
+        }
     }
     pub fn screen(&self, n: Point) -> Pos2 {
+        let n = match self.warp.as_deref().filter(|_| self.on_photo) {
+            Some((w, ow, oh)) => w.from_source(Point::new(n.x * ow, n.y * oh)).map_or(n, |t| Point::new(t.x / ow, t.y / oh)),
+            None => n,
+        };
         let q = self.from_norm.apply(n);
         pos2(self.rect.left() + q.x as f32 / self.k, self.rect.top() + q.y as f32 / self.k)
     }
@@ -381,5 +407,39 @@ mod snap_tests {
         assert_eq!(other, r);
         let bad = snap_fit_rect(r, [1088, 720], f32::NAN);
         assert_eq!((bad.width(), bad.height()), (1088.0, 720.0));
+    }
+}
+
+#[cfg(test)]
+mod mask_map_tests {
+    use super::*;
+    use lightcraft_develop::DevelopSettings;
+
+    fn close(a: Point, b: Point) -> bool {
+        (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4
+    }
+
+    /// Under a perspective warp, a mask's on-screen place goes into its coordinates on the photo
+    /// (`Mask::on_photo`) and back: the point clicked is the point the render puts the mask on, and
+    /// its handle draws where it was clicked.
+    #[test]
+    fn a_mask_drawn_on_a_warped_photo_lands_on_the_content_under_the_pointer() {
+        let mut d = DevelopSettings::default();
+        d.geometry.vertical = 30.0;
+        d.geometry.rotate = 5.0;
+        let frame = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&frame, Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 300.0)));
+        let q = pos2(220.0, 140.0);
+        let on = m.for_mask(true).norm(q);
+        let plain = m.for_mask(false).norm(q);
+        assert!(!close(on, plain), "the warp moves the photo under the frame: {on:?} {plain:?}");
+        // the render maps the mask's coordinates through the warp to the same frame point
+        assert!(close(frame.for_mask(true).mask_to_norm(on), plain));
+        assert!((m.for_mask(true).screen(on) - q).length() < 0.01, "and its handle draws there");
+        // a new mask (no id) and a mask of today are on the photo; an old one isn't
+        let mut d = d.clone();
+        d.masks.push(lightcraft_develop::Mask { id: 7, on_photo: false, ..Default::default() });
+        assert!(close(m.for_mask_id(&d, None).norm(q), on));
+        assert!(close(m.for_mask_id(&d, Some(7)).norm(q), plain));
     }
 }

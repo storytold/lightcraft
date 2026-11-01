@@ -324,6 +324,8 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
     }
     for m in &d.masks {
         let sel = Some(m.id) == active;
+        // (its coordinates on the photo, or an old mask's on the corrected frame)
+        let map = &map.for_mask(m.on_photo);
         // Ctrl+Shift+O (`mask_overlay_all`) shows every visible mask's region; outline each one
         // too, not just the selected mask. Handles and the rotation grip stay on the selected
         // mask so nothing else becomes draggable. The component check keeps this in step with the
@@ -439,6 +441,7 @@ fn component_outline(
 fn object_marks(app: &LightcraftApp, p: &egui::Painter, map: &CanvasMap, d: &DevelopSettings, active: Option<u32>) {
     let pending = app.session.segmenter.pending_clicks().cloned();
     for m in d.masks.iter().filter(|m| Some(m.id) == active) {
+        let map = &map.for_mask(m.on_photo);
         for (k, c) in m.components.iter().enumerate() {
             if let MaskShape::Object { hint, exclude, .. } = &c.shape {
                 let (hint, exclude) = match pending.as_ref().filter(|q| (q.mask, q.comp) == (m.id, k)) {
@@ -503,7 +506,8 @@ fn object_tool(
         if own_pin_at(grips, app.session.active_mask, q) {
             return;
         }
-        let n = map.norm(q);
+        // (a click goes into the selected mask, or a new one: in its coordinates)
+        let n = map.for_mask_id(d, app.session.active_mask).norm(q);
         let exclude = ui.input(|i| i.modifiers.alt);
         match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
             Ok(_) => {
@@ -527,6 +531,8 @@ fn brush_tool(
     d: &DevelopSettings,
 ) {
     let active = app.session.active_mask;
+    // the stroke goes into the selected mask (or a new one): in its coordinates
+    let map = &map.for_mask_id(d, active);
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let r = (app.ui.brush_size as f64 * long) as f32;
     if let Some(h) = resp.hover_pos() {
@@ -635,6 +641,7 @@ fn grip_gestures(
             let m = d.masks.iter().find(|m| Some(m.id) == active)?;
             // Handles take precedence; otherwise grab the selected radial component under
             // the press, including components after the first in compound masks.
+            let map = &map.for_mask(m.on_photo);
             let at = map.norm(q);
             if let Some(ci) = m.components.iter().position(|c| radial_body_contains(&c.shape, at, map)) {
                 return Some((m.id, ci, 0));
@@ -655,6 +662,7 @@ fn grip_gestures(
     if resp.dragged()
         && let (Some(Gesture::MaskHandle { mask, comp, handle, original_shape }), Some(q)) = (app.gesture.clone(), resp.interact_pointer_pos())
     {
+        let map = &map.for_mask_id(d, Some(mask));
         let n = map.norm(q);
         let press_origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(q);
         let n0 = map.norm(press_origin);
@@ -692,6 +700,7 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
     for &(mid, ci, handle, q) in grips {
         let Some(m) = d.masks.iter().find(|m| m.id == mid) else { continue };
         let Some(shape) = m.components.get(ci).map(|c| &c.shape) else { continue };
+        let map = &map.for_mask(m.on_photo);
         let at = map.norm(q);
         let mask_name = if m.name.trim().is_empty() { format!("{} {mid}", crate::i18n::tr("Mask")) } else { m.name.clone() };
         let name = mask_handle_name(&mask_name, shape, handle);
@@ -713,7 +722,9 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
 
 /// Long-edge units → normalized units for x and y.
 fn frame_long_norm(map: &CanvasMap) -> (f64, f64) {
-    // derive from the mapping: 1 normalized unit in x and y in screen points
+    // derive from the mapping: 1 normalized unit in x and y in screen points (of the frame's
+    // proportions, which a lens or perspective warp doesn't change)
+    let map = map.for_mask(false);
     let o = map.screen(Point::new(0.0, 0.0));
     let x = map.screen(Point::new(1.0, 0.0)).distance(o) as f64;
     let y = map.screen(Point::new(0.0, 1.0)).distance(o) as f64;

@@ -201,6 +201,39 @@ impl Warp {
         self.corrected_to_source(self.to_corrected(p), ch)
     }
 
+    /// Source px → transformed px (green plane): the inverse of [`Warp::to_source`], by Newton's
+    /// method on it (the warps are smooth and close to the identity, so a few steps reach a
+    /// hundredth of a pixel). `None` when it doesn't converge (a point far outside a strong warp).
+    pub fn from_source(&self, s: Point) -> Option<Point> {
+        if !(s.x.is_finite() && s.y.is_finite()) {
+            return None;
+        }
+        let f = |p: Point| self.to_source(p, 1);
+        // start from where the perspective alone puts it (the lens part moves pixels little)
+        let mut t = self.from_corrected(s);
+        let h = 1e-3 * self.w.max(self.h).max(1.0);
+        for _ in 0..24 {
+            let v = f(t);
+            let (ex, ey) = (v.x - s.x, v.y - s.y);
+            if !(ex.is_finite() && ey.is_finite()) {
+                return None;
+            }
+            if ex.abs() < 1e-4 && ey.abs() < 1e-4 {
+                return Some(t);
+            }
+            let (dx, dy) = (f(Point::new(t.x + h, t.y)), f(Point::new(t.x, t.y + h)));
+            let (a, c) = ((dx.x - v.x) / h, (dx.y - v.y) / h);
+            let (b, d) = ((dy.x - v.x) / h, (dy.y - v.y) / h);
+            let det = a * d - b * c;
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            t = Point::new(t.x - (d * ex - b * ey) / det, t.y - (a * ey - c * ex) / det);
+        }
+        let v = f(t);
+        ((v.x - s.x).abs() < 1e-2 && (v.y - s.y).abs() < 1e-2).then_some(t)
+    }
+
     /// Vignetting compensation gain at source position `src` (px).
     pub fn gain(&self, src: Point) -> f32 {
         let mut g = 1.0;

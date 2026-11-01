@@ -161,17 +161,18 @@ pub fn window_for_reads_checked(
     win: crate::PixelWindow,
 ) -> Option<crate::PixelWindow> {
     let spots = &s.spots;
-    let autos: Vec<&lightcraft_develop::BrushStroke> = s
+    // (with whether its mask's coordinates are on the photo before the warp)
+    let autos: Vec<(bool, &lightcraft_develop::BrushStroke)> = s
         .masks
         .iter()
         .filter(|m| m.visible)
-        .flat_map(|m| &m.components)
-        .filter_map(|c| match &c.shape {
-            lightcraft_develop::MaskShape::Brush { strokes } => Some(strokes),
+        .flat_map(|m| m.components.iter().map(move |c| (m.on_photo, c)))
+        .filter_map(|(on, c)| match &c.shape {
+            lightcraft_develop::MaskShape::Brush { strokes } => Some(strokes.iter().map(move |st| (on, st))),
             _ => None,
         })
         .flatten()
-        .filter(|st| st.auto_mask)
+        .filter(|(_, st)| st.auto_mask)
         .collect();
     if spots.is_empty() && autos.is_empty() {
         return Some(win);
@@ -205,10 +206,10 @@ pub fn window_for_reads_checked(
     // Auto Mask strokes weigh each dab by its similarity to the pixel under the dab's centre and
     // refine the stroke over a couple of radii: each dab matters to pixels within 2.5 radii
     let mut dab_boxes: Vec<[f64; 4]> = Vec::new();
-    for st in autos {
+    for (on_photo, st) in autos {
         // One more than the window takes, so a stroke past it is still recognised as past it
         // without the other 1.8 million dabs being built first (#1520).
-        let dabs = crate::masks::brush_dabs_within(st, frame, full_w, full_h, MAX_DABS_CONSIDERED + 1);
+        let dabs = crate::masks::brush_dabs_within(st, &frame.for_mask(on_photo), full_w, full_h, MAX_DABS_CONSIDERED + 1);
         let r = dabs.r;
         if dabs.dabs.len() > MAX_DABS_CONSIDERED {
             continue;
