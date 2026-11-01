@@ -123,13 +123,24 @@ impl FlickrUi {
         let running = self.upload.as_ref().map(UploadTask::status);
         #[cfg(target_arch = "wasm32")]
         let running: Option<Value> = None;
-        json!({"busy": self.busy, "error": self.error, "authorizeUrl": self.authorize_url, "upload": running, "last": self.last_result})
+        let albums =
+            self.albums.as_ref().map(|l| l.iter().map(|(id, title, photos)| json!({"id": id, "title": title, "photos": photos})).collect::<Vec<_>>());
+        json!({
+            "busy": self.busy,
+            "error": self.error,
+            "authorizeUrl": self.authorize_url,
+            "upload": running,
+            "last": self.last_result,
+            "albums": albums,
+            "albumsLoading": self.albums_loading,
+            "albumsError": self.albums_error,
+        })
     }
 }
 
 /// The `flickr.*` and `dialog.flickrUpload` commands, run the desktop app's way.
 pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
-    if !matches!(id, "dialog.flickrUpload" | "flickr.upload" | "flickr.signIn" | "flickr.completeSignIn" | "flickr.cancelSignIn") {
+    if !matches!(id, "dialog.flickrUpload" | "flickr.upload" | "flickr.albums" | "flickr.signIn" | "flickr.completeSignIn" | "flickr.cancelSignIn") {
         return None;
     }
     #[cfg(target_arch = "wasm32")]
@@ -199,8 +210,15 @@ mod native {
                     ..app.flickr.last_dialog.clone().unwrap_or_default()
                 };
                 app.ui.dialog = Some(Dialog::FlickrUpload { opts });
-                load_albums(app);
+                // the dialog says so if the list can't be read
+                let _ = load_albums(app);
                 Ok(Value::Null)
+            }
+            // read on a worker thread like the dialog's list (it can take many pages): the result
+            // arrives in `ui.inspect` → `flickr.albums`
+            "flickr.albums" => {
+                load_albums(app)?;
+                Ok(json!({"started": true}))
             }
             "flickr.upload" => start_upload(app, p),
             "flickr.signIn" => sign_in(app),
@@ -222,11 +240,11 @@ mod native {
 
     /// Read the account's albums in the background (the Upload dialog shows the last list
     /// meanwhile). Quiet: no activity row, nothing on screen but the dialog's list.
-    fn load_albums(app: &mut LightcraftApp) {
+    fn load_albums(app: &mut LightcraftApp) -> Result<(), String> {
         if app.flickr.albums_loading {
-            return;
+            return Ok(());
         }
-        let Ok((client, token)) = lightcraft_engine::flickr::albums_request(&app.session) else { return };
+        let (client, token) = lightcraft_engine::flickr::albums_request(&app.session)?;
         app.flickr.albums_loading = true;
         let r = crate::tasks::spawn(
             app,
@@ -244,9 +262,11 @@ mod native {
                 }
             },
         );
-        if r.is_err() {
+        if let Err(e) = r {
             app.flickr.albums_loading = false;
+            return Err(e);
         }
+        Ok(())
     }
 
     /// Step 1 on a worker thread; then the browser opens Flickr's approval page.

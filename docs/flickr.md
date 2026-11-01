@@ -60,7 +60,8 @@ over MCP (`lightcraft-cli mcp`, synchronously):
 | `flickr.upload` | `{ids?, longEdge?, quality?, privacy?, hidden?, tags?, description?, removeLocation?, album?, newAlbum?}` (`album` or `newAlbum`, not both) | `{total, uploaded, failed, albumFailed, cancelled, signInNeeded, album, createdAlbum?, albumCreateError?, photos: [{photo, file, photoId, url, albumError?} \| {photo, file, error}]}` |
 
 At most 500 photos per upload. In the app, `flickr.upload` returns `{background: true, total}` at once; poll
-`ui.inspect` → `flickr` (or `activity.list`, kind `upload`).
+`ui.inspect` → `flickr` (or `activity.list`, kind `upload`). `flickr.albums` likewise returns `{started: true}` and
+reads the list on a worker thread; it appears in `ui.inspect` → `flickr.albums` (`albumsLoading`, `albumsError`).
 
 ## For maintainers
 
