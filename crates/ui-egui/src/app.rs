@@ -218,9 +218,18 @@ impl LightcraftApp {
         // the photo's settings with the lock stored: an edit that leaves them so changed nothing
         let develop_of_active = |s: &lightcraft_engine::Session| s.active().and_then(|p| s.develop_of(p));
         let locked = stored_lock.then(|| develop_of_active(&self.session)).flatten();
-        let r = self.session.execute(id, &params).map_err(CommandError::from);
+        let edit_from = self.session.commits();
+        let mut r = self.session.execute(id, &params).map_err(CommandError::from);
         if stored_lock {
-            self.settle_stored_crop_lock(commits, r.is_ok() && develop_of_active(&self.session) != locked);
+            let active_changed = r.is_ok() && develop_of_active(&self.session) != locked;
+            if !active_changed && r.is_ok() && self.session.interaction.is_none() && self.others_changed_since(edit_from) {
+                // other photos the edit named changed, the active one didn't: take the lock (and the
+                // edit) back, then make the edit again without it, so those photos keep theirs
+                self.settle_stored_crop_lock(commits, false);
+                r = self.session.execute(id, &params).map_err(CommandError::from);
+            } else {
+                self.settle_stored_crop_lock(commits, active_changed);
+            }
         }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
@@ -388,6 +397,28 @@ impl LightcraftApp {
                 self.session.redo.pop();
             }
         }
+    }
+
+    /// Whether the undo steps committed since `commits` changed the settings of a photo other than
+    /// the active one (a `develop.set` naming other photos, Auto Sync). Outside an interaction only.
+    fn others_changed_since(&self, commits: u64) -> bool {
+        let s = &self.session;
+        let steps = usize::try_from(s.commits().wrapping_sub(commits)).unwrap_or(0).min(s.undo.len());
+        let active = s.active();
+        let mut pending: Vec<(&lightcraft_catalog::Op, usize)> = s.undo.iter().rev().take(steps).map(|e| (&e.op, 0)).collect();
+        while let Some((op, depth)) = pending.pop() {
+            match op {
+                // an undo step holds what it replaced: a photo changed when that differs from what it has now
+                lightcraft_catalog::Op::SetDevelop { id, settings, .. } => {
+                    if Some(*id) != active && s.develop_of(*id).is_some_and(|now| now != *settings) {
+                        return true;
+                    }
+                }
+                lightcraft_catalog::Op::Batch { ops } if depth < 8 => pending.extend(ops.iter().map(|o| (o, depth + 1))),
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Before an edit of an untouched photo's crop (a drag, the angle, Straighten, Auto, a flip):

@@ -2,7 +2,8 @@
 //! untouched photo the crop tool shows the crop locked to the photo's shape while the crop itself
 //! carries no lock yet; an edit of the angle (the Straighten slider, the Straighten tool's line,
 //! Auto, rotating with the pointer, `develop.set`) or a flip first stores that lock, so the crop
-//! stays locked and keeps its ratio; Constrain Crop leaves the crop untouched, still shown locked.
+//! stays locked and keeps its ratio; Constrain Crop and an edit of other photos only leave the crop
+//! untouched, still shown locked.
 //! Nothing but the lock button (and A) unlocks it.
 
 use std::time::Duration;
@@ -275,4 +276,33 @@ fn a_merged_crop_that_changes_nothing_leaves_the_photo_untouched() {
         assert!(h.app.session.undo.len() <= undo + 1, "{partial}: no stray lock step");
         assert!(h.app.session.redo.is_empty(), "{partial}: and no stray Redo step");
     }
+}
+
+/// Another photo than the active one, for edits that name their photos.
+fn other_photo(h: &Headless) -> lightcraft_catalog::PhotoId {
+    let active = h.app.session.active().expect("a photo");
+    h.app.session.catalog.photos().map(|p| p.id).find(|id| *id != active).expect("a second photo")
+}
+
+/// An edit that names other photos (`develop.set` with `ids`) and leaves the active one as it was keeps what
+/// it did to those photos; only the lock stored on the active photo first goes again.
+#[test]
+fn an_edit_of_other_photos_keeps_theirs_and_leaves_the_active_one_untouched() {
+    let mut h = crop_tool();
+    let id = h.app.session.active().expect("a photo");
+    let other = other_photo(&h);
+    let angle_of = |h: &Headless, p| h.app.session.develop_of(p).expect("the photo").crop.geometry.angle;
+    let undo = h.app.session.undo.len();
+    ask(&mut h, "engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": 3.0, "ids": [other.0]}}));
+    assert!((angle_of(&h, other) - 3.0).abs() < 1e-9, "the photo named is straightened");
+    assert!(untouched(&h, id), "the active photo, not named, is untouched");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step: the edit, no lock");
+    assert!(h.app.session.redo.is_empty(), "and no Redo step");
+
+    // both named, the active one unchanged by it (already level): the other is levelled all the same
+    ask(&mut h, "engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": 0.0, "ids": [id.0, other.0]}}));
+    assert!(angle_of(&h, other).abs() < 1e-9, "the other photo named is levelled");
+    assert!(untouched(&h, id), "the active photo stays untouched");
+    h.app.run("edit.undo", json!({})).expect("undo");
+    assert!((angle_of(&h, other) - 3.0).abs() < 1e-9, "Undo takes that edit back");
 }
