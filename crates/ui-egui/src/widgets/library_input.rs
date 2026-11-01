@@ -67,7 +67,7 @@ pub(crate) fn note_raw(ctx: &Context, raw: &RawInput) {
                     }
                     state.pending = true;
                 }
-                Event::PointerMoved(_) => state.pending |= !state.buttons.is_empty(),
+                Event::PointerMoved(_) | Event::MouseMoved(_) => state.pending |= !state.buttons.is_empty(),
                 Event::PointerGone | Event::WindowFocused(false) => {
                     state.pending |= !state.buttons.is_empty();
                     state.buttons.clear();

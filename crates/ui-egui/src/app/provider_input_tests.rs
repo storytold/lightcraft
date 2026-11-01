@@ -157,11 +157,20 @@ fn same_frame_input_waits_for_widgets_but_idle_hover_and_leave_do_not_block_a_re
     assert!(!allowed, "delivery before this frame's widgets must not retarget a key");
     assert!(app.can_admit_provider_library(&ctx).is_ok(), "the settled UI pass consumes the raw barrier");
     let mut hover_allowed = false;
-    frame(&mut app, &ctx, vec![Event::PointerMoved(Pos2::new(390.0, 110.0)), Event::PointerGone], Some(&mut hover_allowed));
-    assert!(hover_allowed, "idle pointer movement/leave is not editing input");
+    frame(
+        &mut app,
+        &ctx,
+        vec![Event::PointerMoved(Pos2::new(390.0, 110.0)), Event::MouseMoved(Vec2::new(3.0, -2.0)), Event::PointerGone],
+        Some(&mut hover_allowed),
+    );
+    assert!(hover_allowed, "idle pointer/raw mouse movement and leave are not editing input");
     let at = Pos2::new(390.0, 110.0);
     frame(&mut app, &ctx, vec![pointer(at, true)], None);
     assert!(app.can_admit_provider_library(&ctx).is_err(), "a held press survives a settled pass");
+    let mut held_motion_allowed = true;
+    frame(&mut app, &ctx, vec![Event::MouseMoved(Vec2::new(2.0, -1.0))], Some(&mut held_motion_allowed));
+    assert!(!held_motion_allowed, "raw mouse motion with a held press still blocks delivery before widgets");
+    assert!(app.can_admit_provider_library(&ctx).is_err(), "the held press survives its motion's settled pass");
     frame(&mut app, &ctx, vec![pointer(at, false)], None);
     assert!(app.can_admit_provider_library(&ctx).is_ok());
     host.opened(&pending, None, "fixture complete");
