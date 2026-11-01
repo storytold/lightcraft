@@ -860,7 +860,7 @@ fn zero_width_crop_with_grain_renders_finite_pixels() {
 /// While a slider moved or a brush stroke rendered, the draft on screen had other large-scale tone
 /// than the final render (shadows lifted ~6/255 and lower contrast at 100 %, ~1/255 at fit), which
 /// then snapped in: drafts capped the Highlights / Shadows base at 24 px. A draft and a full render
-/// of the same frame, whole or a window of a zoomed view, now match.
+/// of the same frame, whole or a 1:1 window of a zoomed view, are now the same pixels.
 #[test]
 fn a_draft_has_the_large_scale_tone_of_the_full_render() {
     use crate::{PixelWindow, Quality};
@@ -888,29 +888,13 @@ fn a_draft_has_the_large_scale_tone_of_the_full_render() {
         adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, shadows: 50.0, ..Default::default() },
         ..Default::default()
     });
-    // the worst 16 px block mean difference of any channel: the low-frequency part the eye saw flicker
-    let block_diff = |a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8| {
+    // how many pixels differ, and by how much at most (8-bit levels, any channel)
+    let differ = |a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8| {
         assert_eq!((a.width, a.height), (b.width, b.height));
-        let mut worst = 0f64;
-        for by in 0..a.height / 16 {
-            for bx in 0..a.width / 16 {
-                // each channel on its own: a shift of one channel against another (warmer) must show
-                let (mut da, mut db) = ([0f64; 3], [0f64; 3]);
-                for y in by * 16..by * 16 + 16 {
-                    for x in bx * 16..bx * 16 + 16 {
-                        let (p, q) = (a.get(x, y), b.get(x, y));
-                        for c in 0..3 {
-                            da[c] += f64::from(p[c]);
-                            db[c] += f64::from(q[c]);
-                        }
-                    }
-                }
-                for c in 0..3 {
-                    worst = worst.max((da[c] - db[c]).abs() / 256.0);
-                }
-            }
-        }
-        worst
+        a.data.iter().zip(&b.data).fold((0usize, 0u8), |(n, worst), (p, q)| {
+            let d = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0);
+            (n + usize::from(d > 0), worst.max(d))
+        })
     };
     // a zoomed view's window at 100 % of a 6000 px frame, and a whole frame drawn 2000 px wide
     let cases = [
@@ -921,8 +905,10 @@ fn a_draft_has_the_large_scale_tone_of_the_full_render() {
         for req in cases {
             let full = render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }).image;
             let draft = render(&src, &info, s, &RenderRequest { quality: Quality::Draft, ..req }).image;
-            let d = block_diff(&full, &draft);
-            assert!(d <= 0.5, "{name} {:?}: the draft's large-scale tone is {d:.2}/255 off the full render's", req.window);
+            // no cache to reuse: a draft runs the full render's code, so the two are the same picture
+            // (a draft's one shortcut left is a cached base from before a noise reduction change)
+            let (n, worst) = differ(&full, &draft);
+            assert_eq!(n, 0, "{name} {:?}: {n} pixels of the draft differ from the full render, by up to {worst}/255", req.window);
         }
     }
 }

@@ -1000,8 +1000,8 @@ fn soft_proofs_match() {
 
 /// A slider draft on the GPU has the large-scale tone of the full render (the
 /// Highlights / Shadows base was narrower in drafts), for a slider drag and a mask stroke, in a
-/// 100 % window of a 6000 px frame and in a whole frame drawn 2000 px wide; and it matches the CPU's
-/// full render as closely.
+/// 1:1 window of a 6000 px frame and in a whole frame drawn 2000 px wide: the same pixels as the GPU's
+/// full render, and within 0.5/255 (16 px block means, each channel) of the CPU's.
 #[test]
 fn a_gpu_draft_has_the_large_scale_tone_of_the_full_render() {
     use lightcraft_pipeline::PixelWindow;
@@ -1059,13 +1059,15 @@ fn a_gpu_draft_has_the_large_scale_tone_of_the_full_render() {
             let full = lightcraft_gpu::render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }, None).expect("gpu full").image;
             let draft = lightcraft_gpu::render(&src, &info, s, &RenderRequest { quality: Quality::Draft, ..req }, None).expect("gpu draft").image;
             let cpu = render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }).image;
-            let (d, c) = (block_diff(&full, &draft), block_diff(&cpu, &draft));
-            eprintln!("{name} {:?}: gpu draft vs gpu full {d:.3}/255, vs cpu full {c:.3}/255", req.window);
-            assert!(
-                d <= 0.5 && c <= 0.5,
-                "{name} {:?}: the GPU draft's large-scale tone is {d:.2}/255 off the GPU full render, {c:.2}/255 off the CPU's",
-                req.window
-            );
+            // the GPU's draft and full renders run the same kernels on the same base: the same pixels
+            let same = full.data.iter().zip(&draft.data).filter(|(p, q)| p != q).count();
+            // against the CPU, the per-pixel float differences of two devices remain (max 1 level in
+            // the other equivalence cases); 16 px block means average them out, so 0.5/255 is far
+            // above them and far below the 24 px cap's error this fixes (~6/255 at 100 %, ~1/255 at fit)
+            let c = block_diff(&cpu, &draft);
+            eprintln!("{name} {:?}: gpu draft vs gpu full: {same} pixels differ; vs cpu full {c:.3}/255", req.window);
+            assert_eq!(same, 0, "{name} {:?}: the GPU draft differs from the GPU full render in {same} pixels", req.window);
+            assert!(c <= 0.5, "{name} {:?}: the GPU draft's large-scale tone is {c:.2}/255 off the CPU's full render", req.window);
         }
     }
 }
