@@ -219,10 +219,18 @@ pub fn memory_limit() -> Option<usize> {
     static LIMIT: OnceLock<Option<usize>> = OnceLock::new();
     *LIMIT.get_or_init(|| {
         #[cfg(target_os = "linux")]
-        let cgroup = cgroup_limit(
-            std::fs::read_to_string("/sys/fs/cgroup/memory.max").ok().as_deref(),
-            std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes").ok().as_deref(),
-        );
+        let cgroup = {
+            let read = |p: &str| std::fs::read_to_string(p).ok();
+            // the process's own cgroup and the ones above it (a systemd slice or a container's
+            // limit sits there, not always at the root: review of PR #3499), the smallest limit
+            let own = read("/proc/self/cgroup").map(|t| cgroup_limit_files(&t)).unwrap_or_default();
+            let mut limits: Vec<usize> = own
+                .iter()
+                .filter_map(|(v2, v1)| cgroup_limit(v2.as_deref().and_then(read).as_deref(), v1.as_deref().and_then(read).as_deref()))
+                .collect();
+            limits.extend(cgroup_limit(read("/sys/fs/cgroup/memory.max").as_deref(), read("/sys/fs/cgroup/memory/memory.limit_in_bytes").as_deref()));
+            limits.into_iter().min()
+        };
         #[cfg(not(target_os = "linux"))]
         let cgroup = None;
         effective_limit(total_ram(), cgroup)
@@ -242,6 +250,43 @@ pub(crate) fn cgroup_limit(v2: Option<&str>, v1: Option<&str>) -> Option<usize> 
     // (v1 says "no limit" with a number near 2^63)
     bytes.filter(|b| *b > 0 && *b < 1 << 60).and_then(|b| usize::try_from(b).ok())
 }
+
+/// The memory limit files of the process's cgroup and of each cgroup above it, from
+/// `/proc/self/cgroup`'s text: `(v2 memory.max, v1 memory.limit_in_bytes)` per level, the
+/// process's own first, at most [`MAX_CGROUP_DEPTH`] levels (paths with `..` are ignored).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn cgroup_limit_files(proc_self_cgroup: &str) -> Vec<(Option<String>, Option<String>)> {
+    let mut out = Vec::new();
+    for line in proc_self_cgroup.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let path = path.trim();
+        if !path.starts_with('/') || path.split('/').any(|c| c == "..") {
+            continue;
+        }
+        let v2 = controllers.is_empty();
+        let v1 = controllers.split(',').any(|c| c == "memory");
+        if !v2 && !v1 {
+            continue;
+        }
+        let mut dir = path.trim_end_matches('/');
+        for _ in 0..MAX_CGROUP_DEPTH {
+            if dir.is_empty() {
+                break;
+            }
+            out.push(if v2 {
+                (Some(format!("/sys/fs/cgroup{dir}/memory.max")), None)
+            } else {
+                (None, Some(format!("/sys/fs/cgroup/memory{dir}/memory.limit_in_bytes")))
+            });
+            dir = dir.rfind('/').and_then(|i| dir.get(..i)).unwrap_or("");
+        }
+    }
+    out
+}
+
+/// Levels of the cgroup tree looked at above the process's own.
+const MAX_CGROUP_DEPTH: usize = 32;
 
 /// The smaller of the computer's memory and a cgroup's limit, whichever is known.
 pub(crate) fn effective_limit(ram: Option<usize>, cgroup: Option<usize>) -> Option<usize> {
@@ -419,7 +464,7 @@ mod export_share_tests {
     /// three), and a budget set high by hand never reserves more than 80 % of the limit.
     #[test]
     fn a_container_limit_sizes_the_export_gate() {
-        use super::{cgroup_limit, effective_limit};
+        use super::{MAX_CGROUP_DEPTH, cgroup_limit, cgroup_limit_files, effective_limit};
         let gb = 1usize << 30;
         assert_eq!(cgroup_limit(Some("4294967296\n"), None), Some(4 * gb));
         assert_eq!(cgroup_limit(Some("max\n"), Some("4294967296")), None, "v2 without a limit");
@@ -427,6 +472,27 @@ mod export_share_tests {
         assert_eq!(cgroup_limit(None, Some("2147483648")), Some(2 * gb));
         assert_eq!(cgroup_limit(Some("garbage"), None), None);
         assert_eq!(cgroup_limit(None, None), None);
+        // the process's own cgroup and those above it (review of PR #3499)
+        let v2 = cgroup_limit_files("0::/user.slice/user-1000.slice/app.scope\n");
+        assert_eq!(
+            v2.iter().filter_map(|f| f.0.as_deref()).collect::<Vec<_>>(),
+            [
+                "/sys/fs/cgroup/user.slice/user-1000.slice/app.scope/memory.max",
+                "/sys/fs/cgroup/user.slice/user-1000.slice/memory.max",
+                "/sys/fs/cgroup/user.slice/memory.max"
+            ]
+        );
+        let v1 = cgroup_limit_files("12:cpu,cpuacct:/docker/abc\n4:memory:/docker/abc\n");
+        assert_eq!(
+            v1,
+            [
+                (None, Some("/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes".to_string())),
+                (None, Some("/sys/fs/cgroup/memory/docker/memory.limit_in_bytes".to_string()))
+            ]
+        );
+        assert!(cgroup_limit_files("0::/\n").is_empty(), "the root: read as before");
+        assert!(cgroup_limit_files("0::/../etc\ngarbage\n4:memory\n").is_empty());
+        assert!(cgroup_limit_files(&format!("0::{}\n", "/a".repeat(100))).len() <= MAX_CGROUP_DEPTH);
         let limit = effective_limit(Some(16 * gb), Some(4 * gb));
         assert_eq!(limit, Some(4 * gb));
         assert_eq!(effective_limit(Some(16 * gb), None), Some(16 * gb));
