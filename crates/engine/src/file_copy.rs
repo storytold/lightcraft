@@ -34,6 +34,24 @@ mod tests {
         }
     }
 
+    struct ReaderThenFailure<R> {
+        inner: R,
+        first_read: bool,
+        first_read_len: usize,
+    }
+
+    impl<R: Read> Read for ReaderThenFailure<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.first_read {
+                self.first_read = false;
+                self.first_read_len = self.inner.read(buf)?;
+                Ok(self.first_read_len)
+            } else {
+                Err(io::Error::other("injected reader failure after data"))
+            }
+        }
+    }
+
     #[derive(Default)]
     struct RecordingWriter {
         writes: Vec<usize>,
@@ -113,6 +131,17 @@ mod tests {
     }
 
     #[test]
+    fn copy_buffer_propagates_reader_failure_after_data() {
+        let mut reader = ReaderThenFailure { inner: Cursor::new(b"first chunk"), first_read: true, first_read_len: 0 };
+        let mut writer = RecordingWriter::default();
+
+        let err = copy_buffered(&mut reader, &mut writer).unwrap_err();
+
+        assert!(reader.first_read_len > 0);
+        assert_eq!(err.to_string(), "injected reader failure after data");
+    }
+
+    #[test]
     fn copy_buffer_propagates_destination_write_failure() {
         let source = patterned_bytes((1 << 20) + 17);
         let mut reader = ChunkedReader { inner: Cursor::new(source), max_read: 8192 };
@@ -123,6 +152,18 @@ mod tests {
         assert_eq!(err.to_string(), "injected destination write failure");
         assert_eq!(writer.largest_write_request, 1 << 20);
         assert_eq!(writer.flush_calls, 0, "write failure must occur during io::copy, before explicit flush");
+    }
+
+    #[test]
+    fn copy_buffer_propagates_buffered_tail_write_failure() {
+        let source = b"small buffered tail";
+        let mut reader = Cursor::new(source);
+        let mut writer = RecordingWriter { fail_write: true, ..RecordingWriter::default() };
+
+        let err = copy_buffered(&mut reader, &mut writer).unwrap_err();
+
+        assert_eq!(err.to_string(), "injected destination write failure");
+        assert_eq!(reader.position(), source.len() as u64);
     }
 
     #[test]
