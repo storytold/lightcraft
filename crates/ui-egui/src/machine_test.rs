@@ -23,6 +23,15 @@ pub struct MachineTask {
     apply: bool,
 }
 
+impl MachineTask {
+    /// Stop the test (another card was chosen while it ran: what it measured no longer holds).
+    pub fn stop(&self) {
+        if let Some(c) = self._guard.cancel_flag() {
+            c.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Make the export settings take effect (lanes, the GPU for exports, the GPU's share).
 pub fn apply(st: &AppSettings) {
     lightcraft_engine::export::set_export_lanes(lanes(st));
@@ -276,6 +285,14 @@ mod tests {
         app.ui.settings.gpu_card = "some-card".into();
         app.logic(&ctx);
         assert!(app.ui.settings.machine_test.is_none(), "another editing card");
+        // a test running when the card changes is stopped: it measured the cards before
+        let (_tx, rx) = channel();
+        let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        let flag = _guard.cancel_flag().expect("a cancel flag");
+        app.machine = Some(MachineTask { rx, _guard, apply: true });
+        app.ui.settings.gpu_helper = "auto".into();
+        app.logic(&ctx);
+        assert!(flag.load(Ordering::Relaxed), "the running test is stopped");
     }
 
     /// Review of PR #3506: the second card's choice from the last test is applied (the test puts
