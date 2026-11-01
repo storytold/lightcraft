@@ -602,7 +602,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let seed = pu(F_GRAIN_SEED);
         var g = grain_noise(gx * sc, gy * sc, seed);
         g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
-        let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
+        var lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
+        if (hdr) {
+            // (as the CPU: above SDR white the weight below would grow huge and negative)
+            lum = clamp(lum, 0.0, 1.0);
+        }
         let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
         e = e + k;
     }

@@ -71,6 +71,8 @@ fn hdr_edit() -> DevelopSettings {
     s.effects.clarity = 15.0;
     s.detail.nr_luminance = 20.0;
     s.detail.sharpen_amount = 30.0;
+    // (review of PR #3511) grain weighs luminance clamped to SDR in HDR, as on the CPU
+    s.grain.amount = 25.0;
     s
 }
 

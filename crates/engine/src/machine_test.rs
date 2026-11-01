@@ -387,7 +387,11 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
                 Some(_) => return Err(bad(C, "paths must be a list of file paths")),
             };
             let quick = p.get("quick").and_then(Value::as_bool).unwrap_or(false);
-            // (an export running in the background would share the test's settings and skew it)
+            // (another test or an export running in the background would share the test's
+            // computer and settings and skew it)
+            if s.activity.list().iter().any(|t| t.kind == "benchmark") {
+                return Err(bad(C, "the computer is already being tested: wait for that test to finish"));
+            }
             if s.activity.list().iter().any(|t| t.kind == "export") {
                 return Err(bad(C, "wait for the export to finish, then test this computer"));
             }
@@ -476,6 +480,11 @@ mod tests {
         assert!(e.contains("wait for the export"), "{e}");
         assert!(s.activity.list().iter().all(|t| t.kind != "benchmark"), "no test row");
         drop(export);
+        // (review of PR #3499) nor while another test runs
+        let other = s.activity.start("benchmark", "Testing this computer", crate::activity::Cancel::No);
+        let e = s.execute("app.testMachine", &serde_json::json!({"quick": true, "apply": false})).unwrap_err().to_string();
+        assert!(e.contains("already being tested"), "{e}");
+        drop(other);
     }
 
     #[test]

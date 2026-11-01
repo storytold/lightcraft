@@ -160,6 +160,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let mut p = p.clone();
         if let Some(o) = p.as_object_mut() {
             o.insert("waitHelper".into(), json!(false));
+            // nor for the editing card's device, unless the request asks to
+            o.entry("wait").or_insert(json!(false));
         }
         return Some(app.session.execute("app.gpu", &p).map_err(|e| e.to_string()));
     }
