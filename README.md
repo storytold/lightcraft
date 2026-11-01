@@ -407,6 +407,7 @@ cargo xtask web --serve                                 # the same app in the br
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
 cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
 cargo xtask ci --quick                                  # only what your branch's changes can break (minutes)
+cargo xtask test -p lightcraft-raw --keep-going         # tests only, with ci's caps; every failing test binary
 ```
 
 `cargo xtask ci --quick` compares with the merge base of `origin/main` (`--base REF` for another)
@@ -426,6 +427,16 @@ unchanged. Explicit `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS`, `RUST_TEST_TH
 `NEXTEST_TEST_THREADS` settings override these defaults. The tests run under
 `cargo test`; `LIGHTCRAFT_NEXTEST=1` runs them under [cargo-nextest](https://nexte.st) instead (one
 process per test, slower here because each regenerates the demo scenes). Ordinary development commands keep their own settings.
+
+To run tests without the rest of `ci`, use `cargo xtask test` rather than `cargo test --workspace`,
+which runs one test per CPU in every test binary (on a 16-core machine the UI tests alone run out of
+memory) and takes no CI slot. It has `ci`'s caps and waits for its slot, builds every test target
+once (the same build as `ci`'s, so neither rebuilds the other) and runs each test binary, or those
+of the `-p PKG` packages, with whatever follows `--` (`cargo xtask test -p lightcraft-ui-egui --
+i18n::`). It stops at the first failing binary, as `ci` does; `--keep-going` runs them all and
+names each that failed. `--doc` adds the doctests; `LIGHTCRAFT_NEXTEST=1` applies here too, where
+`--test-threads N` and `--nocapture` become nextest's own options and only filters, `--exact`,
+`--skip`, `--ignored` and `--include-ignored` may follow `--`.
 
 **Release builds on memory-constrained machines:** [#1196](https://github.com/storytold/lightcraft/issues/1196)
 reports Arch/AUR release-link OOM kills on a 16 GB machine when the desktop and CLI build concurrently
