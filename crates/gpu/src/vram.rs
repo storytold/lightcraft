@@ -90,25 +90,37 @@ fn probe(name: &str, vendor: u32, device: u32) -> Option<u64> {
 #[cfg(any(windows, target_os = "linux"))]
 const QUERY_TIME: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// Bytes of a memory query's output kept (its answer is a few lines; review of PR #3499).
+#[cfg(any(windows, target_os = "linux"))]
+const MAX_QUERY_OUTPUT: u64 = 1 << 20;
+
 /// `cmd`'s standard output, when it exits successfully within `limit`; else it is killed and
 /// `None` (the caller falls back to another source or a safe size).
 #[cfg(any(windows, target_os = "linux"))]
 fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
     // read on a thread of its own, so a full pipe can't stop the query from exiting; its result
     // is waited for within the same deadline (a grandchild holding the pipe open can't hold us:
-    // review of PR #3499)
+    // review of PR #3499). At most MAX_QUERY_OUTPUT is kept; the rest is drained and dropped.
     let (otx, orx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("lc-gpu-query".into())
-        .spawn(move || {
-            let mut b = Vec::new();
-            let _ = stdout.read_to_end(&mut b);
-            let _ = otx.send(b);
-        })
-        .ok()?;
+    let reader = std::thread::Builder::new().name("lc-gpu-query".into()).spawn(move || {
+        let mut b = Vec::new();
+        let _ = (&mut stdout).take(MAX_QUERY_OUTPUT).read_to_end(&mut b);
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        let _ = otx.send(b);
+    });
+    if reader.is_err() {
+        // (no reader: the query is not left running; review of PR #3506)
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
     let deadline = std::time::Instant::now() + limit;
     let status = loop {
         match child.try_wait() {
@@ -376,6 +388,13 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
         let out = output_within(cmd(&["echo 8192"]), std::time::Duration::from_secs(10)).unwrap();
         assert!(String::from_utf8_lossy(&out).contains("8192"));
+        // a flood of output is cut at MAX_QUERY_OUTPUT, and the query still finishes
+        #[cfg(windows)]
+        let flood = cmd(&["for /L %i in (1,1,40000) do @echo 0123456789012345678901234567890123456789"]);
+        #[cfg(not(windows))]
+        let flood = cmd(&["yes 0123456789012345678901234567890123456789 | head -n 40000"]);
+        let out = output_within(flood, std::time::Duration::from_secs(60)).unwrap();
+        assert_eq!(out.len() as u64, MAX_QUERY_OUTPUT);
     }
 
     #[test]
