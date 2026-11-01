@@ -1087,8 +1087,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // The new record takes only what the bytes determine from the photo with the same
             // bytes, never that photo's own state: not its Recently Deleted (#2589), virtual copy,
             // edits, history, versions, ratings, capture time or the metadata a person writes. Its
-            // metadata and capture time are what its own file gives it, as a file import reads them
-            // (copyright, creator…); the catalog's capture time, when it has one, applies on top.
+            // metadata and capture time are what its own file and XMP sidecar give it, as a file
+            // import reads them (copyright, caption, creator…); the catalog's apply on top.
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
             let mut p = Photo::new(
                 s.catalog.alloc_photo_id(),
@@ -1107,25 +1107,27 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.embedded_lens = duplicate.embedded_lens;
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
-            if let Some(file) = file {
-                p.meta = file.meta.clone();
-                p.captured = file.captured.clone();
-            } else {
+            let file = file.cloned().unwrap_or_else(|| {
                 // (the file wasn't read: only the exposure description, which no command edits;
                 // not GPS, which placing a photo on the map does, nor the capture time, which
                 // Edit Capture Time does)
                 let m = &duplicate.meta;
-                p.meta.camera = m.camera.clone();
-                p.meta.lens = m.lens.clone();
-                p.meta.focal_mm = m.focal_mm;
-                p.meta.aperture = m.aperture;
-                p.meta.shutter = m.shutter.clone();
-                p.meta.iso = m.iso;
-                p.meta.focus = m.focus.clone();
-            }
-            // the settings a file import gives it (as-shot white balance, embedded lens
-            // corrections, the default preset); the catalog's settings apply on top
-            crate::import::apply_import_defaults(s, &mut p);
+                let meta = lightcraft_catalog::Meta {
+                    camera: m.camera.clone(),
+                    lens: m.lens.clone(),
+                    focal_mm: m.focal_mm,
+                    aperture: m.aperture,
+                    shutter: m.shutter.clone(),
+                    iso: m.iso,
+                    focus: m.focus.clone(),
+                    ..Default::default()
+                };
+                crate::import::FileFacts { meta, ..Default::default() }
+            });
+            // as a file import of it: its file's metadata and capture time, the import defaults
+            // (as-shot white balance, embedded lens corrections, the default preset), its XMP
+            // sidecar; the catalog's settings and metadata apply on top
+            crate::import::start_from_file(s, &mut p, file, &now);
             p
         } else {
             let id = s.catalog.alloc_photo_id();

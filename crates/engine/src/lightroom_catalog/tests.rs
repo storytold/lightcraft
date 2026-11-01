@@ -212,6 +212,7 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
                 file: Some(Box::new(crate::import::FileFacts {
                     meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
                     captured: None,
+                    sidecar: None,
                 })),
             }],
             ..Default::default()
@@ -352,6 +353,46 @@ fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() 
     assert_eq!(m.gps, None, "nothing from the other photo's record");
     // the catalog row has no capture time: the file's, not the other photo's edited one
     assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A content duplicate's XMP sidecar goes into its new record as it does for a file import of it
+/// (caption, copyright…) when the catalog doesn't restate them, also when its file has a capture
+/// time of its own (#2589).
+#[test]
+fn a_content_duplicate_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 /// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
