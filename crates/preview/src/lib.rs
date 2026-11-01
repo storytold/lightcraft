@@ -152,6 +152,20 @@ impl PreviewCache {
         drop(current);
     }
 
+    /// [`Self::put_memory`] for a job that captured `generation`: nothing is kept once the cache
+    /// was cleared (or retired) after that, so a job started before Discard Preview Cache can't
+    /// put its picture back.
+    pub fn put_memory_at(&self, generation: u64, key: Hash128, img: Arc<Rgba8>) {
+        // (the guard is held through the insertion: a clear can't come between the look and the insertion)
+        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *current != Some(generation) {
+            return;
+        }
+        let c = cost(&img);
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img, c);
+        drop(current);
+    }
+
     pub fn put(&self, key: Hash128, img: Arc<Rgba8>) {
         let _ = self.put_at(self.generation(), key, img);
     }

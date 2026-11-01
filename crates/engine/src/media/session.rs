@@ -353,9 +353,11 @@ impl crate::Session {
         let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(id.0).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
-        let embedded_cache = embedded
-            .as_ref()
-            .map(|(_, _, edge)| (self.media.rendered.clone(), Hasher128::new().str(&content_key(&p)).str("embedded").u64(*edge as u64).finish()));
+        let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
+            let cache = self.media.rendered.clone();
+            let generation = cache.generation();
+            (cache, Hasher128::new().str(&content_key(&p)).str("embedded").u64(*edge as u64).finish(), generation)
+        });
         Some(QuickJob {
             request_id: 0,
             photo: id,
@@ -408,7 +410,7 @@ impl crate::Session {
             embedded: Some((path, l, edge)),
             // the camera JPEG is this thumbnail (an unedited raw): kept with the rendered ones, under
             // a key of its own, so the folder's next visit reads it from the thumbnail cache
-            embedded_cache: job.cache.as_ref().map(|(c, k)| (c.clone(), embedded_thumb_key(*k))),
+            embedded_cache: job.cache.as_ref().map(|(c, k)| (c.clone(), embedded_thumb_key(*k), c.generation())),
             embedded_on_disk: true,
             minimum_embedded_edge: None,
             small: Some(Box::new(job.clone())),
