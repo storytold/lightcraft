@@ -317,5 +317,12 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "Signed in as {name}": "{name}としてサインイン中",
+  "Signed in to Flickr as {name}": "{name}としてFlickrにサインインしました",
+  "Upload {n} photo{} to Flickr as {name}": "{name}として{n}枚の写真をFlickrにアップロード{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "{total}枚中{ok}枚をFlickrにアップロードしました{:.0}",
+  " · {} not added to the album": " · {}枚はアルバムに追加されませんでした",
+  " · the album couldn't be made: {}": " · アルバムを作成できませんでした：{}",
+  " · new album “{}”": " · 新しいアルバム「{}」"
 }

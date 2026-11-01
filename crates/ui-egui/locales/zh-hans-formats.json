@@ -317,5 +317,12 @@
   "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
-  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "Signed in as {name}": "已登录：{name}",
+  "Signed in to Flickr as {name}": "已以 {name} 身份登录 Flickr",
+  "Upload {n} photo{} to Flickr as {name}": "以 {name} 身份上传 {n} 张照片到 Flickr{0:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "已上传 {total} 张中的 {ok} 张照片到 Flickr{0:.0}",
+  " · {} not added to the album": " · {} 张未加入相册",
+  " · the album couldn't be made: {}": " · 无法创建相册：{}",
+  " · new album “{}”": " · 新相册“{}”"
 }

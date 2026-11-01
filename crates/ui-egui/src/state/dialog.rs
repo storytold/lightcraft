@@ -39,6 +39,10 @@ pub enum Dialog {
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
+    /// Upload the selected photos to Flickr (File ▸ Share ▸ Flickr…).
+    FlickrUpload {
+        opts: crate::flickr::UploadDialog,
+    },
     /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
         settings: lightcraft_engine::slideshow_export::ExportSettings,
@@ -233,7 +237,7 @@ pub enum Dialog {
     Merge {
         opts: crate::merge::MergeDialog,
     },
-    /// Settings (preferences): `tab` = general | import | performance | interface.
+    /// Settings (preferences): `tab` = one of `dialogs::settings::TABS`.
     Settings {
         tab: String,
     },

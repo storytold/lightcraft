@@ -118,6 +118,7 @@ impl LightcraftApp {
             export: None,
             tasks: Default::default(),
             last_export_result: None,
+            flickr: Default::default(),
             slideshow_export_reported: true,
             hover_preview: None,
             window_is_fullscreen: false,

@@ -61,6 +61,7 @@ pub struct TextField<'a> {
     align: Option<egui::Align>,
     margin: Option<egui::Margin>,
     rows: Option<usize>,
+    password: bool,
 }
 
 /// The egui id of the field registered as `widget`, to give it the focus (⌘F to search).
@@ -92,6 +93,7 @@ impl<'a> TextField<'a> {
             align: None,
             margin: None,
             rows: None,
+            password: false,
         }
     }
 
@@ -150,6 +152,12 @@ impl<'a> TextField<'a> {
         self
     }
 
+    /// Show dots instead of the text (a secret); egui never copies it to the clipboard.
+    pub fn password(mut self, on: bool) -> Self {
+        self.password = on;
+        self
+    }
+
     /// Select all the text when the field takes focus, so typing replaces it (names, numbers).
     pub fn select_on_focus(mut self, on: bool) -> Self {
         self.select_on_focus = on;
@@ -185,6 +193,8 @@ impl<'a> TextField<'a> {
         if let Some(action) = memo.action.take() {
             ui.memory_mut(|m| m.request_focus(id));
             match action {
+                // (never offered for a password; ignored if it arrives anyway)
+                Action::Cut | Action::Copy if self.password => {}
                 Action::Cut => ui.input_mut(|i| i.events.push(egui::Event::Cut)),
                 Action::Copy => ui.input_mut(|i| i.events.push(egui::Event::Copy)),
                 // only the host can read the clipboard: it answers with a paste event
@@ -239,6 +249,9 @@ impl<'a> TextField<'a> {
         }
         if let Some(margin) = self.margin {
             edit = edit.margin(margin);
+        }
+        if self.password {
+            edit = edit.password(true);
         }
         if let Some(rows) = self.rows {
             edit = edit.desired_rows(rows);
@@ -302,7 +315,7 @@ impl<'a> TextField<'a> {
         memo.menu_open = !(response.secondary_clicked() && crate::widgets::carrying(ui.ctx()))
             && egui::Popup::context_menu(&response)
                 .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
-                .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
+                .show(|ui| menu(ui, self.widget, id, self.text, self.password, &mut memo.action))
                 .is_some();
 
         let mut ending = None;
@@ -390,9 +403,11 @@ fn has_selection(ctx: &egui::Context, id: egui::Id) -> bool {
 }
 
 /// The field's context menu: Cut, Copy, Paste, Select All, with the keyboard's shortcuts beside them.
-fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, action: &mut Option<Action>) {
+/// In a password field Cut and Copy are greyed out: egui never puts a secret on the clipboard, so
+/// Copy would do nothing and Cut would only delete it.
+fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, password: bool, action: &mut Option<Action>) {
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let selected = has_selection(ui.ctx(), id);
+    let selected = has_selection(ui.ctx(), id) && !password;
     let items = [
         (Action::Cut, "cut", "Cut", "Cmd+X", selected),
         (Action::Copy, "copy", "Copy", "Cmd+C", selected),

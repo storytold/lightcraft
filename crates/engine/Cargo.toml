@@ -48,6 +48,7 @@ lightcraft-segment = { workspace = true, optional = true }
 lightcraft-fetch = { workspace = true }
 # capture-time parsing for face recognition (native only)
 chrono = { workspace = true }
+lightcraft-flickr = { workspace = true }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.

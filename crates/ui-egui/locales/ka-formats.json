@@ -320,5 +320,12 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  "Signed in as {name}": "შესული ხართ როგორც {name}",
+  "Signed in to Flickr as {name}": "Flickr-ში შესული ხართ როგორც {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Flickr-ზე ატვირთვა როგორც {name} – ფოტო: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Flickr-ზე ატვირთულია ფოტო: {ok} / {total}{:.0}",
+  " · {} not added to the album": " · ალბომს არ დაემატა: {}",
+  " · the album couldn't be made: {}": " · ალბომის შექმნა ვერ მოხერხდა: {}",
+  " · new album “{}”": " · ახალი ალბომი „{}“"
 }

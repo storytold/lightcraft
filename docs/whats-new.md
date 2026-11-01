@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Share to Flickr
+- Connect to Flickr once in Settings ▸ Accounts, step by step: open Flickr's API key page, paste the free key it gives
+  you and click Continue; Flickr's approval page opens in your browser, and pasting the code it shows finishes the
+  sign-in (official builds can carry their own key and skip that step). LightCraft never sees your password; the
+  sign-in is kept on this computer (not in the library) until you sign out.
+- File ▸ Share ▸ Flickr… uploads the selected photos with their edits as JPEGs: choose the size (1024, 2048,
+  4096 px or full size), quality and who can see them (public, friends, family, friends & family, only you). Titles
+  come from each photo's title (else its file name), the caption becomes the description and keywords become tags;
+  location is left out unless you ask for it. Put them in one of your Flickr albums, or make a new one around them (none by default). The
+  upload runs in the background in the activity stack, with ✕.
+- Agents and the CLI use `flickr.signIn`, `flickr.completeSignIn` and `flickr.upload` (see docs/flickr.md).
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

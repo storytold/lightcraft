@@ -185,7 +185,7 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
         ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
         ("cloud", Icon::Cloud, cloud_tip, ""),
         ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
-        ("share", Icon::Share, "Export", "dialog.export"),
+        ("share", Icon::Share, "Export and share", ""),
         ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
         ("bell", Icon::Bell, "Activity", "panel.activity"),
     ] {
@@ -218,9 +218,31 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
         {
             app.toast_error(ui.ctx(), e);
         }
+        if id == "share" {
+            egui::Popup::menu(&resp).show(|ui| share_menu(app, ui));
+        }
         x -= 40.0;
     }
     x
+}
+
+/// The top bar's share icon: Export…, then each place photos can be shared to.
+fn share_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let can = app.session.active().is_some();
+    for (id, label, cmd) in [("shareExport", "Export…", "dialog.export"), ("shareFlickr", "Share to Flickr…", "dialog.flickrUpload")] {
+        if id == "shareFlickr" {
+            ui.separator();
+        }
+        let enabled = can && crate::menus::ui_enabled(app, cmd);
+        let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
+        register(ui, format!("menu:{id}"), r.rect);
+        if r.clicked() {
+            if let Err(e) = app.run(cmd, json!({})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    }
 }
 
 /// The appearance icon at `x`, with its theme-favourites menu.

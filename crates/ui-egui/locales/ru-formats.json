@@ -317,5 +317,12 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "Signed in as {name}": "Вход выполнен: {name}",
+  "Signed in to Flickr as {name}": "Вход во Flickr выполнен: {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Загрузить во Flickr фото ({n}) как {name}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Загружено во Flickr фото: {ok} из {total}{:.0}",
+  " · {} not added to the album": " · не добавлено в альбом: {}",
+  " · the album couldn't be made: {}": " · не удалось создать альбом: {}",
+  " · new album “{}”": " · новый альбом «{}»"
 }
