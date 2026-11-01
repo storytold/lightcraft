@@ -862,5 +862,32 @@ fn upright_hint_asks_for_the_lines_guided_needs() {
     assert_eq!(guided_hint(Upright::Full), "two lines along what should be vertical and two along what should be horizontal");
     assert_eq!(guided_hint(Upright::Vertical), "two lines along what should be vertical");
     assert_eq!(guided_hint(Upright::Level), "a line along what should be level or upright");
-    assert_eq!(guided_hint(Upright::Auto), "two lines along what should be vertical");
+    assert_eq!(guided_hint(Upright::Auto), "two lines along what should be vertical, or one line along what should be level");
+}
+
+/// What the hints promise is what Guided does: one vertical and one horizontal guide only level (the horizontal one
+/// becomes level, the vertical one keeps its lean, so Full's hint asks for two of each), and the single level line
+/// Auto's hint offers fixes the horizon Auto leaves alone for being more than 5° off.
+#[test]
+fn solve_guided_levels_one_guide_of_each_family_only() {
+    use crate::upright::{Analysis, Reject, Segment, shortfall, solve_guided};
+    use lightcraft_develop::Upright;
+    let vertical = Segment { a: Point::new(0.1, -0.5), b: Point::new(0.19, 0.5) };
+    let horizontal = Segment { a: Point::new(-0.5, 0.1), b: Point::new(0.5, 0.12) };
+    let h = solve_guided(&[vertical, horizontal]);
+    let (p, q) = (h.apply(horizontal.a), h.apply(horizontal.b));
+    assert!((p.y - q.y).abs() < 1e-9, "the horizontal guide is levelled: {p:?} {q:?}");
+    let (p, q) = (h.apply(vertical.a), h.apply(vertical.b));
+    assert!((p.x - q.x).abs() > 0.03, "the vertical guide keeps its lean (no full correction): {p:?} {q:?}");
+    // a horizon 10° off: too tilted for Auto, levelled by the one line its hint asks for
+    let (s, c) = 10f64.to_radians().sin_cos();
+    let horizon = Segment { a: Point::new(-0.4 * c, -0.4 * s), b: Point::new(0.4 * c, 0.4 * s) };
+    let tilted = Analysis {
+        horizontal: vec![horizon, Segment { a: Point::new(horizon.a.x, 0.2 + horizon.a.y), b: Point::new(horizon.b.x, 0.2 + horizon.b.y) }],
+        ..Analysis::default()
+    };
+    assert_eq!(shortfall(Upright::Auto, &tilted), Some(Reject::TooTilted.message()));
+    let h = solve_guided(&[horizon]);
+    let (p, q) = (h.apply(horizon.a), h.apply(horizon.b));
+    assert!((p.y - q.y).abs() < 1e-9, "one level guide fixes it: {p:?} {q:?}");
 }

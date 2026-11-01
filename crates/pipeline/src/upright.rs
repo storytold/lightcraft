@@ -700,11 +700,14 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
 
 /// What to draw in Guided when `mode` falls short ("Try Guided: draw …"). Guided works from the guides alone, not
 /// from lines the mode found, and one guide of a kind only levels ([`solve_guided`]): Full needs two of each
-/// family, Vertical two vertical ones, and levelling one line.
+/// family, Vertical two vertical ones, and levelling one line. Auto falls short either for its verticals (two
+/// vertical guides) or for a horizon tilted more than it levels ([`Reject::TooTilted`]: one level guide), so it names
+/// both.
 pub fn guided_hint(mode: Upright) -> &'static str {
     match mode {
         Upright::Full => "two lines along what should be vertical and two along what should be horizontal",
         Upright::Level => "a line along what should be level or upright",
+        Upright::Auto => "two lines along what should be vertical, or one line along what should be level",
         _ => "two lines along what should be vertical",
     }
 }
