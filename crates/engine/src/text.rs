@@ -57,6 +57,19 @@ pub fn cell_glyphs(font: &FontRef<'_>, data: &harfrust::ShaperData, text: &str, 
     Some(glyphs)
 }
 
+/// NFC, except CJK compatibility ideographs, which NFC would swap for their unified forms.
+fn compose(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let compatibility = |c: char| matches!(c, '\u{F900}'..='\u{FAFF}' | '\u{2F800}'..='\u{2FA1F}');
+    let mut out = String::with_capacity(text.len());
+    for part in text.split_inclusive(compatibility) {
+        let kept = part.chars().next_back().filter(|&c| compatibility(c));
+        out.extend(kept.and_then(|c| part.strip_suffix(c)).unwrap_or(part).nfc());
+        out.extend(kept);
+    }
+    out
+}
+
 /// A string laid out at one size: its glyphs relative to the box's top-left corner and the box's
 /// size in pixels (lines are `px` apart; vertical text: columns `px` wide, right to left).
 pub struct TextLayout {
@@ -71,7 +84,6 @@ impl TextLayout {
     /// `text` (cut at [`MAX_CHARS`]) at `px` pixels a line; `None` when there is nothing to draw
     /// (empty text, a non-finite or non-positive size).
     pub fn new(text: &str, px: f32, vertical: bool, craft: &'static [crate::fonts::CraftFont]) -> Option<TextLayout> {
-        use unicode_normalization::UnicodeNormalization;
         use unicode_segmentation::UnicodeSegmentation;
         if text.is_empty() || !px.is_finite() || px <= 0.0 {
             return None;
@@ -81,7 +93,7 @@ impl TextLayout {
             None => text,
         };
         // macOS file names are often decomposed (NFD); the layout below draws one glyph per char
-        let composed: String = text.nfc().collect();
+        let composed = compose(text);
         let text = composed.as_str();
         let fonts = faces(craft);
         let latin = fonts.first()?.clone();
@@ -292,6 +304,14 @@ mod tests {
             return;
         }
         assert_draws_composed("제주도 바다 여행.jpg", CRAFT_FONTS);
+    }
+
+    #[test]
+    fn compatibility_ideographs_keep_their_code_points() {
+        use unicode_normalization::UnicodeNormalization;
+        let nfd = |s: &str| s.nfd().collect::<String>();
+        let text = format!("\u{FA10}{} \u{2F800}{}\u{F900}", nfd("본 제주"), nfd("Ọ"));
+        assert_eq!(compose(&text), "\u{FA10}본 제주 \u{2F800}Ọ\u{F900}");
     }
 
     #[test]
