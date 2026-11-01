@@ -291,6 +291,7 @@
   "Auto-Tag from Tracklog…": "Автопривязка по треку…",
   "Add Locations": "Добавить места",
   "Automatic": "Автоматически",
+  "Tested": "Проверено",
   "tested": "проверено",
   "Automatic renders the Detail view at the size it is shown, up to the photo's own pixels. Choose a size to cap it: smaller is faster.": "Автоматический режим рендерит «Детализацию» в отображаемом размере, вплоть до собственных пикселей фото. Выберите размер, чтобы ограничить: меньше — быстрее.",
   "Automatically Write Changes into XMP": "Автоматически записывать изменения в XMP",

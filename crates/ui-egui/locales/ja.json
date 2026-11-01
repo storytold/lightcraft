@@ -123,6 +123,7 @@
   "Auto-Tag from Tracklog…": "GPS軌跡から位置情報を付ける…",
   "Add Locations": "位置情報を追加",
   "Automatic": "自動",
+  "Tested": "テスト済み",
   "tested": "テスト済み",
   "Automatically Write Changes into XMP": "変更をXMPに自動保存",
   "Automatically write changes into XMP sidecars": "変更をXMPサイドカーファイルに自動保存",
