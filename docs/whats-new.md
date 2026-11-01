@@ -2,6 +2,22 @@
 
 ## 2026-10-30
 
+### A damaged Lightroom catalog imports everything it can
+- A Lightroom catalog with a few damaged records (two images with the same id, a virtual copy whose master
+  is gone or is itself a copy, keywords or collections whose parents loop) no longer fails the whole import: those
+  images are skipped and counted in the result window, and a looping keyword or collection is imported with a
+  warning. So is a second collection with the id of another (its photos go to the first), and a capture time that
+  isn't a date is left out with a warning. A catalog that can't be read at all now says which file and what is wrong ("the Lightroom catalog … is
+  damaged: table Adobe_images can't be read: …") instead of "invalid parameters".
+
+### Lightroom catalogs import into libraries on exFAT drives
+- Importing a Lightroom catalog into a library on an exFAT or FAT drive (or a network share without hard links) no
+  longer fails with "cannot atomically publish archive: Operation not supported": the recovery archive in the
+  library's `Interop` folder is saved another way that still never replaces an existing archive. When the archive
+  can't be saved at all, the import goes on and warns, naming the folder, as documented. An `Interop` folder that can't
+  be written to at all (or is a link) is refused before any photo is imported, naming it, since the import index must
+  be saved there; a failed import-index write now names the file instead of reporting "invalid parameters".
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 

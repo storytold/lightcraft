@@ -186,7 +186,7 @@ fn spawn_inspect(
             let result = lightcraft_engine::guard::catch("Lightroom inspect", || {
                 lightcraft_engine::lightroom_catalog::read_with_progress(&path, &cancel, &progress.catalog_total, &progress.catalog_done)
             })
-            .and_then(|r| r.map(inspect_report));
+            .and_then(|r| r.map(inspect_report).map_err(|e| e.to_string()));
             let _ = tx.send(Message::Inspected(result));
             ctx.request_repaint();
         })
@@ -348,13 +348,21 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
             in_trash = in_trash
         ));
     }
-    // images whose catalog records are incomplete come as data (`skipped`), said here in the UI
-    // language; their ids are in the report for the CLI and agents
-    let skipped = report["skipped"].as_array().map_or(0, Vec::len);
-    if skipped > 0 {
+    // images whose catalog records are incomplete or contradictory come as data (`skipped`), said
+    // here in the UI language; their ids and reasons are in the report for the CLI and agents
+    let skipped = report["skipped"].as_array().map_or(&[][..], Vec::as_slice);
+    let contradictory = skipped.iter().filter(|s| matches!(s["reason"].as_str(), Some("duplicateId" | "masterIsCopy"))).count();
+    let incomplete = skipped.len() - contradictory;
+    if incomplete > 0 {
         details.push(crate::i18n::tr_format!(
             "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-            skipped = skipped
+            skipped = incomplete
+        ));
+    }
+    if contradictory > 0 {
+        details.push(crate::i18n::tr_format!(
+            "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).",
+            skipped = contradictory
         ));
     }
     if let Some(warning) = value.get("indexWarning").and_then(Value::as_str) {
@@ -752,6 +760,24 @@ mod tests {
         assert_eq!(en.len(), 4, "{en:?}");
         assert_eq!(en[1], "3 catalog images were not imported because their records in the catalog are incomplete.");
         assert_eq!(&en[2..], ["w1", "w2"]);
+    }
+
+    /// Images skipped for contradictory records (a damaged catalog, #1588) are their own line; a
+    /// virtual copy whose master is gone is incomplete, like a missing file record.
+    #[test]
+    fn contradictory_records_are_their_own_line() {
+        let value = json!({"report": {"photos": 3, "collections": 0, "skipped": [
+            {"image": 7, "reason": "missingMaster"},
+            {"image": 8, "reason": "duplicateId"},
+            {"image": 9, "reason": "masterIsCopy"},
+        ]}});
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
+            panic!("not a Lightroom result")
+        };
+        assert_eq!(details.len(), 3, "{details:?}");
+        assert_eq!(details[1], "1 catalog images were not imported because their records in the catalog are incomplete.");
+        assert!(details[2].starts_with("2 catalog images were not imported because their records in the catalog contradict others"), "{details:?}");
     }
 
     #[test]

@@ -265,6 +265,7 @@
   "{size} GB": "{size} Gt",
   "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "Katalogin kuvia tämän kirjaston Äskettäin poistetuissa: {in_trash}. Ne jäävät sinne; palauta ne Äskettäin poistetuista nähdäksesi ne.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{s} s of AV1 video": "{s} s AV1-videota",
   "{verb} {n} Photo{}": "{verb} kuvia: {n}{:.0}",
