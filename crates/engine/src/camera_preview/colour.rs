@@ -43,7 +43,7 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
 /// `lens` is the file's own lens-correction warp ([`lens_geometry`], read before the caller removes it from
 /// `OpcodeList3`): the camera applied it to its JPEG, so the sensor proxy is warped the same way before pairing.
 /// `embedded` is the file's embedded lens correction: its vignetting is applied to the sensor proxy of every fit, as
-/// the render applies it.
+/// the render applies it. Its resolved warp may also align CR3 correspondences, subject to geometry gates.
 pub(crate) fn starting_colour(
     raw: &mut RawImage,
     bytes: &[u8],
@@ -131,11 +131,22 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
     }
+    let correction = if raw.format == RawFormat::Cr3 { crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(bytes)) } else { None };
+    starting_colour_tags_with_correction(raw, bytes, correction.as_ref())
+}
+
+/// Build DNG colour tags using `correction` only for CR3 camera-JPEG correspondence geometry.
+pub(super) fn starting_colour_tags_with_correction(
+    raw: &mut RawImage,
+    bytes: &[u8],
+    correction: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<ColorData> {
+    let correction = correction.filter(|_| raw.format == RawFormat::Cr3);
     // the white the source shows, decided before `starting_colour` may fill in measured matrices
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None);
+    let (_, t, look) = starting_colour(raw, bytes, None, correction);
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 
