@@ -72,6 +72,11 @@ pub type Result<T> = std::result::Result<T, CatalogError>;
 /// Maximum History entries kept per photo.
 pub const HISTORY_LIMIT: usize = 200;
 
+/// Pre-v10 `SetCaptured` records lacked the `manual` field and were only emitted for manual user edits.
+const fn default_pre_v10_manual() -> bool {
+    true
+}
+
 /// Every catalog mutation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -181,6 +186,8 @@ pub enum Op {
     SetCaptured {
         id: PhotoId,
         captured: Option<String>,
+        #[serde(default = "default_pre_v10_manual")]
+        manual: bool,
     },
     /// Assisted culling scores.
     SetAnalysis {
@@ -1027,14 +1034,16 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetAnalysis { id, analysis: std::mem::replace(&mut p.analysis, analysis) }
             }
-            Op::SetCaptured { id, captured } => {
+            Op::SetCaptured { id, captured, manual } => {
                 if let Some(c) = &captured
                     && stacks::iso_seconds(c).is_none()
                 {
                     return Err(CatalogError::Invalid(format!("not a date: {c}")));
                 }
                 let p = self.photo_mut(id)?;
-                Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
+                let old_captured = std::mem::replace(&mut p.captured, captured);
+                let old_manual = std::mem::replace(&mut p.captured_manual, manual);
+                Op::SetCaptured { id, captured: old_captured, manual: old_manual }
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;
@@ -1177,6 +1186,18 @@ impl Catalog {
         Ok(c)
     }
 
+    /// Catalogs created before format v10 didn't track whether capture times were file-derived
+    /// or manual user edits. Mark existing capture times as manual on upgrade so reloads preserve
+    /// their stored values. Local browsed photos are not part of the library and keep their
+    /// file-derived provenance.
+    pub fn mark_captured_manual_for_upgrade(&mut self) {
+        for p in self.photos.values_mut() {
+            if !p.local && p.captured.is_some() {
+                Arc::make_mut(p).captured_manual = true;
+            }
+        }
+    }
+
     /// Make a catalog read from a snapshot hold together where a damaged or hand-edited file left
     /// it inconsistent, so nothing that relies on it can fail (code indexes stacks by the ids it
     /// finds in them, and walks folders up to the top): every photo, album and stack carries the
@@ -1191,6 +1212,10 @@ impl Catalog {
             if p.id != *id {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
                 Arc::make_mut(p).id = *id;
+            }
+            if p.local && p.captured_manual {
+                changed.push(format!("local photo {} cleared spurious captured_manual", p.id.0));
+                Arc::make_mut(p).captured_manual = false;
             }
             if p.history.len() > HISTORY_LIMIT {
                 let n = Arc::make_mut(p).trim_history();

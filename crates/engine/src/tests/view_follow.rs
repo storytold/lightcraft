@@ -65,8 +65,10 @@ fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
     // (ops a command would refuse here, or on a photo that is gone, are edits that were not made: also a case)
     match dice.roll(9) {
         0 => {
-            let _ =
-                s.commit("Capture time", Op::SetCaptured { id: one, captured: Some(format!("2025-{:02}-{:02}T08:00:00", 1 + n % 12, 1 + n % 28)) });
+            let _ = s.commit(
+                "Capture time",
+                Op::SetCaptured { id: one, captured: Some(format!("2025-{:02}-{:02}T08:00:00", 1 + n % 12, 1 + n % 28)), manual: false },
+            );
             return;
         }
         1 => {

@@ -1401,7 +1401,7 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
 
     // Read Metadata from File fills in a missing capture time too
     let id = sample.id;
-    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None, manual: false }).unwrap();
     std::fs::copy(src.join("sample.jpg.xmp"), format!("{path}.xmp")).unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();

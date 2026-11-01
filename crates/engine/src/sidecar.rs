@@ -900,7 +900,7 @@ impl Session {
             Op::SetMeta { id, meta: Box::new(q.meta.clone()) },
         ];
         if q.captured != p.captured {
-            ops.push(Op::SetCaptured { id, captured: q.captured.clone() });
+            ops.push(Op::SetCaptured { id, captured: q.captured.clone(), manual: false });
         }
         if develop_changed {
             ops.extend(self.develop_op(id, (*q.develop).clone(), "Read Metadata from File"));

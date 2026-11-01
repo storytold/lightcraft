@@ -834,7 +834,7 @@ fn persistent_reimport_keeps_copy_and_collection_ids_and_capture_time() {
     s.close_library().unwrap();
     s.open_library(&dir, false).unwrap();
     let id = PhotoId(first["mapping"]["1"].as_u64().unwrap());
-    s.commit("Changed time", Op::SetCaptured { id, captured: None }).unwrap();
+    s.commit("Changed time", Op::SetCaptured { id, captured: None, manual: true }).unwrap();
     let second = apply(&mut s, data, true).unwrap();
     assert_eq!(first["mapping"], second["mapping"]);
     assert_eq!(first["imported"], 2);
@@ -844,6 +844,17 @@ fn persistent_reimport_keeps_copy_and_collection_ids_and_capture_time() {
     assert_eq!(s.catalog.len(), 2);
     assert_eq!(s.catalog.albums().count(), 2);
     assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
+    assert!(!s.catalog.photo(id).unwrap().captured_manual, "changed capture time clears manual provenance");
+
+    // When reimporting with a matching capture time, an existing manual provenance is preserved
+    s.commit("Manual edit matching time", Op::SetCaptured { id, captured: Some("2024-01-16T12:34:56".into()), manual: true }).unwrap();
+    assert!(s.catalog.photo(id).unwrap().captured_manual);
+    let mut data_matching = sample();
+    data_matching.collections.reverse();
+    apply(&mut s, data_matching, true).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
+    assert!(s.catalog.photo(id).unwrap().captured_manual, "matching capture time preserves manual provenance");
+
     s.close_library().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }

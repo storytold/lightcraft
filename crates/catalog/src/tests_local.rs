@@ -116,7 +116,7 @@ fn any_user_change_keeps_a_record() {
         ("gps", set(|p| p.meta.gps = Some((1.0, 2.0)))),
         ("copyright", set(|p| p.meta.copyright = "© me".into())),
         ("creator edit", set(|p| p.meta.creator = "Me".into())),
-        ("capture time", op(|id| Op::SetCaptured { id, captured: Some("2020-01-01T00:00:00".into()) })),
+        ("capture time", op(|id| Op::SetCaptured { id, captured: Some("2020-01-01T00:00:00".into()), manual: false })),
         ("rename", set(|p| p.file_name = "renamed.JPG".into())),
         ("culling", op(|id| Op::SetAnalysis { id, analysis: Some(Analysis::default()) })),
         ("deleted", op(|id| Op::SetDeleted { id, deleted: true })),

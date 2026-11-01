@@ -48,7 +48,7 @@ fn a_month_triangle_names_its_year() {
     let mut session = lightcraft_engine::Session::with_demo();
     let ids: Vec<_> = session.catalog.photos().map(|p| p.id).take(2).collect();
     for (id, captured) in ids.into_iter().zip(["2025-03-05T10:00:00", "2026-03-05T10:00:00"]) {
-        session.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(captured.into()) }).expect("the capture time is set");
+        session.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(captured.into()), manual: false }).expect("the capture time is set");
     }
     let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     app.ui.left_panel = true;

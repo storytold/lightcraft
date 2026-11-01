@@ -601,7 +601,7 @@ fn capture_time_shift_counts_photos_whose_time_does_not_read() {
     let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
     let (good, bad) = (ids[0], ids[1]);
     for (id, t) in [(good, "2026-01-01T10:00:00"), (bad, "2026-01-01T10:00:00 and more")] {
-        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()) }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()), manual: false }).unwrap();
     }
     let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [good.0, bad.0], "hours": 1})).unwrap();
     assert_eq!(r["unreadable"], 1, "the unreadable photo is counted: {r}");
@@ -629,7 +629,7 @@ fn capture_time_set_refuses_an_active_photo_whose_time_does_not_read() {
     let (bad, other) = (ids[0], ids[1]);
     let broken = "2026-01-01T10:00:00 and more";
     for (id, t) in [(bad, broken), (other, "2026-01-01T12:00:00")] {
-        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()) }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()), manual: false }).unwrap();
     }
     s.execute("library.select", &serde_json::json!({"ids": [bad.0, other.0], "active": bad.0})).unwrap();
     assert_eq!(s.active(), Some(bad));
@@ -641,7 +641,7 @@ fn capture_time_set_refuses_an_active_photo_whose_time_does_not_read() {
     let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [bad.0], "time": "2026-01-01T11:00:00"})).unwrap();
     assert_eq!((r["changed"].as_u64(), r["unreadable"].as_u64()), (Some(1), Some(0)), "{r}");
     assert_eq!(captured(&s, bad).as_deref(), Some("2026-01-01T11:00:00"), "alone, it gets the time");
-    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id: bad, captured: Some(broken.into()) }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id: bad, captured: Some(broken.into()), manual: false }).unwrap();
     let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [bad.0, other.0], "time": "2026-01-01T11:00:00", "each": true})).unwrap();
     assert_eq!((r["changed"].as_u64(), r["unreadable"].as_u64()), (Some(2), Some(0)), "{r}");
     assert_eq!(captured(&s, bad).as_deref(), Some("2026-01-01T11:00:00"), "each repairs it");
