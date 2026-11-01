@@ -120,12 +120,14 @@ pub(super) fn watermark_preview(
 }
 
 /// The 16-bit note: LZW's byte dictionary does worse on 16-bit samples than storing them, so
-/// 16-bit LZW TIFFs came out 10-33 % larger than uncompressed ones (issue #2882).
+/// 16-bit LZW TIFFs came out 10-33 % larger than uncompressed ones (issue #2882). Since ZIP is written at
+/// the Balanced level (TEST-TIFF-ZIP), a 24 MP 16-bit ZIP takes about as long as LZW, so neither note
+/// calls LZW slower.
 pub(crate) const TIFF_LZW_NOTE_16: &str =
-    "At 16 bit, LZW is often larger than no compression, and larger and slower than ZIP. Use it only if other software needs LZW.";
+    "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.";
 /// The note at 8 bit and 32-bit float: one 8-bit file in #2882 was larger with LZW too.
 pub(crate) const TIFF_LZW_NOTE: &str =
-    "LZW is usually larger and slower than ZIP, and can be larger than no compression. Use it only if other software needs LZW.";
+    "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.";
 
 /// The note shown under Compression when a TIFF export uses LZW (none otherwise). The export
 /// keeps LZW: some software reads only LZW TIFFs.
@@ -359,6 +361,18 @@ mod tiff_lzw_note_tests {
         let jpeg = ExportOptions { format: ExportFormat::Jpeg, tiff_compression: TiffCompression::Lzw, ..Default::default() };
         assert_eq!(tiff_lzw_note(&jpeg), None);
         assert!(TIFF_LZW_NOTE_16.contains("16 bit") && TIFF_LZW_NOTE.contains("other software needs LZW"));
+    }
+
+    // TEST-TIFF-ZIP: ZIP and LZW now take about as long, so no note calls LZW slower, and every
+    // language has both notes
+    #[test]
+    fn lzw_notes_dont_call_it_slower_and_every_language_has_them() {
+        for note in [TIFF_LZW_NOTE_16, TIFF_LZW_NOTE] {
+            assert!(!note.contains("slower"), "{note}");
+            for language in crate::i18n::Locale::ALL.iter().skip(1) {
+                assert_ne!(language.tr(note), note, "{language:?} has no translation of {note:?}");
+            }
+        }
     }
 
     // Presets that write LZW TIFFs carry the same hint; the built-in ones don't write LZW

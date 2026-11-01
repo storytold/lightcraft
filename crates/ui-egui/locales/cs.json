@@ -2438,5 +2438,7 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "Při 16 bitech je LZW často větší než bez komprese a větší než ZIP při zhruba stejné rychlosti. Použijte jej, jen pokud jiný software vyžaduje LZW.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW je obvykle větší než ZIP a může být větší než bez komprese. Použijte jej, jen pokud jiný software vyžaduje LZW."
 }

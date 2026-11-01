@@ -3606,6 +3606,7 @@ dependencies = [
  "avif-serialize",
  "bytemuck",
  "dhat",
+ "flate2",
  "image",
  "image-webp",
  "jixel",

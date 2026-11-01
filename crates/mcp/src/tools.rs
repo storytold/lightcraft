@@ -239,7 +239,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "destinationMode": {"type": "string", "enum": ["specificFolder", "sameAsOriginal"], "description": "specificFolder (default) = everything into `dir`; sameAsOriginal = each photo into the folder of its original (+ `subfolder`); a photo with no folder on disk (demo, browser) or whose folder is gone gets an error"},
                 "subfolder": {"type": "string", "description": "Created inside the destination folder"},
                 "conflict": {"type": "string", "enum": ["unique", "overwrite", "skip"]},
-                "tiffCompression": {"type": "string", "enum": ["none", "lzw", "zip"], "description": "zip (default); lzw is usually larger and slower than zip, and at 16 bit often larger than none: use it only when other software needs LZW"},
+                "tiffCompression": {"type": "string", "enum": ["none", "lzw", "zip"], "description": "zip (default); lzw is usually larger than zip at about the same speed, and at 16 bit often larger than none: use it only when other software needs LZW"},
                 "dngCompression": {"type": "string", "enum": ["lossless", "deflate", "uncompressed", "lossy"]},
                 "format": {"type": "string", "enum": ["jpeg", "png", "tiff", "psd", "webp", "avif", "jxl", "original", "dng", "rendereddng"], "description": "psd = a flat PSD (no layers); rendereddng = Render to DNG, a linear 16-bit float DNG of the rendered photo with the edit baked in; original = the file as is + an XMP sidecar with the edits; dng = raw photos as DNG with the edits embedded"},
                 "longEdge": {"type": "integer", "description": "Output long edge in px. When no size param is given: 3000; 0 = full size (cropped, native resolution)"},

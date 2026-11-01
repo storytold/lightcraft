@@ -2315,5 +2315,7 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "Przy 16 bitach LZW często daje plik większy niż bez kompresji i większy niż ZIP, przy podobnej szybkości. Używaj go tylko, gdy inny program wymaga LZW.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW zwykle daje plik większy niż ZIP i może dać większy niż bez kompresji. Używaj go tylko, gdy inny program wymaga LZW."
 }
