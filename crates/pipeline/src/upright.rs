@@ -460,7 +460,8 @@ pub enum Reject {
     MeetInside,
     /// Correcting them would turn the camera too far to be a tilt (Auto leaves it to Vertical).
     TooSteep,
-    /// The horizon is tilted more than Auto levels (5°): usually intentional, or scene lines (Level fixes it anyway).
+    /// The lines it would level by (horizontal, else vertical) are tilted more than Auto levels (5°): usually
+    /// intentional, or scene lines (Level fixes it anyway).
     TooTilted,
 }
 
@@ -474,7 +475,7 @@ impl Reject {
             Reject::Disagree => "the long lines lean different ways",
             Reject::MeetInside => "the lines meet inside the photo (a floor or a road, not a tilted camera)",
             Reject::TooSteep => "the lines lean too far to be a tilted camera (Vertical corrects them anyway)",
-            Reject::TooTilted => "the horizon is tilted too far to be a levelling fix (Level corrects it anyway)",
+            Reject::TooTilted => "the lines are tilted too far to be a levelling fix (Level corrects them anyway)",
         }
     }
 }
@@ -697,10 +698,10 @@ pub fn shortfall(mode: Upright, a: &Analysis) -> Option<&'static str> {
     }
 }
 
-/// The line family Guided needs drawn when `mode` falls short ("vertical" or "horizontal"): Full that found its
-/// verticals but not its horizontals needs horizontal guides; everything else needs vertical ones.
-pub fn missing_family(mode: Upright, a: &Analysis) -> &'static str {
-    if mode == Upright::Full && a.vertical_vp.is_some() && a.horizontal_vp.is_none() { "horizontal" } else { "vertical" }
+/// The lines Guided needs drawn when `mode` falls short: Full needs both families drawn (Guided works from the
+/// guides alone, not from lines Full found), the others vertical ones.
+pub fn missing_family(mode: Upright) -> &'static str {
+    if mode == Upright::Full { "vertical and what should be horizontal" } else { "vertical" }
 }
 
 /// The Upright correction for `mode` from an analysis (lens-corrected → transformed, centred coordinates).

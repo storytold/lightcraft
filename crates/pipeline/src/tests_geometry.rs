@@ -853,16 +853,13 @@ fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
     assert_eq!(shortfall(Upright::Level, &Analysis::default()), Some(Reject::TooFew.message()));
 }
 
-/// The Guided hint names the lines the mode is missing: Full with verticals but no horizontals asks for horizontal
-/// guides, and with no verticals (or in Vertical) for vertical ones.
+/// The Guided hint names the lines to draw: Full needs both families (Guided uses only the guides drawn), the
+/// other modes vertical ones.
 #[test]
-fn upright_hint_asks_for_the_missing_line_family() {
-    use crate::upright::{Analysis, missing_family};
+fn upright_hint_asks_for_the_lines_guided_needs() {
+    use crate::upright::missing_family;
     use lightcraft_develop::Upright;
-    let verticals_only = Analysis { vertical_vp: Some([0.0, 8.0, 1.0]), ..Analysis::default() };
-    assert_eq!(missing_family(Upright::Full, &verticals_only), "horizontal");
-    assert_eq!(missing_family(Upright::Full, &Analysis::default()), "vertical");
-    assert_eq!(missing_family(Upright::Vertical, &Analysis::default()), "vertical");
-    let horizontals_only = Analysis { horizontal_vp: Some([8.0, 0.0, 1.0]), ..Analysis::default() };
-    assert_eq!(missing_family(Upright::Full, &horizontals_only), "vertical");
+    assert_eq!(missing_family(Upright::Full), "vertical and what should be horizontal");
+    assert_eq!(missing_family(Upright::Vertical), "vertical");
+    assert_eq!(missing_family(Upright::Level), "vertical");
 }
