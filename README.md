@@ -407,6 +407,7 @@ cargo xtask web --serve                                 # the same app in the br
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
 cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
 cargo xtask ci --quick                                  # only what your branch's changes can break (minutes)
+cargo xtask test -p lightcraft-raw --keep-going         # tests only, with ci's caps; every failing test binary
 ```
 
 `cargo xtask ci --quick` compares with the merge base of `origin/main` (`--base REF` for another)
@@ -415,7 +416,15 @@ the wasm check when the changes touch them; a change to `Cargo.toml`, `Cargo.loc
 config tests everything. GitHub runs the full `cargo xtask ci` on every pull request
 (`.github/workflows/ci.yml`). Only one `ci` runs at a time per machine: a second one, from another
 worktree say, waits for the first and names it, since several at once take longer in total than in
-turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock.
+turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock. The wait
+gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes (default 120; `0` waits as long as it takes) and
+names the run holding the slot. Nothing a run waits on is unbounded either: each test binary may run
+for `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30, timed from cargo's `Running` line for it;
+`0` for no limit). One that runs longer, a test hung on a GPU device say, is killed with every
+process it started (on Linux found by an environment variable they inherit, so those that outlived
+their parent too), and the run reports it as `timed out after 30 min` with the tests still running
+and those that never reported a result. Under `LIGHTCRAFT_NEXTEST=1`, `.config/nextest.toml` kills a
+test after 30 minutes instead. After a timeout, `ci` skips its GPU probe and translation gaps report.
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
@@ -423,9 +432,24 @@ available when it starts (at most one per CPU; 4 if memory can't be read), so an
 builds with fewer. Test threads follow, capped at 4.
 Full-debuginfo linkers, one per CPU, otherwise exhaust RAM before any test runs. GPU coverage is
 unchanged. Explicit `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS`, `RUST_TEST_THREADS` and
-`NEXTEST_TEST_THREADS` settings override these defaults. The tests run under
+`NEXTEST_TEST_THREADS` settings override these defaults. Outside `ci`, `.cargo/config.toml` limits
+plain `cargo test` to 4 tests at once in each test binary (`RUST_TEST_THREADS=4` unless the
+environment sets it; libtest's own default is one per CPU), and `.config/nextest.toml` does the same
+for `cargo nextest run`. `cargo xtask` inherits that default but doesn't count it as an explicit
+setting (a marker beside it, `LIGHTCRAFT_TEST_THREADS_DEFAULT`, tells it apart), so `ci` still
+lowers the threads on a machine short of RAM. An explicit `RUST_TEST_THREADS` other than 4 wins
+as-is; an explicit 4 can't be told apart from the default, so `ci` and `cargo xtask test` may lower
+it to their RAM-aware value (never raise it). The tests run under
 `cargo test`; `LIGHTCRAFT_NEXTEST=1` runs them under [cargo-nextest](https://nexte.st) instead (one
 process per test, slower here because each regenerates the demo scenes). Ordinary development commands keep their own settings.
+
+To run tests without the rest of `ci`, use `cargo xtask test` rather than `cargo test --workspace`,
+which gets none of `ci`'s RAM-aware caps (only the 4-thread default above) and takes no CI slot.
+It has `ci`'s caps and waits for its slot, builds every test target
+once (the same build as `ci`'s, so neither rebuilds the other) and runs each test binary, or those
+of the `-p PKG` packages, with whatever follows `--` (`cargo xtask test -p lightcraft-ui-egui --
+i18n::`). It stops at the first failing binary, as `ci` does; `--keep-going` runs them all and
+names each that failed. `--doc` adds the doctests; `LIGHTCRAFT_NEXTEST=1` applies here too.
 
 **Release builds on memory-constrained machines:** [#1196](https://github.com/storytold/lightcraft/issues/1196)
 reports Arch/AUR release-link OOM kills on a 16 GB machine when the desktop and CLI build concurrently
