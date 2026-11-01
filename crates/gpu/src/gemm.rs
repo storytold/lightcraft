@@ -235,7 +235,13 @@ static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 /// it the first time) on the GPU. `None` when the GPU can't do it (unavailable, too large, a
 /// device error): the caller computes it on the CPU.
 pub fn matmul(a: &[f32], rows: usize, k: usize, n: usize, key: u64, weights: &dyn Fn() -> Option<Vec<f32>>) -> Option<Vec<f32>> {
-    match try_matmul(a, rows, k, n, key, weights) {
+    // wgpu panics in `Device::poll` once the device is lost (see `ctx::Gpu::poll`): the GPU is
+    // then given up on and the CPU computes this product
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_matmul(a, rows, k, n, key, weights))).unwrap_or_else(|_| {
+        mark_broken("a matrix product on the GPU panicked");
+        Err("the GPU gave up".into())
+    });
+    match r {
         Ok(c) => Some(c),
         Err(e) => {
             log::debug!("gpu (AI masks): matrix product on the CPU: {e}");

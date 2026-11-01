@@ -668,7 +668,9 @@ fn auto(state: &mut State, shared: &Shared, job: &mut Job, what: &AutoKind, mode
                 Some(_) => state.people_cache.as_ref().filter(|(k, _)| *k == job.key).map(|(_, m)| m),
                 None => None,
             };
-            let input = state.input_cache.as_ref().filter(|(k, _)| *k == job.key).map(|(_, i)| i).ok_or("the photo is not available")?;
+            // (the input cache is shared by every model: another photo's mask may have replaced it
+            // while the people and faces caches still hold this one, so render it again if so)
+            let input = photo(&mut state.input_cache, job)?;
             let skin = req.classes.iter().any(|c| matches!(c, 2 | 3));
             let Some(g) = people_mask(&req, &input.rgb, input.w, input.h, map, &faces) else { return Ok(None) };
             if skin && face.is_none() {

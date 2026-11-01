@@ -404,6 +404,25 @@ fn automatic_masks_without_their_model_are_approximate() {
     }
     let e = s.execute("mask.add", &json!({"kind": "landscape", "class": "lava"})).unwrap_err().to_string();
     assert!(e.contains("naturalGround"), "{e}");
+    // (review of PR #2706) the model named is the one that is missing: one person needs the face
+    // model though the people model is in place, face parts beside hair need the people model
+    if Segmenter::AVAILABLE {
+        let put = |root: &std::path::Path, dir: &str, file: &str, size: u64| {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::File::create(root.join(dir).join(file)).unwrap().set_len(size).unwrap();
+        };
+        let root = tmp("auto-people-only");
+        put(&root, "mediapipe-selfie-multiclass", "selfie_multiclass_256x256.tflite", 16_371_837);
+        s.segmenter.models_root = Some(root);
+        let r = s.execute("mask.add", &json!({"kind": "people", "person": 2})).unwrap();
+        assert_eq!(r["model"], "face", "{r}");
+        let root = tmp("auto-face-only");
+        put(&root, "mediapipe-face-landmarker", "face_landmarker.task", 3_758_596);
+        s.segmenter.models_root = Some(root);
+        let r = s.execute("mask.add", &json!({"kind": "people", "parts": ["Hair", "Lips"]})).unwrap();
+        assert_eq!(r["model"], "people", "{r}");
+        s.segmenter.models_root = Some(tmp("auto-none"));
+    }
     // a People part the models don't know is refused, not stored selecting nothing
     let e = s.execute("mask.add", &json!({"kind": "people", "parts": ["Hair", "Elbows"]})).unwrap_err().to_string();
     assert!(e.contains("Elbows") && e.contains("iris and pupil"), "{e}");
