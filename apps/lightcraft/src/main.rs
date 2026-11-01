@@ -50,9 +50,12 @@ mod platform;
 mod prefs;
 mod session;
 
-use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lost_reason, record_gpu_lost, window_files};
+use gpu_crash::{
+    gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lost_reason, gpu_lost_restart_check, lost_device_panic, record_gpu_lost,
+    restart_after_gpu_lost, window_files,
+};
 #[cfg(test)]
-use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, window_wgpu_options};
+use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, gpu_lost_restart_notice, may_restart_after_gpu_lost, restart_args, window_wgpu_options};
 #[cfg(test)]
 use launch::launch_imports_in;
 use launch::{
@@ -228,6 +231,8 @@ fn main() -> eframe::Result {
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
     let gpu_crash = gpu_crash_check(in_memory).or_else(|| gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
+    // started again after the window's GPU device was lost
+    let restart_notice = gpu_lost_restart_check();
     let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
     lightcraft_engine::gpu::set_enabled(gpu_on);
     // the window's renderer: probed (Windows) and with a fallback chain, so a driver that can't
@@ -303,6 +308,7 @@ fn main() -> eframe::Result {
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);
+                app.notices.extend(restart_notice);
                 app.gpu_notice = true;
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
                 // the snapshot below, so this alone isn't written to the settings file
@@ -371,17 +377,27 @@ fn main() -> eframe::Result {
         // the window was up: a panic that escaped it now is LightCraft stopping, typically the
         // window's renderer after the graphics driver reset the GPU (issue #1337: egui-wgpu panics
         // on the lost device). Not a failed start: no other renderer is tried, and the message
-        // says what happened.
+        // says what happened. The panic names a lost device when the window's own device was
+        // lost, which the compute pipeline may never have seen.
+        let mut window_lost = None;
         let stopped = match started {
             Ok(r) => r,
-            Err(_) => Err(eframe::Error::AppCreation("its window stopped drawing (the renderer panicked)".into())),
+            Err(payload) => {
+                window_lost = lost_device_panic(payload.as_ref());
+                Err(eframe::Error::AppCreation("its window stopped drawing (the renderer panicked)".into()))
+            }
         };
         if let Err(e) = &stopped {
-            let lost = gpu_lost_reason();
+            let lost = gpu_lost_reason().or(window_lost.clone());
+            // recorded first: the next start (the restart below, or the user's) renders on the CPU
             if let Some(reason) = &lost
                 && !in_memory
             {
                 record_gpu_lost(gpu_lost_marker_path().as_deref(), reason);
+            }
+            // the window is gone but the library is saved: start again rather than stop
+            if window_lost.is_some() && !in_memory && restart_after_gpu_lost() {
+                return Ok(());
             }
             // (not "app creation error: …": the app had been created)
             let what = match e {
