@@ -433,8 +433,11 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
 /// equivalence tests run on a machine without a GPU (the CI gate) instead of skipping. The opt-in
 /// is set on this one command: the other steps' tests check the CPU fallback without it. No
 /// `denoise` feature: the model runners refuse software adapters on their own. Fails if a GPU test
-/// still skips (but those of [`ci_report::SOFTWARE_ADAPTER_SKIPS`]), so a runner that loses the adapter can't pass silently.
-/// Nothing to run (a hardware adapter, none, a failed probe) is not a failure.
+/// still skips (but those of [`ci_report::SOFTWARE_ADAPTER_SKIPS`]), so a runner that loses the
+/// adapter can't pass silently. The skip log is created empty first and must still be there; the
+/// tests run with [`ci_report::SKIP_LOG_REQUIRED_ENV`], so a skip that can't be logged fails its
+/// test, and a line of the log that isn't a skip record fails the step. Nothing to run (a hardware
+/// adapter, none, a failed probe) is not a failure.
 fn gpu_software(
     root: &Path,
     probe: &dyn Fn(),
@@ -448,29 +451,29 @@ fn gpu_software(
         return Ok(());
     };
     let log = ci_report::skip_log(root, "gpu-software");
+    // an empty log now, so a missing one afterwards means the skips went elsewhere
+    std::fs::write(&log, "").map_err(|e| format!("can't create the skip log {}: {e}", log.display()))?;
     let (mut c, what) = tests(&with_test_targets(&["-p", ci_quick::GPU_PACKAGE]));
     let opt_in = ci_report::ALLOW_SOFTWARE_ENV;
     c.env(opt_in, "1").env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, &log);
+    // a skip that can't be logged fails its test: the check below needs all of them
+    c.env(ci_report::SKIP_LOG_REQUIRED_ENV, "1");
     eprintln!("only a software adapter: {adapter} ({backend})");
     let t = std::time::Instant::now();
     let ran = run(c, &format!("{opt_in}=1 LIGHTCRAFT_GPU_BACKEND={backend} {what}"));
     let seconds = t.elapsed().as_secs_f64();
-    let skips = match std::fs::read_to_string(&log) {
-        Ok(text) => Ok(ci_report::unexpected_gpu_skips(&text)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(format!("{}: {e}", log.display())),
-    };
+    let skips = std::fs::read_to_string(&log).map(|text| ci_report::unexpected_gpu_skips(&text)).map_err(|e| format!("{}: {e}", log.display()));
     let result = match (ran, &skips) {
         (Err(e), _) => Err(e),
         (Ok(()), Err(e)) => Err(format!("can't read the skip log: {e}")),
-        (Ok(()), Ok(left)) if !left.is_empty() => Err(format!("{} GPU test(s) still skipped on {adapter}: {}", left.len(), left.join("; "))),
+        (Ok(()), Ok(left)) if !left.is_empty() => Err(format!("{} unexpected GPU skip(s) on {adapter}: {}", left.len(), left.join("; "))),
         (Ok(()), Ok(_)) => Ok(()),
     };
     match &skips {
         Ok(left) if left.is_empty() => {
             eprintln!("skip log: no GPU test skipped but the {} that can't run on a software adapter", ci_report::SOFTWARE_ADAPTER_SKIPS.len())
         }
-        Ok(left) => eprintln!("skip log: {} GPU test(s) still skipped:\n  {}", left.len(), left.join("\n  ")),
+        Ok(left) => eprintln!("skip log: {} unexpected GPU skip(s):\n  {}", left.len(), left.join("\n  ")),
         Err(e) => eprintln!("skip log: {e}"),
     }
     *run_record.borrow_mut() = serde_json::json!({

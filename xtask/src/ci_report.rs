@@ -23,6 +23,10 @@ pub const SCHEMA: u64 = 1;
 /// The environment variable `lightcraft-testkit` appends skips to.
 pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
 
+/// `1`: a skip that can't reach the log fails its test (`lightcraft-testkit`), for the
+/// `gpu-software` step, whose check needs every GPU skip; the other steps only warn.
+pub const SKIP_LOG_REQUIRED_ENV: &str = "LIGHTCRAFT_SKIP_LOG_REQUIRED";
+
 /// `target/ci` under the workspace root (not `CARGO_TARGET_DIR`: one place to look, like
 /// `target/bench`).
 pub fn dir(root: &Path) -> PathBuf {
@@ -200,23 +204,29 @@ pub const SOFTWARE_ADAPTER_SKIPS: &[(&str, &str)] = &[
 
 /// The GPU skips in the `gpu-software` step's skip log (`text`, one JSON object per line) other
 /// than [`SOFTWARE_ADAPTER_SKIPS`], as `test: reason`. Any is a failure: the test did not get the
-/// adapter, so it checked nothing. A line that isn't JSON but mentions the GPU need counts.
+/// adapter, so it checked nothing. So is a line that isn't a JSON object with string `need` and
+/// `test` fields (a torn or foreign write could hide a GPU skip), shown as its first characters.
+/// Skips of other needs (corpus, fonts, …) are left to the report.
 pub fn unexpected_gpu_skips(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        match serde_json::from_str::<Value>(line) {
-            Ok(v) if v["need"] == "gpu" => {
-                let test = v["test"].as_str().unwrap_or("?");
-                if !SOFTWARE_ADAPTER_SKIPS.iter().any(|(t, _)| *t == test) {
-                    out.push(format!("{test}: {}", v["reason"].as_str().unwrap_or("")));
-                }
-            }
-            Ok(_) => {}
-            Err(_) if line.replace(' ', "").contains(r#""need":"gpu""#) => out.push(line.to_owned()),
-            Err(_) => {}
+        let record = serde_json::from_str::<Value>(line).ok().filter(Value::is_object);
+        let fields = record.as_ref().and_then(|v| Some((v["need"].as_str()?, v["test"].as_str()?, v["reason"].as_str().unwrap_or(""))));
+        match fields {
+            Some(("gpu", test, reason)) if !SOFTWARE_ADAPTER_SKIPS.iter().any(|(t, _)| *t == test) => out.push(format!("{test}: {reason}")),
+            Some(_) => {}
+            None => out.push(format!("not a skip record: {}", shorten(line, 200))),
         }
     }
     out
+}
+
+/// `s` cut to `max` characters (at a char boundary), with `…` when cut.
+fn shorten(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", s.get(..at).unwrap_or(s)),
+        None => s.to_owned(),
+    }
 }
 
 /// One test that skipped, possibly in several steps.
@@ -719,9 +729,27 @@ mod tests {
         // the name decides, not the reason: a new test can't slip through with a familiar reason
         let reused = line("gpu", "ctx::tests::a_new_test", "no GPU device, or one that can't be lost on purpose here");
         assert_eq!(unexpected_gpu_skips(&reused).len(), 1);
-        let torn = r#"{"need": "gpu", "reason": "no GPU dev"#;
-        assert_eq!(unexpected_gpu_skips(torn), [torn], "a line cut short still counts");
-        assert!(unexpected_gpu_skips("not json").is_empty());
+        // anything that isn't a skip record is reported, raw: it could be a GPU skip torn apart
+        for bad in [
+            r#"{"need":"gp"#,
+            "{\"need\":\t\"gpu\", \"reason\": \"no GPU dev",
+            r#"{"test":"equivalence::camera_tone"}"#,
+            "null",
+            "not json",
+            r#"{"need":"gpu","test":7}"#,
+            "[]",
+        ] {
+            assert_eq!(unexpected_gpu_skips(bad), [format!("not a skip record: {bad}")], "{bad:?}");
+        }
+        // valid JSON with a tab after the colon is a record like any other
+        assert_eq!(unexpected_gpu_skips("{\"need\":\t\"gpu\",\"test\":\"memory\",\"reason\":\"no GPU adapter\"}"), ["memory: no GPU adapter"]);
+        let listed = "{\"need\":\t\"gpu\",\"test\":\"ctx::tests::a_really_lost_device_is_not_polled_again\"}";
+        assert!(unexpected_gpu_skips(listed).is_empty());
+        assert!(unexpected_gpu_skips(&corpus).is_empty(), "other needs are the report's business");
+        // a long line is cut at a char boundary
+        let long = format!("{{\"need\":\"{}", "é".repeat(300));
+        let shown = &unexpected_gpu_skips(&long)[0];
+        assert!(shown.ends_with('…') && shown.chars().count() == "not a skip record: ".len() + 201, "{shown}");
     }
 
     /// Each listed test still exists and still skips for want of a GPU, so a renamed or removed
