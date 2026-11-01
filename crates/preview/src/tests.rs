@@ -792,3 +792,148 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Notes 1 and 4 of 2026-10-22: with every worker busy with a long render, a cheap stand-in (a
+/// raw's embedded JPEG) waited for one of them to end; the fast lane runs it at once.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_fast_lane_runs_cheap_jobs_while_every_other_worker_is_busy() {
+    use std::time::{Duration, Instant};
+    let mut p: JobPool<u8, u8> = JobPool::with_fast_lane(2, 1, |s| *s >= 100);
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    // two long renders take both ordinary workers…
+    for slot in [1u8, 2] {
+        let h = held.clone();
+        p.submit(
+            slot,
+            0,
+            50,
+            Box::new(move || {
+                let _ = h.lock().map(|r| r.recv_timeout(Duration::from_secs(20)));
+                0
+            }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    // …and a third one waits for them: the fast worker never takes it
+    p.submit(3, 0, 60, Box::new(|| 3));
+    std::thread::sleep(Duration::from_millis(100));
+    // a cheap job still runs at once
+    let t0 = Instant::now();
+    p.submit(100, 0, 1, Box::new(|| 100));
+    let mut got = Vec::new();
+    while t0.elapsed() < Duration::from_secs(5) && !got.contains(&100) {
+        if p.wait(Duration::from_millis(20))
+            && let Some(d) = p.try_recv()
+        {
+            got.push(d.result);
+        }
+    }
+    assert!(got.contains(&100), "the cheap job ran while the other workers were busy");
+    assert!(!got.contains(&3), "the fast lane took only its own jobs: {got:?}");
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    drop(release);
+    p.shutdown(Duration::from_secs(5));
+}
+
+/// Background jobs (a folder's thumbnail renders) run a few at a time: a worker stays free for the
+/// photo on screen.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn background_jobs_leave_workers_free() {
+    use std::time::Duration;
+    let mut p: JobPool<u8, u8> = JobPool::new(3);
+    p.cap_background(10, 1);
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for slot in [1u8, 2, 3] {
+        let (h, r) = (held.clone(), running.clone());
+        p.submit(
+            slot,
+            0,
+            3,
+            Box::new(move || {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = h.lock().map(|x| x.recv_timeout(Duration::from_secs(20)));
+                0
+            }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(running.load(std::sync::atomic::Ordering::SeqCst), 1, "one background job at a time");
+    p.submit(9, 0, 50, Box::new(|| 9));
+    let mut got = None;
+    for _ in 0..100 {
+        if p.wait(Duration::from_millis(20))
+            && let Some(d) = p.try_recv()
+        {
+            got = Some(d.result);
+            break;
+        }
+    }
+    assert_eq!(got, Some(9), "the job on screen found a free worker");
+    drop(release);
+    p.shutdown(Duration::from_secs(5));
+}
+
+/// `put_at` says whether the image is kept where it lasts: not for a job made before the cache was cleared or
+/// retired, nor when the disk cache can't write it (CodeRabbit on #3077).
+#[test]
+fn put_at_says_whether_the_image_was_kept() {
+    let dir = temp_dir("put-at-kept");
+    let cache = PreviewCache::with_disk(1 << 20, &dir, 1 << 20);
+    let (key, img) = (hash_bytes(b"kept"), Arc::new(gradient(8, 8, 3)));
+    let old = cache.generation();
+    assert!(cache.put_at(old, key, img.clone()), "kept");
+    cache.clear();
+    assert!(!cache.put_at(old, key, img.clone()), "a job from before the clear keeps nothing");
+    assert!(cache.put_at(cache.generation(), key, img.clone()));
+    let generation = cache.generation();
+    cache.retire();
+    assert!(!cache.put_at(generation, key, img.clone()), "nor one for a retired cache");
+    // a file where the cache folder goes: the write fails
+    let blocked = temp_dir("put-at-blocked");
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    let cache = PreviewCache::with_disk(1 << 20, &blocked, 1 << 20);
+    assert!(!cache.put_at(cache.generation(), key, img.clone()), "not written");
+    let memory = PreviewCache::memory(1 << 20);
+    assert!(memory.put_at(memory.generation(), key, img), "a memory-only cache keeps it");
+    let _ = std::fs::remove_file(&blocked);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `dims` reads a cached file's first few KiB, and further when its size marker comes later (CodeRabbit on #3080).
+#[test]
+fn dims_finds_a_size_marker_past_the_first_few_kib() {
+    let dir = temp_dir("dims-far");
+    let d = DiskCache::new(&dir, 1 << 20);
+    let key = hash_bytes(b"far");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    // the same picture with a 10 KiB application segment before its frame header
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    let path = dir.join(file);
+    let jpeg = std::fs::read(&path).unwrap();
+    let mut padded = jpeg[..2].to_vec();
+    let pad = 10 << 10;
+    padded.extend_from_slice(&[0xFF, 0xEF, ((pad + 2) >> 8) as u8, ((pad + 2) & 0xFF) as u8]);
+    padded.extend(std::iter::repeat_n(0u8, pad));
+    padded.extend_from_slice(&jpeg[2..]);
+    std::fs::write(&path, padded).unwrap();
+    assert_eq!(d.dims(key), Some((40, 30)), "found past the first read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture bigger than the room pruning leaves is removed by the pruning its own write starts: `put` says it
+/// was not kept (CodeRabbit on #3077).
+#[test]
+fn a_write_the_pruning_removes_is_not_reported_as_kept() {
+    let dir = temp_dir("pruned-away");
+    let d = DiskCache::new(&dir, 64);
+    assert!(!d.put(hash_bytes(b"too big"), &gradient(64, 64, 9)), "pruned away at once");
+    let roomy = DiskCache::new(&dir, 1 << 20);
+    assert!(roomy.put(hash_bytes(b"fits"), &gradient(64, 64, 9)));
+    let _ = std::fs::remove_dir_all(&dir);
+}

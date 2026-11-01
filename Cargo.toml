@@ -55,6 +55,8 @@ log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 rayon = "1"
+# free/total space of a drive (engine's low-disk alert); MIT OR Apache-2.0, pure Rust (rustix / windows-sys)
+fs4 = { version = "1.1", default-features = false }
 winapi-util = "0.1" # lightcraft-catalog reads a file's volume serial number and file index with it on Windows
 proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }

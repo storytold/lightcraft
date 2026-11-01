@@ -120,6 +120,10 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             }
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
+            // (only cells on screen count: the ones drawn ahead on either side are not seen yet)
+            if local.intersects(vp) {
+                crate::panels::grid::note_cell(app, *id, ui.ctx().cumulative_pass_nr());
+            }
             let thumb = app.renderer.thumb(*id);
             if thumb.is_none() {
                 p.rect_filled(img_area, 0.0, t.skeleton);

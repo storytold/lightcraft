@@ -2928,6 +2928,7 @@
   "This row covers more than one disk: drop on a folder inside it": "ეს სტრიქონი ერთზე მეტ დისკს მოიცავს: ჩააგდეთ მის შიგნით მყოფ საქაღალდეზე",
   "This screen is off: turn it on under Titles to play it.": "ეს ეკრანი გამორთულია: დასაკრავად ჩართეთ „ტიტრებში“.",
   "Tidying the thumbnail cache": "ესკიზების ქეში სუფთავდება",
+  "Checking free disk space": "დისკზე თავისუფალი ადგილის შემოწმება",
   "Title text": "ტიტრის ტექსტი",
   "Titles": "ტიტრები",
   "Tokens: {file}, {name}, {title}, {caption}, {date}, {exposure}, {iso}, {focal}, {camera}, {lens}, {rating}, {creator}, {copyright}. Other text shows as typed.": "ტეგები: {file}, {name}, {title}, {caption}, {date}, {exposure}, {iso}, {focal}, {camera}, {lens}, {rating}, {creator}, {copyright}. სხვა ტექსტი ისე ჩანს, როგორც აკრიფეთ.",

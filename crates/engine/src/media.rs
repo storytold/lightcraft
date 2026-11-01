@@ -34,19 +34,22 @@ mod settings_hash;
 mod source;
 
 pub use cache::DenoiseIndex;
+#[cfg(test)]
+pub(crate) use cache::rendered_budget;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 #[cfg(test)]
 pub(crate) use render::thread_render_counts;
 pub use render::{
-    RenderCounts, RenderJob, RenderResult, ScreenFrame, as_background_gpu, background_gpu, background_photo, develop, develop_reporting,
+    RenderCounts, RenderJob, RenderResult, ScreenFrame, as_background_gpu, background_gpu, background_photo, develop, develop_reporting, fit_cached,
     fit_for_display, render_counts, rendering_in_background,
 };
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;
 pub use source::{
-    DISK_CACHE_BYTES, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, MakeProduct, PairLoader, PreviewLoader, ProbeInfo,
-    RENDER_CACHE_VERSION, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, face_edge, thumb_bucket,
+    DISK_CACHE_BYTES, DISK_CACHE_PER_PHOTO, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, MakeProduct, PairLoader,
+    PreviewLoader, ProbeInfo, RENDER_CACHE_VERSION, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, default_disk_cache_bytes, face_edge,
+    thumb_bucket,
 };
 
 pub struct MediaCache {

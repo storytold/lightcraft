@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-pub use disk::{DiskCache, decode_jpeg, encode_jpeg};
+pub use disk::{DiskCache, decode_jpeg, encode_jpeg, jpeg_dims};
 pub use hash::{Hash128, Hasher128, hash_bytes};
 use lightcraft_raster::Rgba8;
 pub use lru::{Lru, next_tick};
@@ -108,20 +108,66 @@ impl PreviewCache {
         Some(img)
     }
 
-    pub fn put(&self, key: Hash128, img: Arc<Rgba8>) {
-        self.put_at(self.generation(), key, img);
+    /// The size of the image kept under `key` (memory, else disk: read from its file's header), without
+    /// loading it or changing what is kept.
+    pub fn dims(&self, key: Hash128) -> Option<(usize, usize)> {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return None;
+        }
+        if let Some(v) = self.mem.lock().unwrap_or_else(|e| e.into_inner()).peek(&key) {
+            return Some((v.width, v.height));
+        }
+        self.disk.as_ref()?.dims(key)
     }
 
-    pub fn put_at(&self, generation: u64, key: Hash128, img: Arc<Rgba8>) {
-        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *current != Some(generation) {
-            return;
+    /// The size of the image kept under `key` where it lasts: on disk when the cache has a disk (a copy only
+    /// in memory, whose deferred write may have been skipped, doesn't count), else in memory. Nothing is
+    /// loaded or changed.
+    pub fn stored_dims(&self, key: Hash128) -> Option<(usize, usize)> {
+        match &self.disk {
+            Some(d) if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_some() => d.dims(key),
+            Some(_) => None,
+            None => self.dims(key),
         }
-        if let Some(d) = &self.disk {
-            d.put(key, &img);
+    }
+
+    /// The memory LRU's copy of `key`, without looking on disk.
+    pub fn get_memory(&self, key: Hash128) -> Option<Arc<Rgba8>> {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return None;
+        }
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
+    }
+
+    /// Keep `img` in memory only (it is never written to disk): for pictures that are cheap
+    /// enough to make again, such as a raw's decoded camera JPEG, but worth keeping for a revisit.
+    pub fn put_memory(&self, key: Hash128, img: Arc<Rgba8>) {
+        // (the guard is held through the insertion: a clear can't come between the look and the insertion)
+        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.is_none() {
+            return;
         }
         let c = cost(&img);
         self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img, c);
+        drop(current);
+    }
+
+    pub fn put(&self, key: Hash128, img: Arc<Rgba8>) {
+        let _ = self.put_at(self.generation(), key, img);
+    }
+
+    /// [`Self::put`] for a job of `generation`. Returns whether the image is kept where it lasts: `false` when
+    /// the cache was cleared or retired since the job was made (nothing is kept; see [`Self::generation`] to
+    /// tell), or when the disk cache could not write the file (the image is kept in memory all the same).
+    pub fn put_at(&self, generation: u64, key: Hash128, img: Arc<Rgba8>) -> bool {
+        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *current != Some(generation) {
+            return false;
+        }
+        let written = self.disk.as_ref().is_none_or(|d| d.put(key, &img));
+        let c = cost(&img);
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img, c);
+        written
     }
 
     /// Like [`Self::put`], but the disk write (a JPEG encode) happens on a background thread, so

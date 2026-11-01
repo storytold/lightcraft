@@ -172,15 +172,43 @@ impl DiskCache {
         }
     }
 
-    pub fn put(&self, key: Hash128, img: &Rgba8) {
-        let Some(bytes) = encode_jpeg(img) else { return };
+    /// The size (width, height) of the picture kept under `key`, read from the start of its file
+    /// only (no decode, no hit counted, nothing written): to tell whether a preview is there and
+    /// big enough without loading it.
+    pub fn dims(&self, key: Hash128) -> Option<(usize, usize)> {
+        use std::io::Read;
         let p = self.path(key);
-        let Some(parent) = p.parent() else { return };
+        if !p.parent().is_some_and(is_real_dir) {
+            return None;
+        }
+        let mut f = std::fs::File::open(&p).or_else(|_| std::fs::File::open(self.named(key, OLD_EXT))).ok()?;
+        // the size is normally in the first few KiB: more is read only when that is not enough
+        let mut head = Vec::new();
+        for limit in [FIRST_HEADER_BYTES, HEADER_BYTES] {
+            let more = limit.saturating_sub(head.len() as u64);
+            (&mut f).take(more).read_to_end(&mut head).ok()?;
+            if let Some(dims) = jpeg_dims(&head) {
+                return Some(dims);
+            }
+            if (head.len() as u64) < limit {
+                // the whole file was read
+                break;
+            }
+        }
+        None
+    }
+
+    /// Write `img` under `key`. Returns whether the file was written (a full or unwritable cache folder
+    /// gives `false`; the cache is unchanged then).
+    pub fn put(&self, key: Hash128, img: &Rgba8) -> bool {
+        let Some(bytes) = encode_jpeg(img) else { return false };
+        let p = self.path(key);
+        let Some(parent) = p.parent() else { return false };
         // a folder the cache makes for itself says that it is a cache; one that was there
         // already may hold somebody's files, and is not declared one
         let made = !self.dir.exists();
         if std::fs::create_dir_all(parent).is_err() || !is_real_dir(parent) {
-            return;
+            return false;
         }
         if made {
             let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
@@ -193,7 +221,7 @@ impl DiskCache {
         let tmp = p.with_extension(format!("tmp{:?}", std::thread::current().id()).replace(['(', ')'], ""));
         if std::fs::write(&tmp, &bytes).is_err() || std::fs::rename(&tmp, &p).is_err() {
             let _ = std::fs::remove_file(&tmp);
-            return;
+            return false;
         }
         self.writes.fetch_add(1, Ordering::Relaxed);
         *used = used.saturating_sub(old_len).saturating_add(bytes.len() as u64);
@@ -201,7 +229,10 @@ impl DiskCache {
         drop(total);
         if over {
             self.prune();
+            // (a picture bigger than the room pruning leaves goes too: it was not kept)
+            return p.is_file();
         }
+        true
     }
 
     /// All cache files (only names of the cache's own shape, see [`is_cache_file`]):
@@ -370,6 +401,12 @@ impl DiskCache {
         *t.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum())
     }
 
+    /// Bytes on disk when already known, without reading the folder (`None` until [`Self::size`],
+    /// a write or a prune has counted them).
+    pub fn known_size(&self) -> Option<u64> {
+        *self.total.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn clear(&self) {
         for (p, _, _) in self.scan() {
             let _ = std::fs::remove_file(p);
@@ -426,6 +463,22 @@ pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
     enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
     enc.encode(&rgb, img.width as u16, img.height as u16, jpeg_encoder::ColorType::Rgb).ok()?;
     Some(out)
+}
+
+/// How much of a cached file [`DiskCache::dims`] reads: the JPEG headers this cache writes come
+/// first and are a few hundred bytes.
+const HEADER_BYTES: u64 = 64 << 10;
+/// What [`DiskCache::dims`] reads first, which holds the size of the JPEGs this cache writes.
+const FIRST_HEADER_BYTES: u64 = 4 << 10;
+
+/// A JPEG's (width, height) from its headers (`None`: not a JPEG, or cut short before its frame header).
+pub fn jpeg_dims(bytes: &[u8]) -> Option<(usize, usize)> {
+    use zune_core::bytestream::ZCursor;
+    let mut d = zune_jpeg::JpegDecoder::new(ZCursor::new(bytes));
+    d.decode_headers().ok()?;
+    let info = d.info()?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 /// Decode a cached thumbnail (see [`encode_jpeg`]).

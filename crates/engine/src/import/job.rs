@@ -523,6 +523,8 @@ impl Session {
             key,
             cached: Vec::new(),
             embedded,
+            embedded_cache: None,
+            embedded_on_disk: false,
             minimum_embedded_edge,
             small: Some(Box::new(small)),
         })
