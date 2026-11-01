@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** patch (headline feature breadth refreshed to the checklist's recount, 83.5% of 544 in-scope rows, after LR-LIB-FINDDUPES — Photo ▸ Find Duplicate Photos…, a feature beyond Lightroom — and the rows added since 2026-10-24; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -12,7 +12,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 | Number | Value | Kind |
 |---|---:|---|
-| **Feature breadth**, checklist | **81.6%** of 532 in-scope rows (P0 98.0%, P1 95.2%, P2 50.0%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
+| **Feature breadth**, checklist | **83.5%** of 544 in-scope rows (P0 98.0%, P1 94.4%, P2 57.0%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~61%** (range 56–66%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
 | **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 74.0% × 0.804 × colour 0.85 |

@@ -791,6 +791,7 @@
   "Find Duplicate Photos…": "Sök efter dubblettfoton…",
   "Keep": "Behåll",
   "Looking for duplicate photos…": "Söker efter dubblettfoton…",
+  "Finding duplicate photos was stopped before it finished.": "Sökningen efter dubblettfoton stoppades innan den var klar.",
   "byte-identical": "identiska byte för byte",
   "visually identical": "visuellt identiska",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "Den bästa kopian i varje grupp är ibockad: raw före renderad fil, förlustfri före förstörande, fler pixlar, större fil. Bocka ur ett foto för att radera det, eller bocka i fler för att behålla dem också.",

@@ -537,6 +537,7 @@
   "Find Duplicate Photos…": "Localizar fotos duplicadas…",
   "Keep": "Manter",
   "Looking for duplicate photos…": "Procurando fotos duplicadas…",
+  "Finding duplicate photos was stopped before it finished.": "A busca por fotos duplicadas foi interrompida antes de terminar.",
   "byte-identical": "idênticas byte a byte",
   "visually identical": "visualmente idênticas",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "A melhor cópia de cada grupo está marcada: raw antes de arquivo renderizado, sem perdas antes de com perdas, mais pixels, arquivo maior. Desmarque uma foto para excluí-la, ou marque mais para mantê-las também.",

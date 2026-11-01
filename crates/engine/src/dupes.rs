@@ -5,8 +5,9 @@
 //! - **Exact** duplicates share a content hash (the file's bytes) and need no decoding.
 //! - **Visual** duplicates have the same aspect ratio and both perceptual hashes within `distance` bits
 //!   ([`cull::dct_hash`] and [`cull::diff_hash`], from the thumbnail-level source, the same picture the grid shows).
-//!   The default distance is tight on purpose: a burst frame or the next shot of the scene is never a duplicate,
-//!   only the same picture at another size, compression or with mild tone edits.
+//!   The default distance is tight on purpose, for the same picture at another size, compression or with mild tone
+//!   edits; nothing looks at capture times, so a burst frame stays apart only as far as its hashes differ (in
+//!   practice they do: a few bits for the same picture, a dozen or more for the next frame).
 //! - **Quality**: a raw beats a rendered file, lossless beats lossy, more pixels, a larger file (less compression),
 //!   then edits and rating, then the earlier import.
 //! - **Runs** off the UI thread like the focus-point reader ([`crate::focus_scan`]): a worker decodes and hashes one

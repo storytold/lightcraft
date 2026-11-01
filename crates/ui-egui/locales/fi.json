@@ -735,6 +735,7 @@
   "Find Duplicate Photos…": "Etsi kaksoiskappaleet…",
   "Keep": "Säilytä",
   "Looking for duplicate photos…": "Etsitään kaksoiskappaleita…",
+  "Finding duplicate photos was stopped before it finished.": "Kaksoiskappaleiden etsintä keskeytettiin ennen sen valmistumista.",
   "byte-identical": "tavulleen samat",
   "visually identical": "ulkoisesti samat",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "Jokaisen ryhmän paras kopio on valittu: raw ennen renderöityä tiedostoa, häviötön ennen häviöllistä, enemmän pikseleitä, suurempi tiedosto. Poista valinta poistaaksesi kuvan, tai valitse lisää säilyttääksesi nekin.",

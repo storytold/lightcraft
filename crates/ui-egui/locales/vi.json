@@ -677,6 +677,7 @@
   "Find Duplicate Photos…": "Tìm ảnh trùng lặp…",
   "Keep": "Giữ lại",
   "Looking for duplicate photos…": "Đang tìm ảnh trùng lặp…",
+  "Finding duplicate photos was stopped before it finished.": "Việc tìm ảnh trùng lặp đã bị dừng trước khi hoàn tất.",
   "byte-identical": "giống hệt từng byte",
   "visually identical": "giống hệt về hình ảnh",
   "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.": "Bản sao tốt nhất của mỗi nhóm đã được đánh dấu: raw hơn tệp đã kết xuất, không mất dữ liệu hơn có mất dữ liệu, nhiều điểm ảnh hơn, tệp lớn hơn. Bỏ đánh dấu một ảnh để xóa nó, hoặc đánh dấu thêm để giữ lại chúng.",
