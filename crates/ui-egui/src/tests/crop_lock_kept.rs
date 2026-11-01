@@ -273,7 +273,7 @@ fn a_merged_crop_that_changes_nothing_leaves_the_photo_untouched() {
         let _ = h.request("engine.execute", json!({"command": "develop.merge", "params": {"settings": {"crop": partial}}}), T);
         h.settle(SETTLE);
         assert!(untouched(&h, id), "{partial}: the crop is as it was");
-        assert!(h.app.session.undo.len() <= undo + 1, "{partial}: no stray lock step");
+        assert_eq!(h.app.session.undo.len(), undo, "{partial}: no undo step");
         assert!(h.app.session.redo.is_empty(), "{partial}: and no stray Redo step");
     }
 }
@@ -305,4 +305,49 @@ fn an_edit_of_other_photos_keeps_theirs_and_leaves_the_active_one_untouched() {
     assert!(untouched(&h, id), "the active photo stays untouched");
     h.app.run("edit.undo", json!({})).expect("undo");
     assert!((angle_of(&h, other) - 3.0).abs() < 1e-9, "Undo takes that edit back");
+}
+
+/// An edit of the angle that changes nothing (the angle the untouched photo already has, typed or set)
+/// adds no undo step and leaves the photo untouched: the lock stored first goes again with it, and the
+/// tool goes on showing the crop locked.
+#[test]
+fn an_angle_edit_that_changes_nothing_adds_no_step() {
+    for (what, command, params) in [
+        ("crop.straighten 0", "crop.straighten", json!({"angle": 0.0})),
+        ("develop.set crop.angle 0", "develop.set", json!({"control": "crop.angle", "value": 0.0})),
+        ("develop.adjust crop.angle 0", "develop.adjust", json!({"control": "crop.angle", "delta": 0.0})),
+        ("crop.set angle 0", "crop.set", json!({"angle": 0.0})),
+    ] {
+        let mut h = crop_tool();
+        let id = h.app.session.active().expect("a photo");
+        let undo = h.app.session.undo.len();
+        ask(&mut h, "engine.execute", json!({"command": command, "params": params}));
+        assert!(untouched(&h, id), "{what}: the crop is as it was");
+        assert_eq!(h.app.session.undo.len(), undo, "{what}: no undo step");
+        assert!(h.app.session.redo.is_empty(), "{what}: and no Redo step");
+        assert!(h.app.crop_tool_aspect().is_some(), "{what}: still shown locked");
+    }
+}
+
+/// Undo puts the crop's lock back to what it was before the edit: a ratio chosen before straightening
+/// stays chosen when the straightening is undone, and undoing the lock toggle locks the crop again.
+/// (On an untouched photo, Undo of the first edit takes the stored lock away again with it:
+/// `a_typed_angle_and_develop_set_keep_the_lock`.)
+#[test]
+fn undo_puts_back_the_lock_the_crop_had() {
+    let mut h = crop_tool();
+    ask(&mut h, "engine.execute", json!({"command": "crop.aspect", "params": {"aspect": "4x5"}}));
+    let (lock, ratio, _) = crop_state(&h);
+    let want = lock.expect("4x5 locked");
+    ask(&mut h, "engine.execute", json!({"command": "crop.straighten", "params": {"angle": 3.0}}));
+    assert_locked(&h, want, "4x5 then crop.straighten");
+    h.app.run("edit.undo", json!({})).expect("undo");
+    let (lock, rect, angle) = crop_state(&h);
+    assert_eq!(lock, Some(want), "Undo of the straightening keeps the 4x5 lock");
+    assert!(angle.abs() < 1e-9 && (rect - ratio).abs() < 1e-9, "and the crop as it was: angle {angle}, ratio {rect}");
+    ask(&mut h, "engine.execute", json!({"command": "crop.lockAspect"}));
+    assert_eq!(h.app.crop_tool_aspect(), None, "unlocked");
+    h.app.run("edit.undo", json!({})).expect("undo");
+    assert_eq!(crop_state(&h).0, Some(want), "Undo of the unlock locks it to 4x5 again");
+    assert!(h.app.crop_tool_aspect().is_some(), "and the tool shows it locked");
 }
