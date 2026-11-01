@@ -220,24 +220,40 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
 /// [`on_disk`] on a thread of its own, waited for [`LOOK_FOR`] at most (a file lookup the OS holds
 /// on a hung network share can't hold the test; nothing found in time: the demo photos).
 #[cfg(not(target_arch = "wasm32"))]
-fn find_on_disk(candidates: Vec<String>, stop: impl Fn() -> bool + Send + 'static) -> Vec<String> {
+fn find_on_disk(candidates: Vec<String>, stop: impl Fn() -> bool + Clone + Send + 'static) -> Vec<String> {
     let deadline = std::time::Instant::now() + LOOK_FOR;
     let (ftx, frx) = channel();
+    let scan_stop = stop.clone();
     let spawned = std::thread::Builder::new().name("machine-test-scan".into()).spawn(move || {
-        let _ = ftx.send(on_disk(candidates, 4, deadline, &stop, |p| std::path::Path::new(p).is_file()));
+        let _ = ftx.send(on_disk(candidates, 4, deadline, &scan_stop, |p| std::path::Path::new(p).is_file()));
     });
-    match spawned {
-        // a little past the scan's own deadline, for the lookup in progress at it
-        Ok(_) => frx.recv_timeout(LOOK_FOR + std::time::Duration::from_millis(500)).unwrap_or_default(),
-        Err(e) => {
-            log::warn!("test my machine: can't look for the library's photos: {e}");
-            Vec::new()
+    if let Err(e) = spawned {
+        log::warn!("test my machine: can't look for the library's photos: {e}");
+        return Vec::new();
+    }
+    // a little past the scan's own deadline, for the lookup in progress at it
+    wait_for_scan(&frx, deadline + std::time::Duration::from_millis(500), &stop)
+}
+
+/// The scan's result, waited for until `until` in short steps, so a stop is seen at once (review
+/// of PR #3499); nothing (the demo photos, or the caller sees the stop) otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_for_scan(rx: &Receiver<Vec<String>>, until: std::time::Instant, stop: &dyn Fn() -> bool) -> Vec<String> {
+    loop {
+        let now = std::time::Instant::now();
+        if stop() || now >= until {
+            return Vec::new();
+        }
+        match rx.recv_timeout((until - now).min(std::time::Duration::from_millis(100))) {
+            Ok(v) => return v,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Vec::new(),
         }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn find_on_disk(_candidates: Vec<String>, _stop: impl Fn() -> bool + Send + 'static) -> Vec<String> {
+fn find_on_disk(_candidates: Vec<String>, _stop: impl Fn() -> bool + Clone + Send + 'static) -> Vec<String> {
     Vec::new()
 }
 
@@ -483,6 +499,15 @@ mod tests {
         assert_eq!((kept.len(), kept.first().map(String::as_str), kept.last().map(String::as_str)), (512, Some("r1488.cr3"), Some("r1999.cr3")));
         assert_eq!(newest(all.iter().take(3), MAX_CANDIDATES), ["r0.cr3", "r1.cr3", "r2.cr3"]);
         assert!(newest(all.iter(), 0).is_empty());
+        // a stop during the wait for a scan that hangs is seen at once (review of PR #3499)
+        let (_tx, rx) = channel::<Vec<String>>();
+        let t = std::time::Instant::now();
+        let stop_at = t + std::time::Duration::from_millis(150);
+        assert!(wait_for_scan(&rx, t + std::time::Duration::from_secs(30), &|| std::time::Instant::now() >= stop_at).is_empty());
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "{:?}", t.elapsed());
+        let (tx, rx) = channel();
+        tx.send(vec!["a.cr3".to_string()]).unwrap();
+        assert_eq!(wait_for_scan(&rx, t + std::time::Duration::from_secs(30), &|| false), ["a.cr3"]);
     }
 
     /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would
