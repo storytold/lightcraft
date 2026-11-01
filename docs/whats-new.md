@@ -8,7 +8,7 @@
   one copies the photos the library doesn't have yet off the camera, with progress and ✕ in the activity stack,
   then opens the import review with **Move** checked. Photos already imported (same file name, size and capture
   time) are not read again, and a cancelled copy carries on where it stopped. Nothing on the camera is changed.
-  Windows only so far; agents use `library.fetchCamera`.
+  Agents use `library.fetchCamera`.
 
 ### Import from cameras that don't show up as a drive, on macOS too
 - On macOS, cameras and phones that talk PTP over USB (a Leica M11, most cameras in their default USB mode) are now
