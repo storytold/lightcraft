@@ -200,6 +200,8 @@ fn orientation_from_matrix(matrix: &[u8]) -> Option<Orientation> {
 /// Helper struct for track inspection.
 struct TrackInfo {
     is_video: bool,
+    /// The `track_enabled` bit of `tkhd` flags: a disabled track is not played.
+    enabled: bool,
     width: u32,
     height: u32,
     orientation: Option<Orientation>,
@@ -212,6 +214,7 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize, meta: &mut Metadata
         return None;
     }
     let mut is_video = false;
+    let mut enabled = false;
     let mut width = 0u32;
     let mut height = 0u32;
     let mut orientation = None;
@@ -220,6 +223,8 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize, meta: &mut Metadata
         match &b.kind {
             b"tkhd" => {
                 let Some(&ver) = b.body.first() else { continue };
+                // ISO-BMFF full box: version, then 24 bits of flags (`track_enabled` is bit 0).
+                enabled = b.body.get(1..4).is_some_and(|flags| flags.get(2).is_some_and(|last| last & 1 != 0));
                 let (matrix_off, w_off, h_off) = if ver == 0 { (40usize, 76usize, 80usize) } else { (52usize, 88usize, 92usize) };
                 if let Some(m) = b.body.get(matrix_off..matrix_off + 36) {
                     orientation = orientation_from_matrix(m);
@@ -255,7 +260,7 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize, meta: &mut Metadata
         }
     }
 
-    Some(TrackInfo { is_video, width, height, orientation })
+    Some(TrackInfo { is_video, enabled, width, height, orientation })
 }
 
 /// Read text payload from a QuickTime user data atom.
@@ -506,8 +511,8 @@ pub fn extract_video_xmp(bytes: &[u8]) -> Option<String> {
 /// Establish that a supported video has no embedded location before copying it unchanged.
 /// Unlike probing for display, incomplete boxes, exhausted budgets and malformed XMP fail closed.
 pub fn verify_video_location_absent(bytes: &[u8]) -> Result<(), String> {
-    let mut budget = MAX_BOXES;
-    verify_location_boxes(bytes, &mut budget, 0)?;
+    let (mut top_level, mut nested) = (MAX_BOXES, MAX_BOXES);
+    verify_location_boxes(bytes, &mut top_level, &mut nested, 0)?;
     probe_video(bytes).ok_or("can't verify location: unreadable video")?;
     Ok(())
 }
@@ -550,12 +555,15 @@ fn verify_xmp_structure(packet: &str) -> Result<(), String> {
     Err("can't verify video location: XMP event limit exceeded".into())
 }
 
-fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), String> {
+fn verify_location_boxes(bytes: &[u8], top_level: &mut usize, nested: &mut usize, depth: usize) -> Result<(), String> {
     if depth > MAX_DEPTH {
         return Err("can't verify video location: metadata nesting limit exceeded".into());
     }
     let mut at = 0usize;
     while at < bytes.len() {
+        // Top-level fragments and the boxes inside them have separate budgets: a movie with many
+        // fragments must not spend the traversal budget its own metadata needs.
+        let budget = if depth == 0 { &mut *top_level } else { &mut *nested };
         if *budget == 0 {
             return Err("can't verify video location: metadata box limit exceeded".into());
         }
@@ -591,12 +599,12 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
                     );
                 }
             }
-            b"moov" | b"udta" | b"trak" | b"mdia" | b"moof" | b"traf" => verify_location_boxes(b.body, budget, depth + 1)?,
+            b"moov" | b"udta" | b"trak" | b"mdia" | b"moof" | b"traf" => verify_location_boxes(b.body, top_level, nested, depth + 1)?,
             b"meta" => {
                 let body = meta_children(b.body).ok_or("can't verify video location: truncated metadata")?;
                 // `keys` names the `ilst` items: only a location key that holds a value refuses.
-                verify_meta_location(body, budget)?;
-                verify_location_boxes(body, budget, depth + 1)?;
+                verify_meta_location(body, nested)?;
+                verify_location_boxes(body, top_level, nested, depth + 1)?;
             }
             b"XMP_" | b"uuid" if &b.kind == b"XMP_" || b.uuid == Some(XMP_UUID) => {
                 let packet = std::str::from_utf8(b.body).map_err(|_| "can't verify video location: invalid XMP encoding")?;
@@ -775,8 +783,9 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     b"trak" => {
                         if let Some(t) = parse_trak(child.body, &mut budget, 0, &mut meta, &mut xmp)
                             && t.is_video
+                            && t.enabled
                         {
-                            // The main video is the track showing the largest picture; an
+                            // The main video is the enabled track showing the largest picture; an
                             // auxiliary track (a thumbnail, a preview) may come later and must
                             // not replace it. Ties keep the first track.
                             let area = |t: &TrackInfo| u64::from(t.width).saturating_mul(u64::from(t.height));
@@ -1145,10 +1154,14 @@ mod tests {
     #[test]
     fn probe_keeps_the_largest_video_track() {
         let file = synthetic_mp4(60, 600, 1920, 1080, 0);
-        for (width, height, expected) in [(320, 240, (1920, 1080)), (2560, 1440, (2560, 1440))] {
-            let bytes = with_extra_track(&file, width, height);
+        // The fixture's own track is enabled (`tkhd` flags = 1).
+        assert!(probe_video(&file).is_some());
+        for (width, height, enabled, expected) in
+            [(320, 240, true, (1920, 1080)), (2560, 1440, true, (2560, 1440)), (2560, 1440, false, (1920, 1080))]
+        {
+            let bytes = with_extra_track(&file, width, height, enabled);
             let meta = probe_video(&bytes).expect("valid video");
-            assert_eq!((meta.width, meta.height), expected, "added {width}x{height}");
+            assert_eq!((meta.width, meta.height), expected, "added {width}x{height}, enabled={enabled}");
         }
     }
 
@@ -1388,12 +1401,16 @@ mod tests {
     }
 
     /// Append a second video track (a copy of the fixture's `trak`, resized) to the synthetic movie.
-    fn with_extra_track(bytes: &[u8], width: u32, height: u32) -> Vec<u8> {
+    fn with_extra_track(bytes: &[u8], width: u32, height: u32, enabled: bool) -> Vec<u8> {
         let ftyp_len = be32(bytes, 0).expect("ftyp size") as usize;
         let trak_at = bytes.windows(4).position(|w| w == b"trak").expect("trak") - 4;
         let trak_len = be32(bytes, trak_at).expect("trak size") as usize;
         let mut second = bytes.get(trak_at..trak_at + trak_len).expect("trak body").to_vec();
-        // `trak` header (8) + `tkhd` header (8) + the v0 body's width/height offsets (76/80).
+        // `trak` header (8) + `tkhd` header (8) + the full-box version/flags: the low flag byte
+        // is `track_enabled`. The v0 body's width/height are at 76/80.
+        if !enabled {
+            *second.get_mut(19).expect("tkhd flags") = 0;
+        }
         second.get_mut(92..96).expect("track width")[..].copy_from_slice(&(width << 16).to_be_bytes());
         second.get_mut(96..100).expect("track height")[..].copy_from_slice(&(height << 16).to_be_bytes());
         let mut out = bytes.get(..trak_at + trak_len).expect("movie ending at its track").to_vec();

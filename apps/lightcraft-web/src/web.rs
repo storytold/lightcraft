@@ -171,7 +171,7 @@ async fn blob_range(blob: &web_sys::Blob, start: u64, length: u64) -> Result<Vec
     Ok(bytes)
 }
 
-async fn video_blob_metadata(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
+async fn video_blob_metadata(blob: &web_sys::Blob, include_fragments: bool) -> Result<Vec<u8>, String> {
     let size = blob.size();
     if !size.is_finite() || size < 0.0 || size.fract() != 0.0 || size > 9_007_199_254_740_991.0 {
         return Err("invalid video file size".into());
@@ -184,7 +184,7 @@ async fn video_blob_metadata(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
         }
         let head = blob_range(blob, at, size.saturating_sub(at).min(16)).await?;
         let (kind, len) = lightcraft_engine::files::video_box_info(&head, at, size)?;
-        if lightcraft_engine::files::is_video_metadata_box(&kind) {
+        if lightcraft_engine::files::is_video_metadata_box(&kind) || (include_fragments && &kind == b"moof") {
             let new_len = (out.len() as u64).checked_add(len).ok_or("video metadata length overflow")?;
             if new_len > 64 << 20 {
                 return Err("video metadata exceeds the 64 MiB scan budget".into());
@@ -208,7 +208,8 @@ async fn video_blob_metadata(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
 }
 
 async fn store_video(originals: &Originals, backend: Option<&Backend>, file: &web_sys::File) -> Result<(), String> {
-    let metadata = video_blob_metadata(file).await?;
+    // Import only needs the movie header; fragmented metadata matters for the location check.
+    let metadata = video_blob_metadata(file, false).await?;
     let mut probe = lightcraft_engine::files::probe_bytes(&file.name(), &metadata)?;
     if probe.kind != lightcraft_engine::catalog::MediaKind::Video {
         return Err("no readable video track in this container".into());
@@ -399,6 +400,18 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
                 }
                 download_blob(destination, &original.blob)?;
                 Ok(original.blob.size() as u64)
+            })
+        })),
+        // checked before any sidecar download starts: undo of a download is not possible
+        original_check: Some(Box::new(|source, remove_location| {
+            let hash = crate::store::hash_of_path(source).ok_or("invalid browser original path")?;
+            VIDEO_BLOBS.with(|b| {
+                let b = b.borrow();
+                let original = b.get(hash).ok_or("the original video is still loading from browser storage; retry shortly")?;
+                if remove_location {
+                    original.location_check.clone()?;
+                }
+                Ok(())
             })
         })),
         // the browser download path has no meaningful create-new file write; the control channel
@@ -809,7 +822,7 @@ impl WebApp {
                 if video_hashes.contains(&hash) {
                     let result = async {
                         let blob = b.read_original_blob(&storage_key(&hash)).await?.ok_or("original is missing from browser storage")?;
-                        let location_check = match video_blob_metadata(&blob).await {
+                        let location_check = match video_blob_metadata(&blob, true).await {
                             Ok(metadata) => lightcraft_meta::verify_video_location_absent(&metadata),
                             Err(e) => Err(format!("cannot verify video location: {e}")),
                         };
@@ -958,33 +971,73 @@ impl WebApp {
         ready
     }
 
+    /// The IDs `export_active` would pick now: selected visible photos in grid order, then the
+    /// selected ones off screen; the active photo when nothing is selected. An empty list means
+    /// the export itself will report that there is nothing to export.
+    fn export_target_ids(&mut self) -> Vec<u64> {
+        if !self.app.session.selection.ids.is_empty() {
+            let selected: std::collections::HashSet<_> = self.app.session.selection.ids.iter().copied().collect();
+            let mut ids: Vec<_> = self.app.session.visible().iter().copied().filter(|id| selected.contains(id)).collect();
+            let shown: std::collections::HashSet<_> = ids.iter().copied().collect();
+            ids.extend(self.app.session.selection.ids.iter().copied().filter(|id| !shown.contains(id)));
+            ids.into_iter().map(|id| id.0).collect()
+        } else {
+            self.app.session.active().into_iter().map(|id| id.0).collect()
+        }
+    }
+
+    /// The settings an export command will use, for deciding whether it copies Originals.
+    fn resolved_export_params(&self, id: &str, p: &serde_json::Value) -> Option<serde_json::Value> {
+        use lightcraft_engine::export::ExportOptions;
+        match id {
+            "app.export" => self.app.session.export_params(p).ok(),
+            "app.exportPrevious" => self.app.session.last_export.as_ref().map(ExportOptions::known_keys_only),
+            _ => None,
+        }
+    }
+
     fn run_inbox(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::export::{ExportFormat, ExportOptions};
         let mut queue = PENDING_COMMANDS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         queue.extend(INBOX.with(|q| std::mem::take(&mut *q.borrow_mut())));
         let mut retry = VecDeque::new();
-        // Later commands wait behind one whose videos are still loading, so their order on screen
-        // stays the order JavaScript sent them in.
-        let mut blocked = false;
-        for (id, params, (resolve, reject)) in queue {
-            if blocked {
-                retry.push_back((id, params, (resolve, reject)));
-                continue;
-            }
+        // Exports whose Originals are loading keep their order between themselves (and with the
+        // commands already queued), but a status query such as `web.stats` must not wait for a
+        // storage read to settle.
+        let mut export_waiting = false;
+        for (id, mut params, (resolve, reject)) in queue {
             let parsed = crate::automation::params(&params);
-            if let Ok(p) = &parsed
-                && matches!(id.as_str(), "app.export" | "app.exportPrevious")
-                && !self.export_videos_loaded(p)
-            {
-                retry.push_back((id, params, (resolve, reject)));
-                blocked = true;
-                ctx.request_repaint();
-                continue;
-            }
-            let r = match parsed {
-                Err(e) => Err(format!("{id}: {e}")),
-                Ok(_) if id == "web.stats" => Ok(self.web_stats()),
-                Ok(params) => self.app.run(&id, params),
+            let mut p = match parsed {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = reject.call1(&JsValue::NULL, &format!("{id}: {e}").into());
+                    continue;
+                }
             };
+            if matches!(id.as_str(), "app.export" | "app.exportPrevious") {
+                // Freeze the targets now: the selection may change while a load finishes.
+                let resolved = self.resolved_export_params(&id, &p);
+                let has_ids =
+                    p.get("ids").is_some_and(|v| !v.is_null()) || resolved.as_ref().is_some_and(|r| r.get("ids").is_some_and(|v| !v.is_null()));
+                if !has_ids && p.is_object() {
+                    p["ids"] = json!(self.export_target_ids());
+                    params = p.to_string();
+                }
+                if export_waiting {
+                    retry.push_back((id, params, (resolve, reject)));
+                    continue;
+                }
+                // A rendered export reads no Original: only a copy can be waiting for storage.
+                let copies_original =
+                    resolved.as_ref().is_some_and(|r| ExportOptions::export_format(r, ExportFormat::default()) == ExportFormat::Original);
+                if copies_original && !self.export_videos_loaded(&p) {
+                    retry.push_back((id, params, (resolve, reject)));
+                    export_waiting = true;
+                    ctx.request_repaint();
+                    continue;
+                }
+            }
+            let r = if id == "web.stats" { Ok(self.web_stats()) } else { self.app.run(&id, p) };
             let _ = match r {
                 Ok(v) => resolve.call1(&JsValue::NULL, &v.to_string().into()),
                 Err(e) => reject.call1(&JsValue::NULL, &e.into()),

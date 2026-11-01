@@ -638,6 +638,9 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    // Keys whose retained structured value already holds text: later descriptions need not scan
+    // it again just to learn that it is not blank.
+    let mut text_values: std::collections::HashSet<String> = std::collections::HashSet::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
     let mut dropped = false;
@@ -650,11 +653,18 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
             for (key, value) in m {
                 match values.entry(key) {
                     std::collections::btree_map::Entry::Occupied(mut slot) => {
-                        if !value_has_text(slot.get()) && value_has_text(&value) {
+                        if text_values.contains(slot.key()) {
+                            continue;
+                        }
+                        if value_has_text(&value) {
+                            text_values.insert(slot.key().clone());
                             slot.insert(value);
                         }
                     }
                     std::collections::btree_map::Entry::Vacant(slot) => {
+                        if value_has_text(&value) {
+                            text_values.insert(slot.key().clone());
+                        }
                         slot.insert(value);
                     }
                 }

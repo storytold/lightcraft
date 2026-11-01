@@ -23,7 +23,7 @@ pub fn copy_original(source: &str, destination: &str, remove_location: bool) -> 
     let mut file = std::fs::File::open(source).map_err(|e| format!("{source}: {e}"))?;
     let before = file.metadata().map_err(|e| format!("{source}: {e}"))?;
     if remove_location {
-        let metadata = crate::files::read_video_metadata_from(&mut file, before.len(), source)?;
+        let metadata = crate::files::read_video_metadata_from_with_fragments(&mut file, before.len(), source, true)?;
         lightcraft_meta::verify_video_location_absent(&metadata).map_err(|e| format!("{source}: {e}"))?;
     }
     file.seek(SeekFrom::Start(0)).map_err(|e| format!("{source}: {e}"))?;
@@ -47,7 +47,8 @@ pub fn copy_original(source: &str, destination: &str, remove_location: bool) -> 
             if remove_location {
                 let mut copied = std::fs::File::open(tmp)?;
                 let len = copied.metadata()?.len();
-                let metadata = crate::files::read_video_metadata_from(&mut copied, len, source).map_err(std::io::Error::other)?;
+                let metadata =
+                    crate::files::read_video_metadata_from_with_fragments(&mut copied, len, source, true).map_err(std::io::Error::other)?;
                 lightcraft_meta::verify_video_location_absent(&metadata).map_err(|e| std::io::Error::other(format!("{destination}: {e}")))?;
             }
             Ok(())
@@ -61,6 +62,11 @@ pub type OriginalCopier<'a> = dyn FnMut(&str, &str, bool) -> Result<u64, String>
 
 /// Thread-safe host copier for background Original exports.
 pub type SharedOriginalCopier = std::sync::Arc<dyn Fn(&str, &str, bool) -> Result<u64, String> + Send + Sync>;
+
+/// Host preflight for an unchanged Original the copier will stream: source path and the
+/// location-removal policy. It only checks (the bytes stay unread), so a host whose download starts
+/// before the copy can refuse before writing anything.
+pub type OriginalCheck<'a> = dyn Fn(&str, bool) -> Result<(), String> + 'a;
 
 /// [`write_file`], synced to disk: for a written file that becomes a library photo (Edit a Copy)
 /// and so can't simply be exported again once the catalog points at it.
@@ -97,18 +103,30 @@ fn sidecar_path(main: &str, ext: &str) -> String {
 /// How large a previous sidecar may be to keep a copy for restoring after a failed export.
 const MAX_SIDECAR_BACKUP: u64 = 16 * 1024 * 1024;
 
-/// Put the sidecars a failed export replaced back, or remove the ones it created.
-fn restore_sidecars(write: &mut dyn FnMut(&str, &[u8]) -> Result<(), String>, previous: &[(String, Option<Vec<u8>>)]) {
+/// Put the sidecars a failed export replaced back, or remove the ones it created. Returns the
+/// paths that could not be restored so the export's own error can name them.
+fn restore_sidecars(write: &mut dyn FnMut(&str, &[u8]) -> Result<(), String>, previous: &[(String, Option<Vec<u8>>)]) -> Vec<String> {
+    let mut unrestored = Vec::new();
     for (path, bytes) in previous {
-        match bytes {
-            Some(bytes) => {
-                let _ = write(path, bytes);
-            }
-            None => {
-                let _ = std::fs::remove_file(path);
-            }
+        let restored = match bytes {
+            Some(bytes) => write(path, bytes).is_ok(),
+            // The sidecar did not exist before this export; remove what it created. A file that
+            // was never created is already in the desired state.
+            None => match std::fs::remove_file(path) {
+                Ok(()) => true,
+                Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+            },
+        };
+        if !restored {
+            unrestored.push(path.clone());
         }
     }
+    unrestored
+}
+
+/// A failed export's error, keeping its cause first and naming the sidecars it could not put back.
+fn restore_error(error: String, unrestored: Vec<String>) -> String {
+    if unrestored.is_empty() { error } else { format!("{error}; could not restore sidecar(s): {}", unrestored.join(", ")) }
 }
 
 /// Where a batch's files go: each photo's path (destination folder, subfolder, conflict policy,
@@ -123,6 +141,7 @@ pub(super) struct Placer<'a> {
     exists: &'a dyn Fn(&str) -> bool,
     stop_on_error: bool,
     pub(super) copy: Option<&'a mut OriginalCopier<'a>>,
+    pub(super) check: Option<&'a OriginalCheck<'a>>,
 }
 
 fn join_path(a: &str, b: &str) -> String {
@@ -137,7 +156,7 @@ impl<'a> Placer<'a> {
         exists: &'a dyn Fn(&str) -> bool,
         stop_on_error: bool,
     ) -> Placer<'a> {
-        Placer { o, to, single: false, taken: Default::default(), out: Vec::new(), write, exists, stop_on_error, copy: None }
+        Placer { o, to, single: false, taken: Default::default(), out: Vec::new(), write, exists, stop_on_error, copy: None, check: None }
     }
 
     /// The folder photo `name` (its original in `source_dir`) is written to: the batch's folder or
@@ -225,6 +244,7 @@ impl<'a> Placer<'a> {
             }
         };
         let file = path.clone().unwrap_or_else(|_| name.clone());
+        let check = self.check;
         let write = &mut *self.write;
         let copy = &mut self.copy;
         let mut byte_count = e.bytes.len() as u64;
@@ -234,26 +254,37 @@ impl<'a> Placer<'a> {
             for f in &files {
                 guard.check(std::path::Path::new(f))?;
             }
+            // A streaming host (the browser) starts a download as soon as it is asked to copy:
+            // check that the original is loaded and may be published before writing any sidecar.
+            if let (Some((source, remove_location)), Some(check)) = (&original, check) {
+                check(source, *remove_location)?;
+            }
             // Keep the previous sidecars in memory so a failure after replacing some (or after
             // replacing the clip) can put the group back together instead of pairing a new clip
             // with old metadata, or the reverse.
-            let previous: Vec<(String, Option<Vec<u8>>)> = files
-                .iter()
-                .skip(1)
-                .filter_map(|sc| match std::fs::metadata(sc) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some((sc.clone(), None)),
-                    // Only a small file is backed up; anything else is left as it is rather than
-                    // removed by a later restore that cannot put it back.
-                    Ok(m) if m.is_file() && m.len() <= MAX_SIDECAR_BACKUP => std::fs::read(sc).ok().map(|bytes| (sc.clone(), Some(bytes))),
-                    _ => None,
-                })
-                .collect();
+            // Every existing sidecar is backed up before any is replaced (or the export stops here, with
+            // nothing touched), so a failed clip copy can always put the metadata back.
+            let mut previous: Vec<(String, Option<Vec<u8>>)> = Vec::new();
+            for sc in files.iter().skip(1) {
+                match std::fs::metadata(sc) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => previous.push((sc.clone(), None)),
+                    Err(e) => return Err(format!("{sc}: can't inspect the existing sidecar before export: {e}")),
+                    Ok(m) if m.is_file() => {
+                        if m.len() > MAX_SIDECAR_BACKUP {
+                            return Err(format!("{sc}: the existing sidecar is too large to back up before export"));
+                        }
+                        let bytes = std::fs::read(sc).map_err(|e| format!("{sc}: can't back up the existing sidecar: {e}"))?;
+                        previous.push((sc.clone(), Some(bytes)));
+                    }
+                    Ok(_) => {}
+                }
+            }
             // Sidecars first: a metadata write failure leaves the previous clip untouched.
             let mut sidecars = Vec::new();
             for ((_, bytes), sc) in e.sidecars.iter().zip(files.iter().skip(1)) {
                 if let Err(e) = write(sc, bytes) {
-                    restore_sidecars(&mut *write, &previous);
-                    return Err(e);
+                    let unrestored = restore_sidecars(&mut *write, &previous);
+                    return Err(restore_error(e, unrestored));
                 }
                 sidecars.push(sc.clone());
             }
@@ -264,8 +295,8 @@ impl<'a> Placer<'a> {
                 write(&path, &e.bytes)
             };
             if let Err(e) = main {
-                restore_sidecars(&mut *write, &previous);
-                return Err(e);
+                let unrestored = restore_sidecars(&mut *write, &previous);
+                return Err(restore_error(e, unrestored));
             }
             Ok((path, files, sidecars))
         });

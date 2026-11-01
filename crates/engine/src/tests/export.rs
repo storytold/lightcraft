@@ -132,6 +132,40 @@ fn original_video_location_removal_refuses_native_gps_but_allows_location_free_c
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A host preflight runs before the sidecars are written: a browser download that would fail its
+/// Original check starts no download at all.
+#[test]
+fn a_streamed_original_preflight_runs_before_its_sidecars() {
+    use crate::export::{Conflict, Destination};
+    let dir = temp_dir("video-preflight");
+    let path = dir.join("clip.mp4");
+    std::fs::write(&path, super::import::synthetic_mp4(1000, 1000, 640, 360, 0)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let o = ExportOptions { format: ExportFormat::Original, naming: "{name}".into(), conflict: Conflict::Overwrite, ..Default::default() };
+    let out = dir.join("out");
+    let to = Destination { dir: out.to_string_lossy().to_string(), exact: None };
+    let items = crate::export::prepare_batch(&mut s, &[id], &o).unwrap();
+    let check = |_: &str, _: bool| Err("the original video is still loading".to_string());
+    let check: &crate::export::OriginalCheck = &check;
+    let error = crate::export::run_batch_with_copy_and_check(
+        items,
+        &o,
+        &to,
+        &mut |_, _| panic!("nothing may be downloaded or written"),
+        &|_| false,
+        true,
+        &mut |_, _| true,
+        Some(&mut crate::export::copy_original),
+        Some(check),
+    )
+    .unwrap_err();
+    assert!(error.contains("still loading"), "{error}");
+    assert!(!out.join("clip.xmp").exists(), "the sidecar is written only after the check");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The flattened XMP property inventory is bounded: a packet that buries its GPS past the budget
 /// must not look location-free to either Original export path, buffered or streaming.
 #[test]

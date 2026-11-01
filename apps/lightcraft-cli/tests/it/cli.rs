@@ -108,6 +108,7 @@ fn render_refuses_video_without_claiming_an_output_but_original_still_copies_it(
     mvhd[12..16].copy_from_slice(&1000u32.to_be_bytes());
     mvhd[16..20].copy_from_slice(&1000u32.to_be_bytes());
     let mut tkhd = [0; 84];
+    tkhd[3] = 1; // track_enabled
     tkhd[76..80].copy_from_slice(&(640u32 << 16).to_be_bytes());
     tkhd[80..84].copy_from_slice(&(360u32 << 16).to_be_bytes());
     let hdlr = [0u32.to_be_bytes().as_slice(), &0u32.to_be_bytes(), b"vide"].concat();

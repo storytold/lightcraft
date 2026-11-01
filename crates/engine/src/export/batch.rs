@@ -1,7 +1,7 @@
 use super::ExportOptions;
 use super::place::Placer;
 use super::prepare::{Destination, PreparedExport};
-use super::{OriginalCopier, Ran};
+use super::{OriginalCheck, OriginalCopier, Ran};
 
 /// Run prepared exports in order: pick each one's path, and hand the bytes (and sidecars) to
 /// `write`. `exists` tells whether a path is taken. The conflict policy applies to a file and its
@@ -39,9 +39,28 @@ pub fn run_batch_with_copy<'a>(
     progress: &mut dyn FnMut(usize, &str) -> bool,
     copy: Option<&'a mut OriginalCopier<'a>>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    run_batch_with_copy_and_check(items, o, to, write, exists, stop_on_error, progress, copy, None)
+}
+
+/// [`run_batch_with_copy`] with a host preflight run before an Original's sidecars are written:
+/// the browser uses it to refuse a clip that is not loaded (or has a location) before it starts a
+/// download.
+#[allow(clippy::too_many_arguments)]
+pub fn run_batch_with_copy_and_check<'a>(
+    items: Vec<PreparedExport>,
+    o: &'a ExportOptions,
+    to: &'a Destination,
+    write: &'a mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
+    exists: &'a dyn Fn(&str) -> bool,
+    stop_on_error: bool,
+    progress: &mut dyn FnMut(usize, &str) -> bool,
+    copy: Option<&'a mut OriginalCopier<'a>>,
+    check: Option<&'a OriginalCheck<'a>>,
+) -> Result<Vec<serde_json::Value>, String> {
     let lanes = export_parallelism(items.len());
     let mut placer = Placer::new(o, to, write, exists, stop_on_error);
     placer.copy = copy;
+    placer.check = check;
     run_batch_with(items, &mut placer, progress, lanes)
 }
 

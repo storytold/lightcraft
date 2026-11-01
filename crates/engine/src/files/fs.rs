@@ -114,11 +114,25 @@ pub fn video_box_info(header: &[u8], at: u64, file_len: u64) -> Result<([u8; 4],
 
 /// Boxes retained for metadata probing and fail-closed location verification.
 pub fn is_video_metadata_box(kind: &[u8; 4]) -> bool {
-    matches!(kind, b"moov" | b"moof" | b"ftyp" | b"meta" | b"uuid" | b"udta" | b"\xa9xyz" | b"loci" | b"XMP_")
+    matches!(kind, b"moov" | b"ftyp" | b"meta" | b"uuid" | b"udta" | b"\xa9xyz" | b"loci" | b"XMP_")
 }
 
 /// Stage metadata from an already opened original, keeping verification and copy on one handle.
+/// Fragmented `moof` boxes are left out: display and probing read the movie header, and an import
+/// must not fail because a clip has many fragments.
 pub(crate) fn read_video_metadata_from(f: &mut (impl std::io::Read + std::io::Seek), file_len: u64, path: &str) -> Result<Vec<u8>, String> {
+    read_video_metadata_from_with_fragments(f, file_len, path, false)
+}
+
+/// [`read_video_metadata_from`], optionally retaining top-level `moof` fragments for the location
+/// check (where fragment metadata can hide). Retained metadata stays under the 64 MiB cap; a clip
+/// past it cannot be verified and the check fails closed.
+pub(crate) fn read_video_metadata_from_with_fragments(
+    f: &mut (impl std::io::Read + std::io::Seek),
+    file_len: u64,
+    path: &str,
+    include_fragments: bool,
+) -> Result<Vec<u8>, String> {
     use std::io::SeekFrom;
     let mut out = Vec::new();
     let mut at = 0u64;
@@ -136,7 +150,7 @@ pub(crate) fn read_video_metadata_from(f: &mut (impl std::io::Read + std::io::Se
         }
         let (kind, total_len) = video_box_info(&hdr, at, file_len).map_err(|e| format!("{path}: {e}"))?;
         let end = at.checked_add(total_len).ok_or("video box offset overflow")?;
-        if is_video_metadata_box(&kind) {
+        if is_video_metadata_box(&kind) || (include_fragments && &kind == b"moof") {
             let box_len = usize::try_from(total_len).map_err(|_| format!("{path}: video metadata box is too large"))?;
             // Per box and in all: many small boxes must not add up past the working-memory cap.
             if total_len > MAX_BOX_SIZE || out.len().saturating_add(box_len) > MAX_BOX_SIZE as usize {
@@ -202,6 +216,12 @@ fn probe_video_file(f: &mut std::fs::File, path: &str, file_len: u64) -> Result<
         _ => "MP4".to_string(),
     };
     let content_hash = Some(hash_file_stream(f, path)?);
+    // Hashing rewinds and reads the whole file: if the boxes changed meanwhile, the hash no
+    // longer describes the metadata and neither can be catalogued.
+    let after_boxes = read_video_metadata_from(f, file_len, path)?;
+    if after_boxes != meta_bytes {
+        return Err(format!("{path}: original changed while probing; retry when it is no longer being written"));
+    }
     Ok(ProbeInfo {
         width: w,
         height: h,

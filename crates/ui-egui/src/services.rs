@@ -101,6 +101,9 @@ pub struct Services {
     pub original_copy: Option<Box<lightcraft_engine::export::OriginalCopier<'static>>>,
     /// Thread-safe Original copier for background exports.
     pub original_copy_shared: Option<lightcraft_engine::export::SharedOriginalCopier>,
+    /// Check (without copying) that a streamed Original is ready and may be published. The browser
+    /// uses it so an unloaded clip or a location check refusal happens before a download starts.
+    pub original_check: Option<Box<dyn Fn(&str, bool) -> Result<(), String>>>,
     /// PNG encoder (the host links an image encoder; the UI crate stays codec-free).
     pub png: Option<PngEncode>,
     /// Show a file in the system file manager (desktop only).

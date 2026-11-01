@@ -236,7 +236,7 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
 /// Read a video without trusting a possibly stale catalog size or allowing growth to extend the
 /// allocation. Byte-returning exports check platform capacity and known physical RAM.
 fn read_video_original(path: &str) -> Result<Vec<u8>, String> {
-    use std::io::Read;
+    use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let before = file.metadata().map_err(|e| format!("{path}: {e}"))?;
     let size = before.len();
@@ -246,9 +246,24 @@ fn read_video_original(path: &str) -> Result<Vec<u8>, String> {
     bytes.try_reserve_exact(len).map_err(|e| format!("{path}: can't allocate original: {e}"))?;
     bytes.resize(len, 0);
     file.read_exact(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-    let mut extra = [0u8; 1];
     let after = file.metadata().map_err(|e| format!("{path}: {e}"))?;
-    if file.read(&mut extra).map_err(|e| format!("{path}: {e}"))? != 0
+    // Read it again and compare in chunks: the size and mtime can be unchanged while the bytes
+    // are not (rewritten in place), and this avoids a second full copy.
+    file.seek(SeekFrom::Start(0)).map_err(|e| format!("{path}: {e}"))?;
+    let mut buf = vec![0u8; 1 << 16];
+    let mut at = 0usize;
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("{path}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let expected = bytes.get(at..at.saturating_add(n));
+        if expected != Some(buf.get(..n).unwrap_or(&[])) {
+            return Err(format!("{path}: original changed during export; retry when the file is no longer being written"));
+        }
+        at = at.saturating_add(n);
+    }
+    if at != len
         || after.len() != size
         || after.modified().map_err(|e| format!("{path}: {e}"))? != before.modified().map_err(|e| format!("{path}: {e}"))?
     {

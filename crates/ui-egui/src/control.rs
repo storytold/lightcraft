@@ -603,13 +603,14 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
         crate::export_task::start(app, items, opts, to, after)?
     } else {
+        let check = app.services.original_check.as_deref();
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let copy = app.services.original_copy.as_mut();
         let can_copy = copy.is_some();
         let mut copy = copy;
         let mut copier = |from: &str, to: &str, remove: bool| copy.as_mut().ok_or("no Original copier")?(from, to, remove);
         let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
-        let files = lightcraft_engine::export::run_batch_with_copy(
+        let files = lightcraft_engine::export::run_batch_with_copy_and_check(
             items,
             &opts,
             &to,
@@ -618,6 +619,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
             true,
             &mut |_, _| true,
             if can_copy { Some(&mut copier) } else { None },
+            check,
         )?;
         let mut out = json!({"files": files});
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a

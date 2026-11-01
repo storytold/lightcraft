@@ -3038,17 +3038,23 @@ fn video_metadata_after_thousands_of_fragments_is_read_without_the_payloads() {
     }
     fragmented.extend_from_slice(&file[ftyp_len..]);
     let mut reader = std::io::Cursor::new(&fragmented);
+    // Import and display skip fragments entirely: their payloads never count against the cap.
     let metadata = crate::files::read_video_metadata_from(&mut reader, fragmented.len() as u64, "fragmented.mp4").unwrap();
-    // `moof` can hold metadata (and is needed for the fail-closed location check); the media
-    // payload boxes are still skipped.
+    assert_eq!(metadata, file, "fragment boxes are skipped; only the movie metadata is retained");
+    assert_eq!(lightcraft_meta::probe_video(&metadata).unwrap().duration, Some(84.5));
+
+    // The location check asks for the fragments too: their metadata may hide a place. Payload
+    // boxes (mdat) are still skipped.
     let mut expected = file[..ftyp_len].to_vec();
     for _ in 0..2048 {
         expected.extend_from_slice(&8u32.to_be_bytes());
         expected.extend_from_slice(b"moof");
     }
     expected.extend_from_slice(&file[ftyp_len..]);
-    assert_eq!(metadata, expected, "fragment payloads are skipped; moof metadata is retained");
-    assert_eq!(lightcraft_meta::probe_video(&metadata).unwrap().duration, Some(84.5));
+    let mut reader = std::io::Cursor::new(&fragmented);
+    let with_fragments = crate::files::read_video_metadata_from_with_fragments(&mut reader, fragmented.len() as u64, "fragmented.mp4", true).unwrap();
+    assert_eq!(with_fragments, expected, "fragment payloads are skipped; moof metadata is retained for verification");
+    assert_eq!(lightcraft_meta::probe_video(&with_fragments).unwrap().duration, Some(84.5));
 }
 
 #[test]
