@@ -141,16 +141,18 @@ fn is_jxl(b: &[u8]) -> bool {
 /// The bytes a file's own (offset, length) pair names, cut at the file's end; `None` when the offset
 /// lies past it. Both numbers come from the file: never cast them (a `u64` offset past 4 GiB would
 /// wrap to a small, wrong one on a 32-bit build) nor add them unchecked. A span the file's end cuts
-/// short is kept only when it is a JPEG whose own end marker is inside it (an overstated length with
-/// the whole JPEG inside), cut at that marker: a truncated JPEG passes the frame-header check, would
-/// win as the largest preview and then fail to decode (CodeRabbit on #3077). An `FF D9` inside an
-/// APP payload doesn't count, and bytes that don't start a JPEG are refused without a scan.
-fn file_span(data: &[u8], offset: u64, len: u64) -> Option<&[u8]> {
+/// short is kept only when it is a JPEG whose own end marker is inside it, after its scan (an
+/// overstated length with the whole JPEG inside), cut at that marker: a truncated JPEG passes the
+/// frame-header check, would win as the largest preview and then fail to decode (CodeRabbit on
+/// #3077). An `FF D9` inside an APP payload doesn't count, bytes that don't start a JPEG are refused
+/// without a scan, and the walks share `budget` (bytes, as [`scan_with_budget`]'s do), so a file of
+/// many such pointers stays linear.
+fn file_span<'a>(data: &'a [u8], offset: u64, len: u64, budget: &mut usize) -> Option<&'a [u8]> {
     let start = usize::try_from(offset).ok()?;
     let wanted = usize::try_from(offset.saturating_add(len)).unwrap_or(usize::MAX);
     let span = data.get(start..wanted.min(data.len()))?;
     if wanted > data.len() {
-        return span.get(..jpeg_end(span)?);
+        return span.get(..jpeg_end(span, budget)?);
     }
     Some(span)
 }
@@ -158,17 +160,20 @@ fn file_span(data: &[u8], offset: u64, len: u64) -> Option<&[u8]> {
 /// Where the JPEG at the start of `s` ends (just past its end marker), walking its marker segments:
 /// a segment's payload is skipped by its stated length (so an `FF D9` inside APP data isn't taken
 /// for the end), entropy-coded bytes one at a time (stuffed `FF 00` and restart markers included).
-/// `None` when `s` isn't a JPEG or ends first. Each step moves forward, so it ends within `s`.
-fn jpeg_end(s: &[u8]) -> Option<usize> {
+/// `None` when `s` isn't a JPEG, ends first, reaches its end marker before a start of scan (no image
+/// data), or the walk spends `budget` (one per step, shared by a file's walks). Each step moves
+/// forward, so it ends within `s`.
+fn jpeg_end(s: &[u8], budget: &mut usize) -> Option<usize> {
     if !s.starts_with(&[0xff, 0xd8]) {
         return None;
     }
-    let mut i = 2usize;
+    let (mut i, mut scanned) = (2usize, false);
     loop {
+        *budget = budget.checked_sub(1)?;
         match (s.get(i), s.get(i.checked_add(1)?)) {
             (None, _) | (Some(&0xff), None) => return None,
             (Some(&0xff), Some(&m)) => match m {
-                0xd9 => return i.checked_add(2),
+                0xd9 => return if scanned { i.checked_add(2) } else { None },
                 // fill byte
                 0xff => i += 1,
                 // stuffed zero, restart marker, TEM: no length follows
@@ -179,6 +184,7 @@ fn jpeg_end(s: &[u8]) -> Option<usize> {
                     if len < 2 {
                         return None;
                     }
+                    scanned |= m == 0xda;
                     i = i.checked_add(2)?.checked_add(len)?;
                 }
             },
@@ -188,12 +194,12 @@ fn jpeg_end(s: &[u8]) -> Option<usize> {
     }
 }
 
-fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>) {
+fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>, budget: &mut usize) {
     // whole JPEG files stored as an undefined-type tag value (e.g. Panasonic `JpgFromRaw` 0x002e)
     for e in &ifd.entries {
         if matches!(e.value, lightcraft_tiff::Value::Undefined(_))
             && e.count() > 1024
-            && let Some(s) = file_span(data, e.offset, e.count() as u64)
+            && let Some(s) = file_span(data, e.offset, e.count() as u64, budget)
             && s.starts_with(&[0xff, 0xd8])
         {
             out.push(s);
@@ -201,7 +207,7 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>)
     }
     if let (Some(off), Some(len)) = (ifd.u64(t::JPEG_INTERCHANGE_FORMAT), ifd.u64(t::JPEG_INTERCHANGE_FORMAT_LENGTH)) {
         let off = off.saturating_add(base);
-        if let Some(s) = file_span(data, off, len) {
+        if let Some(s) = file_span(data, off, len, budget) {
             out.push(s);
         }
     }
@@ -279,8 +285,10 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     }
     let tiff = Tiff::parse(bytes).ok()?;
     let mut found: Vec<&[u8]> = Vec::new();
+    // the walks of pointers past the file's end share one budget (see file_span)
+    let mut budget = scan_budget(bytes.len());
     for ifd in tiff.all_ifds() {
-        candidates(bytes, ifd, 0, &mut found);
+        candidates(bytes, ifd, 0, &mut found, &mut budget);
     }
     // maker-note preview IFDs (e.g. Nikon PreviewIFD 0x0011 holds JPEGInterchangeFormat relative to the note base)
     if let Some(exif) = tiff.exif()
@@ -288,11 +296,11 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     {
         let make = tiff.find(t::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default();
         if let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make) {
-            candidates(bytes, &mn.ifd, mn.base, &mut found);
+            candidates(bytes, &mn.ifd, mn.base, &mut found, &mut budget);
             if let Some(off) = mn.ifd.u64(0x0011)
                 && let Ok((pifd, _)) = lightcraft_tiff::parse_ifd_at(bytes, mn.base + off, mn.order, mn.base, false, &Default::default())
             {
-                candidates(bytes, &pifd, mn.base, &mut found);
+                candidates(bytes, &pifd, mn.base, &mut found, &mut budget);
             }
         }
     }

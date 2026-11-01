@@ -719,6 +719,9 @@ fn a_preview_cut_short_by_the_end_of_the_file_is_not_taken() {
         file.extend_from_slice(tail);
         file
     };
+    // the big one with a start of scan after its frame header (sized_jpeg has none), as a real JPEG
+    let mut big = big;
+    big.splice(21..21, [0xff, 0xda, 0x00, 0x02]);
     let declared = big.len() as u32 + 64;
     // cut short: half of the big JPEG, no end marker
     let cut = with_tail(&big[..big.len() / 2], declared);
@@ -737,14 +740,18 @@ fn a_preview_cut_short_by_the_end_of_the_file_is_not_taken() {
     tail.extend_from_slice(&[0x11, 0xff, 0xd9, 0x22]);
     let whole = with_tail(&tail, declared);
     assert_eq!(embedded_preview(&whole).as_deref(), Some(&with_app[..]), "a whole JPEG is cut at its own end");
+    // an end marker before any start of scan: no image data, not taken (CodeRabbit on #3080)
+    let unscanned = sized_jpeg(1600, 1200, 3, 4000);
+    let whole = with_tail(&unscanned, unscanned.len() as u32 + 64);
+    assert_eq!(embedded_preview(&whole).as_deref(), Some(&small[..]), "a JPEG without a scan is not taken");
 }
 
 /// The walk to a JPEG's end refuses what isn't one and never runs past the bytes it has.
 #[test]
 fn the_end_of_a_jpeg_is_its_own_end_marker() {
-    use super::jpeg_end;
+    let jpeg_end = |s: &[u8]| super::jpeg_end(s, &mut (1usize << 20));
     assert_eq!(jpeg_end(&[0x12, 0x34, 0xff, 0xd9]), None, "not a JPEG");
-    assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xd9]), Some(4));
+    assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xd9]), None, "an end before any scan: no image data");
     // a stuffed zero and a restart marker in the scan data, then the end
     assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0x55, 0xff, 0x00, 0xff, 0xd3, 0x66, 0xff, 0xd9]), Some(14));
     // a segment length of 0 or 1, or one running past the end
@@ -753,4 +760,19 @@ fn the_end_of_a_jpeg_is_its_own_end_marker() {
     for n in 0..12 {
         assert_eq!(jpeg_end(&[0xff, 0xd8, 0xff, 0xe1, 0x00, 0x04, 0xff, 0xd9, 0x55, 0xff, 0xff, 0xff][..n]), None, "{n} bytes");
     }
+}
+
+/// CodeRabbit on #3080: the walks to a JPEG's end share one budget, so a file of many pointers past
+/// its end can't make each walk run the whole file: a walk that would overspend it gives up.
+#[test]
+fn the_walks_to_a_jpegs_end_share_a_budget() {
+    use super::jpeg_end;
+    let mut j = vec![0xff, 0xd8, 0xff, 0xda, 0x00, 0x02];
+    j.extend(std::iter::repeat_n(0x55u8, 1000));
+    j.extend_from_slice(&[0xff, 0xd9]);
+    let mut budget = 1500;
+    assert_eq!(jpeg_end(&j, &mut budget), Some(j.len()), "the first walk fits");
+    assert!(budget < 1500 - 1000, "and is charged for its steps: {budget} left");
+    assert_eq!(jpeg_end(&j, &mut budget), None, "the second would overspend what is left");
+    assert_eq!(budget, 0);
 }
