@@ -308,11 +308,23 @@ fn share_lives_in_the_file_menu_and_the_top_bar() {
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::FlickrUpload { .. })), "{:?}", h.app.ui.dialog.is_some());
 }
 
+/// Sends on drop, so the stand-in's held answer is released on every way out of a test (a failed
+/// assertion included) and its thread ends.
+struct Release(std::sync::mpsc::Sender<()>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
 #[test]
 fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
-    // Flickr refuses the upload's (old) sign-in, slowly
+    // Flickr refuses the upload's (old) sign-in, once the test lets it answer
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release = Release(release_tx);
     std::thread::spawn(move || {
         for s in l.incoming() {
             let Ok(mut s) = s else { break };
@@ -325,7 +337,8 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
                 }
                 got.extend_from_slice(&buf[..n]);
             }
-            std::thread::sleep(Duration::from_millis(800));
+            // held until the test releases it (or gives up after T)
+            let _ = release_rx.recv_timeout(T);
             let body = "<rsp stat=\"fail\"><err code=\"98\" msg=\"Invalid auth token\" /></rsp>";
             let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         }
@@ -334,10 +347,18 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
     signed_in(&mut h);
     let id = h.app.session.catalog.photos().next().unwrap().id.0;
     h.app.run("flickr.upload", json!({"ids": [id], "longEdge": 128})).unwrap();
-    // while it runs, Settings won't sign out or in
+    // while it runs (its answer is held), Settings won't sign out or in
     settings(&mut h);
-    let disabled = |h: &Headless, id: &str| h.app.flickr.uploading() && has(h, id);
-    assert!(disabled(&h, "button:flickrSignOut"), "Sign Out is shown but held while uploading");
+    assert!(h.app.flickr.uploading() && has(&h, "button:flickrSignOut"), "Sign Out is shown");
+    h.request("ui.clickWidget", json!({"id": "button:flickrSignOut"}), T);
+    h.step();
+    assert!(h.app.flickr.uploading(), "the upload is still held");
+    assert_eq!(h.app.session.flickr_status()["signedIn"], true, "a click on the held Sign Out does nothing");
+    // nor does the command, from an agent
+    assert!(h.app.run("flickr.signOut", json!({})).is_err());
+    assert!(h.request("engine.execute", json!({"command": "flickr.signOut"}), T)["error"].is_string());
+    assert!(h.app.run("flickr.setApiKey", json!({"key": "other", "secret": "key"})).is_err(), "a new key would sign out too");
+    assert_eq!(h.app.session.flickr_status()["signedIn"], true);
     assert!(h.app.run("flickr.signIn", json!({})).is_err() || h.app.flickr.busy.is_some() || h.app.flickr.uploading());
     // another account signs in anyway (through the engine, as an agent could)
     h.app
@@ -350,6 +371,7 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
             fullname: String::new(),
         })
         .unwrap();
+    drop(release);
     assert!(h.step_until(T, |h| h.app.flickr.last_result.is_some()), "the upload ends");
     assert_eq!(h.app.flickr.last_result.as_ref().unwrap()["signInNeeded"], true);
     assert_eq!(h.app.session.flickr_status()["username"], "dorothea", "the account connected meanwhile stays signed in");
@@ -370,4 +392,83 @@ fn albums_through_the_control_channel_load_in_the_background() {
     let flickr = &inspect["result"]["flickr"];
     assert_eq!(flickr["albumsLoading"], false);
     assert_eq!(flickr["albums"], json!([{"id": "501", "title": "Portfolio", "photos": 9}, {"id": "502", "title": "Travel", "photos": 4}]));
+}
+
+#[test]
+fn the_album_list_belongs_to_the_signed_in_account() {
+    let base = fake(Duration::from_millis(300));
+    let (mut h, _) = app(&base);
+    signed_in(&mut h);
+    h.app.run("flickr.albums", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.albums.is_some()));
+    // another account signs in: the first one's list goes
+    h.app
+        .session
+        .flickr_finish_sign_in(lightcraft_engine::flickr::Token {
+            token: "account-b".into(),
+            secret: "b-secret".into(),
+            user_nsid: "8@N01".into(),
+            username: "dorothea".into(),
+            fullname: String::new(),
+        })
+        .unwrap();
+    h.step();
+    assert!(h.app.flickr.albums.is_none(), "account A's albums aren't offered for account B");
+    // a read started for B, then a switch back to A before it answers: B's list is ignored
+    h.app.run("flickr.albums", json!({})).unwrap();
+    signed_in(&mut h);
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(h.app.flickr.albums_account.as_deref(), Some("acc"));
+    assert!(h.app.flickr.albums.is_none(), "the late answer for account B is dropped");
+}
+
+#[test]
+fn the_dialog_says_why_there_are_no_albums() {
+    let (mut h, _) = app("http://127.0.0.1:9");
+    // signed in, but with no API key: the albums can't even be asked for
+    h.app
+        .session
+        .flickr_finish_sign_in(lightcraft_engine::flickr::Token { token: "acc".into(), secret: "accsecret".into(), ..Default::default() })
+        .unwrap();
+    if lightcraft_engine::flickr::albums_request(&h.app.session).is_ok() {
+        return; // a build with its own key can always ask
+    }
+    h.app.run("dialog.flickrUpload", json!({})).unwrap();
+    assert!(h.app.flickr.albums_error.is_some(), "the dialog shows a reason, not an empty list");
+}
+
+#[test]
+fn a_cancelled_sign_in_does_not_come_back() {
+    let base = fake(Duration::from_millis(400));
+    let (mut h, opened) = app(&base);
+    h.app.session.flickr_set_api_key("k", "s").unwrap();
+    // cancelled while Flickr is still giving the request token
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    h.app.run("flickr.cancelSignIn", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.busy.is_none()), "the step ends");
+    assert_eq!(h.app.session.flickr_status()["pending"], false, "nothing resumed");
+    assert!(opened.lock().unwrap().is_empty(), "no approval page opened");
+    // cancelled while the code is being exchanged: the token is dropped
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.session.flickr_status()["pending"] == true));
+    h.app.run("flickr.completeSignIn", json!({"code": "123-456-789"})).unwrap();
+    h.app.run("flickr.cancelSignIn", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.busy.is_none()));
+    assert_eq!(h.app.session.flickr_status()["signedIn"], false, "a cancelled sign-in never becomes the account");
+}
+
+#[test]
+fn the_key_field_follows_a_key_changed_elsewhere() {
+    let (mut h, _) = app("http://127.0.0.1:9");
+    h.app.session.flickr_set_api_key("first", "s1").unwrap();
+    settings(&mut h);
+    assert_eq!(h.app.flickr.key, "first");
+    // an agent sets another key
+    h.app.run("flickr.setApiKey", json!({"key": "second", "secret": "s2"})).unwrap();
+    h.step();
+    h.step();
+    assert_eq!(h.app.flickr.key, "second", "Save Key would otherwise send the old key");
 }

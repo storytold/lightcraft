@@ -184,6 +184,20 @@ fn uploads_rendered_photos_with_their_titles_captions_and_keywords() {
 }
 
 #[test]
+fn only_you_uploads_private_on_the_wire() {
+    let (base, seen) = fake(flickr_ok);
+    let mut s = signed_in(&base);
+    let id = s.catalog.photos().next().unwrap().id.0;
+    let r = s.execute("flickr.upload", &json!({"ids": [id], "longEdge": 128, "privacy": "private"})).unwrap();
+    assert_eq!(r["uploaded"].as_u64(), Some(1), "{r}");
+    let seen = seen.lock().unwrap();
+    let body = String::from_utf8_lossy(&seen[0].body).to_string();
+    for field in ["is_public", "is_friend", "is_family"] {
+        assert!(body.contains(&format!("name=\"{field}\"\r\n\r\n0\r\n")), "{field} is 0 for Only you");
+    }
+}
+
+#[test]
 fn a_refused_sign_in_stops_the_upload_and_signs_out() {
     let (base, seen) = fake(|_, _| (200, "<rsp stat=\"fail\"><err code=\"98\" msg=\"Invalid auth token\" /></rsp>".into()));
     let mut s = signed_in(&base);

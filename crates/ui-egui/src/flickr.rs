@@ -98,6 +98,14 @@ pub struct FlickrUi {
     pub albums_loading: bool,
     /// Why the albums could not be read.
     pub albums_error: Option<String>,
+    /// The sign-in the album list (and a read in progress) belongs to: its token's public half.
+    /// When the signed-in account changes, the list is dropped and a late answer is ignored.
+    pub albums_account: Option<String>,
+    /// Counts sign-in attempts: Cancel moves it on, so a request-token answer that arrives after
+    /// it neither resumes the sign-in nor opens the browser.
+    pub sign_in_attempt: u64,
+    /// The stored API key the Key field was last filled from (a key changed elsewhere refills it).
+    pub loaded_key: String,
     /// An upload in progress.
     #[cfg(not(target_arch = "wasm32"))]
     pub upload: Option<UploadTask>,
@@ -140,7 +148,17 @@ impl FlickrUi {
 
 /// The `flickr.*` and `dialog.flickrUpload` commands, run the desktop app's way.
 pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
-    if !matches!(id, "dialog.flickrUpload" | "flickr.upload" | "flickr.albums" | "flickr.signIn" | "flickr.completeSignIn" | "flickr.cancelSignIn") {
+    if !matches!(
+        id,
+        "dialog.flickrUpload"
+            | "flickr.upload"
+            | "flickr.albums"
+            | "flickr.signIn"
+            | "flickr.completeSignIn"
+            | "flickr.cancelSignIn"
+            | "flickr.signOut"
+            | "flickr.setApiKey"
+    ) {
         return None;
     }
     #[cfg(target_arch = "wasm32")]
@@ -196,6 +214,7 @@ mod native {
     }
 
     pub(super) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+        scope_albums(app);
         match id {
             "dialog.flickrUpload" => {
                 if app.session.flickr_token().is_none() {
@@ -210,8 +229,10 @@ mod native {
                     ..app.flickr.last_dialog.clone().unwrap_or_default()
                 };
                 app.ui.dialog = Some(Dialog::FlickrUpload { opts });
-                // the dialog says so if the list can't be read
-                let _ = load_albums(app);
+                // the dialog says why when the list can't even be asked for
+                if let Err(e) = load_albums(app) {
+                    app.flickr.albums_error = Some(e);
+                }
                 Ok(Value::Null)
             }
             // read on a worker thread like the dialog's list (it can take many pages): the result
@@ -226,7 +247,17 @@ mod native {
                 let code = p.get("code").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| app.flickr.code.clone());
                 complete_sign_in(app, code)
             }
+            // an upload keeps the sign-in it started with, as in Settings: no signing out, and no
+            // new key (which signs out), until it ends
+            "flickr.signOut" | "flickr.setApiKey" => {
+                if app.flickr.uploading() {
+                    return Err(crate::i18n::tr("Wait for the upload to Flickr to finish (or stop it) first").to_string());
+                }
+                app.session.execute(id, p).map_err(|e| e.to_string())
+            }
             "flickr.cancelSignIn" => {
+                // a request-token answer still on its way is ignored when it comes
+                app.flickr.sign_in_attempt = app.flickr.sign_in_attempt.wrapping_add(1);
                 app.session.flickr_cancel_sign_in();
                 app.flickr.authorize_url = None;
                 app.flickr.code.clear();
@@ -245,13 +276,19 @@ mod native {
             return Ok(());
         }
         let (client, token) = lightcraft_engine::flickr::albums_request(&app.session)?;
+        let account = token.token.clone();
+        app.flickr.albums_account = Some(account.clone());
         app.flickr.albums_loading = true;
         let r = crate::tasks::spawn(
             app,
             "Reading Flickr albums",
             None,
             move || lightcraft_engine::flickr::list_albums(&client, &token, &AtomicBool::new(false)),
-            |app, _, r| {
+            move |app, _, r| {
+                // another account signed in meanwhile: this list isn't its list
+                if current_account(app).as_deref() != Some(account.as_str()) {
+                    return;
+                }
                 app.flickr.albums_loading = false;
                 match r {
                     Ok(list) => {
@@ -269,6 +306,23 @@ mod native {
         Ok(())
     }
 
+    /// The signed-in account (its token's public half).
+    fn current_account(app: &LightcraftApp) -> Option<String> {
+        app.session.flickr_token().map(|t| t.token.clone())
+    }
+
+    /// Keep the album list to the signed-in account: after a sign-out or another sign-in it is
+    /// dropped (with any read in progress, whose answer is then ignored).
+    fn scope_albums(app: &mut LightcraftApp) {
+        let current = current_account(app);
+        if app.flickr.albums_account != current {
+            app.flickr.albums = None;
+            app.flickr.albums_error = None;
+            app.flickr.albums_loading = false;
+            app.flickr.albums_account = current;
+        }
+    }
+
     /// Step 1 on a worker thread; then the browser opens Flickr's approval page.
     fn sign_in(app: &mut LightcraftApp) -> Result<Value, String> {
         if app.flickr.busy.is_some() {
@@ -277,13 +331,19 @@ mod native {
         let client = app.session.flickr_client()?;
         app.flickr.busy = Some("Contacting Flickr…");
         app.flickr.error = None;
+        app.flickr.sign_in_attempt = app.flickr.sign_in_attempt.wrapping_add(1);
+        let attempt = app.flickr.sign_in_attempt;
         let r = crate::tasks::spawn(
             app,
             "Signing in to Flickr",
             Some("flickr"),
             move || client.request_token(&AtomicBool::new(false)).map(|req| (client.authorize_url(&req), req)),
-            |app, ctx, r| {
+            move |app, ctx, r| {
                 app.flickr.busy = None;
+                // cancelled while Flickr was answering: nothing to resume, no browser
+                if app.flickr.sign_in_attempt != attempt {
+                    return;
+                }
                 match r {
                     Ok((url, req)) => {
                         app.session.flickr_begin_sign_in(req);
@@ -321,13 +381,19 @@ mod native {
         let client = app.session.flickr_client()?;
         app.flickr.busy = Some("Contacting Flickr…");
         app.flickr.error = None;
+        let asked = request.clone();
         let r = crate::tasks::spawn(
             app,
             "Signing in to Flickr",
             Some("flickr"),
-            move || client.access_token(&request, &code, &AtomicBool::new(false)),
-            |app, ctx, r| {
+            move || client.access_token(&asked, &code, &AtomicBool::new(false)),
+            move |app, ctx, r| {
                 app.flickr.busy = None;
+                // cancelled (or restarted) while the code was being exchanged: the token is dropped,
+                // so a cancelled sign-in never becomes the account
+                if app.session.flickr_pending() != Some(&request) {
+                    return;
+                }
                 let r = r.map_err(|e| e.to_string()).and_then(|token| {
                     let name = if token.fullname.trim().is_empty() { token.username.clone() } else { token.fullname.clone() };
                     app.session.flickr_finish_sign_in(token).map(|_| name)
@@ -390,6 +456,7 @@ mod native {
     }
 
     pub(super) fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+        scope_albums(app);
         let Some(task) = &app.flickr.upload else { return };
         match task.rx.try_recv() {
             Ok(r) => {
@@ -412,9 +479,12 @@ mod native {
                 }
                 if let (Some(id), Some(title)) = (r["createdAlbum"]["id"].as_str(), r["createdAlbum"]["title"].as_str()) {
                     m += &crate::i18n::tr_format!(" · new album “{}”", title);
-                    // the next dialog lists it even before the albums are read again
+                    // the next dialog lists it even before the albums are read again (when the list
+                    // is still this account's)
                     let photos = r["uploaded"].as_u64().unwrap_or(0).saturating_sub(album_failed);
-                    app.flickr.albums.get_or_insert_with(Vec::new).insert(0, (id.to_string(), title.to_string(), photos));
+                    if app.flickr.albums_account.as_deref() == Some(account.as_str()) {
+                        app.flickr.albums.get_or_insert_with(Vec::new).insert(0, (id.to_string(), title.to_string(), photos));
+                    }
                 }
                 if r["cancelled"] == true {
                     m += crate::i18n::tr(" · cancelled");
