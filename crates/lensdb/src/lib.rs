@@ -206,7 +206,7 @@ impl LensDb {
             {
                 score *= 0.8;
             }
-            if score >= 0.6 && best.is_none_or(|(s, _)| score > s) {
+            if score >= 0.6 && best.is_none_or(|(s, b)| score > s || (score == s && b.crop_factor.is_none() && lens.crop_factor.is_some())) {
                 best = Some((score, lens));
             }
         }

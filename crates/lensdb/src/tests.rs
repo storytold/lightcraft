@@ -304,6 +304,52 @@ fn crop_xml(parent: &str, calibration: &str) -> String {
 }
 
 #[test]
+fn tied_lens_matches_prefer_a_known_calibration_crop() {
+    let name = spec_name([50.0, 50.0, 1.8, 1.8]);
+    for (parent, unknown, known) in [
+        ("", "", r#"cropfactor="1""#),
+        ("<cropfactor>bad</cropfactor>", "", r#"cropfactor="1""#),
+        ("<cropfactor>1</cropfactor>", r#"cropfactor="bad""#, ""),
+        ("<cropfactor>1</cropfactor>", r#"cropfactor="bad""#, r#"cropfactor="1""#),
+    ] {
+        let calibration = |attributes: &str| format!(r#"<calibration {attributes}><distortion model="poly3" focal="50" k1="-0.01" /></calibration>"#);
+        for (first, second) in [(unknown, known), (known, unknown)] {
+            let xml = format!(
+                "<lensdatabase><lens><maker>Test</maker><model>{name}</model>{parent}{}{}</lens></lensdatabase>",
+                calibration(first),
+                calibration(second),
+            );
+            let db = LensDb::parse(&xml).unwrap();
+            assert_eq!(db.lenses.len(), 2);
+            assert_eq!(db.lenses.iter().filter(|p| p.crop_factor.is_none()).count(), 1);
+            for profile in [db.find_lens(None, &name, None), db.find_lens_named(None, &name, None)] {
+                let profile = profile.unwrap();
+                assert_eq!(profile.crop_factor, Some(1.0), "{parent}: {first}, {second}");
+                assert!(profile.correction(&shot(50.0)).is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn a_higher_lens_score_still_wins_with_unknown_crop() {
+    let mut db = db();
+    let camera = db.cameras[0].clone();
+    let mut unknown = db.lenses[0].clone();
+    unknown.crop_factor = None;
+    let mut known = unknown.clone();
+    known.crop_factor = Some(1.0);
+    known.mounts = vec!["Other Mount".into()];
+    let name = unknown.models[0].clone();
+    for lenses in [vec![unknown.clone(), known.clone()], vec![known, unknown]] {
+        db.lenses = lenses;
+        for profile in [db.find_lens(None, &name, Some(&camera)), db.find_lens_named(None, &name, Some(&camera))] {
+            assert_eq!(profile.unwrap().crop_factor, None, "the better mount match outranks crop availability");
+        }
+    }
+}
+
+#[test]
 fn unknown_calibration_crop_is_not_assumed_full_frame() {
     for parent in [
         "",
@@ -423,7 +469,7 @@ fn hostile_numbers_give_finite_corrections_or_none() {
                 r#"<lens><maker>M</maker><model>M 1</model><cropfactor>{v}</cropfactor><aspect-ratio>{v}</aspect-ratio><calibration><distortion model="poly3" focal="24" k1="0.01"/><vignetting model="pa" focal="24" aperture="2.8" k1="-0.3"/></calibration></lens>"#
             ),
             format!(
-                r#"<lens><maker>M</maker><model>M 1</model><calibration cropfactor="{v}" aspect-ratio="{v}"><distortion model="ptlens" focal="24" a="{v}" b="{v}" c="{v}"/><tca model="poly3" focal="24" vr="{v}" vb="{v}" cr="{v}" cb="{v}" br="{v}" bb="{v}"/></calibration></lens>"#
+                r#"<lens><maker>M</maker><model>M 1</model><calibration cropfactor="1" aspect-ratio="{v}"><distortion model="ptlens" focal="24" a="{v}" b="{v}" c="{v}"/><tca model="poly3" focal="24" vr="{v}" vb="{v}" cr="{v}" cb="{v}" br="{v}" bb="{v}"/></calibration></lens>"#
             ),
             format!(
                 r#"<lens><maker>M</maker><model>M 1</model><cropfactor>1</cropfactor><calibration><distortion model="poly5" focal="{v}" k1="{v}" k2="{v}"/><distortion model="poly3" focal="50" k1="{v}"/><vignetting model="pa" focal="{v}" aperture="{v}" distance="{v}" k1="{v}" k2="{v}" k3="{v}"/><tca model="linear" focal="{v}" kr="{v}" kb="{v}"/></calibration></lens>"#
