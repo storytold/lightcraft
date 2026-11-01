@@ -1630,6 +1630,9 @@ fn grid_info_cycles_caption() {
     let mut h = detail("panel.edit");
     assert_eq!(exec(&mut h, "view.gridInfo", json!({}))["info"], "exposure");
     assert_eq!(exec(&mut h, "view.gridInfo", json!({}))["info"], "date");
+    assert_eq!(exec(&mut h, "view.gridInfo", json!({}))["info"], "size");
+    assert_eq!(exec(&mut h, "view.gridInfo", json!({}))["info"], "filename");
+    assert_eq!(exec(&mut h, "view.gridInfo", json!({"info": "size"}))["info"], "size");
     assert_eq!(exec(&mut h, "view.gridInfo", json!({"info": "filename"}))["info"], "filename");
     let r = h.request("engine.execute", json!({"command": "view.gridInfo", "params": {"info": "lens"}}), T);
     assert_ne!(r["ok"], true);

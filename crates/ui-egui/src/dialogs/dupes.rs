@@ -14,6 +14,8 @@ use crate::theme::Tokens;
 /// A card's thumbnail box.
 const THUMB_W: f32 = 150.0;
 const THUMB_H: f32 = 100.0;
+/// A whole card (thumbnail, the Keep tick, three lines): cards off screen take this much room and lay out nothing.
+const CARD_H: f32 = 190.0;
 /// Thumbnail requests from the window come before the grid's off-screen prefetch.
 const THUMB_PRIORITY: u32 = 20;
 
@@ -48,6 +50,7 @@ pub fn take_result(dlg: &mut Dialog, last: &Value) {
     }
     let group_of = |g: &Value| DuplicateGroup {
         exact: g["exact"].as_bool().unwrap_or(false),
+        max_distance: g["maxDistance"].as_u64().and_then(|d| u32::try_from(d).ok()).unwrap_or(0),
         photos: g["photos"]
             .as_array()
             .map(|ps| {
@@ -119,7 +122,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     ui.add_space(6.0);
     egui::ScrollArea::vertical().max_height(super::list_height(ui, 520.0)).auto_shrink([false, true]).show(ui, |ui| {
         for (n, g) in groups.iter_mut().enumerate() {
-            let kind = crate::i18n::tr(if g.exact { "byte-identical" } else { "visually identical" });
+            // (how far apart the hashes are says how sure a visual match is: 0–2 bits is the same picture
+            // at another size or compression, the top of the range deserves a look)
+            let kind = if g.exact {
+                crate::i18n::tr("byte-identical").to_string()
+            } else {
+                crate::i18n::tr_format!("visually identical, {bits} bits apart", bits = g.max_distance)
+            };
             ui.label(
                 egui::RichText::new(crate::i18n::tr_format!("Group {n} · {count} photos · {kind}", n = n + 1, count = g.photos.len(), kind = kind))
                     .font(t.semibold(12.5))
@@ -164,9 +173,17 @@ fn progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
 fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, p: &mut DuplicatePhoto) {
     let id = PhotoId(p.id);
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
+    // a card the scroll position hides takes its room and nothing else: no thumbnail request, no text layout
+    // (a library can have thousands of photos in groups)
+    let footprint = Rect::from_min_size(ui.cursor().min, vec2(THUMB_W + 8.0, CARD_H));
+    if !ui.clip_rect().intersects(footprint) {
+        ui.allocate_exact_size(footprint.size(), Sense::hover());
+        return;
+    }
     crate::panels::grid::request_thumb(app, id, THUMB_W as usize, THUMB_PRIORITY);
     ui.vertical(|ui| {
         ui.set_width(THUMB_W + 8.0);
+        ui.set_min_height(CARD_H);
         let (rect, _) = ui.allocate_exact_size(vec2(THUMB_W, THUMB_H), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, 4.0, t.skeleton);
@@ -197,8 +214,8 @@ fn fit(rect: Rect, size: [usize; 2]) -> Rect {
     Rect::from_center_size(rect.center(), vec2(w * s, h * s))
 }
 
-/// "8.2 MB", "640 KB", "12 B".
-fn human_size(bytes: u64) -> String {
+/// "8.2 MB", "640 KB", "12 B" (also the grid's Dimensions & File Size caption).
+pub(crate) fn human_size(bytes: u64) -> String {
     match bytes {
         b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
         b if b >= 1 << 10 => format!("{} KB", b >> 10),

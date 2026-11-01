@@ -321,5 +321,6 @@
   "No duplicate photos found among {photos} photos.": "Среди {photos} фото дубликатов не найдено.",
   "{groups} groups among {photos} photos · {delete} to delete": "Групп: {groups} среди {photos} фото · к удалению: {delete}",
   "Group {n} · {count} photos · {kind}": "Группа {n} · фото: {count} · {kind}",
-  "Hashed {done} of {total} photos": "Обработано {done} из {total} фото"
+  "Hashed {done} of {total} photos": "Обработано {done} из {total} фото",
+  "visually identical, {bits} bits apart": "визуально одинаковые, расстояние {bits} бит"
 }

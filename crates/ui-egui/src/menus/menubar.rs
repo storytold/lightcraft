@@ -649,9 +649,9 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             v.push(item("view.toolOverlay", Value::Null, "Cycle Tool Overlay", shortcut, true, None));
             v
         }
-        "Grid Info" => ["filename", "exposure", "date"]
+        "Grid Info" => ["filename", "exposure", "date", "size"]
             .into_iter()
-            .zip(["File Name", "Exposure (shutter · aperture · ISO)", "Capture Date"])
+            .zip(["File Name", "Exposure (shutter · aperture · ISO)", "Capture Date", "Dimensions & File Size"])
             .map(|(k, label)| item("view.gridInfo", json!({"info": k}), label, None, true, Some(app.ui.grid_info == k)))
             .collect(),
         "Sort" => {
