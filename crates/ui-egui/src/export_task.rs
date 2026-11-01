@@ -37,6 +37,10 @@ impl ExportTask {
     }
 }
 
+/// Why an export, contact sheet or print doesn't start while Test my machine runs: it would share
+/// the test's temporary export settings and skew what the test measures.
+pub const MACHINE_TEST_RUNNING: &str = "the computer is being tested (Settings ▸ Performance): wait for the test to finish, then export";
+
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
 /// Photos). Errors per photo are collected, not fatal.
 pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
@@ -98,6 +102,9 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
 
 /// Export a single paginated PDF with the same activity row and cancellation as image exports.
 pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
+    if crate::machine_test::running(app) {
+        return Err(MACHINE_TEST_RUNNING.into());
+    }
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
@@ -147,6 +154,9 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
 /// activity row and cancellation as the other exports.
 pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
     use lightcraft_engine::print::{compose, output};
+    if crate::machine_test::running(app) {
+        return Err(MACHINE_TEST_RUNNING.into());
+    }
     if app.export.is_some() {
         return Err("an export is already running".into());
     }

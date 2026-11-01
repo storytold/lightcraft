@@ -225,4 +225,24 @@ mod tests {
         assert!(taken && h.app.ui.fullscreen, "the finished test was taken in full screen");
         assert_eq!(h.app.ui.settings.machine_test.as_ref().map(|m| m.lanes), Some(3));
     }
+
+    /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would
+    /// use the test's temporary settings and skew what the test measures).
+    #[test]
+    fn nothing_exports_while_the_test_runs() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let (_tx, rx) = channel();
+        let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        app.machine = Some(MachineTask { rx, _guard });
+        let dir = std::env::temp_dir().join(format!("lc-machine-export-{}", std::process::id()));
+        let out = dir.join("out.jpg").to_string_lossy().to_string();
+        let pdf = dir.join("out.pdf").to_string_lossy().to_string();
+        let e = crate::control::export_active(&mut app, &serde_json::json!({"path": out})).unwrap_err();
+        assert_eq!(e, crate::export_task::MACHINE_TEST_RUNNING);
+        let e = crate::export_task::start_contact_sheet(&mut app, &serde_json::json!({"path": pdf})).unwrap_err();
+        assert_eq!(e, crate::export_task::MACHINE_TEST_RUNNING);
+        let e = crate::export_task::start_print(&mut app, &serde_json::json!({"path": pdf})).unwrap_err();
+        assert_eq!(e, crate::export_task::MACHINE_TEST_RUNNING);
+        assert!(!dir.exists(), "nothing written");
+    }
 }
