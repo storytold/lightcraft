@@ -215,13 +215,20 @@ const CHROMA_SHRINK: f64 = 2.0;
 /// Kernel width of the chroma table's colourfulness nodes (`CHROMA_SATS`, in [`chroma_key`] units).
 const CHROMA_SAT_KERNEL: f64 = 0.12;
 
+/// Fewest training samples for a chroma table: as many per node as the single curve's minimum
+/// (64 samples for its [`CHROMA_N`] nodes) over the table's `CHROMA_N × CHROMA_SAT_N` nodes. With
+/// fewer, the single curve is fitted instead.
+const CHROMA_TABLE_MIN_SAMPLES: usize = 64 * lightcraft_pipeline::tone::CHROMA_SAT_N;
+
 /// The look's tone curve with a chroma table fitted to `pairs` (two thirds train, one third held
 /// out), when that lowers the held-out error: one chroma-by-display-luminance curve per
 /// colourfulness node (`CHROMA_SATS`). One curve for every colour was fitted mostly on the many
 /// near-neutral pixels, which a camera bleaches toward white in the highlights, and bleached bright
 /// saturated colours as much (Z 9 yellows, #2022); a node with few samples stays near 1.
 /// Colourfulness is compared as the distance from neutral of luminance-normalised RGB.
-pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<CameraTone> {
+/// `allow_table` false (a partial look, whose colour is only partly the photo's own) or fewer than
+/// [`CHROMA_TABLE_MIN_SAMPLES`] samples fit the single curve only.
+pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, allow_table: bool) -> Option<CameraTone> {
     use lightcraft_pipeline::tone::{CHROMA_N, CHROMA_SAT_N, CHROMA_SATS};
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let scene = |x: &[f64; 3]| {
@@ -262,10 +269,11 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
         }
         (sum / (weight + CHROMA_SHRINK)).exp() as f32
     };
+    let use_table = allow_table && samples.len() >= CHROMA_TABLE_MIN_SAMPLES;
     let curve: [f32; CHROMA_N] = std::array::from_fn(|j| node(j, None));
     let table: [[f32; CHROMA_N]; CHROMA_SAT_N] = std::array::from_fn(|s| std::array::from_fn(|j| node(j, Some(f64::from(CHROMA_SATS[s])))));
     let single = look.tone.with_chroma(curve)?;
-    let fitted = single.with_chroma_sat(table)?;
+    let fitted = if use_table { single.with_chroma_sat(table)? } else { single };
     let error = |map: &ToneMap| -> f64 {
         pairs
             .iter()
@@ -280,7 +288,11 @@ pub(super) fn fit_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> O
     let after = error(&ToneMap::camera(&fitted, 0.0, 0.0, 0.0));
     if lightcraft_pipeline::profiling() {
         let one = error(&ToneMap::camera(&single, 0.0, 0.0, 0.0));
-        eprintln!("[profile] ARW chroma table {table:?} (one curve {curve:?}): held-out error {before:.4} -> {after:.4} (one curve {one:.4})");
+        if use_table {
+            eprintln!("[profile] ARW chroma table {table:?} (one curve {curve:?}): held-out error {before:.4} -> {after:.4} (one curve {one:.4})");
+        } else {
+            eprintln!("[profile] ARW chroma curve {curve:?} ({} samples, no table): held-out error {before:.4} -> {after:.4}", samples.len());
+        }
     }
     (after.is_finite() && after < before).then_some(fitted)
 }

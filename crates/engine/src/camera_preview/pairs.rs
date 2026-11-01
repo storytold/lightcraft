@@ -328,7 +328,7 @@ fn fit_pairs_on(
         };
         let Some(curve) = fit_tone_with_shadows(tone_fit, &pairs, sensor, reference, edge_limit, colour) else { continue };
         let mut look = CameraLook { matrix, tone: curve, hue_sat: hue_sat.clone() };
-        if let Some(tone) = fit_chroma(&bright, &look) {
+        if let Some(tone) = fit_chroma(&bright, &look, true) {
             look.tone = tone;
         }
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
@@ -473,7 +473,7 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, 
     };
     let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, |x| matrix.apply(x))?;
     let mut look = CameraLook { matrix, tone, hue_sat: None };
-    if let Some(tone) = fit_chroma(&bright, &look) {
+    if let Some(tone) = fit_chroma(&bright, &look, false) {
         look.tone = tone;
     }
     let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
