@@ -118,38 +118,45 @@ async fn load(name: &str, bytes: Vec<u8>, backend: Backend, originals: Originals
     parts.push(&js_sys::Uint8Array::from(bytes.as_slice()));
     let file = web_sys::File::new_with_u8_array_sequence(&parts, name).map_err(|e| format!("{e:?}"))?;
     let dir = crate::safety::restore_staged(file, backend.clone()).await?;
-    let files = Files::default();
-    let mut total = 0usize;
-    for entry in LIBRARY_FILES {
-        if let Some(bytes) = backend.read_capped(&super::library_key(&dir, entry), (80 * 1024 * 1024usize).saturating_sub(total)).await? {
-            total = total.checked_add(bytes.len()).ok_or("Backup metadata size overflow")?;
-            files.preload(entry, bytes);
+    let result: Result<Loaded, String> = async {
+        let files = Files::default();
+        let mut total = 0usize;
+        for entry in LIBRARY_FILES {
+            if let Some(bytes) = backend.read_capped(&super::library_key(&dir, entry), (80 * 1024 * 1024usize).saturating_sub(total)).await? {
+                total = total.checked_add(bytes.len()).ok_or("Backup metadata size overflow")?;
+                files.preload(entry, bytes);
+            }
         }
-    }
-    let source_generation = files.generation()?;
-    let mut session = Session::new();
-    originals.install(&mut session);
-    session
-        .open_library_in(
-            LibraryStores {
-                dir: format!("browser:{}/{dir}", backend.kind()).into(),
-                catalog: Box::new(files.store()),
-                files: Box::new(files.store()),
-                on_disk: false,
-            },
-            false,
-        )
-        .map_err(|e| e.to_string())?;
-    for hash in names(&session)?.keys() {
-        if !available.contains(hash) {
-            return Err("The backup omits an original referenced by its catalog".into());
+        let source_generation = files.generation()?;
+        let mut session = Session::new();
+        originals.install(&mut session);
+        session
+            .open_library_in(
+                LibraryStores {
+                    dir: format!("browser:{}/{dir}", backend.kind()).into(),
+                    catalog: Box::new(files.store()),
+                    files: Box::new(files.store()),
+                    on_disk: false,
+                },
+                false,
+            )
+            .map_err(|e| e.to_string())?;
+        for hash in names(&session)?.keys() {
+            if !available.contains(hash) {
+                return Err("The backup omits an original referenced by its catalog".into());
+            }
         }
+        session.media.preview_capacity = 3;
+        // Input is blocked during this asynchronous switch. Activate only a validated catalog,
+        // after the old library's pending local writes have settled.
+        backend.write(crate::backup::ACTIVE_LIBRARY, dir.as_bytes()).await?;
+        Ok(Loaded { session, files, dir: dir.clone(), source_generation })
     }
-    session.media.preview_capacity = 3;
-    // Input is blocked during this asynchronous switch. Activate only a validated catalog,
-    // after the old library's pending local writes have settled.
-    backend.write(crate::backup::ACTIVE_LIBRARY, dir.as_bytes()).await?;
-    Ok(Loaded { session, files, dir, source_generation })
+    .await;
+    match result {
+        Ok(loaded) => Ok(loaded),
+        Err(error) => Err(crate::safety::failed_staged_restore(&backend, &dir, error).await),
+    }
 }
 
 struct SaveChoice {

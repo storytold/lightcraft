@@ -267,12 +267,32 @@ pub async fn restore_staged(file: web_sys::File, backend: Backend) -> Result<Str
     }
     let mut written = 0usize;
     for entry in &entries {
-        if restore_entry(&file, &backend, &dir, entry, cd_offset).await? {
-            written += 1;
+        match restore_entry(&file, &backend, &dir, entry, cd_offset).await {
+            Ok(true) => written += 1,
+            Ok(false) => {}
+            Err(error) => return Err(failed_staged_restore(&backend, &dir, error).await),
         }
     }
     log::info!("lightcraft: restored {written} files into {dir}");
     Ok(dir)
+}
+
+/// A failed validation must not leave the new library's private files occupying browser quota.
+/// The pointer check also preserves a library whose activation committed before an I/O error.
+pub(crate) async fn cleanup_staged(backend: &Backend, dir: &str) -> Result<(), String> {
+    let active = backend.read_capped(ACTIVE_LIBRARY, 128).await?;
+    crate::backup::discard_staged_library(dir, active.as_deref(), |key| {
+        let backend = backend.clone();
+        async move { backend.remove(&key).await }
+    })
+    .await
+}
+
+pub(crate) async fn failed_staged_restore(backend: &Backend, dir: &str, error: String) -> String {
+    match cleanup_staged(backend, dir).await {
+        Ok(()) => error,
+        Err(cleanup) => format!("{error}; could not remove staged library files: {cleanup}"),
+    }
 }
 
 async fn restore_entry(file: &web_sys::File, backend: &Backend, dir: &str, entry: &crate::backup::ZipEntry, cd_offset: u64) -> Result<bool, String> {
@@ -336,7 +356,9 @@ async fn new_restore_dir(backend: &Backend) -> Result<String, String> {
 /// Official Restore keeps its activation behavior, after the verified staging succeeds.
 pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, String> {
     let dir = restore_staged(file, backend.clone()).await?;
-    backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await?;
+    if let Err(error) = backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await {
+        return Err(failed_staged_restore(&backend, &dir, error).await);
+    }
     Ok(dir)
 }
 

@@ -9,7 +9,7 @@
 //!   name so an unzipped backup is browsable;
 //! - `README.txt`.
 //!
-//! Restoring never deletes anything: the library files go to a new library folder in browser
+//! Restoring preserves existing libraries: the files go to a new library folder in browser
 //! storage, originals that aren't stored yet are added (they're named by content, so existing
 //! ones are identical; a restored one must match its content hash, see [`verify_original`]),
 //! and only then does a small pointer file ([`ACTIVE_LIBRARY`]) switch to the restored library.
@@ -83,6 +83,35 @@ pub fn restore_key(entry: &str, dir: &str) -> Option<String> {
     let rest = entry.strip_prefix("originals/")?;
     let (hash, _) = rest.split_once('/').unwrap_or((rest, ""));
     valid_hash(hash).then(|| format!("originals/{hash}"))
+}
+
+/// Remove only a failed restore's private metadata. Content-addressed originals remain shared.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) async fn discard_staged_library<F, Fut>(dir: &str, active: Option<&[u8]>, mut remove: F) -> Result<(), String>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let private = dir.len() <= 128
+        && dir.strip_prefix("library-restored-").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !private || active == Some(dir.as_bytes()) {
+        return Err("refusing to remove an active or non-staged library".into());
+    }
+    let mut problem = None;
+    for name in crate::files::LIBRARY_FILES {
+        if let Err(error) = remove(format!("{dir}/{name}")).await
+            && problem.is_none()
+        {
+            problem = Some(error);
+        }
+    }
+    if let Some(error) = problem {
+        return Err(error);
+    }
+    // OPFS removes this only when empty; IndexedDB has no directory entry. Never recurse.
+    remove(dir.to_string()).await
 }
 
 fn u16le(v: &mut Vec<u8>, x: u16) {
@@ -374,6 +403,74 @@ mod tests {
         }
         out.extend(w.finish().unwrap());
         out
+    }
+
+    fn run_ready<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => panic!("the synthetic storage callback must finish synchronously"),
+        }
+    }
+
+    #[test]
+    fn failed_staged_cleanup_removes_only_private_metadata_and_keeps_shared_originals() {
+        let dir = "library-restored-test-1";
+        let mut disk = std::collections::BTreeMap::from([
+            (format!("{dir}/catalog.snap"), vec![1]),
+            (format!("{dir}/prefs.json"), vec![2]),
+            ("library/catalog.snap".into(), vec![9]),
+            ("originals/abc123".into(), vec![7]),
+        ]);
+        assert!(disk.contains_key(&format!("{dir}/catalog.snap")));
+        let mut removed = Vec::new();
+        run_ready(discard_staged_library(dir, Some(b"library"), |key| {
+            removed.push(key.clone());
+            disk.remove(&key);
+            std::future::ready(Ok(()))
+        }))
+        .unwrap();
+        assert_eq!(disk.len(), 2);
+        assert_eq!(disk.get("library/catalog.snap"), Some(&vec![9]));
+        assert_eq!(disk.get("originals/abc123"), Some(&vec![7]));
+        assert_eq!(removed.len(), crate::files::LIBRARY_FILES.len() + 1);
+        assert!(removed.iter().all(|key| key == dir || key.starts_with(&format!("{dir}/"))));
+    }
+
+    #[test]
+    fn staged_cleanup_refuses_active_or_foreign_library_paths() {
+        for dir in ["library", "library-restored-", "../library-restored-other", "library-restored-other/../library"] {
+            let mut removed = Vec::new();
+            assert!(run_ready(discard_staged_library(dir, None, |key| {
+                removed.push(key);
+                std::future::ready(Ok(()))
+            }))
+            .is_err());
+            assert!(removed.is_empty());
+        }
+        let dir = "library-restored-active-1";
+        let mut removed = Vec::new();
+        assert!(run_ready(discard_staged_library(dir, Some(dir.as_bytes()), |key| {
+            removed.push(key);
+            std::future::ready(Ok(()))
+        }))
+        .is_err());
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn staged_cleanup_attempts_remaining_private_files_after_one_removal_fails() {
+        let mut attempted = Vec::new();
+        let error = run_ready(discard_staged_library("library-restored-test-2", None, |key| {
+            let failed = key.ends_with("/catalog.snap");
+            attempted.push(key);
+            std::future::ready(if failed { Err("entry is locked".into()) } else { Ok(()) })
+        }))
+        .unwrap_err();
+        assert_eq!(error, "entry is locked");
+        assert_eq!(attempted.len(), crate::files::LIBRARY_FILES.len());
+        assert!(attempted.iter().all(|key| key.starts_with("library-restored-test-2/")));
     }
 
     #[test]

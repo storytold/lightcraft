@@ -30,6 +30,16 @@ Each transfer, retained snapshot and bounded queue is limited to 80 MiB, 16 pend
 
 The host owns authentication, per-user authorization, durable writes, conflicts, transport, retries and destination UI. No backend, service URL, cloud widget, token storage or cross-origin messaging is installed here. Browser-local libraries remain local data; the host must define its own shared-device/logout policy. Large libraries and catalogs referring to external desktop paths cannot be uploaded through this bounded browser adapter; import the originals or use the native backup workflow.
 
+Generation checkpoints cover only the six files included in a library snapshot; auxiliary
+recovery copies do not make an unchanged backup dirty. A failed restore or post-stage validation
+removes only the fresh staging library's private metadata and empty directory. Shared originals
+and the active library are preserved; a cleanup error is reported with the original failure.
+
+Terminal `opened`, `openFailed` and `saveFailed` events survive a full event queue. Their
+already-admitted read/save owners remain pending until the terminal can be enqueued, with at
+most 16 retained read completions and 16 save failures. The publisher drains bounded batches
+twice in order; the queue and each returned batch remain limited to 64 events.
+
 ## Validation
 
 Source regression fixtures cover opt-in defaults, save choices, separate resource identities, atomic library snapshots, content generations, overflow handling and archive bounds including the central directory. Execution results are recorded only after validation of the published source candidate.

@@ -56,7 +56,10 @@ struct Mirror {
 }
 
 impl Mirror {
-    fn changed(&mut self) {
+    fn changed(&mut self, name: &str) {
+        if !LIBRARY_FILES.contains(&name) {
+            return;
+        }
         match self.generation.checked_add(1) {
             Some(next) if !self.generation_exhausted => self.generation = next,
             _ => self.generation_exhausted = true,
@@ -104,7 +107,7 @@ impl Files {
         let mut m = self.lock();
         if m.files.get(name) != Some(&data) {
             m.files.insert(name.to_string(), data);
-            m.changed();
+            m.changed(name);
         }
     }
 
@@ -117,7 +120,7 @@ impl Files {
         let mut m = self.lock();
         if m.files.get(name).map(Vec::as_slice) != Some(data) {
             m.files.insert(name.to_string(), data.to_vec());
-            m.changed();
+            m.changed(name);
         }
         m.mark(name, Dirty::Rewrite);
     }
@@ -129,7 +132,7 @@ impl Files {
         let from = f.len();
         f.extend_from_slice(data);
         if changed {
-            m.changed();
+            m.changed(name);
         }
         m.mark(name, Dirty::Append { from });
     }
@@ -140,7 +143,7 @@ impl Files {
             let changed = f.len() > len;
             f.truncate(len);
             if changed {
-                m.changed();
+                m.changed(name);
             }
             m.mark(name, Dirty::Rewrite);
         }
@@ -323,6 +326,23 @@ mod tests {
         assert!(files.is_dirty());
         assert_eq!(files.take_dirty().len(), 2);
         assert!(!files.is_dirty());
+    }
+
+    #[test]
+    fn auxiliary_file_changes_leave_the_provider_capture_generation_unchanged() {
+        let files = Files::default();
+        files.preload("catalog.snap", b"catalog".to_vec());
+        let before = files.snapshot().unwrap();
+        files.preload("prefs.json.corrupt-1", b"damaged preferences".to_vec());
+        files.write("presets.json.corrupt-2", b"damaged presets");
+        files.append("presets.json.corrupt-2", b" preserved");
+        files.truncate("presets.json.corrupt-2", 4);
+        assert_eq!(files.snapshot().unwrap(), before);
+        assert_eq!(files.get("presets.json.corrupt-2").as_deref(), Some(b"dama".as_slice()));
+        let writes = files.take_dirty();
+        assert!(writes.iter().any(|write| write.name() == "presets.json.corrupt-2"), "auxiliary files still reach local storage");
+        files.append("catalog.snap", b" changed");
+        assert_ne!(files.generation().unwrap(), before.generation, "real backup content changes still advance its generation");
     }
 
     #[test]
