@@ -102,7 +102,8 @@ def main():
     def one(f):
         # (a file that hangs, a helper that can't start or output that isn't JSON skips that file, not the batch)
         try:
-            p = subprocess.run([a.rawdump, "noise", f], capture_output=True, text=True, timeout=600)
+            p = subprocess.run([a.rawdump, "noise", f], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=600)
             if p.returncode != 0:
                 print(f"skipped {f}: rawdump exit {p.returncode}: {p.stderr.strip()}", file=sys.stderr, flush=True)
                 return None
