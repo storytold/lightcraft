@@ -20,6 +20,9 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 35 mm equivalent, flash, exposure bias, program, metering, white balance), orientation, GPS, dimensions and the
 user fields (artist, copyright, title, caption, keywords, hierarchical keywords, rating −1…5, colour label).
 
+For Panasonic RW2 (`IIU\0`) containers, ISO falls back to positive IFD0 tags `0x0017` and `0x0037` only when standard
+EXIF ISO is absent. These private tag numbers are not interpreted for ordinary TIFF or DNG files.
+
 EXIF capture-time candidates are tried in order: DateTimeOriginal, DateTimeDigitized, then IFD0 DateTime. A clock
 with more than three colon-separated components is rejected as a whole, allowing the next valid candidate or XMP
 fallback to supply the capture time. The original tag remains available in All Metadata. JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
