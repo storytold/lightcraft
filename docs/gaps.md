@@ -90,6 +90,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Gap 18 review: Remove Location reads the QuickTime metadata layouts the catalog reads (`trak`/`mdia` `udta`, mdta `meta`), treats cleared location atoms as no location, and refuses an XMP property inventory a size limit cut short (video and image Originals) instead of reading the omission as absence. Scope, hours and headline counts unchanged |
 | 2026-10-29 | minor | Import thumbnails render when the camera JPEG is too small, retaining preview-only/error fallbacks; import review: remembered thumbnail size and density-aware previews (#2237, part of #2056); pre-import loupe/keyboard culling remains open; no ranked gap closes |
 | 2026-10-24 | minor | Gap 8: lens profile work is tracked in #329; hours unchanged |
 | 2026-10-25 | patch | Import Copy and Move report rename-sequence exhaustion per file without losing earlier transfers; no ranked gap or readiness changes |
@@ -102,7 +103,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-27 | patch | Gap 18 follow-up: failed browser loads wait for retry, fragmented MP4 scans share a larger traversal budget, QuickTime metadata layouts and legacy candidate guards agree, and culling cards/accessibility identify clips without duration. Video-export guidance remains explicitly unreleased; scope and hours unchanged |
 | 2026-10-27 | patch | Gap 18: original file admission decoupled from cache budgets, with platform/physical-memory guards and fallible browser buffer allocation; cache handoff avoids a full copy. Scope and hours unchanged |
 | 2026-10-27 | patch | Gap 18 review audit: content-based bounded probing even for renamed clips, correct CLI skip errors, configurable buffering budgets instead of the fixed 256 MiB restriction; scope and hours unchanged |
-| 2026-10-27 | patch | Gap 18: streamed Original copies and Blob-backed browser videos without a clip-size cap; verified location-free clips allowed with Remove Location; legacy filtering fixed; playback/transcoding scope, hours and headline counts unchanged || 2026-10-24 | minor | Gap 28: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata; no key leaves the entry; hours unchanged |
+| 2026-10-27 | patch | Gap 18: streamed Original copies and Blob-backed browser videos without a clip-size cap; verified location-free clips allowed with Remove Location; legacy filtering fixed; playback/transcoding scope, hours and headline counts unchanged |
+| 2026-10-24 | minor | Gap 28: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata; no key leaves the entry; hours unchanged |
 | 2026-10-24 | minor | Gap 30 shrinks: the Info panel's Show Metadata For (Target Photo / Selected Photos, `view.infoSelectedPhotos`) shows the selected photos' shared values and marks fields that differ as Mixed; the All Metadata dialog remains; 1–3 h (was 4–8) |
 | 2026-10-24 | patch | Typed GPS input now validates the complete coordinate expression, rejecting unknown text, wrong-axis or conflicting hemispheres, and invalid DMS minutes/seconds before changing metadata; ranked gaps, estimates and readiness counts unchanged |
 | 2026-10-24 | patch | LR-EXP-METADATA: Original export refuses embedded GPS or nonblank place names when Remove Location Info is on; ranked gaps, estimates and readiness unchanged |

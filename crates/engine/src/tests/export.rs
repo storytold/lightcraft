@@ -132,6 +132,76 @@ fn original_video_location_removal_refuses_native_gps_but_allows_location_free_c
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The flattened XMP property inventory is bounded: a packet that buries its GPS past the budget
+/// must not look location-free to either Original export path, buffered or streaming.
+#[test]
+fn original_video_location_removal_refuses_a_packet_past_the_property_budget() {
+    use super::import::{synthetic_mp4, write_test_box};
+    let long = "u".repeat(4000);
+    let mut packet = String::from(concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description"#,
+        r#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:exif="http://ns.adobe.com/exif/1.0/" "#
+    ));
+    for _ in 0..400 {
+        packet.push_str(&format!("dc:{long}=\"x\" "));
+    }
+    for _ in 0..1100 {
+        packet.push_str("dc:z=\"x\" ");
+    }
+    packet.push_str(r#"exif:GPSLatitude="37,46.494N" exif:GPSLongitude="122,15.120W"/></rdf:RDF>"#);
+    assert!(lightcraft_meta::parse_xmp(&packet).unwrap().metadata.gps.is_none(), "the fixture hides its coordinates");
+
+    let dir = temp_dir("video-original-budget");
+    let source = dir.join("clip.mp4");
+    let destination = dir.join("destination.mp4");
+    let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+    write_test_box(&mut bytes, b"XMP_", packet.as_bytes());
+    assert!(lightcraft_meta::try_extract(&bytes).unwrap().gps.is_none(), "the generic extractor cannot see it either");
+    std::fs::write(&source, &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let unrestricted = ExportOptions::from_json(&json!({"format": "original", "removeLocation": false}));
+    assert_eq!(export_photo(&mut s, id, &unrestricted, 1).unwrap().bytes, bytes);
+
+    let private = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+    let error = export_photo(&mut s, id, &private, 1).err().expect("an inventory it cannot read completely must refuse");
+    assert!(error.contains("exceeds the size limit") && error.contains("original video"), "{error}");
+    let copied = crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), true).unwrap_err();
+    assert!(copied.contains("exceeds the size limit"), "{copied}");
+    assert!(!destination.exists(), "the refused copy leaves no file");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// QuickTime atoms left behind for a cleared location carry no place, so Remove Location copies
+/// the clip unchanged instead of refusing a location-free file.
+#[test]
+fn original_video_location_removal_allows_a_cleared_location_atom() {
+    use super::import::{synthetic_mp4, write_test_box};
+    let dir = temp_dir("video-original-cleared-location");
+    let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+    let moov_at = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+    let mut moov = bytes[moov_at + 8..].to_vec();
+    let mut udta = Vec::new();
+    write_test_box(&mut udta, b"\xa9xyz", &[0, 0, 0, 0]);
+    write_test_box(&mut moov, b"udta", &udta);
+    bytes.truncate(moov_at);
+    write_test_box(&mut bytes, b"moov", &moov);
+    let source = dir.join("cleared.mp4");
+    std::fs::write(&source, &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let private = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+    assert_eq!(export_photo(&mut s, id, &private, 1).unwrap().bytes, bytes);
+    let destination = dir.join("copy.mp4");
+    assert_eq!(crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), true).unwrap(), bytes.len() as u64);
+    assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn original_video_location_removal_checks_embedded_place_names_in_buffers_and_copies() {
     let dir = temp_dir("video-original-place-names");
@@ -992,6 +1062,53 @@ fn remove_location_refuses_original_with_unreadable_non_psd_xmp() {
     let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
     let error = export_photo(&mut session, id, &options, 1).err().expect("unreadable XMP must not pass location removal");
     assert!(error.contains("can't verify location metadata") && error.contains("malformed embedded XMP"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_original_image_with_truncated_xmp_inventory() {
+    let dir = temp_dir("export-noloc-truncated-xmp");
+    // Flattened keys repeat their whole ancestor path, so a small packet can still exhaust the
+    // key budget: 2200 leaves under four 200-byte names spend it long before the GPS elements.
+    let level = "n".repeat(200);
+    let mut packet = String::from(concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" "#,
+        r#"xmlns:lc="https://lightcraft.example/lc/" xmlns:exif="http://ns.adobe.com/exif/1.0/"><rdf:RDF><rdf:Description><lc:root rdf:parseType="Resource">"#
+    ));
+    for _ in 0..4 {
+        packet.push_str(&format!("<lc:{level} rdf:parseType=\"Resource\">"));
+    }
+    for i in 0..2200 {
+        packet.push_str(&format!("<lc:leaf{i} lc:att=\"v\"/>"));
+    }
+    packet.push_str("</lc:root>");
+    for _ in 0..4 {
+        packet.push_str(&format!("</lc:{level}>"));
+    }
+    // Whatever the deep block left unspent is below one leaf key: powers of two drain it without
+    // overshooting the budget (a key larger than what remains is skipped, not charged).
+    for n in [512usize, 256, 128, 64, 32, 16, 8, 4, 2, 1] {
+        packet.push_str(&format!("<{}/>", "z".repeat(n)));
+    }
+    packet.push_str(r#"<exif:GPSLatitude>37,46.494N</exif:GPSLatitude><exif:GPSLongitude>122,15.120W</exif:GPSLongitude></rdf:Description></rdf:RDF></x:xmpmeta>"#);
+    let parsed = lightcraft_meta::parse_xmp(&packet).unwrap();
+    assert!(parsed.properties_truncated, "the fixture really exhausts the key budget");
+    assert!(parsed.metadata.gps.is_none(), "the budget hides the coordinates");
+
+    let path = dir.join("Buried.jpg");
+    let pixels = [96u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(&packet), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    assert!(lightcraft_meta::try_extract(&bytes).unwrap().gps.is_none(), "the catalog cannot see it either");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    let error = export_photo(&mut session, id, &options, 1).err().expect("an incomplete inventory must not pass");
+    assert!(error.contains("XMP property inventory exceeds the size limit"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

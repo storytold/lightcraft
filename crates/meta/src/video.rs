@@ -182,8 +182,9 @@ struct TrackInfo {
     orientation: Option<Orientation>,
 }
 
-/// Parse a `trak` box to extract video dimensions and matrix orientation from its `tkhd`.
-fn parse_trak(body: &[u8], budget: &mut usize, depth: usize) -> Option<TrackInfo> {
+/// Parse a `trak` box to extract video dimensions and matrix orientation from its `tkhd`, and the
+/// metadata a camera or recorder keeps per track (`trak/udta`, or `trak/mdia/udta`).
+fn parse_trak(body: &[u8], budget: &mut usize, depth: usize, meta: &mut Metadata, xmp: &mut Option<String>) -> Option<TrackInfo> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -207,14 +208,23 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize) -> Option<TrackInfo
                     height = h >> 16;
                 }
             }
+            b"udta" => parse_udta(b.body, meta, xmp, budget, depth + 1),
+            b"meta" => parse_meta(b.body, meta, xmp, budget, depth + 1),
+            b"XMP_" => take_xmp(b.body, xmp),
+            b"uuid" if b.uuid == Some(XMP_UUID) => take_xmp(b.body, xmp),
             b"mdia" => {
-                // mdia contains hdlr and minf
+                // mdia contains hdlr and minf, and some recorders keep their udta here
                 for child in read_boxes(b.body, budget) {
-                    if &child.kind == b"hdlr" {
-                        // handler type at body + 8..12
-                        if child.body.get(8..12) == Some(b"vide") {
-                            is_video = true;
+                    match &child.kind {
+                        b"hdlr" => {
+                            // handler type at body + 8..12
+                            if child.body.get(8..12) == Some(b"vide") {
+                                is_video = true;
+                            }
                         }
+                        b"udta" => parse_udta(child.body, meta, xmp, budget, depth + 1),
+                        b"meta" => parse_meta(child.body, meta, xmp, budget, depth + 1),
+                        _ => {}
                     }
                 }
             }
@@ -245,6 +255,43 @@ fn read_udta_text(body: &[u8]) -> Option<String> {
     None
 }
 
+/// Keep the first XMP packet found in an `XMP_` or XMP `uuid` box.
+fn take_xmp(body: &[u8], xmp: &mut Option<String>) {
+    if let Ok(s) = std::str::from_utf8(body) {
+        *xmp = Some(s.to_string());
+    }
+}
+
+/// `true` for a `loci` atom that carries nothing: only its version/flags header, or zeroed fields.
+fn loci_is_empty(body: &[u8]) -> bool {
+    body.get(4..).is_some_and(|rest| rest.iter().all(|b| *b == 0))
+}
+
+/// Parse a QuickTime/3GP `loci` (location information) atom: a version/flags header, a 16-bit
+/// language, a null-terminated place name, a role byte, the coordinates as signed 16.16 fixed
+/// point (longitude, latitude, altitude in metres) and two trailing text fields (astronomical body
+/// and notes). A cleared atom — all zeroes — means "no location".
+fn parse_loci(body: &[u8]) -> Option<Gps> {
+    if loci_is_empty(body) {
+        return None;
+    }
+    // header (4) + language (2), then the name up to its terminator, then the role byte
+    let name = body.get(6..)?;
+    let nul = name.iter().position(|b| *b == 0)?;
+    let at = 6usize.checked_add(nul)?.checked_add(1)?.checked_add(1)?;
+    let fixed = |i: usize| -> Option<f64> {
+        let s = body.get(i..i.checked_add(4)?)?;
+        Some(f64::from(i32::from_be_bytes([s[0], s[1], s[2], s[3]])) / 65_536.0)
+    };
+    let longitude = fixed(at)?;
+    let latitude = fixed(at.checked_add(4)?)?;
+    let altitude = fixed(at.checked_add(8)?)?;
+    if !latitude.is_finite() || !longitude.is_finite() || !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+        return None;
+    }
+    Some(Gps { latitude, longitude, altitude: altitude.is_finite().then_some(altitude) })
+}
+
 /// Parse metadata inside `udta` container box.
 fn parse_udta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget: &mut usize, depth: usize) {
     if depth > MAX_DEPTH {
@@ -252,11 +299,7 @@ fn parse_udta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget
     }
     for b in read_boxes(body, budget) {
         match &b.kind {
-            b"XMP_" => {
-                if let Ok(s) = std::str::from_utf8(b.body) {
-                    *xmp = Some(s.to_string());
-                }
-            }
+            b"XMP_" => take_xmp(b.body, xmp),
             b"\xa9mak" => {
                 if let Some(s) = read_udta_text(b.body).filter(|s| !s.trim().is_empty()) {
                     meta.make = Some(s.trim().to_string());
@@ -298,6 +341,11 @@ fn parse_udta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget
                 if let Some(s) = read_udta_text(b.body)
                     && let Some(gps) = parse_iso6709(&s)
                 {
+                    meta.gps = Some(gps);
+                }
+            }
+            b"loci" => {
+                if let Some(gps) = parse_loci(b.body) {
                     meta.gps = Some(gps);
                 }
             }
@@ -344,7 +392,7 @@ fn meta_children(body: &[u8]) -> Option<&[u8]> {
 /// Parse a QuickTime/ISO `meta` box: its `keys` name the fields and its `ilst` items, numbered by
 /// the key they belong to, hold the values. Apple's MOVs record the capture time, make, model,
 /// software and location here (mdta) rather than in `udta`; the time carries its offset.
-fn parse_meta(body: &[u8], meta: &mut Metadata, _xmp: &mut Option<String>, budget: &mut usize, depth: usize) {
+fn parse_meta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget: &mut usize, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -352,6 +400,8 @@ fn parse_meta(body: &[u8], meta: &mut Metadata, _xmp: &mut Option<String>, budge
     let mut keys: Vec<Option<String>> = Vec::new();
     for b in read_boxes(body, budget) {
         match &b.kind {
+            b"XMP_" => take_xmp(b.body, xmp),
+            b"uuid" if b.uuid == Some(XMP_UUID) => take_xmp(b.body, xmp),
             b"keys" => {
                 // FullBox header, entry count, then each key: size (namespace included) and name
                 let count = be32(b.body, 4).unwrap_or(0).min(4096) as usize;
@@ -388,6 +438,9 @@ fn parse_meta(body: &[u8], meta: &mut Metadata, _xmp: &mut Option<String>, budge
 pub fn extract_video_xmp(bytes: &[u8]) -> Option<String> {
     let mut budget = MAX_BOXES;
     for b in read_boxes(bytes, &mut budget) {
+        if b.kind == *b"XMP_" {
+            return std::str::from_utf8(b.body).ok().map(str::to_string);
+        }
         if &b.kind == b"uuid"
             && b.uuid == Some(XMP_UUID)
             && let Ok(s) = std::str::from_utf8(b.body)
@@ -408,6 +461,17 @@ pub fn extract_video_xmp(bytes: &[u8]) -> Option<String> {
                     parse_udta(child.body, &mut meta, &mut xmp, &mut budget, 0);
                     if xmp.is_some() {
                         return xmp;
+                    }
+                }
+                if &child.kind == b"meta"
+                    && let Some(body) = meta_children(child.body)
+                {
+                    for inner in read_boxes(body, &mut budget) {
+                        if (&inner.kind == b"XMP_" || inner.uuid == Some(XMP_UUID))
+                            && let Ok(s) = std::str::from_utf8(inner.body)
+                        {
+                            return Some(s.to_string());
+                        }
                     }
                 }
             }
@@ -491,42 +555,42 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
         let b = read_boxes(one, &mut one_budget).pop().ok_or("can't verify video location: malformed box")?;
         *budget -= 1;
         match &b.kind {
-            b"\xa9xyz" | b"loci" => {
-                return Err(
-                    "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
-                );
+            b"\xa9xyz" => {
+                // An empty atom names no place: some writers leave the tag behind when the user
+                // clears a clip's location. Anything it does hold refuses the unchanged copy.
+                if !read_udta_text(b.body).unwrap_or_default().trim().is_empty() {
+                    return Err(
+                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                    );
+                }
+            }
+            b"loci" => {
+                if !loci_is_empty(b.body) {
+                    return Err(
+                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                    );
+                }
             }
             b"moov" | b"udta" | b"trak" | b"mdia" => verify_location_boxes(b.body, budget, depth + 1)?,
             b"meta" => {
                 let body = meta_children(b.body).ok_or("can't verify video location: truncated metadata")?;
+                // `keys` names the `ilst` items: only a location key that holds a value refuses.
+                verify_meta_location(body, budget)?;
                 verify_location_boxes(body, budget, depth + 1)?;
-            }
-            b"keys" => {
-                let count = be32(b.body, 4).ok_or("can't verify video location: truncated metadata keys")?;
-                if count > 4096 {
-                    return Err("can't verify video location: metadata key limit exceeded".into());
-                }
-                let mut offset = 8usize;
-                for _ in 0..count {
-                    let n = be32(b.body, offset).filter(|n| *n >= 8).ok_or("can't verify video location: invalid metadata key")? as usize;
-                    let end = offset.checked_add(n).ok_or("can't verify video location: metadata key overflow")?;
-                    let key = b.body.get(offset.saturating_add(8)..end).ok_or("can't verify video location: truncated metadata key")?;
-                    if key == b"com.apple.quicktime.location.ISO6709" {
-                        return Err(
-                            "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip"
-                                .into(),
-                        );
-                    }
-                    offset = end;
-                }
-                if offset != b.body.len() {
-                    return Err("can't verify video location: trailing metadata key bytes".into());
-                }
             }
             b"XMP_" | b"uuid" if &b.kind == b"XMP_" || b.uuid == Some(XMP_UUID) => {
                 let packet = std::str::from_utf8(b.body).map_err(|_| "can't verify video location: invalid XMP encoding")?;
                 verify_xmp_structure(packet)?;
                 let xmp = crate::parse_xmp(packet).map_err(|e| format!("can't verify video location: invalid XMP: {e}"))?;
+                // The flattened map gives up properties once their key text passes a limit: it can
+                // no longer prove that a location is absent, so the packet is unverifiable.
+                if xmp.properties_truncated {
+                    return Err(concat!(
+                        "can't verify an original video's embedded location: the XMP property inventory ",
+                        "exceeds the size limit; export without Remove Location only to share the unchanged clip"
+                    )
+                    .into());
+                }
                 if xmp.metadata.gps.is_some()
                     || xmp.properties.keys().any(|key| key.split('/').any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")))
                 {
@@ -544,6 +608,62 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
             _ => {}
         }
         at = end;
+    }
+    Ok(())
+}
+
+const LOCATION_KEY: &[u8] = b"com.apple.quicktime.location.ISO6709";
+
+/// Verify a `meta` box's mdta pairs: `keys` names each `ilst` item by its 1-based index, and a
+/// location key that carries a value refuses the copy. A key whose item is missing or blank names
+/// no place, like the empty XMP place fields the parser accepts.
+fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
+    let mut location_keys: Vec<usize> = Vec::new();
+    let mut items: Vec<(usize, &[u8])> = Vec::new();
+    for b in read_boxes(body, budget) {
+        match &b.kind {
+            b"keys" => {
+                let count = be32(b.body, 4).ok_or("can't verify video location: truncated metadata keys")?;
+                if count > 4096 {
+                    return Err("can't verify video location: metadata key limit exceeded".into());
+                }
+                let mut offset = 8usize;
+                for index in 1..=count as usize {
+                    let n = be32(b.body, offset).filter(|n| *n >= 8).ok_or("can't verify video location: invalid metadata key")? as usize;
+                    let end = offset.checked_add(n).ok_or("can't verify video location: metadata key overflow")?;
+                    let key = b.body.get(offset.saturating_add(8)..end).ok_or("can't verify video location: truncated metadata key")?;
+                    if key == LOCATION_KEY {
+                        location_keys.push(index);
+                    }
+                    offset = end;
+                }
+                if offset != b.body.len() {
+                    return Err("can't verify video location: trailing metadata key bytes".into());
+                }
+            }
+            b"ilst" => {
+                for item in read_boxes(b.body, budget) {
+                    items.push((u32::from_be_bytes(item.kind) as usize, item.body));
+                }
+            }
+            _ => {}
+        }
+    }
+    for index in location_keys {
+        for (_, item) in items.iter().filter(|(i, _)| *i == index) {
+            for data in read_boxes(item, budget) {
+                if &data.kind != b"data" {
+                    continue;
+                }
+                // type and locale precede the value; a short or unreadable item could hide one
+                let value = data.body.get(8..).ok_or("can't verify video location: truncated metadata value")?;
+                if !value.iter().all(u8::is_ascii_whitespace) {
+                    return Err(
+                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -606,7 +726,7 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                         }
                     }
                     b"trak" => {
-                        if let Some(t) = parse_trak(child.body, &mut budget, 0)
+                        if let Some(t) = parse_trak(child.body, &mut budget, 0, &mut meta, &mut xmp)
                             && t.is_video
                             && (primary_track.is_none() || (t.width > 0 && t.height > 0))
                         {
@@ -636,17 +756,17 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     b"meta" => {
                         parse_meta(child.body, &mut meta, &mut xmp, &mut budget, 0);
                     }
-                    b"uuid" if child.uuid == Some(XMP_UUID) => {
-                        if let Ok(s) = std::str::from_utf8(child.body) {
-                            xmp = Some(s.to_string());
-                        }
-                    }
+                    b"XMP_" => take_xmp(child.body, &mut xmp),
+                    b"uuid" if child.uuid == Some(XMP_UUID) => take_xmp(child.body, &mut xmp),
                     _ => {}
                 }
             }
         }
         if &b.kind == b"meta" {
             parse_meta(b.body, &mut meta, &mut xmp, &mut budget, 0);
+        }
+        if &b.kind == b"XMP_" {
+            take_xmp(b.body, &mut xmp);
         }
     }
 
@@ -667,13 +787,14 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
         meta.fill_missing(&xmp_str.metadata);
     }
 
-    // If capture time from `mvhd` was found and `meta.capture_time` was not set, fill it
+    // If the container tags and the XMP named no capture time, the movie header's creation time
+    // stands in; when they did name one, it reports that instead of the time the file was muxed.
     if meta.capture_time.is_none() {
         if let Some(c) = captured.as_deref().and_then(DateTime::parse_iso) {
             meta.capture_time = Some(c);
         }
-    } else if captured.is_none() {
-        captured = meta.capture_time.map(|c| c.to_iso());
+    } else if let Some(c) = meta.capture_time {
+        captured = Some(c.to_iso());
     }
 
     let has_video_track = primary_track.is_some();
@@ -772,6 +893,117 @@ mod tests {
             body.extend_from_slice(packet);
             write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
             verify_video_location_absent(&bytes).unwrap();
+        }
+    }
+
+    /// A packet can bury its GPS properties past the flattened-key budget: the map then omits them
+    /// while parsing still succeeds, so the verifier must refuse an inventory it cannot prove
+    /// complete rather than read the omission as absence.
+    #[test]
+    fn location_verification_refuses_a_packet_that_buries_its_gps_past_the_key_budget() {
+        let long = "u".repeat(4000);
+        let mut packet = String::from(concat!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description"#,
+            r#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:exif="http://ns.adobe.com/exif/1.0/" "#
+        ));
+        // Longer keys than the whole budget, repeated under one name.
+        for _ in 0..400 {
+            packet.push_str(&format!("dc:{long}=\"x\" "));
+        }
+        // Then short ones until the remainder cannot pay for another four-byte key.
+        for _ in 0..1100 {
+            packet.push_str("dc:z=\"x\" ");
+        }
+        packet.push_str(r#"exif:GPSLatitude="37,46.494N" exif:GPSLongitude="122,15.120W"/></rdf:RDF>"#);
+
+        let parsed = crate::parse_xmp(&packet).unwrap();
+        assert!(parsed.properties_truncated, "the fixture really exhausts the key budget");
+        assert!(parsed.metadata.gps.is_none(), "the budget hides the coordinates from the map");
+        assert!(!parsed.properties.keys().any(|key| key.contains("GPS")), "no GPS property survives the budget");
+
+        for uuid in [false, true] {
+            let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+            let mut body = if uuid { XMP_UUID.to_vec() } else { Vec::new() };
+            body.extend_from_slice(packet.as_bytes());
+            write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
+            let error = verify_video_location_absent(&bytes).unwrap_err();
+            assert!(error.contains("exceeds the size limit"), "uuid={uuid}: {error}");
+        }
+    }
+
+    /// Atoms a writer leaves behind when a location is cleared hold no place: they must not refuse
+    /// an otherwise eligible copy. Anything with content still refuses.
+    #[test]
+    fn location_verification_allows_cleared_quicktime_location_atoms() {
+        let text = |s: &str| {
+            let mut body = (s.len() as u16).to_be_bytes().to_vec();
+            body.extend_from_slice(&0u16.to_be_bytes());
+            body.extend_from_slice(s.as_bytes());
+            body
+        };
+        let with = |kind: &[u8; 4], body: &[u8]| {
+            let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+            let mut atom = Vec::new();
+            write_box(&mut atom, kind, body);
+            let mut udta = Vec::new();
+            write_box(&mut udta, b"udta", &atom);
+            let moov_at = be32(&bytes, 0).expect("ftyp size") as usize;
+            let mut moov = bytes.get(moov_at + 8..).expect("moov body").to_vec();
+            moov.extend_from_slice(&udta);
+            bytes.truncate(moov_at);
+            write_box(&mut bytes, b"moov", &moov);
+            bytes
+        };
+        let located = "+37.7749-122.4194/";
+        for (body, allows) in [(text(""), true), (text(" "), true), (Vec::new(), true), (text(located), false)] {
+            let bytes = with(b"\xa9xyz", &body);
+            assert_eq!(verify_video_location_absent(&bytes).is_ok(), allows, "©xyz {body:?}");
+            assert_eq!(probe_video(&bytes).unwrap().metadata.gps.is_some(), !allows, "©xyz probe {body:?}");
+        }
+
+        // a `loci` atom written as all zeroes names no place; spec coordinates do
+        let cleared = vec![0u8; 4 + 2 + 1 + 1 + 12];
+        let mut located = vec![0u8; 4]; // version/flags
+        located.extend_from_slice(&0u16.to_be_bytes()); // language
+        located.extend_from_slice(b"Place\0");
+        located.push(1); // role: real location
+        for value in [-122.4194f64, 37.7749, 0.0] {
+            located.extend_from_slice(&((value * 65_536.0) as i32).to_be_bytes());
+        }
+        located.extend_from_slice(b"Earth\0");
+        assert!(verify_video_location_absent(&with(b"loci", &cleared)).is_ok());
+        assert!(probe_video(&with(b"loci", &cleared)).unwrap().metadata.gps.is_none());
+        let located = with(b"loci", &located);
+        assert!(verify_video_location_absent(&located).is_err());
+        let gps = probe_video(&located).unwrap().metadata.gps.expect("loci coordinates");
+        assert!((gps.latitude - 37.7749).abs() < 1e-4 && (gps.longitude + 122.4194).abs() < 1e-4, "{gps:?}");
+    }
+
+    /// Metadata kept per track (`trak/udta` and `trak/mdia/udta`) is read for display and checked
+    /// the same way as the movie-level boxes, so the catalog never hides a location the copy refuses.
+    #[test]
+    fn quicktime_track_metadata_is_read_and_checked() {
+        let text = |s: &str| {
+            let mut body = (s.len() as u16).to_be_bytes().to_vec();
+            body.extend_from_slice(&0u16.to_be_bytes());
+            body.extend_from_slice(s.as_bytes());
+            body
+        };
+        let udta = || {
+            let mut udta = Vec::new();
+            write_box(&mut udta, b"\xa9day", &text("2026-05-04T21:00:00-0400"));
+            write_box(&mut udta, b"\xa9xyz", &text("+37.7749-122.4194/"));
+            udta
+        };
+        for mdia in [false, true] {
+            let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+            let mut extra = Vec::new();
+            write_box(&mut extra, b"udta", &udta());
+            let bytes = if mdia { with_mdia_children(&file, &extra) } else { with_trak_children(&file, &extra) };
+            let meta = probe_video(&bytes).expect("valid video");
+            assert_eq!(meta.captured.as_deref(), Some("2026-05-04T21:00:00-04:00"), "mdia={mdia}");
+            assert!(meta.metadata.gps.is_some(), "mdia={mdia}");
+            assert!(verify_video_location_absent(&bytes).is_err(), "mdia={mdia}");
         }
     }
 
@@ -992,6 +1224,39 @@ mod tests {
         body.extend_from_slice(children);
         let mut out = bytes[..ftyp_len].to_vec();
         write_box(&mut out, b"moov", &body);
+        out
+    }
+
+    /// Grow the (last) `trak` of the synthetic movie, keeping the enclosing `moov` size honest.
+    fn with_trak_children(bytes: &[u8], children: &[u8]) -> Vec<u8> {
+        let ftyp_len = be32(bytes, 0).expect("ftyp size") as usize;
+        let trak_at = bytes.windows(4).position(|w| w == b"trak").expect("trak") - 4;
+        let trak_len = be32(bytes, trak_at).expect("trak size") as usize;
+        assert_eq!(trak_at + trak_len, bytes.len(), "the fixture's trak ends the file");
+        let mut out = bytes.get(..trak_at).expect("trak start").to_vec();
+        let mut body = bytes.get(trak_at + 8..trak_at + trak_len).expect("trak body").to_vec();
+        body.extend_from_slice(children);
+        write_box(&mut out, b"trak", &body);
+        let moov_len = u32::try_from(out.len() - ftyp_len).expect("small fixture");
+        out.get_mut(ftyp_len..ftyp_len + 4).expect("moov size")[..].copy_from_slice(&moov_len.to_be_bytes());
+        out
+    }
+
+    /// Grow the (last) `mdia` of the synthetic movie, keeping the enclosing `trak` and `moov` sizes honest.
+    fn with_mdia_children(bytes: &[u8], children: &[u8]) -> Vec<u8> {
+        let ftyp_len = be32(bytes, 0).expect("ftyp size") as usize;
+        let trak_at = bytes.windows(4).position(|w| w == b"trak").expect("trak") - 4;
+        let mdia_at = bytes.windows(4).position(|w| w == b"mdia").expect("mdia") - 4;
+        let mdia_len = be32(bytes, mdia_at).expect("mdia size") as usize;
+        assert_eq!(mdia_at + mdia_len, bytes.len(), "the fixture's mdia ends the file");
+        let mut out = bytes.get(..mdia_at).expect("mdia start").to_vec();
+        let mut body = bytes.get(mdia_at + 8..mdia_at + mdia_len).expect("mdia body").to_vec();
+        body.extend_from_slice(children);
+        write_box(&mut out, b"mdia", &body);
+        let trak_len = u32::try_from(out.len() - trak_at).expect("small fixture");
+        out.get_mut(trak_at..trak_at + 4).expect("trak size")[..].copy_from_slice(&trak_len.to_be_bytes());
+        let moov_len = u32::try_from(out.len() - ftyp_len).expect("small fixture");
+        out.get_mut(ftyp_len..ftyp_len + 4).expect("moov size")[..].copy_from_slice(&moov_len.to_be_bytes());
         out
     }
 

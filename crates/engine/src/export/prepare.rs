@@ -320,9 +320,16 @@ impl PreparedExport {
                         if !bytes.starts_with(b"8BPS") {
                             let embedded = lightcraft_meta::embedded(&bytes);
                             if let Some(xmp) = embedded.xmp.as_deref() {
-                                lightcraft_meta::parse_xmp(xmp).map_err(|e| {
+                                let packet = lightcraft_meta::parse_xmp(xmp).map_err(|e| {
                                     format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}")
                                 })?;
+                                // A packet whose flattened property map a size limit cut short could hide
+                                // a location behind unrelated keys, so it cannot prove absence.
+                                if packet.properties_truncated {
+                                    return Err(format!(
+                                        "{label}: can't verify location metadata in this original file: the XMP property inventory exceeds the size limit"
+                                    ));
+                                }
                             }
                         }
                         let embeds_place_name =
