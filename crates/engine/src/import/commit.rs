@@ -256,6 +256,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
                 p.kind = info.kind;
+                p.duration = info.duration;
                 p.file_size = info.file_size;
                 p.captured = info.captured;
                 p.meta = info.meta;

@@ -762,7 +762,7 @@ fn render(args: &[String]) -> Result<(), String> {
     if !values.is_empty() {
         run(&mut s, "develop.set", json!({"values": values}))?;
     }
-    use lightcraft_engine::export::{ExportFormat, ExportOptions, export_photo};
+    use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, prepare_batch, run_batch_with_copy};
     let mut p = json!({"quality": quality});
     if let Some(n) = size {
         p["longEdge"] = json!(n);
@@ -779,21 +779,29 @@ fn render(args: &[String]) -> Result<(), String> {
     let o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
     // Add to Apple Photos: refused before anything is written when it can't be done
     let after = s.after_export(&o)?;
-    let e = export_photo(&mut s, lightcraft_engine::catalog::PhotoId(id), &o, 1)?;
-    // never over the input (or its sidecar), however it is spelled: `render IMG.jpg -o IMG.jpg`
-    let sidecars: Vec<(String, &Vec<u8>)> =
-        e.sidecars.iter().map(|(ext, bytes)| (Path::new(&output).with_extension(ext).to_string_lossy().to_string(), bytes)).collect();
-    let guard = s.original_guard();
-    for p in std::iter::once(&output).chain(sidecars.iter().map(|(p, _)| p)) {
-        guard.check(Path::new(p)).map_err(|err| format!("render: {err}"))?;
+    let items = prepare_batch(&mut s, &[lightcraft_engine::catalog::PhotoId(id)], &o)?;
+    let files = run_batch_with_copy(
+        items,
+        &o,
+        &Destination { dir: String::new(), exact: Some(output.clone()) },
+        &mut lightcraft_engine::export::write_file,
+        &|path| Path::new(path).exists(),
+        true,
+        &mut |_, _| true,
+        Some(&mut lightcraft_engine::export::copy_original),
+    )?;
+    let e = files.first().ok_or("render: no output was written")?;
+    let output = e["path"].as_str().ok_or_else(|| match e.get("warning").or_else(|| e.get("error")).and_then(Value::as_str) {
+        Some(reason) => format!("render: {reason}"),
+        None => format!("render: no output was written ({e})"),
+    })?;
+    if let Some(sidecars) = e["sidecars"].as_array() {
+        for sc in sidecars.iter().filter_map(Value::as_str) {
+            eprintln!("lightcraft-cli: wrote {sc}");
+        }
     }
-    lightcraft_engine::export::write_file(&output, &e.bytes)?;
-    for (sc, bytes) in &sidecars {
-        lightcraft_engine::export::write_file(sc, bytes)?;
-        eprintln!("lightcraft-cli: wrote {sc}");
-    }
-    eprintln!("lightcraft-cli: wrote {output} ({}×{})", e.width, e.height);
-    if let Some(photos) = after.run(&[json!({"path": output})], false) {
+    eprintln!("lightcraft-cli: wrote {output} ({}×{})", e["width"], e["height"]);
+    if let Some(photos) = after.run(&files, false) {
         if let Some(err) = photos.get("error").and_then(Value::as_str) {
             return Err(format!("render: {output} was written, but {err}"));
         }

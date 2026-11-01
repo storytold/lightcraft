@@ -7,7 +7,14 @@ use lightcraft_ui_egui::{LightcraftApp, Services};
 
 fn harness() -> Harness<'static, LightcraftApp> {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+    let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
+    // These assertions cover dialog roles and labels, not glyph rasterization. Releases embed the
+    // optional script faces; on a development build without them, let egui render tofu rather than
+    // panic when the system locale uses a script such as Georgian.
+    if lightcraft_engine::CRAFT_FONTS.is_empty() {
+        builder = builder.allow_missing_glyphs();
+    }
+    let mut h = builder.build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);

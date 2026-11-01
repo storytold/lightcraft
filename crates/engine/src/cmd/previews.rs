@@ -482,7 +482,9 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let mut jobs: Vec<SmartJob> = Vec::new();
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
-        if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
+        // Videos have no frame to build a proxy from, but their proxy (if one exists from an
+        // earlier version) still follows a Discard.
+        if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) || (ph.is_video() && !discard) {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);

@@ -564,6 +564,10 @@ pub struct Prepared {
     marks: Marks,
     /// Print sharpening, applied to each photo once it's rendered at its print size.
     color: crate::print_color::PrintColorSettings,
+    /// Photos left out of the print (a video has no frame to print yet): file name and reason.
+    skipped: Vec<(String, String)>,
+    /// Photos of the selection that the print has (a photo used in several cells counts once).
+    photos: usize,
 }
 
 impl Prepared {
@@ -574,6 +578,16 @@ impl Prepared {
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// Photos the print left out, with the reason for each ([`Self::len`] counts the rest).
+    pub fn skipped(&self) -> &[(String, String)] {
+        &self.skipped
+    }
+
+    /// Photos of the selection the print has (one used in several cells counts once).
+    pub fn photos(&self) -> usize {
+        self.photos
     }
 
     /// Pages the job will produce.
@@ -644,12 +658,29 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
     if pw == 0 || ph == 0 || page_px > MAX_PAGE_PIXELS {
         return Err(format!("a page of {pw} x {ph} pixels is too large; lower the print resolution"));
     }
-    let plan = plan_cells(&settings.layout, photos)?;
+    // A video has no frame to print yet: leave it out (the cells reflow around it) and report it,
+    // rather than failing the whole print with "no such photo".
+    let mut skipped = Vec::new();
+    let mut printable = Vec::with_capacity(photos.len());
+    for id in photos {
+        match session.catalog.photo(*id) {
+            Some(p) if p.is_video() => skipped.push((p.file_name.clone(), "a video: not printed (no frame yet)".to_string())),
+            Some(_) => printable.push(*id),
+            None => return Err(format!("no photo {}", id.0)),
+        }
+    }
+    if printable.is_empty() {
+        return Err("none of the selected photos can be printed: they are videos".into());
+    }
+    let plan = plan_cells(&settings.layout, &printable)?;
     if page_px.saturating_mul(plan.len() as u64) > MAX_JOB_PIXELS {
         return Err("the print is too large for memory; lower the print resolution or print fewer pages".into());
     }
     let style = CellStyle::of(&settings, ppi);
     let mut items = Vec::new();
+    // Photos a cell really places: Picture Package draws only the first, a custom cell its own,
+    // and a still repeated in several cells counts once.
+    let mut placed = std::collections::BTreeSet::new();
     for (page, cells) in plan.iter().enumerate() {
         for (rect, id) in cells {
             let Some(cell) = px_rect(rect, ppi, pw, ph) else { continue };
@@ -661,6 +692,7 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
             let p = place(nw as f64, nh as f64, aw, ah, style.fill, style.rotate).ok_or("a photo has no size")?;
             let (rw, rh) = p.unturned();
             let job = session.export_job(*id, rw, rh, OutputSpace::Rec2020, OutputDepth::U16)?;
+            placed.insert(*id);
             items.push(Item { page, name, cell, key: (id.0, rw, rh), job });
         }
     }
@@ -672,6 +704,8 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
         style,
         marks: Marks::of(&settings, ppi, pw, ph),
         color: settings.job.color.clone(),
+        skipped,
+        photos: placed.len(),
     })
 }
 

@@ -1012,7 +1012,8 @@ fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
     let mut expected = (**s.catalog.photo(id).unwrap()).clone();
     expected.kind = lightcraft_catalog::MediaKind::Video;
     s.execute("library.filter", &json!({"kind": "video"})).unwrap();
-    assert!(s.visible().is_empty());
+    // the Videos filter finds a legacy record by its VIDEO format, before the repair as well
+    assert_eq!(s.visible(), &[id]);
     let result = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
     assert_eq!(result["mapping"]["1"], id.0);
     assert_eq!(result["imported"], 0);
@@ -1024,7 +1025,8 @@ fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
     assert_eq!(s.catalog.stack(stack.id), Some(&stack));
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.to_snapshot(), before);
-    assert!(s.visible().is_empty());
+    // (the undone import leaves the legacy record, which the Videos filter still finds)
+    assert_eq!(s.visible(), &[id]);
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!(s.catalog.to_snapshot(), after);
     assert_eq!(s.visible(), &[id]);

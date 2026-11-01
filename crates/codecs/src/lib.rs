@@ -243,7 +243,7 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
         #[cfg(not(feature = "jxl"))]
         Format::Jxl => unsupported(),
         Format::Heif => heif::decode(bytes, &opts),
-        Format::Avif | Format::RawTiffLike | Format::RawOther => unsupported(),
+        Format::Avif | Format::RawTiffLike | Format::RawOther | Format::Mp4 | Format::Mov => unsupported(),
     }
 }
 

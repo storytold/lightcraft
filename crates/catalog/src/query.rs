@@ -224,7 +224,7 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "lens" => p.meta.lens.to_lowercase().contains(val),
             "keyword" | "kw" => p.meta.keywords.iter().any(|k| crate::keywords::is_under(k, val)),
             "person" | "who" => has_person(p, val),
-            "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
+            "type" | "kind" => format!("{:?}", p.effective_kind()).eq_ignore_ascii_case(val),
             "edited" => (val == "true" || val == "yes") == p.is_edited(),
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
@@ -420,7 +420,10 @@ impl Filter {
                 return false;
             }
         }
-        if self.flag.is_some_and(|f| f != p.flag) || self.label.is_some_and(|l| Some(l) != p.label) || self.kind.is_some_and(|k| k != p.kind) {
+        if self.flag.is_some_and(|f| f != p.flag)
+            || self.label.is_some_and(|l| Some(l) != p.label)
+            || self.kind.is_some_and(|k| k != p.effective_kind())
+        {
             return false;
         }
         if self.edited.is_some_and(|e| e != p.is_edited()) {

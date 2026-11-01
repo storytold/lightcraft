@@ -30,6 +30,7 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+    ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
     ("lc", LC_NS),
     // Read-only: develop settings written by other raw developers (interchange; see docs/xmp-interop.md).
     ("crs", CRS_NS),
@@ -75,6 +76,100 @@ pub struct XmpData {
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
+    /// True when a resource limit dropped flattened properties (their key text ran past the budget),
+    /// so [`XmpData::properties`] is not a complete inventory of the packet. Reading metadata can
+    /// live with a partial map; a check that must prove a property is *absent* (an embedded
+    /// location before copying an Original) must treat it as unverifiable instead.
+    pub properties_truncated: bool,
+}
+
+impl XmpData {
+    /// Whether the XMP inventory names GPS or a non-empty place field. LocationShown and
+    /// LocationCreated are IPTC Extension structures; their flattened array entries can be empty
+    /// strings even when their struct children contain a city or coordinates, so inspect their
+    /// retained structured value and flattened child fields as well. Callers that must prove
+    /// absence must check [`Self::properties_truncated`] first.
+    pub fn has_location_metadata(&self) -> bool {
+        const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
+
+        let has_text = |root: &XmpValue| {
+            let mut pending = Vec::new();
+            if pending.try_reserve(1).is_err() {
+                return true;
+            }
+            pending.push(root);
+            let mut visited = 0usize;
+            while let Some(value) = pending.pop() {
+                visited = visited.saturating_add(1);
+                // Parsed trees are capped at MAX_NODES. If a caller constructs an XmpData with a
+                // larger tree, conservatively treat it as location-bearing rather than risk an
+                // unbounded walk in an export privacy check.
+                if visited > MAX_NODES {
+                    return true;
+                }
+                match value {
+                    XmpValue::Text(text) if !text.trim().is_empty() => return true,
+                    XmpValue::Array(items) => {
+                        if pending.len().saturating_add(items.len()) > MAX_NODES || pending.try_reserve(items.len()).is_err() {
+                            return true;
+                        }
+                        pending.extend(items);
+                    }
+                    XmpValue::Struct(fields) => {
+                        if pending.len().saturating_add(fields.len()) > MAX_NODES || pending.try_reserve(fields.len()).is_err() {
+                            return true;
+                        }
+                        pending.extend(fields.values());
+                    }
+                    XmpValue::Text(_) => {}
+                }
+            }
+            false
+        };
+
+        for (key, values) in &self.properties {
+            let parts = key.split('/');
+            if parts.clone().any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")) {
+                // Even an isolated/blank GPS property is not proof that GPS was removed.
+                return true;
+            }
+
+            let Some(location_part) = parts.clone().find(|part| {
+                matches!(
+                    *part,
+                    "Iptc4xmpCore:Location"
+                        | "Iptc4xmpCore:CountryCode"
+                        | "photoshop:City"
+                        | "photoshop:State"
+                        | "photoshop:Country"
+                        | "lc:location"
+                        | "Iptc4xmpExt:LocationShown"
+                        | "Iptc4xmpExt:LocationCreated"
+                )
+            }) else {
+                continue;
+            };
+
+            if IPTC_LOCATION_STRUCTS.contains(&location_part) {
+                let root = parts.clone().next().unwrap_or(key);
+                if self.values.get(root).is_some_and(has_text) || values.iter().any(|value| !value.trim().is_empty()) {
+                    return true;
+                }
+                // `values` keeps the first text-bearing occurrence across RDF descriptions, while
+                // flattened child properties retain every occurrence.
+                if self.properties.iter().any(|(candidate, nested_values)| {
+                    candidate.strip_prefix(root).is_some_and(|suffix| suffix.starts_with('/'))
+                        && nested_values.iter().any(|value| !value.trim().is_empty())
+                }) {
+                    return true;
+                }
+            } else if values.iter().any(|value| !value.trim().is_empty()) {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 /// A structured XMP value.
@@ -107,6 +202,26 @@ impl XmpValue {
             other => std::slice::from_ref(other),
         }
     }
+}
+
+/// Whether a structured value holds any non-blank text. A tree larger than the parser's node
+/// budget counts as text-bearing (the conservative answer for a privacy check).
+fn value_has_text(value: &XmpValue) -> bool {
+    let mut pending = vec![value];
+    let mut visited = 0usize;
+    while let Some(value) = pending.pop() {
+        visited = visited.saturating_add(1);
+        if visited > MAX_NODES {
+            return true;
+        }
+        match value {
+            XmpValue::Text(text) if !text.trim().is_empty() => return true,
+            XmpValue::Array(items) => pending.extend(items.iter()),
+            XmpValue::Struct(fields) => pending.extend(fields.values()),
+            XmpValue::Text(_) => {}
+        }
+    }
+    false
 }
 
 fn node_struct(n: &Node) -> XmpValue {
@@ -339,29 +454,30 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, dropped: &mut bool) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
+        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget, dropped) {
             props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props, budget);
+        collect_property(c, prefix, props, budget, dropped);
     }
 }
 
 /// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
-/// property is then left out, like other elements a limit has cut).
-fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+/// property is then left out, like other elements a limit has cut) and the map is marked partial.
+fn take_key_bytes(key: &str, budget: &mut usize, dropped: &mut bool) -> bool {
     let n = key.len();
     if *budget < n {
+        *dropped = true;
         return false;
     }
     *budget -= n;
     true
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, dropped: &mut bool) {
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -375,7 +491,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        if take_key_bytes(&key, budget) {
+        if take_key_bytes(&key, budget, dropped) {
             props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
         }
         return;
@@ -383,26 +499,26 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
+            collect_property(c, &struct_prefix, props, budget, dropped);
         }
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props, budget);
+        collect_description(d, &struct_prefix, props, budget, dropped);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
             let full = format!("{struct_prefix}{k}");
-            if take_key_bytes(&full, budget) {
+            if take_key_bytes(&full, budget, dropped) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    if take_key_bytes(&key, budget) {
+    if take_key_bytes(&key, budget, dropped) {
         props.entry(key).or_default().push(v);
     }
 }
@@ -522,12 +638,37 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    // Keys whose retained structured value already holds text: later descriptions need not scan
+    // it again just to learn that it is not blank.
+    let mut text_values: std::collections::HashSet<String> = std::collections::HashSet::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
+    let mut dropped = false;
     for d in descs {
-        collect_description(d, "", &mut props, &mut key_budget);
+        collect_description(d, "", &mut props, &mut key_budget, &mut dropped);
         if let XmpValue::Struct(m) = node_struct(d) {
-            values.extend(m);
+            // A later description can repeat a property with an empty value (an IPTC location
+            // struct with a blank `rdf:li`, say). Keep the earlier text-bearing value: otherwise
+            // the empty one would hide the place an export's Remove Location must refuse.
+            for (key, value) in m {
+                match values.entry(key) {
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        if text_values.contains(slot.key()) {
+                            continue;
+                        }
+                        if value_has_text(&value) {
+                            text_values.insert(slot.key().clone());
+                            slot.insert(value);
+                        }
+                    }
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        if value_has_text(&value) {
+                            text_values.insert(slot.key().clone());
+                        }
+                        slot.insert(value);
+                    }
+                }
+            }
         }
     }
     let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -606,7 +747,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok(XmpData { metadata: m, lc_settings, properties: props, values, properties_truncated: dropped })
 }
 
 fn frac(v: f64) -> String {
