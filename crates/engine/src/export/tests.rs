@@ -269,6 +269,7 @@ fn metadata_policies() {
     use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
     let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
     p.meta.camera = "Synthetic X2".into();
+    p.meta.camera_identity = Some(lightcraft_catalog::CameraIdentity { make: Some("Synthetic".into()), model: Some("Synthetic X2".into()) });
     p.meta.copyright = "(c) Me".into();
     p.meta.copyright_status = lightcraft_catalog::CopyrightStatus::Copyrighted;
     p.meta.usage_terms = "Editorial use only".into();
@@ -1522,4 +1523,38 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
+}
+
+#[test]
+fn exported_camera_identity_stays_separate_in_jpeg_and_tiff() {
+    use lightcraft_catalog::{CameraIdentity, Catalog, Photo, PhotoId, Source};
+    let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
+    p.meta.camera = "Canon IXUS 185".into();
+    p.meta.camera_identity = Some(CameraIdentity { make: Some("Canon".into()), model: Some("Canon IXUS 185".into()) });
+    for format in [ExportFormat::Jpeg, ExportFormat::Tiff] {
+        for policy in [MetadataPolicy::All, MetadataPolicy::AllExceptCamera, MetadataPolicy::Copyright, MetadataPolicy::None] {
+            let o = ExportOptions { format, metadata: policy, ..Default::default() };
+            let metadata = export_metadata(&p, &Catalog::new(), &o);
+            let bytes = encode_with_metadata(&test_image(), &o, metadata.as_ref()).unwrap();
+            let back = lightcraft_meta::extract(&bytes);
+            if policy == MetadataPolicy::All {
+                assert_eq!(back.make.as_deref(), Some("Canon"));
+                assert_eq!(back.model.as_deref(), Some("Canon IXUS 185"));
+                if format == ExportFormat::Tiff {
+                    let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+                    let ifd = &tiff.ifds[0];
+                    assert_eq!(ifd.value(lightcraft_tiff::tags::MAKE).and_then(|v| v.as_str()).as_deref(), Some("Canon"));
+                    assert_eq!(ifd.value(lightcraft_tiff::tags::MODEL).and_then(|v| v.as_str()).as_deref(), Some("Canon IXUS 185"));
+                }
+                let packet = lightcraft_meta::embedded(&bytes).xmp.unwrap();
+                assert!(packet.contains("Canon IXUS 185"));
+                assert!(!packet.contains("Canon Canon IXUS 185"));
+            } else {
+                assert!(back.make.is_none() && back.model.is_none(), "camera policy respected");
+            }
+        }
+    }
+    p.meta.camera_identity = None;
+    let legacy = export_metadata(&p, &Catalog::new(), &ExportOptions::default()).unwrap();
+    assert!(legacy.make.is_none() && legacy.model.is_none(), "unknown source tags are never inferred from a display label");
 }

@@ -1809,3 +1809,29 @@ fn existing_photo_settings_are_not_rewritten() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn camera_identity_preserves_tags_and_deduplicates_labels() {
+    for (make, model, label) in [
+        ("Canon", "Canon IXUS 185", "Canon IXUS 185"),
+        ("NIKON CORPORATION", "NIKON Z 6_2", "NIKON Z 6_2"),
+        ("Leica Camera AG", "LEICA Q2", "LEICA Q2"),
+        ("RICOH IMAGING COMPANY, LTD.", "RICOH GR IIIx", "RICOH GR IIIx"),
+        ("samsung", "SM-A528B", "samsung SM-A528B"),
+        ("Canon", "Canonical", "Canon Canonical"),
+        ("", "Model", "Model"),
+        ("Maker", "", "Maker"),
+    ] {
+        let source = lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+        let (meta, _) = super::meta_of(&source);
+        assert_eq!(meta.camera, label);
+        let identity = meta.camera_identity.as_ref().unwrap();
+        assert_eq!((identity.make.as_deref(), identity.model.as_deref()), (Some(make), Some(model)));
+        let encoded = serde_json::to_string(&meta).unwrap();
+        let restored: lightcraft_catalog::Meta = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored, meta, "catalog metadata round trip");
+    }
+    let legacy: lightcraft_catalog::Meta = serde_json::from_str(r#"{"camera":"Canon Canon IXUS 185"}"#).unwrap();
+    assert_eq!(legacy.camera, "Canon Canon IXUS 185");
+    assert!(legacy.camera_identity.is_none(), "legacy labels are not guessed into source tags");
+}
