@@ -235,6 +235,7 @@ fn manual_vertical_keystone_widens_the_top() {
     assert!(lb.y - lt.y > rb.y - rt.y, "left side enlarged");
 }
 
+/// Verifies manual geometry corrections straighten a keystoned grid test fixture.
 #[test]
 fn manual_transforms_straighten_known_keystone() {
     let (w, h) = (480usize, 320usize);

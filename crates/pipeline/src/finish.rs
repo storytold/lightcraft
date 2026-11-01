@@ -853,6 +853,7 @@ mod tests {
         assert!((encode_srgb(lut, 2.0) - 1.0).abs() < 1e-6);
     }
 
+    /// Verifies 8x8 Bayer dithering preserves endpoints, exact 8-bit quantization steps, and fractional levels.
     #[test]
     fn bayer_dithering_preserves_extremes_and_dithers_smoothly() {
         for y in 0..8 {
