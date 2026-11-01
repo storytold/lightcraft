@@ -313,6 +313,7 @@
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
   "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "{title}: {line}": "{title}: {line}",
   "Photo: {name}": "Foto: {name}",
   "Panel layout could not be restored: {error}": "Panellayouten kunde inte återställas: {error}",
   "Panel move was not applied: {error}": "Panelflytten tillämpades inte: {error}",
@@ -320,5 +321,6 @@
   "{name} is installed and in use: face recognition is on": "{name} är installerad och används: ansiktsigenkänning är på",
   "Creates {stacks} stack{} from {photos} of {scope}": "Skapar staplar: {stacks} · foton: {photos} av {scope}{:.0}",
   "{n} selected photo{} · {pages} page{}": "Markerade foton: {n} · sidor: {pages}{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}",
+  "Can't read this folder: {}": "Det går inte att läsa den här mappen: {}"
 }
