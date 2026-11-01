@@ -234,8 +234,7 @@ pub struct Resolution {
 /// [`crate::backend::choose_named_adapter`], and the choice is logged once.
 pub fn resolve_card(entries: &[AdapterEntry], variable: Option<&str>, saved: Option<&AdapterKey>) -> Resolution {
     let Some(w) = variable.map(str::trim).filter(|w| !w.is_empty()) else { return resolve_unnamed(entries, saved) };
-    let (choice, candidates) = named_choice(entries, w);
-    let (warn, line) = crate::backend::named_choice_note(w, &choice, &candidates);
+    let (warn, line, choice) = named_note(entries, w);
     if let Some(i) = choice.index {
         crate::backend::log_once(warn, &line);
         return Resolution { index: Some(i), how: How::Variable, missing: None };
@@ -273,6 +272,32 @@ fn fallback_line(line: &str, r: &Resolution, entries: &[AdapterEntry]) -> String
     }
 }
 
+/// What the name `w` picks among `entries` ([`named_choice`]), and the line that says so: a name
+/// that matches only cards LightCraft can't use names them and why (review of PR #3511), rather than
+/// saying it names none.
+fn named_note(entries: &[AdapterEntry], w: &str) -> (bool, String, crate::backend::NamedChoice) {
+    let (choice, candidates) = named_choice(entries, w);
+    let rejected: Vec<String> = crate::backend::choose_named_adapter(w, &candidates)
+        .matches
+        .iter()
+        .filter_map(|i| entries.get(*i))
+        .filter(|e| !e.usable)
+        .map(|e| format!("{} ({})", e.name, e.why_not.as_deref().unwrap_or("not usable")))
+        .collect();
+    let (warn, line) = if choice.index.is_none() && choice.software.is_empty() && !rejected.is_empty() {
+        (
+            true,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={w} names only graphics cards LightCraft can't use: {}; using the default choice",
+                rejected.join(", ")
+            ),
+        )
+    } else {
+        crate::backend::named_choice_note(w, &choice, &candidates)
+    };
+    (warn, line, choice)
+}
+
 /// What the name `w` picks among `entries` ([`crate::backend::choose_named_adapter`]), leaving out
 /// hardware cards that can't be used (too few storage buffers).
 fn named_choice<'a>(entries: &'a [AdapterEntry], w: &str) -> (crate::backend::NamedChoice, Vec<crate::backend::Candidate<'a>>) {
@@ -287,11 +312,10 @@ fn named_choice<'a>(entries: &'a [AdapterEntry], w: &str) -> (crate::backend::Na
 /// What the settings say about the second graphics card.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum HelperChoice {
-    /// Automatic: another usable card than the editing one, dedicated first (decision 1: used when
-    /// found).
-    #[default]
+    /// Automatic: another usable card than the editing one, dedicated first.
     Auto,
-    /// Don't use one.
+    /// Don't use one: the default, until the user turns a second card on (review of #3506).
+    #[default]
     Off,
     /// This card (not when it is the editing card).
     Card(AdapterKey),
@@ -380,7 +404,7 @@ struct State {
     told_missing: Vec<AdapterKey>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { card: None, helper: HelperChoice::Auto, screen: None, listed: None, told_missing: Vec::new() });
+static STATE: Mutex<State> = Mutex::new(State { card: None, helper: HelperChoice::Off, screen: None, listed: None, told_missing: Vec::new() });
 
 fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -482,6 +506,11 @@ mod tests {
 
     #[test]
     fn keys_round_trip_and_parse_leniently() {
+        // (review of #3506) the second card is off until the user turns it on; an older settings
+        // file's "" still means Automatic
+        assert_eq!(HelperChoice::default(), HelperChoice::Off);
+        assert_eq!(HelperChoice::parse_setting(""), HelperChoice::Auto);
+        assert_eq!(HelperChoice::parse_setting("off"), HelperChoice::Off);
         let k = AdapterKey { backend: "dx12".into(), vendor: 0x10de, device: 0x2f04, name: "NVIDIA GeForce RTX 5070".into(), index: 1 };
         assert_eq!(k.to_string(), "dx12:10de:2f04:NVIDIA GeForce RTX 5070#1");
         assert_eq!(AdapterKey::parse(&k.to_string()), Some(k.clone()));
@@ -573,6 +602,11 @@ mod tests {
         assert_eq!(resolve_card(&e, Some("g"), None).index, Some(1));
         // only the unusable card: the default choice
         assert_eq!(resolve_card(&e, Some("old"), None), Resolution { index: None, how: How::Default, missing: None });
+        // and the log says why, naming that card (not "names none of the graphics cards")
+        let (warn, line, _) = named_note(&e, "old");
+        assert!(warn && line.contains("NVIDIA Old Graphics (") && line.contains("storage buffers") && !line.contains("names none"), "{line}");
+        let (_, line, _) = named_note(&e, "radeon");
+        assert!(line.contains("names none of the graphics cards"), "{line}");
         // the log names what is used instead of a name that picked nothing
         let line = "gpu: LIGHTCRAFT_GPU_ADAPTER=radeon names none of the graphics cards (A, B); using the default choice";
         let two = entries_from(&two_cards(), Some(&screen_5070()));
