@@ -701,6 +701,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 // because whether that crop was the largest of its aspect is a property of the crop
                 // the user drew, not of the step being applied (PR #1876 review)
                 let from = opt_crop(p, "from");
+                // a drag's starting crop is still a crop: the smallest the tool can draw applies
+                if let Some(c) = from.as_ref() {
+                    let min_side = MIN_CROP_FRACTION * w.min(h) * (1.0 - 1e-9);
+                    if c.rect.width() * w < min_side || c.rect.height() * h < min_side {
+                        return Err(bad(
+                            "crop.straighten",
+                            format!("from.rect is smaller than the smallest crop ({} % of the shorter side)", MIN_CROP_FRACTION * 100.0),
+                        ));
+                    }
+                }
                 edit(s, "crop.straighten", "Straighten", |d| {
                     d.crop.geometry = match from {
                         Some(c) => d.crop.geometry.with_angle_from(c.rect, c.angle, angle, w, h),
