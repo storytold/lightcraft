@@ -1523,3 +1523,111 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+/// A raw's linear Rec.2020 near black as decoding leaves it since it stopped clamping channels at zero: a flat dark
+/// patch with sensor noise through a saturating camera matrix (a NIKON D780 profile's), so many channels are
+/// negative, and a few strongly out-of-gamut pixels. `clamped` is the same frame as decoding left it before.
+fn dark_frame_with_negative_channels(clamped: bool) -> lightcraft_raster::Rgb32f {
+    let m = [[3.48f32, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]];
+    // ±0.004 of noise per channel, a hash of the position
+    let noise = |x: usize, y: usize, c: usize| {
+        let h = ((x * 7919 + y * 104_729 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    lightcraft_raster::Rgb32f::from_fn(192, 128, |x, y| {
+        let rgb = if (x * 3 + y) % 97 == 0 {
+            [-0.05, 0.01, -0.02]
+        } else {
+            let cam: [f32; 3] = std::array::from_fn(|c| 0.002 + noise(x, y, c));
+            std::array::from_fn(|i| m[i][0] * cam[0] + m[i][1] * cam[1] + m[i][2] * cam[2])
+        };
+        if clamped { rgb.map(|v: f32| v.max(0.0)) } else { rgb }
+    })
+}
+
+/// Exports `src` pushed +4 EV at half its size, rendered as an export renders it (the options' depth and colour
+/// space, a separate HDR render for a gain map JPEG) and written by the export's own encoders.
+fn export_dark_frame(src: &lightcraft_raster::Rgb32f, o: &ExportOptions) -> Vec<u8> {
+    let info = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+    let mut s = lightcraft_develop::DevelopSettings::default();
+    s.light.exposure = 4.0;
+    s.hdr.enabled = o.hdr;
+    let render = |depth| {
+        let req = lightcraft_pipeline::RenderRequest { depth, space: o.effective_space(), ..lightcraft_pipeline::RenderRequest::fit(96, 96) };
+        lightcraft_pipeline::render(src, &info, &s, &req)
+    };
+    let r = render(o.effective_depth());
+    if o.hdr_output() && o.format == ExportFormat::Jpeg {
+        let hdr = render(OutputDepth::F32Hdr).deep.expect("an HDR render has float samples");
+        encode_gain_map_jpeg(&r.image, &hdr, o, None).unwrap()
+    } else {
+        encode_rendered(&r, o, None).unwrap()
+    }
+}
+
+/// Mean 8-bit sRGB of a decoded export.
+fn mean_srgb8(d: &lightcraft_codecs::Decoded) -> [f64; 3] {
+    let img = d.to_srgb8();
+    let n = img.data.len().max(1) as f64;
+    std::array::from_fn(|c| img.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / n)
+}
+
+/// Negative channels from decoding reach the export encoders: a dark frame pushed +4 EV exports in every rendered
+/// format, depth and HDR mode as a file that decodes to the right size with finite samples (AVIF, which LightCraft
+/// can't decode, and the linear DNG are checked for their structure), and comes out less tinted than the same frame
+/// with its channels clamped at decoding. (At full size the white-balance clamp before noise reduction still zeroes
+/// them, #2598; the half-size export averages them first.)
+#[test]
+fn dark_frame_with_negative_channels_exports_in_every_format() {
+    let src = dark_frame_with_negative_channels(false);
+    assert!(src.data.iter().flatten().filter(|v| **v < 0.0).count() > src.data.len() / 4, "the source has few negatives");
+    let cases = [
+        (ExportFormat::Jpeg, None, false),
+        (ExportFormat::Jpeg, None, true),
+        (ExportFormat::Png, Some(8), false),
+        (ExportFormat::Png, Some(16), false),
+        (ExportFormat::Png, None, true),
+        (ExportFormat::Tiff, Some(8), false),
+        (ExportFormat::Tiff, Some(16), false),
+        (ExportFormat::Tiff, Some(32), false),
+        (ExportFormat::Tiff, Some(32), true),
+        (ExportFormat::Psd, Some(8), false),
+        (ExportFormat::Psd, Some(16), false),
+        (ExportFormat::Webp, None, false),
+        (ExportFormat::Avif, Some(8), false),
+        (ExportFormat::Avif, Some(10), false),
+        (ExportFormat::Avif, None, true),
+        (ExportFormat::Jxl, Some(8), false),
+        (ExportFormat::Jxl, Some(16), false),
+        (ExportFormat::Jxl, None, true),
+        (ExportFormat::RenderedDng, None, false),
+        (ExportFormat::RenderedDng, None, true),
+    ];
+    for (format, bit_depth, hdr) in cases {
+        let what = format!("{format:?}, {bit_depth:?} bits, HDR {hdr}");
+        let bytes = export_dark_frame(&src, &ExportOptions { format, bit_depth, hdr, ..Default::default() });
+        match format {
+            ExportFormat::Avif => assert_eq!(bytes.get(4..8), Some(&b"ftyp"[..]), "{what}"),
+            ExportFormat::RenderedDng => {
+                let dng = lightcraft_raw::decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!((dng.width, dng.height), (96, 64), "{what}");
+            }
+            _ => {
+                let d = lightcraft_codecs::decode(&bytes, Default::default()).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!((d.width, d.height), (96, 64), "{what}");
+                assert!(d.image.data.iter().flatten().all(|v| v.is_finite()), "{what}: non-finite samples");
+                if format == ExportFormat::Jpeg && hdr {
+                    let gm = lightcraft_codecs::gainmap::read_jpeg(&bytes).unwrap_or_else(|| panic!("{what}: no gain map"));
+                    assert!(gm.meta.alternate_headroom.is_finite(), "{what}: gain map headroom");
+                }
+            }
+        }
+    }
+    let jpeg = ExportOptions::default();
+    let tint = |src| {
+        let m = mean_srgb8(&lightcraft_codecs::decode(&export_dark_frame(src, &jpeg), Default::default()).unwrap());
+        m.iter().copied().fold(f64::MIN, f64::max) - m.iter().copied().fold(f64::MAX, f64::min)
+    };
+    let (kept, clamped) = (tint(&src), tint(&dark_frame_with_negative_channels(true)));
+    assert!(kept < clamped / 2.0, "kept negatives tint the export by {kept:.1} codes, clamped ones by {clamped:.1}");
+}

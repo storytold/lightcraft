@@ -855,6 +855,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-19 | patch | LR-CROP-RECT: on a straightened photo a free crop corner dragged out grows both sides to the place nearest the pointer that fits (#2308); status unchanged |
 | 2026-10-19 | patch | LR-CROP-RECT: on a straightened photo a moved crop slides along the tilted edges, so a box that fills the photo's height reaches its sides (#2299); status unchanged |
 | 2026-10-19 | patch | LR-VIEW-ZOOM: the slow slider-drag verdict is described as per photo and control, as the code keys it; status unchanged |
+| 2026-10-18 | patch | Four revision rows (LR-PROF-CAMERACOLOR, LR-IMP-FORMATS) that had landed in the A. Import table moved here; no status changes |
 | 2026-10-18 | patch | Export regression integration (maintenance): Graphic watermarks honour EXIF rotation/mirroring through the shared `read_graphic` path and keep their aspect ratio when fitted to the output. HDR JPEG `limitKb` includes the gain map and metadata. Refreshed onto main fb7ac08b, retaining upstream export bounds, colour metadata, JPEG encoding and opaque RGB/real-alpha handling (#1691); no feature-count or readiness estimate changes. |
 | 2026-10-18 | patch | LR-META-XMP: Lightroom's profile and version bookkeeping (`CompatibleVersion`, profile digests, lens profile identity, `CropConstrainToUnitSquare`, default-strength lens profile scales) is no longer reported as unimported XMP; status unchanged (✅) |
 | 2026-10-17 | minor | MENU-VIEW-DETAIL, MENU-VIEW-EDIT, MENU-VIEW-CLIPPING, MENU-VIEW-MASKOVERLAY, MENU-VIEW-PHOTOCOUNT, MENU-VIEW-BEFOREAFTER, LR-VIEW-FOCUSPOINT: menu labels renamed: switches are named for what they show (Photo Counts, Focus Point, Clipping, Mask Overlay, All Mask Overlays, Mask Pins, Layout Image), View ▸ Detail is Detail View, Window ▸ Edit is Edit Panel, Compare Before and After is Before/After Side by Side, Clear Preview Cache is Discard Preview Cache; shortcuts and commands unchanged; statuses unchanged |
@@ -869,6 +870,12 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: Hasselblad 3FR and FFF show their uncompressed RGB preview (no JPEG in these files) in the grid and loupe until developed, and as the stand-in when a file fails to decode; status unchanged (🟡) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: a Hasselblad FFF develops with the camera's colour matrix from the original 3FR header it embeds (tag `0xC51B`) instead of the neutral matrix; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: bundled Nikon D90 camera profile; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: bundled Nikon D750 camera profile; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: bundled Nikon D780 camera profile; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: a photo no look fits keeps its camera profile's colour instead of the neutral fallback; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: camera profiles carry a pooled tone curve that continues each photo's own past its JPEG's range; status unchanged (🟡) |
+| 2026-10-16 | patch | LR-PROF-CAMERACOLOR: raw decoding keeps negative channels (noise near black) instead of clipping each at zero, which turned pushed shadows magenta; status unchanged (🟡) |
 | 2026-10-13 | minor | LRC-LIB-KEYWORDS: the Keyword List marks a keyword that has an applied keyword inside it (a dot in its box); status unchanged |
 | 2026-10-12 | minor | LR-IMP-FORMATS: folder discovery includes SR2/SRF; MCP and CLI reuse the engine extension list. DSC-F828 remains preview-only; decoder support and row status unchanged |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); status unchanged (🟡) |
