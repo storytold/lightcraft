@@ -268,7 +268,7 @@ impl RenderJob {
         let closing = || lightcraft_gpu::shutting_down().then(|| "LightCraft is closing".to_string());
         let source = match closing() {
             Some(e) => Err(e),
-            None => self.source.load_source().and_then(|s| closing().map_or(Ok(s), Err)),
+            None => self.source.load_source_of(self.source_key).and_then(|s| closing().map_or(Ok(s), Err)),
         };
         match source {
             Ok(source) if self.superseded.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) => {

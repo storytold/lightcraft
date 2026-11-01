@@ -10,7 +10,7 @@
 //! presents the texture one frame later: add ~16.7 ms for photons.)
 //!
 //! `LAND=1` (note 8 of 31 Oct): the drag starts 200 ms after the loupe first shows anything of the
-//! photo, without waiting for its full render; `gap_ms_max` is the longest time during the drag
+//! photo (its render, a stand-in or its grid thumbnail), without waiting for its full render; `gap_ms_max` is the longest time during the drag
 //! without a new picture on screen (from the first value change).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -123,7 +123,13 @@ fn main() {
     let t_open = Instant::now();
     let land = env("LAND", "0") != "0";
     if land {
-        while t_open.elapsed() < Duration::from_secs(120) && !h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id) {
+        // anything the loupe can draw of the photo: its render, a stand-in or its grid thumbnail
+        // (what the loupe's `draw_slot` falls back on; review of PR #3569)
+        let shows = |h: &Headless| {
+            let r = &h.app.renderer;
+            [Slot::Main, Slot::Preview].iter().any(|s| r.textures.get(s).is_some_and(|t| t.photo == id)) || r.thumb(id).is_some()
+        };
+        while t_open.elapsed() < Duration::from_secs(120) && !shows(&h) {
             h.step();
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -204,7 +210,11 @@ fn main() {
             }
             let before = shown_key;
             observe(&h, n, &asked, &mut shown_key, &mut lat_frames, &mut lat_ms, &mut draft_px);
-            if i == 1 || shown_key != before {
+            // (the gap is timed from the first value change, before its frame: review of PR #3569)
+            if i == 1 {
+                changes.push(start);
+            }
+            if shown_key != before {
                 changes.push(Instant::now());
             }
         }

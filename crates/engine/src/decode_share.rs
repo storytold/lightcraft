@@ -20,14 +20,16 @@ use crate::media::{DecodedSource, Twin};
 /// (a decode that hangs on a slow share must not hold every view of the photo with it).
 const WAIT_AT_MOST: Duration = Duration::from_secs(60);
 
-/// Finished decodes kept (weakly) at most; dead ones are dropped first.
-const KEPT: usize = 64;
-
 /// A finished decode: everything of a [`DecodedSource`], its pixels held weakly.
 struct Kept {
     image: Weak<Rgb32f>,
     denoised: Option<Weak<Twin>>,
-    /// The source with its pixels taken out (`image` replaced by an empty picture).
+    /// The source's DNG mattes and gain table map, held weakly like the pixels: they can be as
+    /// large as the picture (a byte per pixel), so a decode let go of never keeps them alive here
+    /// (review of PR #3569).
+    mattes: Option<Weak<lightcraft_pipeline::masks::Mattes>>,
+    local_tone: Option<Weak<lightcraft_pipeline::local_tone::LocalTone>>,
+    /// The source with its pixels (and the parts above) taken out (`image` replaced by an empty picture).
     rest: DecodedSource,
     /// Weak references to the loaders the key names by address: they keep those addresses from
     /// being reused by another loader while this entry is here.
@@ -40,10 +42,13 @@ pub(crate) type Anchors = Vec<Box<dyn std::any::Any + Send + Sync>>;
 impl Kept {
     fn of(src: &DecodedSource, anchors: Anchors) -> Kept {
         let empty = Arc::new(Rgb32f { width: 0, height: 0, data: Vec::new() });
+        let info = src.info.as_ref().map(|i| lightcraft_pipeline::SourceInfo { mattes: None, local_tone: None, ..i.clone() });
         Kept {
             image: Arc::downgrade(&src.image),
             denoised: src.denoised.as_ref().map(Arc::downgrade),
-            rest: DecodedSource { image: empty, denoised: None, ..src.clone() },
+            mattes: src.info.as_ref().and_then(|i| i.mattes.as_ref()).map(Arc::downgrade),
+            local_tone: src.info.as_ref().and_then(|i| i.local_tone.as_ref()).map(Arc::downgrade),
+            rest: DecodedSource { image: empty, denoised: None, info, ..src.clone() },
             _anchors: anchors,
         }
     }
@@ -55,7 +60,18 @@ impl Kept {
             Some(w) => Some(w.upgrade()?),
             None => None,
         };
-        Some(DecodedSource { image, denoised, ..self.rest.clone() })
+        let mut src = DecodedSource { image, denoised, ..self.rest.clone() };
+        if let Some(info) = src.info.as_mut() {
+            info.mattes = match &self.mattes {
+                Some(w) => Some(w.upgrade()?),
+                None => None,
+            };
+            info.local_tone = match &self.local_tone {
+                Some(w) => Some(w.upgrade()?),
+                None => None,
+            };
+        }
+        Some(src)
     }
 
     fn alive(&self) -> bool {
@@ -93,12 +109,12 @@ impl Drop for Claim<'_> {
             let mut map = s.map.lock().unwrap_or_else(PoisonError::into_inner);
             match self.result.take() {
                 Some(kept) => {
-                    if map.len() >= KEPT {
-                        map.retain(|_, st| match st {
-                            State::Running => true,
-                            State::Done(k) => k.alive(),
-                        });
-                    }
+                    // (dead entries go at every insert: cheap at this size, and what they still
+                    // hold is never kept until the map fills)
+                    map.retain(|_, st| match st {
+                        State::Running => true,
+                        State::Done(k) => k.alive(),
+                    });
                     map.insert(self.key.to_string(), State::Done(Box::new(kept)));
                 }
                 None => {
@@ -191,6 +207,20 @@ mod tests {
         drop((a, b, c));
         let e = decode_once("test:shared", Vec::new(), || Ok(src(4.0))).unwrap();
         assert_eq!(e.image.data[0][0], 4.0);
+    }
+
+    #[test]
+    fn a_decode_let_go_of_keeps_neither_its_pixels_nor_its_mattes_or_gain_map() {
+        let mattes = Arc::new(lightcraft_pipeline::masks::Mattes::default());
+        let info = lightcraft_pipeline::SourceInfo { mattes: Some(mattes.clone()), ..Default::default() };
+        let a = decode_once("test:mattes", Vec::new(), || Ok(DecodedSource { info: Some(info), ..src(1.0) })).unwrap();
+        let weak = Arc::downgrade(&mattes);
+        drop(mattes);
+        // while held, a later job takes the mattes too
+        let b = decode_once("test:mattes", Vec::new(), || Ok(src(2.0))).unwrap();
+        assert!(b.info.as_ref().and_then(|i| i.mattes.as_ref()).is_some_and(|m| weak.upgrade().is_some_and(|w| Arc::ptr_eq(m, &w))));
+        drop((a, b));
+        assert!(weak.upgrade().is_none(), "the share keeps no mattes of a decode let go of");
     }
 
     #[test]

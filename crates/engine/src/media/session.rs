@@ -386,6 +386,18 @@ impl crate::Session {
         }
     }
 
+    /// [`Self::accept`] for a render replaced before it finished ([`crate::media::SUPERSEDED`]): its source was
+    /// built before it ran, so it is taken only while it is still what the photo's renders load. A plain source of a
+    /// photo whose denoised picture became ready meanwhile is not (the readiness cleared the photo's sources;
+    /// keeping this one would show the photo without its noise reduction: review of PR #3569).
+    pub fn accept_replaced(&mut self, r: &RenderResult) {
+        let lacks_twin = r.loaded.as_ref().is_some_and(|src| src.denoised.is_none() && !src.from_proxy);
+        if lacks_twin && self.media.denoise.get(r.photo).is_some() {
+            return;
+        }
+        self.accept(r);
+    }
+
     /// Record the as-shot white balance a decode of photo `id`'s file read (`info`) when the catalog has another:
     /// a raw imported before its camera's matrices gave it a Kelvin scale keeps 6500 / 0 (the relative scale's
     /// reference) until its file is next decoded (issue #730). Bookkeeping, not an undo step; the look does not

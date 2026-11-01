@@ -1,4 +1,4 @@
-use super::{Arc, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
+use super::{Arc, Deserialize, DevelopSettings, Hash128, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
 pub const RENDER_CACHE_VERSION: u64 = 72;
@@ -229,6 +229,14 @@ impl SourceRef {
     }
 
     pub fn load_source(&self) -> Result<DecodedSource, String> {
+        self.load_source_of(None)
+    }
+
+    /// [`Self::load_source`] for a job whose photo's file content is `content` (its
+    /// [`crate::media::RenderJob::source_key`]): a decode is shared only with jobs for the same content, so a photo
+    /// reloaded after its file changed never takes a decode of the old file that is still running or held (review
+    /// of PR #3569).
+    pub fn load_source_of(&self, content: Option<Hash128>) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Fit { from, max_edge } => {
@@ -244,7 +252,7 @@ impl SourceRef {
             SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
                 // (a job that comes while another decodes the same pixels waits for that decode)
                 let decode = || Self::decode_file(path, *max_edge, loader.as_ref(), fallback.as_deref(), denoise.as_ref(), reduced.as_ref());
-                return match share_key(path, *max_edge, loader.as_ref(), fallback.as_deref(), denoise.as_ref(), reduced.as_ref()) {
+                return match share_key(path, content, *max_edge, loader.as_ref(), fallback.as_deref(), denoise.as_ref(), reduced.as_ref()) {
                     Some(key) => {
                         let mut anchors: crate::decode_share::Anchors = Vec::new();
                         if let Some(l) = loader {
@@ -331,6 +339,7 @@ impl SourceRef {
 /// makes the photo's denoised picture first, for an export).
 fn share_key(
     path: &str,
+    content: Option<Hash128>,
     max_edge: usize,
     loader: Option<&FileLoader>,
     fallback: Option<&std::path::Path>,
@@ -345,7 +354,7 @@ fn share_key(
     let reduced = at(reduced.map(|l| Arc::as_ptr(l) as *const ()));
     let pair = at(denoise.map(|(_, l)| Arc::as_ptr(l) as *const ()));
     let denoised = denoise.map(|(spec, _)| (spec.key.as_str(), spec.product.as_path()));
-    Some(format!("{path}|{max_edge}|{loader:x}|{reduced:x}|{pair:x}|{denoised:?}|{fallback:?}"))
+    Some(format!("{path}|{content:?}|{max_edge}|{loader:x}|{reduced:x}|{pair:x}|{denoised:?}|{fallback:?}"))
 }
 
 /// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
