@@ -220,7 +220,9 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     }
     // the second card stays on unless it was clearly slower (it also keeps the editing card free
     // for the photo being edited)
-    let helper_slower = helper_run.as_ref().is_some_and(|h| h.photos_per_min < one_card.photos_per_min * 0.97);
+    // (a round whose photos fell back to the processor didn't measure the two cards: review of
+    // PR #3511)
+    let helper_slower = helper_run.as_ref().is_some_and(|h| h.gpu_fallbacks > 0 || h.photos_per_min < one_card.photos_per_min * 0.97);
     let best = match helper_run {
         Some(h) if !helper_slower => h,
         _ => one_card,
