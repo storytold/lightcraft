@@ -87,11 +87,10 @@ pub fn file_name(model: &str) -> String {
 
 /// Read and validate a profile file.
 pub fn load(path: &Path) -> Result<CameraProfile, String> {
-    let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
-    if size > MAX_FILE {
-        return Err(format!("{}: {size} bytes is too large for a camera profile", path.display()));
-    }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = crate::bounded_read::read_bounded(path, MAX_FILE).map_err(|e| match e {
+        crate::bounded_read::ReadError::TooLarge(size) => format!("{}: {size} bytes is too large for a camera profile", path.display()),
+        e => format!("{}: {e}", path.display()),
+    })?;
     parse(&bytes, &path.display().to_string())
 }
 
