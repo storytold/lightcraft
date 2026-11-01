@@ -250,6 +250,16 @@ pub fn tr_ctx<'a>(context: &str, source: &'a str) -> &'a str {
     tr_ctx_in(language(), context, source)
 }
 
+/// A UI command's label from the command tables, in the context its command gives it: the File
+/// menu's "Export Presets…" exports develop presets, the curve panel's and the Effect menu's
+/// their own kind. Wherever a command's label is shown (menus, Keyboard Shortcuts).
+pub fn command_label<'a>(id: &str, label: &'a str) -> &'a str {
+    match id {
+        "file.exportPresets" => tr_ctx(DEVELOP_PRESETS_CONTEXT, label),
+        _ => tr(label),
+    }
+}
+
 fn tr_ctx_in<'a>(language: Locale, context: &str, source: &'a str) -> &'a str {
     match language.catalog().get(&format!("{context}|{source}")) {
         Some(translation) => translation.as_str(),

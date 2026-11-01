@@ -1032,7 +1032,26 @@ fn contextual_entries_name_real_messages() {
     assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Rename Preset"), "Preset umbenennen");
     assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Export Presets"), "Presets exportieren");
     assert_eq!(Locale::De.tr("Export Presets"), "Vorgaben exportieren");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Export Presets…"), "Presets exportieren…");
+    assert_eq!(Locale::De.tr("Export Presets…"), "Vorgaben exportieren…");
     assert_eq!(tr_ctx_in(Locale::En, FILTER_BAR_CONTEXT, "Presets"), "Presets");
+}
+
+/// The File menu's preset import and export, and the file dialogs behind them, call develop
+/// presets "Presets" in German; the curve panel's and the Effect menu's "Export Presets…" don't.
+#[test]
+fn file_menu_preset_commands_say_presets() {
+    set_language(Locale::De);
+    let label = |id: &str| crate::menus::ui_commands().find(|c| c.0 == id).map(|c| c.1).unwrap_or_default();
+    let menu = |id: &str| crate::menubar::display_item_label(id, &serde_json::Value::Null, label(id)).to_string();
+    assert_eq!(menu("file.importPresets"), "Profile und Presets importieren…");
+    assert_eq!(menu("file.exportPresets"), "Presets exportieren…");
+    let shortcut = crate::shortcuts::find_bindable("file.exportPresets").map(|b| command_label(b.id, b.label));
+    assert_eq!(shortcut, Some("Presets exportieren…"));
+    assert_eq!(tr("Import Presets"), "Presets importieren");
+    assert_eq!(tr("Presets & Profiles"), "Presets und Profile");
+    assert_eq!(command_label("curve.exportPresets", "Export Presets…"), "Vorgaben exportieren…");
+    set_language(Locale::En);
 }
 
 /// Every plain message: the keys of every catalog (but contextual entries, which a language adds
