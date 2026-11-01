@@ -553,6 +553,9 @@ pub fn default_export_dir() -> String {
 /// (exact output file, single photo), `ids` (default: the selection, else the active photo).
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
+    if crate::machine_test::running(app) {
+        return Err(crate::export_task::MACHINE_TEST_RUNNING.into());
+    }
     let p = &app.session.export_params(p)?;
     // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
     let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
