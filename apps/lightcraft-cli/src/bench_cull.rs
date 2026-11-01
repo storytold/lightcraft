@@ -152,6 +152,14 @@ fn resolves_inside(path: &Path, folder: &Path, hops: u32) -> bool {
 /// Refuse `--json` or `--work` in the folder being measured: nothing is written next to the photos,
 /// the results and the run's libraries included. Checked before anything is made.
 fn check_outputs(folder: &Path, json: Option<&Path>, work: &Path) -> Result<(), String> {
+    // a `..` after a folder not made yet can't be resolved now, and the run makes that folder:
+    // `--json NEW/../FOLDER/r.json` would pass the checks below and land in the source folder
+    // (CodeRabbit on #3544)
+    for (name, p) in [("--json", json), ("--work", Some(work))] {
+        if let Some(p) = p.filter(|p| p.components().any(|c| c == std::path::Component::ParentDir)) {
+            return Err(format!("{}: {name} must not contain \"..\"; give the folder without it", p.display()));
+        }
+    }
     if let Some(j) = json.filter(|j| inside_source(j, folder)) {
         return Err(format!("{}: --json must not be in the folder being measured", j.display()));
     }
@@ -602,6 +610,21 @@ mod tests {
         assert!(!src.join("out").exists(), "nothing was made in the source folder");
         assert!(check_outputs(&src, None, &work.join("elsewhere")).is_ok());
         assert!(check_outputs(&src, Some(&src.join("r.json")), &work.join("elsewhere")).is_err());
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// A `..` in `--json` or `--work` is refused: after a folder the run hasn't made yet it can't be
+    /// resolved now, and would lead into the source folder once the run makes it (CodeRabbit on #3544).
+    #[test]
+    fn a_dot_dot_in_the_outputs_is_refused() {
+        let work = run_dir(&std::env::temp_dir()).unwrap();
+        let src = fresh_dir(&work, "src").unwrap();
+        let sneaky = work.join("new").join("..").join("src").join("r.json");
+        let e = check_outputs(&src, Some(&sneaky), &work.join("elsewhere")).unwrap_err();
+        assert!(e.contains("--json") && e.contains(".."), "{e}");
+        let e = check_outputs(&src, None, &work.join("new").join("..").join("src")).unwrap_err();
+        assert!(e.contains("--work"), "{e}");
+        assert!(!work.join("new").exists(), "nothing was made");
         let _ = std::fs::remove_dir_all(&work);
     }
 }
