@@ -30,8 +30,13 @@ impl Drop for Headless {
 impl Default for Headless {
     fn default() -> Self {
         // the lens database the desktop app downloaded, when it is there (a headless session never fetches it)
-        let session =
-            Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_lens_database();
+        let session = Session::new()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_flickr();
         Self::new(session.with_default_sam3_model().with_default_slide_templates())
     }
 }
