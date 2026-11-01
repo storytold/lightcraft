@@ -474,7 +474,7 @@ fn custom_white_balance_on_relative_wb_raws_is_not_read_as_kelvin() {
 fn catalog_crops_without_has_crop_are_imported() {
     // Lightroom Classic catalogs store crop edges and angle but never `HasCrop`
     let (partial, unknown) = mapped_settings(
-        "s = { CropConstrainAspectRatio = true, CropLeft = 0.042702, CropRight = 0.957298, CropTop = 0.1 }",
+        "s = { CropConstrainAspectRatio = true, CropLeft = 0.042702, CropRight = 0.957298, CropTop = 0.1, CropBottom = 1 }",
         crate::crs::Target::RawAbsolute,
         1.5,
         Orientation::Normal,
@@ -489,15 +489,32 @@ fn catalog_crops_without_has_crop_are_imported() {
     assert_eq!(crop["rect"]["y1"], 1.0);
     assert_eq!(crop["angle"], 0.0);
     assert!(!unknown.iter().any(|k| k.starts_with("CropLeft")), "{unknown:?}");
-    // an angle alone still means a crop (Lightroom's angle turns the other way to LightCraft's)
-    let (partial, unknown) =
-        mapped_settings("s = { CropAngle = -1.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
+    // A full-frame straighten still means a crop (the angle turns the other way to LightCraft's).
+    let (partial, unknown) = mapped_settings(
+        "s = { CropLeft = 0, CropTop = 0, CropRight = 1, CropBottom = 1, CropAngle = -1.5 }",
+        crate::crs::Target::RawAbsolute,
+        1.5,
+        Orientation::Normal,
+        1.5,
+        Orientation::Normal,
+    )
+    .unwrap();
     assert_eq!(partial["crop"]["geometry"]["angle"], 1.5);
     assert!(!unknown.iter().any(|k| k.starts_with("CropAngle")), "{unknown:?}");
     // no crop fields: the crop stays untouched
     let (partial, _) =
         mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert!(partial.get("crop").is_none());
+}
+
+#[test]
+fn catalog_partial_crops_are_refused_without_guessing_edges() {
+    for settings in ["s = { CropLeft = 0.1, CropTop = 0.2, CropRight = 0.8 }", "s = { CropAngle = -1.5 }"] {
+        let (partial, unknown) =
+            mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
+        assert!(partial.get("crop").is_none(), "{partial}");
+        assert!(unknown.iter().any(|k| k.starts_with("Crop")), "{unknown:?}");
+    }
 }
 
 #[test]
@@ -533,7 +550,15 @@ fn catalog_crops_follow_the_photo_orientation() {
     assert_eq!(crop(Orientation::FlipH), [0.4, 0.2, 0.9, 0.9, 0.0]);
     // a mirror turns the straighten the other way
     let angle = |o: Orientation| {
-        let (partial, _) = mapped_settings("s = { CropAngle = 2 }", crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
+        let (partial, _) = mapped_settings(
+            "s = { CropLeft = 0, CropTop = 0, CropRight = 1, CropBottom = 1, CropAngle = 2 }",
+            crate::crs::Target::RawAbsolute,
+            1.5,
+            o,
+            1.5,
+            Orientation::Normal,
+        )
+        .unwrap();
         partial["crop"]["geometry"]["angle"].as_f64().unwrap()
     };
     assert_eq!(angle(Orientation::Rotate90), -2.0);

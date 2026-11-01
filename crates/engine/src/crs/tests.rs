@@ -76,6 +76,36 @@ fn identity_crop_without_has_crop_is_read() {
 }
 
 #[test]
+fn partial_crop_edges_are_refused() {
+    for missing in ["CropLeft", "CropTop", "CropRight", "CropBottom"] {
+        for has_crop in [false, true] {
+            let mut p = props(SIDECAR);
+            p.remove(&format!("crs:{missing}"));
+            if !has_crop {
+                p.remove("crs:HasCrop");
+            }
+            let (partial, skipped) = to_partial_report(&p, None, Target::RawAbsolute, 1.5);
+            assert!(partial.get("crop").is_none(), "{missing}, {has_crop}: {partial}");
+            assert!(skipped.iter().any(|k| k.starts_with("Crop")), "{skipped:?}");
+            let existing = apply_partial(&DevelopSettings::default(), &to_partial(&props(SIDECAR), Target::RawAbsolute), 1.0);
+            assert_eq!(apply_partial(&existing, &partial, 1.0).crop.geometry, existing.crop.geometry);
+        }
+    }
+}
+
+#[test]
+fn has_crop_false_clears_even_nontrivial_crop_fields() {
+    let existing = apply_partial(&DevelopSettings::default(), &to_partial(&props(SIDECAR), Target::RawAbsolute), 1.0);
+    for x in [
+        SIDECAR.replace("HasCrop=\"True\"", "HasCrop=\"False\""),
+        SIDECAR.replace("HasCrop=\"True\"", "HasCrop=\"False\"").replace("CropLeft=\"0.05\"", "CropLeft=\"invalid\""),
+    ] {
+        let partial = to_partial(&props(&x), Target::RawAbsolute);
+        assert_eq!(apply_partial(&existing, &partial, 1.0).crop.geometry, lightcraft_geom::CropGeometry::default());
+    }
+}
+
+#[test]
 fn nontrivial_crop_without_has_crop_is_imported() {
     let x = SIDECAR.replace("crs:HasCrop=\"True\"", "");
     let (partial, skipped) = to_partial_report(&props(&x), None, Target::RawAbsolute, 1.5);

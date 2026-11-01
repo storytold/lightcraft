@@ -454,13 +454,13 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     }
 
     // ---- Crop (normalized edges of the unrotated image + straighten angle)
-    // Catalogs and some sidecars omit HasCrop: a valid crop edge or angle still supplies a crop.
+    // Catalogs and some sidecars omit HasCrop: all four valid edges still supply a crop.
     // The full-frame rectangle with angle zero is already our identity (no crop).
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
     // Validate before marking fields read or applying defaults. A supplied invalid value (including
     // Lightroom's deferred sentinel) must not replace an existing crop, even with HasCrop=True.
     let crop = CROP.map(|k| props.get(k).and_then(|v| v.first()).and_then(|s| parse_num(s)));
-    let valid_crop = CROP.iter().zip(crop).all(|(k, v)| !props.contains_key(*k) || v.is_some());
+    let valid_crop = crop[..4].iter().all(Option::is_some) && (!props.contains_key(CROP[4]) || crop[4].is_some());
     match boolean(props, "crs:HasCrop").or_else(|| crop.iter().any(Option::is_some).then_some(true)) {
         Some(true) if valid_crop => {
             let [l, t, r, b, angle] = crop;
