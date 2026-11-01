@@ -51,8 +51,29 @@ impl ImportDefaults {
     /// Whether a new photo gets AI Denoise switched on ([`ImportDefaults::denoise_above_iso`]). Not a photo of a
     /// folder being browsed (`Photo::local`): it isn't imported, and no denoised picture is made for it.
     pub fn denoise_on_import(&self, p: &Photo) -> bool {
-        !p.local && self.denoise_above_iso.is_some_and(|min| min > 0 && p.meta.iso.is_some_and(|iso| iso >= min)) && crate::denoise::eligible(p)
+        !p.local && self.denoise_above(p)
     }
+
+    /// Whether the photo is shot at or above the ISO chosen, and AI Denoise can work on it.
+    fn denoise_above(&self, p: &Photo) -> bool {
+        self.denoise_above_iso.is_some_and(|min| min > 0 && p.meta.iso.is_some_and(|iso| iso >= min)) && crate::denoise::eligible(p)
+    }
+
+    /// A browsed photo being imported now (its record was made while browsing, without import defaults): its
+    /// settings with AI Denoise switched on, when the ISO chosen asks for it and it isn't on already.
+    pub(crate) fn denoise_for_promoted(&self, p: &Photo) -> Option<lightcraft_develop::DevelopSettings> {
+        (p.local && self.denoise_above(p) && !p.develop.enhance.denoise_enabled()).then(|| with_denoise(&p.develop))
+    }
+}
+
+/// `d` with AI Denoise on, at its amount or the default 50.
+fn with_denoise(d: &lightcraft_develop::DevelopSettings) -> lightcraft_develop::DevelopSettings {
+    let mut d = d.clone();
+    d.enhance.denoise_on = Some(true);
+    if !(d.enhance.denoise.is_finite() && d.enhance.denoise > 0.0) {
+        d.enhance.denoise = 50.0;
+    }
+    d
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -110,12 +131,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     }
     // AI Denoise above the ISO chosen (Settings ▸ Import): part of the look the photo starts from
     if s.import_defaults.denoise_on_import(p) && !p.develop.enhance.denoise_enabled() {
-        let mut d = (*p.develop).clone();
-        d.enhance.denoise_on = Some(true);
-        if !(d.enhance.denoise.is_finite() && d.enhance.denoise > 0.0) {
-            d.enhance.denoise = 50.0;
-        }
-        let look = std::sync::Arc::new(d);
+        let look = std::sync::Arc::new(with_denoise(&p.develop));
         p.develop = look.clone();
         p.import_look = Some(look);
     }

@@ -208,7 +208,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     for it in prepared.items {
         match it {
             PreparedItem::Promote(id) => {
-                if s.catalog.photo(id).is_some_and(|p| p.local) {
+                if let Some(p) = s.catalog.photo(id).filter(|p| p.local) {
+                    // browsed without import defaults: AI Denoise from the ISO chosen is switched on now
+                    if !opts.local
+                        && let Some(d) = s.import_defaults.denoise_for_promoted(p)
+                    {
+                        ops.push(Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "AI Denoise".into(), edited: p.edited.clone() });
+                    }
                     ops.push(Op::SetLocal { id, local: false });
                 }
                 report.imported.push(id.0);
