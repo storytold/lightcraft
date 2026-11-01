@@ -2841,7 +2841,9 @@ fn cr3_vignetting_precedes_profile_geometry_in_every_orientation() {
 fn check_cr3_profile_geometry_orientation(vignetted: bool) {
     use lightcraft_raw::{BlackLevel, RawData, Rect};
     let (w, h) = (416, 288);
-    let scene = profile_geometry_scene(w, h);
+    let mut scene = profile_geometry_scene(w, h);
+    // Leave headroom for nonuniform WB and source-position vignetting in the generated JPEG.
+    scene.map_in_place(|p| p.map(|v| v * 0.3));
     let mut raw = raw_of(RawFormat::Cr3, "Synthetic", "Uncalibrated", Default::default());
     raw.width = w;
     raw.height = h;
@@ -2853,7 +2855,8 @@ fn check_cr3_profile_geometry_orientation(vignetted: bool) {
     raw.crop = Rect::new(16, 16, 384, 256);
     raw.linearized = true;
     raw.wb_multipliers = Some([1.25, 1.0, 0.8]);
-    let transform = lightcraft_raw::color::camera_transform(&raw, D65);
+    let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    assert!(transform.wb.windows(2).any(|v| (v[0] - v[1]).abs() > 0.01), "the fixture must exercise nonuniform as-shot WB");
     assert!(transform.matrix_is_fallback);
     let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
     assert_eq!((sensor.width, sensor.height), (384, 256));
@@ -2870,6 +2873,13 @@ fn check_cr3_profile_geometry_orientation(vignetted: bool) {
     target.map_in_place(|p| p.map(|v| v.powf(0.7)));
     let to_srgb = lightcraft_color::SRGB.from_xyz().mul(&REC2020.to_xyz());
     let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let jpeg_range = target
+        .data
+        .iter()
+        .filter(|p| p.iter().all(|v| v.is_finite()))
+        .flat_map(|p| to_srgb.apply_f32(*p))
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    assert!(jpeg_range.0 >= 0.0 && jpeg_range.1 <= 1.0, "the generated reference must not clip: {jpeg_range:?}");
     let pixels: Vec<u8> = target.data.iter().flat_map(|p| to_srgb.apply_f32(*p).map(|v| (srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
     let image = lightcraft_codecs::EncodeImage::new(384, 256, 3, lightcraft_codecs::Samples::U8(&pixels));
     let jpeg = lightcraft_codecs::encode_jpeg(&image, 98, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
@@ -2896,7 +2906,8 @@ fn check_cr3_profile_geometry_orientation(vignetted: bool) {
         );
         let mut displayed = aligned.clone();
         displayed.map_in_place(|p| p.map(|v| v.powf(0.7)));
-        assert!(geometry_rms(&displayed, &reference) < 0.009, "orientation {exif}: WB exactly once and matching frames");
+        let rms = geometry_rms(&displayed, &reference);
+        assert!(rms < 0.009, "orientation {exif}: WB exactly once and matching frames: {rms}");
         let oriented_target = target.clone().into_oriented(orientation);
         let expected = reference_at(&oriented_target, &aligned);
         assert!(geometry_rms(&displayed, &expected) < 0.009, "orientation {exif}: absolute oriented ground truth");
