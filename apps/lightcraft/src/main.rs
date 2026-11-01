@@ -61,7 +61,7 @@ use launch::{
 };
 #[cfg(test)]
 use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
-use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
+use prefs::{PrefsWriter, as_remembered, config_dir, load_prefs, prefs_path, remember_native_window};
 #[cfg(test)]
 use prefs::{load_prefs_at, write_atomic};
 use session::{open_session, services};
@@ -87,6 +87,12 @@ impl eframe::App for App {
         // translucent UI layers (disabled panels, modal dimming) must not reveal the desktop.
         egui::Color32::from_rgb(12, 12, 12).to_normalized_gamma_f32()
     }
+    fn persist_egui_memory(&self) -> bool {
+        // UiState already has its own persistence. Only native window geometry belongs in
+        // eframe storage; --memory and LIGHTCRAFT_NO_PREFS must not write it indirectly.
+        false
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
@@ -257,6 +263,8 @@ fn main() -> eframe::Result {
             // Wayland matches the window to packaging/linux/ai.storyteller.lightcraft.desktop by this id
             .with_app_id(APP_ID),
         wgpu_options,
+        persist_window: cfg!(windows) && remember_native_window(in_memory, keep_prefs_file, prefs_path().is_some()),
+        persistence_path: config_dir().map(|d| d.join("window-state")),
         ..Default::default()
     };
     // the app's copy: `log_file` is still named in the message of a start that fails
