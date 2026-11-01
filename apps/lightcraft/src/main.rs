@@ -159,6 +159,8 @@ fn main() -> eframe::Result {
     if let Some(logger) = logger {
         logging::record_panics(logger);
     }
+    // before anything uses rayon, so its threads show as `lc-rayon-N` in a thread dump (#3071)
+    lightcraft_engine::threads::name_global_pool();
     alloc_release::install();
     let mut control_port = control_port_from("LIGHTCRAFT_CONTROL_PORT", std::env::var("LIGHTCRAFT_CONTROL_PORT").ok().filter(|v| !v.is_empty()));
     let mut files = Vec::new();
