@@ -852,3 +852,64 @@ fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
     let after = &nodes[pos("app.settings") + 1..];
     assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
 }
+/// A Build row must never resolve to the parent Discard row, even with both submenus open.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn smart_preview_menu_clicks_keep_build_and_discard_separate() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use lightcraft_engine::smart::{self, Format};
+    let timeout = std::time::Duration::from_secs(20);
+    for (case, params) in [
+        ("library", json!({"background": true})),
+        ("compact", json!({"background": true, "format": "compact"})),
+        ("lossless", json!({"background": true, "format": "lossless"})),
+        ("discard", json!({"discard": true, "background": true})),
+    ] {
+        let dir = std::env::temp_dir().join(format!("lc-smart-menu-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut session = lightcraft_engine::Session::new().with_fs();
+        session.media.smart_dir = Some(dir.join("Smart Previews"));
+        session.smart_previews_format = Format::Lossless;
+        let photo = Photo::new(PhotoId(1), Source::File { path: dir.join("offline.tif").to_string_lossy().into() }, "offline.tif", "TIFF", 8, 8, "");
+        let proxy = smart::sharded_file_path(session.media.smart_dir.as_ref().unwrap(), &photo);
+        std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+        let bytes = smart::encode_format(&lightcraft_raster::Rgb32f::new(8, 8), None, Format::Lossless).unwrap();
+        std::fs::write(&proxy, &bytes).unwrap();
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        session.selection.ids = vec![PhotoId(1)];
+        session.selection.active = Some(PhotoId(1));
+        let mut app = LightcraftApp::new(session, Default::default());
+        app.native_menu = false;
+        let mut h = crate::headless::Headless::new(app, [1600.0, 1000.0], 1.0);
+        h.settle(timeout);
+        for id in ["menu:File", "menusub:Previews", "menusub:Build Smart Previews (Visible)"] {
+            let r = h.request("ui.clickWidget", json!({"id": id}), timeout);
+            assert_eq!(r["ok"], true, "{case}: {id}: {r}");
+            h.step();
+        }
+        let expected = format!("menuitem:{}", MenuNode::key("library.smartPreviews", &params));
+        let registered = h.app.widgets.iter().any(|(id, _)| id == &expected);
+        // Exercise the old duplicate registration too, so the regression demonstrates its action.
+        let target = if registered { expected.as_str() } else { "menuitem:library.smartPreviews" };
+        let r = h.request("ui.clickWidget", json!({"id": target}), timeout);
+        assert_eq!(r["ok"], true, "{case}: {r}");
+        h.settle(timeout);
+        if case == "discard" {
+            assert!(!proxy.exists(), "the explicit Discard row still discards");
+        } else {
+            assert!(proxy.exists(), "{case}: clicking Build discarded an offline original's only proxy");
+            if case != "compact" {
+                let Some(crate::state::Dialog::BuildSmartPreviews { params: confirmed, .. }) = &h.app.ui.dialog else {
+                    panic!("{case}: Build must open the lossless confirmation, never Discard");
+                };
+                assert_eq!(confirmed["format"], "lossless");
+                assert_ne!(confirmed["discard"], true);
+            } else {
+                assert_eq!(h.app.session.preview_build.as_ref().map(|b| b.what), Some("smart previews"));
+            }
+        }
+        assert!(registered, "each parameter choice has its own automation id: {expected}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

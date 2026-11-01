@@ -1408,6 +1408,8 @@ mod color_image_tests {
     fn the_worker_converts_the_texture_pixels() {
         let image = lightcraft_raster::Rgba8::from_fn(5, 3, |x, y| [(x * 40) as u8, (y * 80) as u8, 7, 255]);
         let result = |rendered| RenderResult {
+            cache_generation: 0,
+            cache_owner: std::sync::Weak::new(),
             request_id: 1,
             source_key: None,
             photo: PhotoId(1),

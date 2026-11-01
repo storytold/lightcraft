@@ -82,7 +82,6 @@
   "the {n} selected photos": "選択中の{n}枚",
   "the {} photos in view": "表示中の{}枚",
   "these {count} photos": "この{count}枚の写真",
-  "{count} smart preview{} · {:.1} MB": "スマートプレビュー{count}枚{:.0}・{:.1}MB",
   "{f} folders (and their subfolders)": "{f}個のフォルダとそのサブフォルダ",
   "{label} Grading": "{label}のカラーグレーディング",
   "{label} {d:+} on every selected photo": "選択したすべての写真の{label}を{d:+}調整",
@@ -317,5 +316,37 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "Photos: {count}": {
+    "one": "写真: {count}枚",
+    "few": "写真: {count}枚",
+    "many": "写真: {count}枚",
+    "other": "写真: {count}枚"
+  },
+  "Estimated total size: {size}": "推定合計サイズ: {size}",
+  "Destination: {path}": "保存先: {path}",
+  "Free space: {size}": "空き容量: {size}",
+  ". {kept} existing previews kept unchanged": ". 既存のプレビュー {kept} 件を変更せず保持しました",
+  "{count} smart preview{} · {:.1} MiB": "スマートプレビュー{count}枚{:.0}・{:.1}MiB",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "スマートプレビューのフォルダーを変更しました。元のファイル{count}件を削除できませんでした。",
+    "few": "スマートプレビューのフォルダーを変更しました。元のファイル{count}件を削除できませんでした。",
+    "many": "スマートプレビューのフォルダーを変更しました。元のファイル{count}件を削除できませんでした。",
+    "other": "スマートプレビューのフォルダーを変更しました。元のファイル{count}件を削除できませんでした。"
+  },
+  "Smart preview folder change failed: {error}": "スマートプレビューのフォルダーを変更できませんでした: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": "。既存のプレビュー{count}件を変更せずに保持しました",
+    "few": "。既存のプレビュー{count}件を変更せずに保持しました",
+    "many": "。既存のプレビュー{count}件を変更せずに保持しました",
+    "other": "。既存のプレビュー{count}件を変更せずに保持しました"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "スマートプレビュー{count}件 · {size:.1} MiB",
+    "few": "スマートプレビュー{count}件 · {size:.1} MiB",
+    "many": "スマートプレビュー{count}件 · {size:.1} MiB",
+    "other": "スマートプレビュー{count}件 · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "スマートプレビューの保存容量を確認できませんでした: {e}",
+  "free space is unavailable for {path} on this platform": "このプラットフォームでは{path}の空き容量を確認できません。"
 }

@@ -792,3 +792,79 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The files in the cache's shard folders under `dir`.
+fn cached_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |shards| shards.flatten().filter_map(|s| std::fs::read_dir(s.path()).ok()).map(|f| f.count()).sum())
+}
+
+/// A clear removed its disk files while holding the generation lock, which the app reads every frame: 100,000
+/// thumbnails took 6.7 s, the whole time the UI waited (found in the review of #1328, whose source refreshes clear
+/// like this branch's conversions, discards and look refreshes). The new generation now shows at once, while the
+/// files go; meanwhile none of them is served, and once the clear returns none is left.
+#[test]
+fn clearing_a_large_disk_cache_never_holds_up_generation_reads() {
+    let dir = temp_dir("clear-unlocked");
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 40));
+    let old = cache.generation();
+    let key = hash_bytes(b"an old thumbnail");
+    cache.put_at(old, key, Arc::new(gradient(8, 8, 3)));
+    // many more, named as the cache names them (a clear does not read them)
+    for i in 0..20_000u64 {
+        let hex = hash_bytes(&i.to_le_bytes()).to_string();
+        let shard = dir.join(&hex[..2]);
+        std::fs::create_dir_all(&shard).unwrap();
+        std::fs::write(shard.join(format!("{hex}.jpg")), b"x").unwrap();
+    }
+    let clearing = {
+        let cache = cache.clone();
+        std::thread::spawn(move || cache.clear())
+    };
+    while cache.generation() == old {
+        std::thread::yield_now();
+    }
+    let left = cached_files(&dir);
+    let served = cache.get(key).is_some();
+    clearing.join().unwrap();
+    assert!(left > 0, "the new generation could be read only once every file was gone");
+    assert!(!served, "an old thumbnail was served while the files were being removed");
+    assert_eq!(cached_files(&dir), 0);
+    assert!(cache.get(key).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+type ClearHook = Arc<dyn Fn(&DiskCache) + Send + Sync>;
+static DURING_CLEAR: std::sync::Mutex<Vec<(std::path::PathBuf, ClearHook)>> = std::sync::Mutex::new(Vec::new());
+
+/// Called by [`DiskCache::clear`] after it lists the files and before it removes them.
+pub(crate) fn during_clear(disk: &DiskCache) {
+    let hook = DURING_CLEAR.lock().unwrap().iter().find(|(dir, _)| dir == disk.dir()).map(|(_, hook)| hook.clone());
+    if let Some(hook) = hook {
+        hook(disk);
+    }
+}
+
+/// A clear lets current thumbnails be written while it removes the files. One written after its
+/// listing outlives it, so the cache's size must count it: a total of zero would let the folder
+/// grow past its budget until something scanned it again.
+#[test]
+fn a_thumbnail_written_while_a_clear_removes_files_keeps_its_size() {
+    let dir = temp_dir("clear-accounting");
+    let disk = DiskCache::new(&dir, 1 << 30);
+    for i in 0..4u8 {
+        disk.put(hash_bytes(&[i]), &gradient(32, 32, i));
+    }
+    assert!(disk.size() > 0);
+    DURING_CLEAR.lock().unwrap().push((dir.clone(), Arc::new(|disk: &DiskCache| disk.put(hash_bytes(b"during the clear"), &gradient(32, 32, 9)))));
+    disk.clear();
+    let on_disk: u64 = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|shard| std::fs::read_dir(shard.path()).ok())
+        .flat_map(|files| files.flatten())
+        .map(|f| f.metadata().unwrap().len())
+        .sum();
+    assert!(on_disk > 0, "the thumbnail written during the clear outlives it");
+    assert_eq!(disk.size(), on_disk, "the cache's size counts what is on disk");
+    let _ = std::fs::remove_dir_all(&dir);
+}
