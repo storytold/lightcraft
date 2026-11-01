@@ -73,12 +73,7 @@ fn building_previews_writes_nothing_next_to_the_photos() {
         s.prep_tick(crate::prep::Mode::Library, Some(*id), false);
     }
     if let Some(b) = s.preview_build.clone() {
-        for _ in 0..500 {
-            if !b.running() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        assert!(wait_finished(&b), "the background build stops (a late write would slip past the check)");
     }
     assert_eq!(listing(&shoot), before, "nothing was written next to the photos");
     let _ = std::fs::remove_dir_all(&root);
