@@ -64,6 +64,9 @@ pub struct LoupeTiming {
     total: u64,
     /// Whether the loupe drew a photo in the frame being drawn ([`LoupeTiming::end_frame`]).
     drawn: bool,
+    /// How long the photo before the current one stayed (ms), when the loupe stepped to it from
+    /// that photo; `None` when the loupe opened on it (from the grid, or coming back to the loupe).
+    stepped_from: Option<f64>,
 }
 
 /// Sources that show the photo at full size: the camera's JPEG, a cached or a fresh render.
@@ -77,7 +80,9 @@ impl LoupeTiming {
     pub fn observe(&mut self, photo: PhotoId, source: &'static str, now: f64) {
         self.drawn = true;
         if self.current.as_ref().is_none_or(|(_, t)| t.photo != photo) {
+            let stepped = self.current.is_some();
             self.finish(now);
+            self.stepped_from = if stepped { self.done.back().map(|t| t.dwell_ms) } else { None };
             let t = StepTiming { photo, any_ms: None, any_source: "none", full_ms: None, full_source: "none", sharp_ms: None, dwell_ms: 0.0 };
             self.current = Some((now, t));
         }
@@ -106,7 +111,9 @@ impl LoupeTiming {
         let (since, prev_dwell) = match &self.current {
             // the first frame of a step: `observe` has not seen this photo yet
             Some((since, t)) if t.photo != photo => (now, (now - since) * 1000.0),
-            Some((since, _)) => (*since, self.done.back().map(|t| t.dwell_ms).unwrap_or(f64::INFINITY)),
+            // (a photo the loupe opened on, not stepped to, never settles: the step that ended by
+            // leaving the loupe is not its predecessor)
+            Some((since, _)) => (*since, self.stepped_from.unwrap_or(f64::INFINITY)),
             None => return false,
         };
         prev_dwell.is_finite() && prev_dwell < FAST_STEP_SECS * 1000.0 && now - since < SETTLE_SECS
@@ -195,6 +202,26 @@ mod tests {
         assert!(l.settling(PhotoId(3), 2.1));
         // …until this one has stayed long enough
         assert!(!l.settling(PhotoId(3), 2.033 + SETTLE_SECS + 0.001));
+    }
+
+    /// Leaving the loupe soon after a step and coming back on another photo is not a fast step
+    /// (CodeRabbit on #3077): the photo the loupe opens on renders at once, on every frame.
+    #[test]
+    fn coming_back_to_the_loupe_on_another_photo_is_not_a_fast_step() {
+        let mut l = LoupeTiming::default();
+        l.observe(PhotoId(1), "embedded", 0.0);
+        l.end_frame(0.0);
+        // the grid is up after 100 ms on the photo
+        l.end_frame(0.1);
+        assert!(!l.settling(PhotoId(2), 0.2), "the first frame back");
+        l.observe(PhotoId(2), "thumb", 0.2);
+        l.end_frame(0.2);
+        assert!(!l.settling(PhotoId(2), 0.25), "nor the frames after it");
+        // a fast step from there still settles
+        l.observe(PhotoId(2), "embedded", 0.25);
+        assert!(l.settling(PhotoId(3), 0.3));
+        l.observe(PhotoId(3), "thumb", 0.3);
+        assert!(l.settling(PhotoId(3), 0.35));
     }
 
     /// A frame without the loupe finishes the photo it showed: coming back to it later starts a new step, and
