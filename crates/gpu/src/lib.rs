@@ -413,6 +413,9 @@ fn allowed() -> bool {
     ENABLED.load(Ordering::Relaxed) && !env_disabled() && broken_here().is_none() && !ON_CPU.try_with(|c| c.get()).unwrap_or(false)
 }
 
+/// Most points in one spot stroke rendered on the GPU (a long brush stroke has a few hundred).
+pub const MAX_GPU_SPOT_POINTS: usize = 4096;
+
 thread_local! {
     /// This thread's renders stay on the CPU ([`on_cpu`]).
     static ON_CPU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -421,10 +424,16 @@ thread_local! {
 /// Run `f` with this thread's renders on the CPU (an export set to the processor, a benchmark's
 /// CPU run); the rest of the process keeps the GPU.
 pub fn on_cpu<R>(f: impl FnOnce() -> R) -> R {
-    let was = ON_CPU.with(|c| c.replace(true));
-    let r = f();
-    ON_CPU.with(|c| c.set(was));
-    r
+    /// Puts the thread's flag back, also when `f` panics (review of PR #3530).
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let was = self.0;
+            let _ = ON_CPU.try_with(|c| c.set(was));
+        }
+    }
+    let _restore = Restore(ON_CPU.with(|c| c.replace(true)));
+    f()
 }
 
 /// Why the device in use failed, while it waits to be replaced (`None`: it works, or there is none).
@@ -866,6 +875,11 @@ fn run(
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
             return Err(Fallback::NotTried);
         }
+        // a stroke with more points than a brush makes (a hostile or broken XMP) is one GPU
+        // dispatch whose every pixel walks all of them: the CPU renders it (review of PR #3530)
+        if s.spots.iter().any(|sp| sp.points.len() > MAX_GPU_SPOT_POINTS) {
+            return Err(Fallback::NotTried);
+        }
         // (a lost device is replaced here once its pause is over; until then the CPU renders)
         let gpu = device().ok_or(Fallback::NotTried)?;
         // An export's turn at the GPU (see `gate`): it waits while other exports use the card's
@@ -985,6 +999,20 @@ pub(crate) fn validate_wgsl(name: &str, src: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use lightcraft_pipeline::{OutputDepth, Overlay};
+
+    /// Review of PR #3530: a panic inside `on_cpu` leaves the thread's renders on the GPU again.
+    #[test]
+    fn a_panic_in_on_cpu_leaves_the_thread_as_it_was() {
+        let on = || super::ON_CPU.with(|c| c.get());
+        assert!(!on());
+        assert!(std::panic::catch_unwind(|| super::on_cpu(|| panic!("render"))).is_err());
+        assert!(!on(), "still on the CPU after the panic");
+        super::on_cpu(|| {
+            let _ = std::panic::catch_unwind(|| super::on_cpu(|| panic!("inner")));
+            assert!(on(), "the outer on_cpu still holds");
+        });
+        assert!(!on());
+    }
 
     /// The helper refuses what a driver would: a function defined twice (what an automatic merge of two branches
     /// touching the same kernel can leave).

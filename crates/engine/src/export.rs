@@ -89,7 +89,9 @@ pub struct ExportOptions {
     pub resize: Option<Resize>,
     /// Print resolution written into the file (pixels per inch).
     pub ppi: u16,
-    /// JPEG only: largest quality whose file fits in this many KB.
+    /// JPEG only: the file fits in this many KB, at a quality close below the largest that would
+    /// (a prediction from the photo itself, in about two encodes: a quality or two lower than an
+    /// exhaustive search could find, never larger than the limit).
     pub limit_kb: Option<u32>,
     pub sharpen: SharpenFor,
     pub sharpen_amount: SharpenAmount,
