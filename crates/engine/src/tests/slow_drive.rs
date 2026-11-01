@@ -171,7 +171,14 @@ fn a_failed_write_is_reported_and_retried_never_dropped() {
     fail.store(true, Ordering::SeqCst);
     // handed over before the thread found out: accepted, then held
     s.execute("photo.flag", &json!({"flag": "pick", "ids": [all[0].0]})).unwrap();
-    frames_until(&mut s, "the failure is reported", |s| s.unsaved().is_some());
+    // the quit check reads it at once, not as of the last frame (review of #3557)
+    let t = Instant::now();
+    while s.library.as_ref().unwrap().journal().unwritten().is_none() {
+        assert!(t.elapsed() < Duration::from_secs(20), "the log thread never reported the failure");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    s.refresh_unsaved();
+    assert!(s.unsaved().is_some(), "refreshed for the quit check");
     let (n, why) = s.unsaved().map(|(n, w)| (n, w.to_string())).unwrap();
     assert!(n >= 1 && why.contains("the drive is gone"), "{n} {why}");
     // later flags: refused with the reason, kept in memory and queued
@@ -221,11 +228,38 @@ fn a_log_that_stays_broken_is_saved_by_the_closing_snapshot() {
     // (the snapshot itself is written by the store, which the hook leaves alone; the log's reset
     // after it fails, so close reports it, but the snapshot holds everything)
     let _ = s.close_library();
+    // the snapshot holds them: the quit prompt must not say they would be lost (review of #3557)
+    assert!(s.unsaved().is_none(), "{:?}", s.unsaved());
     drop(s);
     fault::remove(&dir);
     let again = open(&dir);
     assert!(again.library.as_ref().unwrap().report.damaged.is_none());
     assert_eq!(culled(&again), want);
     drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same library opened again in the same session (Settings, Libraries; a reopen after an
+/// error): everything the old session's log thread was handed is in the files before the new one
+/// reads them (review of #3557).
+#[test]
+fn reopening_the_same_library_reads_what_its_log_thread_was_handed() {
+    let dir = temp_dir("reopen");
+    let mut s = open(&dir);
+    fault::install(
+        &dir,
+        Arc::new(|step| {
+            if step == Step::Write {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            Ok(())
+        }),
+    );
+    let all = ids(&s);
+    s.execute("photo.flag", &json!({"flag": "reject", "ids": [all[0].0]})).unwrap();
+    s.open_library(&dir, true).unwrap();
+    fault::remove(&dir);
+    assert_eq!(s.catalog.photo(all[0]).unwrap().flag, Flag::Reject);
+    drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }

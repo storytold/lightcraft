@@ -715,6 +715,10 @@ impl Journal {
     /// Appended records the store holds because writing them failed (retried), and why; `None`
     /// when nothing is held back. Never waits for the drive.
     pub fn unwritten(&self) -> Option<(usize, String)> {
+        // a snapshot that holds every op holds whatever the log's thread still holds
+        if self.snapshot_seq >= self.seq && self.pending.is_none() {
+            return None;
+        }
         self.store.unwritten()
     }
 
@@ -728,7 +732,7 @@ impl Journal {
         self.pending.is_none()
             && self.log_records >= self.retry_at_records
             && (self.snapshot_due
-                || self.store.unwritten().is_some()
+                || self.unwritten().is_some()
                 || self.log_records >= self.policy.max_records
                 || self.log_bytes >= self.policy.max_bytes)
     }

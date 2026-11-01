@@ -190,3 +190,43 @@ fn the_journal_reopens_every_op_after_a_slow_then_failing_drive() {
     assert_eq!(again.len(), 60);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A sync that fails leaves the written bytes past the synced length in the file; a cut to exactly
+/// that length removes them from the file too, so they never come back on the next open (review
+/// of #3557).
+#[test]
+fn a_cut_to_the_synced_length_removes_bytes_a_failed_sync_left() {
+    let dir = temp_dir("cut-synced");
+    let mut store = FsStore::open(&dir).unwrap();
+    store
+        .append(
+            LOG, b"0
+",
+        )
+        .unwrap();
+    store.flush().unwrap();
+    fault::install(&dir, Arc::new(|step| if step == Step::Sync { Err(std::io::Error::other("sync failed (test)")) } else { Ok(()) }));
+    store
+        .append(
+            LOG, b"1
+",
+        )
+        .unwrap();
+    wait_until("the failure is published", || store.unwritten().is_some());
+    assert_eq!(
+        std::fs::read(dir.join(LOG)).unwrap(),
+        b"0
+1
+",
+        "written, not synced"
+    );
+    store.truncate(LOG, 2).unwrap();
+    fault::remove(&dir);
+    drop(store);
+    assert_eq!(
+        std::fs::read(dir.join(LOG)).unwrap(),
+        b"0
+"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

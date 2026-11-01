@@ -512,11 +512,15 @@ impl Session {
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
-        // the current library may be these same files: let its background snapshot land first
-        if let Some(old) = self.library.as_mut()
-            && let Err(e) = old.journal.wait()
-        {
-            log::error!("library: {e}");
+        // the current library may be these same files: let its background snapshot land first, and
+        // what its log's thread was handed reach the file before the new journal reads it
+        if let Some(old) = self.library.as_mut() {
+            if let Err(e) = old.journal.wait() {
+                log::error!("library: {e}");
+            }
+            if let Err(e) = old.journal.flush() {
+                log::error!("library: {e}");
+            }
         }
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
@@ -743,6 +747,14 @@ impl Session {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
+        }
+    }
+
+    /// Read again what the catalog log's own thread holds because writing it failed (never waits):
+    /// before a check of [`Session::unsaved`] that must be current, such as the quit prompt's.
+    pub fn refresh_unsaved(&mut self) {
+        if let Some(lib) = self.library.as_mut() {
+            lib.log_held = lib.journal.unwritten();
         }
     }
 

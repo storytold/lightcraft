@@ -76,6 +76,8 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(names.len(), &names.join(", "))));
         return false;
     }
+    // (what the catalog log's thread holds is read now, not as of the last frame)
+    app.session.refresh_unsaved();
     if app.session.unsaved().is_none() {
         return true;
     }

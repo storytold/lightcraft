@@ -80,7 +80,10 @@ impl LogWriter {
     fn ask<T>(&self, make: impl FnOnce(Sender<io::Result<T>>) -> Msg) -> io::Result<T> {
         let (tx, rx) = channel();
         self.send(make(tx))?;
-        rx.recv_timeout(WAIT).map_err(|_| stopped())?
+        rx.recv_timeout(WAIT).map_err(|e| match e {
+            RecvTimeoutError::Timeout => io::Error::new(io::ErrorKind::TimedOut, "the drive took over a minute to write the catalog log"),
+            RecvTimeoutError::Disconnected => stopped(),
+        })?
     }
 
     /// Hand `data` over (never waits for the drive). Refused while bytes handed over before can't
@@ -225,7 +228,9 @@ impl Writer {
                 Err(e) => return Err(e),
             },
         };
-        if len >= good {
+        // (to exactly `good` with bytes held: the file is cut, since a write that failed may have
+        // left some of them past `good`)
+        if len > good || (len == good && self.held.is_empty()) {
             // within what is held: nothing on the drive changes (what a failed write left past
             // `good` is cut before the next write)
             let keep = usize::try_from(len - good).unwrap_or(usize::MAX).min(self.held.len());
