@@ -4000,7 +4000,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-surface"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "lightcraft-develop",
  "miniz_oxide 0.9.1",
