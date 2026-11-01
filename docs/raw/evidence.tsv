@@ -569,3 +569,10 @@ Konica Minolta	DiMAGE A200	verified	corpus: crates/raw/tests/it/corpus.rs (xtask
 Konica Minolta	Maxxum 7D Dynax 7D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Konica Minolta	DiMAGE 7	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
 Konica Minolta	DiMAGE A2	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
+Canon	EOS D30	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS D60	verified	corpus: crates/raw/tests/it/corpus.rs; 18 maintainer files exact (craft-libs crates/crw/clean-room/03-verification.md)
+Canon	EOS 10D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
+Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
+Canon	PowerShot G1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	PowerShot G6	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	PowerShot G5	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG

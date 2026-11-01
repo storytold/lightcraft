@@ -9,6 +9,7 @@ mod arw_lens;
 pub(crate) mod arw_lens_rm6;
 pub mod cr2;
 pub mod cr3;
+pub mod crw;
 pub mod crx;
 pub(crate) mod crx_wavelet;
 pub mod erf;

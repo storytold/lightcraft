@@ -135,7 +135,7 @@ Canon	EOS 6D	CR2	2012	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_
 Canon	EOS 6D Mark II	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 7D	CR2	2008	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	EOS 7D Mark II	CR2	2013	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	EOS 10D	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	EOS 10D	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
 Canon	EOS 20D	CR2	2003	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 20Da	CR2	2005	unverified	CR2 lossless JPEG decoder
 Canon	EOS 30D	CR2	2005	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -149,9 +149,9 @@ Canon	EOS 80D	CR2	2015	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW
 Canon	EOS 90D	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS 200D (EOS Kiss X9, EOS Rebel SL2)	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 250D (EOS Rebel SL3, EOS 200D II, EOS Kiss X10)	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
-Canon	EOS D30	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	EOS D60	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	EOS D30	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS D60	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs; 18 maintainer files exact (craft-libs crates/crw/clean-room/03-verification.md)
+Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
 Canon	EOS 100D (EOS Digital Rebel SL1, EOS Kiss X7)	CR2	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 500D (EOS Digital Rebel T1i, EOS Kiss X3 Digital)	CR2	2008	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 550D (EOS Digital Rebel T2i, EOS Kiss X4 Digital)	CR2	2010	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
@@ -202,20 +202,20 @@ Canon	EOS R8	CR3	2022	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (exact 
 Canon	EOS R50	CR3	2022	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS R50 V	CR3	2024	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS R100	CR3	2022	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (exact sensor hashes, docs/cr3.md)
-Canon	PowerShot 600	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot A5	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot A50	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot G1	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot 600	CRW	2003	preview	pre-CIFF CRW is not decoded
+Canon	PowerShot A5	CRW	2003	preview	pre-CIFF CRW is not decoded
+Canon	PowerShot A50	CRW	2003	preview	pre-CIFF CRW is not decoded
+Canon	PowerShot G1	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	PowerShot G1 X	CR2	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G1 X Mark II	CR2	2013	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G1 X Mark III	CR2	2017	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot G2	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot G3	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot G2	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
+Canon	PowerShot G3	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
 Canon	PowerShot G3 X	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot G5	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot G5	CRW	2003	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG
 Canon	PowerShot G5 X	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G5 X Mark II	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
-Canon	PowerShot G6	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot G6	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	PowerShot G7 X	CR2	2013	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G7 X Mark II	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G7 X Mark III	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
@@ -227,17 +227,17 @@ Canon	PowerShot G11	CR2	2008	verified	corpus: crates/raw/tests/it/body_corpus.rs
 Canon	PowerShot G12	CR2	2010	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G15	CR2	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G16	CR2	2013	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot Pro 1	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot Pro70	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot Pro90 IS	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S30	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S40	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S45	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S50	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S60	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot Pro 1	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
+Canon	PowerShot Pro70	CRW	2003	preview	pre-CIFF CRW is not decoded
+Canon	PowerShot Pro90 IS	CRW	2003	preview	pre-CIFF CRW is not decoded
+Canon	PowerShot S30	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
+Canon	PowerShot S40	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
+Canon	PowerShot S45	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
+Canon	PowerShot S50	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
+Canon	PowerShot S60	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
 Canon	PowerShot S90	CR2	2008	unverified	CR2 lossless JPEG decoder
 Canon	PowerShot S95	CR2	2010	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot S70	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot S70	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
 Canon	PowerShot S100	CR2	2010	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot S100V	CR2	2010	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot S110	CR2	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
