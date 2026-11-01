@@ -1,5 +1,11 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Fractional XMP orientation values are no longer treated as valid codes
+- XMP `tiff:Orientation` is used only when its numeric value is an integer from 1 to 8. Values such as `6.9` remain
+  visible in All Metadata but no longer become a different, valid orientation when imported or saved.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
