@@ -16,8 +16,8 @@ PyTorch are used only to train, and the result is an ONNX file that LightCraft's
   read-noise relation `b = c · a²` fitted to the file. Without `--noise-cal`, `c` is the built-in EOS R5 C fit, as
   before; the first log lines (and `log.jsonl`) say which was used. A plane the calibration left out takes the mean
   of the measured planes and is logged as not measured. A plane without its `a` or `b`, NaN, infinity, a negative
-  number, a value outside float32 or an empty file stops `train.py` before it trains, naming the camera, ISO and
-  plane.
+  number or a value outside float32 stops `train.py` before it trains, naming the camera, ISO and plane; an empty,
+  unreadable or non-JSON file stops it naming the file.
 - Not used: RawNIND (the dataset is CC BY-SA 4.0 and its published weights GPL-3.0), SIDD, FiveK, DIV2K and other
   research-only sets.
 
