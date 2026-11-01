@@ -944,7 +944,7 @@ pub(crate) fn read_texture(
         },
         wgpu::Extent3d { width: w32, height: h32, depth_or_array_layers: 1 },
     );
-    queue.submit([enc.finish()]);
+    let copied = queue.submit([enc.finish()]);
     if let Some(e) = pollster::block_on(scope.pop()) {
         return Err(format!("texture copy failed: {e}"));
     }
@@ -954,7 +954,8 @@ pub(crate) fn read_texture(
         let _ = tx.send(r);
     });
     let wait = std::time::Duration::from_secs(10);
-    poll_device(device, generation, wgpu::PollType::Wait { submission_index: None, timeout: Some(wait) })?;
+    // (the copy's own submission, not whatever else the device has queued: review of PR #3530)
+    poll_device(device, generation, wgpu::PollType::Wait { submission_index: Some(copied), timeout: Some(wait) })?;
     match rx.recv_timeout(wait) {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(format!("{e}")),

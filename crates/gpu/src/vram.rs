@@ -88,13 +88,16 @@ fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> 
     use std::io::Read;
     let mut child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
     let mut stdout = child.stdout.take()?;
-    // read on a thread of its own, so a full pipe can't stop the query from exiting
-    let reader = std::thread::Builder::new()
+    // read on a thread of its own, so a full pipe can't stop the query from exiting; its result
+    // is waited for within the same deadline (a grandchild holding the pipe open can't hold us:
+    // review of PR #3499)
+    let (otx, orx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
         .name("lc-gpu-query".into())
         .spawn(move || {
             let mut b = Vec::new();
             let _ = stdout.read_to_end(&mut b);
-            b
+            let _ = otx.send(b);
         })
         .ok()?;
     let deadline = std::time::Instant::now() + limit;
@@ -111,7 +114,8 @@ fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> 
         log::warn!("gpu: a graphics memory query took longer than {} s; using a safe size", limit.as_secs());
         return None;
     };
-    let out = reader.join().ok()?;
+    let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(200));
+    let out = orx.recv_timeout(left).ok()?;
     status.success().then_some(out)
 }
 
