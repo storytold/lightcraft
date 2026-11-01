@@ -589,6 +589,10 @@ pub fn encode_gain(gain: &GainImage, m: &GainMapMeta, quality: u8) -> Result<Vec
     if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain_samples(gain).is_none_or(|n| gain.data.len() < n) {
         return Err(Error::Encode("gain map image is malformed".into()));
     }
+    // a JPEG frame header holds each side in 16 bits (review of PR #3506)
+    if gain.width > usize::from(u16::MAX) || gain.height > usize::from(u16::MAX) {
+        return Err(Error::Encode("gain map image is larger than a JPEG can hold".into()));
+    }
     if !m.is_valid() || m.multichannel != (gain.channels == 3) {
         return Err(Error::Encode("gain map metadata doesn't match the map".into()));
     }
@@ -842,6 +846,9 @@ mod tests {
         assert!(encode_gain(&gain, &GainMapMeta::default(), 90).is_err());
         assert_eq!(gain_samples(&gain), None);
         assert_eq!(gain_samples(&GainImage { width: 4, height: 2, channels: 3, data: Vec::new() }), Some(24));
+        // wider than a JPEG frame header holds
+        let wide = GainImage { width: 65_536, height: 1, channels: 1, data: vec![0; 65_536] };
+        assert!(encode_gain(&wide, &GainMapMeta::default(), 90).is_err());
     }
 
     #[test]
