@@ -50,6 +50,7 @@ pub(crate) fn starting_colour(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
+    let own_matrix = lightcraft_raw::color::has_matrix(&raw.color);
     let (xy, t, look) = starting_colour_with(
         raw,
         |raw, t| fit_preview(raw, bytes, t, lens, embedded),
@@ -62,6 +63,10 @@ pub(crate) fn starting_colour(
             fit_dark_tone(&sensor, &reference, &clipped)
         },
     );
+    let look = match look {
+        Some(look) => Some(look),
+        None => previewless_tone(raw, bytes, own_matrix, &t, &None).map(|tone| CameraLook { matrix: Mat3::IDENTITY, tone, hue_sat: None }),
+    };
     if look.is_none() && dng_tone_eligible(raw, &t) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
@@ -122,6 +127,67 @@ pub(super) fn starting_colour_with(
     // A black-and-white JPEG first tries its existing tone fit on the chosen colour.
     let look = if black_and_white { monochrome(raw, &t) } else { None };
     (xy, t, look.or_else(|| dark(raw, &t)))
+}
+
+/// Median tone and chroma curves of the camera looks fitted to the embedded JPEGs of 50 public Canon RF-mount CR3
+/// files (R, RP, R3, R5, R6, R6 Mark II, R7, R10, R50, R100, R6 Mark III; the HDR-PQ files, which have no JPEG,
+/// are not among them). On a common scene-luminance grid, the median over the files whose own knots cover the grid
+/// point; the part past the covered range continues at half the last covered slope. The curves agree within roughly
+/// 15 % between bodies from 0.05 to 0.25 scene luminance (display 0.08-0.13 and 0.58-0.73 at the ends).
+const CANON_TONE_KNOTS: [[f32; 2]; 32] = [
+    [0.01300, 0.02133],
+    [0.01462, 0.02399],
+    [0.01645, 0.02399],
+    [0.01851, 0.02573],
+    [0.02082, 0.03036],
+    [0.02342, 0.03749],
+    [0.02635, 0.04490],
+    [0.02964, 0.05512],
+    [0.03334, 0.06410],
+    [0.03751, 0.07782],
+    [0.04219, 0.09449],
+    [0.04746, 0.11311],
+    [0.05340, 0.13590],
+    [0.06007, 0.16061],
+    [0.06757, 0.18507],
+    [0.07601, 0.21076],
+    [0.08551, 0.23481],
+    [0.09619, 0.26245],
+    [0.10821, 0.29332],
+    [0.12173, 0.32584],
+    [0.13694, 0.36895],
+    [0.15405, 0.40889],
+    [0.17330, 0.45380],
+    [0.19495, 0.50112],
+    [0.21931, 0.54242],
+    [0.24671, 0.58651],
+    [0.27754, 0.63641],
+    [0.31221, 0.67163],
+    [0.35122, 0.69642],
+    [0.39510, 0.71950],
+    [0.44447, 0.73694],
+    [0.50000, 0.75066],
+];
+const CANON_TONE_CHROMA: [f32; lightcraft_pipeline::tone::CHROMA_N] = [1.0191, 1.0141, 0.9875, 0.9537, 0.9309, 0.9176, 0.8915, 0.9833];
+
+/// The tone a Canon CR3 starts from when it has no embedded JPEG to fit a look to (the HDR-PQ shots of the R5 Mark II and R8
+/// carry only an HEVC preview) and takes the model's spectral colour matrices: the median camera tone of Canon
+/// RF-mount bodies ([`CANON_TONE_KNOTS`]), instead of LightCraft's default curve, which renders such a raw about
+/// 13 L* darker than the camera's own look. `None` for any raw with a preview, its own matrices or a fitted look.
+pub(super) fn previewless_tone(
+    raw: &RawImage,
+    bytes: &[u8],
+    own_matrix: bool,
+    transform: &CameraTransform,
+    look: &Option<CameraLook>,
+) -> Option<CameraTone> {
+    if raw.format != RawFormat::Cr3 || own_matrix || transform.matrix_is_fallback || look.is_some() {
+        return None;
+    }
+    if lightcraft_raw::embedded_preview(bytes).is_some() {
+        return None;
+    }
+    CameraTone::new(CANON_TONE_KNOTS)?.with_chroma(CANON_TONE_CHROMA)
 }
 
 /// The colour a raw starts from ([`starting_colour`]) as DNG colour tags, for a DNG of the raw's camera RGB (Photo
