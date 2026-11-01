@@ -209,10 +209,12 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
     // an AI model's segmentation stored with the shape wins over the source's mattes and the heuristics
+    // (a damaged one, which selects nothing, leaves them to it)
     if let Some(seg) = ai_seg(shape) {
         let mut out = Plane::new(w, h);
-        sample_seg(Some(seg), &[], 1.0, frame, w, h, log_l, &mut out);
-        return out;
+        if sample_seg(Some(seg), &[], 1.0, frame, w, h, log_l, &mut out) {
+            return out;
+        }
     }
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
@@ -383,7 +385,7 @@ const SEG_EPS: f32 = 0.01;
 /// Stored model segmentations at each output pixel: the zoomed-in `detail` passes inside
 /// their rectangles (the highest of them where they overlap), the whole-photo `seg`
 /// elsewhere; the logit (times `gain`: > 1 is a harder edge) through a sigmoid. Damaged
-/// data selects nothing.
+/// data selects nothing: `false` when none of it could be read (`out` untouched).
 ///
 /// Issue #3272: a model's grid is much coarser than an export (a 288² grid has ~20 px cells on
 /// 24 MP), and its bilinear contour passes up to a cell from the photo's edge, so the mask spilled
@@ -397,12 +399,12 @@ const SEG_EPS: f32 = 0.01;
 /// as do those where the photo has no edge to follow. Refine Edges
 /// then works on the combined mask ([`evaluate_one`]) and finds these edges already in place.
 #[allow(clippy::too_many_arguments)]
-fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, log_l: &Plane, out: &mut Plane) {
+fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, log_l: &Plane, out: &mut Plane) -> bool {
     let coarse = seg.and_then(SegGrid::new);
     // (capped: a hostile document can hold many)
     let patches: Vec<SegGrid> = detail.iter().take(lightcraft_develop::segmask::MAX_DETAIL).filter_map(SegGrid::new).collect();
     if coarse.is_none() && patches.is_empty() {
-        return;
+        return false;
     }
     let m = frame.out_to_norm(w, h);
     for_rows(&mut out.data, w, |y, row| {
@@ -418,6 +420,7 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
         guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
+    true
 }
 
 fn frame_px(frame: &Frame, w: usize) -> f32 {

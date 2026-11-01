@@ -135,19 +135,22 @@ used.
 
 Folders: `models/<name>/` in LightCraft's settings folder — `%APPDATA%\LightCraft\models\` (Windows),
 `~/Library/Application Support/LightCraft/models/` (macOS), `~/.config/lightcraft/models/` (Linux) —
-or the folder `LIGHTCRAFT_AI_MODELS_DIR` names: `birefnet-portrait/`, `eomt-s-coco/`,
-`sam2.1-hiera-tiny/`, `depth-anything-v2-small/`. To install one by hand, put its files there
-(`model.safetensors`, plus `config.json` for EoMT and Depth Anything).
+or the folder `LIGHTCRAFT_AI_MODELS_DIR` names: `mediapipe-selfie-multiclass/`,
+`mediapipe-face-landmarker/`, `birefnet-portrait/`, `eomt-s-coco/`, `sam2.1-hiera-tiny/` (SAM 3
+has its own folder, below). To install one by hand, put its files there (`model.safetensors`, plus
+`config.json` for EoMT; `selfie_multiclass_256x256.tflite` and `face_landmarker.task` for the
+MediaPipe models).
 
-Download locations, in order: `LIGHTCRAFT_<MODEL>_MIRRORS` (`LIGHTCRAFT_SUBJECT_MIRRORS`,
-`LIGHTCRAFT_SCENE_MIRRORS`, `LIGHTCRAFT_SAM2_MIRRORS`, `LIGHTCRAFT_DEPTH_MIRRORS`; base URLs
+Download locations, in order: `LIGHTCRAFT_<MODEL>_MIRRORS` (`LIGHTCRAFT_PEOPLE_MIRRORS`,
+`LIGHTCRAFT_FACE_MIRRORS`, `LIGHTCRAFT_SUBJECT_MIRRORS`, `LIGHTCRAFT_SCENE_MIRRORS`,
+`LIGHTCRAFT_SAM2_MIRRORS`; base URLs
 separated by commas or spaces), the file `models/<folder>-mirrors.txt`, then the built-in list: the
 publisher's own Hugging Face repository, pinned to a commit (their licences allow redistribution
 and the repositories are not gated). **Maintainers:** put LightCraft's own mirror first in each
 list (`TODO(maintainer)` in `models.rs`), with the files unchanged and each model's licence next
 to them.
 
-Agents and scripts: `ai.models.status`, `ai.models.download {"id": "subject"|"scene"|"sam2"|"depth",
+Agents and scripts: `ai.models.status`, `ai.models.download {"id": "people"|"face"|"subject"|"scene"|"sam2"|"sam3",
 "acknowledged": true}` (refused without `acknowledged`: pass it only after the user agreed),
 `ai.models.cancel {"id"}`.
 
@@ -355,8 +358,9 @@ a stored segmentation (as `mask.list` / the develop settings hold it): the mask 
 the model. Without SAM 3 (local, or a remote worker set by `LIGHTCRAFT_SAM3_REMOTE`), Describe
 (`prompt`) fails with an error starting "The SAM 3 model is not installed" that says how to get it;
 Object fails only when there is no SAM 3 and SAM 2.1 isn't installed either, with an error offering
-SAM 2.1. With a remote worker, an unreachable worker is reported as such, not as a missing model. Subject, Background and Sky never fail for a missing model: they
-return an approximate mask (`{approximate, model, note}`).
+SAM 2.1. With a remote worker, an unreachable worker is reported as such, not as a missing model. Subject, Background, Sky, People and
+Landscape never fail for a missing model: they return an approximate mask (`{approximate, model,
+note}`).
 
 In the desktop app the commands don't wait for the model: `mask.objectPoint` returns
 `{pending: true}` and the selection is applied when it's computed (one undo step per settled
