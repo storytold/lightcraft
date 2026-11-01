@@ -99,6 +99,20 @@ impl QuickJob {
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.
+/// Which decode of a photo a loaded source is: its file's content and, when it has one, its database lens profile
+/// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
+/// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
+/// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
+pub fn source_identity(p: &Photo) -> Hash128 {
+    let mut k = Hasher128::new();
+    k.str(&content_key(p));
+    let lens = lens_key(p);
+    if lens != 0 {
+        k.u64(lens);
+    }
+    k.finish()
+}
+
 pub fn content_key(p: &Photo) -> String {
     match (&p.content_hash, &p.source) {
         (Some(h), _) => h.clone(),

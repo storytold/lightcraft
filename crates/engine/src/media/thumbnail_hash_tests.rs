@@ -88,6 +88,25 @@ fn source_from_before_content_reload_is_not_accepted() {
     s.accept(&old);
     assert_eq!(s.media.source_usage().0, 0);
 }
+/// A decode that started before the photo's database lens profile changed (a lens database arriving, looked up again
+/// by `cmd::lens_refresh`, which drops the photo's sources) never puts its source back in the cache: the source's
+/// colour was fitted through the old profile.
+#[test]
+fn source_from_before_a_lens_profile_change_is_not_accepted() {
+    let mut s = session();
+    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    assert!(old.loaded.is_some());
+    let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(lens)) }).unwrap();
+    s.media.forget(PhotoId(1));
+    s.accept(&old);
+    assert_eq!(s.media.source_usage().0, 0, "the old decode is dropped");
+    // a decode made with the new profile is kept
+    let new = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    s.accept(&new);
+    assert_ne!(s.media.source_usage().0, 0);
+}
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
 /// for renders and for stand-ins, answering the request it came from.
