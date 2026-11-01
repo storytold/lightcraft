@@ -21,6 +21,16 @@ Open an issue in the [issue tracker](https://github.com/storytold/lightcraft/iss
 
 LightCraft writes its log to `logs/lightcraft.log` in its settings folder. On Windows that is `%APPDATA%\LightCraft\logs\`. Each start moves the previous log to `lightcraft.1.log`, and that one to `lightcraft.2.log`, so the log of a run that crashed survives the next start.
 
+## A more detailed log
+
+When thumbnails or previews don't appear, appear slowly, or keep the computer busy, a log of every picture LightCraft draws helps. Start LightCraft with the environment variable `RUST_LOG` set to `warn,lightcraft*=info,lightcraft_ui_egui::render=debug`. On Windows, in PowerShell:
+
+```powershell
+$env:RUST_LOG = "warn,lightcraft*=info,lightcraft_ui_egui::render=debug"; & "C:\Program Files\LightCraft\lightcraft.exe"
+```
+
+The log then has a line for each picture LightCraft asks for, with its file, and a line for how it ended: drawn, or dropped and why (for example, scrolled out of view, or replaced by a newer request). A file that can't be read is still a warning. So the log shows whether a file was asked for once or many times. `LIGHTCRAFT_LOG=debug` instead turns on the detailed log of all of LightCraft.
+
 ## Still stuck?
 
 Ask in [Discord](https://discord.gg/artcraft).
