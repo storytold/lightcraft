@@ -164,3 +164,51 @@ fn damaged_settings_file_is_shown() {
     h.step();
     assert!(!has(&h, "button:noticeOk"));
 }
+
+/// A change the catalog log's thread accepted but hadn't written yet (a drive that takes a moment,
+/// then fails) is not taken for saved: the quit check waits for the thread, finds the failure and
+/// saves everything with the closing snapshot before the window may close (review of #3557). It
+/// used to read only the failure the thread had already reported, and close with the change in
+/// no file.
+#[test]
+fn quitting_waits_for_what_the_log_thread_has_not_written_yet() {
+    use lightcraft_catalog::fault::{self, Step};
+    let dir = std::env::temp_dir().join(format!("lc-ui-quit-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = lightcraft_engine::Session::new();
+    s.open_library(&dir, true).unwrap();
+    let id = s.catalog.photos().map(|p| p.id).min().unwrap();
+    fault::install(
+        &dir,
+        Arc::new(|step| {
+            if step == Step::Write {
+                std::thread::sleep(Duration::from_millis(400));
+                return Err(std::io::Error::other("the drive is gone (test)"));
+            }
+            Ok(())
+        }),
+    );
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let r = h.request("engine.execute", json!({"command": "photo.flag", "params": {"flag": "reject", "ids": [id.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let closes = crate::panels::notices::may_close(&mut h.app);
+    let prompt = h.app.quit_prompt.as_ref().map(|p| p.text().to_string());
+    // the files alone, as the next start reads them, hold the change
+    let copy = dir.with_extension("copy");
+    let _ = std::fs::remove_dir_all(&copy);
+    std::fs::create_dir_all(&copy).unwrap();
+    for f in [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG] {
+        if dir.join(f).exists() {
+            std::fs::copy(dir.join(f), copy.join(f)).unwrap();
+        }
+    }
+    let (_, c, _) = lightcraft_catalog::Journal::open(Box::new(lightcraft_catalog::store::FsStore::open(&copy).unwrap())).unwrap();
+    let saved = c.photo(id).map(|p| p.flag);
+    fault::remove(&dir);
+    drop(h);
+    let _ = std::fs::remove_dir_all(&copy);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!closes || saved == Some(lightcraft_catalog::Flag::Reject), "closed with the flag in no file: {saved:?}");
+    assert!(closes, "the closing snapshot saved it, so the window may close: {:?} {saved:?}", prompt);
+}

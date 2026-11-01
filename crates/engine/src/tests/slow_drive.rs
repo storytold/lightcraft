@@ -263,3 +263,33 @@ fn reopening_the_same_library_reads_what_its_log_thread_was_handed() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The same library opened again while its log's thread can't write what it was handed: the open
+/// fails and the current library stays open with the change (held, retried), instead of a new
+/// catalog read from files that miss it (review of #3557). Once the drive is back, the reopen
+/// reads it.
+#[test]
+fn a_reopen_waits_for_what_the_log_thread_could_not_write() {
+    let dir = temp_dir("reopen-fail");
+    let mut s = open(&dir);
+    let all = ids(&s);
+    let fail = Arc::new(AtomicBool::new(false));
+    slow_drive(&dir, Duration::from_millis(5), fail.clone());
+    fail.store(true, Ordering::SeqCst);
+    s.execute("photo.flag", &json!({"flag": "reject", "ids": [all[0].0]})).unwrap();
+    let r = s.open_library(&dir, true);
+    assert!(matches!(r, Err(crate::EngineError::NotSaved(_))), "{r:?}");
+    assert_eq!(s.catalog.photo(all[0]).unwrap().flag, Flag::Reject, "the open library keeps the change");
+    assert!(s.unsaved().is_some(), "and says it isn't saved yet");
+    fail.store(false, Ordering::SeqCst);
+    let t = Instant::now();
+    while s.library.as_mut().unwrap().journal_mut().flush().is_err() {
+        assert!(t.elapsed() < Duration::from_secs(20), "never written");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    s.open_library(&dir, true).unwrap();
+    fault::remove(&dir);
+    assert_eq!(s.catalog.photo(all[0]).unwrap().flag, Flag::Reject);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}

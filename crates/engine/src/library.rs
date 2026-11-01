@@ -511,17 +511,20 @@ impl Session {
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
-        self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first, and
-        // what its log's thread was handed reach the file before the new journal reads it
+        // what its log's thread was handed reach the file before the new journal reads it. When
+        // that can't be written, the open fails and the current library stays open with what its
+        // thread holds (retried): read now, the files would miss it (review of #3557).
         if let Some(old) = self.library.as_mut() {
             if let Err(e) = old.journal.wait() {
                 log::error!("library: {e}");
             }
             if let Err(e) = old.journal.flush() {
-                log::error!("library: {e}");
+                old.log_held = old.journal.unwritten();
+                return Err(EngineError::NotSaved(format!("the open library's changes aren't on disk yet, so it stays open: {e}")));
             }
         }
+        self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
         self.media.denoise.clear();
@@ -756,6 +759,23 @@ impl Session {
         if let Some(lib) = self.library.as_mut() {
             lib.log_held = lib.journal.unwritten();
         }
+    }
+
+    /// Every change applied is in the library's last snapshot (a closing snapshot landed), whatever
+    /// the catalog log's thread still holds or failed to reset. `false` without a library.
+    pub fn snapshot_holds_everything(&self) -> bool {
+        self.pending_log.is_empty() && self.library.as_ref().is_some_and(|l| l.journal.snapshot_seq() >= l.journal.seq())
+    }
+
+    /// Wait until what the catalog log's thread was handed is on disk, then read again what it
+    /// holds ([`Session::refresh_unsaved`]). Before the quit check: a change the thread accepted
+    /// but hasn't written yet is in no count of [`Session::unsaved`]. An error (a write failed, or
+    /// the drive took over a minute) means some changes may not be on disk yet.
+    pub fn flush_log(&mut self) -> Result<()> {
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        let flushed = lib.journal.flush();
+        lib.log_held = lib.journal.unwritten();
+        Ok(flushed?)
     }
 
     /// Changes applied in memory but not yet written to disk because saving failed: the number of
