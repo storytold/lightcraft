@@ -63,6 +63,10 @@ impl LightcraftApp {
         let changed = |applied: &Option<String>, now: &str| applied.as_deref().is_some_and(|a| a != now);
         if changed(&self.gpu_helper_applied, &self.ui.settings.gpu_helper) || changed(&self.gpu_card_applied, &self.ui.settings.gpu_card) {
             self.ui.settings.machine_test = None;
+            // (and a test running now would report on the cards before: stopped)
+            if let Some(t) = &self.machine {
+                t.stop();
+            }
         }
         // the second graphics card (Settings ▸ Performance), before the warm-up below sets it up
         if self.gpu_helper_applied.as_deref() != Some(self.ui.settings.gpu_helper.as_str()) {

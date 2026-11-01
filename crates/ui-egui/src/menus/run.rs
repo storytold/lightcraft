@@ -165,6 +165,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         return Some(app.session.execute("app.gpu", &p).map_err(|e| e.to_string()));
     }
+    if id == "app.testMachine" {
+        // minutes of exports: on the test's own thread, never the UI thread
+        return Some(crate::machine_test::command(app, p));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
