@@ -480,7 +480,8 @@ mod tests {
             }
         }
         crate::i18n::set_language(Locale::En);
-        assert!(wrapped.contains(&(Locale::De, 222.0)), "German wraps in the default panel: {wrapped:?}");
+        // (the dense buttons fit German's Zurücksetzen in one row at 222 pt; at the narrowest panel it wraps)
+        assert!(wrapped.contains(&(Locale::De, 200.0)), "German wraps in the narrowest panel: {wrapped:?}");
         // English keeps its single row from the default width up
         assert!(!wrapped.iter().any(|&(l, w)| l == Locale::En && w >= 222.0), "{wrapped:?}");
     }
