@@ -21,6 +21,7 @@ lightcraft-denoise = { path = "crates/denoise", default-features = false }
 lightcraft-geom = { path = "crates/geom" }
 lightcraft-faces = { path = "crates/faces" }
 lightcraft-sysmem = { path = "crates/sysmem" }
+lightcraft-coreml = { path = "crates/coreml" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 lightcraft-tiff = { path = "crates/tiff" }
@@ -106,6 +107,8 @@ rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
 # macOS: the profile of the screen showing the window (safe AppKit bindings; muda and wgpu use the same)
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
+block2 = { version = "0.6", default-features = false, features = ["std"] } # lightcraft-coreml: completion handlers of Core ML
+objc2-core-ml = { version = "0.3", default-features = false, features = ["std", "block2", "MLDictionaryFeatureProvider", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModel_MLModelCompilation", "MLMultiArray"] } # pure-Rust bindings to Core ML (lightcraft-coreml)
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSColorSpace", "NSResponder", "NSScreen", "NSWindow"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData"] }
 # Linux: the desktop's dark/light setting from the XDG settings portal (Settings ▸ Interface ▸

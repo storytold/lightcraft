@@ -8,7 +8,8 @@ re-exported here. `manifest` and `known` validate opt-in models; `onnx` reads a 
 into `net`; `cpu` executes it and `reference` supplies scalar checks. `bayer`, `tiles`
 and `run` pack sensor data and blend overlapping tiles while preserving clipped
 highlights. `product` reads/writes the disposable `.lcdn` cache. `runtime` supplies
-the installation self-test. Synthetic networks are generated in Rust for tests.
+the installation self-test. `coreml` rescales a network so its activations fit 16-bit arithmetic (exact in real arithmetic;
+the 16-bit arithmetic itself is not) and writes it as a Core ML model file (for `lightcraft-coreml`, the Neural Engine). Synthetic networks are generated in Rust for tests.
 
 Run `cargo test -p lightcraft-denoise --features runtime`. The CPU backend is optional;
 featureless and web builds keep the model metadata and cache format without faer/GEMM.

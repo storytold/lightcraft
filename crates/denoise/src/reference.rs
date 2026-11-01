@@ -41,6 +41,16 @@ fn tensor(channels: usize, side: usize, total: &mut usize) -> Result<Vec<f32>, N
 
 /// Run `net` on `input` (`in_channels` planes of `tile × tile`).
 pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> {
+    run_tensors(net, tile, input)?.pop().map(|t| t.data).ok_or_else(|| NetError::Invalid("no layers".into()))
+}
+
+/// The largest absolute value of every tensor (0 is the input) of a run of `net` on `input`.
+pub fn peaks(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> {
+    Ok(run_tensors(net, tile, input)?.iter().map(|t| t.data.iter().fold(0f32, |m, v| m.max(v.abs()))).collect())
+}
+
+/// Every tensor of a run: the input, then what each layer made.
+fn run_tensors(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<T>, NetError> {
     if !net.fits_tile(tile) || input.len() != net.in_channels * tile * tile {
         return Err(NetError::Invalid("the tile does not fit the network".into()));
     }
@@ -140,7 +150,7 @@ pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> 
         };
         tensors.push(out);
     }
-    tensors.pop().map(|t| t.data).ok_or_else(|| NetError::Invalid("no layers".into()))
+    Ok(tensors)
 }
 
 fn leaky(v: f32, alpha: Option<f32>) -> f32 {

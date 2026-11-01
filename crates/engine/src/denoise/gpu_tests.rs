@@ -38,6 +38,7 @@ fn worst(want: &[f32], got: &[f32]) -> f32 {
     want.iter().zip(got).fold(0f32, |m, (a, b)| m.max((a - b).abs())) / scale
 }
 
+/// Test: a tile on the card is the cpus tile.
 #[test]
 fn a_tile_on_the_card_is_the_cpus_tile() {
     let (model, cpu, path) = model("same", 64);
@@ -94,6 +95,7 @@ fn with_remote(path: &Path, tile: u64, addr: &str, sha256: &str) -> Network {
     network(path, &manifest, Some(remote)).unwrap()
 }
 
+/// Test: a remote server shares the tiles and drops out when it cannot.
 #[test]
 fn a_remote_server_shares_the_tiles_and_drops_out_when_it_cannot() {
     let (_, cpu, path) = model("remote", 64);
@@ -133,6 +135,7 @@ fn a_remote_server_shares_the_tiles_and_drops_out_when_it_cannot() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Test: with the processor chosen everything runs on the cpu.
 #[test]
 fn with_the_processor_chosen_everything_runs_on_the_cpu() {
     let (model, cpu, path) = model("cpu", 64);
@@ -145,6 +148,7 @@ fn with_the_processor_chosen_everything_runs_on_the_cpu() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Test: the card is used where it is faster than the processor.
 #[test]
 fn the_card_is_used_where_it_is_faster_than_the_processor() {
     // measured: a tile alone on one CPU thread 1.4 s; an RTX 4090 Laptop 13 ms; a Radeon 610M 490 ms
@@ -168,6 +172,7 @@ impl TileRunner for Garbage {
     }
 }
 
+/// Test: a tile the card gets wrong is run on the processor and three stop the card.
 #[test]
 fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card() {
     let (_, cpu, path) = model("garbage", 64);
@@ -181,6 +186,10 @@ fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card() 
         last_threads: AtomicUsize::new(0),
         remote: None,
         local_card: AtomicBool::new(true),
+        local_ane: AtomicBool::new(false),
+        ane: OnceLock::new(),
+        sha256: OnceLock::new(),
+        ane_fallbacks: AtomicUsize::new(0),
     };
     let (input, _) = lightcraft_denoise::runtime::test_tile(64);
     let want = cpu.run(&input).unwrap();
@@ -198,6 +207,7 @@ fn a_tile_the_card_gets_wrong_is_run_on_the_processor_and_three_stop_the_card() 
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Test: a slow card is left out unless it is chosen.
 #[test]
 fn a_slow_card_is_left_out_unless_it_is_chosen() {
     let (_, cpu, path) = model("slow", 64);
@@ -211,6 +221,10 @@ fn a_slow_card_is_left_out_unless_it_is_chosen() {
         last_threads: AtomicUsize::new(0),
         remote: None,
         local_card: AtomicBool::new(true),
+        local_ane: AtomicBool::new(false),
+        ane: OnceLock::new(),
+        sha256: OnceLock::new(),
+        ane_fallbacks: AtomicUsize::new(0),
     };
     assert_eq!(model.runner(RunOn::Auto, 16).1, 16, "sixteen threads beat it");
     let device = model.device(RunOn::Auto);
@@ -223,6 +237,7 @@ fn a_slow_card_is_left_out_unless_it_is_chosen() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Test: a set up marker left behind keeps the card off.
 #[test]
 fn a_set_up_marker_left_behind_keeps_the_card_off() {
     let (model, _, path) = model("crashed", 64);
@@ -237,6 +252,7 @@ fn a_set_up_marker_left_behind_keeps_the_card_off() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Test: a set up runs beside the cpu and removes its marker.
 #[test]
 fn a_set_up_runs_beside_the_cpu_and_removes_its_marker() {
     let dir = folder("setup");
@@ -278,6 +294,7 @@ fn a_set_up_runs_beside_the_cpu_and_removes_its_marker() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Test: a set up that takes too long is given up on.
 #[test]
 fn a_set_up_that_takes_too_long_is_given_up_on() {
     let dir = folder("slowsetup");

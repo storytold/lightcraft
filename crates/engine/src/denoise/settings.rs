@@ -1,4 +1,4 @@
-use super::gpu::GPU_SETUP_MARKER;
+use super::gpu::{ANE_SETUP_MARKER, GPU_SETUP_MARKER};
 use super::model::RunOn;
 use super::{DenoiserManifest, Deserialize, Duration, Path, PathBuf, Serialize, Value};
 
@@ -131,5 +131,6 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
 pub(crate) fn forget_gpu_set_ups(dir: &Path) {
     for i in installed_models(dir) {
         let _ = std::fs::remove_file(i.onnx.with_file_name(GPU_SETUP_MARKER));
+        let _ = std::fs::remove_file(i.onnx.with_file_name(ANE_SETUP_MARKER));
     }
 }
