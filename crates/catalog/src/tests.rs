@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
+use serde_json::json;
 
 use super::*;
 
@@ -10,6 +11,26 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
     p.captured = Some(date.to_string());
     c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     id
+}
+
+#[cfg(test)]
+mod filter_deserialize_tests {
+    use super::*;
+
+    /// #2241: a filter key that is not one of `Filter`'s fields (a typo or a guessed name such as
+    /// `cameraModel` instead of `camera`) is rejected, not silently dropped: an agent or script that
+    /// filters by `cameraModel` must not be handed the whole library and told the filter worked.
+    #[test]
+    fn unknown_filter_key_is_rejected_not_ignored() {
+        let e = serde_json::from_value::<Filter>(json!({ "cameraModel": "X2" })).unwrap_err().to_string();
+        assert!(e.contains("cameraModel"), "the unknown key is named: {e}");
+
+        let e = serde_json::from_value::<Filter>(json!({ "foo": 1 })).unwrap_err().to_string();
+        assert!(e.contains("foo"), "the unknown key is named: {e}");
+
+        // the valid key is still accepted; `camera` is the field `cameraModel` was close to.
+        serde_json::from_value::<Filter>(json!({ "camera": "X2" })).unwrap();
+    }
 }
 
 #[test]
