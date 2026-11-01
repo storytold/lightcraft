@@ -181,6 +181,65 @@ fn filmstrip_wheel_scrolls_and_keeps_its_position() {
     assert!(cell.left() >= 0.0 && cell.right() <= 1200.0, "the new active photo is in view ({cell:?})");
 }
 
+/// Going to the same album/photo again is deliberate: it must scroll the photo back into view.
+#[test]
+fn show_in_album_scrolls_the_same_active_photo_back_into_view() {
+    for view in ["photoGrid", "detail"] {
+        let mut h = demo(view);
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().map(|id| id.0).collect();
+        let album = h.app.session.execute("album.create", &json!({"name": "All demo photos"})).unwrap()["id"].as_u64().unwrap();
+        h.app.session.execute("album.addPhotos", &json!({"id": album, "ids": ids})).unwrap();
+        h.app.run("library.source", json!({"kind": "album", "id": album})).unwrap();
+        let target = h.app.session.visible_cloned()[ids.len() / 2];
+        h.app.run("library.source", json!({"kind": "all"})).unwrap();
+        h.app.run("library.select", json!({"ids": [target.0], "active": target.0})).unwrap();
+        idle(&mut h, 30);
+
+        let navigate = || json!({"command": "app.showInAlbum", "params": {"album": album}});
+        let r = h.request("engine.execute", navigate(), T);
+        assert_eq!(r["ok"], true, "{view}: {r}");
+        idle(&mut h, 60);
+        assert_eq!(h.app.session.active(), Some(target));
+
+        if view == "photoGrid" {
+            let canvas = h.app.canvas_rect.expect("grid canvas");
+            h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+            for _ in 0..5 {
+                h.request("ui.scroll", json!({"dy": -300.0}), T);
+            }
+            idle(&mut h, 60);
+            let before = grid_y(&h);
+            assert!(before > 600.0, "grid was scrolled away from the target: {before}");
+
+            let r = h.request("engine.execute", navigate(), T);
+            assert_eq!(r["ok"], true, "{view}: {r}");
+            idle(&mut h, 60);
+            let after = grid_y(&h);
+            assert!(after < before, "repeated navigation should return to the active photo: {before} → {after}");
+            assert!(widget(&h, &format!("thumb:{}", target.0)).intersects(h.app.canvas_rect.unwrap()));
+        } else {
+            let strip = widget(&h, &format!("film:{}", target.0));
+            h.request("ui.move", json!({"x": 600.0, "y": strip.center().y}), T);
+            for _ in 0..12 {
+                h.request("ui.scroll", json!({"dy": -300.0}), T);
+            }
+            idle(&mut h, 60);
+            let before = film_x(&h);
+            assert!(before > 600.0, "filmstrip was scrolled away from the target: {before}");
+            let target_widget = format!("film:{}", target.0);
+            assert!(h.app.widgets.iter().all(|(id, _)| id != &target_widget), "the distant target should be outside the virtualized filmstrip");
+
+            let r = h.request("engine.execute", navigate(), T);
+            assert_eq!(r["ok"], true, "{view}: {r}");
+            idle(&mut h, 60);
+            let after = film_x(&h);
+            assert!(after < before, "repeated navigation should return to the active photo: {before} → {after}");
+            let cell = widget(&h, &format!("film:{}", target.0));
+            assert!(cell.left() >= 0.0 && cell.right() <= 1200.0, "the active photo is visible: {cell:?}");
+        }
+    }
+}
+
 #[test]
 fn filmstrip_shows_every_selected_photo() {
     let mut h = demo("detail");

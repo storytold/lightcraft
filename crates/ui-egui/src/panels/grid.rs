@@ -393,11 +393,12 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let active = app.session.selection.active;
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
     // comes back on screen; otherwise the scroll position is the user's
-    let scroll_to: Option<Rect> = if follow_active(ui.ctx(), egui::Id::unique("grid-follow-active"), active, app.session.source) {
-        active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied())
-    } else {
-        None
-    };
+    let scroll_to: Option<Rect> =
+        if follow_active(ui.ctx(), egui::Id::unique("grid-follow-active"), active, app.session.source, app.follow_active_generation) {
+            active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied())
+        } else {
+            None
+        };
     let mut visible_ids = HashSet::new();
     let mut visited = 0u64;
     // a wheel notch scrolls a third of the grid's height
@@ -466,14 +467,26 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// the strip was not drawn on the previous pass (view switch, panel shown again). Otherwise the
 /// scroll position is the user's: time passing, finished renders, edits to the photo or a released
 /// scroll bar never move it (issue #11).
-pub(crate) fn follow_active(ctx: &egui::Context, key: egui::Id, active: Option<PhotoId>, source: lightcraft_engine::LibrarySource) -> bool {
+pub(crate) fn follow_active(
+    ctx: &egui::Context,
+    key: egui::Id,
+    active: Option<PhotoId>,
+    source: lightcraft_engine::LibrarySource,
+    generation: u64,
+) -> bool {
     let pass = ctx.cumulative_pass_nr();
-    let last: Option<(Option<PhotoId>, lightcraft_engine::LibrarySource, u64)> = ctx.data(|d| d.get_temp(key));
-    ctx.data_mut(|d| d.insert_temp(key, (active, source, pass)));
+    let last: Option<(Option<PhotoId>, lightcraft_engine::LibrarySource, u64, u64)> = ctx.data(|d| d.get_temp(key));
+    ctx.data_mut(|d| d.insert_temp(key, (active, source, pass, generation)));
     match last {
-        Some((was, where_, drawn)) => follow_changed(was, where_, drawn, active, source, pass),
+        Some((was, where_, drawn, previous_generation)) => {
+            previous_generation != generation || follow_changed(was, where_, drawn, active, source, pass)
+        }
         None => true,
     }
+}
+
+pub(crate) fn follow_active_again(generation: &mut u64) {
+    *generation = generation.wrapping_add(1);
 }
 
 /// Scroll when the active photo changes, the strip was not drawn last pass, or the same photo
@@ -1278,6 +1291,7 @@ pub fn toggle_stack(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
 
 pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     context_menu_open_and_edit(app, ui, id);
+    let _ = context_menu_show_in_album(app, ui, id);
     context_menu_rate(app, ui);
     context_menu_albums(app, ui, id);
     context_menu_file_actions(app, ui);
@@ -1338,6 +1352,29 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
         app.toast(ui.ctx(), e);
     }
     ui.separator();
+}
+
+fn context_menu_show_in_album(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) -> egui::Response {
+    let albums = crate::menus::albums_for_photo(app, id);
+    let parent = ui.add_enabled_ui(!albums.is_empty(), |ui| {
+        crate::widgets::menu_button(ui, crate::i18n::tr("Show in Album"), |ui| {
+            if albums.is_empty() {
+                ui.add_enabled(false, egui::Button::new(crate::i18n::tr("No containing albums")));
+            } else {
+                for (album, label) in albums {
+                    let row = ui.button(&label);
+                    register(ui, format!("contextShowInAlbum:{}", album.0), row.rect);
+                    if row.clicked()
+                        && let Err(error) = app.run("app.showInAlbum", json!({"album": album.0, "id": id.0}))
+                    {
+                        app.toast(ui.ctx(), error);
+                    }
+                }
+            }
+        })
+    });
+    register(ui, "button:contextShowInAlbum", parent.inner.response.rect);
+    parent.inner.response
 }
 
 fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -1569,6 +1606,66 @@ mod tests {
         let album = lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(9));
         assert!(!follow_changed(Some(id), all, 4, Some(id), all, 5));
         assert!(follow_changed(Some(id), all, 4, Some(id), album, 5));
+    }
+
+    #[test]
+    fn show_in_album_repeats_the_scroll_for_the_same_active_photo() {
+        let ctx = egui::Context::default();
+        let photo = PhotoId(3);
+        let all = lightcraft_engine::LibrarySource::All;
+        let grid = egui::Id::unique("grid-follow-active");
+        let filmstrip = egui::Id::unique("film-follow-active");
+        let mut generation = 0;
+        assert!(follow_active(&ctx, grid, Some(photo), all, generation));
+        assert!(follow_active(&ctx, filmstrip, Some(photo), all, generation));
+        assert!(!follow_active(&ctx, grid, Some(photo), all, generation));
+        assert!(!follow_active(&ctx, filmstrip, Some(photo), all, generation));
+
+        follow_active_again(&mut generation);
+
+        assert!(follow_active(&ctx, grid, Some(photo), all, generation));
+        assert!(follow_active(&ctx, filmstrip, Some(photo), all, generation));
+    }
+
+    #[test]
+    fn show_in_album_scroll_reset_is_shared_across_ui_contexts() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let photo = app.session.active().expect("demo has an active photo");
+        let album = app.session.execute("album.create", &serde_json::json!({"name": "Follow", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+        let command_ctx = egui::Context::default();
+        app.tasks.repaint = Some(command_ctx.clone());
+        app.run("app.showInAlbum", serde_json::json!({"album": album, "id": photo.0})).unwrap();
+
+        let grid_ctx = egui::Context::default();
+        let filmstrip_ctx = egui::Context::default();
+        let grid = egui::Id::unique("grid-follow-active");
+        let filmstrip = egui::Id::unique("film-follow-active");
+        let source = app.session.source;
+        let active = app.session.active();
+        let generation = app.follow_active_generation;
+        assert!(follow_active(&grid_ctx, grid, active, source, generation));
+        assert!(follow_active(&filmstrip_ctx, filmstrip, active, source, generation));
+        assert!(!follow_active(&grid_ctx, grid, active, source, generation));
+        assert!(!follow_active(&filmstrip_ctx, filmstrip, active, source, generation));
+
+        // The command runs with its own context; both UI contexts observe the app-owned reset.
+        app.run("app.showInAlbum", serde_json::json!({"album": album, "id": photo.0})).unwrap();
+        let generation = app.follow_active_generation;
+
+        assert!(follow_active(&grid_ctx, grid, app.session.active(), app.session.source, generation), "the grid must see the reset");
+        assert!(follow_active(&filmstrip_ctx, filmstrip, app.session.active(), app.session.source, generation), "the filmstrip must see the reset");
+    }
+
+    #[test]
+    fn show_in_album_context_parent_is_disabled_without_containing_albums() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let mut response = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            response = Some(context_menu_show_in_album(&mut app, ui, PhotoId(1)));
+        });
+        out.textures_delta.clear();
+        assert!(response.is_some_and(|response| !response.enabled()));
     }
 
     #[test]

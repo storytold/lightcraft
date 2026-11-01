@@ -12,7 +12,8 @@ mod files;
 mod run;
 mod ui_commands;
 
-pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_enabled};
+pub(crate) use files::albums_for_photo;
+pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_album_enabled, show_in_folders_enabled};
 pub use run::{parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
 
@@ -63,6 +64,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
                     .is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. }))
         }
         "app.showInFolders" => show_in_folders_enabled(app, None),
+        "app.showInAlbum" => show_in_album_enabled(app, None),
         "app.openSamModelFolder" => app.session.segmenter.dir.is_some() && app.services.open_with.is_some(),
         "file.exportPresets" => app.session.presets.iter().any(|p| !p.builtin),
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
