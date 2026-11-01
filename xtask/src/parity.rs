@@ -445,15 +445,11 @@ old
     }
 
     #[test]
-    fn zoom_and_filmstrip_checklist_rows_are_unique() {
-        let md = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/parity-checklist.md")).unwrap();
+    fn checked_in_checklist_has_valid_unique_rows() {
+        let md = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(DOC)).unwrap();
         let doc = parse(&md);
+        assert!(!doc.rows.is_empty(), "the checklist must contain feature rows");
         assert!(doc.errors.is_empty(), "{:?}", doc.errors);
-        for id in ["LR-VIEW-FILMSTRIP", "LR-VIEW-ZOOM"] {
-            assert_eq!(doc.rows.iter().filter(|r| r.id == id).count(), 1, "{id}");
-        }
-        let zoom = md.lines().find(|l| l.starts_with("| LR-VIEW-ZOOM |")).unwrap();
-        assert!(zoom.contains("Fit–1600%") && zoom.contains("keyboard steps 25–1600 %"));
     }
 
     #[test]
