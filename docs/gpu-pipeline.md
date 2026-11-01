@@ -285,6 +285,11 @@ LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG="$log" cargo test -p lightcr
 grep '"need":"gpu"' "$log" | grep -v -e 'lost on purpose' -e 'memory never ran out'   # no output: only the two below skipped
 ```
 
+`cargo xtask ci` does this by itself when the probe finds only a software adapter (step
+`gpu-software`, #3516; under `--quick` when `lightcraft-gpu` changed), so the CI gate runs the
+equivalence tests on lavapipe, and fails if a GPU test still skips other than those listed in
+`SOFTWARE_ADAPTER_SKIPS` (`xtask/src/ci_report.rs`), by name, with why they can't run there.
+
 - **Linux:** Mesa's lavapipe (Vulkan; `mesa-vulkan-drivers` on Debian and Ubuntu). Its storage
   bindings stop at 128 MiB (the WebGPU default), so the two big-source tests use a 117 MiB source:
   above what a view keeps with its stages (96 MiB) and small enough to be uploaded there.

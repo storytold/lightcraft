@@ -170,6 +170,55 @@ pub fn hardware_backends(gpu: &Value) -> Vec<(String, String)> {
     out
 }
 
+/// The variable that lets `lightcraft-gpu` accept a software adapter (tests only, `crates/gpu/src/ctx.rs`).
+pub const ALLOW_SOFTWARE_ENV: &str = "LIGHTCRAFT_GPU_ALLOW_SOFTWARE";
+
+/// The software adapter the `gpu-software` step runs the GPU tests on: the first `Cpu` adapter
+/// (backend, name) when no backend lists a hardware one. `None` when there is a hardware adapter
+/// (its GPU tests already run), no adapter at all, or the probe failed (the report says why). A
+/// backend whose own probe failed counts as having no adapter.
+pub fn software_only(gpu: &Value) -> Option<(String, String)> {
+    if gpu.get("error").is_some() || !hardware_backends(gpu).is_empty() {
+        return None;
+    }
+    gpu["backends"].as_array().into_iter().flatten().find_map(|b| {
+        let backend = b["backend"].as_str()?;
+        let a = b["adapters"].as_array()?.iter().find(|a| a["type"] == "Cpu")?;
+        Some((backend.to_owned(), a["name"].as_str().unwrap_or("?").to_owned()))
+    })
+}
+
+/// The GPU tests that skip on a software adapter even with the opt-in, by their skip-log `test`
+/// name (`lightcraft_testkit::skip!` records the test's thread name), and why. Every other GPU
+/// skip fails the `gpu-software` step: a test that can't run on lavapipe or WARP goes here, with
+/// its reason, rather than turning the check off.
+pub const SOFTWARE_ADAPTER_SKIPS: &[(&str, &str)] = &[
+    // crates/gpu/src/ctx.rs
+    ("ctx::tests::a_really_lost_device_is_not_polled_again", "only a Metal device can be lost on purpose"),
+    ("ctx::tests::running_out_of_device_memory_falls_back_without_stopping_the_gpu", "lavapipe's allocations never run out"),
+];
+
+/// The GPU skips in the `gpu-software` step's skip log (`text`, one JSON object per line) other
+/// than [`SOFTWARE_ADAPTER_SKIPS`], as `test: reason`. Any is a failure: the test did not get the
+/// adapter, so it checked nothing. A line that isn't JSON but mentions the GPU need counts.
+pub fn unexpected_gpu_skips(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<Value>(line) {
+            Ok(v) if v["need"] == "gpu" => {
+                let test = v["test"].as_str().unwrap_or("?");
+                if !SOFTWARE_ADAPTER_SKIPS.iter().any(|(t, _)| *t == test) {
+                    out.push(format!("{test}: {}", v["reason"].as_str().unwrap_or("")));
+                }
+            }
+            Ok(_) => {}
+            Err(_) if line.replace(' ', "").contains(r#""need":"gpu""#) => out.push(line.to_owned()),
+            Err(_) => {}
+        }
+    }
+    out
+}
+
 /// One test that skipped, possibly in several steps.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Skip {
@@ -359,6 +408,12 @@ fn adapters_lines(report: &Value) -> Vec<String> {
     out
 }
 
+/// "GPU tests on the software adapter …", when the `gpu-software` step ran them.
+fn software_name(report: &Value) -> Option<String> {
+    let sw = report.get("software").filter(|v| v.is_object())?;
+    Some(format!("GPU tests on the software adapter {} ({})", sw["adapter"].as_str().unwrap_or("?"), sw["backend"].as_str().unwrap_or("?")))
+}
+
 fn machine_line(report: &Value) -> String {
     let m = &report["machine"];
     let mut s = format!("{} {}", m["os"].as_str().unwrap_or("?"), m["arch"].as_str().unwrap_or("?"));
@@ -418,6 +473,14 @@ pub fn summary_text(report: &Value) -> String {
             h["status"].as_str().unwrap_or("?")
         );
     }
+    if let Some(name) = software_name(report) {
+        let sw = &report["software"];
+        let time = sw["seconds"].as_f64().map(seconds).unwrap_or_default();
+        let _ = writeln!(s, "{name}: {} ({time})", sw["status"].as_str().unwrap_or("?"));
+        for skip in sw["unexpected_skips"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let _ = writeln!(s, "  still skipped: {skip}");
+        }
+    }
     let skips = skips_from(report);
     if skips.is_empty() {
         let _ = writeln!(s, "Skipped tests: {}", no_skips(report));
@@ -473,6 +536,11 @@ pub fn summary_md(report: &Value) -> String {
         let time = h["seconds"].as_f64().map(seconds).unwrap_or_default();
         let name = format!("GPU tests on {} ({})", h["backend"].as_str().unwrap_or("?"), h["adapter"].as_str().unwrap_or("?"));
         let _ = writeln!(s, "| {} | {} | {time} |", cell(&name), h["status"].as_str().unwrap_or("?"));
+    }
+    if let Some(name) = software_name(report) {
+        let sw = &report["software"];
+        let time = sw["seconds"].as_f64().map(seconds).unwrap_or_default();
+        let _ = writeln!(s, "| {} | {} | {time} |", cell(&name), sw["status"].as_str().unwrap_or("?"));
     }
     let skips = skips_from(report);
     if skips.is_empty() {
@@ -613,6 +681,81 @@ mod tests {
         assert!(md.contains("| test | ok | 2m 05s |"), "{md}");
         assert!(md.contains("| gpu | 1 | no GPU \\| adapter | `memory::memory` |"), "{md}");
         assert!(md.contains("1 tests skipped (gpu 1)"), "{md}");
+    }
+
+    #[test]
+    fn the_software_run_needs_a_software_adapter_and_no_hardware_one() {
+        let llvmpipe = json!({"name": "llvmpipe (LLVM 20.1.2, 256 bits)", "type": "Cpu"});
+        let warp = json!({"name": "Microsoft Basic Render Driver", "type": "Cpu"});
+        let intel = json!({"name": "Intel(R) UHD Graphics 620", "type": "IntegratedGpu"});
+        let gpu = |backends: Value| json!({"pipeline": {"available": false}, "backends": backends});
+
+        let only_cpu = gpu(json!([{"backend": "vulkan", "adapters": [llvmpipe]}]));
+        assert_eq!(software_only(&only_cpu), Some(("vulkan".to_owned(), "llvmpipe (LLVM 20.1.2, 256 bits)".to_owned())));
+        let failed_then_cpu = gpu(json!([{"backend": "vulkan", "adapters": [], "error": "crashed"}, {"backend": "dx12", "adapters": [warp]}]));
+        assert_eq!(software_only(&failed_then_cpu), Some(("dx12".to_owned(), "Microsoft Basic Render Driver".to_owned())));
+
+        let hardware_too = gpu(json!([{"backend": "vulkan", "adapters": [llvmpipe]}, {"backend": "dx12", "adapters": [warp, intel]}]));
+        assert_eq!(software_only(&hardware_too), None, "a hardware adapter's GPU tests already run");
+        assert_eq!(software_only(&gpu(json!([{"backend": "vulkan", "adapters": []}]))), None, "no adapter");
+        assert_eq!(software_only(&gpu(json!([]))), None);
+        assert_eq!(software_only(&json!({"error": "gpu_probe exited with 101"})), None, "a failed probe never fails the run");
+        assert_eq!(software_only(&Value::Null), None, "not probed");
+    }
+
+    #[test]
+    fn only_the_listed_tests_may_skip_on_the_software_adapter() {
+        let line =
+            |need: &str, test: &str, reason: &str| json!({"need": need, "reason": reason, "test": test, "binary": "lightcraft_gpu"}).to_string();
+        let lost = line("gpu", "ctx::tests::a_really_lost_device_is_not_polled_again", "no GPU device, or one that can't be lost on purpose here");
+        let memory =
+            line("gpu", "ctx::tests::running_out_of_device_memory_falls_back_without_stopping_the_gpu", "no GPU device, or its memory never ran out");
+        let corpus = line("corpus", "corpus::decodes", "no corpus");
+        assert!(unexpected_gpu_skips("").is_empty(), "no log: nothing skipped");
+        assert!(unexpected_gpu_skips(&format!("{lost}\n{memory}\n{corpus}\n\n")).is_empty());
+
+        let missed = line("gpu", "equivalence::camera_tone", "no GPU adapter");
+        assert_eq!(unexpected_gpu_skips(&format!("{lost}\n{missed}\n")), ["equivalence::camera_tone: no GPU adapter"]);
+        // the name decides, not the reason: a new test can't slip through with a familiar reason
+        let reused = line("gpu", "ctx::tests::a_new_test", "no GPU device, or one that can't be lost on purpose here");
+        assert_eq!(unexpected_gpu_skips(&reused).len(), 1);
+        let torn = r#"{"need": "gpu", "reason": "no GPU dev"#;
+        assert_eq!(unexpected_gpu_skips(torn), [torn], "a line cut short still counts");
+        assert!(unexpected_gpu_skips("not json").is_empty());
+    }
+
+    /// Each listed test still exists and still skips for want of a GPU, so a renamed or removed
+    /// test doesn't leave a stale entry behind.
+    #[test]
+    fn the_software_adapter_skips_name_real_gpu_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask is in the workspace");
+        let ctx = std::fs::read_to_string(root.join("crates/gpu/src/ctx.rs")).unwrap();
+        for (test, why) in SOFTWARE_ADAPTER_SKIPS {
+            assert!(!why.is_empty(), "{test}: say why");
+            let name = test.strip_prefix("ctx::tests::").expect("a test of crates/gpu/src/ctx.rs");
+            let body = ctx.split(&format!("fn {name}()")).nth(1).unwrap_or_else(|| panic!("{test} is gone from ctx.rs"));
+            let body = body.split("\n    }\n").next().unwrap_or_default();
+            assert!(body.contains("skip!(Gpu"), "{test} no longer skips for a GPU");
+        }
+    }
+
+    #[test]
+    fn the_software_run_is_reported() {
+        let mut report = json!({
+            "command": "cargo xtask ci",
+            "result": "fail",
+            "steps": [{"name": "gpu-software", "status": "fail", "seconds": 52.5}],
+            "software": {"backend": "vulkan", "adapter": "llvmpipe", "status": "fail", "seconds": 51.0, "unexpected_skips": ["memory: no GPU adapter"]},
+            "skips": [],
+        });
+        let text = summary_text(&report);
+        assert!(text.contains("GPU tests on the software adapter llvmpipe (vulkan): fail (51.0 s)"), "{text}");
+        assert!(text.contains("  still skipped: memory: no GPU adapter"), "{text}");
+        let md = summary_md(&report);
+        assert!(md.contains("| GPU tests on the software adapter llvmpipe (vulkan) | fail | 51.0 s |"), "{md}");
+        report["software"] = Value::Null;
+        assert!(!summary_text(&report).contains("software adapter"), "nothing when it did not run");
+        assert!(!summary_md(&report).contains("software adapter"));
     }
 
     #[test]
