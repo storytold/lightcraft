@@ -80,7 +80,12 @@ fn main() {
     }
     let mut o = ExportOptions { hdr, quality: 90, ..ExportOptions::default() };
     if let Some(edge) = value("--long-edge") {
-        o.resize = Some(lightcraft_engine::export::Resize::long_edge(edge as u32));
+        // (a value past u32 is refused, not cut to another size: review of PR #3565)
+        let Ok(edge) = u32::try_from(edge) else {
+            eprintln!("--long-edge {edge}: too large");
+            std::process::exit(2);
+        };
+        o.resize = Some(lightcraft_engine::export::Resize::long_edge(edge));
     }
     o.limit_kb = value("--limit-kb").map(|kb| kb as u32);
     let lanes = lightcraft_engine::export::export_parallelism(ids.len());

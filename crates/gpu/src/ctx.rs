@@ -340,7 +340,7 @@ static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
 static LOST_DEVICES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 /// Device `generation` is lost (see [`LOST_DEVICES`]).
-fn mark_lost(generation: u64) {
+pub(crate) fn mark_lost(generation: u64) {
     let mut lost = LOST_DEVICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lost.contains(&generation) {
         lost.push(generation);
@@ -348,7 +348,7 @@ fn mark_lost(generation: u64) {
 }
 
 /// Whether device `generation` is lost (0, an unknown device: never).
-fn is_lost(generation: u64) -> bool {
+pub(crate) fn is_lost(generation: u64) -> bool {
     generation != 0 && LOST_DEVICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&generation)
 }
 /// Bytes in the free pool.
@@ -1324,6 +1324,34 @@ mod tests {
             assert!(super::is_lost(g.generation), "the loss is recorded");
             assert!(!crate::gate::throttle(&g, submitted()), "a lost device is not polled again");
         });
+        println!("CHILD: survived");
+    }
+
+    /// Review of PR #3565: a device lost before it is put in place (its loss callback ran while
+    /// it was being made) isn't used: the loss is recorded and renders go to the CPU.
+    #[test]
+    fn a_device_lost_while_it_is_made_is_not_used() {
+        if run_child("lost_while_made_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_device_lost_while_it_is_made_is_not_used"]
+    fn lost_while_made_child() {
+        static NO_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn made_lost() -> Result<super::Gpu, String> {
+            let g = crate::new_device().inspect_err(|_| NO_GPU.store(true, std::sync::atomic::Ordering::Relaxed))?;
+            super::mark_lost(g.generation);
+            Ok(g)
+        }
+        let got = crate::slot::get(made_lost);
+        if NO_GPU.load(std::sync::atomic::Ordering::Relaxed) {
+            println!("CHILD: no GPU");
+            return;
+        }
+        assert!(got.is_none(), "the lost device is not handed out");
+        assert!(crate::slot::lost_reason().is_some(), "its loss is recorded");
         println!("CHILD: survived");
     }
 
