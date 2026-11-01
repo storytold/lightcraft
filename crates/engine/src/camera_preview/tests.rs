@@ -1,5 +1,7 @@
+use super::pairs::{EDGE_CONTRAST, MAX_MIDTONE_LOSS, Pair};
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
+use lightcraft_color::SRGB;
 
 fn steep_toe_scene() -> (Rgb32f, Rgb32f) {
     let mut sensor = Rgb32f::new(96, 64);
@@ -100,7 +102,7 @@ fn colour_holdouts_stay_out_of_the_wider_tone_training() {
     let (sensor, reference) = steep_toe_scene();
     let fit = |reference: &Rgb32f| {
         let (pairs, _) = collect_pairs(&sensor, reference, 0.005, None, false).unwrap();
-        fit_tone_with_shadows(ToneFit::Quantile, &pairs, &sensor, reference, None, |x| x).unwrap()
+        fit_tone_with_shadows(ToneFit::Quantile, &pairs, &[], &sensor, reference, None, |x| x).unwrap()
     };
     let expected = fit(&reference);
     let mut changed = reference.clone();
@@ -179,7 +181,7 @@ fn camera_toe_requires_lower_independent_dark_error() {
             held.iter().map(|(x, y)| (f64::from(tone.apply(luma(*x) as f32)).powf(1.0 / 2.2) - luma(*y).powf(1.0 / 2.2)).powi(2)).sum::<f64>()
         };
         assert_ne!(candidate, original);
-        let selected = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &sensor, &reference, None, |x| x).unwrap();
+        let selected = fit_tone_with_shadows(ToneFit::Quantile, &pairs, &[], &sensor, &reference, None, |x| x).unwrap();
         if holdout_matches_original {
             assert!(error(&candidate) > error(&original) + 0.1);
             assert_eq!(selected, original, "a correlated but misleading training set must keep the original curve");
@@ -729,7 +731,7 @@ fn corpus_lens_corrected_jpegs_pair_with_the_warped_sensor() {
         }
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let (Some((plain, reference, _)), Some((chosen, chosen_reference, _))) =
+        let (Some((plain, reference, _, _)), Some((chosen, chosen_reference, _, _))) =
             (proxies(&raw, &bytes, &t, PROXY, 0.0, None, None), proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&lens), None))
         else {
             continue;
@@ -1417,7 +1419,7 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
         let look = fit_preview(&raw, &bytes, &transform, None, None).0.expect("a camera look");
         // the look fitted to the JPEG, as before this change
-        let (sensor, reference, clipped) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None, None).unwrap();
+        let (sensor, reference, clipped, _) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None, None).unwrap();
         let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
         let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
@@ -1706,7 +1708,7 @@ fn clipped_fit_falls_back_to_all_pixels() {
     let none = fit_look(&sensor, &reference, &vec![false; sensor.data.len()], None).unwrap();
     assert_eq!((none.matrix.0, none.tone), (all.matrix.0, all.tone));
     // without clipped pixels the refit keeps the accepted attempt (here: all pixels, own colour, quantile tone)
-    let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+    let check = HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false, grey: false };
     let (_, attempt) = search_ordered(&sensor, &reference, None, TONE_FITS, &check).unwrap();
     assert_eq!(attempt, Attempt { tone: ToneFit::Quantile, profile: false, away_from_edges: false, dark: false });
     assert!(without_clipped(&sensor, &[true; 3]).is_none(), "a mask of another size is ignored");
@@ -1922,6 +1924,173 @@ fn partial_look_brightens_a_dull_scene_without_learning_colour() {
     assert!(lightness(&neutral) < target * 0.6, "the neutral fallback is far darker");
 }
 
+/// Issue #631's bird: a frame that is mostly bright overcast sky (here 90%, camera JPEG about
+/// 0.93, above the fits' 0.85 cut) and dark, nearly colourless branches that the camera renders
+/// like the neutral fallback. On the midtones alone no look is clearly better than the fallback;
+/// with the bright, unclipped pairs the partial look takes the sky from the camera.
+#[test]
+fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
+    let (w, h) = (96usize, 64usize);
+    let neutral = ToneMap::new(0.0, 0.0, 0.0);
+    let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+    for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        if i % 10 != 0 {
+            // the sky: unclipped, varied, near white in the camera JPEG
+            let k = (i * 7919 % 5521) as f32 / 5521.0;
+            *s = [0.40 + 0.10 * k; 3];
+            *r = [0.91 + 0.04 * k; 3];
+        } else {
+            // the branches: dark, a few tinted, as the fallback renders them
+            let ev = 0.02 + (i % 37) as f32 * 0.0011;
+            let tint = if i % 30 == 0 { 1.3 } else { 1.0 };
+            *s = [ev * tint, ev, ev * (2.0 - tint)];
+            *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
+        }
+    }
+    let none = vec![false; w * h];
+    let check = HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false, grey: false };
+    let midtones_only = [None, Some(EDGE_CONTRAST)].into_iter().find_map(|e| fit_partial_on(&sensor, &reference, e, &check, false));
+    assert!(midtones_only.is_none(), "on the midtones alone the look is no clear gain");
+    let look = fit_look(&sensor, &reference, &none, None).expect("a partial look from the bright pairs");
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let sky = luma(displayed(look.matrix.apply([0.42; 3]), &tone));
+    let fallback = luma(displayed([0.42; 3], &neutral));
+    assert!((sky - 0.92).abs() < 0.04, "the sky as the camera renders it: {sky} (fallback {fallback})");
+    assert!(fallback < 0.85, "the fallback is visibly darker: {fallback}");
+}
+
+/// Codex review of #631's bird: the second attempt (with bright pairs) must not buy its sky with
+/// the midtones (here darker branches the fallback already renders right, and a dimmer sky), must
+/// not darken a clipped sky its bright pairs leave out, and must not take a JPEG pixel clipped in
+/// its own encoding for tone evidence.
+#[test]
+fn the_bright_pairs_attempt_keeps_midtones_clipped_sky_and_clipping() {
+    let (w, h) = (96usize, 64usize);
+    let neutral = ToneMap::new(0.0, 0.0, 0.0);
+    let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
+    // (sky sensor range, share of the sky that is clipped)
+    for (case, sky_lo, sky_hi, clipped_share) in [
+        ("dim sky", 0.10, 0.20, 0usize),
+        ("half the sky clipped", 0.40, 0.50, 2),
+        ("clipped sky below brighter unclipped sky", 1.20, 1.40, 2),
+        ("a small clipped region", 1.20, 1.40, 9),
+    ] {
+        let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+        let mut clipped = vec![false; w * h];
+        for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            if i % 10 != 0 {
+                let k = (i * 7919 % 5521) as f32 / 5521.0;
+                if clipped_share > 0 && i % clipped_share == 0 {
+                    *s = [1.0; 3];
+                    clipped[i] = true;
+                    *r = [0.93; 3];
+                } else {
+                    *s = [sky_lo + (sky_hi - sky_lo) * k; 3];
+                    *r = [0.91 + 0.04 * k; 3];
+                }
+            } else {
+                let ev = 0.02 + (i % 37) as f32 * 0.0017;
+                let tint = if i % 30 == 0 { 1.3 } else { 1.0 };
+                *s = [ev * tint, ev, ev * (2.0 - tint)];
+                *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
+            }
+        }
+        let look = fit_look(&sensor, &reference, &clipped, None);
+        assert!(look.is_none(), "{case}: the guards must reject the fit and keep the fallback");
+        let render = |x: [f64; 3]| match &look {
+            Some(look) => displayed(look.matrix.apply(x), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)),
+            None => displayed(x, &neutral),
+        };
+        // midtones: no further from the camera than the fallback, beyond the allowance
+        let (mut fallback, mut kept, mut n) = (0.0, 0.0, 0.0);
+        for (x, y) in sensor.data.iter().zip(&reference.data).step_by(10) {
+            let (x, y) = (x.map(f64::from), y.map(f64::from));
+            for c in 0..3 {
+                fallback += (encoded(displayed(x, &neutral)[c]) - encoded(y[c])).powi(2);
+                kept += (encoded(render(x)[c]) - encoded(y[c])).powi(2);
+                n += 1.0;
+            }
+        }
+        assert!((kept / n).sqrt() <= (fallback / n).sqrt() + MAX_MIDTONE_LOSS + 0.005, "{case}: midtones paid for the sky");
+        // a clipped sky no darker than the fallback renders it
+        let sky = luma(render([1.0; 3]));
+        assert!(sky >= luma(displayed([1.0; 3], &neutral)) - 0.01, "{case}: clipped sky darkened to {sky}");
+    }
+    // clipped in the JPEG's sRGB, though no Rec.2020 channel reaches 0.98
+    let to_2020 = REC2020.from_xyz().mul(&SRGB.to_xyz());
+    let red_clipped = to_2020.apply([1.0, 0.9, 0.8]);
+    assert!(red_clipped.iter().all(|v| *v < 0.98) && jpeg_clipped(red_clipped, None), "{red_clipped:?}");
+    assert!(!jpeg_clipped(to_2020.apply([0.94, 0.93, 0.92]), None), "a bright, unclipped JPEG pixel");
+}
+
+/// The camera toe (#1307) in the bright pairs' attempt: a frame that is mostly bright sky, with
+/// branches from deep shadow to the midtones that the camera renders through a steep toe. The
+/// bright pairs give the curve its sky and the dark pairs its toe, in the same curve; without
+/// the dark pairs it runs in a straight line to black and lifts them.
+#[test]
+fn the_bright_pairs_attempt_follows_the_camera_toe() {
+    let (w, h) = (96usize, 64usize);
+    let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+    let mut dark = Vec::new();
+    for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        if i % 10 != 0 {
+            let k = (i * 7919 % 5521) as f32 / 5521.0;
+            *s = [0.40 + 0.10 * k; 3];
+            *r = [0.91 + 0.04 * k; 3];
+        } else {
+            // scene luminance 0.004 to 0.1, half of it below the colour pairs' JPEG floor of 0.015
+            let y = 0.004 * 25f32.powf((i * 7919 % 4093) as f32 / 4093.0);
+            let rgb = [0.8 + (i % 11) as f32 * 0.04, 1.0, 0.8 + (i % 17) as f32 * 0.025];
+            *s = rgb.map(|v| v * y / luminance_2020(rgb));
+            let display = 3.0 * y * (y / (y + 0.02)).powi(2);
+            *r = s.map(|v| v * display / y);
+            if display < 0.015 {
+                dark.push(i);
+            }
+        }
+    }
+    assert!(dark.len() > 200);
+    let check = HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false, grey: false };
+    let mut without_dark = sensor.clone();
+    for &i in &dark {
+        without_dark.data[i] = [f32::NAN; 3];
+    }
+    let with_toe = fit_partial_on(&sensor, &reference, None, &check, true).expect("a partial look from the bright pairs");
+    let straight = fit_partial_on(&without_dark, &reference, None, &check, true).expect("the same look without the dark pairs");
+    let scene = |look: &CameraLook, x: [f32; 3]| look.tone.apply(luma(look.matrix.apply(x.map(f64::from))) as f32);
+    for look in [&with_toe, &straight] {
+        let sky = luma(displayed(look.matrix.apply([0.42; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
+        assert!((sky - 0.92).abs() < 0.04, "the sky as the camera renders it: {sky}");
+    }
+    let error = |look: &CameraLook| {
+        dark.iter().map(|&i| (scene(look, sensor.data[i]) - luminance_2020(reference.data[i])).abs()).sum::<f32>() / dark.len() as f32
+    };
+    let (toe, line) = (error(&with_toe), error(&straight));
+    assert!(toe < 0.001 && toe < line * 0.5, "deep-shadow luminance error {toe} with the dark pairs, {line} without");
+}
+
+/// The bright pairs' held-out third stays out of both curves' training in the camera toe's fit,
+/// as the colour pairs' does: it is the bright pairs' attempt's held-out check.
+#[test]
+fn bright_holdouts_stay_out_of_the_wider_tone_training() {
+    let (sensor, reference) = steep_toe_scene();
+    let (pairs, _) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
+    let sky: Vec<Pair> = (0..600)
+        .map(|i| {
+            let k = (i * 7919 % 601) as f64 / 601.0;
+            ([0.30 + 0.10 * k; 3], [0.91 + 0.04 * k; 3])
+        })
+        .collect();
+    let fit = |sky: &[Pair]| fit_tone_with_shadows(ToneFit::Quantile, &pairs, sky, &sensor, &reference, None, |x| x).unwrap();
+    let expected = fit(&sky);
+    assert_ne!(expected, fit(&[]), "the bright pairs train the curve");
+    let mut changed = sky.clone();
+    changed.iter_mut().step_by(3).for_each(|(_, y)| *y = y.map(|v| v * 0.95));
+    assert_eq!(fit(&changed), expected, "a held-out bright pair trained the curve");
+    changed.iter_mut().skip(1).step_by(3).for_each(|(_, y)| *y = y.map(|v| v * 0.95));
+    assert_ne!(fit(&changed), expected, "the training bright pairs train the curve");
+}
+
 /// When the neutral fallback already matches the camera JPEG, or the JPEG is unrelated or
 /// monochrome, the partial look isn't clearly better and the photo keeps the neutral fallback.
 #[test]
@@ -1937,7 +2106,7 @@ fn partial_look_only_when_clearly_better_than_the_neutral_fallback() {
     let neutral = ToneMap::new(0.0, 0.0, 0.0);
     let mut reference = sensor.clone();
     reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
-    let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+    let check = HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false, grey: false };
     assert!(fit_partial(&sensor, &reference, &check).is_none(), "no clear gain over the fallback");
     // an unrelated picture
     for (i, p) in reference.data.iter_mut().enumerate() {
@@ -2190,8 +2359,8 @@ fn the_vignetting_correction_is_applied_before_the_lens_warp() {
         let sensor = |x: usize, y: usize| texture(x as f64, y as f64) / if vignetted { gain(x, y) } else { 1.0 };
         let (raw, bytes) = grey_raw_with_jpeg((w, h), sensor, jpeg, [1.0; 3]);
         let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let (plain, _, _) = proxies(&raw, &bytes, &t, PROXY, 0.0, None, embedded).unwrap();
-        let (sensor, _, _) = proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&warp), embedded).unwrap();
+        let (plain, _, _, _) = proxies(&raw, &bytes, &t, PROXY, 0.0, None, embedded).unwrap();
+        let (sensor, _, _, _) = proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&warp), embedded).unwrap();
         assert!(sensor.data.iter().zip(&plain.data).any(|(a, b)| a != b), "the warped candidate is chosen");
         sensor
     };
@@ -2308,7 +2477,7 @@ fn dng_tone_fit_keeps_the_files_colour_and_follows_the_camera_tone() {
         }
     }
     let colour = Some((Mat3::IDENTITY, None));
-    let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+    let check = HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false, grey: false };
     let look =
         fit_attempt(&sensor, &reference, &colour, Attempt { tone: ToneFit::Quantile, profile: true, away_from_edges: false, dark: true }, &check)
             .expect("tone fitted");
@@ -2554,7 +2723,7 @@ fn a_narrow_curve_is_checked_as_lowered_for_dro() {
         *dst = p.map(|v| v * (0.6 + (y - 0.07) * 0.25) / y);
     }
     let neutral = luma(displayed([0.9; 3], &ToneMap::new(0.0, 0.0, 0.0)));
-    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, true) {
+    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, true, None) {
         let look = with_dro_off_tone(look);
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
         let correction = look.hue_sat.as_ref().and_then(HueSat::new);
@@ -2605,4 +2774,158 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         let sky = luma(displayed(look.matrix.apply([0.9; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
+}
+
+#[test]
+fn bright_pairs_use_the_effective_jpeg_colour_space() {
+    use super::pairs::bright_tone_pairs;
+    use lightcraft_codecs::NamedSpace;
+    let to_working = REC2020.from_xyz().mul(&lightcraft_color::ADOBE_RGB.to_xyz());
+    let valid_adobe = to_working.apply([0.93, 0.80, 0.96]);
+    assert!(luma(valid_adobe) >= 0.85);
+    let bright = [([0.4; 3], valid_adobe)];
+    assert_eq!(bright_tone_pairs(&bright, Some(NamedSpace::AdobeRgb)).0, bright, "valid Adobe RGB tone evidence must survive");
+    assert!(bright_tone_pairs(&bright, Some(NamedSpace::Srgb)).0.is_empty(), "the same working pixel clips in sRGB");
+    assert!(bright_tone_pairs(&bright, None).0.is_empty(), "unknown primaries keep the conservative check");
+    let clipped_adobe = to_working.apply([1.0, 0.90, 0.80]);
+    assert!(jpeg_clipped(clipped_adobe, Some(NamedSpace::AdobeRgb)), "a clipped Adobe RGB channel stays out");
+}
+
+#[test]
+fn look_proxies_keep_the_decoders_effective_jpeg_primaries() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, NamedSpace, Samples};
+    let (w, h) = (192usize, 128usize);
+    let (raw, tiff) = grey_raw_with_jpeg((w, h), |_, _| 0.2, |_, _| 0.2, [1.0; 3]);
+    let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    assert_eq!(proxies(&raw, &tiff, &t, PROXY, 0.0, None, None).unwrap().3, None);
+    let pixels = vec![230u8; w * h * 3];
+    let image = EncodeImage::new(w as u32, h as u32, 3, Samples::U8(&pixels));
+    for space in NamedSpace::ALL {
+        let icc = lightcraft_codecs::icc::write_named(space);
+        let jpeg =
+            lightcraft_codecs::encode_jpeg(&image, 95, ChromaSubsampling::S444, &EncodeMeta { icc: Some(&icc), ..Default::default() }).unwrap();
+        let mut tagged = tiff[..38].to_vec();
+        tagged[30..34].copy_from_slice(&(jpeg.len() as u32).to_le_bytes());
+        tagged.extend(jpeg);
+        let decoded = crate::files::decode_raw_preview(&tagged, Default::default(), None).unwrap();
+        assert_eq!(decoded.space.named, Some(space));
+        assert_eq!(decoded.space.origin, lightcraft_codecs::SpaceOrigin::IccMatrixTrc);
+        let (_, _, _, effective) = proxies(&raw, &tagged, &t, PROXY, 0.0, None, None).unwrap();
+        assert_eq!(effective, Some(space), "the fit must use the decoded ICC primaries");
+    }
+}
+
+/// Filtering the first bright pair shifts every retry holdout into the old chroma training set.
+/// Changing only those holdouts must leave the trained curve unchanged.
+#[test]
+fn filtered_bright_holdouts_cannot_train_the_chroma_curve() {
+    let knots = std::array::from_fn(|i| {
+        let x = 0.001 + 0.979 * i as f32 / 31.0;
+        [x, x]
+    });
+    let look = CameraLook { matrix: Mat3::IDENTITY, tone: CameraTone::new(knots).unwrap(), hue_sat: None };
+    let map = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let tint = [0.88, 1.0, 1.12];
+    let bright: Vec<Pair> = (0..600)
+        .map(|i| {
+            let y = 0.86 + 0.02 * ((i * 7919 % 601) as f64 / 601.0);
+            let x = tint.map(|v| v * y / luma(tint));
+            let p = displayed(x, &map);
+            let py = luma(p);
+            let target = if i == 0 { [0.8; 3] } else { p.map(|v| py + (v - py) * 0.25) };
+            (x, target)
+        })
+        .collect();
+    let (extra, held) = super::pairs::bright_tone_pairs(&bright, None);
+    assert_eq!(held.len(), bright.len());
+    assert_eq!(extra.len(), bright.len() - 1, "only the first pair is filtered out");
+    assert!(held[1] && !held[3], "the filtered and original holdout indices must differ");
+    let fit = |pairs: &[Pair]| super::hue_sat::fit_chroma_excluding(pairs, &look, &held).expect("enough measured chroma to fit");
+    let expected = fit(&bright);
+    let changed = |select: &dyn Fn(usize) -> bool| {
+        bright
+            .iter()
+            .enumerate()
+            .map(|(i, (x, target))| {
+                let y = luma(*target);
+                (*x, if select(i) { target.map(|v| y + (v - y) * 2.0) } else { *target })
+            })
+            .collect::<Vec<Pair>>()
+    };
+    let holdouts_changed = changed(&|i| held[i]);
+    assert_eq!(super::pairs::bright_tone_pairs(&holdouts_changed, None).1, held, "holdout edits must retain eligibility and the split");
+    assert_eq!(fit(&holdouts_changed), expected, "a retry holdout changed the trained chroma curve");
+    let training_changed = changed(&|i| i % 3 != 0 && !held[i]);
+    assert_ne!(fit(&training_changed), expected, "the remaining training samples must still train chroma");
+}
+
+#[test]
+fn known_jpeg_spaces_use_their_own_clipping_bounds() {
+    use lightcraft_codecs::NamedSpace;
+    for space in NamedSpace::ALL {
+        let rgb = space.rgb_space();
+        let to_working = REC2020.from_xyz().mul(&lightcraft_color::bradford(rgb.white, REC2020.white)).mul(&rgb.to_xyz());
+        let valid = to_working.apply([0.97, 0.88, 0.88]);
+        assert!(luma(valid) >= 0.85, "bright fixture in {space:?}");
+        assert!(!jpeg_clipped(valid, Some(space)), "valid {space:?} bright pixel was discarded: {valid:?}");
+        assert!(jpeg_clipped(to_working.apply([1.0, 0.9, 0.8]), Some(space)), "a clipped {space:?} channel must stay out");
+    }
+}
+
+#[test]
+fn dro_bright_retries_keep_their_rendered_midtones() {
+    let (w, h) = (96usize, 64usize);
+    let neutral = ToneMap::new(0.0, 0.0, 0.0);
+    let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
+    let mut accepted = 0;
+    for sky_lo in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2] {
+        for target_lo in [0.86, 0.88, 0.90, 0.92] {
+            for branch_lo in [0.005, 0.01, 0.02, 0.04] {
+                for branch_step in [0.0005, 0.0011, 0.0017] {
+                    let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+                    for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+                        if i % 10 != 0 {
+                            let k = (i * 7919 % 5521) as f32 / 5521.0;
+                            *s = [sky_lo + 0.1 * k; 3];
+                            *r = [target_lo + 0.04 * k; 3];
+                        } else {
+                            let ev = branch_lo + (i % 37) as f32 * branch_step;
+                            let tint = if i % 30 == 0 { 1.3 } else { 1.0 };
+                            *s = [ev * tint, ev, ev * (2.0 - tint)];
+                            *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
+                        }
+                    }
+                    let check =
+                        HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: true, grey: false };
+                    if [None, Some(EDGE_CONTRAST)].into_iter().any(|edge| fit_partial_on(&sensor, &reference, edge, &check, false).is_some()) {
+                        continue;
+                    }
+                    if fit_pairs(&sensor, &reference).is_some() {
+                        continue;
+                    }
+                    let Some(look) = fit_look_with(&sensor, &reference, &vec![false; w * h], None, true, None) else { continue };
+                    accepted += 1;
+                    let used = super::look_fit::dro_off(&look.tone);
+                    let map = ToneMap::camera(&used, 0.0, 0.0, 0.0);
+                    let (pairs, _) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
+                    let (mut before, mut after, mut n) = (0.0, 0.0, 0.0);
+                    for (x, target) in pairs.iter().step_by(3) {
+                        let fallback = displayed(*x, &neutral);
+                        let rendered = displayed(look.matrix.apply(*x), &map);
+                        for c in 0..3 {
+                            before += (encoded(fallback[c]) - encoded(target[c])).powi(2);
+                            after += (encoded(rendered[c]) - encoded(target[c])).powi(2);
+                            n += 1.0;
+                        }
+                    }
+                    let (before, after) = ((before / n).sqrt(), (after / n).sqrt());
+                    assert!(
+                        after <= before + MAX_MIDTONE_LOSS + 1e-5,
+                        "DRO retry exceeded rendered midtone loss: sky={sky_lo}, target={target_lo}, branches={branch_lo}+i*{branch_step}, rms {before}->{after}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(accepted > 0, "the fixtures must exercise accepted DRO bright retries");
 }
