@@ -481,6 +481,20 @@ impl Mixer {
     pub fn is_neutral(&self) -> bool {
         self.bands().iter().all(|b| *b == Hsl::default())
     }
+    /// Band `i` (in [`MIXER_BANDS`] order), `None` past the last.
+    pub fn band_mut(&mut self, i: usize) -> Option<&mut Hsl> {
+        Some(match i {
+            0 => &mut self.red,
+            1 => &mut self.orange,
+            2 => &mut self.yellow,
+            3 => &mut self.green,
+            4 => &mut self.aqua,
+            5 => &mut self.blue,
+            6 => &mut self.purple,
+            7 => &mut self.magenta,
+            _ => return None,
+        })
+    }
 }
 
 /// Most Point Color samples per photo (Lightroom's limit).
@@ -1125,6 +1139,12 @@ pub struct Mask {
     /// no points, so masks without one keep their JSON (and every cached preview its `hash64`).
     #[serde(skip_serializing_if = "PointCurves::is_empty")]
     pub curve: PointCurves,
+    /// The local Color Mixer: Hue / Saturation / Luminance of the 8 colour bands, applied within the mask with the
+    /// global mixer's maths, after the photo's colour tools. Not in Lightroom's masks (Capture One has it per
+    /// layer): kept in LightCraft's own settings only, and not written while neutral (a mask without it reads as
+    /// neutral, and keeps its JSON and `hash64`).
+    #[serde(skip_serializing_if = "Mixer::is_neutral")]
+    pub mixer: Mixer,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1142,6 +1162,7 @@ impl Default for Mask {
             adjust: LocalAdjustments::default(),
             refine: 0.0,
             curve: PointCurves::default(),
+            mixer: Mixer::default(),
         }
     }
 }

@@ -297,8 +297,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v10: `Mask.curve` (a mask's local Curve, in the develop settings).
-    const NEWEST_FIELDS: u32 = 10;
+    /// v11: `Mask.mixer` (a mask's local Color Mixer, in the develop settings).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

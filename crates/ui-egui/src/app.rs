@@ -238,7 +238,7 @@ impl LightcraftApp {
         }
         // `mask: null` is the photo's Tone Curve, not a mask's
         let mask_curve = matches!(id, "develop.curve" | "curve.reset" | "curve.applyPreset") && params.get("mask").is_some_and(|m| !m.is_null());
-        if r.is_ok() && (id == "mask.adjust" || mask_curve) {
+        if r.is_ok() && (matches!(id, "mask.adjust" | "mask.mixer" | "mask.mixerTargeted") || mask_curve) {
             // Judge local adjustments (sliders and the mask's Curve) on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;

@@ -53,6 +53,7 @@
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
 //! | 10 | a mask's local Curve (LR-MASK-CURVE) | `Mask.curve` (in the develop settings' `masks`) |
+//! | 11 | a mask's local Color Mixer (LR-MASK-MIXER) | `Mask.mixer` (in the develop settings' `masks`) |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -77,7 +78,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

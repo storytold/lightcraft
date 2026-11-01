@@ -133,6 +133,8 @@ pub struct Evaluated {
     pub adjust: LocalAdjustments,
     /// The mask's local Curve as tables ([`crate::finish::local_curve_luts`]); `None` while it is linear.
     pub curve: Option<[Lut1; 3]>,
+    /// The mask's local Color Mixer, resolved ([`crate::colorops::MixerK`]); `None` while it is neutral.
+    pub mixer: Option<crate::colorops::MixerK>,
 }
 
 #[inline]
@@ -152,6 +154,7 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
             alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes),
             adjust: m.adjust,
             curve: crate::finish::local_curve_luts(&m.curve),
+            mixer: (!m.mixer.is_neutral()).then(|| crate::colorops::MixerK::new(&m.mixer)),
         })
         .collect()
 }

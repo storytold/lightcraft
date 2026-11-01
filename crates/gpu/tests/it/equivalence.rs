@@ -444,6 +444,37 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 ),
             ];
         }),
+        ("masks (local color mixers)", |s| {
+            use lightcraft_develop::{Hsl, LocalAdjustments as L, Mixer};
+            let m = |shape, adjust, mixer, curve, invert| Mask {
+                components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+                adjust,
+                mixer,
+                curve,
+                invert,
+                ..Default::default()
+            };
+            let radial = MaskShape::Radial { center: Point::new(0.4, 0.6), rx: 0.3, ry: 0.25, angle: 0.0, feather: 50.0, invert: false };
+            let linear = MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.7) };
+            // a global mixer too: the local ones apply after it
+            s.mixer.green.sat = -40.0;
+            let warm =
+                Mixer { orange: Hsl { hue: 50.0, sat: 30.0, lum: -40.0 }, blue: Hsl { hue: -30.0, sat: -90.0, lum: 30.0 }, ..Default::default() };
+            let cool =
+                Mixer { green: Hsl { hue: 60.0, sat: 50.0, lum: 20.0 }, magenta: Hsl { hue: 0.0, sat: -70.0, lum: -20.0 }, ..Default::default() };
+            let lift = lightcraft_develop::PointCurves {
+                master: vec![Point::new(0.0, 0.0), Point::new(0.5, 0.62), Point::new(1.0, 1.0)],
+                ..Default::default()
+            };
+            s.masks = vec![
+                // a feathered radial with a mixer and a slider
+                m(radial, L { exposure: 0.2, ..Default::default() }, warm, Default::default(), false),
+                // a mask without one in between: the slots skip it
+                m(linear.clone(), L { saturation: -30.0, ..Default::default() }, Mixer::default(), Default::default(), false),
+                // a mixer with a local Curve at 70 % Amount, inverted
+                m(linear, L { amount: 70.0, ..Default::default() }, cool, lift, true),
+            ];
+        }),
         ("calibration", |s| {
             s.calibration.shadows_tint = 40.0;
             s.calibration.red_hue = 50.0;
@@ -457,6 +488,28 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.optics.defringe_purple_amount = 5.0;
         }),
     ]
+}
+
+/// A mask's local Color Mixer is drawn by the kernel (not left out, nor handed to the CPU), as the CPU draws it.
+#[test]
+fn local_color_mixers_render_on_the_gpu() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 480, 320);
+    let (raw, req) = (SourceInfo { raw: true, ..Default::default() }, RenderRequest::fit(480, 480));
+    eprintln!("adapter: {}", lightcraft_gpu::adapter_name().unwrap_or_default());
+    let mut s = DevelopSettings::default();
+    let edit = cases().into_iter().find(|(name, _)| *name == "masks (local color mixers)").map(|c| c.1).unwrap();
+    edit(&mut s);
+    check("local color mixers", &src, &raw, &s, &req);
+    let with = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render").image;
+    for m in &mut s.masks {
+        m.mixer = Default::default();
+    }
+    let without = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render").image;
+    let (mean, max, _) = diff(&with, &without);
+    assert!(mean > 0.2 && max > 10, "the mixers change the GPU render: mean {mean:.2}, max {max}");
 }
 
 /// A mask's local Curve is drawn by the kernel (not left out, nor handed to the CPU), as the CPU draws it.

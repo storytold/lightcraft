@@ -2073,3 +2073,69 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         assert!(s.auto_sync, "Auto Sync must remain enabled");
     }
 }
+
+#[test]
+fn a_masks_color_mixer_through_its_commands() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+    let ids: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    let mixer_of = |s: &crate::Session, k: usize| active_dev(s).masks[k].mixer;
+    // sliders of one mask's mixer: the other mask and the photo's own mixer stay neutral
+    let r = s.execute("mask.mixer", &json!({"id": ids[0], "values": {"yellow.hue": -40, "yellow.sat": 25, "orange.lum": 150}})).unwrap();
+    assert_eq!(r["mixer"]["yellow.hue"], -40.0);
+    assert_eq!((mixer_of(&s, 0).yellow.hue, mixer_of(&s, 0).yellow.sat), (-40.0, 25.0));
+    assert_eq!(mixer_of(&s, 0).orange.lum, 100.0, "clamped to the slider's range");
+    assert!(mixer_of(&s, 1).is_neutral());
+    assert!(active_dev(&s).mixer.is_neutral(), "the photo's Color Mixer is untouched");
+    // without `id`, the selected mask (the last added)
+    s.execute("mask.mixer", &json!({"values": {"blue.sat": -30}})).unwrap();
+    assert_eq!(mixer_of(&s, 1).blue.sat, -30.0);
+    // one undo step per change
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(mixer_of(&s, 1).is_neutral());
+    // a bad request is refused and changes nothing
+    let before = active_dev(&s);
+    for bad in [
+        json!({"id": ids[0], "values": {"yellow.chroma": 10}}),
+        json!({"id": ids[0], "values": {"teal.hue": 10}}),
+        json!({"id": ids[0], "values": {"yellow.hue": "a lot"}}),
+        json!({"id": ids[0], "values": [1, 2]}),
+        json!({"id": ids[0]}),
+        json!({"id": 99, "values": {"yellow.hue": 10}}),
+    ] {
+        assert!(s.execute("mask.mixer", &bad).is_err(), "{bad}");
+    }
+    for bad in [json!({"id": ids[0], "x": 0.5, "y": 0.5, "delta": 5, "target": "chroma"}), json!({"id": 99, "x": 0.5, "y": 0.5, "delta": 5})] {
+        assert!(s.execute("mask.mixerTargeted", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(active_dev(&s), before, "nothing changed");
+    // the targeted adjustment moves the bands of the colour under the point, on that mask only
+    let r = s.execute("mask.mixerTargeted", &json!({"id": ids[1], "target": "sat", "x": 0.5, "y": 0.5, "delta": 20})).unwrap();
+    let moved = r.as_object().unwrap();
+    assert!(!moved.is_empty() && moved.keys().all(|k| k.ends_with(".sat")), "{r}");
+    assert!(!mixer_of(&s, 1).is_neutral());
+    assert_eq!(mixer_of(&s, 0), before.masks[0].mixer);
+    // reset
+    s.execute("mask.mixer", &json!({"id": ids[0], "reset": true})).unwrap();
+    assert!(mixer_of(&s, 0).is_neutral());
+}
+
+#[test]
+fn auto_sync_carries_a_masks_color_mixer() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let other = |s: &crate::Session| (*s.develop_of(PhotoId(ids[1])).unwrap()).clone();
+    assert_eq!(other(&s).masks.len(), 1, "the mask is synced");
+    s.execute("mask.mixer", &json!({"values": {"yellow.hue": -35, "orange.sat": 20}})).unwrap();
+    let m = &other(&s).masks[0];
+    assert_eq!((m.mixer.yellow.hue, m.mixer.orange.sat), (-35.0, 20.0), "the selected photo's mask gets the mixer too");
+    // and only the selected photos
+    s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    s.execute("mask.mixer", &json!({"values": {"yellow.hue": 10}})).unwrap();
+    assert_eq!(other(&s).masks[0].mixer.yellow.hue, -35.0, "Auto Sync off: the other photo keeps its own");
+}

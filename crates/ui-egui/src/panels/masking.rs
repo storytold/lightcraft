@@ -396,6 +396,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if open {
                 super::edit::curve_editor(app, ui, id, &d, super::edit::CurveTarget::Mask(m.id));
             }
+            // and its own Color Mixer (LR-MASK-MIXER), laid out as the Edit panel's; none in black and white
+            if !crate::is_bw(&d) {
+                let open = app.ui.flyout_open("maskMixer");
+                if flyout_row(ui, "maskMixer", "Color Mixer", Icon::Radial, open).clicked() {
+                    app.ui.toggle_flyout("maskMixer");
+                }
+                if open {
+                    super::mask_mixer::mixer(app, ui, &m);
+                }
+            }
         }
     }
     let amt = ControlSpec {

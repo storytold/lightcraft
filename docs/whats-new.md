@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### A Color Mixer in every mask
+- Masks have a Color Mixer of their own, which Lightroom's masks don't: open Color Mixer under a mask's Curve. It is
+  laid out as the Edit panel's: pick a colour, then move its Hue, Saturation and Luminance, or use the targeted
+  adjustment (Hue, Saturation or Luminance) and drag up or down on the photo. It works inside the mask only, faded
+  by its feather and Amount, after the photo's own colour tools: a suit's blue or a wall's yellow can change in one
+  mask without touching the rest of the photo. Black and white photos ignore it.
+- The catalog format is now version 11 (`Mask.mixer`). Once this version has opened a library, older LightCraft
+  versions refuse it ("written by a newer version") instead of dropping the masks' mixers.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

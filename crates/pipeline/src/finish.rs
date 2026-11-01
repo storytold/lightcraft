@@ -57,6 +57,24 @@ fn eval_curves(l: &[Lut1; 3], e: [f32; 3], hdr: bool) -> [f32; 3] {
     }
 }
 
+/// The masks' local Color Mixers on display-linear Rec.2020 colour `d` of pixel `i`: each mask's at its
+/// opacity there, in mask order, on OkLCh (as the global mixer); `d` itself when none covers it. The GPU kernel
+/// (`finish.wgsl`) computes the same.
+#[inline]
+fn local_mix(d: [f32; 3], i: usize, mixers: &[(&crate::masks::Evaluated, &crate::colorops::MixerK)]) -> [f32; 3] {
+    use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+    let mut lch: Option<[f32; 3]> = None;
+    for (m, k) in mixers {
+        let a = m.alpha.data.get(i).copied().unwrap_or(0.0).min(1.0);
+        if a.is_nan() || a <= 0.0 {
+            continue;
+        }
+        let v = lch.unwrap_or_else(|| lab_to_lch(oklab_from_2020(d)));
+        lch = Some(k.apply_scaled(v, a));
+    }
+    lch.map_or(d, |v| oklab_to_2020(lch_to_lab(v)))
+}
+
 /// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
 /// detail `det` (log luminance minus its texture blur): 1 everywhere at 0, only stronger edges
 /// as it rises. The GPU kernel (`finish.wgsl`) computes the same; Alt-drag on Masking shows it
@@ -417,6 +435,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let FinishParams { curves, vig, to_out, out_luma, grain, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let local_curves: Vec<_> = p.masks.iter().filter_map(|m| Some((m, m.curve.as_ref()?))).collect();
+    // the masks' local Color Mixers (none in black and white, as the global mixer's colours are gone there)
+    let local_mixers: Vec<_> = if fp.ops.bw.is_some() { Vec::new() } else { p.masks.iter().filter_map(|m| Some((m, m.mixer.as_ref()?))).collect() };
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
@@ -468,6 +488,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- colour
             d = fp.ops.apply(d, l_sat, l_hue);
+            // --- the masks' local Color Mixers, in mask order, each at its mask's opacity (after the global colour tools)
+            d = local_mix(d, i, &local_mixers);
             if let Some((dir, amt)) = local.tint {
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);

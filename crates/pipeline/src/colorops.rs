@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
 use lightcraft_color::{Mat3, REC2020, SRGB};
-use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
+use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, Mixer, PointColor};
 
 /// OkLCh hue angle (radians) of a pure sRGB colour with HSV hue `deg`.
 pub fn oklch_hue_of_srgb_hue(deg: f64) -> f32 {
@@ -128,6 +128,65 @@ impl PointK {
     }
 }
 
+/// Words of a resolved colour mixer ([`MixerK::words`]): hue, saturation, luminance of the 8 bands.
+pub const MIXER_WORDS: usize = 24;
+
+/// A colour mixer resolved for the per-pixel stage: per band, the hue shift (radians), the
+/// saturation scale and the luminance shift. The global mixer ([`ColorOps`]) and each mask's local
+/// one use the same maths ([`mixer_apply`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MixerK {
+    pub hue: [f32; 8],
+    pub sat: [f32; 8],
+    pub lum: [f32; 8],
+}
+
+impl MixerK {
+    pub fn new(m: &Mixer) -> MixerK {
+        let bands = m.bands();
+        let fin = |v: f64| if v.is_finite() { v } else { 0.0 };
+        MixerK {
+            hue: bands.map(|b| (fin(b.hue) / 100.0) as f32 * 0.5),
+            sat: bands.map(|b| (fin(b.sat) / 100.0) as f32),
+            lum: bands.map(|b| (fin(b.lum) / 100.0) as f32 * 0.18),
+        }
+    }
+
+    /// The words the GPU kernel reads: hue[8], sat[8], lum[8].
+    pub fn words(&self) -> [f32; MIXER_WORDS] {
+        let mut w = [0.0; MIXER_WORDS];
+        for (slot, v) in w.iter_mut().zip(self.hue.iter().chain(&self.sat).chain(&self.lum)) {
+            *slot = *v;
+        }
+        w
+    }
+
+    /// OkLCh `lch` through the mixer at `strength` (0..1: a mask's opacity; 1 = the full mixer).
+    #[inline]
+    pub fn apply_scaled(&self, lch: [f32; 3], strength: f32) -> [f32; 3] {
+        mixer_apply(&self.hue, &self.sat, &self.lum, lch, strength)
+    }
+}
+
+/// The colour mixer's maths on OkLCh `lch`: each band's shifts weighted by the hue's band weights,
+/// hue and luminance shifts faded out towards neutrals; `strength` scales the shifts (1 = as set).
+#[inline]
+pub fn mixer_apply(hue: &[f32; 8], sat: &[f32; 8], lum: &[f32; 8], lch: [f32; 3], strength: f32) -> [f32; 3] {
+    let [mut l, mut c, mut h] = lch;
+    let w = band_weights(h);
+    let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
+    for i in 0..8 {
+        dh += w[i] * hue[i];
+        ds += w[i] * sat[i];
+        dl += w[i] * lum[i];
+    }
+    let chroma_w = (c / 0.12).min(1.0);
+    h += dh * strength * chroma_w;
+    c *= (1.0 + ds * strength).max(0.0);
+    l += dl * strength * chroma_w * l.max(0.05).sqrt();
+    [l, c, h]
+}
+
 /// The colour tools' parameters, resolved once per render (fields are read by the GPU kernel).
 #[derive(Clone, Debug)]
 pub struct ColorOps {
@@ -154,14 +213,14 @@ fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
 
 impl ColorOps {
     pub fn new(s: &DevelopSettings) -> ColorOps {
-        let bands = s.mixer.bands();
+        let mk = MixerK::new(&s.mixer);
         let g = &s.grading;
         ColorOps {
             vibrance: (s.color.vibrance / 100.0) as f32,
             saturation: (s.color.saturation / 100.0) as f32,
-            hue: bands.map(|b| (b.hue / 100.0) as f32 * 0.5),
-            sat: bands.map(|b| (b.sat / 100.0) as f32),
-            lum: bands.map(|b| (b.lum / 100.0) as f32 * 0.18),
+            hue: mk.hue,
+            sat: mk.sat,
+            lum: mk.lum,
             mixer: !s.mixer.is_neutral(),
             points: if crate::is_bw(s) {
                 Vec::new()
@@ -214,17 +273,7 @@ impl ColorOps {
         }
         let [mut l, mut c, mut h] = lab_to_lch(lab);
         if self.mixer {
-            let w = band_weights(h);
-            let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
-            for i in 0..8 {
-                dh += w[i] * self.hue[i];
-                ds += w[i] * self.sat[i];
-                dl += w[i] * self.lum[i];
-            }
-            let chroma_w = (c / 0.12).min(1.0);
-            h += dh * chroma_w;
-            c *= (1.0 + ds).max(0.0);
-            l += dl * chroma_w * l.max(0.05).sqrt();
+            [l, c, h] = mixer_apply(&self.hue, &self.sat, &self.lum, [l, c, h], 1.0);
         }
         for p in &self.points {
             [l, c, h] = p.apply([l, c, h]);

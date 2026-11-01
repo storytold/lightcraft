@@ -756,6 +756,8 @@ mod tests_local;
 #[cfg(test)]
 mod tests_local_curve;
 #[cfg(test)]
+mod tests_local_mixer;
+#[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]
 mod tests_tone;
