@@ -401,8 +401,10 @@ stop-after-a-device-error handling; any failure is an `Err` and the candle backb
   backbone: IoU 1.0. With f16 weights: max rel 3.8e-3, mean abs 5.4e-4, mask IoU ≥ 0.9997.
 - Tests: kernel unit tests against plain loops (`src/sam3/tests.rs`: cut-off tiles, K not a multiple of the tile,
   windowed and global attention, LN, RoPE, im2col/reorder, f16 rounding), skipped without a GPU; the end-to-end
-  test runs with `LIGHTCRAFT_SAM3_DIR` set. Tested on NVIDIA (RTX 5070, Vulkan) and Apple silicon (M4 Pro, Metal
-  through wgpu: first forward 3.1 s, CPU 17.2 s; max rel 4.9e-5, masks IoU ≥ 0.99992). AMD, Intel and DX12 are untested.
+  test runs with `LIGHTCRAFT_SAM3_DIR` set. Tested on NVIDIA (RTX 5070, Vulkan), Apple silicon (M4 Pro, Metal
+  through wgpu: first forward 3.1 s, CPU 17.2 s; max rel 4.9e-5, masks IoU ≥ 0.99992) and AMD (RX 7900 XTX on
+  Windows 11, DX12 and Vulkan, all four `sam3_` tests: backbone 0.46 s on DX12 and 0.51 s on Vulkan against 26 s in
+  candle on the CPU, max rel 4.3e-5 / 5.1e-5; on DX12 Describe, semantic and click masks IoU ≥ 0.9993). Intel is untested.
 
 ### SAM 3 necks
 After the backbone, the click decoder needs the tracker neck (`tracker_neck`) and Describe the detector's
@@ -518,6 +520,14 @@ candle runs the decoder for that model from then on.
 - Not done: masks only for the queries above the threshold (`merge` keeps sigmoid(logit) · sigmoid(presence) > 0.5).
   `Sam3::detect` returns all 200 and the reference test (`crates/segment/tests/reference.rs`) checks the
   best-scoring query's mask, which need not pass the threshold; with `rows` it is a matter of passing fewer of them.
+
+### SAM 3 on the GPU: device memory in all
+With every part on the GPU (after a photo's analysis and a first Describe): the backbone's 1.8 GB of f32 weights and
+0.2 GB of work buffers, both necks ~245 MB, the DETR encoder 38 MB of weights and 80 MB of work buffers, the mask
+decoder 6 MB and 282 MB: ~2.7 GB of device memory, ~1.8 GB when the backbone falls back to f16 weights. The parts
+after the backbone load on first use, each on its own; one that runs out of memory (or fails otherwise) stays in
+candle on the CPU from then on (`Sam3::detr_fallback`, `Sam3::mask_fallback`, the necks per kind) and the others stay
+on the GPU. Settings ▸ Performance ▸ AI masks ▸ Run on: CPU keeps all of it off the GPU.
 
 ## Open items
 - Keep the loupe texture on the GPU (render into an `egui-wgpu` texture on eframe's device instead of
