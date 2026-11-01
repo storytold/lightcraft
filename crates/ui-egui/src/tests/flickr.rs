@@ -354,3 +354,20 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
     assert_eq!(h.app.flickr.last_result.as_ref().unwrap()["signInNeeded"], true);
     assert_eq!(h.app.session.flickr_status()["username"], "dorothea", "the account connected meanwhile stays signed in");
 }
+
+#[test]
+fn albums_through_the_control_channel_load_in_the_background() {
+    let base = fake(Duration::from_millis(300));
+    let (mut h, _) = app(&base);
+    assert!(h.app.run("flickr.albums", json!({})).is_err(), "signed out: an error, not an empty list");
+    signed_in(&mut h);
+    // it returns at once (the stand-in answers 300 ms later): the window keeps drawing
+    let r = h.request("engine.execute", json!({"command": "flickr.albums"}), T);
+    assert_eq!(r["result"]["started"], true, "{r}");
+    assert!(h.app.flickr.albums_loading && h.app.flickr.albums.is_none());
+    assert!(h.step_until(T, |h| h.app.flickr.albums.is_some()), "the albums arrive");
+    let inspect = h.request("ui.inspect", json!({}), T);
+    let flickr = &inspect["result"]["flickr"];
+    assert_eq!(flickr["albumsLoading"], false);
+    assert_eq!(flickr["albums"], json!([{"id": "501", "title": "Portfolio", "photos": 9}, {"id": "502", "title": "Travel", "photos": 4}]));
+}

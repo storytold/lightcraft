@@ -56,8 +56,12 @@ pub fn save(path: &Path, account: &Account) -> Result<(), String> {
     let json = serde_json::to_string_pretty(account).map_err(|e| e.to_string())?;
     let tmp = dir.join(format!(".{}.tmp-{}", path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), crate::oauth::unique()));
     let write = || -> std::io::Result<()> {
-        std::fs::write(&tmp, json.as_bytes())?;
-        owner_only(&tmp)?;
+        use std::io::Write;
+        // owner-only from the moment it exists: the secrets are never readable by others, even briefly
+        let mut f = create_owner_only(&tmp)?;
+        f.write_all(json.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
         std::fs::rename(&tmp, path)
     };
     write().map_err(|e| {
@@ -66,15 +70,16 @@ pub fn save(path: &Path, account: &Account) -> Result<(), String> {
     })
 }
 
+/// A new file at `p` (never an existing one), on Unix readable and writable by its owner only.
 #[cfg(unix)]
-fn owner_only(p: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600))
+fn create_owner_only(p: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(p)
 }
 
 #[cfg(not(unix))]
-fn owner_only(_: &Path) -> std::io::Result<()> {
-    Ok(())
+fn create_owner_only(p: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(p)
 }
 
 #[cfg(test)]
@@ -108,6 +113,22 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_temp_file_is_owner_only_before_anything_is_written() {
+        let d = dir("tempmode");
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join(".flickr.json.tmp");
+        let f = create_owner_only(&p).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o600, "private while still empty");
+        }
+        drop(f);
+        assert!(create_owner_only(&p).is_err(), "never reuses a file that is already there");
         let _ = std::fs::remove_dir_all(&d);
     }
 
