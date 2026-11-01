@@ -34,7 +34,7 @@ pub(crate) fn thumb_edge(size: f32, pixels_per_point: f32) -> usize {
 
 /// Use the shared control contract for pointer, keyboard, exact-value entry and reset interactions.
 fn thumb_size_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    use lightcraft_develop::controls::{ControlSpec, Section, Track};
+    use lightcraft_develop::controls::{ControlSpec, Section, Shade, Track};
     const SIZE: ControlSpec = ControlSpec {
         id: "importThumbSize",
         label: "Thumbnail size",
@@ -45,6 +45,7 @@ fn thumb_size_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         step: 1.0,
         decimals: 0,
         track: Track::Plain,
+        shade: Shade::Plain,
     };
     let out = crate::widgets::slider(ui, &SIZE, f64::from(thumb_size(app.ui.import_thumb_size)), true, None);
     if let Some(size) = out.value {
