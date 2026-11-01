@@ -16,9 +16,13 @@ measured on the frames it draws), so they exclude the control channel's round tr
 import json, os, socket, statistics, sys, threading, time
 
 USAGE = __doc__.strip().splitlines()[2]
-if len(sys.argv) < 3 or not sys.argv[1].isdigit() or not 0 < int(sys.argv[1]) < 65536:
+# (isdecimal, not isdigit: "²" is a digit int() refuses; a decimal string too long for int() too)
+try:
+    PORT = int(sys.argv[1]) if len(sys.argv) >= 3 and sys.argv[1].isdecimal() else 0
+except ValueError:
+    PORT = 0
+if not 0 < PORT < 65536 or sys.argv[2].startswith("--"):
     sys.exit(USAGE)
-PORT = int(sys.argv[1])
 FOLDER = sys.argv[2]
 args = sys.argv[3:]
 # a run takes minutes: a misspelt option, or an option where a value belongs, stops it now
@@ -51,6 +55,11 @@ STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
 if STEPS < 1 or HOLD_MS < 1:
     sys.exit(f"--steps and --hold-ms must be 1 or more; {USAGE}")
+# the app keeps its last 256 loupe steps; each phase reads only its own, and the hold needs STEPS + 1
+# of them with one to spare (a full history is how a phase tells that steps were dropped)
+KEPT_STEPS = 256
+if STEPS + 1 >= KEPT_STEPS:
+    sys.exit(f"--steps {STEPS}: the app keeps {KEPT_STEPS} loupe steps, so at most {KEPT_STEPS - 2}; {USAGE}")
 LABEL = opt("--label", "run")
 OVERWRITE = "--overwrite" in args
 # a run takes minutes: refuse an existing result (or a link there, even a dangling one) before it
@@ -107,6 +116,9 @@ def steps_total(s=None):
 def steps_since(n0):
     s = inspect()["perf"]["loupeSteps"]
     new = steps_total(s) - n0
+    if new > len(s["steps"]):
+        # the app dropped some of this phase's steps: its numbers would be for part of it
+        sys.exit(f"{new} loupe steps since the phase began but the app kept {len(s['steps'])}: use fewer --steps")
     return (s["steps"][-new:] if new > 0 else []), s
 
 out = {"label": LABEL, "folder": FOLDER, "holdMs": HOLD_MS}

@@ -38,8 +38,14 @@ fn main() {
         let r = s.execute("prefs.setBackgroundPrep", &json!({"settings": {"culling": v}}));
         eprintln!("prep {patch}: {:?}", r.map(|v| v["settings"]["culling"].to_string()));
     }
-    let r = s.execute("library.browse", &json!({"path": folder}));
-    eprintln!("{:9.1} browse: {}", ms(), r.map(|v| v.to_string()).unwrap_or_else(|e| e.to_string()));
+    match s.execute("library.browse", &json!({"path": folder})) {
+        Ok(v) => eprintln!("{:9.1} browse: {v}", ms()),
+        Err(e) => {
+            // (the phases below would measure an empty view, not this folder)
+            eprintln!("{folder}: browse failed: {e}");
+            std::process::exit(1);
+        }
+    }
     let mut h = Headless::new(LightcraftApp::new(s, Services::default()), [1600.0, 1000.0], 1.0);
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let n = h.app.session.visible_cloned().len();
@@ -67,6 +73,11 @@ fn main() {
     }
     let lt = h.app.loupe_timing.to_json();
     let st = lt["steps"].as_array().cloned().unwrap_or_default();
+    // (the loupe keeps only its latest steps: the numbers below cover those)
+    let total = lt["total"].as_u64().unwrap_or(st.len() as u64);
+    if (st.len() as u64) < total {
+        eprintln!("          [loupe] {total} steps timed, the latest {} kept: the numbers cover those", st.len());
+    }
     let col = |k: &str| -> (Vec<f64>, usize) {
         let v: Vec<f64> = st.iter().filter_map(|x| x[k].as_f64()).collect();
         let missing = st.len() - v.len();
@@ -79,7 +90,7 @@ fn main() {
         st.iter().map(|x| format!("{}/{}", x["anySource"].as_str().unwrap_or("?"), x["fullSource"].as_str().unwrap_or("?"))).collect();
     let f = h.app.thumb_first.summary();
     eprintln!(
-        "{:9.1} [loupe, {} steps, dwell {dwell} ms] any p50 {:.0} p90 {:.0} (never {any_m}) · full p50 {:.0} p90 {:.0} (never {full_m}) · sharp p50 {:.0} p90 {:.0} (never {sharp_m})",
+        "{:9.1} [loupe, {} of {total} steps, dwell {dwell} ms] any p50 {:.0} p90 {:.0} (never {any_m}) · full p50 {:.0} p90 {:.0} (never {full_m}) · sharp p50 {:.0} p90 {:.0} (never {sharp_m})",
         ms(),
         st.len(),
         pct(&mut any, 0.5),

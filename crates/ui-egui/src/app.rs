@@ -701,6 +701,7 @@ impl LightcraftApp {
             return;
         }
         self.sync_theme(&ctx);
+        self.thumb_first.begin_frame(ctx.cumulative_frame_nr());
         self.ui_pass(&ctx);
         self.draw_window(ui);
         self.finish_ui_pass(&ctx);

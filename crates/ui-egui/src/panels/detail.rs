@@ -324,7 +324,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // a wipe shows the Before whole-frame render on its side of the line…
     let line = crate::region::wipe_line(img_rect, canvas);
     draw_wipe_before(app, &p, id, img_rect, line);
-    let camera_full_drawn = camera_full && draw_camera_full(app, &p, id, img_rect, display_aspect);
+    let camera_full_drawn = camera_full && draw_camera_full(app, &p, id, img_rect, display_aspect, window_cover(&windows));
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
     let drawn = draw_windows(app, &p, &window_ctx, &windows, [canvas, img_rect], (show_before, split));
@@ -850,14 +850,35 @@ fn request_camera_full(app: &mut LightcraftApp, photo: &lightcraft_catalog::Phot
 }
 
 /// The camera JPEG at full size, magnified like the whole-frame render, until the window is
-/// there. Whether it was drawn.
-fn draw_camera_full(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rect: Rect, display_aspect: f32) -> bool {
+/// there: only where the window will go (`cover`, see [`window_cover`]). A window capped smaller
+/// than the view leaves strips around it, and those keep the developed whole-frame render rather
+/// than an unlabelled camera JPEG (CodeRabbit on #3544). Whether it was drawn.
+fn draw_camera_full(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rect: Rect, display_aspect: f32, cover: Option<Rect>) -> bool {
+    let Some(cover) = cover else { return false };
     let Some(tex) = app.renderer.textures.get(&Slot::QuickFull).filter(|t| t.photo == id) else { return false };
     if !crate::region::same_aspect(tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32, display_aspect) {
         return false;
     }
-    p.image(tex.tex.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    p.with_clip_rect(p.clip_rect().intersect(cover)).image(
+        tex.tex.id(),
+        img_rect,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
     true
+}
+
+/// Where on screen the requested window renders go (each its window's share of its view's drawn
+/// rect), joined: `None` without any.
+fn window_cover(windows: &[(WindowView, crate::region::RegionView)]) -> Option<Rect> {
+    windows
+        .iter()
+        .map(|(v, w)| {
+            let (fw, fh) = (w.full.0.max(1) as f32, w.full.1.max(1) as f32);
+            let at = v.img.min + vec2(w.window.x as f32 / fw * v.img.width(), w.window.y as f32 / fh * v.img.height());
+            Rect::from_min_size(at, vec2(w.window.w as f32 / fw * v.img.width(), w.window.h as f32 / fh * v.img.height()))
+        })
+        .reduce(|a, b| a.union(b))
 }
 
 /// Which window renders [`draw_windows`] drew.
@@ -1330,6 +1351,29 @@ mod tests {
         assert!(holds_foreground(false, false, false), "not shown yet, nothing failed");
         assert!(!holds_foreground(false, false, true), "shown");
         assert!(!holds_foreground(false, true, false), "failed, nothing on the way");
+    }
+
+    /// The camera JPEG goes only where the window render will: a window of the left half of the
+    /// frame covers the left half of the drawn photo, not the strips beside it.
+    #[test]
+    fn the_camera_jpeg_covers_only_where_the_window_goes() {
+        use super::{WindowView, window_cover};
+        use crate::region::RegionView;
+        use egui::{Rect, pos2};
+        use lightcraft_pipeline::PixelWindow;
+        assert_eq!(window_cover(&[]), None, "no window: no camera JPEG");
+        let img = Rect::from_min_max(pos2(100.0, 50.0), pos2(700.0, 450.0));
+        let v = WindowView { slot: crate::render::Slot::Region, before: false, img, target: img, visible: img };
+        let w = RegionView {
+            photo: lightcraft_catalog::PhotoId(1),
+            before: false,
+            key: 1,
+            full: (6000, 4000),
+            window: PixelWindow { x: 0, y: 1000, w: 3000, h: 2000 },
+            settings: 0,
+        };
+        let r = window_cover(&[(v, w)]).unwrap();
+        assert_eq!(r, Rect::from_min_max(pos2(100.0, 150.0), pos2(400.0, 350.0)), "the window's share of the drawn rect");
     }
 
     /// The rotation pointer's arc bulges away from the side of the crop box it is on, and follows
