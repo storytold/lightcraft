@@ -21,6 +21,9 @@ fn gpu() -> bool {
     if !ok {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
     }
+    // which card the comparisons ran on (`LIGHTCRAFT_GPU_ADAPTER` picks one on a machine with two)
+    static NAMED: std::sync::Once = std::sync::Once::new();
+    NAMED.call_once(|| eprintln!("GPU equivalence tests on {}", lightcraft_gpu::adapter_name().unwrap_or_default()));
     ok
 }
 

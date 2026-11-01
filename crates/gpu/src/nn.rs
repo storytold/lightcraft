@@ -4,7 +4,8 @@
 //! The runner has a device of its own, so a denoise job and the interactive renders are separate contexts that the
 //! driver time-slices, and a failure of one never takes the other down. It respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference) and the same crash sentinel around device creation.
-//! `LIGHTCRAFT_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card.
+//! `LIGHTCRAFT_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card (`backend::pick_adapter`,
+//! shared with the render device).
 //!
 //! Every failure is an `Err` (never a panic), and a device that errs or is lost stops being used: callers then run the
 //! CPU runner. The kernels (`wgsl/nn_conv.wgsl`, `wgsl/nn_pool.wgsl`) are tested against the plain-loop reference
@@ -89,23 +90,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
     desc.flags = crate::backend::instance_flags_from_env(desc.flags);
     let instance = wgpu::Instance::new(desc);
-    let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
-    let adapter = match &wanted {
-        Some(w) => {
-            let all = pollster::block_on(instance.enumerate_adapters(backends));
-            let names: Vec<String> = all.iter().map(|a| a.get_info().name).collect();
-            all.into_iter()
-                .find(|a| {
-                    let i = a.get_info();
-                    i.device_type != wgpu::DeviceType::Cpu && i.name.to_lowercase().contains(w.as_str())
-                })
-                .ok_or_else(|| format!("no GPU adapter named like `{w}` (found: {})", names.join(", ")))?
-        }
-        None => pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?,
-    };
+    let adapter = crate::backend::pick_adapter(&instance, backends)?;
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(format!("software adapter ({}) skipped: the CPU is faster", info.name));
