@@ -685,13 +685,20 @@ pub(crate) fn find(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.findDuplicates";
     follow_library(s);
     let wait = p.get("wait").and_then(Value::as_bool) == Some(true);
+    let replace = p.get("replace").and_then(Value::as_bool) == Some(true);
     if s.dupes.job.is_some() {
-        if !wait {
+        if replace {
+            // start over with these parameters: what the run hashed so far is taken in and kept, the rest is
+            // stopped (the window's controls change while a run goes)
+            step(s, s.dupes.pace);
+            s.dupes.job = None;
+        } else if wait {
+            // a script that waits gets the running job's result, whatever it was asked for
+            wait_for_job(s);
+            return Ok(json!({"queued": 0, "running": false, "last": s.dupes.last.clone().unwrap_or(Value::Null)}));
+        } else {
             return Ok(json!({"queued": 0, "running": true, "status": status(s)}));
         }
-        // a script that waits gets the running job's result, whatever it was asked for
-        wait_for_job(s);
-        return Ok(json!({"queued": 0, "running": false, "last": s.dupes.last.clone().unwrap_or(Value::Null)}));
     }
     let ids = crate::cmd::photo_ids(p, C)?;
     let options = options(p, C)?;

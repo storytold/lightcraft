@@ -176,6 +176,23 @@ fn waiting_on_a_run_already_going_returns_its_result() {
     assert!(s.activity.list().iter().all(|t| t.kind != "duplicates"));
 }
 
+/// `replace` starts over with new parameters while a run goes, keeping the hashes it made; a second replaced run
+/// after a finished one renders nothing.
+#[test]
+fn replacing_a_run_keeps_its_hashes() {
+    let (mut s, ids) = library("replace");
+    s.execute("duplicates.pump", &json!({"pace": "pause"})).unwrap();
+    let r = s.execute("library.findDuplicates", &json!({"distance": 0})).unwrap();
+    assert_eq!(r["running"], true, "{r}");
+    let r = s.execute("library.findDuplicates", &json!({"distance": 6, "replace": true, "wait": true})).unwrap();
+    assert_eq!(r["running"], false, "{r}");
+    assert_eq!(r["last"]["groups"][0]["keep"], ids["a.jpg"], "the replaced run's parameters apply: {r}");
+    let r = s.execute("library.findDuplicates", &json!({"distance": 2, "replace": true, "wait": true})).unwrap();
+    assert_eq!(r["last"]["decoded"], 0, "{r}");
+    assert_eq!(r["last"]["groups"].as_array().map(Vec::len), Some(1));
+    assert!(s.activity.list().iter().all(|t| t.kind != "duplicates"));
+}
+
 /// The difference hash is held to the same distance as the DCT hash: a pair whose difference hashes are further
 /// apart than `distance` is not a duplicate, whatever the DCT hash says.
 #[test]
