@@ -120,6 +120,26 @@ impl Default for SourceInfo {
     }
 }
 
+/// How a render shrinks its source to the output size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Downscale {
+    /// Mitchell–Netravali: soft, no visible ringing. Previews and thumbnails.
+    #[default]
+    Smooth,
+    /// Lanczos-3: keeps the detail a smaller output can hold, as a dedicated downscale does
+    /// (exports, #2970). Its slight overshoot at hard edges stays below the output sharpening's.
+    Sharp,
+}
+
+impl Downscale {
+    pub fn filter(self) -> lightcraft_raster::resample::Filter {
+        match self {
+            Downscale::Smooth => lightcraft_raster::resample::Filter::Mitchell,
+            Downscale::Sharp => lightcraft_raster::resample::Filter::Lanczos3,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Quality {
     /// Interactive drags: skips the most expensive refinements.
@@ -150,6 +170,8 @@ pub struct RenderRequest {
     /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
     /// `space` (see [`DisplaySpace`]; ignored by deep renders).
     pub display: Option<DisplaySpace>,
+    /// Filter of the downscale to the output size.
+    pub downscale: Downscale,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -202,6 +224,7 @@ impl RenderRequest {
             proof: None,
             window: None,
             display: None,
+            downscale: Downscale::Smooth,
         }
     }
 }
@@ -426,7 +449,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         }
     }
     let s = &*settings;
-    let frame = frame_for(src, info, s, req.apply_crop);
+    let mut frame = frame_for(src, info, s, req.apply_crop);
+    frame.downscale = req.downscale.filter();
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
