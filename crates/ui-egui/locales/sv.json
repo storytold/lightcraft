@@ -2459,5 +2459,15 @@
   "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…": "Knappen Taggar visar platshållare för mallen, till exempel {date} eller {seq}. Varje fil byter namn på disken tillsammans med sin XMP-sidofil; ett namn som redan finns får -1, -2…",
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
-  "Bottom bar": "Nedre fältet"
+  "Bottom bar": "Nedre fältet",
+  "Quit LightCraft?": "Avsluta LightCraft?",
+  "Waiting to import opened files": "Väntar på att importera öppnade filer",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 fil du öppnade har inte importerats än. Om du avslutar tas denna begäran bort.",
+  "An import is already running. Wait for it to finish, then click Import again.": "En import pågår redan. Vänta tills den är klar och klicka sedan på Importera igen.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Slutför eller avbryt importen och stäng Importera foton innan du byter bibliotek. Köade foton öppnas i det här biblioteket.",
+  "The open request contains a path that is not absolute.": "Begäran om att öppna innehåller en sökväg som inte är absolut.",
+  "This file's name cannot be represented as UTF-8.": "Namnet på den här filen kan inte representeras som UTF-8.",
+  "The open request contains no files.": "Begäran om att öppna innehåller inga filer.",
+  "The open request contains an invalid number of files.": "Begäran om att öppna innehåller ett ogiltigt antal filer.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Biblioteket ändrades innan de här fotona kunde importeras. Öppna fotona igen i det avsedda biblioteket."
 }

@@ -12,6 +12,8 @@ const BATCH: usize = 8;
 /// UI thread between frames, so a slow drive never stalls the window.
 #[derive(Debug, Default)]
 pub struct ImportTask {
+    /// Photo IDs, import options and prepared batches belong to this library opening.
+    library: u64,
     /// Files and folders to import (handed to the worker when the task starts).
     queue: Vec<String>,
     pub total: usize,
@@ -31,10 +33,12 @@ pub struct ImportTask {
     pub warnings: Vec<ImportWarning>,
     undo0: usize,
     first: Option<u64>,
+    /// A native document open shows the result in Detail after the import finishes.
+    open_documents: bool,
     /// Reading a folder for the Local view: the photos stay out of the library, and nothing is
     /// selected or announced as added.
     pub(super) browse: bool,
-    /// Cancel was pressed: no further files are started; batches already readied are added.
+    /// Cancel was pressed. Manual imports finish prepared batches; native Add imports discard them.
     pub cancelled: bool,
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
     auto: bool,
@@ -57,14 +61,20 @@ impl ImportTask {
     }
 
     /// An import of `paths` (files or folders) with `library.import` params (without `paths`).
-    pub fn new(paths: Vec<String>, params: Value, undo0: usize, browse: bool) -> Self {
-        ImportTask { total: paths.len(), queue: paths, params, undo0, browse, ..Default::default() }
+    pub fn new(paths: Vec<String>, params: Value, undo0: usize, browse: bool, session: &lightcraft_engine::Session) -> Self {
+        ImportTask { library: session.library_generation(), total: paths.len(), queue: paths, params, undo0, browse, ..Default::default() }
     }
 
     /// An Auto Import (see [`ImportTask::auto`]).
     pub fn auto(mut self) -> Self {
         self.auto = true;
         self
+    }
+
+    /// Manual imports finish prepared batches before a library switch. A cancelled native Add
+    /// worker can be detached immediately, without accepting its late results.
+    pub(crate) fn blocks_library_switch(&self) -> bool {
+        !(self.open_documents && self.guard.as_ref().is_some_and(|g| g.is_cancelled()))
     }
 
     /// `{done, total, imported, cancelled}` for `ui.inspect`.
@@ -112,9 +122,9 @@ impl ImportRun {
         queue: Vec<String>,
         album: Option<u64>,
         album_name: Option<String>,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         ctx: &egui::Context,
     ) -> Result<Self, String> {
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (total, done) = (job.total.clone(), job.done.clone());
         let (opts, now) = (job.opts.clone(), job.now().to_string());
         let runner = Self::spawn(job, queue, cancel.clone(), ctx)?;
@@ -205,9 +215,8 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     if !d.in_library(app) {
         return Err("another library was opened since the photos were scanned: nothing was imported".into());
     }
-    // a browse scan that finishes starts its own import, replacing this one
-    if app.import.is_some() || app.scan.as_ref().is_some_and(|t| t.browse) {
-        return Err(crate::i18n::tr("An import is running").to_string());
+    if app.import.is_some() || app.scan.is_some() {
+        return Err(crate::i18n::tr("An import is already running. Wait for it to finish, then click Import again.").to_string());
     }
     let queue = d.selected_paths();
     if queue.is_empty() {
@@ -253,7 +262,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         }
     }
     let total = queue.len();
-    app.import = Some(ImportTask::new(queue, params, undo0, false));
+    app.import = Some(ImportTask::new(queue, params, undo0, false, &app.session));
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))
 }
@@ -266,28 +275,67 @@ pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value,
     }
     let undo0 = app.session.undo.len();
     let total = paths.len();
-    app.import = Some(ImportTask::new(paths, json!({"mode": "add"}), undo0, false));
+    app.import = Some(ImportTask::new(paths, json!({"mode": "add"}), undo0, false, &app.session));
     Ok(json!({"importing": total}))
+}
+
+/// Open documents from the operating system using the normal add-in-place import. Existing
+/// photos are selected by the importer's duplicate handling; new photos use the same defaults,
+/// sidecars, errors and undo as window drops. No copy or move is implied by opening a document.
+pub fn start_documents(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
+    let result = start_paths(app, paths)?;
+    if let Some(task) = app.import.as_mut() {
+        task.open_documents = true;
+        // Register before the first worker tick, so even an import that has not started can stop.
+        task.guard = Some(app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes));
+    }
+    Ok(result)
+}
+
+/// Native Add workers only prepare metadata. Dropping their receiver rejects both buffered and
+/// late results without waiting for I/O. Copy and Move retain their existing completion rules.
+pub(super) fn detach_cancelled_documents(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if !app.import.as_ref().is_some_and(|t| t.open_documents && t.guard.as_ref().is_some_and(|g| g.is_cancelled())) {
+        return;
+    }
+    let Some(mut task) = app.import.take() else { return };
+    task.run = None;
+    task.cancelled = true;
+    if task.library == app.session.library_generation() {
+        // Keep earlier commits and merge their undo steps in the original library only.
+        finish(app, ctx, task);
+    }
 }
 
 /// Advance the import in progress (called every frame): start its worker, then add the batches it
 /// has readied to the catalog.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    detach_cancelled_documents(app, ctx);
     let Some(mut task) = app.import.take() else { return };
+    // Check before both starting work and accepting prepared batches. The UI blocks library
+    // switches, but a host replacing its session must not commit old photo IDs into a new one.
+    if task.library != app.session.library_generation() {
+        app.notices.push(crate::i18n::tr("Import stopped because its library changed. Import the photos again in the intended library.").to_string());
+        return;
+    }
     if task.run.is_none() {
         let mut p = task.params.clone();
         p["paths"] = json!(task.queue);
+        let cancel =
+            task.guard.as_ref().and_then(|g| g.cancel_flag()).unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
         let started = lightcraft_engine::cmd::library::import_params(&app.session, &p)
             .and_then(|req| Ok((lightcraft_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
             .map_err(|e| e.to_string())
-            .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx));
+            .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, cancel, ctx));
         if task.auto {
             task.keep_selection = Some(app.session.selection.clone());
         }
         match started {
             Ok(run) => {
                 let label = if task.browse { "Reading folder" } else { "Importing" };
-                task.guard = Some(app.session.activity.start("import", label, lightcraft_engine::activity::Cancel::Flag(run.cancel.clone())));
+                if task.guard.is_none() {
+                    task.guard = Some(app.session.activity.start("import", label, lightcraft_engine::activity::Cancel::Flag(run.cancel.clone())));
+                }
                 task.run = Some(run);
             }
             Err(e) => {
@@ -447,6 +495,15 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         quiet_finish(app, ctx, &task);
         return;
     }
+    if task.open_documents && !task.moved_on && (task.first.is_some() || !task.existing.is_empty()) {
+        // An album, Local folder or search must not hide the file just opened by Finder.
+        let _ = app.run("library.clearFilter", json!({}));
+        let _ = app.run("library.source", json!({"kind": "all"}));
+        let _ = app.run("view.detail", json!({}));
+        if task.first.is_none() {
+            let _ = app.run("library.select", json!({"ids": task.existing}));
+        }
+    }
     if let Some(f) = task.first.filter(|_| !task.moved_on) {
         // a view the new photos aren't in (an album, Picks, a Local folder) would leave the active
         // photo off screen: show All Photos, as Lightroom shows the import's own collection (#1446)
@@ -462,6 +519,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         && task.failed == 0
         && task.warnings.is_empty()
         && !task.cancelled
+        && (!task.open_documents || !task.moved_on)
         && show_existing(app, ctx, &task.existing)
     {
         return;
@@ -553,4 +611,87 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     };
     app.toast_for(ctx, msg, 6.0);
     true
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+    use crate::Services;
+    use crate::state::ViewMode;
+
+    #[test]
+    fn document_paths_use_the_import_command_and_add_mode() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        start_documents(&mut app, vec!["/Volumes/NAS/撮影 café #1.ARW".into(), "/tmp/missing %.dng".into()]).unwrap();
+        let task = app.import.as_ref().unwrap();
+        assert_eq!(task.queue, ["/Volumes/NAS/撮影 café #1.ARW", "/tmp/missing %.dng"]);
+        let mut params = task.params.clone();
+        params["paths"] = json!(task.queue);
+        let request = lightcraft_engine::cmd::library::import_params(&app.session, &params).unwrap();
+        assert_eq!(request.opts.mode, lightcraft_engine::import::ImportMode::Add);
+        assert!(task.open_documents);
+    }
+
+    #[test]
+    fn finished_native_opens_keep_the_view_the_user_chose_while_importing() {
+        for duplicate in [false, true] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+            let id = app.session.catalog.photos().next().unwrap().id.0;
+            app.run("library.source", json!({"kind": "picks"})).unwrap();
+            app.run("library.filter", json!({"text": "the user's search"})).unwrap();
+            app.ui.view = ViewMode::PhotoGrid;
+            let source = app.session.source;
+            let selection = app.session.selection.clone();
+            let mut task = ImportTask::new(Vec::new(), json!({"mode": "add"}), app.session.undo.len(), false, &app.session);
+            task.open_documents = true;
+            task.moved_on = true;
+            task.first = (!duplicate).then_some(id);
+            task.imported = usize::from(!duplicate);
+            if duplicate {
+                task.existing.push(id);
+            }
+            finish(&mut app, &egui::Context::default(), task);
+            assert_eq!(app.session.source, source);
+            assert_eq!(app.session.selection, selection);
+            assert_eq!(app.session.filter.text, "the user's search");
+            assert_eq!(app.ui.view, ViewMode::PhotoGrid);
+        }
+    }
+
+    #[test]
+    fn documents_import_select_and_reopen_duplicates_in_detail() {
+        let dir = std::env::temp_dir().join(format!("lc-document-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("撮影 café #1.png");
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[20, 90, 30, 255]; 64] };
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+        std::fs::write(&file, bytes).unwrap();
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
+        let ctx = egui::Context::default();
+        let mut active = None;
+        for pass in 0..2 {
+            app.run("library.source", json!({"kind": "picks"})).unwrap();
+            app.run("library.filter", json!({"text": "not-the-file-name"})).unwrap();
+            app.ui.view = ViewMode::PhotoGrid;
+            start_documents(&mut app, vec![file.to_str().unwrap().into()]).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while app.import.is_some() && std::time::Instant::now() < deadline {
+                tick(&mut app, &ctx);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(app.import.is_none());
+            assert_eq!(app.session.catalog.len(), 1);
+            assert_eq!(app.ui.view, ViewMode::Detail);
+            let photo = app.session.catalog.photo(app.session.active().unwrap()).unwrap();
+            assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if path == file.to_str().unwrap()));
+            assert!(!photo.local);
+            if pass == 0 {
+                active = app.session.selection.active;
+            }
+            assert_eq!(app.session.selection.active, active);
+            assert_eq!(app.session.visible().len(), 1);
+        }
+        assert!(file.exists(), "opening must leave the original in place");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

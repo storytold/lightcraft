@@ -320,5 +320,7 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "{n} file yang Anda buka belum diimpor. Keluar akan membuang permintaan ini.",
+  "File {n} in the open request is not a file URL.": "Berkas {n} dalam permintaan untuk membuka bukan URL berkas."
 }

@@ -2556,5 +2556,15 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Un file aperto non è ancora stato importato. Uscendo, questa richiesta verrà scartata.",
+  "An import is already running. Wait for it to finish, then click Import again.": "È già in corso un'importazione. Attendi che finisca, poi fai di nuovo clic su Importa.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Completa o annulla l'importazione e chiudi Importa foto prima di cambiare libreria. Le foto in coda verranno aperte in questa libreria.",
+  "Quit LightCraft?": "Uscire da LightCraft?",
+  "Waiting to import opened files": "In attesa di importare i file aperti",
+  "The open request contains a path that is not absolute.": "La richiesta di apertura contiene un percorso che non è assoluto.",
+  "This file's name cannot be represented as UTF-8.": "Il nome di questo file non può essere rappresentato in UTF-8.",
+  "The open request contains no files.": "La richiesta di apertura non contiene file.",
+  "The open request contains an invalid number of files.": "La richiesta di apertura contiene un numero di file non valido.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "La libreria è cambiata prima che fosse possibile importare queste foto. Apri di nuovo le foto nella libreria desiderata."
 }

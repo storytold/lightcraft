@@ -3470,5 +3470,15 @@
   "Top bar": "Obere Leiste",
   "Tool strip": "Werkzeugleiste",
   "Bottom bar": "Untere Leiste",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC-/FreeSync-Flimmern verhindern (gilt ab dem nächsten Start)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC-/FreeSync-Flimmern verhindern (gilt ab dem nächsten Start)",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 von dir geöffnete Datei wurde noch nicht importiert. Beim Beenden wird dieser Importauftrag verworfen.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Ein Import läuft bereits. Warten Sie, bis er abgeschlossen ist, und klicken Sie dann erneut auf „Importieren“.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Schließen Sie den Import ab oder brechen Sie ihn ab, und schließen Sie „Fotos importieren“, bevor Sie die Bibliothek wechseln. Fotos in der Warteschlange werden in dieser Bibliothek geöffnet.",
+  "Quit LightCraft?": "LightCraft beenden?",
+  "Waiting to import opened files": "Geöffnete Dateien warten auf den Import",
+  "The open request contains a path that is not absolute.": "Die Anfrage zum Öffnen enthält einen Pfad, der nicht absolut ist.",
+  "This file's name cannot be represented as UTF-8.": "Der Name dieser Datei kann nicht als UTF-8 dargestellt werden.",
+  "The open request contains no files.": "Die Anfrage zum Öffnen enthält keine Dateien.",
+  "The open request contains an invalid number of files.": "Die Anfrage zum Öffnen enthält eine ungültige Anzahl von Dateien.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Die Bibliothek wurde geändert, bevor diese Fotos importiert werden konnten. Öffne die Fotos erneut in der gewünschten Bibliothek."
 }

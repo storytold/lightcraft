@@ -2389,5 +2389,15 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "您打开的 1 个文件尚未导入。退出将取消此导入请求。",
+  "An import is already running. Wait for it to finish, then click Import again.": "已有导入正在进行。请等待其完成，然后再次点击“导入”。",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "切换图库前，请先完成或取消导入，并关闭“导入照片”。排队中的照片将在此图库中打开。",
+  "Quit LightCraft?": "退出 LightCraft？",
+  "Waiting to import opened files": "等待导入已打开的文件",
+  "The open request contains a path that is not absolute.": "打开请求包含非绝对路径。",
+  "This file's name cannot be represented as UTF-8.": "此文件名无法用 UTF-8 表示。",
+  "The open request contains no files.": "打开请求中没有文件。",
+  "The open request contains an invalid number of files.": "打开请求中的文件数量无效。",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "导入这些照片之前，图库已更改。请在目标图库中重新打开照片。"
 }

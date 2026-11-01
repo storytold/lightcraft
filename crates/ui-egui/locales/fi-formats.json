@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "Paneelien asettelua ei voitu palauttaa: {error}",
   "Panel move was not applied: {error}": "Paneelin siirtoa ei otettu käyttöön: {error}",
   "{name} is installed": "{name} on asennettu",
-  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä"
+  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Avaamiasi tiedostoja on vielä tuomatta: {n}. Lopettaminen hylkää nämä pyynnöt.",
+  "File {n} in the open request is not a file URL.": "Avauspyynnön tiedosto {n} ei ole tiedoston URL-osoite."
 }

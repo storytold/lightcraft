@@ -3659,5 +3659,15 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "თქვენ მიერ გახსნილი ერთი ფაილი ჯერ არ შემოტანილა. გასვლისას ეს მოთხოვნა გაუქმდება.",
+  "An import is already running. Wait for it to finish, then click Import again.": "იმპორტი უკვე მიმდინარეობს. დაელოდეთ მის დასრულებას და შემდეგ ისევ დააწკაპუნეთ იმპორტზე.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "ბიბლიოთეკის შეცვლამდე დაასრულეთ ან გააუქმეთ იმპორტი და დახურეთ ფოტოების იმპორტის ფანჯარა. რიგში მყოფი ფოტოები ამ ბიბლიოთეკაში გაიხსნება.",
+  "Quit LightCraft?": "გავიდეთ LightCraft-იდან?",
+  "Waiting to import opened files": "გახსნილი ფაილების იმპორტის მოლოდინში",
+  "The open request contains a path that is not absolute.": "გახსნის მოთხოვნა შეიცავს გზას, რომელიც აბსოლუტური არ არის.",
+  "This file's name cannot be represented as UTF-8.": "ამ ფაილის სახელის UTF-8 ფორმატში წარმოდგენა შეუძლებელია.",
+  "The open request contains no files.": "გახსნის მოთხოვნა ფაილებს არ შეიცავს.",
+  "The open request contains an invalid number of files.": "გახსნის მოთხოვნაში ფაილების რაოდენობა არასწორია.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "ამ ფოტოების იმპორტამდე ბიბლიოთეკა შეიცვალა. ფოტოები ხელახლა გახსენით სასურველ ბიბლიოთეკაში."
 }

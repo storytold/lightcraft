@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "File aperti non ancora importati: {n}. Uscendo, queste richieste verranno scartate.",
+  "File {n} in the open request is not a file URL.": "Il file {n} nella richiesta di apertura non è un URL di file."
 }

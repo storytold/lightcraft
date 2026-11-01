@@ -105,6 +105,8 @@ impl LightcraftApp {
             compare_hold_until: f64::NEG_INFINITY,
             merge: merge::MergeState::default(),
             import: None,
+            pending_document_opens: 0,
+            pending_document_library: None,
             scan: None,
             waiting_import: Default::default(),
             sync: None,

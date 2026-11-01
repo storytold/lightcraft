@@ -2438,5 +2438,15 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Jeden otevřený soubor ještě nebyl importován. Ukončením se tento požadavek zahodí.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Import již probíhá. Počkejte, až skončí, a potom znovu klikněte na Importovat.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Před změnou knihovny dokončete nebo zrušte import a zavřete okno Importovat fotografie. Fotografie ve frontě se otevřou v této knihovně.",
+  "Quit LightCraft?": "Ukončit LightCraft?",
+  "Waiting to import opened files": "Čekání na import otevřených souborů",
+  "The open request contains a path that is not absolute.": "Požadavek na otevření obsahuje cestu, která není absolutní.",
+  "This file's name cannot be represented as UTF-8.": "Název tohoto souboru nelze vyjádřit v UTF-8.",
+  "The open request contains no files.": "Požadavek na otevření neobsahuje žádné soubory.",
+  "The open request contains an invalid number of files.": "Požadavek na otevření obsahuje neplatný počet souborů.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Knihovna se změnila před importem těchto fotografií. Otevřete fotografie znovu v požadované knihovně."
 }

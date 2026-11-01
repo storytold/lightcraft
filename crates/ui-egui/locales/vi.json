@@ -2684,5 +2684,15 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "Quit LightCraft?": "Thoát LightCraft?",
+  "Waiting to import opened files": "Đang chờ nhập các tệp đã mở",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 tệp bạn đã mở chưa được nhập. Thoát sẽ hủy yêu cầu này.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Một quá trình nhập đang chạy. Hãy đợi đến khi hoàn tất, rồi nhấp Nhập lần nữa.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Hoàn tất hoặc hủy quá trình nhập và đóng Nhập ảnh trước khi chuyển thư viện. Các ảnh trong hàng đợi sẽ được mở trong thư viện này.",
+  "The open request contains a path that is not absolute.": "Yêu cầu mở chứa một đường dẫn không phải là đường dẫn tuyệt đối.",
+  "This file's name cannot be represented as UTF-8.": "Tên tệp này không thể biểu diễn bằng UTF-8.",
+  "The open request contains no files.": "Yêu cầu mở không chứa tệp nào.",
+  "The open request contains an invalid number of files.": "Yêu cầu mở chứa số lượng tệp không hợp lệ.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Thư viện đã thay đổi trước khi có thể nhập các ảnh này. Hãy mở lại ảnh trong thư viện mong muốn."
 }

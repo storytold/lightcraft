@@ -2315,5 +2315,15 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "Jeden otwarty plik nie został jeszcze zaimportowany. Zakończenie programu odrzuci to żądanie.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Import już trwa. Poczekaj na jego zakończenie, a następnie ponownie kliknij Importuj.",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Przed zmianą biblioteki zakończ lub anuluj import i zamknij okno Importuj zdjęcia. Zdjęcia z kolejki zostaną otwarte w tej bibliotece.",
+  "Quit LightCraft?": "Zakończyć LightCraft?",
+  "Waiting to import opened files": "Oczekiwanie na import otwartych plików",
+  "The open request contains a path that is not absolute.": "Żądanie otwarcia zawiera ścieżkę, która nie jest bezwzględna.",
+  "This file's name cannot be represented as UTF-8.": "Nazwy tego pliku nie można przedstawić w UTF-8.",
+  "The open request contains no files.": "Żądanie otwarcia nie zawiera plików.",
+  "The open request contains an invalid number of files.": "Żądanie otwarcia zawiera nieprawidłową liczbę plików.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Biblioteka zmieniła się przed zaimportowaniem tych zdjęć. Otwórz zdjęcia ponownie w wybranej bibliotece."
 }

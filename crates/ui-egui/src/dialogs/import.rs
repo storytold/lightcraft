@@ -21,6 +21,15 @@ use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
+/// Activity kind for accepted native files that are waiting for the importer.
+pub const DOCUMENT_OPEN_ACTIVITY: &str = "documentOpen";
+
+/// Count files still accepted by the desktop queue, excluding cancelled requests even before
+/// the host's next tick removes them. One native request may contain several files.
+pub(crate) fn pending_document_files(app: &LightcraftApp) -> u64 {
+    app.session.activity.running_cancellable().iter().filter(|t| t.kind == DOCUMENT_OPEN_ACTIVITY).fold(0_u64, |n, t| n.saturating_add(t.total))
+}
+
 mod body;
 mod scan;
 mod tags;
@@ -40,7 +49,38 @@ pub use scan::{ScanTask, browse, open, poll_scan, running};
 #[cfg(test)]
 pub(crate) use scan::{stall_scan, stall_scan_of};
 pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-pub use task::{ImportTask, start, start_paths, tick};
+pub use task::{ImportTask, start, start_documents, start_paths, tick};
+
+/// Startup recovery has not chosen a usable library or Continue Without Saving yet.
+pub fn waiting_for_library(app: &LightcraftApp) -> bool {
+    app.session.library.is_none()
+        && app.pending_document_library.is_none()
+        && app.import.is_none()
+        && app.library_problem.as_ref().is_some_and(|p| !p.dismissed)
+}
+
+/// Include the native file/folder picker, before its scan opens the Import Photos review.
+pub fn dialog_open(app: &LightcraftApp) -> bool {
+    matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. }))
+        || app.pending_picks.iter().any(|p| matches!(p.command.as_str(), "file.addPhotos" | "file.addFolder" | "file.importLightroom"))
+}
+
+/// Keep queued documents and running imports in the library where they were requested.
+/// Recovery is allowed to choose a library before any native request has been bound to one.
+pub(crate) fn check_library_switch(app: &mut LightcraftApp) -> Result<(), String> {
+    let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    task::detach_cancelled_documents(app, &ctx);
+    if app.import.is_some() || app.scan.is_some() || dialog_open(app) || (pending_document_files(app) != 0 && !waiting_for_library(app)) {
+        let error = crate::i18n::tr(
+            "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.",
+        )
+        .to_string();
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        app.toast_error(&ctx, error.clone());
+        return Err(error);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

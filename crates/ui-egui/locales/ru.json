@@ -2596,5 +2596,15 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "1 file you opened hasn't been imported yet. Quitting discards this request.": "1 открытый вами файл ещё не импортирован. При выходе этот запрос будет отменён.",
+  "An import is already running. Wait for it to finish, then click Import again.": "Импорт уже выполняется. Дождитесь его завершения и снова нажмите «Импорт».",
+  "Finish or cancel the import and close Import Photos before switching libraries. Queued photos will open in this library.": "Завершите или отмените импорт и закройте «Импорт фото», прежде чем переключать библиотеку. Фото в очереди откроются в этой библиотеке.",
+  "Quit LightCraft?": "Выйти из LightCraft?",
+  "Waiting to import opened files": "Открытые файлы ожидают импорта",
+  "The open request contains a path that is not absolute.": "Запрос на открытие содержит путь, который не является абсолютным.",
+  "This file's name cannot be represented as UTF-8.": "Имя этого файла невозможно представить в UTF-8.",
+  "The open request contains no files.": "Запрос на открытие не содержит файлов.",
+  "The open request contains an invalid number of files.": "Запрос на открытие содержит недопустимое число файлов.",
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Библиотека изменилась до импорта этих фотографий. Откройте фотографии снова в нужной библиотеке."
 }
