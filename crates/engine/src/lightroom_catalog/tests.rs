@@ -472,7 +472,8 @@ fn the_report_accounts_for_every_catalog_image_once() {
     data.photos.extend([
         photo(3, "/library/kept.ARW", 0),
         photo(4, "/library/trashed.ARW", 0),
-        // a video and its virtual copy
+        // a file type LightCraft doesn't read (an MP4 the catalog doesn't list as a video) and its
+        // virtual copy
         photo(5, "/Videos/clip.MP4", 0),
         photo(6, "/Videos/clip.MP4", 5),
         far,

@@ -190,9 +190,9 @@ pub struct CatalogImport {
     /// Lightroom's All Photographs counts them). The import report accounts for each one.
     #[serde(default)]
     pub images: usize,
-    /// Catalog images left out because their original isn't a file type LightCraft reads (videos,
-    /// for one), counted by the original's extension in lower case ("" for none); a virtual copy
-    /// counts under its master's. Their ids are in [`CatalogImport::warnings`].
+    /// Catalog images left out because their original isn't a file type LightCraft reads (a
+    /// document or a program; a video the catalog lists as one becomes a video record), counted by
+    /// the original's extension in lower case ("" for none); a virtual copy counts under its master's. Their ids are in [`CatalogImport::warnings`].
     #[serde(default)]
     pub not_supported: BTreeMap<String, usize>,
 }
