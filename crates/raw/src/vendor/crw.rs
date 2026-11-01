@@ -109,6 +109,11 @@ mod tests {
     }
 
     fn synthetic_crw_sized(model: &str, w: usize, h: usize) -> Vec<u8> {
+        let payload: Vec<u8> = (0..514 + 256).map(|i| (i * 41 % 253) as u8).collect();
+        synthetic_crw_with_payload(model, w, h, payload)
+    }
+
+    fn synthetic_crw_with_payload(model: &str, w: usize, h: usize, payload: Vec<u8>) -> Vec<u8> {
         let le16 = |v: u16| v.to_le_bytes();
         let le32 = |v: u32| v.to_le_bytes();
         let heap = |records: &[(u16, Vec<u8>)]| -> Vec<u8> {
@@ -149,7 +154,6 @@ mod tests {
             (0x180e, [1083410638u32, 0, 0].iter().flat_map(|&v| le32(v)).collect()),
             (0x10a9, color_balance),
         ]);
-        let payload: Vec<u8> = (0..514 + 256).map(|i| (i * 41 % 253) as u8).collect();
         let root = heap(&[(0x2005, payload), (0x300a, props)]);
         let mut f = b"II".to_vec();
         f.extend_from_slice(&le32(26));
@@ -204,6 +208,19 @@ mod tests {
         }
         // the largest real frame (the 10D's 3152 × 2068) is within it
         assert!(decode(&synthetic_crw_sized("Canon EOS D60", 3152, 2068), Mode::Header).is_ok());
+    }
+
+    /// A stream cut short is `Corrupt`, not a smeared image: the crate once filled every sample
+    /// after the entropy stream ended with its predictor value and returned success, so a CRW
+    /// truncated just past its header rendered and exported as a flat frame.
+    #[test]
+    fn a_truncated_entropy_stream_is_corrupt() {
+        // the 514-byte header and two bytes of entropy: almost all of the 960-sample frame unread
+        let f = synthetic_crw_with_payload("Canon EOS D60", W, H, vec![0; 516]);
+        let Err(RawError::Corrupt(why)) = decode(&f, Mode::Full) else { panic!("a truncated stream must be refused") };
+        assert!(why.starts_with("CRW: ") && why.contains("before the frame does"), "{why}");
+        // the header alone still reads, so the library can list the file and show its preview
+        assert!(decode(&f, Mode::Header).is_ok());
     }
 
     #[test]
