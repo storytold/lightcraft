@@ -1,10 +1,10 @@
-//! Olympus ORF — uncompressed variants.
+//! Olympus ORF — uncompressed and lossless compressed variants.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
 //! `0x0101/0x0102` PreviewImageStart/Length — and `0x2040` ImageProcessing — `0x0100` WB_RBLevels, `0x0600`
-//! BlackLevel2, `0x0612–0x0615` CropLeft/Top/Width/Height) and our own black-box analysis of CC0 samples from
-//! raw.pixls.us (E-1, E-400, XZ-2):
+//! BlackLevel2, `0x0611` ValidBits, `0x0612–0x0615` CropLeft/Top/Width/Height) and our own black-box analysis of CC0
+//! samples from raw.pixls.us (E-1, E-400, XZ-2) and E-M1 Mark III samples:
 //!
 //! - 16 bits per sample: little-endian words; some bodies (E-1, E-400) store 12-bit values in the top bits (the low
 //!   four bits zero in more than 99% of samples), which we shift down.
@@ -28,14 +28,20 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Olympus's compressed ORF (most interchangeable-lens bodies since ~2008) is not decoded: no permissively
-//!   licensed description exists. It reports [`RawError::Unsupported`]; the embedded preview still works.
+//! - Lossless compressed ORF (most interchangeable-lens bodies since ~2008): IFD0 still states `Compression = 1`
+//!   and `BitsPerSample = 16`, with a single strip starting with a 7-byte header (`00 00 00 00 01 00 00`) followed
+//!   by an MSB-first bit stream. Each row resets two per-parity channel states `[prev_mag, avg_diff, small_run]`
+//!   and codes residuals with 1 sign bit, 2 low bits, a unary leading-zero count (up to 12) for the high bits of
+//!   the quotient, and `k` adaptive Rice low bits (`k = max(active_bits(prev_mag) - bias, 2 + bias)` where `bias = 2`
+//!   when `small_run < 3`, else `0`), added to a 2D gradient-adaptive same-colour predictor from `(y, x - 2)`,
+//!   `(y - 2, x)` and `(y - 2, x - 2)`.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
 //!   pattern is anchored at the sensor origin (assumed) or at the active area. Files without a usable tag fall back
 //!   to the green diagonal found from the data, which can't tell red from blue (GRBG or RGGB is assumed).
 
+use super::pef::Bits;
 use super::{cfa_from_exif, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::unpack::unpack_msb;
@@ -45,6 +51,96 @@ use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::makernote::MakerNote;
 use lightcraft_tiff::{Ifd, Tiff, Value, makernote, tags as t};
 use rayon::prelude::*;
+
+/// Decode one difference from the MSB-first bit stream, updating the channel's three adaptive state words
+/// `[prev_mag, avg_diff, small_run]`:
+/// - `b0`: sign bit (`1` = negative, inverted as `-1` mask; `0` = positive, `0` mask).
+/// - `b1..b2`: 2 lowest bits of the residual.
+/// - Unary count `lz` (0..=12) of leading zeros followed by a stop `1` bit gives the high part of the quotient
+///   when `lz < 12`; when `lz == 12` (12 zero bits), the next `15 - k` bits hold the high part followed by 1 bit.
+/// - `k` low bits of the quotient are read next, where `k = max((16 - prev_mag.leading_zeros()) - bias, 2 + bias)`
+///   and `bias = 2` while `small_run < 3`, else `0`.
+#[inline]
+fn olympus_diff(bits: &mut Bits, carry: &mut [i32; 3]) -> i32 {
+    let bias = if carry[2] < 3 { 2 } else { 0 };
+    let active = 16 - (carry[0] as u16).leading_zeros() as i32;
+    let num_low = (active - bias).max(2 + bias) as u32;
+    let b = bits.peek(15);
+    let sign = -((b >> 14) as i32);
+    let low = ((b >> 12) & 3) as i32;
+    let lz = ((b & 0xfff) as u16).leading_zeros() as u32 - 4;
+    let high = if lz != 12 {
+        bits.skip(lz + 4);
+        lz as i32
+    } else {
+        bits.skip(15);
+        let num_high = 15 - num_low;
+        let h = bits.peek(num_high + 1) as i32;
+        bits.skip(num_high + 1);
+        h >> 1
+    };
+    carry[0] = (high << num_low) | bits.get(num_low) as i32;
+    let diff = (carry[0] ^ sign) + carry[1];
+    carry[1] = (diff * 3 + carry[1]) >> 5;
+    carry[2] = if carry[0] > 16 { 0 } else { carry[2] + 1 };
+    (diff * 4) | low
+}
+
+/// Same-colour spatial predictor from `(row, col - 2)`, `(row - 2, col)` and `(row - 2, col - 2)`.
+#[inline]
+fn olympus_pred(out: &[u16], w: usize, row: usize, col: usize) -> i32 {
+    if row < 2 && col < 2 {
+        0
+    } else if row < 2 {
+        out[row * w + col - 2] as i32
+    } else if col < 2 {
+        out[(row - 2) * w + col] as i32
+    } else {
+        let left = out[row * w + col - 2] as i32;
+        let up = out[(row - 2) * w + col] as i32;
+        let nw = out[(row - 2) * w + col - 2] as i32;
+        let d_left = left - nw;
+        let d_up = up - nw;
+        if (d_left < 0) != (d_up < 0) && d_left != 0 && d_up != 0 {
+            if d_left.abs() > 32 || d_up.abs() > 32 {
+                left + d_up
+            } else {
+                (left + up) >> 1
+            }
+        } else if d_left.abs() > d_up.abs() {
+            left
+        } else {
+            up
+        }
+    }
+}
+
+/// Decompress an Olympus lossless compressed ORF strip (7-byte header followed by the MSB bit stream).
+pub(crate) fn decompress_olympus(src: &[u8], w: usize, h: usize) -> Result<Vec<u16>> {
+    let n = w.checked_mul(h).ok_or(RawError::Limit("image too large"))?;
+    if !w.is_multiple_of(2) || !h.is_multiple_of(2) || src.len() < 7 {
+        return Err(RawError::Corrupt("ORF compressed strip header too short or odd dimensions".into()));
+    }
+    let payload = &src[7..];
+    // Every pixel consumes at least 4 bits (sign + 2 low bits + at least 1 unary stop bit).
+    if (payload.len() as u64).saturating_mul(2) < n as u64 {
+        return Err(RawError::Corrupt("ORF compressed strip shorter than minimum bit count".into()));
+    }
+    let mut out = vec![0u16; n];
+    let mut bits = Bits::new(payload);
+    for y in 0..h {
+        let mut carry = [[0i32; 3]; 2];
+        for x in 0..w {
+            let d = olympus_diff(&mut bits, &mut carry[x & 1]);
+            let p = olympus_pred(&out, w, y, x);
+            out[y * w + x] = (p + d).clamp(0, 0xffff) as u16;
+        }
+        if bits.overrun() {
+            return Err(RawError::Corrupt(format!("ORF compressed data ends at row {y} of {h}")));
+        }
+    }
+    Ok(out)
+}
 
 pub(crate) const CAMERA_SETTINGS: u16 = 0x2020;
 const IMAGE_PROCESSING: u16 = 0x2040;
@@ -261,10 +357,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12)
+    } else if chunks.len() == 1 && w.is_multiple_of(2) && h.is_multiple_of(2) && total >= 7 && (total - 7).saturating_mul(2) >= n as u64 {
+        let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        if src.len() < 7 || src[..7].iter().all(|&b| b == 0) {
+            return Err(RawError::Unsupported("Olympus compressed ORF".into()));
+        }
+        let d = if mode == Mode::Full || stated.is_none() { decompress_olympus(src, w, h)? } else { Vec::new() };
+        (RawData::U16(d), 12)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };
     let RawData::U16(ref mut samples) = data else { return Err(RawError::Unsupported("float ORF".into())) };
+    let mn = maker_note(bytes, &tiff);
+    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let bits = if bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
         // 12-bit values stored in the top bits
         samples.par_iter_mut().for_each(|v| *v >>= 4);
@@ -278,12 +383,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             16
         }
+    } else if let Some(valid) = ip
+        .as_ref()
+        .and_then(|i| i.u64(0x0611))
+        .or_else(|| mn.as_ref().and_then(|m| m.ifd.u64(MN_VALID_BITS)))
+        .and_then(|b| u32::try_from(b).ok())
+        .filter(|&b| (10..=16).contains(&b))
+    {
+        valid
+    } else if !samples.is_empty() && samples.iter().step_by(31).max().copied().unwrap_or(0) >= 4096 {
+        14
     } else {
         bits
     };
-
-    let mn = maker_note(bytes, &tiff);
-    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
         // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
         Some([Some(x), Some(y), Some(cw), Some(ch)])
@@ -789,5 +901,60 @@ mod tests {
         for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
             let _ = crate::decode(&bytes[..cut]);
         }
+    }
+
+    fn encode_olympus_compressed(samples: &[u16], w: usize, h: usize) -> Vec<u8> {
+        let mut bits: Vec<bool> = Vec::new();
+        let put = |v: u32, n: u32, bits: &mut Vec<bool>| {
+            for i in (0..n).rev() {
+                bits.push((v >> i) & 1 == 1);
+            }
+        };
+        for y in 0..h {
+            let mut carry = [[0i32; 3]; 2];
+            for x in 0..w {
+                let p = olympus_pred(samples, w, y, x);
+                let d = samples[y * w + x] as i32 - p;
+                let low = (d & 3) as u32;
+                let diff = d >> 2;
+                let ch = &mut carry[x & 1];
+                let bias = if ch[2] < 3 { 2 } else { 0 };
+                let active = 16 - (ch[0] as u16).leading_zeros() as i32;
+                let num_low = (active - bias).max(2 + bias) as u32;
+                let delta = diff - ch[1];
+                let (sign_bit, mag) = if delta < 0 { (1u32, (!delta) as u32) } else { (0u32, delta as u32) };
+                let high = mag >> num_low;
+                let rem = mag & ((1 << num_low) - 1);
+                put(sign_bit, 1, &mut bits);
+                put(low, 2, &mut bits);
+                if high < 12 {
+                    put(1, high + 1, &mut bits);
+                } else {
+                    put(0, 12, &mut bits);
+                    let num_high = 15 - num_low;
+                    put(high << 1, num_high + 1, &mut bits);
+                }
+                put(rem, num_low, &mut bits);
+                ch[0] = mag as i32;
+                ch[1] = (diff * 3 + ch[1]) >> 5;
+                ch[2] = if ch[0] > 16 { 0 } else { ch[2] + 1 };
+            }
+        }
+        let mut out = vec![0, 0, 0, 0, 1, 0, 0];
+        out.extend(bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |a, (i, &b)| a | (b as u8) << (7 - i))));
+        out
+    }
+
+    #[test]
+    fn compressed_orf_round_trip() {
+        let (w, h) = (16usize, 6usize);
+        let samples: Vec<u16> = (0..w * h).map(|i| (256 + (i * 313 + (i / w) * 71) % 3500) as u16).collect();
+        let strip = encode_olympus_compressed(&samples, w, h);
+        assert_eq!(decompress_olympus(&strip, w, h).unwrap(), samples);
+        let bytes = orf_with(w as u32, h as u32, 16, strip, Some(RGGB));
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!((r.width, r.height, r.bits), (w, h, 12));
+        assert_eq!(r.data, RawData::U16(samples));
+        assert_eq!(crate::probe_info(&bytes).unwrap(), r.info());
     }
 }
