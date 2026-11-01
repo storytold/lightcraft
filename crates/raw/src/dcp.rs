@@ -281,6 +281,35 @@ mod tests {
         assert!(parse_dcp(&bad).is_err());
     }
 
+    /// The hue/saturation map's header is the user's file too: dimensions far past the data, an entry count
+    /// claiming 4 billion values, or a data offset past the end drop the map (the matrix still reads) instead of
+    /// allocating for the claim or reading past the file.
+    #[test]
+    fn a_hostile_hue_sat_map_header_drops_the_map() {
+        let good = synthetic_dcp(true, true);
+        let at = |needle: &[u8]| good.windows(needle.len()).position(|w| w == needle).unwrap();
+        let le = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let dims = at(&le(&[2, 2, 1]));
+        // the map data's directory entry: tag, FLOAT, count 12, offset
+        let entry = at(&[t::PROFILE_HUE_SAT_MAP_DATA_1.to_le_bytes(), 11u16.to_le_bytes()].concat());
+        let patched = |at: usize, bytes: &[u8]| {
+            let mut b = good.clone();
+            b[at..at + bytes.len()].copy_from_slice(bytes);
+            b
+        };
+        for (what, bytes) in [
+            ("4096³ dimensions", patched(dims, &le(&[4096, 4096, 4096]))),
+            ("dimensions past u32 products", patched(dims, &le(&[u32::MAX, u32::MAX, u32::MAX]))),
+            ("a zero dimension", patched(dims, &le(&[0, 2, 1]))),
+            ("4 billion values", patched(entry + 4, &le(&[u32::MAX]))),
+            ("data past the end", patched(entry + 8, &le(&[u32::MAX - 16]))),
+        ] {
+            let p = parse_dcp(&bytes).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            assert!(p.color.profile.hue_sat_map[0].is_none(), "{what}: the map is dropped");
+            assert!(p.color.color_matrix[0].is_some(), "{what}: the matrix still reads");
+        }
+    }
+
     #[test]
     fn written_profiles_read_back() {
         let p = parse_dcp(&synthetic_dcp(false, true)).unwrap();
