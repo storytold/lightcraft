@@ -63,8 +63,13 @@ def main():
     print(f"measuring {len(files)} files", flush=True)
 
     def one(f):
-        p = subprocess.run([a.rawdump, "noise", f], capture_output=True, text=True, timeout=600)
-        return json.loads(p.stdout) if p.returncode == 0 else None
+        # (a file that hangs, a helper that can't start or output that isn't JSON skips that file, not the batch)
+        try:
+            p = subprocess.run([a.rawdump, "noise", f], capture_output=True, text=True, timeout=600)
+            return json.loads(p.stdout) if p.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+            print(f"skipped {f}: {e}", file=sys.stderr, flush=True)
+            return None
 
     # per (camera, iso, plane): mean bin -> list of p10 variances (one per photo)
     pts = defaultdict(lambda: defaultdict(list))
