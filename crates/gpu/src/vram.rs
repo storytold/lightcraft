@@ -105,8 +105,9 @@ fn sysfs_memory(cards: impl Iterator<Item = SysfsCard>, vendor: u32, device: u32
 /// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
 /// another: a subkey's values are gathered under its path): the subkey whose `DriverDesc` is the
 /// name, only when every subkey with that name reports one size (two cards of one model can't be
-/// told apart by name; `None` rather than another card's size), else, when none has the name, the
-/// largest any adapter reports. `HardwareInformation.qwMemorySize` is a QWORD;
+/// told apart by name; `None` rather than another card's size); when none has the name, the one
+/// adapter that reports a size, if there is only one (never another card's on a computer with
+/// several). `HardwareInformation.qwMemorySize` is a QWORD;
 /// older drivers write `HardwareInformation.MemorySize` (a DWORD, wrong past 4 GiB: used only
 /// without the other).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -152,7 +153,7 @@ fn parse_registry(text: &str, name: &str) -> Option<u64> {
             let b = memory(first)?;
             named.iter().all(|k| memory(k) == Some(b)).then_some(b)
         }
-        None => keys.iter().filter_map(memory).max(),
+        None => only(keys.iter().filter_map(memory)),
     }
 }
 
@@ -166,8 +167,9 @@ fn parse_hex(v: &str) -> Option<u64> {
 }
 
 /// `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits` lines (`name, MiB`):
-/// the cards named `name`, only when they all report one size (`None` rather than another card's),
-/// else, when none has the name, the largest.
+/// the cards named exactly `name` (else those whose name is part of it, `NVIDIA GeForce RTX 4070`
+/// in `… 4070 Ti SUPER` only when no card has the exact name), only when they all report one size
+/// (`None` rather than another card's); when none has the name, the only card, if there is one.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_nvidia_smi(text: &str, name: &str) -> Option<u64> {
     let cards: Vec<(String, u64)> = text
@@ -178,11 +180,20 @@ fn parse_nvidia_smi(text: &str, name: &str) -> Option<u64> {
         })
         .collect();
     let wanted = name.trim().to_ascii_lowercase();
-    let named: Vec<u64> = cards.iter().filter(|(n, _)| *n == wanted || wanted.contains(n.as_str())).map(|c| c.1).collect();
+    let exact: Vec<u64> = cards.iter().filter(|(n, _)| *n == wanted).map(|c| c.1).collect();
+    let named = if exact.is_empty() { cards.iter().filter(|(n, _)| wanted.contains(n.as_str())).map(|c| c.1).collect() } else { exact };
     match named.first() {
         Some(&b) => named.iter().all(|m| *m == b).then_some(b),
-        None => cards.iter().map(|c| c.1).max(),
+        None => only(cards.iter().map(|c| c.1)),
     }
+}
+
+/// The one size in `sizes`, `None` when there are none or several (another card's size is no
+/// guess for this one).
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn only(mut sizes: impl Iterator<Item = u64>) -> Option<u64> {
+    let first = sizes.next()?;
+    sizes.next().is_none().then_some(first)
 }
 
 #[cfg(test)]
@@ -243,8 +254,8 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
     fn the_registry_names_the_adapters_memory() {
         assert_eq!(parse_registry(REG, "NVIDIA GeForce RTX 5070"), Some(12 << 30));
         assert_eq!(parse_registry(REG, "AMD Radeon(TM) Graphics"), Some(512 << 20));
-        // an adapter not listed: the largest
-        assert_eq!(parse_registry(REG, "Something Else"), Some(12 << 30));
+        // an adapter not listed, among several that report a size: not another card's (review of PR #3506)
+        assert_eq!(parse_registry(REG, "Something Else"), None);
         assert_eq!(parse_registry("", "x"), None);
         assert_eq!(parse_registry("garbage\n    HardwareInformation.qwMemorySize    REG_QWORD    nothex", "x"), None);
         // a DWORD alone still counts
@@ -274,7 +285,12 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         let text = "NVIDIA GeForce RTX 5070, 12227\nNVIDIA GeForce GT 1030, 2001\n";
         assert_eq!(parse_nvidia_smi(text, "NVIDIA GeForce RTX 5070"), Some(12227 << 20));
         assert_eq!(parse_nvidia_smi(text, "NVIDIA GeForce GT 1030"), Some(2001 << 20));
-        assert_eq!(parse_nvidia_smi(text, "nope"), Some(12227 << 20));
+        assert_eq!(parse_nvidia_smi(text, "nope"), None, "not another card's size");
+        assert_eq!(parse_nvidia_smi("NVIDIA GeForce RTX 5070, 12227", "nope"), Some(12227 << 20), "the only card");
+        // (review of PR #3499) the exact name wins over a shorter name inside it
+        let family = "NVIDIA GeForce RTX 4070, 12282\nNVIDIA GeForce RTX 4070 Ti SUPER, 16376\n";
+        assert_eq!(parse_nvidia_smi(family, "NVIDIA GeForce RTX 4070 Ti SUPER"), Some(16376 << 20));
+        assert_eq!(parse_nvidia_smi(family, "NVIDIA GeForce RTX 4070"), Some(12282 << 20));
         assert_eq!(parse_nvidia_smi("No devices were found", "x"), None);
     }
 
