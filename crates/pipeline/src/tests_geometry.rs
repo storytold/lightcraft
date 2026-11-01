@@ -27,6 +27,10 @@ pub(crate) fn line_x(img: &Rgba8, y: usize, x0: f64, win: f64) -> f64 {
     let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
     let row: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
     let max = row.iter().cloned().fold(0.0, f64::max);
+    let min = row.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in row.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -41,6 +45,10 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
     let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
     let col: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
     let max = col.iter().cloned().fold(0.0, f64::max);
+    let min = col.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in col.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);

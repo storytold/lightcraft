@@ -230,8 +230,19 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     return a + (b - a) * v;
 }
 
-fn enc8(v: f32) -> u32 {
-    return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
+const BAYER_8X8 = array<f32, 64>(
+     0.0, 32.0,  8.0, 40.0,  2.0, 34.0, 10.0, 42.0,
+    48.0, 16.0, 56.0, 24.0, 50.0, 18.0, 58.0, 26.0,
+    12.0, 44.0,  4.0, 36.0, 14.0, 46.0,  6.0, 38.0,
+    60.0, 28.0, 52.0, 20.0, 62.0, 30.0, 54.0, 22.0,
+     3.0, 35.0, 11.0, 43.0,  1.0, 33.0,  9.0, 41.0,
+    51.0, 19.0, 59.0, 27.0, 49.0, 17.0, 57.0, 25.0,
+    15.0, 47.0,  7.0, 39.0, 13.0, 45.0,  5.0, 37.0,
+    63.0, 31.0, 55.0, 23.0, 61.0, 29.0, 53.0, 21.0,
+);
+
+fn enc8(v: f32, d: f32) -> u32 {
+    return u32(clamp(clamp(v, 0.0, 1.0) * 255.0 + d, 0.0, 255.0));
 }
 
 // sRGB-curve-encoded value → the output space's own curve (`OutputTrc`: 0 sRGB, 1 gamma, 2 Rec.709).
@@ -564,5 +575,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         e = vec3<f32>(0.0, 0.25, 1.0);
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
-    out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
+    let abs_x = u32(pf(F_VIG_VIEW)) + x;
+    let abs_y = u32(pf(F_VIG_VIEW + 1u)) + y;
+    let dither = 0.5 + (BAYER_8X8[(abs_y & 7u) * 8u + (abs_x & 7u)] - 31.5) / 64.0 * 0.75;
+    out[i] = enc8(e.x, dither) | (enc8(e.y, dither) << 8u) | (enc8(e.z, dither) << 16u) | (255u << 24u);
 }
