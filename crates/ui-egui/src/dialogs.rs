@@ -58,6 +58,7 @@ pub const WHATS_NEW: &str = include_str!("../../../docs/whats-new.md");
 fn window_id(dialog: &Dialog) -> egui::Id {
     egui::Id::unique(match dialog {
         Dialog::Import { .. } => "lightcraft-import-dialog",
+        Dialog::Duplicates { .. } => "lightcraft-duplicates-dialog",
         Dialog::Print => "lightcraft-print-dialog",
         Dialog::Settings { .. } => "lightcraft-settings-dialog",
         _ => "lightcraft-dialog",
@@ -121,6 +122,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
     // rather than growing the window when the options below the grid get taller (e.g. Copy).
     let import = matches!(dlg, Dialog::Import { .. });
+    // Find Duplicate Photos can be resized too (its list of groups takes the room), with a window id of its own.
+    let duplicates = matches!(dlg, Dialog::Duplicates { .. });
     // The Print dialog sizes itself to the window and scrolls its settings column on its own.
     let print = matches!(dlg, Dialog::Print);
     let window_id = window_id(&dlg);
@@ -145,9 +148,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let shown = egui::Window::new(crate::i18n::tr(&title))
         .id(window_id)
         .collapsible(false)
-        .resizable(import)
+        .resizable(import || duplicates)
         .vscroll(import)
-        .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
+        .resize(|r| {
+            if import {
+                r.default_height(crate::import::DIALOG_SIZE[1])
+            } else if duplicates {
+                r.default_size([(screen.width() - 160.0).clamp(560.0, 1400.0), (screen.height() - 120.0).max(420.0)]).min_size([560.0, 420.0])
+            } else {
+                r
+            }
+        })
         .frame(frame)
         .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
         .min_width(widest)
@@ -171,7 +182,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 ui.disable();
             }
             ui.spacing_mut().item_spacing.y = 8.0;
-            body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
+            body_h = dialog_body(ui, (!import && !print && !duplicates).then_some(title.as_str()), body_max, |ui| {
                 dialog_content(app, ui, &t, body_max, &mut confirm, &mut dlg)
             });
             ui.add_space(4.0);
