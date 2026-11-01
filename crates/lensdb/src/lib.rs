@@ -60,7 +60,8 @@ pub struct Camera {
     pub maker: String,
     pub model: String,
     pub mount: String,
-    pub crop_factor: f64,
+    /// Sensor crop relative to 35 mm; missing or invalid XML remains unknown.
+    pub crop_factor: Option<f64>,
 }
 
 /// One calibrated vignetting point.
@@ -80,8 +81,8 @@ pub struct Profile {
     /// Every name the lens goes by (EXIF variants, translations).
     pub models: Vec<String>,
     pub mounts: Vec<String>,
-    /// Crop factor of the camera the calibration was made on.
-    pub crop_factor: f64,
+    /// Crop factor of the calibration frame; missing or invalid XML remains unknown.
+    pub crop_factor: Option<f64>,
     /// Long / short side of the calibration frame.
     pub aspect_ratio: f64,
     /// False for fisheye and other non-rectilinear projections: distortion is then not applied.
@@ -205,7 +206,7 @@ impl LensDb {
             {
                 score *= 0.8;
             }
-            if score >= 0.6 && best.is_none_or(|(s, _)| score > s) {
+            if score >= 0.6 && best.is_none_or(|(s, b)| score > s || (score == s && b.crop_factor.is_none() && lens.crop_factor.is_some())) {
                 best = Some((score, lens));
             }
         }
@@ -346,7 +347,7 @@ fn camera(n: &xml::Node) -> Option<Camera> {
         maker: n.kid_text("maker")?.to_string(),
         model: n.kid_text("model")?.to_string(),
         mount: n.kid_text("mount").unwrap_or_default().to_string(),
-        crop_factor: crop_of(n.kid_text("cropfactor")).unwrap_or(1.0),
+        crop_factor: crop_of(n.kid_text("cropfactor")),
     })
 }
 
@@ -375,7 +376,7 @@ fn lens(n: &xml::Node) -> Vec<Profile> {
     if models.is_empty() {
         return Vec::new();
     }
-    let crop = crop_of(n.kid_text("cropfactor")).unwrap_or(1.0);
+    let crop = crop_of(n.kid_text("cropfactor"));
     let aspect = aspect_of(n.kid_text("aspect-ratio")).unwrap_or(1.5);
     let rectilinear = n.kid_text("type").is_none_or(|t| t.eq_ignore_ascii_case("rectilinear"));
     let mounts = n.kids("mount").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect::<Vec<_>>();
@@ -385,7 +386,11 @@ fn lens(n: &xml::Node) -> Vec<Profile> {
                 maker: maker.to_string(),
                 models: models.clone(),
                 mounts: mounts.clone(),
-                crop_factor: crop_of(cal.attr("cropfactor")).unwrap_or(crop),
+                // Only an omitted override inherits; an explicit invalid value remains unknown.
+                crop_factor: match cal.attr("cropfactor") {
+                    Some(value) => crop_of(Some(value)),
+                    None => crop,
+                },
                 aspect_ratio: aspect_of(cal.attr("aspect-ratio")).unwrap_or(aspect),
                 rectilinear,
                 distortion: Vec::new(),
@@ -514,14 +519,16 @@ impl Profile {
     /// The correction for `shot`, as the DNG opcode polynomials the pipeline applies, centred on the image.
     /// Distortion and TCA are combined per plane (R, G, B); a model the polynomial can't follow closely
     /// ([`MAX_WARP_ERROR`], [`MAX_VIGNETTE_ERROR`]) or that would fold the image is left out.
+    /// An unknown or invalid calibration crop factor cannot be converted.
     pub fn correction(&self, shot: &Shot) -> Option<EmbeddedLens> {
         let (w, h) = (shot.width, shot.height);
         if !(w >= 2.0 && h >= 2.0 && w.is_finite() && h.is_finite() && shot.focal.is_finite() && shot.focal > 0.0) {
             return None;
         }
-        let cam = shot.crop_factor.filter(|c| c.is_finite() && *c > 0.0).unwrap_or(self.crop_factor);
+        let calibration_crop = self.crop_factor.filter(|c| c.is_finite() && (0.05..=20.0).contains(c))?;
+        let cam = shot.crop_factor.filter(|c| c.is_finite() && *c > 0.0).unwrap_or(calibration_crop);
         // DNG radius (1 = image half diagonal) → lensfun radii
-        let to_vig = self.crop_factor / cam;
+        let to_vig = calibration_crop / cam;
         let to_dist = to_vig * (1.0 + self.aspect_ratio * self.aspect_ratio).sqrt();
         let center = Point::new(0.5, 0.5);
         let radius = w.hypot(h) / 2.0 / w.max(h);
