@@ -1418,3 +1418,28 @@ fn undo_to_embedded_thumb_rejects_late_full_render() {
     assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
     assert!(!app.renderer.is_pending(full_slot));
 }
+
+/// Brushing three photos with Auto Sync on stalled the window while their renders queued up on the
+/// GPU ahead of the view: work prepared ahead takes batch turns at the GPU, behind the view's own
+/// renders; the views, and a thumbnail on screen, never wait for a turn.
+#[test]
+fn work_prepared_ahead_takes_batch_turns_at_the_gpu() {
+    use crate::render::Turn;
+    let background = crate::panels::grid::BACKGROUND_THUMB_PRIORITY;
+    let p = PhotoId(1);
+    for slot in [Slot::Prefetch(0), Slot::Prefetch(1)] {
+        assert_eq!(Turn::of(slot, 4), Turn::Batch, "{slot:?}");
+    }
+    for slot in [Slot::Thumb(p), Slot::ThumbQuick(p)] {
+        assert_eq!(Turn::of(slot, background), Turn::Batch, "{slot:?} behind its stand-in");
+        assert_eq!(Turn::of(slot, background + 10), Turn::Background, "{slot:?} on screen");
+    }
+    for slot in [Slot::Main, Slot::Region, Slot::RegionBefore, Slot::Before, Slot::Hover, Slot::Compare(0), Slot::Second] {
+        assert_eq!(Turn::of(slot, 0), Turn::View, "{slot:?}");
+    }
+    // the turn is what the job's GPU renders see on its worker thread
+    assert!(Turn::Batch.run(lightcraft_engine::gpu::is_batch), "a batch job's renders are batch work");
+    assert!(!Turn::View.run(lightcraft_engine::gpu::is_batch), "a view's are not");
+    assert!(!Turn::Background.run(lightcraft_engine::gpu::is_batch), "nor a thumbnail's on screen");
+    assert!(!lightcraft_engine::gpu::is_batch(), "and the thread is back to view work after");
+}

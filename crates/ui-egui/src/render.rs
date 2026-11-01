@@ -328,6 +328,43 @@ pub struct Renderer {
 #[cfg(not(target_arch = "wasm32"))]
 const IDLE_TRIM: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How a render job takes its turn at the GPU (and at the processor's memory).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Turn {
+    /// What the user looks at: never waits.
+    View,
+    /// Background work that still shows soon (a thumbnail on screen): the processor's background
+    /// memory budget, but the GPU at once (it must not wait for an export's turn).
+    Background,
+    /// Work prepared ahead (the neighbours of the open photo, thumbnails rendered behind their
+    /// stand-ins): GPU batch work ([`lightcraft_engine::gpu::as_batch`]), like an export's photos.
+    /// It waits while a view render runs and keeps one submission queued at a time, so it can't
+    /// fill the window's GPU queue ahead of the view and the cursor (brushing three photos with
+    /// Auto Sync on stalled the window while their renders queued up).
+    Batch,
+}
+
+impl Turn {
+    /// The turn of a job for `slot` at `priority`.
+    pub(crate) fn of(slot: Slot, priority: u32) -> Turn {
+        match slot {
+            Slot::Prefetch(_) => Turn::Batch,
+            Slot::Thumb(_) | Slot::ThumbQuick(_) if priority <= crate::panels::grid::BACKGROUND_THUMB_PRIORITY => Turn::Batch,
+            Slot::Thumb(_) | Slot::ThumbQuick(_) => Turn::Background,
+            _ => Turn::View,
+        }
+    }
+
+    /// Run `f` (a job's render, on its worker thread) in this turn.
+    pub(crate) fn run<R>(self, f: impl FnOnce() -> R) -> R {
+        match self {
+            Turn::View => f(),
+            Turn::Background => lightcraft_engine::memory::in_background(f),
+            Turn::Batch => lightcraft_engine::memory::in_background(|| lightcraft_engine::gpu::as_batch(f)),
+        }
+    }
+}
+
 impl Slot {
     /// An interactive view of the open photo: slider drags redo only the stages they feed, and a
     /// draft that finishes late still replaces older pixels.
@@ -691,7 +728,7 @@ impl Renderer {
             return;
         }
         let key = job.key;
-        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let turn = Turn::of(slot, priority);
         let display = self.display.clone();
         self.pool.submit(
             slot,
@@ -699,8 +736,7 @@ impl Renderer {
             priority,
             Box::new(move || {
                 let look = Some((geometry_look(&job.settings), job.request.apply_crop));
-                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
-                Finished { look, ..Self::run_for(run, &display) }
+                Finished { look, ..Self::run_for(|| turn.run(|| job.run()), &display) }
             }),
         );
     }
@@ -799,7 +835,7 @@ impl Renderer {
             slot,
             key,
             priority,
-            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None }),
+            Box::new(move || Finished { look: None, result: Turn::of(slot, priority).run(|| job.run()), color: None }),
         );
     }
 

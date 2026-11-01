@@ -72,6 +72,18 @@ pub fn as_batch<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// Are this thread's GPU renders batch work now ([`as_batch`])? Always `false` on wasm.
+pub fn is_batch() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        gate::is_batch()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
 /// Run `f`, several batch renders of one photo (an export's SDR and HDR renditions, `src_px`
 /// source and `out_px` output pixels), in one turn at the GPU: the stages the first leaves on the
 /// device for the second stay its own. Outside batch work, or without a device, it is just `f`.
