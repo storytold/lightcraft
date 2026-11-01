@@ -138,7 +138,7 @@ fn bench_cull_times_a_folder_and_leaves_it_untouched() {
     assert_eq!(v["importCopy"]["photos"], 1);
     assert_eq!(v["rate"]["n"], 3);
     // a folder smaller than the samples is measured on the photos it has, not reported empty
-    assert_eq!(v["loupeRender"]["n"], 3, "{}", v["loupeRender"]);
+    assert_eq!((v["loupeRender"]["n"].as_u64(), v["loupeRender"]["failed"].as_u64()), (Some(3), Some(0)), "{}", v["loupeRender"]);
     // PNGs carry no camera preview: counted as not loaded, never timed as previews
     assert_eq!((v["thumbs"]["count"].as_u64(), v["thumbs"]["failed"].as_u64()), (Some(0), Some(3)), "{}", v["thumbs"]);
     for stage in ["camera1280", "camera2560", "cameraFull"] {

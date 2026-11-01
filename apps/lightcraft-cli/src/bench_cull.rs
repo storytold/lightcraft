@@ -72,8 +72,12 @@ fn ms_since(t: Instant) -> f64 {
 
 /// Print one result line the way `xtask bench` parses it (`name: X ms wall`).
 fn line(name: &str, s: &Value) {
+    let failed = s.get("failed").and_then(Value::as_u64).unwrap_or(0);
     if let Some(p50) = s.get("p50").and_then(Value::as_f64) {
-        println!("{name}: {p50:.1} ms wall  (p95 {} ms, n {})", s["p95"], s["n"]);
+        let failed = if failed > 0 { format!(", {failed} failed") } else { String::new() };
+        println!("{name}: {p50:.1} ms wall  (p95 {} ms, n {}{failed})", s["p95"], s["n"]);
+    } else if failed > 0 {
+        println!("{name}: all {failed} failed");
     }
 }
 
@@ -332,9 +336,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     // --- LightCraft's loupe render (2560 px) from a cold source --------------------------------
-    let ms: Vec<f64> = sample_after(&ids, 80, 5)
+    // (a photo with no loupe job, or whose render fails, counts as failed)
+    let timed: Vec<Option<f64>> = sample_after(&ids, 80, 5)
         .iter()
-        .filter_map(|id| {
+        .map(|id| {
             let job = s.loupe_job(*id, 2560, 1708, true)?;
             let a = Instant::now();
             let r = job.run();
@@ -342,7 +347,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             r.rendered.is_ok().then_some(t)
         })
         .collect();
-    let st = stats(&ms);
+    let ms: Vec<f64> = timed.iter().flatten().copied().collect();
+    let st = with_failed(&ms, timed.len().saturating_sub(ms.len()));
     line("loupe render 2560 px (cold)", &st);
     out["loupeRender"] = st;
 

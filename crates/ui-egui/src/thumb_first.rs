@@ -46,13 +46,7 @@ pub struct ThumbFirstSummary {
 impl ThumbFirst {
     /// A cell of photo `id` was drawn on screen in frame `frame` at `now` (ms), with a picture or not.
     pub fn note(&mut self, frame: u64, id: PhotoId, has_pixels: bool, now: f64) {
-        if frame != self.frame {
-            // cells not drawn in the frame just finished left the screen
-            let last = self.frame;
-            self.waiting.retain(|_, (_, seen)| *seen >= last);
-            self.empty_this_frame = 0;
-            self.frame = frame;
-        }
+        self.begin_frame(frame);
         if !has_pixels {
             self.empty_this_frame += 1;
             self.empty_cell_frames += 1;
@@ -76,6 +70,18 @@ impl ThumbFirst {
             (false, Some(since)) => {
                 self.waiting.insert(id, (since, frame));
             }
+        }
+    }
+
+    /// Frame `frame` is being drawn. Called every frame (and by [`Self::note`]), so a frame that
+    /// draws no cells (the grid and filmstrip hidden) leaves nothing waiting or empty on screen.
+    pub fn begin_frame(&mut self, frame: u64) {
+        if frame != self.frame {
+            // cells not drawn in the frame just finished left the screen
+            let last = self.frame;
+            self.waiting.retain(|_, (_, seen)| *seen >= last);
+            self.empty_this_frame = 0;
+            self.frame = frame;
         }
     }
 
@@ -155,5 +161,18 @@ mod tests {
         assert_eq!(t.summary().waiting, 1);
         t.note(4, PhotoId(1), true, 5040.0);
         assert_eq!(t.summary().max, 40.0, "timed from its return");
+    }
+
+    /// Frames that draw no cells (no grid, no filmstrip) still move the count on: the cells of
+    /// the last frame that had them are no longer on screen.
+    #[test]
+    fn a_frame_without_cells_leaves_none_waiting() {
+        let mut t = ThumbFirst::default();
+        t.note(1, PhotoId(1), false, 0.0);
+        assert_eq!((t.summary().waiting, t.summary().empty_now), (1, 1));
+        t.begin_frame(2);
+        t.begin_frame(3);
+        let s = t.summary();
+        assert_eq!((s.waiting, s.empty_now), (0, 0));
     }
 }
