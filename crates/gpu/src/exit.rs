@@ -35,6 +35,11 @@ pub(crate) fn enter() -> Option<Work<'static>> {
     GATE.enter()
 }
 
+/// The process's gate (device creation carries a [`Work`] of it to the thread that creates it).
+pub(crate) fn gate() -> &'static Gate {
+    &GATE
+}
+
 pub(crate) fn begin_shutdown() {
     GATE.close();
 }
