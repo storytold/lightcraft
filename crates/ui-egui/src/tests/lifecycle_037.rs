@@ -609,7 +609,19 @@ fn hidden_slideshow_pauses_and_keeps_its_remaining_time() {
         let tex = ctx.load_texture(format!("slide-{}", id.0), egui::ColorImage::filled([2, 2], egui::Color32::WHITE), Default::default());
         app.renderer.textures.insert(
             Slot::Slide(Item::Photo(id)),
-            Tex { look: None, key: 0, photo: id, tex, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex {
+                look: None,
+                key: 0,
+                photo: id,
+                tex,
+                size: [2, 2],
+                histogram: None,
+                ms: 0.0,
+                quick: None,
+                full_res: false,
+                first_pixel: None,
+                pixels: None,
+            },
         );
     }
     let first = app.ui.slideshow.as_ref().unwrap().play.current();

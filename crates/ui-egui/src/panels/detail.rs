@@ -38,7 +38,7 @@ pub use geometry::CanvasMap;
 #[cfg(test)]
 pub(crate) use geometry::focus_box;
 use geometry::{animated_rect, middle_pan};
-pub(crate) use geometry::{fit_rect, fit_texture_rect, focus_pan, navigate_gesture, output_px, pan_image, snap_fit_rect, texture_side};
+pub(crate) use geometry::{fit_rect, fit_texture_rect, focus_pan, navigate_gesture, output_px, pan_image, render_size, snap_fit_rect, texture_side};
 #[cfg(test)]
 use info::RENDERING_AFTER_SECS;
 use info::{
@@ -227,11 +227,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // The short side is rounded, not truncated: a truncated box (2560 x 1706 for a 2560 x 1707
     // source) made the render a slightly anisotropic resample of its source, a 2-tap blur along
     // one axis only. A box that matches the source to rounding is rendered at exactly its size.
-    let short = |e: usize, a: f32| ((e as f32 / a).round() as usize).max(1);
-    let (rw, rh) = if aspect >= 1.0 { (want, short(want, aspect)) } else { (short(want, 1.0 / aspect), want) };
+    let (rw, rh) = render_size(want, aspect);
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
-    let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
+    let (sw, sh) = render_size(se, aspect);
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
@@ -270,6 +269,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore, Slot::Hover] {
+        app.renderer.set_texture_zoom(slot, app.ui.zoom);
+    }
     let p = ui.painter_at(canvas);
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
