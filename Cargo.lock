@@ -3716,6 +3716,7 @@ dependencies = [
  "lightcraft-scenes",
  "lightcraft-segment",
  "lightcraft-slideshow",
+ "lightcraft-sysmem",
  "lightcraft-testkit",
  "lightcraft-tiff",
  "log",
@@ -7827,6 +7828,7 @@ version = "0.17.0"
 dependencies = [
  "brotli",
  "flate2",
+ "lightcraft-sysmem",
  "serde_json",
  "sha2",
 ]
