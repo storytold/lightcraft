@@ -170,7 +170,8 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
     if running(app) {
         return Err(crate::i18n::tr("The test is already running").to_string());
     }
-    if app.export.is_some() {
+    // (also a slideshow's or another export that only has its activity row: review of PR #3544)
+    if app.export.is_some() || app.session.activity.list().iter().any(|t| t.kind == "export") {
         return Err(crate::i18n::tr("Wait for the export to finish, then test this computer").to_string());
     }
     let photos = match paths {
@@ -245,7 +246,7 @@ fn find_on_disk(candidates: Vec<String>, stop: impl Fn() -> bool + Clone + Send 
 /// A search for the library's photos in progress (one at a time); dropped when it ends, also
 /// when its thread can't start.
 #[cfg(not(target_arch = "wasm32"))]
-struct Scanning;
+struct Scanning(&'static std::sync::atomic::AtomicBool);
 
 #[cfg(not(target_arch = "wasm32"))]
 static SCANNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -253,14 +254,19 @@ static SCANNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 #[cfg(not(target_arch = "wasm32"))]
 impl Scanning {
     fn start() -> Option<Scanning> {
-        (!SCANNING.swap(true, Ordering::AcqRel)).then_some(Scanning)
+        Scanning::start_on(&SCANNING)
+    }
+
+    /// (a flag of its own in tests, so a search another test started can't hold it)
+    fn start_on(flag: &'static std::sync::atomic::AtomicBool) -> Option<Scanning> {
+        (!flag.swap(true, Ordering::AcqRel)).then_some(Scanning(flag))
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Scanning {
     fn drop(&mut self) {
-        SCANNING.store(false, Ordering::Release);
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -495,6 +501,7 @@ mod tests {
 
     /// Review of PR #3499: the library's photos are looked at on the test's thread, newest first,
     /// and only as many as the test needs.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_newest_photos_on_disk_are_tested() {
         let c: Vec<String> = (1..=6).map(|i| format!("p{i}.nef")).collect();
@@ -530,10 +537,12 @@ mod tests {
         assert!(newest(all.iter(), 0).is_empty());
         // one search at a time: a second can't start while the first is held (review of PR #3506)
         {
-            let first = Scanning::start().unwrap();
-            assert!(Scanning::start().is_none(), "a second search while the first is held");
+            // (its own flag: a search another test started holds the app's; review of PR #3499)
+            static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            let first = Scanning::start_on(&FLAG).unwrap();
+            assert!(Scanning::start_on(&FLAG).is_none(), "a second search while the first is held");
             drop(first);
-            assert!(Scanning::start().is_some(), "free again once it ended");
+            assert!(Scanning::start_on(&FLAG).is_some(), "free again once it ended");
         }
         // a stop during the wait for a scan that hangs is seen at once (review of PR #3499)
         let (_tx, rx) = channel::<Vec<String>>();
@@ -564,5 +573,17 @@ mod tests {
         let e = crate::export_task::start_print(&mut app, &serde_json::json!({"path": pdf})).unwrap_err();
         assert_eq!(e, crate::export_task::MACHINE_TEST_RUNNING);
         assert!(!dir.exists(), "nothing written");
+    }
+
+    /// Review of PR #3544: the test doesn't start while an export that only has its activity row
+    /// runs (a slideshow's).
+    #[test]
+    fn the_test_waits_for_a_slideshow_export() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let export = app.session.activity.start("export", "Exporting the slideshow", Cancel::No);
+        let e = start_with(&mut app, Some(Vec::new()), true, false).unwrap_err();
+        assert!(e.contains("Wait for the export"), "{e}");
+        assert!(app.machine.is_none());
+        drop(export);
     }
 }
