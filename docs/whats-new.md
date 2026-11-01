@@ -227,6 +227,15 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
+## 2026-10-26
+
+### Pushed shadows of raws no longer turn magenta
+- Raw decoding no longer clips each colour channel at zero. Near black, sensor noise through the camera's colour
+  matrix has negative values, and clipping kept only the positive half of each channel's noise, so dark areas
+  pushed up came out purple or magenta, most visibly with saturating camera profiles. In the fitted view, thumbnails
+  and other views smaller than the photo, where neighbouring pixels are averaged first, pushed shadows now keep their
+  real colour (a lens-cap frame pushed 4 EV rendered magenta; it is now black), and cached thumbnails are rendered
+  again. At 100% and in full-size exports white balance still clips each channel before noise reduction (#840).
 
 ## 2026-10-25
 

@@ -923,6 +923,40 @@ fn yellowing_look() -> lightcraft_color::Mat3 {
     lightcraft_color::Mat3([[0.42, 0.548, 0.04], [0.246, 0.728, 0.033], [-0.247, 0.679, 0.447]])
 }
 
+/// Decoding passes finite values through, negative ones included, and zeroes NaN and infinities.
+#[test]
+fn decoding_keeps_negative_channels_and_zeroes_non_finite_ones() {
+    assert_eq!(finite([0.6, 0.05, -0.04]), [0.6, 0.05, -0.04]);
+    assert_eq!(finite([f32::NAN, -0.1, f32::INFINITY]), [0.0, -0.1, 0.0]);
+}
+
+/// Dark sensor noise through a saturating camera matrix (a NIKON D780 profile's) averages to a neutral colour: the
+/// per-channel clamp at zero decoding had kept red's and blue's wider positive halves and turned it magenta.
+#[test]
+fn dark_noise_through_a_saturating_matrix_stays_neutral() {
+    let matrix = lightcraft_color::Mat3([[3.48, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]]);
+    let colour = CameraColourModel { wb: [1.0; 3], matrix, gain: 1.0, tables: None, hue_sat: None };
+    // a grey 0.002 above black with ±0.004 of noise per channel (a deterministic sequence)
+    let mut state = 12345u32;
+    let mut noise = || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    let mut img = Rgb32f::new(200, 200);
+    for p in img.data.iter_mut() {
+        *p = [0.002 + noise(), 0.002 + noise(), 0.002 + noise()];
+    }
+    colour.apply(&mut img);
+    let mut mean = [0.0f64; 3];
+    for p in &img.data {
+        for (m, v) in mean.iter_mut().zip(p) {
+            *m += f64::from(*v);
+        }
+    }
+    let (hi, lo) = (mean[0].max(mean[1]).max(mean[2]), mean[0].min(mean[1]).min(mean[2]));
+    assert!(lo > 0.0 && hi / lo < 1.2, "mean {mean:?} is tinted");
+}
+
 /// A fitted camera look applied in lanes, on rows that aren't a whole number of them, gives the bits of the
 /// pixel-by-pixel path, awkward pixels (black, negative, huge, NaN, infinite) included.
 #[test]

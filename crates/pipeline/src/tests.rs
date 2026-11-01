@@ -841,6 +841,72 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
     }
 }
 
+/// A raw's linear Rec.2020 as decoding leaves it since it stopped clamping channels at zero: a dark ramp with
+/// sensor noise through a saturating camera matrix (a NIKON D780 profile's), so near black many channels are
+/// negative, and a few strongly out-of-gamut pixels.
+fn negative_noise() -> Rgb32f {
+    let m = [[3.48f32, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]];
+    // ±0.004 of noise per channel, a hash of the position
+    let noise = |x: usize, y: usize, c: usize| {
+        let h = ((x * 7919 + y * 104_729 + c * 1_299_709) as u32).wrapping_mul(2_654_435_761);
+        (h >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+    };
+    Rgb32f::from_fn(48, 32, |x, y| {
+        if (x + y) % 37 == 0 {
+            return [-0.05, 0.01, -0.02];
+        }
+        let g = 0.0005 * 1.15f32.powi(x as i32);
+        let cam: [f32; 3] = std::array::from_fn(|c| g + noise(x, y, c));
+        std::array::from_fn(|i| m[i][0] * cam[0] + m[i][1] * cam[1] + m[i][2] * cam[2])
+    })
+}
+
+/// Negative channels from decoding reach every stage after it: every slider at its ends, at every output depth
+/// (HDR on and off), and the auto settings give finite values only.
+#[test]
+fn negative_channels_render_finite_everywhere() {
+    use crate::{DeepSamples, OutputDepth, auto};
+    let src = negative_noise();
+    assert!(src.data.iter().flatten().filter(|v| **v < 0.0).count() > src.data.len() / 4, "the source has few negatives");
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let finite = |s: &DevelopSettings, depth: OutputDepth, what: &str| {
+        let r = render(&src, &info, s, &RenderRequest { depth, ..RenderRequest::fit(48, 48) });
+        assert!(r.histogram.total > 0, "{what}");
+        match (depth, r.deep.map(|d| d.samples)) {
+            (OutputDepth::U8, None) | (OutputDepth::U16, Some(DeepSamples::U16(_))) => {}
+            (OutputDepth::F32Linear | OutputDepth::F32Hdr, Some(DeepSamples::F32(v))) => {
+                assert!(v.iter().all(|v| v.is_finite()), "{what} {depth:?}: non-finite output");
+            }
+            _ => panic!("{what} {depth:?}: missing or wrong deep samples"),
+        }
+    };
+    let mut pushed = DevelopSettings::default();
+    pushed.light.exposure = 4.0;
+    pushed.light.shadows = 100.0;
+    pushed.light.blacks = 100.0;
+    for hdr in [false, true] {
+        let mut s = pushed.clone();
+        s.hdr.enabled = hdr;
+        for depth in [OutputDepth::U8, OutputDepth::U16, OutputDepth::F32Linear, OutputDepth::F32Hdr] {
+            finite(&s, depth, &format!("pushed, hdr {hdr}"));
+        }
+    }
+    for c in controls::CONTROLS {
+        for v in [c.min, c.max] {
+            let mut s = pushed.clone();
+            controls::set(&mut s, c.id, v);
+            finite(&s, OutputDepth::F32Linear, &format!("{} = {v}", c.id));
+        }
+    }
+    let tone = auto::auto_tone(&src, &info, &pushed);
+    let t = [tone.exposure, tone.contrast, tone.highlights, tone.shadows, tone.whites, tone.blacks, tone.vibrance, tone.saturation];
+    assert!(t.iter().all(|v| v.is_finite()), "auto tone {t:?}");
+    assert!(auto::auto_bw_mix(&src, &info, &pushed).iter().all(|v| v.is_finite()));
+    let (t, k) = auto::auto_wb(&src, &info);
+    assert!(t.is_finite() && k.is_finite(), "auto WB {t} {k}");
+    assert!(auto::scene_log_mean(&src, &info, &pushed).is_none_or(f64::is_finite));
+}
+
 /// A crop of no width used to give grain NaN coordinates (and NaN pixels); the render stays finite.
 #[test]
 fn zero_width_crop_with_grain_renders_finite_pixels() {

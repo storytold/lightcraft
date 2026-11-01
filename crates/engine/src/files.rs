@@ -81,7 +81,7 @@ impl CameraColourModel<'_> {
                     }
                     let out = hue_sat.apply_lanes(rgb);
                     for (l, p) in chunk.iter_mut().enumerate() {
-                        *p = [out[0][l], out[1][l], out[2][l]].map(|v| v.max(0.0));
+                        *p = finite([out[0][l], out[1][l], out[2][l]]);
                     }
                 }
             });
@@ -103,8 +103,20 @@ impl CameraColourModel<'_> {
             Some(tables) => tables.apply(rgb, gain),
             None => rgb.map(|v| v * gain),
         };
-        self.hue_sat.map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        finite(self.hue_sat.map_or(rgb, |h| h.apply(rgb)))
     }
+}
+
+/// `rgb` (linear Rec.2020) as decoding leaves it for the stages after: negative channels kept, non-finite ones zero.
+/// Near black, negative channels are sensor noise through the colour matrix, and keeping them keeps the noise zero-mean
+/// until noise reduction and the output's gamut mapping (which moves a colour toward its luminance until it is in
+/// range) deal with it. Clamping each channel at zero here kept only the positive half of every channel's noise:
+/// through a saturating camera matrix (red row 3.5, −2.4, −0.1 on a NIKON D780 profile) red and blue have the widest
+/// noise, so pushed shadows and dark frames came out magenta (a black frame pushed 4 EV rendered at sRGB (64, 28, 65)
+/// in its darkest 40%, (2, 4, 4) without the clamp). Moving each such colour toward its luminance instead still left
+/// it pink, at (34, 14, 22): any per-pixel rule that treats pixels by the sign of their noise biases the mean.
+fn finite(rgb: [f32; 3]) -> [f32; 3] {
+    rgb.map(|v| if v.is_finite() { v } else { 0.0 })
 }
 
 #[cfg(test)]
