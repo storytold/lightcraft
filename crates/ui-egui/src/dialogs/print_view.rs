@@ -883,7 +883,7 @@ fn paint_cell(
             let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
             crate::panels::grid::request_thumb(app, id, px, 10);
         }
-        app.renderer.thumb(id).map(|tex| tex.tex.id())
+        app.renderer.thumb(id).map(|tex| tex.id())
     });
     match tex {
         Some(id) => {

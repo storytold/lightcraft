@@ -45,7 +45,14 @@ mod params;
 mod render;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use render::GpuStages;
+pub use render::{DisplayFrame, GpuStages, Output};
+/// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
+#[cfg(not(target_arch = "wasm32"))]
+pub use wgpu;
+
+/// Unit tests that create the device or swap the crash sentinel's path take turns.
+#[cfg(test)]
+pub(crate) static DEVICE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 /// Set when a GPU render failed: the process stays on the CPU from then on.
@@ -277,6 +284,21 @@ fn env_disabled() -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 static GPU: std::sync::OnceLock<Result<ctx::Gpu, String>> = std::sync::OnceLock::new();
 
+/// Set while [`adopt_window_device`] is about to run or running: [`device`] and [`warm_up`] then
+/// don't create a device of their own (review of PR #1065: the settings' warm-up raced the
+/// adoption thread and could win, so the window's device went unused).
+#[cfg(not(target_arch = "wasm32"))]
+static WINDOW_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Announce (before spawning it) that [`adopt_window_device`] will run, or withdraw that when it
+/// can't (`false`). Until it has finished, renders take the CPU path and [`warm_up`] does nothing.
+pub fn set_window_device_pending(pending: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    WINDOW_PENDING.store(pending, Ordering::Release);
+    #[cfg(target_arch = "wasm32")]
+    let _ = pending;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     // turned off (preference, environment): don't even load the driver (issue #136)
@@ -285,6 +307,11 @@ pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     }
     if let Some(g) = GPU.get() {
         return g.as_ref().ok();
+    }
+    // the window's device is being adopted: render on the CPU until it is, rather than create a
+    // device of our own first (which would leave the window's unused)
+    if WINDOW_PENDING.load(Ordering::Acquire) {
+        return None;
     }
     // creating the device is a long call into the driver: not once the process is ending
     let _work = exit::enter()?;
@@ -313,7 +340,7 @@ pub(crate) fn existing_device() -> Option<&'static ctx::Gpu> {
 /// while GPU rendering is turned off. Repeated calls start one thread at most.
 pub fn warm_up() {
     #[cfg(not(target_arch = "wasm32"))]
-    if !env_disabled() && ENABLED.load(Ordering::SeqCst) && GPU.get().is_none() {
+    if !env_disabled() && ENABLED.load(Ordering::SeqCst) && GPU.get().is_none() && !WINDOW_PENDING.load(Ordering::Acquire) {
         static STARTED: AtomicBool = AtomicBool::new(false);
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
@@ -328,8 +355,9 @@ pub fn warm_up() {
                 // again. Released first, then the preference read again: a call made while this
                 // thread still held the flag (turned back on meanwhile) returned without starting
                 // one, so this thread tries again itself rather than leave "starting" for good.
+                // The window's device being adopted meanwhile: that creates the device, not this.
                 STARTED.store(false, Ordering::SeqCst);
-                if !ENABLED.load(Ordering::SeqCst) || STARTED.swap(true, Ordering::SeqCst) {
+                if WINDOW_PENDING.load(Ordering::Acquire) || !ENABLED.load(Ordering::SeqCst) || STARTED.swap(true, Ordering::SeqCst) {
                     break;
                 }
             }
@@ -493,6 +521,111 @@ pub fn try_render(
 ) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        match run(src, info, s, req, stages, false)? {
+            render::Output::Image(r) => Ok(r),
+            // (not asked for)
+            render::Output::Display { .. } => Err(Fallback::NotTried),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, stages);
+        Err(Fallback::NotTried)
+    }
+}
+
+/// [`render`] for the window: when the device is the window's ([`adopt_window_device`]) and the
+/// render allows it, the result stays on the device as a texture to draw ([`Output::Display`]);
+/// otherwise pixels as from [`render`]. `None`: render on the CPU instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_display(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Output> {
+    run(src, info, s, req, stages, true).ok()
+}
+
+/// Whether renders run on the window's device (and so can be handed over as textures).
+pub fn on_window_device() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        existing_device().is_some_and(|g| g.window)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Render on the window's device (eframe's) instead of a device of its own, so finished views can
+/// be drawn without reading them back ([`render_display`]). Builds the kernels on it (~0.4–2 s:
+/// call it off the UI thread), in place of [`warm_up`]. When that fails, or the window's device
+/// doesn't suit (a software adapter, too few storage buffers), a device of its own is created as
+/// before; `Err` says why the window's wasn't used. Does nothing once a device exists.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo) -> Result<(), String> {
+    /// Whatever the outcome, renders may create or use a device again afterwards.
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            WINDOW_PENDING.store(false, Ordering::Release);
+        }
+    }
+    let _done = Done;
+    if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
+        return Err("GPU rendering is off".into());
+    }
+    let _work = exit::enter().ok_or("LightCraft is closing")?;
+    let mut declined = None;
+    let g = GPU.get_or_init(|| {
+        let adopted = if info.device_type == wgpu::DeviceType::Cpu {
+            Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name))
+        } else {
+            // (building the kernels is a long call into the driver: the crash sentinel covers it)
+            backend::with_init_marker(wgpu::Backends::from(info.backend), || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::adopt(device, queue, info)))
+                    .unwrap_or_else(|_| Err("kernel setup panicked".into()))
+            })
+        };
+        adopted.or_else(|e| {
+            log::warn!("gpu: not rendering on the window's device ({e}); creating one");
+            declined = Some(e);
+            let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+            backend::with_init_marker(backends, || {
+                std::panic::catch_unwind(|| ctx::Gpu::new(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
+            })
+        })
+    });
+    match (g, declined) {
+        (Ok(g), None) if g.window => Ok(()),
+        (_, Some(e)) => Err(e),
+        (Ok(_), None) => Err("a device of its own was created first".into()),
+        (Err(e), None) => Err(e.clone()),
+    }
+}
+
+/// The pixels of a texture on `device` (a [`DisplayFrame`]'s, or any `Rgba8Unorm` texture with
+/// `COPY_SRC`): for a headless screenshot of a view drawn straight from the GPU, and for tests. The
+/// app never needs them to draw. Waits for the GPU (at most a few seconds); `Err` when the copy or
+/// the wait fails.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: usize,
+    height: usize,
+) -> Result<lightcraft_raster::Rgba8, String> {
+    ctx::read_texture(device, queue, texture, width, height)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    display: bool,
+) -> Result<Output, Fallback> {
+    {
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
@@ -501,6 +634,10 @@ pub fn try_render(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
+        // content-aware Fill spots (`spots::fill_box`) have no GPU kernel: the CPU renders the photo
+        if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
+            return Err(Fallback::NotTried);
+        }
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
@@ -512,7 +649,7 @@ pub fn try_render(
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
             let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, display)));
             (r, errors.pop())
         };
         // An error the device raised explains the readback failures that follow it; a buffer
@@ -533,7 +670,8 @@ pub fn try_render(
                     e.clear();
                 }
                 let what = match &r {
-                    Some(r) => format!("{}×{}", r.image.width, r.image.height),
+                    Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
+                    Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
                     None => "GPU render".into(),
                 };
                 let reason = match f.kind {
@@ -567,11 +705,6 @@ pub fn try_render(
         };
         record_fallback(reason.clone());
         Err(Fallback::Failed(reason))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (src, info, s, req, stages);
-        Err(Fallback::NotTried)
     }
 }
 
