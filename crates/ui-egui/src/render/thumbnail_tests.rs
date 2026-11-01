@@ -1306,3 +1306,45 @@ fn undo_to_embedded_thumb_rejects_late_full_render() {
     assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
     assert!(!app.renderer.is_pending(full_slot));
 }
+
+/// Crop on and off with the edit unchanged rendered the photo again each time: the loupe let its
+/// whole-frame render go when the view switched between the uncropped photo (Crop) and the
+/// cropped one. Now the last full-quality renders are kept ([`KEPT_VIEWS`]) and come back at once,
+/// without a render; a draft is never kept, and leaving the view lets them go.
+#[test]
+fn crop_on_and_off_with_an_unchanged_edit_renders_nothing_again() {
+    let (mut app, work, ctx) = fixture();
+    let render = |app: &mut crate::LightcraftApp, job: RenderJob| {
+        let key = job.key;
+        app.renderer.request(Slot::Main, job, 100);
+        let (slot, job) = take_job(&work);
+        finish(app, &work, &ctx, slot, job.run());
+        assert_eq!(app.renderer.textures.get(&Slot::Main).map(|t| t.key), Some(key));
+    };
+    // the uncropped view (Crop open), then the cropped one: two whole-frame renders of one edit
+    let uncropped = app.session.render_job(PhotoId(1), 64, 64, false, false).unwrap();
+    let cropped = app.session.render_job(PhotoId(1), 48, 40, false, true).unwrap();
+    assert_ne!(uncropped.key, cropped.key);
+    render(&mut app, uncropped.clone());
+    render(&mut app, cropped.clone());
+    // C: the kept render, at once and without a render; and back again
+    for (job, what) in [(uncropped.clone(), "uncropped"), (cropped.clone(), "cropped"), (uncropped.clone(), "uncropped")] {
+        let key = job.key;
+        app.renderer.request(Slot::Main, job, 100);
+        assert!(work.borrow().jobs.is_empty(), "coming back to the {what} view rendered again");
+        assert_eq!(app.renderer.textures.get(&Slot::Main).map(|t| t.key), Some(key), "the {what} view shows at once");
+        assert!(!app.renderer.is_pending(Slot::Main));
+    }
+    // a draft shown in between is let go, not kept: the full renders stay
+    let draft = app.session.render_job(PhotoId(1), 48, 40, false, true).unwrap().draft();
+    render(&mut app, draft.clone());
+    app.renderer.request(Slot::Main, cropped.clone(), 100);
+    assert!(work.borrow().jobs.is_empty(), "the cropped view is still kept");
+    app.renderer.request(Slot::Main, draft, 100);
+    assert_eq!(work.borrow().jobs.len(), 1, "a draft that left the view is rendered again, never kept");
+    work.borrow_mut().jobs.clear();
+    // leaving the view lets the kept renders go
+    app.renderer.release(Slot::Main);
+    app.renderer.request(Slot::Main, uncropped, 100);
+    assert_eq!(work.borrow().jobs.len(), 1, "after the view was released it renders");
+}

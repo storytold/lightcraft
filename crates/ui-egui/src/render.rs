@@ -80,6 +80,12 @@ pub(crate) fn geometry_look(settings: &lightcraft_develop::DevelopSettings) -> u
     geometry.hash64()
 }
 
+/// Full-quality whole-frame loupe renders ([`Slot::Main`]) kept after the view moved on, newest
+/// last: the crop tool's whole photo and the cropped view of the same edit (pressing C changes
+/// nothing in the edit, so the kept render shows at once instead of rendering again), or a step
+/// back to the photo before.
+pub const KEPT_VIEWS: usize = 2;
+
 pub struct Tex {
     /// Frame geometry and crop mode captured when these pixels were requested.
     pub look: Option<(u64, bool)>,
@@ -218,6 +224,11 @@ pub struct Renderer {
     /// finishes after a newer request was made still replaces older pixels, so a long slider drag
     /// keeps updating the loupe instead of waiting for the drag to pause.
     shown_ids: HashMap<Slot, u64>,
+    /// Recent full-quality whole-frame renders ([`KEPT_VIEWS`], least recently shown first).
+    kept_views: std::collections::VecDeque<Tex>,
+    /// Keys of the full-quality (not draft) whole-frame renders asked for: what of [`Slot::Main`]
+    /// is worth keeping when the view moves on.
+    full_views: std::collections::HashSet<u64>,
     /// Requests made before this id belong to a library or preview cache that is gone.
     epoch: u64,
     preview_generation: Option<(std::sync::Weak<lightcraft_preview::PreviewCache>, u64)>,
@@ -330,6 +341,8 @@ impl Renderer {
             #[cfg(test)]
             failure_messages: Vec::new(),
             shown_ids: HashMap::new(),
+            kept_views: std::collections::VecDeque::new(),
+            full_views: std::collections::HashSet::new(),
             epoch: 0,
             preview_generation: None,
             pool: JobPool::new(threads),
@@ -567,6 +580,43 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        if slot == Slot::Main {
+            self.kept_views.clear();
+            self.full_views.clear();
+        }
+    }
+
+    /// Show the kept whole-frame render of `photo` made for `key` ([`KEPT_VIEWS`]) in
+    /// [`Slot::Main`], keeping the one shown there now. Whether there was one.
+    fn take_kept_view(&mut self, photo: PhotoId, key: u64) -> bool {
+        let Some(i) = self.kept_views.iter().position(|t| t.key == key && t.photo == photo) else { return false };
+        let Some(found) = self.kept_views.remove(i) else { return false };
+        // a request still out for the view is older than this picture now
+        self.queue.retain(|q| q.slot != Slot::Main);
+        let _ = self.pool.reprioritize(|s, p| if *s == Slot::Main { None } else { Some(p) });
+        self.pending.remove(&Slot::Main);
+        self.requests.remove(&Slot::Main);
+        self.failed.remove(&Slot::Main);
+        self.shown_ids.insert(Slot::Main, lightcraft_preview::next_tick());
+        if let Some(old) = self.textures.insert(Slot::Main, found) {
+            self.keep_view(old);
+        }
+        true
+    }
+
+    /// Keep `t`, a whole-frame render that leaves [`Slot::Main`], if it is a full-quality one (a
+    /// draft or a stand-in is let go).
+    fn keep_view(&mut self, t: Tex) {
+        if t.quick.is_some() || !self.full_views.contains(&t.key) {
+            return;
+        }
+        self.kept_views.retain(|k| !(k.key == t.key && k.photo == t.photo));
+        self.kept_views.push_back(t);
+        while self.kept_views.len() > KEPT_VIEWS {
+            if let Some(gone) = self.kept_views.pop_front() {
+                self.full_views.remove(&gone.key);
+            }
+        }
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -594,6 +644,20 @@ impl Renderer {
             self.slides_live = true;
         }
         let mut job = self.job_for(slot, job);
+        if slot == Slot::Main {
+            // C on and off with the edit unchanged: the render kept from before, no new one
+            if self.textures.get(&slot).is_none_or(|t| t.key != job.key) && self.take_kept_view(job.photo, job.key) {
+                return;
+            }
+            if job.request.quality != lightcraft_pipeline::Quality::Draft {
+                // (bounded: a long session asks for many; only the shown and kept ones matter)
+                if self.full_views.len() > 256 {
+                    let keep: std::collections::HashSet<u64> = self.textures.get(&slot).into_iter().chain(&self.kept_views).map(|t| t.key).collect();
+                    self.full_views.retain(|k| keep.contains(k));
+                }
+                self.full_views.insert(job.key);
+            }
+        }
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
@@ -753,6 +817,8 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.kept_views.clear();
+        self.full_views.clear();
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1107,6 +1173,14 @@ impl Renderer {
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
+            // the whole frame: a full-quality render shown so far is kept for a return to it (Crop
+            // on and off), and the new one gets a texture of its own
+            if slot == Slot::Main
+                && self.textures.get(&slot).is_some_and(|t| t.key != r.key && t.quick.is_none() && self.full_views.contains(&t.key))
+                && let Some(t) = self.textures.remove(&slot)
+            {
+                self.keep_view(t);
+            }
             match self.textures.get_mut(&slot) {
                 Some(t) => {
                     t.tex.set(color, egui::TextureOptions::LINEAR);
