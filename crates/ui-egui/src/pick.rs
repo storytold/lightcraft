@@ -305,7 +305,28 @@ mod tests {
         assert_eq!(title(&mut h, export, json!({"group": "Porträts"})).as_deref(), Some("Gruppe „Porträts“ exportieren"));
         assert_eq!(title(&mut h, import, json!({})).as_deref(), Some("Profile und Presets importieren"));
         assert_eq!(title(&mut h, import, json!({"from": "panel"})).as_deref(), Some("Presets importieren"));
+        // a stock group is named as the panel shows it, a user group as its owner wrote it
+        assert_eq!(title(&mut h, export, json!({"group": "B&W"})).as_deref(), Some("Gruppe „S/W“ exportieren"));
         crate::i18n::set_language(crate::i18n::Locale::En);
+        assert_eq!(title(&mut h, export, json!({"group": "B&W"})).as_deref(), Some("Export Group “B&W”"));
+    }
+
+    /// The Presets panel's ⋯ ▸ Import Presets… opens the dialog under its own title, not the File
+    /// menu's: the click passes `{from: "panel"}`.
+    #[test]
+    fn the_presets_panel_import_button_opens_the_dialog_under_its_own_title() {
+        let (mut h, asked) = app_with_picker();
+        h.app.run("panel.presets", json!({})).unwrap();
+        for _ in 0..5 {
+            h.step();
+        }
+        for id in ["icon:presetMore", "presetMenu:import"] {
+            let r = h.request("ui.clickWidget", json!({"id": id}), SETTLE);
+            assert_eq!(r["ok"], true, "{id}: {r}");
+            h.settle(SETTLE);
+        }
+        let title = asked.lock().unwrap().last().and_then(|(r, _)| r.title.clone());
+        assert_eq!(title.as_deref(), Some("Import Presets"));
     }
 
     #[test]

@@ -1375,10 +1375,13 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
 }
 
 /// The preset export dialog's title, after the menu item that opened it: a group's Export Group…
-/// names the group.
-fn export_presets_title(group: Option<&str>) -> String {
+/// names the group as the panel shows it (a stock group's name in the UI language).
+fn export_presets_title(app: &LightcraftApp, group: Option<&str>) -> String {
     match group {
-        Some(g) => crate::i18n::tr_format!("Export Group “{name}”", name = g),
+        Some(g) => {
+            let builtin = app.session.presets.iter().any(|p| p.builtin && p.group == g);
+            crate::i18n::tr_format!("Export Group “{name}”", name = crate::i18n::builtin_label(g, builtin))
+        }
         None => crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Export Presets").to_string(),
     }
 }
@@ -1461,8 +1464,12 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                 Some(x) => Some(x.to_string()),
                 None => {
                     let name = format!("{}.lcpreset", group.as_deref().unwrap_or("LightCraft Presets"));
-                    let req =
-                        PickRequest::save(export_presets_title(group.as_deref()), crate::i18n::tr("LightCraft Preset"), &["lcpreset"], name.clone());
+                    let req = PickRequest::save(
+                        export_presets_title(app, group.as_deref()),
+                        crate::i18n::tr("LightCraft Preset"),
+                        &["lcpreset"],
+                        name.clone(),
+                    );
                     match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
                         Picked::Now(v) => v.into_iter().next(),
                         Picked::Later => return Some(Ok(Value::Null)),
