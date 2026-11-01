@@ -52,6 +52,8 @@ chrono = { workspace = true }
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
 sam = ["dep:lightcraft-segment"]
+# SAM 3 on an NVIDIA GPU (Linux/Windows); needs the CUDA toolkit at build time
+cuda = ["sam", "lightcraft-segment/cuda"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 

@@ -24,6 +24,10 @@ lightcraft-fetch = { workspace = true }
 candle-core = { workspace = true, features = ["metal"] }
 candle-nn = { workspace = true, features = ["metal"] }
 
+# opt-in NVIDIA GPU build for Linux/Windows; needs the CUDA toolkit (nvcc) at build time
+[features]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
