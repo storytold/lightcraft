@@ -404,3 +404,15 @@ fn survey_command_click_takes_the_photo_out() {
     click_tile(&mut h, a, egui::Modifiers::COMMAND);
     assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
+
+/// ⌘/Ctrl-click on the active survey photo while others remain: it leaves, and the last
+/// remaining photo becomes active, so the keys still act on a photo on screen.
+#[test]
+fn survey_command_click_on_the_active_photo_activates_the_last_one() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    click_tile(&mut h, a, egui::Modifiers::NONE);
+    click_tile(&mut h, a, egui::Modifiers::COMMAND);
+    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
+    assert_eq!((sel, h.app.session.selection.active.map(|p| p.0)), (vec![b, c], Some(c)));
+}
