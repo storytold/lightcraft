@@ -9,6 +9,7 @@ mod cr3_corpus;
 mod cr3_variants;
 mod crx_properties;
 mod dng;
+mod gpr_corpus;
 mod lossy_dng;
 mod nrw_be16;
 mod olympus_samsung_corpus;
