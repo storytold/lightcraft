@@ -395,6 +395,12 @@ impl Gpu {
         desc.backend_options = crate::backend::backend_options();
         // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
         desc.flags = crate::backend::instance_flags_from_env(desc.flags);
+        // Tests: resource creation runs out of memory at this share of the device's own memory budget (DX12 and
+        // Vulkan), so the out-of-memory test never spills into shared system memory (see `out_of_memory_child`)
+        #[cfg(test)]
+        if let Some(percent) = test_memory_budget() {
+            desc.memory_budget_thresholds.for_resource_creation = Some(percent);
+        }
         let instance = wgpu::Instance::new(desc);
         let adapter = pollster::block_on(
             instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
@@ -750,6 +756,13 @@ const READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60)
 /// `LIGHTCRAFT_GPU_LIMITS`: lower the device limits, e.g. to reproduce a smaller adapter.
 /// `webgpu` / `downlevel` = 128 MiB storage bindings and 256 MiB buffers (the WebGPU defaults),
 /// `<n>` = n MiB storage bindings and 2n MiB buffers. Returns (binding bytes, buffer bytes).
+/// The out-of-memory test's device: resource creation fails at this percentage (1–100) of the memory budget the
+/// driver reports for the device (`LIGHTCRAFT_TEST_GPU_MEMORY_BUDGET`, set by the test for its own child process).
+#[cfg(test)]
+fn test_memory_budget() -> Option<u8> {
+    std::env::var("LIGHTCRAFT_TEST_GPU_MEMORY_BUDGET").ok()?.trim().parse::<u8>().ok().filter(|p| (1..=100).contains(p))
+}
+
 fn limits_override() -> Option<(u64, u64)> {
     parse_limits(&std::env::var("LIGHTCRAFT_GPU_LIMITS").ok()?)
 }
@@ -925,12 +938,18 @@ mod tests {
     /// Run `child` (an ignored test in this module) in its own process: it loses the device, which
     /// no other test running beside it may see. Returns its stdout, or `None` without a GPU.
     fn run_child(child: &str) -> Option<String> {
+        run_child_with(child, &[])
+    }
+
+    /// [`run_child`] with these environment variables set for the child.
+    fn run_child_with(child: &str, env: &[(&str, &str)]) -> Option<String> {
         let exe = std::env::current_exe().unwrap();
         // output goes to files: a pipe nobody reads while we wait could fill and stall the child
         let log = |stream: &str| std::env::temp_dir().join(format!("lc-gpu-{child}-{}.{stream}", std::process::id()));
         let (out_path, err_path) = (log("out"), log("err"));
         let mut proc = std::process::Command::new(exe)
             .args(["--exact", &format!("ctx::tests::{child}"), "--ignored", "--nocapture", "--test-threads=1"])
+            .envs(env.iter().copied())
             .stdout(std::fs::File::create(&out_path).unwrap())
             .stderr(std::fs::File::create(&err_path).unwrap())
             .spawn()
@@ -1024,29 +1043,43 @@ mod tests {
     /// A render that runs out of device memory falls back to the CPU and leaves the GPU in use: the upload
     /// whose buffer couldn't be allocated used to try again through `create_buffer_init`, which panicked
     /// mapping the second failed buffer, and the panic stopped GPU use for the session (issue #1764).
+    ///
+    /// The child's device runs out at a tenth of the memory budget its driver reports (wgpu's
+    /// `for_resource_creation` threshold, DX12 and Vulkan), and holds at most [`OOM_HELD_CAP`]: filling the device
+    /// itself took 58 GB of system memory on an RTX 4070 SUPER under Windows, where the driver backs device
+    /// allocations with shared system memory once the card's own is full.
     #[test]
     fn running_out_of_device_memory_falls_back_without_stopping_the_gpu() {
-        if run_child("out_of_memory_child").is_none() {
-            lightcraft_testkit::skip!(Gpu, "no GPU device, or its memory never ran out");
+        if run_child_with("out_of_memory_child", &[("LIGHTCRAFT_TEST_GPU_MEMORY_BUDGET", "10")]).is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device, or its memory never ran out within its budget");
         }
     }
+
+    /// The most device memory `out_of_memory_child` holds before its render.
+    const OOM_HELD_CAP: u64 = 4 << 30;
 
     #[test]
     #[ignore = "run in its own process by running_out_of_device_memory_falls_back_without_stopping_the_gpu"]
     fn out_of_memory_child() {
+        if super::test_memory_budget().is_none() {
+            // without the budget, a driver that spills into system memory would fill that instead
+            println!("CHILD: no GPU (no memory budget set: LIGHTCRAFT_TEST_GPU_MEMORY_BUDGET)");
+            return;
+        }
         let Some(g) = crate::device() else {
             println!("CHILD: no GPU");
             return;
         };
-        // hold device memory until an allocation fails: 1 GiB at a time, then smaller, so little is
-        // left; no larger than the device allows in one buffer, which would be a validation error
+        // hold device memory until an allocation fails or OOM_HELD_CAP is held: 1 GiB at a time, then smaller,
+        // so little is left; no larger than the device allows in one buffer, which would be a validation error
         let max = g.device.limits().max_buffer_size & !(wgpu::COPY_BUFFER_ALIGNMENT - 1);
         let mut sizes: Vec<u64> = [1u64 << 30, 1 << 28, 1 << 26].into_iter().map(|s| s.min(max)).collect();
         sizes.dedup();
         let mut held = Vec::new();
+        let mut held_bytes = 0u64;
         let mut full = false;
-        for size in sizes {
-            for _ in 0..128 {
+        'fill: for size in sizes {
+            while held_bytes + size <= OOM_HELD_CAP {
                 let validation = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
                 let oom = g.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let usage = wgpu::BufferUsages::STORAGE;
@@ -1060,10 +1093,15 @@ mod tests {
                     break;
                 }
                 held.push(buf);
+                held_bytes += size;
+            }
+            if held_bytes >= OOM_HELD_CAP {
+                break 'fill;
             }
         }
+        println!("CHILD: holding {} MiB of device memory", held_bytes >> 20);
         if !full {
-            println!("CHILD: no GPU (its memory never ran out)");
+            println!("CHILD: no GPU (its memory never ran out within {} MiB)", OOM_HELD_CAP >> 20);
             return;
         }
         // a render that needs more than is left: a larger one when the driver still finds room for the first
