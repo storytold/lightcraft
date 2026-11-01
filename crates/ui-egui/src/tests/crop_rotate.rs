@@ -209,7 +209,7 @@ fn corner(h: &Headless, i: usize) -> egui::Pos2 {
 /// Degrees in (-180, 180]; screen angles run the other way once wrapped.
 fn wrap(d: f32) -> f64 {
     let d = d.to_degrees() as f64;
-    (d + 180.0) % 360.0 - 180.0
+    (d + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// The crop box turns the way the pointer does (issue #962). Measured on screen, where y grows
@@ -239,6 +239,31 @@ fn the_crop_box_follows_the_pointer() {
         turn < -1.0,
         "dragging down on the left turns the pointer counter-clockwise, so the box must too, not the other way: it turned {turn:.2}°"
     );
+}
+
+/// A horizontal flip mirrors the overlay, which reverses an image-space turn on screen. The box
+/// must still follow the pointer, not run the other way (PR #1876 review).
+#[test]
+fn a_flipped_photo_still_turns_the_crop_the_way_the_pointer_does() {
+    let mut h = crop_tool();
+    let r = h.request("engine.execute", json!({"command": "photo.flipHorizontal"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let before = corner(&h, 1) - corner(&h, 0);
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [
+            {"kind": "down", "x": -0.05, "y": 0.2},
+            {"kind": "drag", "x": -0.05, "y": 0.25},
+            {"kind": "drag", "x": -0.05, "y": 0.3},
+        ]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(has(&h, "cropAngleReadout"), "the drag is rotating at all; angle={}", angle(&h));
+    let turn = wrap((corner(&h, 1) - corner(&h, 0)).angle() - before.angle());
+    assert!(turn < -1.0, "a flipped photo must still turn with the pointer, not against it: it turned {turn:.2}°");
 }
 
 /// Outside the crop box, where a drag rotates, the pointer becomes a curved double arrow drawn at
