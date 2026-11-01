@@ -377,7 +377,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                     v = [v[0] + d[0], v[1] + d[1], v[2] + d[2]];
                 }
                 let t = tgt[i];
-                img.set(bx0 + x, by0 + y, [t[0] + (v[0] - t[0]) * a, t[1] + (v[1] - t[1]) * a, t[2] + (v[2] - t[2]) * a].map(|c| c.max(0.0)));
+                img.set(bx0 + x, by0 + y, [t[0] + (v[0] - t[0]) * a, t[1] + (v[1] - t[1]) * a, t[2] + (v[2] - t[2]) * a]);
             }
         }
     }
@@ -387,6 +387,27 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
 mod tests {
     use super::*;
     use lightcraft_develop::DevelopSettings;
+
+    #[test]
+    fn spots_preserve_signed_constant_pixels_until_noise_reduction() {
+        let s = DevelopSettings::default();
+        let frame = Frame::new(64, 48, &s, true);
+        for mode in [SpotMode::Clone, SpotMode::Heal, SpotMode::Remove, SpotMode::Fill] {
+            let mut img = Rgb32f::filled(64, 48, [-0.02, 0.01, -0.04]);
+            let spot = Spot {
+                mode,
+                points: vec![Point::new(0.5, 0.5)],
+                size: 0.08,
+                opacity: 100.0,
+                source_offset: Some(Point::new(0.2, 0.0)),
+                ..Default::default()
+            };
+            apply(&mut img, &[spot], &frame, 64.0);
+            for (a, b) in img.get(32, 24).into_iter().zip([-0.02, 0.01, -0.04]) {
+                assert!((a - b).abs() < 1e-6, "{mode:?}: {a} vs {b}");
+            }
+        }
+    }
 
     #[test]
     fn hard_edge_spots_at_zero_opacity_leave_every_pixel_unchanged() {

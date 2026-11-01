@@ -23,6 +23,7 @@ pub struct GpuStages {
     entries: Mutex<Vec<Entry>>,
     /// The uploaded source (a view renders one photo at several sizes).
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
+    nr_floor: lightcraft_pipeline::NrFloorCache,
 }
 
 const CAPACITY: usize = 2;
@@ -117,6 +118,7 @@ impl GpuStages {
     pub fn clear(&self) {
         self.lock().clear();
         *self.source.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.nr_floor.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -601,7 +603,10 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan(src, info, s, req);
+    let plan = match stages {
+        Some(c) => lightcraft_pipeline::plan_cached(src, info, s, req, &c.nr_floor),
+        None => lightcraft_pipeline::plan(src, info, s, req),
+    };
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));
@@ -850,22 +855,29 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let mut img = img;
     if let Some(nr) = lum {
+        // the guide's floor: the whole frame's luminance noise sigma, measured when planning (as on the CPU)
+        let floor = plan.nr_floor.unwrap_or(1e-7);
         let l = cx.gpu.buffer(n);
-        map(cx, "log_lum_k", n, &[], [Some(&img), None, None], &l);
+        map(cx, "log_lum_floor_k", n, &[floor.to_bits()], [Some(&img), None, None], &l);
         let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
         let out = cx.gpu.buffer(n * 3);
         map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
         img = out;
     }
     if let Some(nr) = col {
-        let chroma = cx.gpu.buffer(n * 3);
-        map(cx, "chroma_k", n, &[], [Some(&img), None, None], &chroma);
-        let b = gaussian(cx, &chroma, w, h, 3, nr.sigma);
+        let y = cx.gpu.buffer(n);
+        map(cx, "abs_lum_k", n, &[], [Some(&img), None, None], &y);
+        let by = gaussian(cx, &y, w, h, 1, nr.sigma);
+        let b = gaussian(cx, &img, w, h, 3, nr.sigma);
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), Some(&chroma), Some(&b)], &out);
+        let p = [nr.t, local::NR_RATIO_FROM, local::NR_RATIO_FULL].map(f32::to_bits);
+        map(cx, "nr_col", n, &p, [Some(&img), Some(&b), Some(&by)], &out);
         img = out;
     }
-    img
+    // signed until here (`local::denoise`)
+    let out = cx.gpu.buffer(n * 3);
+    map(cx, "clamp0_k", n, &[], [Some(&img), None, None], &out);
+    out
 }
 
 /// The planes the per-pixel stage reads.
@@ -1129,6 +1141,31 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn red_eye_preserves_signed_noise_like_cpu() {
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let eye = lightcraft_pipeline::redeye::EyeK { cx: 2.0, cy: 0.5, r: 8.0, darken: 0.5, pet: false, catchlight: None };
+        let src = Rgb32f { width: 4, height: 1, data: vec![[-0.01, -0.02, -0.03], [0.0, -0.02, -0.03], [0.5, 0.02, 0.01], [-0.01, 0.01, -0.02]] };
+        let mut want = src.clone();
+        lightcraft_pipeline::redeye::apply(&mut want, &[eye]);
+        assert_eq!(want.data[0], src.data[0]);
+        assert_eq!(want.data[1], src.data[1]);
+        let mut cx = Cx::new(gpu);
+        let input = gpu.upload(rgb_words(&src));
+        let out = gpu.buffer(src.data.len() * 3);
+        let mut params = vec![src.width as u32, 1];
+        params.extend(eye.words().map(f32::to_bits));
+        map(&mut cx, "redeye_k", src.data.len(), &params, [Some(&input), None, None], &out);
+        let actual = cx.read_rgb(&out, src.width, src.height);
+        for (a, b) in actual.data.iter().flatten().zip(want.data.iter().flatten()) {
+            assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+        }
+    }
 
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {

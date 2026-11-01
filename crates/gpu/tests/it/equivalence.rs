@@ -126,6 +126,79 @@ fn preview_noise_reduction_matches() {
     }
 }
 
+/// The guide floor belongs to the whole frame, including rotated/downscaled signed shadows.
+#[test]
+fn signed_noise_reduction_full_and_window_match() {
+    use lightcraft_pipeline::PixelWindow;
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(1024, 768, |x, y| {
+        let n = |k| (((x * 73 + y * 151 + x * y * k) % 257) as f32 / 256.0 - 0.5) * 0.08;
+        let base = if x < 512 { 0.008 } else { 0.18 };
+        [base + n(3), base + n(7), base + n(11)]
+    }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    for variant in 0..3 {
+        let mut s = DevelopSettings::default();
+        s.detail.nr_luminance = 80.0;
+        s.detail.nr_color = 60.0;
+        s.detail.sharpen_amount = 0.0;
+        s.light.exposure = 2.0;
+        s.wb.mode = WbMode::Custom;
+        s.wb.temp = 7800.0;
+        if variant > 0 {
+            s.orientation = Orientation::Rotate90;
+            s.crop.geometry.rect = Rect::new(0.1, 0.1, 0.9, 0.9);
+            s.crop.geometry.angle = 3.0;
+            s.crop.flip_h = true;
+        }
+        if variant == 2 {
+            s.geometry.vertical = 12.0;
+        }
+        let req = RenderRequest::fit(512, 512);
+        let p = lightcraft_pipeline::plan(&src, &info, &s, &req);
+        let win = PixelWindow { x: p.w / 4, y: p.h / 4, w: p.w / 2, h: p.h / 2 };
+        let wr = RenderRequest { window: Some(win), ..req };
+        assert_eq!(p.nr_floor, lightcraft_pipeline::plan(&src, &info, &s, &wr).nr_floor);
+        check("signed NR full", &src, &info, &s, &req);
+        check("signed NR window", &src, &info, &s, &wr);
+        let cpu_full = render(&src, &info, &s, &req).image;
+        let gpu_full = lightcraft_gpu::render(&src, &info, &s, &req, None).unwrap().image;
+        for (name, full, window) in [
+            ("CPU", cpu_full, render(&src, &info, &s, &wr).image),
+            ("GPU", gpu_full, lightcraft_gpu::render(&src, &info, &s, &wr, None).unwrap().image),
+        ] {
+            let mut max = 0;
+            for y in 32..win.h - 32 {
+                for x in 32..win.w - 32 {
+                    let (a, b) = (full.get(win.x + x, win.y + y), window.get(x, y));
+                    for c in 0..3 {
+                        max = max.max(a[c].abs_diff(b[c]));
+                    }
+                }
+            }
+            assert!(max <= 3, "{name}, variant {variant}, full/window max {max}");
+            let cache = StageCache::default();
+            let mut edited = s.clone();
+            edited.detail.nr_luminance = 70.0;
+            if name == "CPU" {
+                assert_eq!(window.data, lightcraft_pipeline::render_cached(&src, &info, &s, &wr, &cache).image.data);
+                assert_eq!(
+                    render(&src, &info, &edited, &wr).image.data,
+                    lightcraft_pipeline::render_cached(&src, &info, &edited, &wr, &cache).image.data
+                );
+            } else {
+                // Check a cache hit after changing the NR slider too.
+                lightcraft_gpu::render(&src, &info, &s, &wr, Some(&cache)).unwrap();
+                let cold = lightcraft_gpu::render(&src, &info, &edited, &wr, None).unwrap().image;
+                let warm = lightcraft_gpu::render(&src, &info, &edited, &wr, Some(&cache)).unwrap().image;
+                assert_eq!(cold.data, warm.data);
+            }
+        }
+    }
+}
+
 /// A render big enough for the per-pixel stage to run in several bands of rows (and the render
 /// in many submissions), with grain (position-dependent) and masks.
 #[test]
