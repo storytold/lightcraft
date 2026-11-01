@@ -10,6 +10,8 @@ struct Rig {
     view: HeadlessView,
     text: String,
     select_on_focus: bool,
+    /// A secret: shown as dots.
+    password: bool,
     /// The field is on screen (a dialog that holds it may close).
     shown: bool,
     /// The app's window has the system's focus (the user may switch to another app).
@@ -27,6 +29,7 @@ impl Rig {
             view: HeadlessView::new(),
             text: text.to_string(),
             select_on_focus: false,
+            password: false,
             shown: true,
             window_focused: true,
             editing: false,
@@ -48,13 +51,14 @@ impl Rig {
         self.time += 1.0 / 60.0;
         let mut raw = HeadlessView::raw_input(egui::vec2(400.0, 300.0), 1.0, self.time, events);
         raw.focused = self.window_focused;
-        let (text, select, shown, endings, editing) = (&mut self.text, self.select_on_focus, self.shown, &mut self.endings, &mut self.editing);
+        let (text, select, password, shown, endings, editing) =
+            (&mut self.text, self.select_on_focus, self.password, self.shown, &mut self.endings, &mut self.editing);
         self.view.run(raw, |ui| {
             ui.add_space(20.0);
             if !shown {
                 return;
             }
-            let r = TextField::singleline(FIELD, text).width(200.0).select_on_focus(select).show(ui);
+            let r = TextField::singleline(FIELD, text).width(200.0).select_on_focus(select).password(password).show(ui);
             endings.extend(r.ending);
             *editing = r.editing;
             if focus_after {
@@ -125,6 +129,25 @@ fn right_click_offers_cut_copy_paste_and_select_all() {
     for item in ["cut", "copy", "paste", "selectAll"] {
         assert!(rig.rect(&format!("{FIELD}:{item}")).is_some(), "{item}: {:?}", rig.widgets);
     }
+}
+
+/// In a password field Cut and Copy are greyed out: egui never copies a secret, so Copy would do
+/// nothing and Cut would only delete it.
+#[test]
+fn a_password_cannot_be_cut_or_copied_from_the_menu() {
+    let mut rig = Rig::new("s3cret");
+    rig.password = true;
+    rig.frame(vec![]);
+    rig.select_all_by_keys();
+    rig.menu("cut");
+    assert_eq!(rig.text, "s3cret", "Cut does not delete the secret");
+    rig.menu("copy");
+    assert_eq!(rig.view.clipboard, "", "nothing copied");
+    // a field that isn't a password still cuts
+    let mut rig = Rig::new("Lisbon");
+    rig.select_all_by_keys();
+    rig.menu("cut");
+    assert_eq!(rig.text, "");
 }
 
 /// Copy in the menu puts the selected text on the clipboard and leaves the field as it was,
