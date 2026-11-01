@@ -62,6 +62,35 @@ pub fn probe(probe: &FileProbe, stale: Vec<Stale>) -> Vec<(Stale, std::result::R
     stale.into_iter().zip(crate::import::probe_with(probe, &paths)).collect()
 }
 
+/// Probe each listed file, reporting completed files and stopping before starting more work after
+/// `cancel` is set. Files not reached retain an error result, which [`apply`] leaves unchanged.
+/// Cancellation is cooperative between files: a file probe already in progress may finish its
+/// read before the worker observes cancellation.
+pub fn probe_cancellable_with_progress(
+    probe: &FileProbe,
+    stale: Vec<Stale>,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &dyn Fn(usize),
+) -> Vec<(Stale, std::result::Result<ProbeInfo, String>)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let paths: Vec<String> = stale.iter().map(|item| item.path.clone()).collect();
+    let done = AtomicUsize::new(0);
+    #[cfg(not(target_arch = "wasm32"))]
+    let probed = std::thread::scope(|scope| {
+        let worker = scope.spawn(|| crate::import::probe_all(Some(probe), &paths, &done, cancel));
+        while !worker.is_finished() {
+            progress(done.load(Ordering::Relaxed));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        worker.join().unwrap_or_else(|_| paths.iter().map(|path| Err(format!("{path}: could not be read"))).collect())
+    });
+    #[cfg(target_arch = "wasm32")]
+    let probed = crate::import::probe_all(Some(probe), &paths, &done, cancel);
+    progress(done.load(Ordering::Relaxed));
+    stale.into_iter().zip(probed).collect()
+}
+
 /// What a recheck changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rechecked {
@@ -126,4 +155,92 @@ pub fn specs() -> Vec<CommandSpec> {
         always,
         recheck
     )]
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+
+    use super::{Stale, probe_cancellable_with_progress};
+    use crate::media::{FileProbe, ProbeInfo};
+    use lightcraft_catalog::PhotoId;
+
+    #[test]
+    fn pre_cancelled_recheck_does_not_read_files_or_advance_progress() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls = calls.clone();
+        let probe: FileProbe = Arc::new(move |_| {
+            probe_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(ProbeInfo::default())
+        });
+        let stale = vec![Stale { id: PhotoId(1), path: "photo.raw".into(), preview_only: Some("preview".into()), preview_checked: "0.5.0".into() }];
+        let cancel = AtomicBool::new(true);
+        let progress = Mutex::new(Vec::new());
+
+        let results = probe_cancellable_with_progress(&probe, stale, &cancel, &|done| {
+            progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
+        });
+
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1.is_err(), "a pre-cancelled file has no probe result");
+        assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&0));
+    }
+
+    #[test]
+    fn cancelled_recheck_probe_does_not_start_remaining_files_and_reports_progress() {
+        const FILES: usize = 32;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let probe_calls = calls.clone();
+        let probe_gate = gate.clone();
+        let probe: FileProbe = Arc::new(move |_| {
+            probe_calls.fetch_add(1, Ordering::Relaxed);
+            let mut released = probe_gate.0.lock().unwrap_or_else(|e| e.into_inner());
+            probe_gate.1.notify_all();
+            while !*released {
+                released = probe_gate.1.wait(released).unwrap_or_else(|e| e.into_inner());
+            }
+            Ok(ProbeInfo::default())
+        });
+        let stale: Vec<_> = (0..FILES)
+            .map(|i| Stale {
+                id: PhotoId(i as u64),
+                path: format!("photo-{i}.raw"),
+                preview_only: Some("preview".into()),
+                preview_checked: "0.5.0".into(),
+            })
+            .collect();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let worker_progress = progress.clone();
+
+        let worker = std::thread::spawn(move || {
+            probe_cancellable_with_progress(&probe, stale, &worker_cancel, &|done| {
+                worker_progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
+            })
+        });
+        let (entered, _) = gate
+            .1
+            .wait_timeout_while(gate.0.lock().unwrap_or_else(|e| e.into_inner()), std::time::Duration::from_secs(5), |_| {
+                calls.load(Ordering::Relaxed) == 0
+            })
+            .unwrap_or_else(|e| e.into_inner());
+        let started = calls.load(Ordering::Relaxed);
+        cancel.store(true, Ordering::Relaxed);
+        drop(entered);
+        *gate.0.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        gate.1.notify_all();
+
+        let results = worker.join().unwrap_or_else(|_| panic!("the probe worker should return results"));
+        let completed = results.iter().filter(|(_, result)| result.is_ok()).count();
+        assert!(started > 0, "the test waited for at least one active file");
+        assert_eq!(calls.load(Ordering::Relaxed), completed, "all started probes complete");
+        assert!(completed < FILES, "cancel leaves later files unstarted: {completed}");
+        assert_eq!(results.len(), FILES);
+        assert!(results.iter().any(|(_, result)| result.as_ref().is_err_and(|e| e == "not probed")));
+        assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&completed));
+    }
 }
