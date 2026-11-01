@@ -592,6 +592,11 @@ fn ui_commands_4(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             })
         }
         "file.backupLibrary" | "file.restoreLibrary" => {
+            // This command also runs through scripting/control channels. Disabling the
+            // provider does not cancel its outstanding captures or reads.
+            if id == "file.restoreLibrary" && app.file_provider.as_ref().is_some_and(|host| host.busy()) {
+                return Some(Err("Finish or cancel pending file provider operations before restoring a library".into()));
+            }
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),

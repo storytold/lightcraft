@@ -736,6 +736,47 @@ mod provider_library_tests {
     }
 
     #[test]
+    fn restore_refuses_pending_provider_work_even_when_disabled_and_keeps_local_behavior() {
+        let restores = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = restores.clone();
+        let services = Services {
+            restore_library: Some(Box::new(move |_session| {
+                count.set(count.get() + 1);
+                Ok(json!({"started": true}))
+            })),
+            backup_library: Some(Box::new(|_session| Ok(json!({"started": true})))),
+            ..Services::default()
+        };
+        let mut app = LightcraftApp::new(Session::new(), services);
+        app.run("file.restoreLibrary", json!({})).unwrap();
+        assert_eq!(restores.get(), 1);
+
+        let host = Host::default();
+        host.set_session("light-restore-test-0001".into()).unwrap();
+        let connection = host.connect("storage".into(), "Storage".into(), "account-1".into()).unwrap();
+        host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.zip".into(), updated_at: String::new() }]).unwrap();
+        app.file_provider = Some(host.clone());
+
+        host.choose(17, 42, "Library.zip".into(), false).unwrap();
+        let dialog = host.take_events().into_iter().find(|e| e.metadata["type"] == "saveDialog").unwrap();
+        assert!(app.run("file.restoreLibrary", json!({})).is_err());
+        assert_eq!(restores.get(), 1);
+        // Reading/exporting the current library does not abandon the pending operation.
+        app.run("file.backupLibrary", json!({})).unwrap();
+        host.resolve_dialog(dialog.metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+        app.run("file.restoreLibrary", json!({})).unwrap();
+        assert_eq!(restores.get(), 2);
+
+        let read = host.request_open("one").unwrap();
+        host.set_enabled(false).unwrap();
+        assert!(app.run("file.restoreLibrary", json!({})).is_err());
+        assert_eq!(restores.get(), 2);
+        host.cancel_open(read, "cancelled".into()).unwrap();
+        app.run("file.restoreLibrary", json!({})).unwrap();
+        assert_eq!(restores.get(), 3);
+    }
+
+    #[test]
     fn provider_recents_are_opaque_resources_separate_from_local_libraries() {
         let mut app = LightcraftApp::new(Session::new(), Services::default());
         let host = Host::default();

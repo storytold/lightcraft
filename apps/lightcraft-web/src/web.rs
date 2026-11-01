@@ -227,8 +227,21 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         restore_library: Some(Box::new(move |_session: &mut Session| {
             let Some(b) = restore_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             let frozen = frozen.clone();
-            // once the backup is in place, stop saving the old library (the page reloads)
-            safety::pick_and_restore(b, move || frozen.set(true));
+            safety::pick_and_restore(b, move || {
+                // Pause the old library only until the reload is handled. A beforeunload
+                // confirmation can be cancelled, so a surviving page must resume its previous
+                // saving policy (including a freeze caused by an earlier storage read failure).
+                let previous = frozen.replace(true);
+                let thaw = frozen.clone();
+                let resume = Closure::once_into_js(move || {
+                    thaw.set(previous);
+                    request_repaint();
+                });
+                if window().is_none_or(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(resume.unchecked_ref(), 0).is_err()) {
+                    frozen.set(previous);
+                    request_repaint();
+                }
+            });
             Ok(json!({"started": true}))
         })),
         pick_files: Some(Box::new(move || {
