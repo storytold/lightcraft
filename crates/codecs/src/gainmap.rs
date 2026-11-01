@@ -488,7 +488,7 @@ pub fn apply(base: &mut [[f32; 3]], width: usize, height: usize, gain: &GainImag
         || gain.width == 0
         || gain.height == 0
         || !matches!(gain.channels, 1 | 3)
-        || gain.data.len() < gain.width * gain.height * gain.channels
+        || gain_samples(gain).is_none_or(|n| gain.data.len() < n)
     {
         return Err(Error::Encode("gain map: base and gain map sizes don't match".into()));
     }
@@ -572,6 +572,36 @@ fn mpf_placeholder() -> Vec<u8> {
 /// Encode a gain map JPEG: `base` (8-bit SDR, 3 or 4 channels, colour-managed by `meta.icc`) and
 /// its gain map, both at `quality`. `meta.xmp` is kept, with the gain map container added.
 pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, quality: u8, sub: ChromaSubsampling, meta: &EncodeMeta) -> Result<Vec<u8>> {
+    let gain_jpeg = encode_gain(gain, m, quality)?;
+    encode_with_gain(base, &gain_jpeg, quality, sub, meta)
+}
+
+/// Samples a gain map of its size holds (`None` when that overflows: a hostile size, never a
+/// wrapped product; review of PR #3529).
+fn gain_samples(gain: &GainImage) -> Option<usize> {
+    gain.width.checked_mul(gain.height)?.checked_mul(gain.channels)
+}
+
+/// The gain map image of a gain map JPEG, encoded at `quality` with its metadata: made once and
+/// joined to its primary image by [`encode_with_gain`] (an export that fits a file size limit
+/// encodes the primary again, never the map).
+pub fn encode_gain(gain: &GainImage, m: &GainMapMeta, quality: u8) -> Result<Vec<u8>> {
+    if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain_samples(gain).is_none_or(|n| gain.data.len() < n) {
+        return Err(Error::Encode("gain map image is malformed".into()));
+    }
+    // a JPEG frame header holds each side in 16 bits (review of PR #3506)
+    if gain.width > usize::from(u16::MAX) || gain.height > usize::from(u16::MAX) {
+        return Err(Error::Encode("gain map image is larger than a JPEG can hold".into()));
+    }
+    if !m.is_valid() || m.multichannel != (gain.channels == 3) {
+        return Err(Error::Encode("gain map metadata doesn't match the map".into()));
+    }
+    let gain_segs = vec![(0xE1, xmp_segment(&m.to_gain_map_xmp())?), (0xE2, m.to_iso())];
+    Ok(jpeg_par::encode(&gain.data, gain.width, gain.height, gain.channels, quality, ChromaSubsampling::S444, &gain_segs))
+}
+
+/// A gain map JPEG of `base` at `quality` with the gain map `gain_jpeg` from [`encode_gain`].
+pub fn encode_with_gain(base: &EncodeImage, gain_jpeg: &[u8], quality: u8, sub: ChromaSubsampling, meta: &EncodeMeta) -> Result<Vec<u8>> {
     let Samples::U8(data) = base.samples else {
         return Err(Error::Encode("gain map JPEG needs an 8-bit base image".into()));
     };
@@ -582,17 +612,8 @@ pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, qualit
     if w == 0 || h == 0 || w > u16::MAX as usize || h > u16::MAX as usize {
         return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
     }
-    if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain.data.len() < gain.width * gain.height * gain.channels {
-        return Err(Error::Encode("gain map image is malformed".into()));
-    }
-    if !m.is_valid() || m.multichannel != (gain.channels == 3) {
-        return Err(Error::Encode("gain map metadata doesn't match the map".into()));
-    }
     // jpeg_par writes 4:4:4 or 4:2:0
     let sub = if sub == ChromaSubsampling::S422 { ChromaSubsampling::S420 } else { sub };
-
-    let gain_segs = vec![(0xE1, xmp_segment(&m.to_gain_map_xmp())?), (0xE2, m.to_iso())];
-    let gain_jpeg = jpeg_par::encode(&gain.data, gain.width, gain.height, gain.channels, quality, ChromaSubsampling::S444, &gain_segs);
 
     let xmp = merge_xmp(meta.xmp, &primary_description(gain_jpeg.len()));
     let mut segs = jpeg_app_segments(&EncodeMeta { xmp: Some(&xmp), ..*meta })?;
@@ -613,7 +634,7 @@ pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, qualit
         let slot = primary.get_mut(at..at + 4).ok_or_else(|| Error::Encode("gain map JPEG: truncated MPF segment".into()))?;
         slot.copy_from_slice(&v.to_be_bytes());
     }
-    primary.extend_from_slice(&gain_jpeg);
+    primary.extend_from_slice(gain_jpeg);
     Ok(primary)
 }
 
@@ -816,6 +837,18 @@ mod tests {
         if let Some(t) = jpeg::embedded_thumbnail(&file, 32, 16) {
             assert_ne!(t.source, crate::ThumbnailSource::MpfPreview);
         }
+    }
+
+    /// Review of PR #3529: a gain map whose size overflows is an error, never a wrapped product.
+    #[test]
+    fn a_gain_map_of_hostile_size_is_an_error() {
+        let gain = GainImage { width: usize::MAX / 2, height: 4, channels: 3, data: vec![0; 16] };
+        assert!(encode_gain(&gain, &GainMapMeta::default(), 90).is_err());
+        assert_eq!(gain_samples(&gain), None);
+        assert_eq!(gain_samples(&GainImage { width: 4, height: 2, channels: 3, data: Vec::new() }), Some(24));
+        // wider than a JPEG frame header holds
+        let wide = GainImage { width: 65_536, height: 1, channels: 1, data: vec![0; 65_536] };
+        assert!(encode_gain(&wide, &GainMapMeta::default(), 90).is_err());
     }
 
     #[test]
