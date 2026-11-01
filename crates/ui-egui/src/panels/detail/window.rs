@@ -67,7 +67,19 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         to_px * (v.visible.right() - v.target.left()),
         to_px * (v.visible.bottom() - v.target.top()),
     );
-    let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
+    let max_span = crate::region::max_span(c.texture_side);
+    // panning (the After side, no edit in progress): the window asked for reaches ahead in the
+    // direction the view moves, so it still covers the view when it arrives
+    let pans = !v.before && !c.interacting;
+    let moved = match app.pan_seen {
+        Some((p, f, at)) if pans && p == c.id && f == (fw, fh) => (visible.0 - at.0, visible.1 - at.1),
+        _ => (0.0, 0.0),
+    };
+    if !v.before {
+        app.pan_seen = Some((c.id, (fw, fh), (visible.0, visible.1)));
+    }
+    let ask = if moved == (0.0, 0.0) { visible } else { crate::region::lead(visible, moved) };
+    let win = crate::region::window_for(fw, fh, ask, max_span).or_else(|| crate::region::window_for(fw, fh, visible, max_span))?;
     // a window waits for the original another window job is decoding (see `defer_window`)
     let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
     let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
@@ -103,20 +115,142 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
     app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
+    if !v.before {
+        forget_unused_tiles(app);
+        let tiles = &app.region_tiles;
+        app.renderer.retain_pan_tiles(|t| tiles.contains_key(&(false, t.key)));
+    }
+    // what is on screen is sharp already, from the windows made so far: nothing to render
+    if pans && crate::region::covers(&sharp_windows(app, c, &view), clamp_visible(visible, (fw, fh))) {
+        let shown = app.renderer.textures.get(&Slot::Region).and_then(|t| app.region_tiles.get(&(false, t.key))).copied();
+        return Some(shown.filter(|t| t.is_current(c.id, view.full, view.settings, false)).unwrap_or(view));
+    }
     app.region_tiles.insert((v.before, job.key), view);
     app.renderer.request(v.slot, job, 99);
     Some(view)
 }
 
-/// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
-/// drag, an earlier draft of it).
-pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
-    let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
-    let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
+/// `visible` (frame pixels) inside a `full` frame.
+fn clamp_visible(visible: (f32, f32, f32, f32), full: (usize, usize)) -> (f32, f32, f32, f32) {
+    let (x0, y0, x1, y1) = visible;
+    (x0.max(0.0), y0.max(0.0), x1.min(full.0 as f32), y1.min(full.1 as f32))
+}
+
+/// What of the frame `view` is cut from is on screen in `v` (frame pixels, inside the frame).
+fn visible_px(c: &WindowCtx, v: &WindowView, view: &crate::region::RegionView) -> (f32, f32, f32, f32) {
+    let frame_edge = c.frame_edge.unwrap_or(view.full.0.max(view.full.1));
+    let to_px = c.ppp * frame_edge as f32 / c.drawn_long.max(1.0);
+    let visible = (
+        to_px * (v.visible.left() - v.target.left()),
+        to_px * (v.visible.top() - v.target.top()),
+        to_px * (v.visible.right() - v.target.left()),
+        to_px * (v.visible.bottom() - v.target.top()),
+    );
+    clamp_visible(visible, view.full)
+}
+
+/// Window views past this many are only kept while their render is on screen, kept or on its way
+/// (a long pan asks for a new window every few frames).
+const TILE_VIEWS: usize = 64;
+
+/// Forget the window views ([`LightcraftApp::region_tiles`]) of the After side whose render is
+/// nowhere any more, once there are many.
+fn forget_unused_tiles(app: &mut LightcraftApp) {
+    if app.region_tiles.len() <= TILE_VIEWS {
         return;
+    }
+    let r = &app.renderer;
+    let used = |key: u64| r.wanted(Slot::Region) == Some(key) || r.wanted(Slot::RegionNear) == Some(key) || r.pan_tiles().any(|t| t.key == key);
+    app.region_tiles.retain(|(before, key), _| *before || used(*key));
+}
+
+/// The windows (frame pixels) the After side of the zoomed view `view` already shows sharp: the
+/// full-quality window on screen, whole, and the [pan tiles](crate::render::Renderer::pan_tiles)
+/// of its look, their inner parts ([`crate::region::inner`]).
+fn sharp_windows(app: &LightcraftApp, c: &WindowCtx, view: &crate::region::RegionView) -> Vec<lightcraft_engine::pipeline::PixelWindow> {
+    let current = |key: u64| {
+        app.region_tiles.get(&(false, key)).filter(|t| app.renderer.is_full_window(key) && t.is_current(c.id, view.full, view.settings, false))
     };
+    let on_screen = app.renderer.textures.get(&Slot::Region).filter(|t| t.photo == c.id).and_then(|t| current(t.key)).map(|t| t.window);
+    let tiles = app.renderer.pan_tiles().filter(|t| t.photo == c.id).filter_map(|t| current(t.key)).map(|t| crate::region::inner(t.window, t.full));
+    on_screen.into_iter().chain(tiles).collect()
+}
+
+/// Once the zoomed view (its After side, `windows`) is still and sharp: make the windows around it
+/// ahead, at low priority and one at a time, nearest first, so a pan finds them sharp. They never
+/// hold up the view's own renders (background work, below [`super::PREFETCH_PRIORITY`]).
+pub(super) fn prefetch_near(app: &mut LightcraftApp, c: &WindowCtx, windows: &[(WindowView, crate::region::RegionView)]) {
+    let Some((v, view)) = windows.iter().find(|(v, _)| !v.before) else { return };
+    if c.interacting
+        || app.renderer.is_pending(Slot::Region)
+        || app.renderer.is_pending(Slot::RegionNear)
+        || app.renderer.pan_tile_count() + 1 >= crate::render::PAN_TILES
+    {
+        return;
+    }
+    let (fw, fh) = view.full;
+    let visible = visible_px(c, v, view);
+    let have = sharp_windows(app, c, view);
+    if !crate::region::covers(&have, visible) {
+        return;
+    }
+    let max_span = crate::region::max_span(c.texture_side);
+    let proof = app.ui.soft_proof.then_some(app.ui.proof);
+    for area in crate::region::around(visible, view.full) {
+        if crate::region::covers(&have, area) {
+            continue;
+        }
+        let Some(win) = crate::region::window_for(fw, fh, area, max_span) else { continue };
+        let Some(job) = app.session.region_job(c.id, fw, fh, win, !c.crop_tool) else { return };
+        let job = job.with_hidden_grading(app.ui.grading_hidden_for(c.id)).with_overlay(c.overlay).with_proof(proof);
+        let job = app.renderer.job_for(Slot::Region, job);
+        let proof_key = proof.map_or(0, |p| p.key());
+        let look = job.settings.hash64() ^ c.overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+        // (another look than the view's: an edit came in between, the view asks again first)
+        if look != view.settings {
+            return;
+        }
+        app.region_tiles.insert((false, job.key), crate::region::RegionView { key: job.key, window: win, ..*view });
+        app.renderer.prefetch_near(job, super::PREFETCH_PRIORITY - 1);
+        return;
+    }
+}
+
+/// Draw the pan tiles of `v` (the After side, no edit in progress) over the whole-frame render,
+/// oldest first, each where it belongs: the sharp pixels made before the view moved on or ahead
+/// of it. The rects drawn (screen points).
+pub(super) fn draw_pan_tiles(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) -> Vec<Rect> {
+    if v.before || c.interacting {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for tex in app.renderer.pan_tiles().filter(|t| t.photo == c.id && app.renderer.is_full_window(t.key)) {
+        let Some(tile) = app.region_tiles.get(&(false, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, false)) else {
+            continue;
+        };
+        let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);
+        let (w, i) = (tile.window, crate::region::inner(tile.window, tile.full));
+        let at = v.img.min + vec2(i.x as f32 / fw * v.img.width(), i.y as f32 / fh * v.img.height());
+        let dst = Rect::from_min_size(at, vec2(i.w as f32 / fw * v.img.width(), i.h as f32 / fh * v.img.height()));
+        let (ww, wh) = (w.w.max(1) as f32, w.h.max(1) as f32);
+        let uv = Rect::from_min_max(
+            pos2(i.x.saturating_sub(w.x) as f32 / ww, i.y.saturating_sub(w.y) as f32 / wh),
+            pos2((i.x + i.w).saturating_sub(w.x) as f32 / ww, (i.y + i.h).saturating_sub(w.y) as f32 / wh),
+        );
+        p.image(tex.tex.id(), dst, uv, Color32::WHITE);
+        out.push(dst.intersect(p.clip_rect()));
+    }
+    out
+}
+
+/// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
+/// drag, an earlier draft of it). The rect it was drawn in (screen points), if it was.
+pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) -> Option<Rect> {
+    let tex = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id)?;
+    let tile = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting))?;
     let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);
     let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    Some(dst.intersect(p.clip_rect()))
 }

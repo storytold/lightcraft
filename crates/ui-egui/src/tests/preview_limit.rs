@@ -1296,7 +1296,11 @@ mod in_the_loupe {
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.settle(SETTLE);
-        assert_eq!(h.app.region_tiles.len(), 2, "{:?}", h.app.region_tiles.keys().collect::<Vec<_>>());
+        // (the After side also keeps the windows made around it for a pan)
+        let keys: Vec<_> = h.app.region_tiles.keys().copied().collect();
+        let before: Vec<u64> = keys.iter().filter(|(b, _)| *b).map(|(_, k)| *k).collect();
+        assert_eq!(before.len(), 1, "{keys:?}");
+        assert!(keys.contains(&(false, before[0])), "the After side keeps its own tile of the same key: {keys:?}");
     }
 
     // Given a window the photo's spots make too big for one render (refused), the loupe falls back

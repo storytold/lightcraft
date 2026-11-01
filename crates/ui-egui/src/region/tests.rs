@@ -650,3 +650,73 @@ fn a_window_is_bounded() {
     let w = window_for(100_000, 100_000, (0.0, 0.0, 90_000.0, 90_000.0), MAX_SPAN).unwrap();
     assert!(w.w <= MAX_SPAN && w.h <= MAX_SPAN);
 }
+
+// ------------------------------------------------ panning (test notes 2026-10-31 note 2)
+
+#[allow(non_snake_case)]
+fn W(x: usize, y: usize, w: usize, h: usize) -> PixelWindow {
+    PixelWindow { x, y, w, h }
+}
+
+#[test]
+fn windows_cover_an_area_together_exactly() {
+    let a = (100.0, 100.0, 900.0, 500.0);
+    assert!(covers(&[W(0, 0, 1000, 1000)], a));
+    // two halves meet edge to edge
+    assert!(covers(&[W(0, 0, 500, 1000), W(500, 0, 500, 1000)], a));
+    // a one-pixel gap between them is found
+    assert!(!covers(&[W(0, 0, 499, 1000), W(500, 0, 500, 1000)], a));
+    // and a corner missing
+    assert!(!covers(&[W(0, 0, 1000, 400), W(0, 400, 800, 600)], a));
+    assert!(!covers(&[], a));
+    // nothing to cover, or hostile numbers: covered (never a render for them)
+    assert!(covers(&[], (5.0, 5.0, 5.0, 9.0)));
+    assert!(covers(&[], (f32::NAN, 0.0, 1.0, 1.0)));
+}
+
+#[test]
+fn a_window_draws_its_inner_part_except_at_the_frame_edges() {
+    let full = (8000, 6000);
+    let m = margin_for(8000);
+    let win = W(1024, 1024, 4096, 3072);
+    assert_eq!(inner(win, full), W(1024 + m, 1024 + m, 4096 - 2 * m, 3072 - 2 * m));
+    // at the frame's edges the window's own pixels are the frame's: drawn to the edge
+    assert_eq!(inner(W(0, 0, 4096, 3072), full), W(0, 0, 4096 - m, 3072 - m));
+    assert_eq!(inner(W(4000, 3000, 4000, 3000), full), W(4000 + m, 3000 + m, 4000 - m, 3000 - m));
+    // a window narrower than its margins stays whole
+    assert_eq!(inner(W(1000, 1000, m, m), full), W(1000, 1000, m, m));
+}
+
+#[test]
+fn a_pan_asks_ahead_in_its_direction() {
+    let v = (1000.0, 1000.0, 2920.0, 2200.0);
+    assert_eq!(lead(v, (0.0, 0.0)), v);
+    // moving right by 20 px a frame: half a second ahead on the right only
+    assert_eq!(lead(v, (20.0, 0.0)), (1000.0, 1000.0, 2920.0 + 600.0, 2200.0));
+    // up and to the left, at most one view's size
+    assert_eq!(lead(v, (-500.0, -10.0)), (1000.0 - 1920.0, 1000.0 - 300.0, 2920.0, 2200.0));
+    assert_eq!(lead(v, (f32::NAN, f32::INFINITY)), v);
+}
+
+#[test]
+fn the_areas_around_a_view_come_nearest_first_and_inside_the_frame() {
+    let v = (2000.0, 2000.0, 3000.0, 2600.0);
+    let a = around(v, (8000, 6000));
+    assert_eq!(a.len(), 8);
+    assert_eq!(a[0], (3000.0, 2000.0, 4000.0, 2600.0), "right first");
+    assert_eq!(a[1], (1000.0, 2000.0, 2000.0, 2600.0), "then left");
+    // in the frame's top-left corner only right, below and their corner remain
+    let a = around((0.0, 0.0, 1000.0, 600.0), (8000, 6000));
+    assert_eq!(a, vec![(1000.0, 0.0, 2000.0, 600.0), (0.0, 600.0, 1000.0, 1200.0), (1000.0, 600.0, 2000.0, 1200.0)]);
+    assert!(around((0.0, 0.0, 0.0, 10.0), (100, 100)).is_empty());
+}
+
+#[test]
+fn the_sharp_share_counts_overlaps_once() {
+    let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
+    let half = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(50.0, 100.0));
+    assert!((covered_share(area, &[half, half]) - 0.5).abs() < 0.03);
+    assert_eq!(covered_share(area, &[area]), 1.0);
+    assert_eq!(covered_share(area, &[]), 0.0);
+    assert_eq!(covered_share(egui::Rect::NOTHING, &[]), 1.0);
+}

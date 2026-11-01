@@ -64,7 +64,19 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// The loupe zoomed in and still: a window next to the one on screen, made ahead at low priority
+    /// and kept with the [pan tiles](Renderer::pan_tiles), so a pan finds it sharp.
+    RegionNear,
 }
+
+/// Windows of the zoomed view kept while it pans ([`Renderer::pan_tiles`]): the ones the view moved
+/// away from and the ones made ahead around it. Each holds a window of the visible area plus its
+/// margin (~26 MB at 1920 x 1200 points), so this many hold the view and the eight around it.
+pub const PAN_TILES: usize = 10;
+
+/// Keys of full-quality windows remembered past this many are let go unless a pan tile or the
+/// view still shows them ([`Renderer::is_full_window`]).
+const FULL_WINDOW_KEYS: usize = 256;
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
 /// hidden grading wheels, must not discard a decoded RAW's actual aspect ratio.
@@ -276,6 +288,15 @@ pub struct Renderer {
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
+    /// Windows of the zoomed view kept while it pans, oldest first (at most [`PAN_TILES`]): a
+    /// window [`Slot::Region`] showed before the view moved on, or one made ahead around it
+    /// ([`Slot::RegionNear`]). Drawn where they belong until the view leaves their photo, zoom or
+    /// look ([`Self::retain_pan_tiles`]).
+    pan_tiles: std::collections::VecDeque<Tex>,
+    /// Keys of the window renders asked for at full quality (a drag's drafts are not sharp).
+    full_windows: std::collections::HashSet<u64>,
+    /// Window renders of the zoomed view ([`Slot::Region`]) started so far (a pan's cost).
+    window_renders: u64,
 }
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
@@ -360,6 +381,9 @@ impl Renderer {
             display: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
+            pan_tiles: std::collections::VecDeque::new(),
+            full_windows: std::collections::HashSet::new(),
+            window_renders: 0,
         }
     }
 }
@@ -567,6 +591,70 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        if slot == Slot::Region {
+            self.pan_tiles.clear();
+            self.full_windows.clear();
+            self.drop_queued(Slot::RegionNear);
+        }
+    }
+
+    /// Forget `slot`'s request: a queued job is dropped, a running one is discarded when it ends.
+    fn drop_queued(&mut self, slot: Slot) {
+        self.pool.reprioritize(|s, p| (*s != slot).then_some(p));
+        self.queue.retain(|q| q.slot != slot);
+        self.pending.remove(&slot);
+        self.requests.remove(&slot);
+    }
+
+    /// The windows of the zoomed view kept while it pans, oldest first.
+    pub fn pan_tiles(&self) -> impl Iterator<Item = &Tex> {
+        self.pan_tiles.iter()
+    }
+
+    /// How many pan tiles there are ([`PAN_TILES`] at most).
+    pub fn pan_tile_count(&self) -> usize {
+        self.pan_tiles.len()
+    }
+
+    /// Keep the pan tiles `keep` says still belong to the view (its photo, zoom and look).
+    pub fn retain_pan_tiles(&mut self, keep: impl Fn(&Tex) -> bool) {
+        self.pan_tiles.retain(|t| keep(t));
+    }
+
+    /// Whether the window rendered for `key` was asked for at full quality (not a drag's draft).
+    pub fn is_full_window(&self, key: u64) -> bool {
+        self.full_windows.contains(&key)
+    }
+
+    /// Window renders of the zoomed view started so far.
+    pub fn window_renders(&self) -> u64 {
+        self.window_renders
+    }
+
+    /// Move what `slot` shows (a window: [`Slot::Region`] or [`Slot::RegionNear`]) into the pan
+    /// tiles; the slot's next render gets a texture of its own.
+    fn keep_as_pan_tile(&mut self, slot: Slot) {
+        let Some(tex) = self.textures.remove(&slot) else { return };
+        self.pan_tiles.retain(|t| !(t.key == tex.key && t.photo == tex.photo));
+        self.pan_tiles.push_back(tex);
+        while self.pan_tiles.len() > PAN_TILES {
+            self.pan_tiles.pop_front();
+        }
+    }
+
+    /// Make the window `job` (already keyed for [`Slot::Region`], see [`Self::job_for`]) next to the
+    /// zoomed view, at `priority`, into the pan tiles ([`Slot::RegionNear`]). Nothing when it is
+    /// there already, on screen or being made, or another one is being made.
+    pub fn prefetch_near(&mut self, job: RenderJob, priority: u32) {
+        let key = job.key;
+        if self.pan_tiles.iter().any(|t| t.key == key)
+            || self.textures.get(&Slot::Region).is_some_and(|t| t.key == key)
+            || self.pending.get(&Slot::Region).is_some_and(|p| p.0 == key)
+            || self.pending.contains_key(&Slot::RegionNear)
+        {
+            return;
+        }
+        self.request(Slot::RegionNear, job, priority);
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -598,6 +686,12 @@ impl Renderer {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
+        if matches!(slot, Slot::Region | Slot::RegionNear) {
+            self.remember_window(job.key, job.request.quality != lightcraft_pipeline::Quality::Draft);
+            if slot == Slot::Region {
+                self.window_renders += 1;
+            }
+        }
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
             slot,
@@ -613,7 +707,7 @@ impl Renderer {
             return;
         }
         let key = job.key;
-        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_) | Slot::RegionNear);
         let display = self.display.clone();
         self.pool.submit(
             slot,
@@ -625,6 +719,25 @@ impl Renderer {
                 Finished { look, ..Self::run_for(run, &display) }
             }),
         );
+    }
+
+    /// Remember that the window render `key` is full quality ([`Self::is_full_window`]), bounded:
+    /// past [`FULL_WINDOW_KEYS`] only the keys a pan tile or the window slots still use stay.
+    fn remember_window(&mut self, key: u64, full: bool) {
+        if !full {
+            return;
+        }
+        if self.full_windows.len() >= FULL_WINDOW_KEYS {
+            let used: std::collections::HashSet<u64> = self
+                .pan_tiles
+                .iter()
+                .map(|t| t.key)
+                .chain([Slot::Region, Slot::RegionNear].iter().filter_map(|s| self.wanted(*s)))
+                .chain(self.textures.get(&Slot::Region).map(|t| t.key))
+                .collect();
+            self.full_windows.retain(|k| used.contains(k));
+        }
+        self.full_windows.insert(key);
     }
 
     /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
@@ -753,6 +866,8 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.pan_tiles.clear();
+        self.full_windows.clear();
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1084,6 +1199,16 @@ impl Renderer {
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
+            // a new window of the zoomed view: the full-quality one it replaces stays where it is,
+            // sharp, while the view pans (a pan at 100 % went soft behind the drag, window by window)
+            if slot == Slot::Region
+                && self
+                    .textures
+                    .get(&Slot::Region)
+                    .is_some_and(|t| t.key != r.key && t.photo == r.photo && t.quick.is_none() && self.full_windows.contains(&t.key))
+            {
+                self.keep_as_pan_tile(Slot::Region);
+            }
             if slot == Slot::HdrHistogram {
                 if rendered.histogram.hdr.is_some() {
                     self.live_hdr_histogram = Some((r.photo, r.key, rendered.histogram));
@@ -1139,6 +1264,10 @@ impl Renderer {
             }
             if slot == Slot::Main {
                 self.last_main_ms = ms;
+            }
+            // a window made next to the view: a pan tile
+            if slot == Slot::RegionNear {
+                self.keep_as_pan_tile(slot);
             }
             changed = true;
         }
@@ -1204,7 +1333,11 @@ impl Renderer {
 
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .values()
+            .chain(self.pan_tiles.iter())
+            .filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?))))
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).

@@ -49,7 +49,7 @@ pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overd
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
 use retouch::{eye_overlay, remove_overlay};
 pub(crate) use window::overlay_supports_window;
-use window::{WindowCtx, WindowView, draw_window, request_window};
+use window::{WindowCtx, WindowView, draw_pan_tiles, draw_window, prefetch_near, request_window};
 
 /// An in-progress on-canvas gesture.
 #[derive(Clone, Debug)]
@@ -270,6 +270,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
+    // a still, sharp zoomed view makes the windows around it ahead, so a pan finds them sharp
+    // (hovering a preset or profile asks for no windows)
+    prefetch_near(app, &window_ctx, &windows);
     let p = ui.painter_at(canvas);
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
@@ -311,12 +314,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     draw_wipe_before(app, &p, id, img_rect, line);
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
+    let mut sharp_rects = Vec::new();
     for (v, view) in &windows {
         // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
         let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
         let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
-        draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view);
+        sharp_rects.extend(draw_pan_tiles(&p.with_clip_rect(clip), app, &window_ctx, v, view));
+        sharp_rects.extend(draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view));
     }
+    app.loupe_sharp = (!windows.is_empty()).then(|| crate::region::covered_share(img_rect.intersect(canvas), &sharp_rects));
     if let Some((bg, g)) = before_badge {
         paint_badge(&p, bg, g);
         register(ui, "canvas:beforeLabel", bg);
