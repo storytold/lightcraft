@@ -655,10 +655,19 @@ mod tests {
         with_marker_in(&slot, &active, "device creation", || {});
         assert!(!m.exists());
         release_on(&slot, &active);
-        // a marker that can't be removed (a folder in its place): logged, no panic
+        // a marker that can't be read (a folder in its place): logged, no panic
         std::fs::create_dir_all(&m).unwrap();
         let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
         with_marker_in(&slot, &active, "device creation", || release_on(&slot, &active));
+        assert!(m.is_dir(), "left as it was");
+        // our own marker whose removal fails after the ownership check (CodeRabbit on PR #3427:
+        // the folder above already fails the read): logged, no panic
+        std::fs::remove_dir_all(&m).unwrap();
+        std::fs::write(&m, marker_text("device creation", 0, owner_token())).unwrap();
+        remove_if_owned_then(&m, || {
+            std::fs::remove_file(&m).unwrap();
+            std::fs::create_dir_all(&m).unwrap();
+        });
         assert!(m.is_dir(), "left as it was");
         let _ = std::fs::remove_dir_all(&dir);
     }
