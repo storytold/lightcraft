@@ -106,7 +106,8 @@ fn sample_candidates(app: &LightcraftApp) -> Vec<String> {
 
 /// How long the test's thread looks for the library's photos before it uses those it found (and
 /// the demo photos when none): a library whose newest folders are on a gone share is not searched
-/// for minutes.
+/// for minutes. The deadline is checked between photos: one lookup the OS holds on a hung share
+/// is not cut short, and the test (its row and ✕ meanwhile) goes on once it returns.
 const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The newest `n` of `candidates` (newest last) that are files on disk, in their order, looked for
@@ -150,6 +151,9 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
 /// ended (`last`: the report and whether it was applied, also with `apply: false`).
 pub fn command(app: &mut LightcraftApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
     const C: &str = "app.testMachine";
+    if !(p.is_object() || p.is_null()) {
+        return Err(format!("{C}: parameters must be an object"));
+    }
     let paths: Option<Vec<String>> = match p.get("paths") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::Array(a)) => {
@@ -402,6 +406,7 @@ mod tests {
         let e = command(&mut app, &serde_json::json!({"apply": "false"})).unwrap_err();
         assert!(e.contains("apply must be true or false"), "{e}");
         assert!(command(&mut app, &serde_json::json!({"quick": 1})).is_err());
+        assert!(command(&mut app, &serde_json::json!([true])).unwrap_err().contains("must be an object"));
         assert!(!running(&app), "nothing started");
         let t = std::time::Instant::now();
         let r = crate::menus::run_ui_command(&mut app, "app.testMachine", &serde_json::json!({"quick": true, "apply": false}))
