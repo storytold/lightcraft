@@ -51,6 +51,11 @@ STEPS = opt("--steps", 40)
 HOLD_MS = opt("--hold-ms", 33)
 if STEPS < 1 or HOLD_MS < 1:
     sys.exit(f"--steps and --hold-ms must be 1 or more; {USAGE}")
+# the app keeps its last 256 loupe steps; a run uses 1 (first open) + 11 (stepping) + STEPS + 1
+# (the hold): more than that would lose the run's own first steps
+KEPT_STEPS = 256
+if 1 + 11 + STEPS + 1 > KEPT_STEPS:
+    sys.exit(f"--steps {STEPS}: the app keeps {KEPT_STEPS} loupe steps, so at most {KEPT_STEPS - 13}; {USAGE}")
 LABEL = opt("--label", "run")
 OVERWRITE = "--overwrite" in args
 # a run takes minutes: refuse an existing result (or a link there, even a dangling one) before it
@@ -107,6 +112,9 @@ def steps_total(s=None):
 def steps_since(n0):
     s = inspect()["perf"]["loupeSteps"]
     new = steps_total(s) - n0
+    if new > len(s["steps"]):
+        # the app dropped some of this phase's steps: its numbers would be for part of it
+        sys.exit(f"{new} loupe steps since the phase began but the app kept {len(s['steps'])}: use fewer --steps")
     return (s["steps"][-new:] if new > 0 else []), s
 
 out = {"label": LABEL, "folder": FOLDER, "holdMs": HOLD_MS}
