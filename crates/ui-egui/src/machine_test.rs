@@ -89,12 +89,11 @@ pub fn adopt(st: &mut AppSettings, r: &MachineReport) {
     st.machine_test = Some(r.clone());
 }
 
-/// Raw photos of the library the test may use, newest last, at most [`CANDIDATES`]: no file is
-/// looked at here, on the UI thread (a library on a slow or gone network share would hold the
-/// window); [`on_disk`] picks those that are there, on the test's thread.
+/// Raw photos of the library the test may use, newest last: no file is looked at here, on the UI
+/// thread (a library on a slow or gone network share would hold the window); [`on_disk`] picks
+/// those that are there, on the test's thread.
 fn sample_candidates(app: &LightcraftApp) -> Vec<String> {
-    let mut v: Vec<String> = app
-        .session
+    app.session
         .catalog
         .photos()
         .filter(|p| p.kind == lightcraft_engine::catalog::MediaKind::Raw)
@@ -102,19 +101,27 @@ fn sample_candidates(app: &LightcraftApp) -> Vec<String> {
             lightcraft_engine::catalog::Source::File { path } => Some(path.clone()),
             _ => None,
         })
-        .collect();
-    let keep = v.len().saturating_sub(CANDIDATES);
-    v.drain(..keep);
-    v
+        .collect()
 }
 
-/// Library photos the test considers (the newest ones).
-const CANDIDATES: usize = 64;
+/// How long the test's thread looks for the library's photos before it uses those it found (and
+/// the demo photos when none): a library whose newest folders are on a gone share is not searched
+/// for minutes.
+const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The newest `n` of `candidates` (newest last) that are files on disk, in their order: the user's
-/// own camera's decode is part of an export. Empty: the test uses the demo photos.
-fn on_disk(candidates: Vec<String>, n: usize, is_file: impl Fn(&str) -> bool) -> Vec<String> {
-    let mut v: Vec<String> = candidates.into_iter().rev().filter(|p| is_file(p)).take(n).collect();
+/// The newest `n` of `candidates` (newest last) that are files on disk, in their order, looked for
+/// newest first until `n` are found or `deadline` passes: the user's own camera's decode is part of
+/// an export. Empty: the test uses the demo photos.
+fn on_disk(candidates: Vec<String>, n: usize, deadline: std::time::Instant, is_file: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut v: Vec<String> = Vec::with_capacity(n);
+    for p in candidates.into_iter().rev() {
+        if v.len() >= n || std::time::Instant::now() >= deadline {
+            break;
+        }
+        if is_file(&p) {
+            v.push(p);
+        }
+    }
     v.reverse();
     v
 }
@@ -181,7 +188,7 @@ fn start_with(app: &mut LightcraftApp, paths: Option<Vec<String>>, quick: bool, 
     let work = move || {
         let paths = match photos {
             Photos::Given(v) => v,
-            Photos::Library(c) => on_disk(c, 4, |p| std::path::Path::new(p).is_file()),
+            Photos::Library(c) => on_disk(c, 4, std::time::Instant::now() + LOOK_FOR, |p| std::path::Path::new(p).is_file()),
         };
         let r = run(paths, quick, stop, &mut |done, total, what| {
             row.progress(done as u64, total as u64);
@@ -221,7 +228,10 @@ fn run(
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.machine else { return };
     let apply_it = task.apply;
+    // (stopped after the test's last look at its flag: its result is not taken)
+    let stopped = task._guard.is_cancelled();
     let r = match task.rx.try_recv() {
+        Ok(Ok(_)) if stopped => Err("cancelled".to_string()),
         Ok(r) => r,
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -414,6 +424,25 @@ mod tests {
         assert!(last["last"]["error"].is_string(), "{last}");
     }
 
+    /// Review of PR #3506: a test stopped after its last look at its flag, whose report then
+    /// arrives, changes nothing.
+    #[test]
+    fn a_report_that_arrives_after_a_stop_is_not_taken() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let ctx = egui::Context::default();
+        let (tx, rx) = channel();
+        let _guard = app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        let id = _guard.id();
+        app.machine = Some(MachineTask { rx, _guard, apply: true });
+        tx.send(Ok(MachineReport { lanes: 5, summary: "Exports about 9 photos a minute".into(), ..Default::default() })).unwrap();
+        let _ = app.session.activity.cancel(id);
+        poll(&mut app, &ctx);
+        assert!(app.machine.is_none());
+        assert!(app.ui.settings.machine_test.is_none(), "not taken");
+        let last = crate::control::inspect(&app, &ctx)["machineTest"]["last"].clone();
+        assert_eq!(last["error"], "cancelled", "{last}");
+    }
+
     /// Review of PR #3499: `app.testMachine {apply: false}` keeps its report where the caller can
     /// read it (`ui.inspect` → `machineTest.last`), and the settings stay as they were.
     #[test]
@@ -438,14 +467,20 @@ mod tests {
     #[test]
     fn the_newest_photos_on_disk_are_tested() {
         let c: Vec<String> = (1..=6).map(|i| format!("p{i}.nef")).collect();
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let looked = std::cell::RefCell::new(Vec::new());
         let gone = |p: &str| {
             looked.borrow_mut().push(p.to_string());
             p != "p5.nef"
         };
-        assert_eq!(on_disk(c.clone(), 3, gone), ["p3.nef", "p4.nef", "p6.nef"]);
+        assert_eq!(on_disk(c.clone(), 3, later, gone), ["p3.nef", "p4.nef", "p6.nef"]);
         assert_eq!(*looked.borrow(), ["p6.nef", "p5.nef", "p4.nef", "p3.nef"], "it stops once it has enough");
-        assert!(on_disk(c, 4, |_| false).is_empty(), "none there: the demo photos");
+        assert!(on_disk(c, 4, later, |_| false).is_empty(), "none there: the demo photos");
+        // the newest hundred are on a gone share: an older photo is still found
+        let many: Vec<String> = (0..200).map(|i| format!("q{i}.nef")).collect();
+        assert_eq!(on_disk(many.clone(), 4, later, |p| p == "q7.nef"), ["q7.nef"]);
+        // past the deadline: no more looking
+        assert!(on_disk(many, 4, std::time::Instant::now(), |_| true).is_empty());
     }
 
     /// Review of PR #3506: no export, contact sheet or print starts while the test runs (it would

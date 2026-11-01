@@ -386,7 +386,12 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
                 Some(Value::Array(a)) => a.iter().map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(C, "paths must be file paths"))).collect::<Result<_, _>>()?,
                 Some(_) => return Err(bad(C, "paths must be a list of file paths")),
             };
-            let quick = p.get("quick").and_then(Value::as_bool).unwrap_or(false);
+            // (a value that isn't true or false is refused: `"false"` read as absent would apply it)
+            let flag = |k: &str, d: bool| match p.get(k) {
+                None | Some(Value::Null) => Ok(d),
+                Some(v) => v.as_bool().ok_or_else(|| bad(C, format!("{k} must be true or false"))),
+            };
+            let (quick, apply_requested) = (flag("quick", false)?, flag("apply", true)?);
             // (another test or an export running in the background would share the test's
             // computer and settings and skew it)
             if s.activity.list().iter().any(|t| t.kind == "benchmark") {
@@ -403,7 +408,7 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
                 !cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
             })
             .map_err(|e| bad(C, e))?;
-            if p.get("apply").and_then(Value::as_bool).unwrap_or(true) {
+            if apply_requested {
                 apply(&r);
             }
             Ok(serde_json::to_value(&r).unwrap_or_default())
@@ -485,6 +490,18 @@ mod tests {
         let e = s.execute("app.testMachine", &serde_json::json!({"quick": true, "apply": false})).unwrap_err().to_string();
         assert!(e.contains("already being tested"), "{e}");
         drop(other);
+    }
+
+    /// Review of PR #3499: a flag that isn't true or false is refused before anything runs
+    /// (`"false"` read as absent would apply the test's result).
+    #[test]
+    fn odd_flags_are_refused() {
+        let mut s = crate::Session::with_demo();
+        for p in [serde_json::json!({"apply": "false"}), serde_json::json!({"quick": "true"}), serde_json::json!({"quick": 1})] {
+            let e = s.execute("app.testMachine", &p).unwrap_err().to_string();
+            assert!(e.contains("must be true or false"), "{p}: {e}");
+        }
+        assert!(s.activity.list().iter().all(|t| t.kind != "benchmark"), "no test ran");
     }
 
     #[test]
