@@ -1268,11 +1268,13 @@ impl Renderer {
     pub fn memory(&self) -> serde_json::Value {
         let cpu: usize = self.stages.values().map(|s| s.bytes()).sum();
         let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
-        let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
-        let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
+        // (with the whole-frame renders kept for a return to them, [`KEPT_VIEWS`])
+        let all = || self.textures.values().chain(&self.kept_views);
+        let tex: usize = all().map(|t| t.size[0] * t.size[1] * 4).sum();
+        let copies: usize = all().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
-            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "textures": {"count": self.textures.len() + self.kept_views.len(), "bytes": tex, "cpuCopyBytes": copies},
         })
     }
 

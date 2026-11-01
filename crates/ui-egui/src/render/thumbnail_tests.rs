@@ -1343,8 +1343,11 @@ fn crop_on_and_off_with_an_unchanged_edit_renders_nothing_again() {
     app.renderer.request(Slot::Main, draft, 100);
     assert_eq!(work.borrow().jobs.len(), 1, "a draft that left the view is rendered again, never kept");
     work.borrow_mut().jobs.clear();
-    // leaving the view lets the kept renders go
+    // the kept render counts in the renderer's memory; leaving the view lets it go
+    let held = |app: &crate::LightcraftApp| app.renderer.memory()["textures"]["count"].as_u64().unwrap();
+    let before = held(&app);
     app.renderer.release(Slot::Main);
+    assert_eq!(held(&app), before - 2, "the shown render and the kept one are let go, and both were counted");
     app.renderer.request(Slot::Main, uncropped, 100);
     assert_eq!(work.borrow().jobs.len(), 1, "after the view was released it renders");
 }
