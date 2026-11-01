@@ -1315,18 +1315,11 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
             }
         });
     });
-    if ui.button(crate::i18n::tr("Find Similar Photos")).clicked() {
-        match app.run("library.findSimilar", json!({"id": id.0})) {
-            Ok(r) => {
-                let n = r["photos"].as_array().map_or(0, Vec::len);
-                app.ui.view = crate::state::ViewMode::PhotoGrid;
-                app.toast(
-                    ui.ctx(),
-                    crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
-                );
-            }
-            Err(e) => app.toast(ui.ctx(), e),
-        }
+    let can_search = lightcraft_engine::cmd::similar::no_search_running(&app.session).is_ok();
+    if ui.add_enabled(can_search, egui::Button::new(crate::i18n::tr("Find Similar Photos"))).clicked()
+        && let Err(e) = app.run("library.findSimilar", json!({"id": id.0}))
+    {
+        app.toast(ui.ctx(), e);
     }
     let live = super::compare::live(app, id);
     let set_reference = ui
