@@ -37,18 +37,45 @@ pub fn install_hook(log: Option<PathBuf>) {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
         let Some(log) = &log else { return };
-        if let Some(dir) = log.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+        if let Ok(mut f) = open_panic_log(log) {
             let _ = writeln!(f, "{secs} [{thread}] panic at {at}: {}", panic_message(info.payload()));
         }
     }));
 }
 
+/// Opens the panic log for appending, making its folder when missing. On Unix a new log is
+/// readable by its owner only (0600): panic messages can name the user's files.
+fn open_panic_log(log: &std::path::Path) -> std::io::Result<std::fs::File> {
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut open = std::fs::OpenOptions::new();
+    open.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    open.open(log)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #2572: the panic log's folder is made when missing, and on Unix a new log is the
+    /// owner's alone; appending keeps what is there.
+    #[test]
+    fn the_panic_log_is_made_for_its_owner_only() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-panic-log-{}", std::process::id()));
+        let log = dir.join("logs").join("lightcraft-panics.log");
+        writeln!(open_panic_log(&log).unwrap(), "one").unwrap();
+        writeln!(open_panic_log(&log).unwrap(), "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "one\ntwo\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_panic_becomes_an_error() {
