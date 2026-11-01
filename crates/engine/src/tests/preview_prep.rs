@@ -589,3 +589,27 @@ fn a_bad_build_request_leaves_the_background_build_running() {
     assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// CodeRabbit on #3080: a background build that can't start isn't tried again on every tick; the
+/// view tries again once [`crate::prep::RETRY_AFTER`] has passed.
+#[test]
+fn a_build_that_cant_start_waits_before_trying_again() {
+    let (mut s, root, ids) = library("prep-retry", 3);
+    let mode = crate::prep::Mode::Library;
+    s.prep.fail_starts = 1;
+    for id in &ids {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    assert!(s.preview_build.is_none(), "the start failed");
+    assert!(s.prep.retry_at.is_some());
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert!(s.preview_build.is_none(), "not tried again at once");
+    // the wait is over
+    s.prep.retry_at = s.prep.retry_at.map(|(view, _)| (view, web_time::Instant::now()));
+    s.prep_tick(mode, Some(ids[2]), false);
+    let b = s.preview_build.clone().expect("tried again");
+    assert!(b.background && s.prep.retry_at.is_none());
+    b.cancel.store(true, Ordering::Relaxed);
+    let _ = wait_finished(&b);
+    let _ = std::fs::remove_dir_all(&root);
+}
