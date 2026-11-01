@@ -3665,5 +3665,22 @@
   "Not selected": "არ არის მონიშნული",
   "Done selecting": "მონიშვნის დასრულება",
   "Select faces…": "სახეების მონიშვნა…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "დააწკაპუნეთ სახის მოსანიშნად ან მონიშვნის გასაუქმებლად. Shift-დაწკაპუნება მოქმედებას დიაპაზონზე ავრცელებს. ორმაგი დაწკაპუნება ფოტოს ხსნის."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "დააწკაპუნეთ სახის მოსანიშნად ან მონიშვნის გასაუქმებლად. Shift-დაწკაპუნება მოქმედებას დიაპაზონზე ავრცელებს. ორმაგი დაწკაპუნება ფოტოს ხსნის.",
+  "Unnamed groups": "უსახელო ჯგუფები",
+  "Refresh groups": "ჯგუფების განახლება",
+  "Fewer mistakes": "ნაკლები შეცდომა",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "გამოიყენეთ უფრო მკაცრი ზღვარი და უსახელო ჯგუფები პირველ სახესთან ახლოს შეინარჩუნეთ",
+  "Auto group unnamed faces": "უსახელო სახეების ავტომატურად დაჯგუფება",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "სახეები უსახელოთა სიაში დაბრუნდება. ფოტოები და სახის ჩარჩოები შენარჩუნდება. გაუქმება მინიჭებას აღადგენს.",
+  "Select all is unavailable because not all faces are shown.": "ყველას მონიშვნა მიუწვდომელია, რადგან ყველა სახე არ ჩანს.",
+  "Open face settings": "სახეების პარამეტრების გახსნა",
+  "All groups": "ყველა ჯგუფი",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "რამდენიმე ჯგუფის ასარჩევად დააწკაპუნეთ. Shift-დაწკაპუნება დიაპაზონს ირჩევს. განხილვა ჯგუფის სახეებს ხსნის.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "სახის ჩასართავად ან გამოსარიცხად დააწკაპუნეთ. Shift-დაწკაპუნება დიაპაზონს აფართოებს; Shift-გადათრევა მონიშნულ სახეებს გამორიცხავს.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "ამოსაცნობი მონაცემების მქონე უსახელო სახეები არ არის. ახალი სახეები სკანირების შემდეგ გამოჩნდება.",
+  "Assign to existing person…": "არსებულ პირზე მინიჭება…",
+  "Find a person…": "პირის ძებნა…",
+  "Or enter a new name…": "ან ახალი სახელის შეყვანა…",
+  "Quick assign:": "სწრაფი მინიჭება:",
+  "Unnamed": "უსახელო"
 }

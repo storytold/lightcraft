@@ -1,6 +1,10 @@
 //! Incremental library-wide grouping, using the same best-two-example score as People → More.
 //! Confirmed people seed galleries; unnamed groups learn from their members as they grow.
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::PhotoId;
@@ -32,6 +36,28 @@ pub(crate) struct Grouping {
     runner_up: f32,
     unindexed: usize,
     saved: bool,
+    saving: Option<PendingSave>,
+}
+
+/// A cancelled or superseded save must not race a later refresh to the same file.
+struct PendingSave {
+    result: mpsc::Receiver<std::result::Result<(), String>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Drop for PendingSave {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+static SAVE_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct SaveSlot;
+impl Drop for SaveSlot {
+    fn drop(&mut self) {
+        SAVE_BUSY.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -100,6 +126,7 @@ fn load(s: &Session) -> Result<Option<Grouping>> {
         runner_up: -1.0,
         unindexed: saved.unindexed,
         saved: true,
+        saving: None,
     };
     let mut seen = std::collections::HashSet::new();
     for group in saved.groups {
@@ -275,11 +302,83 @@ pub(crate) fn query(s: &mut Session, p: &Value, model_threshold: f32) -> Result<
             runner_up: -1.0,
             unindexed,
             saved: false,
+            saving: None,
         });
     }
     let Some(g) = &mut s.faces.groups else { return Ok(Value::Null) };
     g.step(threshold, Duration::from_millis(p["budgetMs"].as_u64().unwrap_or(8).clamp(1, 20)));
-    let complete = g.next == g.faces.len();
+    let grouped = g.next == g.faces.len();
+    if grouped && !g.saved {
+        if let Some(pending) = &g.saving {
+            match pending.result.try_recv() {
+                Ok(Ok(())) => {
+                    g.saving = None;
+                    g.saved = true;
+                }
+                Ok(Err(error)) => {
+                    g.saving = None;
+                    return Err(crate::cmd::bad("faces.groupUnnamed", error));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    g.saving = None;
+                    return Err(crate::cmd::bad("faces.groupUnnamed", "The group save worker stopped"));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        } else if let Some(path) = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("unnamed-face-groups.json")) {
+            if SAVE_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                return Ok(
+                    json!({"complete": false, "strict": g.strict, "processed": g.next, "total": g.faces.len(), "unindexed": g.unindexed, "groups": []}),
+                );
+            }
+            let groups = g
+                .groups
+                .iter()
+                .map(|group| SavedGroup {
+                    name: group.name.clone(),
+                    anchor: group.anchor.clone(),
+                    faces: group
+                        .members
+                        .iter()
+                        .filter_map(|i| {
+                            let f = g.faces.get(*i)?;
+                            let photo = s.catalog.photo(PhotoId(f.photo))?;
+                            Some(SavedFace { photo: f.photo, index: f.index, rect: f.rect, content_hash: photo.content_hash.clone() })
+                        })
+                        .collect(),
+                })
+                .collect();
+            let saved = Saved { version: 1, tag: g.tag.clone(), strict: g.strict, unindexed: g.unindexed, groups };
+            let (tx, result) = mpsc::channel();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_cancelled = cancelled.clone();
+            let spawned = std::thread::Builder::new().name("face-group-save".into()).spawn(move || {
+                let _slot = SaveSlot;
+                let outcome = (|| {
+                    if worker_cancelled.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    let bytes = serde_json::to_vec(&saved).map_err(|e| e.to_string())?;
+                    if bytes.len() > 32 * 1024 * 1024 {
+                        return Err("Saved groups exceed 32 MiB".to_string());
+                    }
+                    if worker_cancelled.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| format!("Cannot save unnamed groups: {e}"))
+                })();
+                let _ = tx.send(outcome);
+            });
+            if let Err(e) = spawned {
+                SAVE_BUSY.store(false, Ordering::Release);
+                return Err(crate::cmd::bad("faces.groupUnnamed", format!("Cannot start group save: {e}")));
+            }
+            g.saving = Some(PendingSave { result, cancelled });
+        } else {
+            g.saved = true;
+        }
+    }
+    let complete = grouped && g.saved;
     let mut groups = Vec::new();
     if complete {
         let mut current_names = std::collections::BTreeMap::new();
@@ -325,41 +424,48 @@ pub(crate) fn query(s: &mut Session, p: &Value, model_threshold: f32) -> Result<
     }
     let response =
         json!({"complete": complete, "strict": g.strict, "processed": g.next, "total": g.faces.len(), "unindexed": g.unindexed, "groups": groups});
-    if complete && !g.saved {
-        if let Some(path) = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("unnamed-face-groups.json")) {
-            let groups = g
-                .groups
-                .iter()
-                .map(|group| SavedGroup {
-                    name: group.name.clone(),
-                    anchor: group.anchor.clone(),
-                    faces: group
-                        .members
-                        .iter()
-                        .filter_map(|i| {
-                            let f = g.faces.get(*i)?;
-                            let photo = s.catalog.photo(PhotoId(f.photo))?;
-                            Some(SavedFace { photo: f.photo, index: f.index, rect: f.rect, content_hash: photo.content_hash.clone() })
-                        })
-                        .collect(),
-                })
-                .collect();
-            let saved = Saved { version: 1, tag: g.tag.clone(), strict: g.strict, unindexed: g.unindexed, groups };
-            let bytes = serde_json::to_vec(&saved).map_err(|e| crate::cmd::bad("faces.groupUnnamed", e.to_string()))?;
-            if bytes.len() > 32 * 1024 * 1024 {
-                return Err(crate::cmd::bad("faces.groupUnnamed", "Saved groups exceed 32 MiB"));
-            }
-            lightcraft_catalog::safe_file::write_atomic(&path, &bytes)
-                .map_err(|e| crate::cmd::bad("faces.groupUnnamed", format!("Cannot save unnamed groups: {e}")))?;
-        }
-        g.saved = true;
-    }
     Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A slow save must not make the next grouping query wait on its UI thread.
+    #[test]
+    fn an_outstanding_save_never_blocks_grouping_queries() {
+        let dir = std::env::temp_dir().join(format!("lc-group-save-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        let mut acquired = false;
+        for _ in 0..5000 {
+            if SAVE_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                acquired = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(acquired, "the earlier save did not finish");
+        let guard = SaveSlot;
+        let started = Instant::now();
+        let pending = query(&mut s, &json!({}), 0.5).unwrap();
+        assert_eq!(pending["complete"], false);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(guard);
+        let mut result = pending;
+        for _ in 0..5000 {
+            if result["complete"] == true {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            result = query(&mut s, &json!({}), 0.5).unwrap();
+        }
+        assert_eq!(result["complete"], true);
+        assert!(dir.join("unnamed-face-groups.json").is_file());
+        s.close_library().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// Strict grouping must resist similarity chains while retaining every input face.
     #[test]
@@ -377,6 +483,7 @@ mod tests {
             runner_up: -1.0,
             unindexed: 0,
             saved: false,
+            saving: None,
         };
         // Adjacent directions match, but 0° and 60° must not end up together.
         for (i, angle) in [0.0_f32, 30.0, 60.0, 180.0].iter().enumerate() {
@@ -423,6 +530,7 @@ mod tests {
             runner_up: -1.0,
             unindexed: 0,
             saved: false,
+            saving: None,
         };
         for (i, angle) in [0.0_f32, 30.0, 60.0].iter().enumerate() {
             let radians = angle.to_radians();

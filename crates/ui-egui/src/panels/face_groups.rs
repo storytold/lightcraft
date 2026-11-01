@@ -102,6 +102,17 @@ fn review(view: &mut View, groups: &[Value], index: usize) {
     view.anchor = None;
 }
 
+/// Keep a save error visible while dropping faces that were already assigned in memory.
+fn assignment_failed(view: &mut View, error: String, refreshed: Option<Value>) {
+    if let Some(r) = refreshed {
+        let present: HashSet<_> = r["groups"].as_array().into_iter().flatten().flat_map(|group| keys(group, true)).collect();
+        view.selected.retain(|key| present.contains(key));
+        view.group = None;
+        view.response = Some(Arc::new(r));
+    }
+    view.error = Some(error);
+}
+
 /// Lay out the face-review panel inside its standard outer margin.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     egui::Frame::NONE.inner_margin(16).show(ui, |ui| show_inner(app, ui));
@@ -113,16 +124,16 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut back = false;
     let mut refresh = false;
     ui.horizontal_wrapped(|ui| {
-        let b = ui.button("‹ People");
+        let b = ui.button(format!("‹ {}", crate::i18n::tr("People")));
         register(ui, "faceGroups:back", b.rect);
         back = b.clicked();
-        ui.heading("Unnamed groups");
-        let b = ui.button("Refresh groups");
+        ui.heading(crate::i18n::tr("Unnamed groups"));
+        let b = ui.button(crate::i18n::tr("Refresh groups"));
         register(ui, "faceGroups:refresh", b.rect);
         refresh = b.clicked();
-        let b = ui.checkbox(&mut view.strict, "Fewer mistakes");
+        let b = ui.checkbox(&mut view.strict, crate::i18n::tr("Fewer mistakes"));
         register(ui, "faceGroups:strict", b.rect);
-        refresh |= b.on_hover_text("Use a tighter threshold and keep unnamed groups close to their first face").changed();
+        refresh |= b.on_hover_text(crate::i18n::tr("Use a tighter threshold and keep unnamed groups close to their first face")).changed();
     });
     if back {
         return;
@@ -148,19 +159,23 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     if let Some(error) = &view.error {
         ui.label(error);
-        if view.response.is_none() && ui.button("Open face settings").clicked() {
+        if view.response.is_none() && ui.button(crate::i18n::tr("Open face settings")).clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
         }
     }
     let response = view.response.clone().unwrap_or_default();
     if response["complete"] != true && view.error.is_none() {
-        ui.label(format!("Grouping similar faces… {} of {}", response["processed"].as_u64().unwrap_or(0), response["total"].as_u64().unwrap_or(0)));
+        ui.label(crate::i18n::tr_format!(
+            "Grouping similar faces… {done} of {total}",
+            done = response["processed"].as_u64().unwrap_or(0),
+            total = response["total"].as_u64().unwrap_or(0)
+        ));
     } else if response["complete"] == true {
         let empty = Vec::new();
         let groups = response["groups"].as_array().unwrap_or(&empty);
         ui.horizontal_wrapped(|ui| {
             if view.group.is_some() {
-                let b = ui.button("‹ All groups");
+                let b = ui.button(format!("‹ {}", crate::i18n::tr("All groups")));
                 register(ui, "faceGroups:all", b.rect);
                 if b.clicked() {
                     view.group = None;
@@ -168,9 +183,13 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             }
             let unindexed = response["unindexed"].as_u64().unwrap_or(0);
-            ui.label(format!("{} groups · {unindexed} faces awaiting recognition", groups.len()));
+            ui.label(crate::i18n::tr_format!(
+                "{groups} groups · {unindexed} faces awaiting recognition",
+                groups = groups.len(),
+                unindexed = unindexed
+            ));
             if app.caches.faces_pending > 0 {
-                ui.label(format!("Scanning: {} photos remaining", app.caches.faces_pending));
+                ui.label(crate::i18n::tr_format!("Scanning: {count} photos remaining", count = app.caches.faces_pending));
             }
         });
         let (items, cards) = match view.group {
@@ -193,17 +212,21 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     // Reuse the grouping, removing accepted members, without interrupting assignment to regroup.
                     view.response = Some(Arc::new(json!({"complete": false})));
                 }
-                Err(e) => view.error = Some(e),
+                Err(e) => {
+                    // A failed catalog save can leave names applied in memory; refresh once.
+                    let refreshed = app.session.execute("faces.groupUnnamed", &json!({"restart": false, "strict": view.strict})).ok();
+                    assignment_failed(&mut view, e, refreshed);
+                }
             }
         } else {
             ui.separator();
-            ui.label(if cards {
+            ui.label(crate::i18n::tr(if cards {
                 "Click groups to select several. Shift-click selects a range. Review opens the faces in a group."
             } else {
                 "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces."
-            });
+            }));
             if items.is_empty() {
-                ui.label("No unnamed faces with recognition data. New faces appear after scanning.");
+                ui.label(crate::i18n::tr("No unnamed faces with recognition data. New faces appear after scanning."));
             }
             grid(app, ui, items, cards, &mut view);
         }
@@ -216,9 +239,9 @@ fn assignment_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Value], 
     let mut assign = None;
     let people = app.caches.person_names(&app.session.catalog);
     ui.horizontal_wrapped(|ui| {
-        ui.strong(format!("{} faces selected", view.selected.len()));
+        ui.strong(crate::i18n::tr_format!("{count} faces selected", count = view.selected.len()));
         let all = !items.is_empty() && items.iter().flat_map(|item| keys(item, cards)).all(|k| view.selected.contains(&k));
-        let b = ui.button(if all { "Deselect all" } else { "Select all" });
+        let b = ui.button(crate::i18n::tr(if all { "Deselect All" } else { "Select all" }));
         register(ui, "faceGroups:selectAll", b.rect);
         if b.clicked() {
             for face in items.iter().flat_map(|item| keys(item, cards)) {
@@ -229,7 +252,7 @@ fn assignment_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Value], 
                 }
             }
         }
-        let b = ui.add_enabled(!view.selected.is_empty(), egui::Button::new("Clear selection"));
+        let b = ui.add_enabled(!view.selected.is_empty(), egui::Button::new(crate::i18n::tr("Clear selection")));
         register(ui, "faceGroups:clear", b.rect);
         if b.clicked() {
             view.selected.clear();
@@ -242,10 +265,10 @@ fn assignment_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Value], 
             let combo = crate::widgets::combo_box("face-groups-person")
                 .width(240.0)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .selected_text("Assign to existing person…")
+                .selected_text(crate::i18n::tr("Assign to existing person…"))
                 .show_ui(ui, |ui| {
                     crate::text_field::TextField::singleline("field:groupPersonSearch", &mut view.person_search)
-                        .hint("Find a person…")
+                        .hint(crate::i18n::tr("Find a person…"))
                         .width(240.0)
                         .show(ui);
                     let search = view.person_search.trim().to_lowercase();
@@ -262,9 +285,12 @@ fn assignment_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Value], 
                 });
             register(ui, "faceGroups:existing", combo.response.rect);
         });
-        let field = crate::text_field::TextField::singleline("field:groupName", &mut view.name).hint("Or enter a new name…").width(220.0).show(ui);
+        let field = crate::text_field::TextField::singleline("field:groupName", &mut view.name)
+            .hint(crate::i18n::tr("Or enter a new name…"))
+            .width(220.0)
+            .show(ui);
         let chosen = view.name.trim();
-        let b = ui.add_enabled(n > 0 && !chosen.is_empty(), egui::Button::new(format!("Assign {n} faces")));
+        let b = ui.add_enabled(n > 0 && !chosen.is_empty(), egui::Button::new(crate::i18n::tr_format!("Assign {n} faces", n = n)));
         register(ui, "faceGroups:name", b.rect);
         if b.clicked() || (n > 0 && !chosen.is_empty() && field.ending == Some(crate::text_field::Ending::Return)) {
             assign = Some(people.iter().find(|p| p.to_lowercase() == chosen.to_lowercase()).cloned().unwrap_or_else(|| chosen.to_string()));
@@ -290,11 +316,11 @@ fn assignment_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Value], 
     }
     if !quick.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Quick assign:");
+            ui.label(crate::i18n::tr("Quick assign:"));
             for name in quick {
                 let b = ui.add_enabled(n > 0, egui::Button::new(&name));
                 register(ui, format!("faceGroups:assign:{name}"), b.rect);
-                if b.on_hover_text(format!("Assign all {n} selected faces to {name}")).clicked() {
+                if b.on_hover_text(crate::i18n::tr_format!("Assign all {n} selected faces to {name}", n = n, name = name)).clicked() {
                     assign = Some(name);
                 }
             }
@@ -364,11 +390,15 @@ fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, items: &[Value], cards: bool
                         let (count, selected) = keys(item, cards)
                             .fold((0usize, 0usize), |(count, selected), k| (count + 1, selected + usize::from(view.selected.contains(&k))));
                         let label = if cards {
-                            if selected == 0 { format!("{count} faces") } else { format!("{selected} of {count} selected") }
+                            if selected == 0 {
+                                crate::i18n::tr_format!("{count} faces", count = count)
+                            } else {
+                                crate::i18n::tr_format!("{selected} of {count} selected", selected = selected, count = count)
+                            }
                         } else if selected > 0 {
-                            "✓ Selected".into()
+                            crate::i18n::tr("✓ Selected").into()
                         } else {
-                            "Not selected".into()
+                            crate::i18n::tr("Not selected").into()
                         };
                         if selected > 0 {
                             ui.painter().rect_stroke(image, 3.0, Stroke::new(2.0, Color32::from_rgb(110, 160, 255)), StrokeKind::Inside);
@@ -392,14 +422,17 @@ fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, items: &[Value], cards: bool
                         register(ui, format!("faceGroups:{}:{i}", if cards { "group" } else { "face" }), image);
                         crate::widgets::announce_selected(
                             &resp,
-                            format!("{} {label}", item["suggestion"].as_str().unwrap_or("Unnamed")),
+                            format!("{} {label}", item["suggestion"].as_str().unwrap_or_else(|| crate::i18n::tr("Unnamed"))),
                             selected > 0,
                         );
                         let mut open = false;
                         if cards {
                             let b = ui
                                 .push_id(("face-group-review", i), |ui| {
-                                    ui.put(Rect::from_min_size(pos2(r.left(), image.bottom() + 26.0), vec2(edge, 22.0)), egui::Button::new("Review"))
+                                    ui.put(
+                                        Rect::from_min_size(pos2(r.left(), image.bottom() + 26.0), vec2(edge, 22.0)),
+                                        egui::Button::new(crate::i18n::tr("Review")),
+                                    )
                                 })
                                 .inner;
                             register(ui, format!("faceGroups:review:{i}"), b.rect);
@@ -467,6 +500,51 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn failed_assignment_keeps_the_error_and_drops_already_named_faces() {
+        let mut view = View { selected: HashSet::from([(1, 0), (2, 0)]), group: Some(0), ..Default::default() };
+        let refreshed = json!({"complete": true, "groups": [{"faces": [{"photo": 2, "index": 0}]}]});
+        assignment_failed(&mut view, "Could not save".into(), Some(refreshed));
+        assert_eq!(view.selected, HashSet::from([(2, 0)]));
+        assert!(view.group.is_none());
+        assert_eq!(view.error.as_deref(), Some("Could not save"));
+        assert_eq!(view.response.as_ref().unwrap()["groups"][0]["faces"].as_array().unwrap().len(), 1);
+        assignment_failed(&mut view, "Still not saved".into(), None);
+        assert_eq!(view.selected, HashSet::from([(2, 0)]));
+        assert_eq!(view.error.as_deref(), Some("Still not saved"));
+    }
+
+    #[test]
+    fn detecting_faces_invalidates_an_open_group_review() {
+        let (mut h, _) = fixture();
+        let dir = std::env::temp_dir().join(format!("lc-group-detect-{}", std::process::id()));
+        let home = dir.join(lightcraft_faces::known::YUNET_ID);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("model.onnx"), lightcraft_faces::synthetic::tiny_detector_model()).unwrap();
+        std::fs::write(home.join("face-model.json"), serde_json::to_vec(&lightcraft_faces::synthetic::tiny_detector_manifest()).unwrap()).unwrap();
+        h.app.session.face_models_dir = Some(dir.clone());
+        assert!(h.app.ui.unnamed_groups.as_ref().unwrap().response.is_some());
+        h.app.run("faces.detect", json!({"ids": [], "apply": false})).unwrap();
+        let view = h.app.ui.unnamed_groups.as_ref().unwrap();
+        assert!(view.response.is_none());
+        assert!(view.selected.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grouped_review_is_rendered_in_the_selected_language() {
+        let (mut h, _) = fixture();
+        h.app.ui.language = crate::i18n::Locale::De;
+        crate::i18n::set_language(crate::i18n::Locale::De);
+        h.step();
+        let painted = h.painted_text();
+        for label in ["Unbenannte Gruppen", "Gruppen aktualisieren", "Weniger Fehler", "Schnell zuweisen:"] {
+            assert!(painted.iter().any(|s| s.contains(label)), "{label}: {painted:?}");
+        }
+        screenshot(&mut h);
+        crate::i18n::set_language(crate::i18n::Locale::En);
+    }
+
     /// Back must preserve review selection before returning through the overview to People.
     #[test]
     fn face_groups_back_returns_through_overview_and_people() {
@@ -479,6 +557,11 @@ mod tests {
         }
         click(&mut h, "faceGroups:group:0");
         click(&mut h, "faceGroups:review:0");
+        let selected = h.app.ui.unnamed_groups.as_ref().unwrap().selected.clone();
+        for params in [json!({}), json!({"name": "  "})] {
+            assert!(h.app.run("view.person", params).is_err());
+            assert_eq!(h.app.ui.unnamed_groups.as_ref().unwrap().selected, selected);
+        }
         h.app.run("view.back", json!({})).unwrap();
         let view = h.app.ui.unnamed_groups.as_ref().unwrap();
         assert!(view.group.is_none());

@@ -2395,5 +2395,22 @@
   "Not selected": "未選択",
   "Done selecting": "選択を終了",
   "Select faces…": "顔を選択…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "クリックで顔を選択または選択解除します。Shiftキーを押しながらクリックすると範囲に適用します。ダブルクリックで写真を開きます。"
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "クリックで顔を選択または選択解除します。Shiftキーを押しながらクリックすると範囲に適用します。ダブルクリックで写真を開きます。",
+  "Unnamed groups": "名前のないグループ",
+  "Refresh groups": "グループを更新",
+  "Fewer mistakes": "誤りを減らす",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "より厳しいしきい値を使い、名前のないグループを最初の顔に近づけます",
+  "Auto group unnamed faces": "名前のない顔を自動でグループ化",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "これらの顔を名前のない顔に戻します。写真と顔の枠は保持されます。元に戻すと割り当てが復元されます。",
+  "Select all is unavailable because not all faces are shown.": "すべての顔が表示されていないため、すべて選択は使えません。",
+  "Open face settings": "顔の設定を開く",
+  "All groups": "すべてのグループ",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "グループをクリックして複数選択します。Shiftクリックで範囲を選択します。確認でグループ内の顔を開きます。",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "顔をクリックして含めるか除外します。Shiftクリックで範囲を広げ、Shiftドラッグで枠内の顔を除外します。",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "認識データのある名前のない顔はありません。スキャン後に新しい顔が表示されます。",
+  "Assign to existing person…": "既存の人物に割り当て…",
+  "Find a person…": "人物を検索…",
+  "Or enter a new name…": "または新しい名前を入力…",
+  "Quick assign:": "クイック割り当て:",
+  "Unnamed": "名前なし"
 }

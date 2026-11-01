@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "無法還原面板配置：{error}",
   "Panel move was not applied: {error}": "面板移動未套用：{error}",
   "{name} is installed": "{name} 已安裝",
-  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟"
+  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
+  "Remove {count} faces from {name}": "從{name}移除{count}張臉孔",
+  "Grouping similar faces… {done} of {total}": "自動群組未命名的臉孔… {done}／{total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "所有群組: {groups} · {unindexed} 人臉 · 等待辨識",
+  "Scanning: {count} photos remaining": "掃描中: {count} 照片 · 剩餘",
+  "{count} faces selected": "{count} 人臉 · 已選取",
+  "Assign {n} faces": "指派: {n} 人臉",
+  "Assign all {n} selected faces to {name}": "指派: {n} 人臉 · 已選取 → {name}",
+  "{count} faces": "{count} 人臉",
+  "{selected} of {count} selected": "{selected}／{count} · 已選取",
+  "Remove from {name}": "從{name}移除"
 }

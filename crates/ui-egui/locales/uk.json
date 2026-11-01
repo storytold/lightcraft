@@ -2393,5 +2393,22 @@
   "Not selected": "Не вибрано",
   "Done selecting": "Завершити вибір",
   "Select faces…": "Вибрати обличчя…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Натисніть, щоб вибрати обличчя або скасувати вибір. Shift-клацання поширює дію на діапазон. Подвійне клацання відкриває фото."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Натисніть, щоб вибрати обличчя або скасувати вибір. Shift-клацання поширює дію на діапазон. Подвійне клацання відкриває фото.",
+  "Unnamed groups": "Групи без імені",
+  "Refresh groups": "Оновити групи",
+  "Fewer mistakes": "Менше помилок",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Використовувати суворіший поріг і зберігати близькість груп без імені до першого обличчя",
+  "Auto group unnamed faces": "Автоматично групувати обличчя без імені",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Повернути ці обличчя до списку без імені. Фото й рамки збережуться. Скасування відновить призначення.",
+  "Select all is unavailable because not all faces are shown.": "Вибрати все неможливо, бо показано не всі обличчя.",
+  "Open face settings": "Відкрити налаштування облич",
+  "All groups": "Усі групи",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Натискайте групи, щоб вибрати кілька. Shift-клік вибирає діапазон. Огляд відкриває обличчя групи.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Натискайте обличчя, щоб включити або виключити їх. Shift-клік розширює діапазон. Shift-перетягування виключає обличчя в рамці.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "Немає облич без імені з даними розпізнавання. Нові обличчя з’являться після сканування.",
+  "Assign to existing person…": "Призначити наявній людині…",
+  "Find a person…": "Знайти людину…",
+  "Or enter a new name…": "Або введіть нове ім’я…",
+  "Quick assign:": "Швидке призначення:",
+  "Unnamed": "Без імені"
 }

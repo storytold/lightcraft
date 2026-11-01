@@ -2322,5 +2322,22 @@
   "Not selected": "Nie zaznaczono",
   "Done selecting": "Zakończ zaznaczanie",
   "Select faces…": "Zaznacz twarze…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknij, aby zaznaczyć twarze lub usunąć zaznaczenie. Shift-kliknięcie rozszerza działanie na zakres. Dwukrotne kliknięcie otwiera zdjęcie."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknij, aby zaznaczyć twarze lub usunąć zaznaczenie. Shift-kliknięcie rozszerza działanie na zakres. Dwukrotne kliknięcie otwiera zdjęcie.",
+  "Unnamed groups": "Grupy bez nazwy",
+  "Refresh groups": "Odśwież grupy",
+  "Fewer mistakes": "Mniej błędów",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Użyj bardziej rygorystycznego progu i utrzymuj grupy bez nazwy blisko ich pierwszej twarzy",
+  "Auto group unnamed faces": "Automatycznie grupuj twarze bez nazwy",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Przywróć te twarze do nienazwanych. Zdjęcia i ramki zostaną zachowane. Cofnij przywraca przypisanie.",
+  "Select all is unavailable because not all faces are shown.": "Nie można zaznaczyć wszystkich, ponieważ nie wszystkie twarze są widoczne.",
+  "Open face settings": "Otwórz ustawienia twarzy",
+  "All groups": "Wszystkie grupy",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Kliknij grupy, aby wybrać kilka. Shift-klik zaznacza zakres. Przegląd otwiera twarze w grupie.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Kliknij twarze, aby je uwzględnić lub wykluczyć. Shift-klik rozszerza zakres. Shift-przeciągnięcie wyklucza twarze w polu.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "Brak nienazwanych twarzy z danymi rozpoznawania. Nowe twarze pojawią się po skanowaniu.",
+  "Assign to existing person…": "Przypisz do istniejącej osoby…",
+  "Find a person…": "Znajdź osobę…",
+  "Or enter a new name…": "Lub wpisz nową nazwę…",
+  "Quick assign:": "Szybkie przypisanie:",
+  "Unnamed": "Bez nazwy"
 }

@@ -1030,3 +1030,4 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-22 | patch | LRC-LIB-PEOPLE: mixed face edits/history and ordinary metadata commands retain XMP auto-write; wholly catalog-only commands stay suppressed. Double-click navigation preserves confirmed-face selections and anchors. Status and counts unchanged. |
 | 2026-10-24 | minor | LRC-LIB-PEOPLE: retain saved grouping, bulk assignment/removal, person selection and catalog-only face history; remove persistent ignored faces and the catalog-format migration. Status and counts unchanged. |
 | 2026-11-02 | patch | LRC-LIB-PEOPLE: rebase grouping and assignment review onto current upstream modules; status and counts unchanged. |
+| 2026-11-02 | patch | LRC-LIB-PEOPLE: validate selected rectangles, guard truncated Select all, refresh stale groups, save them off the UI thread, and localize review controls; status and counts unchanged. |

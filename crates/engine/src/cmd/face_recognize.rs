@@ -96,8 +96,12 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
         by_photo.entry(photo).or_default().push(index);
         if let Some(expected) = &expected_name {
             let region = s.catalog.photo(lightcraft_catalog::PhotoId(photo)).filter(|p| p.in_library()).and_then(|p| p.meta.regions.get(index));
+            let reviewed: lightcraft_geom::Rect =
+                serde_json::from_value(f["rect"].clone()).map_err(|_| bad(C, "selected faces need their original rectangle"))?;
             if !region.is_some_and(|r| {
-                r.kind == lightcraft_meta::RegionKind::Face && r.name.as_ref().is_some_and(|name| name.trim().to_lowercase() == *expected)
+                r.kind == lightcraft_meta::RegionKind::Face
+                    && r.rect == reviewed
+                    && r.name.as_ref().is_some_and(|name| name.trim().to_lowercase() == *expected)
             }) {
                 return Err(bad(C, "a selected face changed; select the faces again before removing their assignment"));
             }

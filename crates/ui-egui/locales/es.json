@@ -2397,5 +2397,22 @@
   "Not selected": "No seleccionado",
   "Done selecting": "Terminar selección",
   "Select faces…": "Seleccionar rostros…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Haz clic para seleccionar o deseleccionar rostros. Mayús-clic extiende la acción a un intervalo. Haz doble clic para abrir una foto."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Haz clic para seleccionar o deseleccionar rostros. Mayús-clic extiende la acción a un intervalo. Haz doble clic para abrir una foto.",
+  "Unnamed groups": "Grupos sin nombre",
+  "Refresh groups": "Actualizar grupos",
+  "Fewer mistakes": "Menos errores",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Usar un umbral más estricto y mantener los grupos sin nombre cerca de su primera cara",
+  "Auto group unnamed faces": "Agrupar automáticamente las caras sin nombre",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Devolver estas caras a las caras sin nombre. Se conservan las fotos y los recuadros. Deshacer restaura la asignación.",
+  "Select all is unavailable because not all faces are shown.": "Seleccionar todo no está disponible porque no se muestran todas las caras.",
+  "Open face settings": "Abrir ajustes de caras",
+  "All groups": "Todos los grupos",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Haz clic en varios grupos para seleccionarlos. Mayús-clic selecciona un intervalo. Revisar abre las caras del grupo.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Haz clic para incluir o excluir caras. Mayús-clic amplía el intervalo. Mayús-arrastrar excluye las caras en el recuadro.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "No hay caras sin nombre con datos de reconocimiento. Las nuevas aparecen tras el análisis.",
+  "Assign to existing person…": "Asignar a una persona existente…",
+  "Find a person…": "Buscar una persona…",
+  "Or enter a new name…": "O escribir un nombre nuevo…",
+  "Quick assign:": "Asignación rápida:",
+  "Unnamed": "Sin nombre"
 }

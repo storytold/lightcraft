@@ -216,7 +216,14 @@ impl LightcraftApp {
         if r.is_ok()
             && matches!(
                 id,
-                "edit.undo" | "edit.redo" | "faces.nameFaces" | "faces.setName" | "faces.renamePerson" | "photo.removeRegion" | "photo.setRegion"
+                "edit.undo"
+                    | "edit.redo"
+                    | "faces.nameFaces"
+                    | "faces.setName"
+                    | "faces.renamePerson"
+                    | "faces.detect"
+                    | "photo.removeRegion"
+                    | "photo.setRegion"
             )
             && let Some(view) = &mut self.ui.unnamed_groups
         {

@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "Remove {count} faces from {name}": "{name}から{count}個の顔を削除",
+  "Grouping similar faces… {done} of {total}": "名前のない顔を自動でグループ化… {total}件中{done}件",
+  "{groups} groups · {unindexed} faces awaiting recognition": "すべてのグループ: {groups} · {unindexed} 顔 · 認識待ち",
+  "Scanning: {count} photos remaining": "スキャン中: {count} 写真 · 残り",
+  "{count} faces selected": "{count} 顔 · 選択中",
+  "Assign {n} faces": "割り当て: {n} 顔",
+  "Assign all {n} selected faces to {name}": "割り当て: {n} 顔 · 選択中 → {name}",
+  "{count} faces": "{count} 顔",
+  "{selected} of {count} selected": "{count}件中{selected}件 · 選択中",
+  "Remove from {name}": "{name}から削除"
 }

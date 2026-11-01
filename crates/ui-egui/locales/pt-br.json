@@ -2241,5 +2241,22 @@
   "Not selected": "Não selecionado",
   "Done selecting": "Concluir seleção",
   "Select faces…": "Selecionar rostos…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Clique para selecionar ou desmarcar rostos. Shift-clique estende a ação a um intervalo. Um clique duplo abre uma foto."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Clique para selecionar ou desmarcar rostos. Shift-clique estende a ação a um intervalo. Um clique duplo abre uma foto.",
+  "Unnamed groups": "Grupos sem nome",
+  "Refresh groups": "Atualizar grupos",
+  "Fewer mistakes": "Menos erros",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Use um limite mais rigoroso e mantenha os grupos sem nome próximos ao primeiro rosto",
+  "Auto group unnamed faces": "Agrupar automaticamente rostos sem nome",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Devolver estes rostos aos sem nome. As fotos e os quadros são mantidos. Desfazer restaura a atribuição.",
+  "Select all is unavailable because not all faces are shown.": "Selecionar tudo não está disponível porque nem todos os rostos são exibidos.",
+  "Open face settings": "Abrir configurações de rostos",
+  "All groups": "Todos os grupos",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Clique em grupos para selecionar vários. Shift-clique seleciona um intervalo. Revisar abre os rostos do grupo.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Clique nos rostos para incluir ou excluir. Shift-clique amplia o intervalo. Shift-arrastar exclui os rostos na área.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "Nenhum rosto sem nome com dados de reconhecimento. Novos rostos aparecem após a varredura.",
+  "Assign to existing person…": "Atribuir a pessoa existente…",
+  "Find a person…": "Buscar pessoa…",
+  "Or enter a new name…": "Ou digite um novo nome…",
+  "Quick assign:": "Atribuição rápida:",
+  "Unnamed": "Sem nome"
 }

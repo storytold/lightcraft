@@ -320,5 +320,15 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  "Remove {count} faces from {name}": "{name}-ისგან {count} სახის წაშლა",
+  "Grouping similar faces… {done} of {total}": "უსახელო სახეების ავტომატურად დაჯგუფება… {done} / {total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "ყველა ჯგუფი: {groups} · {unindexed} სახეები · ამოცნობას ელოდება",
+  "Scanning: {count} photos remaining": "სკანირება: {count} ფოტოები · დარჩენილი",
+  "{count} faces selected": "{count} სახეები · მონიშნული",
+  "Assign {n} faces": "მინიჭება: {n} სახეები",
+  "Assign all {n} selected faces to {name}": "მინიჭება: {n} სახეები · მონიშნული → {name}",
+  "{count} faces": "{count} სახეები",
+  "{selected} of {count} selected": "{selected} / {count} · მონიშნული",
+  "Remove from {name}": "{name}-ისგან წაშლა"
 }

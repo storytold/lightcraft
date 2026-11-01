@@ -363,11 +363,11 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"people": app.session.catalog.people().len()}))
         }
         "view.person" => {
-            app.ui.unnamed_groups = None;
             // {name}: one person's page in the People view: their faces, and the faces that look like them
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {
                 return Some(Err("view.person: missing `name`".into()));
             };
+            app.ui.unnamed_groups = None;
             app.ui.view = ViewMode::People;
             app.ui.person_from = None;
             app.ui.person_page = Some(name.to_string());

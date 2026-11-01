@@ -2376,5 +2376,22 @@
   "Not selected": "Tidak dipilih",
   "Done selecting": "Selesai memilih",
   "Select faces…": "Pilih wajah…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klik wajah untuk memilih atau membatalkan pilihan. Shift-klik memperluas tindakan ke suatu rentang. Klik dua kali membuka foto."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klik wajah untuk memilih atau membatalkan pilihan. Shift-klik memperluas tindakan ke suatu rentang. Klik dua kali membuka foto.",
+  "Unnamed groups": "Grup tanpa nama",
+  "Refresh groups": "Perbarui grup",
+  "Fewer mistakes": "Lebih sedikit kesalahan",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Gunakan ambang yang lebih ketat dan dekatkan grup tanpa nama ke wajah pertamanya",
+  "Auto group unnamed faces": "Kelompokkan wajah tanpa nama secara otomatis",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Kembalikan wajah ini ke wajah tanpa nama. Foto dan kotak wajah tetap disimpan. Urungkan memulihkan penetapan.",
+  "Select all is unavailable because not all faces are shown.": "Pilih semua tidak tersedia karena tidak semua wajah ditampilkan.",
+  "Open face settings": "Buka pengaturan wajah",
+  "All groups": "Semua grup",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Klik beberapa grup untuk memilihnya. Shift-klik memilih rentang. Tinjau membuka wajah dalam grup.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Klik wajah untuk menyertakan atau mengecualikannya. Shift-klik memperluas rentang. Shift-seret mengecualikan wajah dalam kotak.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "Tidak ada wajah tanpa nama dengan data pengenalan. Wajah baru muncul setelah pemindaian.",
+  "Assign to existing person…": "Tetapkan ke orang yang ada…",
+  "Find a person…": "Cari orang…",
+  "Or enter a new name…": "Atau masukkan nama baru…",
+  "Quick assign:": "Penetapan cepat:",
+  "Unnamed": "Tanpa nama"
 }

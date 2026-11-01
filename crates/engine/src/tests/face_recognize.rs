@@ -44,6 +44,19 @@ pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     (s, id)
 }
 
+/// Poll the incremental grouping and its background save to completion.
+fn finished_groups(s: &mut Session, params: Value) -> Value {
+    let mut result = s.execute("faces.groupUnnamed", &params).unwrap();
+    for _ in 0..5000 {
+        if result["complete"] == true {
+            return result;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        result = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    }
+    panic!("grouping did not finish");
+}
+
 /// A fresh empty library with the tiny model installed and chosen. The tests below only need a decodable
 /// picture (and enough pixels for an optional real detector), not the demo's 12 procedural 24 MP scenes:
 /// each demo photo costs a full develop render before the 112 px model input.
@@ -519,11 +532,15 @@ fn removing_person_assignments_refuses_a_stale_batch_without_partial_changes() {
     let (a, b) = two_photos(&s);
     set_regions(&mut s, a, vec![region(0.1, Some("Person"))]);
     set_regions(&mut s, b, vec![region(0.1, Some("Someone else"))]);
-    let faces = json!([{"photo": a.0, "index": 0}, {"photo": b.0, "index": 0}]);
+    let faces = json!([{"photo": a.0, "index": 0, "rect": region(0.1, None).rect}, {"photo": b.0, "index": 0, "rect": region(0.1, None).rect}]);
     let undo = s.undo.len();
     assert!(s.execute("faces.nameFaces", &json!({"faces": faces, "name": null, "expectedName": "Person"})).is_err());
     assert_eq!(s.undo.len(), undo);
     assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Person"));
+    set_regions(&mut s, b, vec![region(0.2, Some("Person"))]);
+    assert!(s.execute("faces.nameFaces", &json!({"faces": faces, "name": null, "expectedName": "Person"})).is_err());
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Person"));
+    assert_eq!(s.catalog.photo(b).unwrap().meta.regions[0].name.as_deref(), Some("Person"));
     set_regions(&mut s, b, vec![region(0.1, Some("PERSON"))]);
     let result = s.execute("faces.nameFaces", &json!({"faces": faces, "name": null, "expectedName": "person"})).unwrap();
     assert_eq!(result["named"], 2);
@@ -546,7 +563,7 @@ fn face_groups_survive_reopening_and_refresh_only_when_requested() {
     let r = region(0.1, None);
     set_regions(&mut s, a, vec![r.clone()]);
     s.faces.index.insert(a.0, &r.rect, unit64(&[(0, 1.0)]));
-    let first = s.execute("faces.groupUnnamed", &json!({"strict": true})).unwrap();
+    let first = finished_groups(&mut s, json!({"strict": true}));
     assert_eq!(first["groups"][0]["faces"].as_array().unwrap().len(), 1);
     let saved = std::fs::read(lib.join("unnamed-face-groups.json")).unwrap();
     set_regions(&mut s, b, vec![r.clone()]);
@@ -563,12 +580,20 @@ fn face_groups_survive_reopening_and_refresh_only_when_requested() {
     assert_eq!(loaded["strict"], true);
     assert_eq!(loaded["groups"], first["groups"]);
     // A failed refresh leaves the previous durable snapshot intact.
-    {
-        let _fault = lightcraft_catalog::safe_file::fail_writes_after(0);
-        assert!(s.execute("faces.groupUnnamed", &json!({"restart": true})).is_err());
+    let actual_dir = s.library.as_ref().unwrap().dir.clone();
+    s.library.as_mut().unwrap().dir = d.join("missing-parent");
+    let mut attempt = s.execute("faces.groupUnnamed", &json!({"restart": true}));
+    for _ in 0..5000 {
+        if attempt.is_err() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        attempt = s.execute("faces.groupUnnamed", &json!({}));
     }
+    assert!(attempt.is_err(), "the asynchronous save failure must be reported");
+    s.library.as_mut().unwrap().dir = actual_dir;
     assert_eq!(std::fs::read(lib.join("unnamed-face-groups.json")).unwrap(), saved);
-    let refreshed = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    let refreshed = finished_groups(&mut s, json!({}));
     assert_eq!(refreshed["groups"][0]["faces"].as_array().unwrap().len(), 2);
     set_regions(&mut s, a, vec![region(0.1, Some("Named"))]);
     s.faces.groups = None;
@@ -880,7 +905,7 @@ fn saved_group_suggestions_follow_renames_merges_and_history_after_reopening() {
     for id in [a, b] {
         s.faces.index.insert(id.0, &r.rect, unit64(&[(0, 1.0)]));
     }
-    let first = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    let first = finished_groups(&mut s, json!({}));
     assert_eq!(first["groups"][0]["suggestion"], "Ann");
     s.close_library().unwrap();
     drop(s);

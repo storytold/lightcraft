@@ -2690,5 +2690,22 @@
   "Not selected": "Chưa chọn",
   "Done selecting": "Chọn xong",
   "Select faces…": "Chọn khuôn mặt…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Nhấp vào khuôn mặt để chọn hoặc bỏ chọn. Giữ Shift và nhấp để mở rộng thao tác cho một dải. Nhấp đúp để mở ảnh."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Nhấp vào khuôn mặt để chọn hoặc bỏ chọn. Giữ Shift và nhấp để mở rộng thao tác cho một dải. Nhấp đúp để mở ảnh.",
+  "Unnamed groups": "Nhóm chưa đặt tên",
+  "Refresh groups": "Làm mới nhóm",
+  "Fewer mistakes": "Ít lỗi hơn",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Dùng ngưỡng chặt hơn và giữ các nhóm chưa đặt tên gần với khuôn mặt đầu tiên",
+  "Auto group unnamed faces": "Tự động nhóm khuôn mặt chưa đặt tên",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Đưa các khuôn mặt này về nhóm chưa đặt tên. Ảnh và khung khuôn mặt được giữ lại. Hoàn tác sẽ khôi phục gán tên.",
+  "Select all is unavailable because not all faces are shown.": "Không thể chọn tất cả vì không phải mọi khuôn mặt đều được hiển thị.",
+  "Open face settings": "Mở cài đặt khuôn mặt",
+  "All groups": "Tất cả nhóm",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Nhấp các nhóm để chọn nhiều nhóm. Shift-nhấp chọn một dải. Xem lại mở các khuôn mặt trong nhóm.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Nhấp khuôn mặt để thêm hoặc loại trừ. Shift-nhấp mở rộng dải. Shift-kéo để loại trừ các khuôn mặt trong khung.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "Không có khuôn mặt chưa đặt tên có dữ liệu nhận diện. Khuôn mặt mới xuất hiện sau khi quét.",
+  "Assign to existing person…": "Gán cho người đã có…",
+  "Find a person…": "Tìm người…",
+  "Or enter a new name…": "Hoặc nhập tên mới…",
+  "Quick assign:": "Gán nhanh:",
+  "Unnamed": "Chưa đặt tên"
 }

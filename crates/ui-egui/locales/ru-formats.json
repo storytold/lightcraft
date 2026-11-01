@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "Remove {count} faces from {name}": "Удалить {count} лиц у {name}",
+  "Grouping similar faces… {done} of {total}": "Автоматически группировать лица без имени… {done} из {total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "Все группы: {groups} · {unindexed} Лица · Ожидают распознавания",
+  "Scanning: {count} photos remaining": "Сканирование: {count} Фото · осталось",
+  "{count} faces selected": "{count} Лица · Выделено",
+  "Assign {n} faces": "Назначить: {n} Лица",
+  "Assign all {n} selected faces to {name}": "Назначить: {n} Лица · Выделено → {name}",
+  "{count} faces": "{count} Лица",
+  "{selected} of {count} selected": "{selected} из {count} · Выделено",
+  "Remove from {name}": "Удалить у {name}"
 }

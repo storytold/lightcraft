@@ -2465,5 +2465,22 @@
   "Not selected": "Inte markerat",
   "Done selecting": "Klar med markering",
   "Select faces…": "Markera ansikten…",
-  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klicka på ansikten för att markera eller avmarkera. Skift-klick utökar åtgärden till ett intervall. Dubbelklick öppnar ett foto."
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klicka på ansikten för att markera eller avmarkera. Skift-klick utökar åtgärden till ett intervall. Dubbelklick öppnar ett foto.",
+  "Unnamed groups": "Namnlösa grupper",
+  "Refresh groups": "Uppdatera grupper",
+  "Fewer mistakes": "Färre misstag",
+  "Use a tighter threshold and keep unnamed groups close to their first face": "Använd en striktare gräns och håll namnlösa grupper nära sitt första ansikte",
+  "Auto group unnamed faces": "Gruppera namnlösa ansikten automatiskt",
+  "Return these faces to unnamed faces. Photos and face boxes are kept. Undo restores the assignment.": "Återför ansiktena till namnlösa ansikten. Foton och ansiktsramar behålls. Ångra återställer tilldelningen.",
+  "Select all is unavailable because not all faces are shown.": "Markera alla är inte tillgängligt eftersom inte alla ansikten visas.",
+  "Open face settings": "Öppna ansiktsinställningar",
+  "All groups": "Alla grupper",
+  "Click groups to select several. Shift-click selects a range. Review opens the faces in a group.": "Klicka på grupper för att välja flera. Skift-klick väljer ett intervall. Granska öppnar gruppens ansikten.",
+  "Click faces to include or exclude them. Shift-click extends that action to a range. Shift-drag a box to exclude faces.": "Klicka på ansikten för att inkludera eller utesluta dem. Skift-klick utökar intervallet. Skift-dra utesluter ansikten i rutan.",
+  "No unnamed faces with recognition data. New faces appear after scanning.": "Inga namnlösa ansikten med igenkänningsdata. Nya ansikten visas efter skanning.",
+  "Assign to existing person…": "Tilldela en befintlig person…",
+  "Find a person…": "Sök person…",
+  "Or enter a new name…": "Eller ange ett nytt namn…",
+  "Quick assign:": "Snabbtilldelning:",
+  "Unnamed": "Namnlös"
 }

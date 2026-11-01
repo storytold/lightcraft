@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "Remove {count} faces from {name}": "Odebrat {count} tváří od osoby {name}",
+  "Grouping similar faces… {done} of {total}": "Automaticky seskupit nepojmenované tváře… {done} z {total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "Všechny skupiny: {groups} · {unindexed} Obličeje · Čeká na rozpoznání",
+  "Scanning: {count} photos remaining": "Skenování: {count} Fotografie · zbývá",
+  "{count} faces selected": "{count} Obličeje · Vybrané",
+  "Assign {n} faces": "Přiřadit: {n} Obličeje",
+  "Assign all {n} selected faces to {name}": "Přiřadit: {n} Obličeje · Vybrané → {name}",
+  "{count} faces": "{count} Obličeje",
+  "{selected} of {count} selected": "{selected} z {count} · Vybrané",
+  "Remove from {name}": "Odebrat od {name}"
 }

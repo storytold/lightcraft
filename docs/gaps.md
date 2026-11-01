@@ -184,3 +184,4 @@ Unnamed faces can now be grouped across the library, reviewed and named in one u
 | 2026-10-22 | patch | LRC-LIB-PEOPLE: mixed face edits/history and ordinary metadata commands retain XMP auto-write; wholly catalog-only commands stay suppressed. Double-click navigation preserves confirmed-face selections and anchors. Status and counts unchanged. |
 | 2026-10-24 | minor | LRC-LIB-PEOPLE: retain saved grouping, bulk assignment/removal, person selection and catalog-only face history; remove persistent ignored faces and the catalog-format migration. Status and counts unchanged. |
 | 2026-11-02 | patch | LRC-LIB-PEOPLE: rebase grouping and assignment review onto current upstream modules; matching calibration and readiness estimates unchanged. |
+| 2026-11-02 | patch | LRC-LIB-PEOPLE: protect person selections against shifted boxes, refresh stale reviews after content changes, save groups in the background, and localize review controls; readiness estimates unchanged. |

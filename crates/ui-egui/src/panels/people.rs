@@ -87,7 +87,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.painter().text(pos2(head.right() - PAD, head.center().y), Align2::RIGHT_CENTER, people.len().to_string(), t.font(13.0), t.text_dim);
     // until face recognition is set up: what it takes, and a button that does the next step
     crate::dialogs::faces::setup_banner(app, ui);
-    let group = ui.button("Auto group unnamed faces");
+    let group = ui.button(crate::i18n::tr("Auto group unnamed faces"));
     register(ui, "unnamed:autoGroup", group.rect);
     if group.clicked() {
         let _ = app.run("view.unnamedGroups", json!({}));

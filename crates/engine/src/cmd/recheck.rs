@@ -96,7 +96,13 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
         }
     }
     if !ops.is_empty() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let replaced: Vec<_> = ops.iter().filter_map(|op| if let Op::SetContent { id, .. } = op { Some(*id) } else { None }).collect();
         s.apply_system(Op::Batch { ops })?;
+        #[cfg(not(target_arch = "wasm32"))]
+        for id in replaced {
+            s.faces.content_replaced(id);
+        }
     }
     for id in &out.updated {
         s.media.forget(*id);

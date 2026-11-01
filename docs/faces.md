@@ -335,8 +335,9 @@ selection are available; Done selecting restores normal photo opening. Double-cl
 while selecting. Removal clears only the person's name, keeping photos and face boxes, and the
 whole batch is one undo step. Removed faces return to Unnamed faces and are hidden from More for
 this session. Refresh saved unnamed groups to include any faces outside their saved membership.
-The command uses `faces.nameFaces` with `name: null` and `expectedName` to reject stale selections
-before making any changes.
+The command uses `faces.nameFaces` with `name: null`, `expectedName` and the original catalog
+rectangle to reject stale selections before making any changes. Person pages show at most 5,000
+confirmed faces; when more exist, Select all is disabled and a notice explains why.
 
 Double-clicking a confirmed face opens its photo and preserves the prior selection and range anchor when returning to the person page.
 
@@ -427,8 +428,9 @@ grouping uses all currently indexed unnamed faces, independent of the photo filt
 rebuilds groups to include newly scanned photos. Completed groups are saved with the library and
 reopen without regrouping. Named, removed or changed faces are filtered out; new faces wait for
 Refresh groups. These remain suggestions, not confirmed identities; nothing is named automatically.
-Refreshing replaces the saved set atomically only after completion, preserving the previous set if
-interrupted or a save fails. Leaving the screen pauses grouping, which runs in short time slices.
+Refreshing replaces the saved set atomically on a background worker, preserving the previous set if
+interrupted or a save fails. A completed result is shown once its save finishes; errors remain visible.
+Leaving the screen pauses grouping, which runs in short time slices.
 
 Default grouping now uses the same mean of the two closest examples and the same threshold as a named
 person's **More** suggestions. Existing people's confirmed faces seed galleries, so pose and age examples
@@ -449,9 +451,6 @@ Saved suggestions follow a confirmed reference face through person renames, merg
 including after reopening the library. If that reference is removed or changed, the
 suggestion is cleared; the group's unnamed members remain available for review. Older saved groups
 without a reference still load, but obsolete person names are hidden; Refresh groups adds references.
-
-Restoring those faces uses the updated name, so an old person is not recreated. The rename dialog's
-face count and merge confirmation include these retained assignments.
 
 Escape or the toolbar Back action returns from a group review to All groups, preserving selection;
 from All groups it returns to People. The existing on-screen navigation buttons
