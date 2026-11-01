@@ -276,10 +276,18 @@ fn an_hsl_slider_drag_sets_its_bands_control() {
 #[test]
 fn solo_mode_puts_down_the_curves_targeted_adjustment() {
     let mut h = mixer();
+    // (the Curve on screen: Light open with its Curve flyout, its targeted adjustment picked up)
+    if !h.app.ui.flyout_open("curve") {
+        h.app.ui.toggle_flyout("curve");
+    }
     h.app.ui.tool = "tat:curve".into();
     run(&mut h, "view.colorMixer", json!({}));
-    assert_eq!(h.app.ui.tool, "tat:curve", "the Curve is still shown");
+    assert!(h.app.ui.section_open("light") && h.app.ui.flyout_open("curve"), "the Curve is still shown");
+    assert_eq!(h.app.ui.tool, "tat:curve", "and keeps its targeted adjustment");
+    // Solo Mode from Light alone: the command opens Color and closes Light
     h.app.ui.single_panel = true;
+    h.app.ui.open_sections = vec!["light".into()];
     run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(h.app.ui.open_sections, ["color"], "Solo Mode closes Light");
     assert_eq!(h.app.ui.tool, "", "Solo Mode hides the Curve");
 }
