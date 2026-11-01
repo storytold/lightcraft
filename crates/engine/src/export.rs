@@ -32,7 +32,7 @@ pub use batch::{
     set_export_lanes, set_export_mix,
 };
 #[cfg(test)]
-use encoding::{FIT_ENCODES, linear_of_8bit};
+use encoding::{FIT_ENCODES, FIT_QUALITIES, linear_of_8bit};
 pub use encoding::{
     encode_deep, encode_gain_map_jpeg, encode_image, encode_rendered, encode_with_metadata, export_metadata, named_space, output_sharpen,
     output_sharpen_deep, removes_location, srgb8_in,
