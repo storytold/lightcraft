@@ -43,7 +43,7 @@ impl Bridge {
         let leave = Rc::new(Cell::new(false));
         let flag = leave.clone();
         let provider = host.clone();
-        let before = Closure::<dyn FnMut(web_sys::Event)>::new(move |event| {
+        let before = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
             if provider.connected() && (flag.get() || provider.busy()) {
                 event.prevent_default();
                 let _ = js_sys::Reflect::set(event.as_ref(), &"returnValue".into(), &"".into());
