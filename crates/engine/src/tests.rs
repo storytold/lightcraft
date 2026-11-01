@@ -47,6 +47,8 @@ mod settings_files;
 mod shelved_folder;
 mod slide;
 mod slideshow_export;
+#[cfg(not(target_arch = "wasm32"))]
+mod slow_drive;
 mod spots;
 mod sync;
 mod view_follow;

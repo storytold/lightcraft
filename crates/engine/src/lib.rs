@@ -606,7 +606,8 @@ impl Session {
             }
         }
         if self.depth == 0 && self.library.is_some() {
-            // Make the command durable before reporting success. When the command's own records
+            // Make the command durable before reporting success (natively: handed to the catalog
+            // log's own thread, which syncs it right after and holds it until it can). When the command's own records
             // can't be appended, it fails with `NotSaved`: the change stays applied in memory and
             // queued, and the next save (any later command, or the frame loop) retries it. Other
             // persistence trouble (a failed compaction, an older queued change still unwritten by
