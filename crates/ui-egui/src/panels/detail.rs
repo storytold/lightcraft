@@ -319,8 +319,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
         let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
         let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
-        sharp_rects.extend(draw_pan_tiles(&p.with_clip_rect(clip), app, &window_ctx, v, view));
+        // (the pan tiles go over the window: after a drag that came back to the look it started
+        // from, they are sharp where its draft is not)
         sharp_rects.extend(draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view));
+        sharp_rects.extend(draw_pan_tiles(&p.with_clip_rect(clip), app, &window_ctx, v, view));
     }
     app.loupe_sharp = sharp_share(&window_views, canvas, &sharp_rects);
     if let Some((bg, g)) = before_badge {

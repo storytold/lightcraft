@@ -302,6 +302,9 @@ pub struct Renderer {
     /// Window renders of the zoomed view ([`Slot::Region`]) asked for so far (a pan's cost; one a
     /// newer request replaced before it started counts too).
     window_renders: u64,
+    /// Keys of the windows made ahead next to the view ([`Slot::RegionNear`]) since it was last
+    /// left: one the pan tiles let go again (over [`PAN_TILE_BYTES`]) is not made again.
+    near_made: std::collections::HashSet<u64>,
 }
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
@@ -389,6 +392,7 @@ impl Renderer {
             pan_tiles: std::collections::VecDeque::new(),
             full_windows: std::collections::HashSet::new(),
             window_renders: 0,
+            near_made: std::collections::HashSet::new(),
         }
     }
 }
@@ -599,6 +603,7 @@ impl Renderer {
         if slot == Slot::Region {
             self.pan_tiles.clear();
             self.full_windows.clear();
+            self.near_made.clear();
             self.drop_queued(Slot::RegionNear);
         }
     }
@@ -622,8 +627,16 @@ impl Renderer {
     }
 
     /// Keep the pan tiles `keep` says still belong to the view (its photo, zoom and look).
+    /// The ones let go may be made ahead again when the view comes back to them.
     pub fn retain_pan_tiles(&mut self, keep: impl Fn(&Tex) -> bool) {
-        self.pan_tiles.retain(|t| keep(t));
+        let near_made = &mut self.near_made;
+        self.pan_tiles.retain(|t| {
+            let kept = keep(t);
+            if !kept {
+                near_made.remove(&t.key);
+            }
+            kept
+        });
     }
 
     /// Whether the window rendered for `key` was asked for at full quality (not a drag's draft).
@@ -663,7 +676,8 @@ impl Renderer {
     /// there already, on screen or being made, or another one is being made.
     pub fn prefetch_near(&mut self, job: RenderJob, priority: u32) {
         let key = job.key;
-        if self.pan_tiles.iter().any(|t| t.key == key)
+        if self.near_made.contains(&key)
+            || self.pan_tiles.iter().any(|t| t.key == key)
             || self.textures.get(&Slot::Region).is_some_and(|t| t.key == key)
             || self.pending.get(&Slot::Region).is_some_and(|p| p.0 == key)
             || self.pending.contains_key(&Slot::RegionNear)
@@ -671,6 +685,11 @@ impl Renderer {
             return;
         }
         self.request(Slot::RegionNear, job, priority);
+    }
+
+    /// Whether the window `key` was made ahead next to the view already (since it was last left).
+    pub fn near_made(&self, key: u64) -> bool {
+        self.near_made.contains(&key)
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -884,6 +903,7 @@ impl Renderer {
         self.textures.clear();
         self.pan_tiles.clear();
         self.full_windows.clear();
+        self.near_made.clear();
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1283,6 +1303,12 @@ impl Renderer {
             }
             // a window made next to the view: a pan tile
             if slot == Slot::RegionNear {
+                if let Some(key) = self.textures.get(&slot).map(|t| t.key) {
+                    if self.near_made.len() >= FULL_WINDOW_KEYS {
+                        self.near_made.clear();
+                    }
+                    self.near_made.insert(key);
+                }
                 self.keep_as_pan_tile(slot);
             }
             changed = true;

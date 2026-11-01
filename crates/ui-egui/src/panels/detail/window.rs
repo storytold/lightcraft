@@ -123,7 +123,9 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         app.renderer.retain_pan_tiles(|t| tiles.contains_key(&(false, t.key)));
     }
     // what is on screen is sharp already, from the windows made so far: nothing to render
-    if pans && crate::region::covers(&sharp_windows(app, c, &view), clamp_visible(visible, (fw, fh))) {
+    // (a drag's draft still on screen is replaced by its full render, whatever the tiles under it)
+    let draft_shown = app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.photo == c.id && !app.renderer.is_full_window(t.key));
+    if pans && !draft_shown && crate::region::covers(&sharp_windows(app, c, &view), clamp_visible(visible, (fw, fh))) {
         let shown = app.renderer.textures.get(&Slot::Region).and_then(|t| app.region_tiles.get(&(false, t.key))).copied();
         return Some(shown.filter(|t| t.is_current(c.id, view.full, view.settings, false)).unwrap_or(view));
     }
@@ -209,6 +211,10 @@ pub(super) fn prefetch_near(app: &mut LightcraftApp, c: &WindowCtx, windows: &[(
         let Some(job) = app.session.region_job(c.id, fw, fh, win, !c.crop_tool) else { continue };
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(c.id)).with_overlay(c.overlay).with_proof(proof);
         let job = app.renderer.job_for(Slot::Region, job);
+        // (made already and let go again by the pan tiles' byte limit: not made over and over)
+        if app.renderer.near_made(job.key) {
+            continue;
+        }
         let proof_key = proof.map_or(0, |p| p.key());
         let look = job.settings.hash64() ^ c.overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
         // (another look than the view's: an edit came in between, the view asks again first)
