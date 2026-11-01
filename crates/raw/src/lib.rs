@@ -27,6 +27,7 @@
 
 mod binned;
 pub mod color;
+pub mod dctjpeg;
 pub mod demosaic;
 mod dng;
 pub mod dngwrite;
@@ -352,7 +353,7 @@ fn other_tiff_reason(bytes: &[u8]) -> String {
         && let Some(info) = dng::raw_ifd(t).and_then(|i| i.image().ok())
         && info.compression == lightcraft_tiff::tags::compression::JPEG
         && let Some(src) = info.chunks(bytes.len() as u64).first().and_then(|c| lightcraft_tiff::image::chunk_bytes(bytes, c))
-        && let Err(e) = ljpeg::frame_info(src)
+        && let Err(e) = if dctjpeg::is_dct(src) { dctjpeg::frame_info(src) } else { ljpeg::frame_info(src) }
     {
         return format!("raw image coded as lossless JPEG that is not decoded yet ({e})");
     }
