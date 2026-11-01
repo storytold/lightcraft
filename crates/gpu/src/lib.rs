@@ -43,6 +43,9 @@ mod exit;
 pub mod faces;
 #[cfg(not(target_arch = "wasm32"))]
 mod gate;
+/// Matrix products for the AI mask models.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gemm;
 #[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
 pub mod nn;
 #[cfg(not(target_arch = "wasm32"))]

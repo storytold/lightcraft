@@ -452,6 +452,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                         d,
                         crate::state::Dialog::Import { .. }
                             | crate::state::Dialog::SamModel { .. }
+                            | crate::state::Dialog::AiModel { .. }
                             | crate::state::Dialog::SmartRules { .. }
                             | crate::state::Dialog::SaveEffect { .. }
                             | crate::state::Dialog::CaptureTime { .. }

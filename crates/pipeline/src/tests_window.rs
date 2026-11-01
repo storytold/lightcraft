@@ -227,7 +227,7 @@ fn a_mask_overlay_window_matches_the_whole_render() {
     let shapes = [
         ("radial", MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.15, angle: 20.0, feather: 50.0, invert: false }, 0.0),
         ("linear refined", MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.55, 0.5) }, 100.0),
-        ("sky", MaskShape::Sky, 0.0),
+        ("sky", MaskShape::Sky { seg: None }, 0.0),
         // a model's grid, enlarged along the photo's edges (issue #3272)
         ("prompt", MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(32)), detail: vec![], edge: 0.0 }, 0.0),
     ];

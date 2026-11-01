@@ -509,6 +509,27 @@
 
 ## 2026-10-22
 
+### AI masks with openly licensed models
+- **Subject**, **Background**, **Sky**, **People** and **Landscape** masks now use AI models instead of
+  guesses, and **Object** works without Meta's SAM 3: each model is downloaded once, when you first
+  need it, after a dialog that shows its size and licence. Without its model, Subject, Background and
+  Sky are made the old way and the Masking panel says the mask is approximate, with a button to get
+  the model; Object offers SAM 2.1, and the People parts need their models. The models' own
+  licences are open (MIT, Apache-2.0); whether BiRefNet-portrait's and EoMT-S's training data allow
+  shipping them is still a maintainer decision (see the parity checklist's mask rows).
+- **People**: pick everyone or one person and the parts — face skin, body skin, hair, clothes,
+  eyebrows, eye whites, irises, lips, teeth.
+- **Entire Person** includes the eyes, brows, mouth, hair and what the person holds, with no square
+  holes in a lace dress; people and clothes edges follow the photo's own edges more closely.
+- **Face Skin** leaves the eyes (lids and lashes, however far they are open), brows and lips out, on
+  smiling and squinting faces too, and reaches the hairline on a high forehead.
+- **Clothes** leaves the wearer's skin and hair out (a neckline, arms, hands) and its edge follows the
+  garment's own edge, without a halo.
+- **Landscape**: sky, water, vegetation, mountains, architecture, natural or artificial ground.
+- **Update** recomputes a mask made before its model was installed.
+- Everything runs on your computer, in LightCraft's own code; nothing is uploaded, unless you set up
+  SAM 3 on another computer (remote mode), which then receives the photo's model input and prompts.
+
 ### Exports don't create a photo's sidecar
 - Saving an export, a preset or any other file as `IMG_1.xmp` or `IMG_1.jpg.xmp` in the folder of the library photo
   `IMG_1.jpg` is now refused when no sidecar is there yet, as writing over an existing one already was. The library

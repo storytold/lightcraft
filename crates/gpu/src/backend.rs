@@ -511,7 +511,7 @@ pub fn window_renderer_order(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod tests {
+pub(crate) mod tests {
 
     /// #250: the indirect-call validation pipeline is off unless asked for; other flags are kept.
     #[test]

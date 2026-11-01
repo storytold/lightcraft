@@ -97,6 +97,47 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v9 library (before AI masks stored their segmentation, #2706) opens with its Subject and People
+/// masks as they were, without a segmentation (they are made by the heuristic until recomputed),
+/// and is rewritten in the current format, which a v9 build then refuses instead of dropping the
+/// stored segmentations. A mask with its segmentation survives the round trip.
+#[test]
+fn v9_ai_masks_load_without_a_segmentation_and_are_upgraded() {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape, SegMask};
+    let comp = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 4, 3, "2026-01-01");
+    let mut d = (*p.develop).clone();
+    d.masks.push(Mask { id: 1, components: vec![comp(MaskShape::Subject { seg: None })], ..Default::default() });
+    d.masks.push(Mask {
+        id: 2,
+        components: vec![comp(MaskShape::People { person: 0, parts: vec!["Face Skin".into()], seg: None })],
+        ..Default::default()
+    });
+    p.develop = std::sync::Arc::new(d.clone());
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let snap = c.to_snapshot();
+    assert!(!snap.contains("\"seg\""), "a v9 build wrote no segmentation");
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(loaded.photo(id).unwrap().develop.masks, d.masks);
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    // a stored segmentation is written and read back
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/p/b.jpg".into() }, "b.jpg", "JPEG", 4, 3, "2026-01-01");
+    let mut d = (*p.develop).clone();
+    let seg = SegMask::from_logits(2, &[4.0, -4.0, 4.0, -4.0]);
+    d.masks.push(Mask { id: 1, components: vec![comp(MaskShape::Sky { seg: Some(seg) })], ..Default::default() });
+    p.develop = std::sync::Arc::new(d.clone());
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+    assert_eq!(back.photo(id).unwrap().develop.masks, d.masks);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,8 +279,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v12: the segmentation stored with an automatic AI mask (`MaskShape::*.seg`).
+    const NEWEST_FIELDS: u32 = 12;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -518,6 +518,33 @@ impl LightcraftApp {
         if download.running {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
+        // openly licensed AI model downloads: keep the progress moving, and say once how each ended when its
+        // dialog is closed
+        let mut ended = Vec::new();
+        for key in &self.ui.ai_downloading {
+            let d = self.session.segmenter.model_download_status(key);
+            if d.running {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            } else {
+                ended.push((key.clone(), d));
+            }
+        }
+        for (key, d) in ended {
+            self.ui.ai_downloading.retain(|k| *k != key);
+            if self.session.segmenter.model_installed(&key) && self.ui.ai_hint.as_deref() == Some(key.as_str()) {
+                self.ui.ai_hint = None;
+            }
+            if matches!(&self.ui.dialog, Some(state::Dialog::AiModel { model, .. }) if *model == key) {
+                continue;
+            }
+            match &d.error {
+                Some(_) if d.cancelled => self.toast(ctx, crate::i18n::tr("AI model download stopped: it resumes where it left off next time.")),
+                Some(e) => self.toast_error(ctx, crate::i18n::tr_format!("The AI model download failed: {e}", e = e)),
+                None if d.finished => self.toast(ctx, crate::i18n::tr("The AI model is installed: new AI masks use it.")),
+                None => {}
+            }
+        }
+        let download = self.session.segmenter.download_status();
         // a download finishing while its dialog is closed: say so once
         if self.ui.sam_downloading && !download.running {
             self.ui.sam_downloading = false;
@@ -549,18 +576,38 @@ impl LightcraftApp {
     /// ([`ErrorKind::ModelMissing`]), not its words.
     pub fn ai_error(&mut self, ctx: &egui::Context, e: impl Into<CommandError>, then: Option<(&str, &str)>) {
         let e = e.into();
-        if lightcraft_engine::segment::Segmenter::AVAILABLE && e.kind == ErrorKind::ModelMissing(AiModel::Sam3) {
-            self.offer_sam_download(then);
+        let offered = if lightcraft_engine::segment::Segmenter::AVAILABLE && e.kind == ErrorKind::ModelMissing(AiModel::Sam3) {
+            self.offer_sam_download(then)
+        } else if let ErrorKind::ModelMissing(AiModel::Open(key)) = e.kind {
+            self.offer_ai_model(key, then)
         } else {
+            false
+        };
+        // not a missing model, or another dialog is open so the offer can't be made: say it
+        if !offered {
             self.toast_error(ctx, e.message);
         }
     }
 
+    /// Open the dialog offering an openly licensed AI model's download (`model`: its key; never downloads by itself).
+    /// Whether it opened (not while another dialog is open).
+    pub fn offer_ai_model(&mut self, model: &str, then: Option<(&str, &str)>) -> bool {
+        if self.ui.dialog.is_none() || matches!(self.ui.dialog, Some(state::Dialog::AiModel { .. })) {
+            self.ui.dialog =
+                Some(state::Dialog::AiModel { model: model.to_string(), then: then.map(|(k, o)| (k.to_string(), o.to_string())), error: None });
+            return true;
+        }
+        false
+    }
+
     /// Open the dialog offering the SAM 3 download (never downloads by itself).
-    pub fn offer_sam_download(&mut self, then: Option<(&str, &str)>) {
+    /// Whether it opened (not while another dialog is open).
+    pub fn offer_sam_download(&mut self, then: Option<(&str, &str)>) -> bool {
         if self.ui.dialog.is_none() || matches!(self.ui.dialog, Some(state::Dialog::SamModel { .. })) {
             self.ui.dialog = Some(state::Dialog::SamModel { then: then.map(|(k, o)| (k.to_string(), o.to_string())), error: None });
+            return true;
         }
+        false
     }
 
     /// A toast for an error the user has to read and act on (stays 6 s).

@@ -102,8 +102,8 @@ impl Mattes {
             if p.is_empty() { self.of(&[Skin, Hair, Teeth, Glasses]) } else { p }
         };
         match shape {
-            MaskShape::Sky => self.of(&[Sky]),
-            MaskShape::Subject => person(),
+            MaskShape::Sky { .. } => self.of(&[Sky]),
+            MaskShape::Subject { .. } => person(),
             MaskShape::People { parts, .. } => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
@@ -208,6 +208,12 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 /// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    // an AI model's segmentation stored with the shape wins over the source's mattes and the heuristics
+    if let Some(seg) = ai_seg(shape) {
+        let mut out = Plane::new(w, h);
+        sample_seg(Some(seg), &[], 1.0, frame, w, h, log_l, &mut out);
+        return out;
+    }
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
         return matte_alpha(&fitting, frame, w, h);
@@ -263,7 +269,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 *v = 1.0 - smooth(tol * 0.5, tol, d);
             }
         }
-        MaskShape::Sky => {
+        MaskShape::Sky { .. } => {
             // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
             let m = frame.out_to_norm(w, h);
@@ -291,7 +297,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         // not computed yet (no clicks, or a build without the model): nothing selected
         MaskShape::Object { hint, .. } if hint.is_empty() => {}
         MaskShape::Prompt { .. } => {}
-        MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
+        MaskShape::Subject { .. } | MaskShape::Object { .. } | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
@@ -304,14 +310,27 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
-        MaskShape::Background => {
-            let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev, mattes);
+        MaskShape::Background { .. } => {
+            let mut s = shape_alpha(&MaskShape::Subject { seg: None }, frame, w, h, img, log_l, ev, mattes);
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
         MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => {}
     }
     out
+}
+
+/// The model segmentation stored with an automatic AI shape (Subject, Sky, Background, People,
+/// Landscape), if any.
+fn ai_seg(shape: &MaskShape) -> Option<&SegMask> {
+    match shape {
+        MaskShape::Subject { seg }
+        | MaskShape::Sky { seg }
+        | MaskShape::Background { seg }
+        | MaskShape::People { seg, .. }
+        | MaskShape::Landscape { seg, .. } => seg.as_ref(),
+        _ => None,
+    }
 }
 
 /// A decoded [`SegMask`]: its logits and the normalized rectangle they cover.

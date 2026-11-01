@@ -37,6 +37,19 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             Ok(serde_json::Value::Null)
         }
+        Dialog::AiModel { model, then, .. } => {
+            if app.session.segmenter.model_installed(model) {
+                if let Some((kind, op)) = then {
+                    crate::panels::masking::begin_ai(app, kind, op)?;
+                }
+                return Ok(serde_json::Value::Null);
+            }
+            let r = app.run("ai.models.download", json!({"id": model, "acknowledged": true}));
+            if r.is_ok() && !app.ui.ai_downloading.contains(model) {
+                app.ui.ai_downloading.push(model.clone());
+            }
+            r
+        }
         Dialog::SamModel { then, .. } => {
             if app.session.segmenter.installed() {
                 // installed: start what the user was doing
