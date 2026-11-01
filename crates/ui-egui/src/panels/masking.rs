@@ -9,6 +9,7 @@ use super::edit::apply_slider_out;
 use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::state::PeopleChoice;
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
 
@@ -54,7 +55,7 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
         MaskShape::Background => ("Background", Icon::Subject),
         MaskShape::Object { .. } => ("Object", Icon::Subject),
         MaskShape::Prompt { .. } => ("Describe", Icon::Subject),
-        MaskShape::People { .. } => ("People", Icon::Subject),
+        MaskShape::People { .. } => ("People", Icon::FaceBox),
         MaskShape::Landscape { .. } => ("Landscape", Icon::Sky),
     }
 }
@@ -93,9 +94,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
-        let tiles: [(&str, &str, Icon); 10] = [
+        let tiles: [(&str, &str, Icon); 11] = [
             ("object", "Object", Icon::Subject),
             ("prompt", "Describe", Icon::Subject),
+            ("people", "People", Icon::FaceBox),
             ("subject", "Subject", Icon::Subject),
             ("sky", "Sky", Icon::Sky),
             ("background", "Background", Icon::Subject),
@@ -139,6 +141,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
                         "prompt" => start_describe(app, "new"),
+                        "people" => start_people(app, "new"),
                         "brush" => {
                             let _ = app.run("tool.brush", json!({"new": true}));
                         }
@@ -157,6 +160,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         describe_field(app, ui, true);
+        people_chooser(app, ui, true);
         let seg = &app.session.segmenter;
         let status = if seg.analyzing() {
             Some("Analyzing the photo for AI masks…")
@@ -286,7 +290,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             crate::widgets::context_menu(&resp, |ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
             if sel {
                 // right under the selected mask: ＋ adds to it, − takes away from it (any mask
-                // type; Describe… opens its field here)
+                // type; Describe… and People… open their fields here)
                 ui.horizontal(|ui| {
                     ui.add_space(30.0);
                     let plus = text_button(ui, &format!("maskPlus:{}", m.id), "+", false).on_hover_text(crate::i18n::tr("Add to this mask"));
@@ -295,6 +299,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     egui::Popup::menu(&minus).show(|ui| component_menu(app, ui, "subtract"));
                 });
                 describe_field(app, ui, false);
+                people_chooser(app, ui, false);
             }
         }
         if !d.masks.is_empty() {
@@ -604,7 +609,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 }
             }
         }
-        MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } => {
+        MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } | MaskShape::People { edge, .. } => {
             // Edge: how crisp the selection's border is (−100 hard … 0 as computed … 100 soft)
             let spec = ControlSpec {
                 id: "edge",
@@ -621,7 +626,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             let base = shape.clone();
             apply_slider_out(app, &spec, out, |app, v| {
                 let mut s = base.clone();
-                if let MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } = &mut s {
+                if let MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } | MaskShape::People { edge, .. } = &mut s {
                     *edge = v.clamp(-100.0, 100.0);
                 }
                 app.run("mask.update", json!({"component": comp, "shape": s}))
@@ -733,7 +738,7 @@ pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &st
     }
 }
 
-/// Start an AI mask of `kind` (object|prompt) combined by `op` (new|add|subtract|intersect),
+/// Start an AI mask of `kind` (object|prompt|people) combined by `op` (new|add|subtract|intersect),
 /// after the model was installed.
 pub(crate) fn begin_ai(app: &mut LightcraftApp, kind: &str, op: &str) -> Result<serde_json::Value, String> {
     match kind {
@@ -746,7 +751,12 @@ pub(crate) fn begin_ai(app: &mut LightcraftApp, kind: &str, op: &str) -> Result<
             app.ui.tool = "object".into();
             Ok(r)
         }
+        "people" => {
+            open_people(app, op);
+            Ok(serde_json::Value::Null)
+        }
         _ => {
+            app.ui.people = None;
             app.ui.describe = Some((op.to_string(), String::new()));
             Ok(serde_json::Value::Null)
         }
@@ -758,7 +768,119 @@ pub(crate) fn start_describe(app: &mut LightcraftApp, op: &str) {
     if needs_model(app, "prompt", op) {
         return;
     }
+    app.ui.people = None;
     app.ui.describe = Some((op.to_string(), String::new()));
+}
+
+/// Open the People chooser (a new mask, or a component combined by `op`).
+pub(crate) fn start_people(app: &mut LightcraftApp, op: &str) {
+    if needs_model(app, "people", op) {
+        return;
+    }
+    open_people(app, op);
+}
+
+/// The chooser with the entire person ticked (the model is installed, or being asked for).
+fn open_people(app: &mut LightcraftApp, op: &str) {
+    app.ui.describe = None;
+    app.ui.people = Some(PeopleChoice { op: op.to_string(), person: 0, parts: [true, false, false, false, false] });
+}
+
+/// The parts a People mask selects, in the order the chooser lists them (as `mask.add` names them).
+const PEOPLE_PARTS: [&str; 5] = ["Entire Person", "Face Skin", "Body Skin", "Hair", "Clothes"];
+
+/// The People chooser: the photo's faces (a name, else "Person 1", "Person 2"…), the parts to
+/// select, and the button that makes the mask.
+fn people_chooser(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
+    let Some(mut pick) = app.ui.people.clone() else { return };
+    // a new mask's chooser sits under the tiles; one that combines, under the selected mask
+    if (pick.op == "new") != new_mask {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(8.0);
+    let prompt = match pick.op.as_str() {
+        "subtract" => "Choose who to leave out",
+        "intersect" => "Choose who to keep",
+        _ => "Choose who to select",
+    };
+    ui.label(crate::i18n::tr(prompt));
+    // (straight from the engine: a query every frame, never an error in the status bar)
+    let faces: Vec<String> = app
+        .session
+        .execute("photo.faces", &json!({}))
+        .ok()
+        .and_then(|r| r.get("faces").and_then(|f| f.as_array().cloned()))
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| match f.get("name").and_then(|n| n.as_str()).map(str::trim) {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => format!("{} {}", crate::i18n::tr("Person"), i + 1),
+        })
+        .collect();
+    pick.person = pick.person.min(faces.len().saturating_sub(1));
+    let mut submit = false;
+    let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if faces.is_empty() {
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("No faces found in this photo.")).color(t.text_dim)).wrap());
+        ui.horizontal(|ui| {
+            if text_button(ui, "maskPeopleDetect", crate::i18n::tr("Detect Faces"), false).clicked() {
+                // (with no detector yet, the app offers it)
+                let _ = app.run("faces.detect", json!({}));
+            }
+            cancel |= text_button(ui, "maskPeopleCancel", crate::i18n::tr("Cancel"), false).clicked();
+        });
+    } else {
+        for (i, name) in faces.iter().enumerate() {
+            let on = i == pick.person;
+            let resp = ui.add(egui::Button::selectable(on, name).truncate().min_size(vec2(ui.available_width(), 22.0)));
+            crate::widgets::announce_selected(&resp, name.clone(), on);
+            register(ui, format!("maskPerson:{i}"), resp.rect);
+            if resp.clicked() {
+                pick.person = i;
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (k, part) in PEOPLE_PARTS.iter().enumerate() {
+                let r = ui.checkbox(&mut pick.parts[k], crate::i18n::tr(part));
+                register(ui, format!("check:maskPeoplePart{k}"), r.rect);
+            }
+        });
+        let go = match pick.op.as_str() {
+            "add" => "Add",
+            "subtract" => "Subtract",
+            "intersect" => "Intersect",
+            _ => "Create Mask",
+        };
+        ui.horizontal(|ui| {
+            // (nothing ticked selects nothing)
+            ui.add_enabled_ui(pick.parts.iter().any(|on| *on), |ui| {
+                submit = text_button(ui, "maskPeopleGo", crate::i18n::tr(go), false).clicked();
+            });
+            cancel |= text_button(ui, "maskPeopleCancel", crate::i18n::tr("Cancel"), false).clicked();
+        });
+    }
+    if cancel {
+        app.ui.people = None;
+        return;
+    }
+    app.ui.people = Some(pick.clone());
+    if submit {
+        let parts: Vec<&str> = PEOPLE_PARTS.iter().zip(pick.parts).filter(|(_, on)| *on).map(|(part, _)| *part).collect();
+        let mut p = json!({"kind": "people", "person": pick.person, "parts": parts});
+        let r = if pick.op == "new" {
+            app.run_typed("mask.add", p)
+        } else {
+            p["op"] = json!(pick.op);
+            app.run_typed("mask.addComponent", p)
+        };
+        match r {
+            // the mask appears when the model has found the person (a detail pass follows)
+            Ok(_) => app.ui.people = None,
+            Err(e) => app.ai_error(ui.ctx(), e, Some(("people", pick.op.as_str()))),
+        }
+    }
 }
 
 /// The SAM model's download, `width` wide. The label is a percentage once the size is known and
@@ -848,6 +970,11 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
     register(ui, format!("maskComp:{op}:prompt"), b.rect);
     if b.clicked() {
         start_describe(app, op);
+    }
+    let b = ui.button(crate::i18n::tr("People…"));
+    register(ui, format!("maskComp:{op}:people"), b.rect);
+    if b.clicked() {
+        start_people(app, op);
     }
     for (kind, label) in [
         ("brush", "Brush"),

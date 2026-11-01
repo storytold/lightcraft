@@ -183,6 +183,26 @@ mod tests {
     }
 
     #[test]
+    fn people_keep_their_selection_and_older_people_shapes_still_load() {
+        // written before People had a SAM 3 selection: no face, seg, detail or edge
+        let old: crate::MaskShape = serde_json::from_str(r#"{"kind": "people", "person": 1, "parts": ["Hair"]}"#).unwrap();
+        let crate::MaskShape::People { person, parts, face, seg, detail, edge } = &old else { panic!("a People shape") };
+        assert_eq!((*person, parts.as_slice(), face, seg, detail.len(), *edge), (1, &["Hair".to_string()][..], &None, &None, 0, 0.0));
+        // and written back the same way (empty fields are left out)
+        assert_eq!(serde_json::to_value(&old).unwrap(), serde_json::json!({"kind": "people", "person": 1, "parts": ["Hair"]}));
+        let new = crate::MaskShape::People {
+            person: 0,
+            parts: vec!["Skin".into(), "Clothes".into()],
+            face: Some([0.4, 0.2, 0.5, 0.35]),
+            seg: Some(SegMask::from_logits(4, &[2.0; 16])),
+            detail: vec![SegMask::from_logits_in(4, &[1.0; 16], [0.2, 0.1, 0.7, 0.9])],
+            edge: -30.0,
+        };
+        let back: crate::MaskShape = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(back, new);
+    }
+
+    #[test]
     fn damaged_data_is_none() {
         let mut m = SegMask::from_logits(8, &[1.0; 64]);
         m.side = 9;

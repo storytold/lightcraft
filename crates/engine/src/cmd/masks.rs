@@ -7,7 +7,7 @@ use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
-use crate::segment::{Click, MAX_CLICKS};
+use crate::segment::{Click, MAX_CLICKS, NO_PERSON, PeopleRequest, no_parts, people};
 use crate::{Result, Session};
 
 /// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
@@ -17,7 +17,7 @@ fn cap_color_range_samples(shape: &mut MaskShape) {
     }
 }
 
-fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
+fn shape_from(s: &Session, kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
     Ok(match kind {
         "brush" => MaskShape::Brush { strokes: vec![] },
         "linear" => {
@@ -57,13 +57,94 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
         "prompt" => {
             MaskShape::Prompt { text: str_param(p, "text").unwrap_or_default().trim().to_string(), seg: seg_param(p), detail: vec![], edge: 0.0 }
         }
+        "people" => people_shape(s, p, c)?,
         other => {
             return Err(bad(
                 c,
-                format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt)"),
+                format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt|people)"),
             ));
         }
     })
+}
+
+/// One of a photo's face regions, as People masks pick a person.
+pub(crate) struct PhotoFace {
+    /// Its position among all the photo's regions (`photo.setRegion` / `photo.removeRegion`).
+    pub region: usize,
+    pub name: Option<String>,
+    /// On the upright photo, as regions are stored.
+    pub rect: lightcraft_geom::Rect,
+    /// The same box in mask coordinates (after Rotate Left/Right).
+    pub face: [f64; 4],
+}
+
+/// Photo `id`'s face regions, in order (a People mask's `person` is an index into these).
+pub(crate) fn photo_faces(s: &Session, id: lightcraft_catalog::PhotoId) -> Vec<PhotoFace> {
+    let Some(p) = s.catalog.photo(id) else { return Vec::new() };
+    let orient = s.develop_of(id).map(|d| d.orientation).unwrap_or_default();
+    p.meta
+        .regions
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.kind == lightcraft_meta::RegionKind::Face)
+        .map(|(i, r)| {
+            let m = orient.map_norm_rect(r.rect);
+            PhotoFace { region: i, name: r.name.clone(), rect: r.rect, face: [m.x0, m.y0, m.x1, m.y1] }
+        })
+        .collect()
+}
+
+/// Overlap of two boxes over their union (0 for empty ones).
+fn iou(a: [f64; 4], b: [f64; 4]) -> f64 {
+    let inter = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let union = area(a) + area(b) - inter;
+    if union > 0.0 { inter / union } else { 0.0 }
+}
+
+/// A People shape from `{face?: [x0, y0, x1, y1], person?: index, parts?: [name, …], seg?}`: the
+/// face box given, else that of the photo's face `person`; a box given alone takes the index of
+/// the photo's face it matches (else 0). Part names are checked and spelled as the panel shows
+/// them, unless `seg` (a stored selection) comes with them.
+fn people_shape(s: &Session, p: &Value, c: &str) -> Result<MaskShape> {
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    let names: Vec<String> = match p.get("parts") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) => {
+            a.iter().map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(c, "`parts` are names"))).collect::<Result<_>>()?
+        }
+        Some(_) => return Err(bad(c, format!("`parts` is a list of names ({})", people::PARTS.join(", ")))),
+    };
+    let seg = seg_param(p);
+    let parts = match seg {
+        Some(_) => names,
+        None => people::parts_of(&names).map_err(|e| bad(c, e))?.iter().map(|p| p.name().to_string()).collect(),
+    };
+    let given = match p.get("face") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let b = v.as_array().filter(|a| a.len() == 4).and_then(|a| Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?, a[3].as_f64()?]));
+            Some(b.and_then(people::face_box).ok_or_else(|| bad(c, "`face` is a box [x0, y0, x1, y1] inside the photo"))?)
+        }
+    };
+    let index = match p.get("person") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|i| u32::try_from(i).ok()).ok_or_else(|| bad(c, "`person` is the index of one of the photo's faces"))?),
+    };
+    let faces = photo_faces(s, id);
+    let (person, face) = match (index, given) {
+        (Some(i), Some(f)) => (i, f),
+        (None, Some(f)) => {
+            let best = faces.iter().enumerate().map(|(i, x)| (i, iou(x.face, f))).filter(|(_, o)| *o > 0.3).max_by(|a, b| a.1.total_cmp(&b.1));
+            (best.and_then(|(i, _)| u32::try_from(i).ok()).unwrap_or(0), f)
+        }
+        (Some(i), None) => {
+            let f = faces.get(i as usize).ok_or_else(|| bad(c, format!("the photo has no face {i} (it has {}; see photo.faces)", faces.len())))?;
+            (i, people::face_box(f.face).ok_or_else(|| bad(c, format!("face {i} is outside the photo")))?)
+        }
+        (None, None) => return Err(bad(c, "a People mask needs `person` (the index of one of photo.faces) or `face` [x0, y0, x1, y1]")),
+    };
+    Ok(MaskShape::People { person, parts, face: Some(face), seg, detail: vec![], edge: 0.0 })
 }
 
 /// `[[x, y], …]` normalized points under `key`.
@@ -86,17 +167,20 @@ enum Later {
     Clicks(Vec<Point>, Vec<Point>),
     /// Background mode: the Describe selection is computed first; the mask is added when found.
     Text(String),
+    /// Background mode: likewise for a People selection.
+    People(PeopleRequest),
 }
 
-/// Compute the segmentation of a new AI shape (Object with clicks, Prompt) — or, in background
-/// mode, say what to queue. An Object without clicks stays empty until the photo is clicked
-/// (the photo is analyzed meanwhile); a Prompt that matches nothing is an error. Shapes given
-/// with their `seg` need no model.
+/// Compute the segmentation of a new AI shape (Object with clicks, Prompt, People) — or, in
+/// background mode, say what to queue. An Object without clicks stays empty until the photo is
+/// clicked (the photo is analyzed meanwhile); a Prompt that matches nothing, or a People mask
+/// with nobody at the face (or none of the parts on them), is an error. Shapes given with their
+/// `seg` need no model.
 fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let background = s.segmenter.background;
     match shape {
-        MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
+        MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } | MaskShape::People { seg: Some(_), .. } => {}
         MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
             s.segmenter.require_model()?;
             return Ok(Later::Clicks(std::mem::take(hint), std::mem::take(exclude)));
@@ -123,9 +207,33 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             let found = segment(s, |s| s.segment_text(id, text))?;
             *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
         }
+        MaskShape::People { person, face: Some(face), parts, .. } if background => {
+            s.segmenter.require_model()?;
+            return Ok(Later::People(PeopleRequest { person: *person, face: *face, parts: parts.clone() }));
+        }
+        MaskShape::People { face: Some(face), parts, seg, .. } => {
+            let found = segment(s, |s| s.segment_people(id, *face, parts))?.ok_or_else(|| ai_err(NO_PERSON))?;
+            if !found.logits().is_some_and(|l| people::selects_anything(&l)) {
+                return Err(ai_err(no_parts(parts)));
+            }
+            *seg = Some(found);
+        }
         _ => {}
     }
     Ok(Later::Nothing)
+}
+
+/// Background mode: queue a Describe or People selection for a new mask (`mask: None`) or a
+/// component of `mask` combined by `op`; it is added when found → `{pending}`. `None`: `later`
+/// is neither.
+fn queue_new(s: &mut Session, later: &Later, mask: Option<u32>, op: &str, name: Option<String>, c: &str) -> Result<Option<Value>> {
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    match later {
+        Later::Text(text) => segment(s, |s| s.segment_text_later(id, mask, op, name, text))?,
+        Later::People(req) => segment(s, |s| s.segment_people_later(id, mask, op, name, req.clone()))?,
+        Later::Nothing | Later::Clicks(..) => return Ok(None),
+    }
+    Ok(Some(json!({"pending": true})))
 }
 
 /// Queue what a new AI component (component `comp` of mask `mask`) still needs.
@@ -248,17 +356,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt|people, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; people: person (index into photo.faces) or face [x0,y0,x1,y1], parts? [Entire Person|Face Skin|Body Skin|Hair|Clothes, or Skin for both skins] (default the entire person); object/prompt/people: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt or people mask returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let mut shape = shape_from(&kind, p, "mask.add")?;
+                let mut shape = shape_from(s, &kind, p, "mask.add")?;
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
-                if let Later::Text(text) = &later {
-                    let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
-                    segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
-                    return Ok(json!({"pending": true}));
+                if let Some(pending) = queue_new(s, &later, None, "add", name.clone(), "mask.add")? {
+                    return Ok(pending);
                 }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 // the effect last applied to a mask of this kind
@@ -294,12 +400,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
-                let mut shape = shape_from(&kind, p, "mask.addComponent")?;
+                let mut shape = shape_from(s, &kind, p, "mask.addComponent")?;
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
-                if let Later::Text(text) = &later {
-                    let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
-                    segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
-                    return Ok(json!({"pending": true}));
+                let op_name = p.get("op").and_then(Value::as_str).unwrap_or("add");
+                if let Some(pending) = queue_new(s, &later, Some(mid), op_name, None, "mask.addComponent")? {
+                    return Ok(pending);
                 }
                 let mut comp = 0;
                 let out = masks_edit(s, "mask.addComponent", "Edit Mask", |masks, _| {
@@ -509,7 +614,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Refine AI Mask Detail",
             [],
             None,
-            "{id?: maskId, component?} — a zoomed-in SAM 3 pass over an Object/Describe selection (default: the mask's last one): the photo around it is analyzed again at a higher resolution, in the background; the mask updates when it's done → {started}",
+            "{id?: maskId, component?} — a zoomed-in SAM 3 pass over an Object/Describe/People selection (default: the mask's last one): the photo around it is analyzed again at a higher resolution, in the background; the mask updates when it's done → {started}",
             has_active,
             |s, p| {
                 let c = "mask.refineDetail";
@@ -522,11 +627,32 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => m
                         .components
                         .iter()
-                        .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. }))
-                        .ok_or_else(|| bad(c, "the mask has no Object or Describe selection"))?,
+                        .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. } | MaskShape::People { .. }))
+                        .ok_or_else(|| bad(c, "the mask has no Object, Describe or People selection"))?,
                 };
                 let started = segment(s, |s| s.segment_detail(id, mid, k))?;
                 Ok(json!({"started": started}))
+            }
+        ),
+        cmd!(
+            query "photo.faces",
+            "Photo Faces",
+            [],
+            None,
+            "{id?} → {faces: [{index, region, name, rect: {x0, y0, x1, y1}, face: [x0, y0, x1, y1]}]} — the photo's face regions in order: `index` is what a People mask's `person` means, `region` the position among all its regions (photo.setRegion / photo.removeRegion); `rect` is on the upright photo, `face` the same box in mask coordinates (after Rotate Left/Right), as mask.add {kind: \"people\", face} takes it",
+            super::always,
+            |s, p| {
+                let c = "photo.faces";
+                let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
+                if s.catalog.photo(id).is_none() {
+                    return Err(bad(c, "no such photo"));
+                }
+                let faces: Vec<Value> = photo_faces(s, id)
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| json!({"index": i, "region": f.region, "name": f.name, "rect": f.rect, "face": f.face}))
+                    .collect();
+                Ok(json!({"faces": faces}))
             }
         ),
         cmd!(
@@ -1150,16 +1276,17 @@ mod tests_color_range {
     /// cost is pixels x samples, so a few hundred hung a large render. The list is now capped.
     #[test]
     fn color_range_samples_are_capped() {
+        let s = Session::new();
         let samples: Vec<Value> = (0..1000).map(|i| json!([i as f64 / 1000.0, 0.1, 0.2])).collect();
-        let shape = shape_from("colorRange", &json!({ "samples": samples }), "mask.add").unwrap();
+        let shape = shape_from(&s, "colorRange", &json!({ "samples": samples }), "mask.add").unwrap();
         let MaskShape::ColorRange { samples, .. } = shape else { panic!("expected ColorRange") };
         assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
         // A reasonable request is unchanged.
-        let few = shape_from("colorRange", &json!({ "samples": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]] }), "mask.add").unwrap();
+        let few = shape_from(&s, "colorRange", &json!({ "samples": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]] }), "mask.add").unwrap();
         let MaskShape::ColorRange { samples, .. } = few else { panic!() };
         assert_eq!(samples.len(), 2);
         // mask.update deserializes the shape directly; it is capped the same way.
-        let mut shape = shape_from("colorRange", &json!({ "samples": [[0.1, 0.2, 0.3]] }), "mask.add").unwrap();
+        let mut shape = shape_from(&s, "colorRange", &json!({ "samples": [[0.1, 0.2, 0.3]] }), "mask.add").unwrap();
         if let MaskShape::ColorRange { samples, .. } = &mut shape {
             samples.resize(1000, samples[0]);
         }

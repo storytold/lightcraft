@@ -1021,9 +1021,25 @@ pub enum MaskShape {
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
     },
+    /// Parts of one person ("Entire Person", "Hair", "Clothes", "Skin"; matched case-insensitively).
+    /// With `seg` it is the SAM 3 selection computed for the person whose face is `face`;
+    /// without, the photo's embedded person mattes (DNG semantic masks) or the subject heuristic.
     People {
+        /// Which of the photo's face regions picked the person, in their order (for display;
+        /// `face` is what identifies them).
         person: u32,
         parts: Vec<String>,
+        /// The person's face box `[x0, y0, x1, y1]`, normalized like every mask shape (the
+        /// uncropped photo after Rotate Left/Right).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        face: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        /// Edge −100..100, as for `Object`.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
     },
     Landscape {
         class: String,

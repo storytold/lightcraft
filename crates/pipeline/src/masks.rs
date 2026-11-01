@@ -4,7 +4,8 @@
 //! Components combine with Add (max), Subtract (a·(1−c)) and Intersect (a·c).
 //!
 //! AI shapes (Sky, Subject, Background, People) use the segmentation [`Mattes`] the source carries
-//! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic.
+//! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic. A
+//! People shape with a stored SAM 3 selection (`seg`) renders from that, like Object and Describe.
 
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
@@ -104,7 +105,8 @@ impl Mattes {
         match shape {
             MaskShape::Sky => self.of(&[Sky]),
             MaskShape::Subject => person(),
-            MaskShape::People { parts, .. } => {
+            // (a stored SAM 3 selection wins over the mattes)
+            MaskShape::People { seg: None, detail, parts, .. } if detail.is_empty() => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
                     .filter_map(|p| {
@@ -278,7 +280,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
-        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
+        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } | MaskShape::People { seg, detail, edge, .. }
+            if seg.is_some() || !detail.is_empty() =>
+        {
             // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
             // 2 % of the long edge, so previews and exports match)
             let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;

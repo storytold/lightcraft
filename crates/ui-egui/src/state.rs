@@ -18,6 +18,16 @@ pub use view::{
     ToolOverlay, ViewMode, Zoom,
 };
 
+/// What the People chooser has picked: how the mask combines (`new`, or `add` / `subtract` /
+/// `intersect` on the selected one), the face (its index in `photo.faces`) and the parts ticked
+/// (Entire Person, Face Skin, Body Skin, Hair, Clothes, in that order).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeopleChoice {
+    pub op: String,
+    pub person: usize,
+    pub parts: [bool; 5],
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
@@ -205,6 +215,9 @@ pub struct UiState {
     /// (`new` mask, or `add`/`subtract`/`intersect` on the selected one) and the text typed.
     #[serde(skip)]
     pub describe: Option<(String, String)>,
+    /// The People chooser (an AI mask of one person, picked by their face) while open.
+    #[serde(skip)]
+    pub people: Option<PeopleChoice>,
     /// A SAM 3 download was started from the app (to report its end once).
     #[serde(skip)]
     pub sam_downloading: bool,
@@ -446,6 +459,7 @@ impl Default for UiState {
             focus_keywords: None,
             renaming_mask: None,
             describe: None,
+            people: None,
             detail_due: None,
             sam_downloading: false,
             renaming_component: None,
