@@ -235,7 +235,7 @@ pub(super) fn limit_elasticity(mut knots: [[f32; 2]; 32], pairs: &[(f64, f64)]) 
     None
 }
 
-fn median(values: &mut [f64]) -> Option<f64> {
+pub(super) fn median(values: &mut [f64]) -> Option<f64> {
     values.sort_by(f64::total_cmp);
     values.get(values.len() / 2).copied()
 }
