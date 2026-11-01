@@ -2,7 +2,7 @@
 //! device by hand:
 //!
 //!     cargo run -p lightcraft-cameras --example probe            # list cameras and their files
-//!     cargo run -p lightcraft-cameras --example probe -- copy DIR # also copy the newest file to DIR
+//!     cargo run -p lightcraft-cameras --example probe -- copy DIR # also copy the last file listed to DIR (never over a file there)
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -40,9 +40,14 @@ fn main() {
             println!("  {}/{}  {:?} bytes  {:?}", f.folder, f.name, f.size, f.created);
         }
         if let (Some(dir), Some(f)) = (&copy_to, files.last()) {
-            let path = std::path::Path::new(dir).join(&f.name);
+            // the device's name as one file name in DIR, never over a file already there
+            let name = std::path::Path::new(&f.name).file_name().unwrap_or(std::ffi::OsStr::new("_"));
+            let path = std::path::Path::new(dir).join(name);
             let t = Instant::now();
-            let r = std::fs::File::create(&path)
+            let r = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
                 .map_err(|e| lightcraft_cameras::Error::Write(e.to_string()))
                 .and_then(|mut out| s.copy_to(f, &mut out, &cancel, &mut |_| {}));
             match r {
