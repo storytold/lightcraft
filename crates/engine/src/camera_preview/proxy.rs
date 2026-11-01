@@ -202,7 +202,7 @@ impl Cr3Framing {
 /// A separate third of the edges must confirm a substantial improvement and a close match.
 /// A weak, flat or unrelated preview leaves the sensor framing unchanged.
 pub(super) fn estimate_cr3_framing(sensor: &Rgb32f, reference: &Rgb32f) -> Option<Cr3Framing> {
-    estimate_framing_against(sensor, reference, sensor, None)
+    estimate_framing_against(sensor, reference, None, None)
 }
 
 #[cfg(test)]
@@ -227,7 +227,7 @@ pub(super) fn geometry_framed_scores() -> Option<[f64; 4]> {
 
 /// Judge a proposed lens warp and bounded framing against the original sensor on fixed
 /// training and independent held-out edges. Lens-only correction may be sufficient.
-fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: &Rgb32f, framed: Option<&Rgb32f>) -> Option<Cr3Framing> {
+fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Option<&Rgb32f>, framed: Option<&Rgb32f>) -> Option<Cr3Framing> {
     #[cfg(test)]
     {
         LAST_GEOMETRY_SCORES.set(None);
@@ -236,6 +236,8 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: &Rgb3
     if sensor.width.checked_mul(sensor.height)? != sensor.data.len() || reference.width.checked_mul(reference.height)? != reference.data.len() {
         return None;
     }
+    let proposal = original.is_some();
+    let original = original.unwrap_or(sensor);
     let sensor = fit(sensor, PROXY, PROXY, Filter::Box);
     let (w, h) = (sensor.width, sensor.height);
     if w < 16 || h < 16 {
@@ -300,8 +302,8 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: &Rgb3
             if !length.is_finite() || length <= 0.01 {
                 continue;
             }
-            // Comparing against framed CR3 fallback uses exactly the same valid
-            // edges on both sides, including the same reference weights.
+            // Pairwise comparisons use exactly the same valid edges on both sides,
+            // including the same reference weights.
             if let Some((other, map)) = support {
                 let (ox, oy) = map.source(x, y, w, h);
                 if ox < 1.5 || oy < 1.5 || ox > w as f32 - 1.5 || oy > h as f32 - 1.5 {
@@ -320,18 +322,26 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: &Rgb3
         }
         (valid >= 64 && valid * 5 >= total * 4 && weight > 0.0).then_some(agreement / weight)
     };
+    // Only profile proposals use common-support improvement during candidate selection.
+    // The public CR3 framing fallback retains its original independent-support search.
     let before = score(&original_gradients, Cr3Framing::IDENTITY, false, None)?;
-    let mut best = (score(&gradients, Cr3Framing::IDENTITY, false, None).unwrap_or(-1.0), Cr3Framing::IDENTITY);
+    let training = |framing| -> Option<(f64, f64)> {
+        let after = score(&gradients, framing, false, proposal.then_some((&original_gradients, Cr3Framing::IDENTITY)))?;
+        let before = if proposal { score(&original_gradients, Cr3Framing::IDENTITY, false, Some((&gradients, framing)))? } else { before };
+        (!proposal || (after >= 0.9 && after >= before + 0.04)).then_some((before, after))
+    };
+    let initial = training(Cr3Framing::IDENTITY);
+    let mut best = (initial.map_or(-1.0, |v| v.1), Cr3Framing::IDENTITY, initial.map_or(before, |v| v.0));
     // At most 10% zoom and two proxy pixels of translation; a coarse search followed by one
     // local refinement prevents unbounded optimisation on the photograph's contents.
     for s in -10..=10 {
         for tx in -4..=4 {
             for ty in -4..=4 {
                 let framing = Cr3Framing { scale: 1.0 + s as f32 * 0.01, offset: [tx as f32 * 0.5 / w as f32, ty as f32 * 0.5 / h as f32] };
-                if let Some(value) = score(&gradients, framing, false, None)
+                if let Some((before, value)) = training(framing)
                     && value > best.0
                 {
-                    best = (value, framing);
+                    best = (value, framing, before);
                 }
             }
         }
@@ -347,18 +357,26 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: &Rgb3
                 if !(0.9..=1.1).contains(&framing.scale) || framing.offset[0].abs() > 2.0 / w as f32 || framing.offset[1].abs() > 2.0 / h as f32 {
                     continue;
                 }
-                if let Some(value) = score(&gradients, framing, false, None)
+                if let Some((before, value)) = training(framing)
                     && value > best.0
                 {
-                    best = (value, framing);
+                    best = (value, framing, before);
                 }
             }
         }
     }
-    let (held_before, held_after) = (score(&original_gradients, Cr3Framing::IDENTITY, true, None)?, score(&gradients, best.1, true, None)?);
+    if proposal && best.0 < 0.9 {
+        return None;
+    }
+    let (held_before, held_after) = (
+        score(&original_gradients, Cr3Framing::IDENTITY, true, proposal.then_some((&gradients, best.1)))?,
+        score(&gradients, best.1, true, proposal.then_some((&original_gradients, Cr3Framing::IDENTITY)))?,
+    );
     #[cfg(test)]
-    LAST_GEOMETRY_SCORES.set(Some([before, best.0, held_before, held_after]));
-    if best.0 < 0.9 || best.0 < before + 0.04 || held_after < 0.9 || held_after < held_before + 0.04 {
+    if proposal {
+        LAST_GEOMETRY_SCORES.set(Some([best.2, best.0, held_before, held_after]));
+    }
+    if best.0 < 0.9 || best.0 < best.2 + 0.04 || held_after < 0.9 || held_after < held_before + 0.04 {
         return None;
     }
     if let Some(framed) = &framed_gradients {
@@ -376,6 +394,12 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: &Rgb3
         eprintln!("[profile] camera JPEG framing {:?}, held-out edge agreement {held_before:.4} -> {held_after:.4}", best.1);
     }
     Some(best.1)
+}
+
+/// Exercise the proposal gate independently of lens-map construction in regressions.
+#[cfg(test)]
+pub(super) fn estimate_profile_framing(candidate: &Rgb32f, reference: &Rgb32f, original: &Rgb32f) -> Option<Cr3Framing> {
+    estimate_framing_against(candidate, reference, Some(original), None)
 }
 
 /// The sensor proxy and its clip mask (same size), both moved to the camera JPEG's framing.
@@ -446,7 +470,7 @@ fn align_profile_geometry_against(
     warp.lens_dist = 1.0;
     let source = |x, y| warp.corrected_to_source(lightcraft_geom::Point::new(x, y), 1);
     let candidate = resample_correspondence(sensor, source);
-    let framing = estimate_framing_against(&candidate, reference, sensor, baseline)?;
+    let framing = estimate_framing_against(&candidate, reference, Some(sensor), baseline)?;
     let mask = resample_correspondence(clipped, source);
     let frame = |x: f64, y: f64| {
         let (x, y) = framing.source(x as f32, y as f32, sensor.width, sensor.height);

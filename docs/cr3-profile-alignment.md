@@ -5,8 +5,8 @@ sensor/JPEG training pairs. It reuses the guarded correspondence algorithm propo
 #2675, with an additional comparison against CR3’s existing framing fallback.
 It does not change CR3 decoding or the lens warp applied when developing the photograph.
 
-A resolved external lens profile may propose geometry only for file-local colour calibration,
-with a fallback camera matrix and no in-file lens warp. The sensor, sensor clip mask, and embedded JPEG are
+A resolved external lens profile may propose geometry only for file-local colour calibration
+and pooled camera-profile pairs, with a fallback camera matrix and no in-file lens warp. The sensor, sensor clip mask, and embedded JPEG are
 oriented together before evaluating the already oriented lens profile. White balance and
 baseline exposure are applied exactly once before geometry assessment.
 
@@ -17,7 +17,10 @@ values. Accepted geometry moves the sensor and clip mask together; invalid borde
 CR3 proposals must also preserve or improve agreement against the existing framed fallback
 on both training and held-out edges, compared on the exact intersection of valid edges with
 the same reference weights. The published minimum 0.04 improvement over the unframed sensor
-is retained separately; the fallback comparison adds no extra improvement threshold. Rejected or absent geometry takes the existing CR3 framing path. All subsequent colour,
+is retained separately, using the exact intersection of original and candidate edges and the same
+reference weights for each candidate during training and for the held-out check. The fallback
+comparison adds no extra improvement threshold. Rejected or absent geometry takes the existing
+CR3 framing path. All subsequent colour,
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
 The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags

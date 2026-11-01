@@ -2618,6 +2618,40 @@ fn profile_geometry_scene(w: usize, h: usize) -> Rgb32f {
     sensor
 }
 
+#[test]
+fn external_profile_geometry_cannot_improve_by_dropping_disagreeing_borders() {
+    // At the scoring resolution, about 14% of side-strip edges disagree. A candidate
+    // that merely discards those strips has no improvement on their common support.
+    let reference = profile_geometry_scene(96, 64);
+    let mut original = reference.clone();
+    let mut candidate = reference.clone();
+    for y in 0..reference.height {
+        for x in 0..reference.width {
+            if !(7..89).contains(&x) {
+                let i = y * reference.width + x;
+                original.data[i] = reference.data[i].map(|v| 0.8 - v);
+                candidate.data[i] = [f32::NAN; 3];
+            }
+        }
+    }
+    assert!(
+        super::proxy::estimate_profile_framing(&candidate, &reference, &original).is_none(),
+        "discarding mismatched edges must not manufacture the required 0.04 improvement"
+    );
+}
+
+#[test]
+fn cr3_framing_only_does_not_report_profile_gate_scores() {
+    let original = profile_geometry_scene(384, 256);
+    let candidate = profile_geometry_target(&original, &synthetic_profile_lens(), Cr3Framing::IDENTITY);
+    // Seed real proposal diagnostics, then ensure the framing-only call clears them.
+    assert!(super::proxy::estimate_profile_framing(&candidate, &candidate, &original).is_some());
+    assert!(super::proxy::geometry_gate_scores().is_some());
+    let _ = estimate_cr3_framing(&original, &original);
+    assert!(super::proxy::geometry_gate_scores().is_none());
+    assert!(super::proxy::geometry_framed_scores().is_none());
+}
+
 /// Return a deliberately strong radial warp for synthetic correspondence tests.
 fn synthetic_profile_lens() -> lightcraft_develop::EmbeddedLens {
     lightcraft_develop::EmbeddedLens {
