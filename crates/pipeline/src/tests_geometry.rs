@@ -29,7 +29,7 @@ pub(crate) fn line_x(img: &Rgba8, y: usize, x0: f64, win: f64) -> f64 {
     let max = row.iter().cloned().fold(0.0, f64::max);
     let min = row.iter().cloned().fold(f64::MAX, f64::min);
     if max - min <= 1.0 {
-        return 0.5;
+        return (a as f64 + b as f64) / 2.0 + 0.5;
     }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in row.iter().enumerate() {
@@ -47,7 +47,7 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
     let max = col.iter().cloned().fold(0.0, f64::max);
     let min = col.iter().cloned().fold(f64::MAX, f64::min);
     if max - min <= 1.0 {
-        return 0.5;
+        return (a as f64 + b as f64) / 2.0 + 0.5;
     }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in col.iter().enumerate() {

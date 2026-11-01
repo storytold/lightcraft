@@ -242,7 +242,11 @@ const BAYER_8X8 = array<f32, 64>(
 );
 
 fn enc8(v: f32, d: f32) -> u32 {
-    return u32(clamp(clamp(v, 0.0, 1.0) * 255.0 + d, 0.0, 255.0));
+    let y = clamp(v, 0.0, 1.0) * 255.0;
+    if (y >= 254.5) {
+        return 255u;
+    }
+    return u32(clamp(y + d, 0.0, 255.0));
 }
 
 // sRGB-curve-encoded value → the output space's own curve (`OutputTrc`: 0 sRGB, 1 gamma, 2 Rec.709).
@@ -577,6 +581,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     let abs_x = u32(pf(F_VIG_VIEW)) + x;
     let abs_y = u32(pf(F_VIG_VIEW + 1u)) + y;
-    let dither = 0.5 + (BAYER_8X8[(abs_y & 7u) * 8u + (abs_x & 7u)] - 31.5) / 64.0 * 0.75;
+    let dither = (BAYER_8X8[(abs_y & 7u) * 8u + (abs_x & 7u)] + 0.5) / 64.0;
     out[i] = enc8(e.x, dither) | (enc8(e.y, dither) << 8u) | (enc8(e.z, dither) << 16u) | (255u << 24u);
 }

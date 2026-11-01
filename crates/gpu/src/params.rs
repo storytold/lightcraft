@@ -211,6 +211,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     }
     p.f("SKIN", ops.skin);
     p.fs("BANDH", lightcraft_pipeline::colorops::band_hues());
+    p.fs("VIG_VIEW", &fp.view);
 
     if let Some(v) = &fp.vig {
         p.b("VIG", true);
@@ -220,7 +221,6 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("VIG_ASPECT_MIX", v.aspect_mix);
         p.f("VIG_POWER", v.power);
         p.f("VIG_HL", v.highlights);
-        p.fs("VIG_VIEW", &fp.view);
         p.u(
             "VIG_STYLE",
             match v.style {

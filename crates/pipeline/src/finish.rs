@@ -300,6 +300,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     }
 }
 
+/// Finish the prepared pipeline stages into an 8-bit RGBA image in `space` (or `display`).
 pub(crate) fn finish(
     p: &Prepared,
     s: &DevelopSettings,
@@ -793,16 +794,21 @@ const BAYER_8X8: [u8; 64] = [
     63, 31, 55, 23, 61, 29, 53, 21,
 ];
 
+/// Returns the ordered Bayer 8×8 dither threshold offset in `0..1` for pixel `(x, y)`.
 #[inline]
 fn bayer_dither_offset(x: usize, y: usize) -> f32 {
     let idx = (y & 7) * 8 + (x & 7);
-    0.5 + (BAYER_8X8[idx] as f32 - 31.5) / 64.0 * 0.75
+    (BAYER_8X8[idx] as f32 + 0.5) / 64.0
 }
 
+/// Quantizes display-curve-encoded value `v` (0..1) to 8-bit integer with 8×8 ordered Bayer dithering.
 #[inline]
 fn enc(v: f32, dither: f32) -> u8 {
-    // `v` is display-curve-encoded (0..1). Quantize to 8-bit integer with 8x8 ordered Bayer dithering.
-    (v.clamp(0.0, 1.0) * 255.0 + dither).clamp(0.0, 255.0) as u8
+    let y = v.clamp(0.0, 1.0) * 255.0;
+    if y >= 254.5 {
+        return 255;
+    }
+    (y + dither).clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]
