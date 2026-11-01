@@ -1,5 +1,5 @@
-use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::colour::previewless_tone;
+use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
 
 fn steep_toe_scene() -> (Rgb32f, Rgb32f) {
