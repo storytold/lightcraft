@@ -1493,6 +1493,41 @@ fn huge_export_size_is_an_error() {
     assert!(s.render_now(id, 10, 70_000).is_err());
 }
 
+/// A typical edit with HDR on and a radial mask (what Test my machine exports).
+fn hdr_edit() -> lightcraft_develop::DevelopSettings {
+    use lightcraft_develop::{DevelopSettings, Mask, MaskComponent, MaskShape};
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 0.35;
+    s.light.contrast = 12.0;
+    s.light.highlights = -45.0;
+    s.light.shadows = 35.0;
+    s.light.whites = 10.0;
+    s.light.blacks = -8.0;
+    s.effects.clarity = 8.0;
+    s.effects.texture = 5.0;
+    s.effects.dehaze = 4.0;
+    s.color.vibrance = 10.0;
+    s.detail.sharpen_amount = 40.0;
+    s.detail.nr_luminance = 15.0;
+    s.detail.nr_color = 25.0;
+    s.hdr.enabled = true;
+    let mut m = Mask {
+        id: 1,
+        name: "mask 1".into(),
+        visible: true,
+        components: vec![MaskComponent {
+            name: None,
+            op: Default::default(),
+            invert: false,
+            shape: MaskShape::Radial { center: lightcraft_geom::Point::new(0.5, 0.45), rx: 0.35, ry: 0.3, angle: 0.0, feather: 60.0, invert: true },
+        }],
+        ..Default::default()
+    };
+    m.adjust.exposure = -0.3;
+    s.masks = vec![m];
+    s
+}
+
 /// Note 28: photos side by side took turns at an idle GPU because a photo's turn covered its
 /// decode and its encode too. A gain map export (HDR and a mask) decodes before its renders and
 /// encodes after them, never inside them.
@@ -1502,11 +1537,11 @@ fn an_export_encodes_outside_its_renders() {
     let mut s = Session::with_demo();
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(3).collect();
     for &id in &ids {
-        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+        s.set_develop(id, hdr_edit(), "test").unwrap();
     }
     let o = ExportOptions::from_json(&json!({"longEdge": 256, "hdr": true, "quality": 90}));
     let before = crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed);
-    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2, true).unwrap();
+    let files = crate::export::export_batch_tuned(&mut s, &ids, &o, 2).unwrap();
     assert_eq!(files.len(), 3, "{files:?}");
     assert!(files.iter().all(|f| f.get("error").is_none()), "{files:?}");
     assert_eq!(crate::export::ENCODES_IN_TURN.load(Ordering::Relaxed), before, "no encode inside a photo's renders");
@@ -1525,7 +1560,7 @@ fn photos_side_by_side_overlap_on_one_gpu_turn() {
     let mut s = Session::with_demo();
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(4).collect();
     for &id in &ids {
-        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+        s.set_develop(id, hdr_edit(), "test").unwrap();
     }
     let batch: Vec<_> = ids.iter().copied().cycle().take(8).collect();
     let o = ExportOptions::from_json(&json!({"longEdge": 3000, "hdr": true, "quality": 90}));
@@ -1535,7 +1570,7 @@ fn photos_side_by_side_overlap_on_one_gpu_turn() {
             s.media.forget(id);
         }
         let t = std::time::Instant::now();
-        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes, true).unwrap();
+        let files = crate::export::export_batch_tuned(&mut s, &batch, &o, lanes).unwrap();
         assert!(files.iter().all(|f| f.get("error").is_none() && f.get("gpuFallback").is_none()), "{files:?}");
         t.elapsed().as_secs_f64()
     };
@@ -1556,7 +1591,7 @@ fn a_cancelled_export_stops_within_a_second() {
     let mut s = Session::with_demo();
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(4).collect();
     for &id in &ids {
-        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+        s.set_develop(id, hdr_edit(), "test").unwrap();
     }
     let batch: Vec<_> = ids.iter().copied().cycle().take(12).collect();
     let o = ExportOptions::from_json(&json!({"longEdge": 1600, "hdr": true}));

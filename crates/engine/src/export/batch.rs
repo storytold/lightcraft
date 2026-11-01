@@ -78,6 +78,22 @@ pub fn export_lanes_override() -> Option<usize> {
     env.or(Some(LANES.load(std::sync::atomic::Ordering::Relaxed)).filter(|n| *n > 0))
 }
 
+/// [`super::export_batch`] with `lanes` photos side by side, the files thrown away (the tests'
+/// timing and turn checks). Changes nothing process-wide.
+#[cfg(test)]
+pub(crate) fn export_batch_tuned(
+    session: &mut crate::Session,
+    ids: &[lightcraft_catalog::PhotoId],
+    o: &ExportOptions,
+    lanes: usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    let items = super::prepare::prepare_batch(session, ids, o)?;
+    let lanes = lanes.clamp(1, MAX_EXPORT_LANES).min(items.len().max(1));
+    let to = Destination::default();
+    let mut sink = |_: &str, _: &[u8]| Ok(());
+    run_batch_with(items, &mut Placer::new(o, &to, &mut sink, &|_| false, true), &mut |_, _| true, lanes, None)
+}
+
 /// [`run_batch`] with `lanes` photos in flight. Without `cancel` the calling thread is one of the
 /// lanes; with it the lanes are threads of their own and this one only places the files, looking
 /// at `cancel` while it waits, so it can leave at once: lanes still in flight then stop at their

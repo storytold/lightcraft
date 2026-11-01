@@ -271,8 +271,7 @@ impl PreparedExport {
                 // A gain map's HDR rendition renders on the GPU too when the SDR one can: from the
                 // stages the SDR render left on the device, in one turn at the GPU (the memory
                 // those stages hold is never another export's to take meanwhile).
-                let hdr_on_gpu = self.gpu
-                    && hdr_job.is_some()
+                let hdr_on_gpu = hdr_job.is_some()
                     && lightcraft_gpu::enabled()
                     && lightcraft_gpu::handles(OutputDepth::F32Hdr, false, lightcraft_pipeline::Overlay::None);
                 let out_px = job.request.max_w.saturating_mul(job.request.max_h);

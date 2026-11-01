@@ -23,6 +23,8 @@ mod prepare;
 mod watermark;
 
 #[cfg(test)]
+pub(crate) use batch::export_batch_tuned;
+#[cfg(test)]
 use batch::run_batch_with;
 pub use batch::{MAX_EXPORT_LANES, export_lanes_override, export_parallelism, run_batch, run_batch_cancellable, set_export_lanes};
 #[cfg(test)]
