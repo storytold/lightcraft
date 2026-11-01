@@ -66,6 +66,7 @@ dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and h
 # formats
 quick-xml = "0.41"
 miniz_oxide = "0.9"
+flashraw = { version = "0.1", default-features = false }
 
 # codecs
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
