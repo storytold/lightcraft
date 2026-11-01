@@ -121,6 +121,7 @@
   "Auto-Tag from Tracklog…": "Geolocalizza dal tracciato…",
   "Add Locations": "Aggiungi posizioni",
   "Automatic": "Automatico",
+  "Tested": "Testato",
   "tested": "testato",
   "Automatic renders the Detail view at the size it is shown, up to the photo's own pixels. Choose a size to cap it: smaller is faster.": "Automatico disegna la vista Dettaglio alla dimensione in cui è mostrata, fino ai pixel della foto. Scegli una dimensione per limitarla: più piccola è più veloce.",
   "Automatically Write Changes into XMP": "Scrivi automaticamente le modifiche nell'XMP",
