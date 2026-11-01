@@ -110,13 +110,14 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
 /// drag, an earlier draft of it).
-pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
-    let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
+pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) -> bool {
+    let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return false };
     let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
-        return;
+        return false;
     };
     let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);
     let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    true
 }

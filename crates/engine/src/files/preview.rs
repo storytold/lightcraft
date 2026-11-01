@@ -80,6 +80,16 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
 /// loupe and grid show it until the raw itself has been developed ([`crate::media::QuickJob`]). The smallest
 /// embedded JPEG that covers `max_edge` is decoded, not the largest.
 pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
+    // a plain sRGB camera JPEG straight to 8-bit, as the quick path decodes it (PERF-CULL-3), so
+    // both paths give the same picture; anything else takes the general decode
+    let edge = u32::try_from(max_edge).unwrap_or(u32::MAX);
+    if lightcraft_raw::embedded_preview_color_space(bytes) != Some(lightcraft_raw::PreviewColorSpace::AdobeRgb)
+        && let Some(jpeg) = stand_in_image(bytes, Some(max_edge))
+        && matches!(jpeg, std::borrow::Cow::Owned(_))
+        && let Ok(Some((image, orientation))) = lightcraft_codecs::decode_jpeg_srgb8_fit(&jpeg, edge, edge)
+    {
+        return Some(image.oriented(preview_orientation(bytes, orientation)));
+    }
     let mut d = decode_raw_preview(bytes, fit_box(max_edge), Some(max_edge))?;
     if d.image.width.max(d.image.height) > max_edge {
         d.image = fit(&d.image, max_edge, max_edge, Filter::Box);

@@ -169,6 +169,20 @@ pub fn decode(bytes: &[u8], opts: DecodeOptions) -> Result<Decoded> {
     std::panic::catch_unwind(|| decode_unguarded(bytes, format, &opts)).unwrap_or_else(|_| Err(Error::Malformed(format, "decoder panicked".into())))
 }
 
+/// A JPEG for display, fast: fitted within `max_w × max_h` (never enlarged) as 8-bit sRGB with its
+/// EXIF orientation (1..=8, not applied), the picture `decode(bytes, DecodeOptions::fit(..))
+/// .to_srgb8()` gives within a few levels, in about half the time for a large camera preview.
+/// `Ok(None)` when the file is not a plain 8-bit sRGB JPEG (an ICC profile or an Adobe RGB EXIF
+/// hint, CMYK, 12-bit, lossless or arithmetic coding): use [`decode`]. Malformed input is an
+/// error, never a panic.
+pub fn decode_jpeg_srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
+    if sniff(bytes) != Some(Format::Jpeg) {
+        return Ok(None);
+    }
+    std::panic::catch_unwind(|| jpeg::srgb8_fit(bytes, max_w, max_h))
+        .unwrap_or_else(|_| Err(Error::Malformed(Format::Jpeg, "decoder panicked".into())))
+}
+
 /// What a file's headers say about its image: enough to catalogue it without decoding pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {

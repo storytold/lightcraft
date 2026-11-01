@@ -2409,6 +2409,8 @@
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
   "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Camera preview": "Aperçu de l'appareil",
+  "The camera's own JPEG, shown until LightCraft has rendered the raw. Judge colour and tone on the rendered photo.": "Le JPEG de l'appareil photo, affiché jusqu'à ce que LightCraft ait rendu le fichier RAW. Jugez la couleur et les tons sur la photo rendue.",
   "Face recognition is on": "La reconnaissance des visages est activée",
   "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "La reconnaissance des visages est désactivée. Activez-la pour obtenir des suggestions de noms et voir ensemble les visages qui se ressemblent.",
   "Turn on": "Activer",

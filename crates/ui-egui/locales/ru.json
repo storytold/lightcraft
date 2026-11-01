@@ -2584,6 +2584,8 @@
   "The photos are imported once it ends": "Фото будут импортированы после этого",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
   "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Camera preview": "Превью камеры",
+  "The camera's own JPEG, shown until LightCraft has rendered the raw. Judge colour and tone on the rendered photo.": "Собственный JPEG камеры, показанный, пока LightCraft не обработает RAW. Оценивайте цвет и тон по обработанному фото.",
   "★ Favorites": "★ Избранное",
   "Import Thumbnail Size": "Размер миниатюр при импорте",
   "Face recognition is on": "Распознавание лиц включено",

@@ -18,6 +18,7 @@ mod crop;
 mod filmstrip;
 mod geometry;
 mod info;
+mod look_ahead;
 mod masks;
 mod retouch;
 mod window;
@@ -41,11 +42,14 @@ use geometry::{animated_rect, middle_pan};
 pub(crate) use geometry::{fit_rect, fit_texture_rect, focus_pan, navigate_gesture, output_px, pan_image, snap_fit_rect, texture_side};
 #[cfg(test)]
 use info::RENDERING_AFTER_SECS;
+use info::camera_preview_badge;
 use info::{
     FILTER_PILL_HEIGHT, FILTER_PILL_INSET, brief_info, filter_pill, filter_pill_shown, info_overlay, info_overlay_extent, label_badge_rect,
     preview_only_pill, quick_name,
 };
 pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overdue};
+pub use look_ahead::LookAhead;
+pub(crate) use look_ahead::look_ahead;
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
 use retouch::{eye_overlay, remove_overlay};
 pub(crate) use window::overlay_supports_window;
@@ -233,7 +237,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
-    request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
+    let settling = request_main_or_settle(app, ui, &ask, [rw, rh], plan.window_edge.is_none(), now);
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)
     let hover_key = request_hover(app, &ask, [sw, sh]);
@@ -242,8 +246,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     request_stand_in(app, id, want, !crop_tool);
+    if !interacting {
+        look_ahead(app, id, want.max(8), !crop_tool);
+    }
     let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
-    if split || show_before || split_view {
+    // (the Before render waits for a settled photo like the loupe's own)
+    if !settling && (split || show_before || split_view) {
         request_before(app, &ask, [sw, sh]);
     }
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more
@@ -263,13 +271,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         look,
         holding: navigating || app.size_hold.holding(now),
     };
-    let window_views = if window_ctx.frame_edge.is_some() {
+    // (stepping fast: no window is asked for until the photo stays, as for the frame above)
+    let window_views = if window_ctx.frame_edge.is_some() && !settling {
         let mode = ViewMode { split, show_before, split_view };
         window_views(mode, &Views { img_rect, target_rect, before_img, before_target, areas: &areas, main_area, canvas })
     } else {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
+    let single = hover_key.is_none() && !split && !show_before && !split_view && !interacting;
+    let camera_full = request_camera_full(app, &photo, single && !windows.is_empty(), native_long.min(texture_side));
     let p = ui.painter_at(canvas);
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
@@ -306,16 +317,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             none_message(app, &p, &t, canvas, id);
         }
     }
-    app.loupe_shown = Some((id, shown));
+    // a wipe shows the Before whole-frame render on its side of the line…
     let line = crate::region::wipe_line(img_rect, canvas);
     draw_wipe_before(app, &p, id, img_rect, line);
+    let camera_full_drawn = camera_full && draw_camera_full(app, &p, id, img_rect, display_aspect, window_cover(&windows));
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
-    for (v, view) in &windows {
-        // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
-        let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
-        let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
-        draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view);
+    let drawn = draw_windows(app, &p, &window_ctx, &windows, [canvas, img_rect], (show_before, split));
+    let shown = shown_after_windows(shown, camera_full_drawn, drawn);
+    app.loupe_shown = Some((id, shown));
+    app.loupe_timing.observe(id, shown, now);
+    // the camera's own JPEG is on screen, not LightCraft's rendering of the raw: say so (once), so
+    // colour and tone are not judged on it (PERF-CULL-4; Lightroom Classic badges its embedded
+    // previews). Not over a window render, which is LightCraft's own.
+    if camera_jpeg_shown(app, &photo, shown, drawn) {
+        camera_preview_badge(ui, canvas, img_rect.intersect(canvas));
     }
     if let Some((bg, g)) = before_badge {
         paint_badge(&p, bg, g);
@@ -733,6 +749,134 @@ struct LoupeAsk {
     overlay: lightcraft_pipeline::Overlay,
 }
 
+/// Stepping fast (an arrow held down): the render waits until the photo stays, the camera JPEG or
+/// thumbnail shows meanwhile, and a render queued for a photo already left is dropped. Otherwise
+/// the loupe's own render is requested. Whether the photo is still settling.
+fn request_main_or_settle(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, size: [usize; 2], whole_draft: bool, now: f64) -> bool {
+    let settling = !a.interacting && app.loupe_timing.settling(a.id, now);
+    if !settling {
+        request_main(app, ui, a, size, whole_draft);
+        return false;
+    }
+    drop_unsettled(&mut app.renderer, a.id);
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::loupe_timing::SETTLE_SECS / 2.0));
+    true
+}
+
+/// While the photo settles: drop the raw renders still queued for a photo the user is stepping
+/// past (one already running finishes). Its whole-frame render unless that is on screen already,
+/// the zoomed-in windows (a region render decodes the raw as much as the frame) and the Before
+/// view, which is a raw render too.
+pub(crate) fn drop_unsettled(renderer: &mut crate::render::Renderer, photo: PhotoId) {
+    if renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != photo) {
+        renderer.drop_queued(Slot::Main);
+    }
+    for slot in [Slot::Region, Slot::RegionBefore, Slot::Before] {
+        renderer.drop_queued(slot);
+    }
+}
+
+/// Zoomed in on an unedited raw (`zoomed`: one view, window renders up): its camera JPEG at full
+/// size under the window render, so a focus check doesn't wait for the raw (PERF-CULL-5; Capture
+/// One's Cull view shows the embedded JPEG at 100 % too). Released when the view is not zoomed any
+/// more (180 MB). Whether it is wanted.
+fn request_camera_full(app: &mut LightcraftApp, photo: &lightcraft_catalog::Photo, zoomed: bool, edge: usize) -> bool {
+    let wanted = zoomed && app.session.embedded_thumb_is_final(photo);
+    if wanted {
+        if let Some(q) = app.session.embedded_full_job(photo.id, edge) {
+            app.renderer.request_quick(Slot::QuickFull, q, 98);
+        }
+    } else if app.renderer.textures.contains_key(&Slot::QuickFull) || app.renderer.is_pending(Slot::QuickFull) {
+        app.renderer.forget(Slot::QuickFull);
+    }
+    wanted
+}
+
+/// The camera JPEG at full size, magnified like the whole-frame render, until the window is
+/// there: only where the window will go (`cover`, see [`window_cover`]). A window capped smaller
+/// than the view leaves strips around it, and those keep the developed whole-frame render rather
+/// than an unlabelled camera JPEG (CodeRabbit on #3544). Whether it was drawn.
+fn draw_camera_full(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rect: Rect, display_aspect: f32, cover: Option<Rect>) -> bool {
+    let Some(cover) = cover else { return false };
+    let Some(tex) = app.renderer.textures.get(&Slot::QuickFull).filter(|t| t.photo == id) else { return false };
+    if !crate::region::same_aspect(tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32, display_aspect) {
+        return false;
+    }
+    p.with_clip_rect(p.clip_rect().intersect(cover)).image(
+        tex.tex.id(),
+        img_rect,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    true
+}
+
+/// Where on screen the requested window renders go (each its window's share of its view's drawn
+/// rect), joined: `None` without any.
+fn window_cover(windows: &[(WindowView, crate::region::RegionView)]) -> Option<Rect> {
+    windows
+        .iter()
+        .map(|(v, w)| {
+            let (fw, fh) = (w.full.0.max(1) as f32, w.full.1.max(1) as f32);
+            let at = v.img.min + vec2(w.window.x as f32 / fw * v.img.width(), w.window.y as f32 / fh * v.img.height());
+            Rect::from_min_size(at, vec2(w.window.w as f32 / fw * v.img.width(), w.window.h as f32 / fh * v.img.height()))
+        })
+        .reduce(|a, b| a.union(b))
+}
+
+/// Which window renders [`draw_windows`] drew.
+#[derive(Clone, Copy)]
+struct WindowsDrawn {
+    /// Any of them.
+    any: bool,
+    /// The window of the view shown whole: the After side's in a split view, the Before's when
+    /// the Before is shown alone; what the timing and the source shown are about. Holding `\`
+    /// side by side or top/bottom keeps both panes, and the After pane is still the one shown.
+    shown: bool,
+}
+
+/// Draw the window renders over the whole-frame ones, each where it belongs in the frame
+/// (clipped to its pane, or its side of the line).
+fn draw_windows(
+    app: &LightcraftApp,
+    p: &egui::Painter,
+    ctx: &WindowCtx,
+    windows: &[(WindowView, crate::region::RegionView)],
+    [canvas, img_rect]: [Rect; 2],
+    (show_before, split): (bool, bool),
+) -> WindowsDrawn {
+    let mut out = WindowsDrawn { any: false, shown: false };
+    // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then; side by
+    // side or top/bottom, both panes stay, and each window stays in its own)
+    let before_alone = show_before && !split;
+    for (v, view) in windows {
+        let mode = if before_alone { BeforeAfter::Original } else { app.ui.before_after };
+        let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
+        let drawn = draw_window(&p.with_clip_rect(clip), app, ctx, v, view);
+        out.any |= drawn;
+        out.shown |= drawn && (!v.before || before_alone);
+    }
+    out
+}
+
+/// What is on screen once the window renders are drawn: the camera JPEG at full size stands in
+/// for the whole-frame render until a window covers it, and a window rendered over a stand-in
+/// (thumbnail or camera JPEG) before the whole frame is the raw's own render.
+fn shown_after_windows(shown: &'static str, camera_full_drawn: bool, drawn: WindowsDrawn) -> &'static str {
+    if camera_full_drawn && !drawn.any {
+        "embedded"
+    } else if drawn.shown && !matches!(shown, "render" | "cached") {
+        "render"
+    } else {
+        shown
+    }
+}
+
+/// Whether the camera's own JPEG is what is on screen (not under a window render).
+fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, shown: &str, drawn: WindowsDrawn) -> bool {
+    !drawn.any && (shown == "embedded" || (shown == "thumb" && app.session.embedded_thumb_is_final(photo)))
+}
+
 /// Request the loupe's own render at `[rw, rh]` (drafts during drags).
 fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: [usize; 2], whole_draft: bool) {
     let (id, interacting, fit_px, overlay) = (a.id, a.interacting, a.fit_px, a.overlay);
@@ -1075,6 +1219,29 @@ pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response,
 
 #[cfg(test)]
 mod tests {
+    /// The camera JPEG goes only where the window render will: a window of the left half of the
+    /// frame covers the left half of the drawn photo, not the strips beside it.
+    #[test]
+    fn the_camera_jpeg_covers_only_where_the_window_goes() {
+        use super::{WindowView, window_cover};
+        use crate::region::RegionView;
+        use egui::{Rect, pos2};
+        use lightcraft_pipeline::PixelWindow;
+        assert_eq!(window_cover(&[]), None, "no window: no camera JPEG");
+        let img = Rect::from_min_max(pos2(100.0, 50.0), pos2(700.0, 450.0));
+        let v = WindowView { slot: crate::render::Slot::Region, before: false, img, target: img, visible: img };
+        let w = RegionView {
+            photo: lightcraft_catalog::PhotoId(1),
+            before: false,
+            key: 1,
+            full: (6000, 4000),
+            window: PixelWindow { x: 0, y: 1000, w: 3000, h: 2000 },
+            settings: 0,
+        };
+        let r = window_cover(&[(v, w)]).unwrap();
+        assert_eq!(r, Rect::from_min_max(pos2(100.0, 150.0), pos2(400.0, 350.0)), "the window's share of the drawn rect");
+    }
+
     /// The rotation pointer's arc bulges away from the side of the crop box it is on, and follows
     /// a box that is itself rotated.
     #[test]

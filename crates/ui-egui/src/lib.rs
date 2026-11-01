@@ -31,6 +31,7 @@ pub mod i18n;
 pub mod icons;
 pub mod lightroom_import;
 pub mod links;
+pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
 mod model_setup;
@@ -287,6 +288,11 @@ pub struct LightcraftApp {
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
+    /// When each photo stepped to in the loupe first showed (`ui.inspect` → `perf.loupeSteps`).
+    pub loupe_timing: loupe_timing::LoupeTiming,
+    /// The loupe's look-ahead: the photo it was made for, the direction of travel (+1 / -1), the
+    /// catalog revision and the edge, so it is worked out again only when one of them changes.
+    pub(crate) look_ahead: panels::detail::LookAhead,
     /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
     /// windows whose textures can be on screen, and for the inspector.
     pub region_view: Option<region::RegionView>,
@@ -312,6 +318,9 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// Scans stopped without waiting for their workers: each channel is kept until its worker ends, so
+    /// the probes it took from the session come back.
+    pub(crate) scans_stopping: Vec<std::sync::mpsc::Receiver<import::ScanEnd>>,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
     /// A Synchronize Folder scan in progress (feeds its dialog).
