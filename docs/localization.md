@@ -101,6 +101,32 @@ literal branches of `tr(if …)` and `tr(match …)`, and skips tests and commen
 reaches `tr` through a variable is listed only when it is a catalog key or in one of the label
 tables the report reads. It always passes, and `cargo xtask ci` prints it after its test step. The
 glyph tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).
+
+The report ends with a section, "English shown without tr", for text that never reaches `tr` at all:
+`ui.label("Folder name")` shows English in every language, and no catalog can hold it because nothing
+looks it up. The section lists each such place as `file:line: call shows "text"` (one per distinct text
+in a file), found by `i18n/untranslated.rs`. It reads the calls that take visible text (`.label`,
+`.button`, `.heading`, `.on_hover_text`, `RichText::new`, `.toast` and the like, named by `CALLS` in that
+file) and this crate's own helpers, which it finds by reading their bodies: a `&str`, `String`,
+`impl Into<String>` or egui-text (`impl IntoAtoms`) parameter that reaches a widget without `tr`. A
+helper that translates its parameter itself (`settings::row`, `text_button`) takes the English key. A string with no two-letter word, or only
+capitals (`"{}%"`, `"—"`, `"PDF"`), is not text, and tests are skipped. Wrap a listed text in `tr("…")` and
+add it to the catalogs to clear it. Nothing fails on a place in the list. What it cannot see:
+
+- Text held in a variable or a table (a `const` of labels, a struct field such as `label:` that is
+  translated when drawn, the option lists of `choices`), text assigned to a field (`ui.status = "…".into()`),
+  and a unit suffix (`.suffix(" rows")`).
+- A closure that wraps a widget call (`let item = |ui, label: &str| ui.button(label)`) is not read as a
+  helper, so literals passed to it are missed.
+- Helpers are matched by name: a function name used twice is read per file (the file's own definition,
+  else the public ones elsewhere), and a function reached as `Type::f` or `Self::f` is not resolved, so a
+  helper set keyed by name can be missed or matched to the wrong definition.
+- A file counts as using this crate's `Button` (which takes the English key) only when it says
+  `button::Button`. A grouped import (`use crate::button::{Button, …}`) is not recognized, so that file's
+  `Button::new("…")` calls are read as egui's and listed although they pass the English key.
+- Every one-argument `.text(x)` is read as a slider caption and its literal is listed; a `.text(…)` with
+  more arguments (the painter's `text(pos, anchor, text, font, color)`) is checked at its third argument only.
+
 To look at a language, render it headless:
 
 ```sh
