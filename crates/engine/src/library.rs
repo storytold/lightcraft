@@ -521,7 +521,11 @@ impl Session {
             }
             if let Err(e) = old.journal.flush() {
                 old.log_held = old.journal.unwritten();
-                return Err(EngineError::NotSaved(format!("the open library's changes aren't on disk yet, so it stays open: {e}")));
+                // a snapshot that holds every op leaves nothing for the files to miss
+                if old.journal.snapshot_seq() < old.journal.seq() {
+                    return Err(EngineError::NotSaved(format!("the open library's changes aren't on disk yet, so it stays open: {e}")));
+                }
+                log::error!("library: {e} (every change is in its snapshot)");
             }
         }
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));

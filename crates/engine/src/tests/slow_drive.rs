@@ -293,3 +293,25 @@ fn a_reopen_waits_for_what_the_log_thread_could_not_write() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A reopen while the log still can't be written, but after a snapshot that holds every change
+/// (the log's reset after it failed): nothing is missing from the files, so the open goes ahead
+/// (review of #3557).
+#[test]
+fn a_reopen_after_a_snapshot_that_holds_everything_goes_ahead() {
+    let dir = temp_dir("reopen-snap");
+    let mut s = open(&dir);
+    let all = ids(&s);
+    let fail = Arc::new(AtomicBool::new(false));
+    slow_drive(&dir, Duration::from_millis(5), fail.clone());
+    fail.store(true, Ordering::SeqCst);
+    s.execute("photo.flag", &json!({"flag": "reject", "ids": [all[0].0]})).unwrap();
+    let _ = s.close_library();
+    assert!(s.snapshot_holds_everything());
+    s.open_library(&dir, true).unwrap();
+    assert_eq!(s.catalog.photo(all[0]).unwrap().flag, Flag::Reject);
+    fault::remove(&dir);
+    drop(s);
+    assert_eq!(open(&dir).catalog.photo(all[0]).unwrap().flag, Flag::Reject);
+    let _ = std::fs::remove_dir_all(&dir);
+}
