@@ -2610,8 +2610,13 @@ fn raw_sidecar_rating_and_crop_survive_naming_and_encoding_variants() {
         assert_eq!((ids(&r, "imported"), r["sidecars"].as_u64()), (1, Some(1)), "{name}: {r}");
         let p = s.catalog.photos().next().unwrap();
         assert_eq!(p.rating, 3, "{name}");
-        let c = p.develop.to_json()["crop"]["geometry"].clone();
-        assert!((c["rect"]["x0"].as_f64().unwrap_or(0.0) - 0.2).abs() < 1e-6, "{name}: {c}");
+        let c = p.develop.crop.geometry;
+        // The stored 60 by 40 frame turns by -1.5 degrees about its centre. Check the
+        // converted corners, rather than the unconverted CropLeft written in the packet.
+        let expected = [0.1931222829585667, 0.11191669674832003, 0.8068777170414335, 0.8880833032516801];
+        let edges = [c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1];
+        assert!(edges.into_iter().zip(expected).all(|(got, want)| (got - want).abs() < 1e-9), "{name}: {c:?}");
+        assert_eq!(c.angle, -1.5, "{name}: {c:?}");
         if name == "lower-full" {
             // a move takes that sidecar along
             let dest = temp_dir("sc-variant-dest");
@@ -2619,6 +2624,7 @@ fn raw_sidecar_rating_and_crop_survive_naming_and_encoding_variants() {
             let args = json!({"paths": [src.to_string_lossy()], "mode": "move", "destination": dest.to_string_lossy(), "organize": "flat"});
             let r = s.execute("library.import", &args).unwrap();
             assert_eq!(s.catalog.photos().next().unwrap().rating, 3, "{r}");
+            assert_eq!(s.catalog.photos().next().unwrap().develop.crop.geometry, c, "{r}");
             assert!(std::fs::read_dir(&dest).unwrap().flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().ends_with(".xmp")), "{r}");
             assert!(!src.join(file).exists(), "no sidecar left behind: {r}");
             let _ = std::fs::remove_dir_all(&dest);

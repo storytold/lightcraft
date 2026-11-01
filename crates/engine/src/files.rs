@@ -14,6 +14,7 @@ use lightcraft_raster::resample::{Filter, fit};
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
 mod colour;
+mod frame;
 mod fs;
 mod load;
 mod preview;
@@ -21,6 +22,7 @@ mod probe;
 
 pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
+pub use frame::fs_frame_probe;
 #[cfg(test)]
 use fs::quick_image_srgb;
 pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};

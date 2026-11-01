@@ -50,7 +50,7 @@ pub(crate) fn decode_raw_preview(
 }
 
 /// Oriented size of the embedded preview of a raw file.
-pub(super) fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(super) fn embedded_preview_frame(bytes: &[u8]) -> Option<(u32, u32, Orientation)> {
     let jpeg = stand_in_image(bytes, None)?;
     // headers only, as for other images (issue #367): decoding a full-size preview just for its
     // size took about a second per file in an import; a decode remains the fallback
@@ -61,10 +61,11 @@ pub(super) fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
             (d.source_width, d.source_height, d.orientation)
         }
     };
-    if preview_orientation(bytes, orientation).swaps_axes() {
+    let orientation = preview_orientation(bytes, orientation);
+    if orientation.swaps_axes() {
         std::mem::swap(&mut w, &mut h);
     }
-    Some((w, h))
+    Some((w, h, orientation))
 }
 
 /// The embedded preview of a raw file as a working-space image no larger than `max_edge`, oriented.

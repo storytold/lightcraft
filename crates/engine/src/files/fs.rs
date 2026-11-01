@@ -126,6 +126,7 @@ impl crate::Session {
         self.media.file_loader = Some(l);
         self.media.reduced_loader = Some(fs_reduced_loader());
         self.media.file_probe = Some(p);
+        self.media.frame_probe = Some(super::fs_frame_probe());
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
         #[cfg(target_os = "macos")]

@@ -106,7 +106,11 @@ WITHOUT ROWID or virtual table produces an explicit error, handled as a warning 
 Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves and supported
 mask structures remain editable, but this is approximate rendering: camera profiles, Adobe AI
 models, some masking/retouch fields and process-version algorithms are not reproduced. Unmapped
-fields are reported. Lightroom's `ProcessVersion` is not mapped: newly imported photos are on
+fields are reported. Lightroom's saved Upright correction isn't read from catalogs yet: how a catalog stores it, and
+whether the catalog's orientation agrees with the decoded file, haven't been checked on a real catalog, so the mode
+is solved again and the import reports `Upright`, whether it is in the catalog's develop settings or its XMP (XMP
+sidecars keep it: [xmp-interop.md](xmp-interop.md), *Saved
+Upright geometry*). Lightroom's `ProcessVersion` is not mapped: newly imported photos are on
 LightCraft's latest rendering process, and photos already in the library keep theirs
 ([process-versions.md](process-versions.md)). When a recovery archive is saved, it retains source settings/history/snapshots
 and original smart-collection rules. Smart collections become regular albums with current

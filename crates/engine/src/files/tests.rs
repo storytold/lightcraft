@@ -1809,3 +1809,46 @@ fn existing_photo_settings_are_not_rewritten() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn review_preview_only_probe_keeps_the_rendered_frame_orientation() {
+    let bytes = cr3_with_preview(48, 32);
+    let probe = probe_bytes("preview.cr3", &bytes).unwrap();
+    assert!(probe.preview_only.is_some());
+    let frame = probe.stored_frame().expect("the preview's decoder has a known frame");
+    assert_eq!(frame.orientation, lightcraft_geom::Orientation::Normal);
+    assert_eq!((frame.width, frame.height), (48.0, 32.0));
+}
+
+#[test]
+fn review_rotated_preview_orientation_wins_over_the_raw() {
+    let (w, h) = (48, 32);
+    let exif = lightcraft_codecs::exif::minimal_exif(8);
+    let pixels = vec![100u8; w * h * 3];
+    let jpeg = encode_jpeg(
+        &EncodeImage::new(w as u32, h as u32, 3, Samples::U8(&pixels)),
+        90,
+        ChromaSubsampling::S444,
+        &EncodeMeta { exif: Some(&exif), ..Default::default() },
+    )
+    .unwrap();
+    let bx = |kind: &[u8; 4], body: &[u8]| [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat();
+    let mut bytes = cr3_with_preview(w as u32, h as u32);
+    bytes.truncate(24);
+    let canon = [0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
+    let raw_exif = lightcraft_codecs::exif::minimal_exif(6);
+    bytes.extend(bx(b"moov", &bx(b"uuid", &[&canon[..], &bx(b"CMT1", &raw_exif)].concat())));
+    let body =
+        [b"\0\0\0\0\0\x01".as_slice(), &(w as u16).to_be_bytes(), &(h as u16).to_be_bytes(), b"\0\x01", &(jpeg.len() as u32).to_be_bytes(), &jpeg]
+            .concat();
+    bytes.extend(bx(b"PRVW", &body));
+    assert_eq!(lightcraft_meta::extract(&bytes).orientation, Some(Orientation::Rotate90));
+    let probe = probe_bytes("rotated.cr3", &bytes).unwrap();
+    assert!(probe.preview_only.is_some());
+    assert_eq!(probe.orientation, Some(Orientation::Rotate270));
+    assert_eq!((probe.width, probe.height), (32, 48));
+    let (image, _) = load_bytes(&bytes, usize::MAX).unwrap();
+    assert_eq!((image.width, image.height), (32, 48));
+    let frame = probe.stored_frame().unwrap();
+    assert_eq!((frame.width, frame.height, frame.orientation), (48.0, 32.0, Orientation::Rotate270));
+}

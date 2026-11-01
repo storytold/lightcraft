@@ -1,5 +1,5 @@
 use super::load::WbScaleOf;
-use super::preview::embedded_preview_size;
+use super::preview::embedded_preview_frame;
 use super::{MediaKind, Meta, Orientation, ProbeInfo};
 
 pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
@@ -131,7 +131,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
-                let (w, h) = embedded_preview_size(bytes).ok_or(format!("unsupported raw ({why}) without an embedded preview"))?;
+                let (w, h, orientation) = embedded_preview_frame(bytes).ok_or(format!("unsupported raw ({why}) without an embedded preview"))?;
                 return Ok(ProbeInfo {
                     width: w,
                     height: h,
@@ -144,6 +144,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     content_hash,
                     xmp: lightcraft_meta::embedded(bytes).xmp,
                     preview_only: Some(why),
+                    orientation: Some(orientation),
                     ..Default::default()
                 });
             }
@@ -171,6 +172,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
             preview_only: None,
+            orientation: Some(raw.orientation),
         });
     }
     let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -204,6 +206,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         embedded_lens: None,
         xmp: None,
         preview_only: None,
+        orientation: Some(o),
     })
 }
 

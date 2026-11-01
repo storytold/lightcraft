@@ -10,7 +10,7 @@ use std::sync::{
 
 use crate::lightroom_sqlite::{Database, FileSource, LiveTable, Value as SqlValue};
 use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
-use lightcraft_geom::{Affine, Orientation, Point, Rect};
+use lightcraft_geom::Orientation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -699,8 +699,7 @@ fn mapped_settings(
     text: &str,
     target: crate::crs::Target,
     aspect: f64,
-    orientation: Orientation,
-    stored_aspect: f64,
+    frame: Option<crate::sidecar::StoredFrame>,
     user: Orientation,
 ) -> Result<(Value, Vec<String>), String> {
     let mut root = crate::preset_import::parse_lua(text)?;
@@ -712,13 +711,26 @@ fn mapped_settings(
     if !props.contains_key("crs:HasCrop") && CROP.iter().any(|k| props.contains_key(*k)) {
         props.insert("crs:HasCrop".into(), vec!["True".into()]);
     }
-    // Mask edges are fractions of the stored image, like the crop's, so radii go to long-edge units
-    // with its aspect: `aspect` is the photo's in LightCraft, which is the shown one for a photo
-    // already in the library and only stands in when the catalog has no file size.
+    let orientation = frame.as_ref().map(|f| f.orientation).unwrap_or_default();
+    let stored_aspect = frame.as_ref().map(|f| f.width / f.height).unwrap_or(aspect);
     let mask_aspect = if stored_aspect.is_finite() && stored_aspect > 0.0 { stored_aspect } else { aspect };
-    let (mut partial, mut unknown) = crate::crs::to_partial_report(&props, Some(&values), target, mask_aspect);
-    catalog_crop(&mut partial, orientation, stored_aspect);
+    let (partial, mut unknown) = crate::crs::to_partial_report(&props, Some(&values), target, mask_aspect);
+    let mut sc = crate::sidecar::SidecarData { develop: Some(crate::sidecar::DevelopPatch::Partial(partial)), ..Default::default() };
+    sc.prepare_frame(frame);
+    unknown.extend(catalog_notes(&sc.warnings));
+    let Some(crate::sidecar::DevelopPatch::Partial(mut partial)) = sc.develop else {
+        return Err("catalog develop settings unavailable".into());
+    };
+    if let Some(frame) = sc.frame {
+        crate::crs::crop_in_frame(&mut partial, frame.orientation.then(user), frame.width / frame.height);
+    }
     catalog_masks(&mut partial, in_photo_frame(orientation, user));
+    // Lightroom's saved Upright isn't kept from catalogs yet: how a catalog encodes it, and whether
+    // its orientation agrees with the decoded file, haven't been checked on a real catalog (issue
+    // #205). The mode is solved again, and the report says what was lost.
+    if let Some(mode) = crate::crs::upright_at_risk(&props) {
+        unknown.push(catalog_upright_note(mode));
+    }
     if deferred > 0 {
         unknown.push("Deferred Lightroom adjustments (-999999)".into());
     }
@@ -748,34 +760,25 @@ fn lightroom_orientation(code: &str) -> Option<Orientation> {
     ALL.into_iter().find(|&o| code.chars().eq([corner(o, 0.0, 0.0), corner(o, 1.0, 0.0)]))
 }
 
-/// Lightroom's crop in LightCraft's frame. `crs` gives the crop's top-left (`CropLeft`, `CropTop`)
-/// and bottom-right (`CropRight`, `CropBottom`) corners on the stored image (before orientation and
-/// straightening), normalized to its size, plus a straighten angle that turns the other way to
-/// LightCraft's. LightCraft's crop is a rectangle in the oriented image rotated by `angle` about its
-/// centre, normalized to the oriented image's size, so the corners go through the orientation and
-/// then the rotation; `stored_aspect` (width / height of the stored image) matters once the
-/// rectangle turns. On a real catalog this reproduced the frame aspect of all 223 straightened crops
-/// in Lightroom's exports within 1%.
-fn catalog_crop(partial: &mut Value, orientation: Orientation, stored_aspect: f64) {
-    let Some(geometry) = partial.pointer_mut("/crop/geometry").and_then(Value::as_object_mut) else { return };
-    let edge = |k: &str| geometry.get("rect").and_then(|r| r.get(k)).and_then(Value::as_f64);
-    let (Some(x0), Some(y0), Some(x1), Some(y1)) = (edge("x0"), edge("y0"), edge("x1"), edge("y1")) else { return };
-    let lightroom_angle = geometry.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
-    if orientation == Orientation::Normal && lightroom_angle == 0.0 {
-        return;
+/// How a catalog import reports Lightroom Upright geometry it doesn't carry over.
+fn catalog_upright_note(mode: crate::import::ImportUprightMode) -> String {
+    match mode {
+        crate::import::ImportUprightMode::Guided => "Upright (Guided: Lightroom's guides aren't read)".into(),
+        _ => "Upright (Lightroom's saved geometry, solved again: not read from catalogs yet)".into(),
     }
-    let w = if stored_aspect.is_finite() && stored_aspect > 0.0 { stored_aspect } else { 1.0 };
-    let (ow, oh) = if orientation.swaps_axes() { (1.0, w) } else { (w, 1.0) };
-    // a mirror turns the straighten the other way too
-    let angle = if orientation.to_parts().0 { lightroom_angle } else { -lightroom_angle };
-    let to_rotated = Affine::rotate_about(angle.to_radians(), Point::new(ow / 2.0, oh / 2.0));
-    let corner = |x: f64, y: f64| {
-        let (u, v) = orientation.map(x * w, y, w, 1.0);
-        to_rotated.apply(Point::new(u, v))
-    };
-    let r = Rect::from_points(corner(x0, y0), corner(x1, y1));
-    geometry.insert("rect".into(), json!({"x0": r.x0 / ow, "y0": r.y0 / oh, "x1": r.x1 / ow, "y1": r.y1 / oh}));
-    geometry.insert("angle".into(), json!(angle));
+}
+
+/// The catalog report's names for what an XMP packet's import diagnostics say wasn't carried over.
+fn catalog_notes(warnings: &[crate::import::ImportWarning]) -> Vec<String> {
+    use crate::import::ImportWarningCode as C;
+    warnings
+        .iter()
+        .flat_map(|w| match w.code {
+            C::CameraProfile => vec!["CameraProfile".to_string()],
+            C::UprightGeometry => vec![catalog_upright_note(w.mode.unwrap_or(crate::import::ImportUprightMode::Unknown))],
+            C::UnmappedXmp => w.fields.clone(),
+        })
+        .collect()
 }
 
 /// The catalog's orientation (the stored image to the photo as Lightroom shows it), then the
@@ -1155,14 +1158,30 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if keep_develop {
             preserved += 1;
         }
-        let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
+        // what the XMP and the develop settings couldn't carry over, each named once
+        let mut notes: Vec<String> = Vec::new();
+        let orientation = lightroom_orientation(text(&src.image, "orientation"));
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
+        let frame = orientation.map(|orientation| crate::sidecar::StoredFrame {
+            orientation,
+            width: number(&src.image, "fileWidth") as f64,
+            height: number(&src.image, "fileHeight") as f64,
+        });
         if !src.xmp.is_empty() {
             match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
                 Ok(mut sc) => {
                     if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
                         strip_xmp_sentinels(partial);
-                        catalog_xmp_masks(partial, in_photo_frame(orientation, p.develop.orientation), stored_aspect, &p);
+                        catalog_xmp_masks(partial, in_photo_frame(orientation.unwrap_or_default(), p.develop.orientation), stored_aspect, &p);
+                    }
+                    // Catalog XMP crops use the same stored frame as the develop row, even
+                    // when that row is missing, invalid or contains no crop fields.
+                    // Catalog Upright encoding remains unverified. Keep its existing warning
+                    // and solve the mode again rather than accepting a sidecar transform.
+                    sc.upright = None;
+                    sc.prepare_frame(frame);
+                    if !keep_develop {
+                        notes.extend(catalog_notes(&sc.warnings));
                     }
                     crate::sidecar::merge_into(&mut p, &sc, &now);
                 }
@@ -1186,20 +1205,22 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             match mapped_settings(
                 &src.settings,
                 crate::crs::Target::for_photo(&p),
-                p.width.max(1) as f64 / p.height.max(1) as f64,
-                orientation,
-                stored_aspect,
+                if stored_aspect.is_finite() && stored_aspect > 0.0 { stored_aspect } else { p.width.max(1) as f64 / p.height.max(1) as f64 },
+                frame,
                 p.develop.orientation,
             ) {
                 Ok((partial, unknown)) => {
                     p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
                     p.edited = Some(now.clone());
-                    if !unknown.is_empty() {
-                        unmapped.insert(src.source_id, unknown);
-                    }
+                    notes.extend(unknown);
                 }
                 Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
             }
+        }
+        let mut seen = std::collections::HashSet::new();
+        notes.retain(|n| seen.insert(n.clone()));
+        if !notes.is_empty() {
+            unmapped.insert(src.source_id, notes);
         }
         if keep_develop {
             (p.develop, p.edited) = previous_develop;

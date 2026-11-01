@@ -658,6 +658,7 @@ impl Session {
             crate::cmd::previews::refresh_stale_smart_previews(self);
         }
         self.library_identity = std::sync::Arc::new(());
+        self.sync_frames = Default::default();
         Ok(())
     }
 
@@ -776,6 +777,7 @@ impl Session {
         };
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
+            self.sync_frames = Default::default();
         }
         result
     }
