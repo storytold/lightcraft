@@ -1835,3 +1835,32 @@ fn stepping_fast_drops_the_queued_before_render() {
         assert!(!app.renderer.is_pending(slot), "{slot:?} still queued");
     }
 }
+
+/// DUAL-GPU-THUMBS: the renderer's background jobs (the grid's real thumbnails, rendered behind
+/// their stand-ins at [`crate::panels::grid::BACKGROUND_THUMB_PRIORITY`]) run as background GPU work,
+/// which goes to the second card when it is on; a visible thumbnail and the loupe never do. With
+/// the second card Off (the default, and every machine without a GPU) they stay on the editing card.
+#[test]
+fn background_thumbnails_run_as_second_card_work_and_stay_on_the_editing_card_when_it_is_off() {
+    use lightcraft_engine::gpu::{Role, current_role};
+    use lightcraft_engine::media::rendering_in_background;
+    lightcraft_engine::gpu::set_helper("off").unwrap();
+    let mut pool: JobPool<Slot, (bool, Role)> = Renderer::pool_of(0);
+    let seen = || Box::new(|| (rendering_in_background(), current_role())) as Box<dyn FnOnce() -> (bool, Role) + Send>;
+    pool.submit(Slot::Thumb(PhotoId(1)), 1, crate::panels::grid::BACKGROUND_THUMB_PRIORITY, seen());
+    pool.submit(Slot::Thumb(PhotoId(2)), 2, BACKGROUND_BELOW, seen());
+    pool.submit(Slot::Main, 3, 99, seen());
+    assert_eq!(pool.run_inline(3), 3);
+    let mut got: Vec<(Slot, (bool, Role))> = std::iter::from_fn(|| pool.try_recv()).map(|d| (d.slot, d.result)).collect();
+    got.sort_by_key(|(s, _)| format!("{s:?}"));
+    assert_eq!(
+        got,
+        vec![
+            (Slot::Main, (false, Role::Primary)),
+            (Slot::Thumb(PhotoId(1)), (true, Role::Primary)),
+            (Slot::Thumb(PhotoId(2)), (false, Role::Primary))
+        ],
+        "only the background thumbnail runs as background work, and with the second card Off on the editing card"
+    );
+    assert!(!rendering_in_background());
+}

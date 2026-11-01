@@ -133,6 +133,12 @@ an agent testing on one card never touches the other.
   without a view render; while the second card works, the editing card takes one batch render at a
   time; a batch render already running pauses between its submissions as soon as the interface is used
   again (`batch_usage_of(Primary).pauses`). The second card never waits for the interface.
+- **Grid thumbnails** rendered behind their stand-ins (the camera JPEG shown first;
+  `BACKGROUND_THUMB_PRIORITY`) are the renderer's background jobs: its job pool runs them inside
+  `media::as_background_gpu` (`JobPool::run_background_with`), so they render on the second card when
+  it is ready, as batch work behind the photo on screen. Thumbnails the grid shows without a stand-in,
+  the loupe and its drafts stay on the editing card. With the second card Off (the default) or lost
+  they render on the editing card as before.
 - **The second card stops responding**: its renders are redone on the CPU, batch work moves to the
   editing card, a notice names it ("work continues on the other graphics card"), and it is restarted
   after the pause like the editing card. Turning it off releases its device and memory.

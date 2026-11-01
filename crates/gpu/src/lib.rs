@@ -131,7 +131,13 @@ pub fn with_role<R>(role: Role, f: impl FnOnce() -> R) -> R {
 /// editing card). For background work that doesn't take turns ([`batch_turn_any`] does this per
 /// photo).
 pub fn on_helper<R>(f: impl FnOnce() -> R) -> R {
-    if helper_ready() { with_role(Role::Helper, f) } else { f() }
+    on_helper_when(helper_ready(), f)
+}
+
+/// [`on_helper`] with the second card's readiness given: `f` on the second card when `ready`,
+/// else on whichever card the thread already renders on.
+fn on_helper_when<R>(ready: bool, f: impl FnOnce() -> R) -> R {
+    if ready { with_role(Role::Helper, f) } else { f() }
 }
 
 /// Run `f` with this thread's GPU renders counted as batch work (an export's photos): they take
@@ -2022,6 +2028,19 @@ pub(crate) fn validate_wgsl(name: &str, src: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use lightcraft_pipeline::{OutputDepth, Overlay};
+
+    /// Background work (the grid's thumbnails behind their stand-ins, Build Previews) goes to the
+    /// second card when it is on and ready, and stays on the editing card when it is Off or lost;
+    /// the thread's card is its own again afterwards.
+    #[test]
+    fn background_work_goes_to_the_second_card_only_when_it_is_ready() {
+        use super::{Role, current_role, on_helper_when};
+        assert_eq!(on_helper_when(true, current_role), Role::Helper);
+        assert_eq!(on_helper_when(false, current_role), Role::Primary);
+        assert_eq!(current_role(), Role::Primary);
+        // Off (the default) on a machine without a usable second device: the editing card
+        assert_eq!(super::on_helper(current_role), Role::Primary);
+    }
 
     /// Review of PR #3530: a panic inside `on_cpu` leaves the thread's renders on the GPU again.
     #[test]

@@ -24,6 +24,39 @@ use std::time::Duration;
 
 pub type Job<R> = Box<dyn FnOnce() -> R + Send>;
 
+/// What runs a background job ([`JobPool::run_background_with`]): it calls the closure once.
+pub type BackgroundRun = fn(&mut dyn FnMut());
+
+/// `e`, its job run inside the pool's [`BackgroundRun`] when it counts as `background` work.
+fn for_background<S, R: 'static>(shared: &Shared<S, R>, e: Entry<S, R>, background: bool) -> Entry<S, R> {
+    match shared.background_run.get().filter(|_| background) {
+        Some(wrap) => {
+            let (wrap, job) = (*wrap, e.job);
+            Entry { job: Box::new(move || run_wrapped(wrap, job)), ..e }
+        }
+        None => e,
+    }
+}
+
+/// Run `job` inside `wrap`.
+fn run_wrapped<R>(wrap: BackgroundRun, job: Job<R>) -> R {
+    let mut job = Some(job);
+    let mut out = None;
+    wrap(&mut || {
+        if let Some(j) = job.take() {
+            out = Some(j());
+        }
+    });
+    match (out, job) {
+        (Some(r), _) => r,
+        // (the wrapper didn't call it)
+        (None, Some(j)) => j(),
+        // (run without a result: the job panicked and `wrap` swallowed it; the worker ends as it
+        // would have without `wrap`, its slot freed by `Free`)
+        (None, None) => std::panic::resume_unwind(Box::new("a background job panicked")),
+    }
+}
+
 struct Entry<S, R> {
     slot: S,
     key: u64,
@@ -47,6 +80,8 @@ struct Shared<S, R> {
     /// [`JobPool::cap_background`]), and how many run now (locked inside `queue`).
     background_cap: Mutex<(u32, usize)>,
     background_running: AtomicUsize,
+    /// Runs each background job ([`JobPool::run_background_with`]).
+    background_run: std::sync::OnceLock<BackgroundRun>,
     /// The worker threads that have not ended yet, and the signal that one did.
     #[cfg(not(target_arch = "wasm32"))]
     live: Mutex<Vec<std::thread::ThreadId>>,
@@ -111,6 +146,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 is_fast,
                 background_cap: Mutex::new((0, usize::MAX)),
                 background_running: AtomicUsize::new(0),
+                background_run: std::sync::OnceLock::new(),
                 #[cfg(not(target_arch = "wasm32"))]
                 live: Mutex::new(Vec::new()),
                 #[cfg(not(target_arch = "wasm32"))]
@@ -184,6 +220,14 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     pub fn cap_background(&self, priority: u32, max: usize) {
         *self.shared.background_cap.lock().unwrap_or_else(|e| e.into_inner()) = (priority, max.max(1));
         self.shared.cv.notify_all();
+    }
+
+    /// Run each job counted as background work ([`Self::cap_background`]) inside `run` (the app:
+    /// as background GPU work, on the second graphics card first). `run` must call the closure it
+    /// is given once and let a panic through; one that doesn't call it has the job run after it.
+    /// Set once; a later call changes nothing.
+    pub fn run_background_with(&self, run: BackgroundRun) {
+        let _ = self.shared.background_run.set(run);
     }
 
     /// Stop the pool: queued jobs are dropped, no new one starts, and the call waits up to
@@ -288,7 +332,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
 /// Pop the best job (highest priority, newest first; `fast_only`: of the fast slots only). Blocks
 /// when `wait` until one is queued or the pool shuts down.
 /// The flag says the job counts as background work ([`JobPool::cap_background`]).
-fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool, fast_only: bool) -> Option<(Entry<S, R>, bool)> {
+fn take<S: PartialEq + Copy, R: 'static>(shared: &Shared<S, R>, wait: bool, fast_only: bool) -> Option<(Entry<S, R>, bool)> {
     let mut q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if shared.shutdown.load(Ordering::Relaxed) {
@@ -314,7 +358,7 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool, fast_only: bo
             if background {
                 shared.background_running.fetch_add(1, Ordering::Relaxed);
             }
-            return Some((e, background));
+            return Some((for_background(shared, e, background), background));
         }
         if !wait {
             return None;
@@ -411,5 +455,49 @@ impl<S, R> Drop for JobPool<S, R> {
         stop(&self.shared, &mut self.workers, DROP_WAIT);
         #[cfg(target_arch = "wasm32")]
         close(&self.shared);
+    }
+}
+
+#[cfg(test)]
+mod background_run_tests {
+    use super::JobPool;
+
+    thread_local! {
+        static INSIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn mark(f: &mut dyn FnMut()) {
+        INSIDE.with(|c| c.set(true));
+        f();
+        INSIDE.with(|c| c.set(false));
+    }
+
+    fn skip(_: &mut dyn FnMut()) {}
+
+    // Given a pool whose background jobs run inside a wrapper (the app: the second graphics card
+    // first), the jobs below the background priority run inside it and the others don't
+    #[test]
+    fn background_jobs_run_inside_the_pools_wrapper() {
+        let mut pool: JobPool<u32, bool> = JobPool::new(0);
+        pool.cap_background(4, 2);
+        pool.run_background_with(mark);
+        pool.submit(1, 1, 10, Box::new(|| INSIDE.with(|c| c.get())));
+        pool.submit(2, 2, 3, Box::new(|| INSIDE.with(|c| c.get())));
+        assert_eq!(pool.run_inline(2), 2);
+        let mut got: Vec<(u32, bool)> = std::iter::from_fn(|| pool.try_recv()).map(|d| (d.slot, d.result)).collect();
+        got.sort();
+        assert_eq!(got, vec![(1, false), (2, true)], "only the background job ran in the wrapper");
+        assert!(!INSIDE.with(|c| c.get()));
+    }
+
+    // Given a wrapper that doesn't call its job, the job still runs (once)
+    #[test]
+    fn a_wrapper_that_skips_the_job_still_has_it_run() {
+        let mut pool: JobPool<u32, u32> = JobPool::new(0);
+        pool.cap_background(4, 2);
+        pool.run_background_with(skip);
+        pool.submit(1, 1, 0, Box::new(|| 7));
+        assert_eq!(pool.run_inline(1), 1);
+        assert_eq!(pool.try_recv().map(|d| d.result), Some(7));
     }
 }

@@ -412,8 +412,18 @@ impl Slot {
 
 impl Renderer {
     fn pool(threads: usize) -> JobPool<Slot, Finished> {
+        Self::pool_of(threads)
+    }
+
+    /// The renderer's job pool, for any result type (tests look inside its jobs): stand-ins on
+    /// workers of their own, at most [`BACKGROUND_AT_ONCE`] background jobs at once, and those run
+    /// as background GPU work ([`lightcraft_engine::media::as_background_gpu`]): on the second
+    /// graphics card when it is on and ready, else on the editing card as before.
+    fn pool_of<R: Send + 'static>(threads: usize) -> JobPool<Slot, R> {
         let pool = if threads == 0 { JobPool::new(0) } else { JobPool::with_fast_lane(threads, STAND_IN_WORKERS, Slot::is_stand_in) };
         pool.cap_background(BACKGROUND_BELOW, BACKGROUND_AT_ONCE);
+        // (they render on the second graphics card first, never in the way of the photo on screen)
+        pool.run_background_with(lightcraft_engine::media::as_background_gpu);
         pool
     }
 
