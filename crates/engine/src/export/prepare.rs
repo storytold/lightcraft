@@ -312,34 +312,33 @@ impl PreparedExport {
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
                     if remove_location {
+                        let mut xmp_has_location = false;
                         if video {
                             lightcraft_meta::verify_video_location_absent(&bytes).map_err(|e| format!("{label}: {e}"))?;
                         }
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        if !bytes.starts_with(b"8BPS") {
-                            let embedded = lightcraft_meta::embedded(&bytes);
-                            if let Some(xmp) = embedded.xmp.as_deref() {
-                                let packet = lightcraft_meta::parse_xmp(xmp).map_err(|e| {
-                                    format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}")
-                                })?;
-                                // A packet whose flattened property map a size limit cut short could hide
-                                // a location behind unrelated keys, so it cannot prove absence.
-                                if packet.properties_truncated {
-                                    return Err(format!(
-                                        "{label}: can't verify location metadata in this original file: the XMP property inventory exceeds the size limit"
-                                    ));
-                                }
+                        let embedded = lightcraft_meta::embedded(&bytes);
+                        if let Some(xmp) = embedded.xmp.as_deref() {
+                            let packet = lightcraft_meta::parse_xmp(xmp)
+                                .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
+                            // A packet whose flattened property map a size limit cut short could hide
+                            // a location behind unrelated keys, so it cannot prove absence.
+                            if packet.properties_truncated {
+                                return Err(format!(
+                                    "{label}: can't verify location metadata in this original file: the XMP property inventory exceeds the size limit"
+                                ));
                             }
+                            xmp_has_location = packet.has_location_metadata();
                         }
                         let embeds_place_name =
                             [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]
                                 .into_iter()
                                 .flatten()
                                 .any(|value| !value.trim().is_empty());
-                        if metadata.gps.is_some() || embeds_place_name {
+                        if metadata.gps.is_some() || embeds_place_name || xmp_has_location {
                             return Err(format!(
-                                "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
+                                "{label}: can't remove the location from an original file that embeds GPS, place names, or other XMP location metadata; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));
                         }
                     }

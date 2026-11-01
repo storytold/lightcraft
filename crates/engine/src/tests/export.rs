@@ -1043,6 +1043,41 @@ fn remove_location_refuses_original_with_embedded_place_names() {
 }
 
 #[test]
+fn remove_location_refuses_original_with_iptc_extension_location_xmp() {
+    let dir = temp_dir("export-noloc-iptc-extension");
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" "#,
+        r#"xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">"#,
+        r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown></rdf:Description></rdf:RDF>"#
+    );
+    let pixels = [96u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(packet), ..Default::default() };
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    let psd = lightcraft_codecs::encode_psd(&image, &encoded).unwrap();
+    let cases = [("Location.jpg", jpeg), ("Location.psd", psd)];
+    let mut paths = Vec::new();
+    for (name, bytes) in &cases {
+        let path = dir.join(name);
+        let metadata = lightcraft_meta::try_extract(bytes).unwrap();
+        assert!(metadata.gps.is_none() && metadata.city.is_none(), "the catalog metadata does not expose this IPTC field");
+        std::fs::write(&path, bytes).unwrap();
+        paths.push(path.to_string_lossy().to_string());
+    }
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    for (name, _) in cases {
+        let id = session.catalog.photos().find(|photo| photo.file_name == name).unwrap().id;
+        let error = export_photo(&mut session, id, &options, 1).err().expect("IPTC Extension location must refuse Original export");
+        assert!(error.contains("other XMP location metadata"), "{name}: {error}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn remove_location_refuses_original_with_unreadable_non_psd_xmp() {
     let dir = temp_dir("export-noloc-malformed-xmp");
     let path = dir.join("Unreadable.jpg");

@@ -143,6 +143,27 @@ fn read_boxes<'a>(bytes: &'a [u8], budget: &mut usize) -> Vec<BoxRef<'a>> {
     out
 }
 
+/// Like [`read_boxes`], but a privacy check must not mistake a malformed or over-budget suffix for
+/// metadata that is absent. The existing parser is intentionally best-effort for display metadata;
+/// here verify that its parsed boxes account for the complete byte sequence.
+fn read_boxes_strict<'a>(bytes: &'a [u8], budget: &mut usize) -> Result<Vec<BoxRef<'a>>, String> {
+    let boxes = read_boxes(bytes, budget);
+    let mut at = 0usize;
+    for b in &boxes {
+        let header_len = if be32(bytes, at) == Some(1) { 16usize } else { 8usize };
+        let uuid_len = if b.kind == *b"uuid" { 16usize } else { 0usize };
+        at = at
+            .checked_add(header_len)
+            .and_then(|n| n.checked_add(uuid_len))
+            .and_then(|n| n.checked_add(b.body.len()))
+            .ok_or_else(|| "can't verify video location: metadata box length overflow".to_string())?;
+    }
+    if at != bytes.len() {
+        return Err("can't verify video location: malformed or excessive metadata boxes".into());
+    }
+    Ok(boxes)
+}
+
 /// Parse orientation from QuickTime/ISOBMFF 3x3 transform matrix (9 x 32-bit fixed point: 16.16).
 /// `[a, b, u, c, d, v, x, y, w]`.
 fn orientation_from_matrix(matrix: &[u8]) -> Option<Orientation> {
@@ -527,10 +548,6 @@ fn verify_xmp_structure(packet: &str) -> Result<(), String> {
     Err("can't verify video location: XMP event limit exceeded".into())
 }
 
-fn is_xmp_place_name(key: &str) -> bool {
-    key.split('/').any(|part| matches!(part, "Iptc4xmpCore:Location" | "photoshop:City" | "photoshop:State" | "photoshop:Country" | "lc:location"))
-}
-
 fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), String> {
     if depth > MAX_DEPTH {
         return Err("can't verify video location: metadata nesting limit exceeded".into());
@@ -560,7 +577,8 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
                 // clears a clip's location. Anything it does hold refuses the unchanged copy.
                 if !read_udta_text(b.body).unwrap_or_default().trim().is_empty() {
                     return Err(
-                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                        "can't remove embedded GPS or embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
+                            .into(),
                     );
                 }
             }
@@ -591,16 +609,9 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
                     )
                     .into());
                 }
-                if xmp.metadata.gps.is_some()
-                    || xmp.properties.keys().any(|key| key.split('/').any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")))
-                {
+                if xmp.metadata.gps.is_some() || xmp.has_location_metadata() {
                     return Err(
-                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
-                    );
-                }
-                if xmp.properties.iter().any(|(key, values)| is_xmp_place_name(key) && values.iter().any(|value| !value.trim().is_empty())) {
-                    return Err(
-                        "can't remove embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
+                        "can't remove embedded GPS or embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
                             .into(),
                     );
                 }
@@ -620,13 +631,19 @@ const LOCATION_KEY: &[u8] = b"com.apple.quicktime.location.ISO6709";
 fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
     let mut location_keys: Vec<usize> = Vec::new();
     let mut items: Vec<(usize, &[u8])> = Vec::new();
-    for b in read_boxes(body, budget) {
+    let mut key_count = None;
+    let mut saw_ilst = false;
+    for b in read_boxes_strict(body, budget)? {
         match &b.kind {
             b"keys" => {
+                if key_count.is_some() || saw_ilst {
+                    return Err("can't verify video location: duplicate or out-of-order metadata keys".into());
+                }
                 let count = be32(b.body, 4).ok_or("can't verify video location: truncated metadata keys")?;
                 if count > 4096 {
                     return Err("can't verify video location: metadata key limit exceeded".into());
                 }
+                key_count = Some(count as usize);
                 let mut offset = 8usize;
                 for index in 1..=count as usize {
                     let n = be32(b.body, offset).filter(|n| *n >= 8).ok_or("can't verify video location: invalid metadata key")? as usize;
@@ -642,7 +659,11 @@ fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
                 }
             }
             b"ilst" => {
-                for item in read_boxes(b.body, budget) {
+                if saw_ilst {
+                    return Err("can't verify video location: duplicate metadata item list".into());
+                }
+                saw_ilst = true;
+                for item in read_boxes_strict(b.body, budget)? {
                     items.push((u32::from_be_bytes(item.kind) as usize, item.body));
                 }
             }
@@ -650,17 +671,23 @@ fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
         }
     }
     for index in location_keys {
-        for (_, item) in items.iter().filter(|(i, _)| *i == index) {
-            for data in read_boxes(item, budget) {
-                if &data.kind != b"data" {
-                    continue;
-                }
-                // type and locale precede the value; a short or unreadable item could hide one
-                let value = data.body.get(8..).ok_or("can't verify video location: truncated metadata value")?;
-                if !value.iter().all(u8::is_ascii_whitespace) {
-                    return Err(
-                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
-                    );
+        for (item_index, item) in &items {
+            if *item_index == 0 || key_count.is_some_and(|n| *item_index > n) {
+                return Err("can't verify video location: metadata item has an invalid key index".into());
+            }
+            if *item_index == index {
+                for data in read_boxes_strict(item, budget)? {
+                    if &data.kind != b"data" {
+                        return Err("can't verify video location: unreadable location metadata value".into());
+                    }
+                    // type and locale precede the value; a short or unreadable item could hide one
+                    let value = data.body.get(8..).ok_or("can't verify video location: truncated metadata value")?;
+                    if !value.iter().all(u8::is_ascii_whitespace) {
+                        return Err(
+                            "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip"
+                                .into(),
+                        );
+                    }
                 }
             }
         }
@@ -876,6 +903,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn location_verification_rejects_iptc_extension_location_structs() {
+        let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
+        let packets = [
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown></rdf:Description></rdf:RDF>"#,
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><rdf:Description><place:LocationCreated rdf:parseType="Resource"><place:CountryName>Italy</place:CountryName></place:LocationCreated></rdf:Description></rdf:RDF>"#,
+        ];
+        for packet in packets {
+            let parsed = crate::parse_xmp(packet).expect("valid IPTC Extension XMP");
+            assert!(parsed.has_location_metadata(), "the IPTC location structure is inventoried");
+            for uuid in [false, true] {
+                let mut bytes = clean.clone();
+                let mut body = if uuid { XMP_UUID.to_vec() } else { Vec::new() };
+                body.extend_from_slice(packet.as_bytes());
+                write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
+                let error = verify_video_location_absent(&bytes).unwrap_err();
+                assert!(error.contains("GPS") || error.contains("location metadata"), "uuid={uuid}: {error}");
+            }
+        }
+
+        let unrelated = concat!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="urn:unrelated">"#,
+            r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown></rdf:Description></rdf:RDF>"#
+        );
+        assert!(!crate::parse_xmp(unrelated).expect("valid unrelated XMP").has_location_metadata());
     }
 
     #[test]
@@ -1372,6 +1426,42 @@ mod tests {
             }
         }
         assert_eq!(meta_children(&[0; 3]), None);
+    }
+
+    #[test]
+    fn location_verification_rejects_a_malformed_mdta_value_box() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+
+        let mut keys = vec![0; 4]; // FullBox version and flags
+        keys.extend_from_slice(&1u32.to_be_bytes());
+        keys.extend_from_slice(&(8u32 + LOCATION_KEY.len() as u32).to_be_bytes());
+        keys.extend_from_slice(b"mdta");
+        keys.extend_from_slice(LOCATION_KEY);
+        let mut keys_box = Vec::new();
+        write_box(&mut keys_box, b"keys", &keys);
+
+        // The item box itself is bounded and well-formed, but its `data` child claims bytes beyond
+        // the item. Best-effort metadata parsing skips that child; a privacy check must fail closed.
+        let value = b"+37.7749-122.4194/";
+        let mut bad_data = Vec::new();
+        bad_data.extend_from_slice(&((16 + value.len() + 8) as u32).to_be_bytes());
+        bad_data.extend_from_slice(b"data");
+        bad_data.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
+        bad_data.extend_from_slice(value);
+        let mut ilst = Vec::new();
+        write_box(&mut ilst, &1u32.to_be_bytes(), &bad_data);
+        let mut ilst_box = Vec::new();
+        write_box(&mut ilst_box, b"ilst", &ilst);
+
+        let mut meta_body = vec![0; 4]; // ISO FullBox version and flags
+        meta_body.extend_from_slice(&keys_box);
+        meta_body.extend_from_slice(&ilst_box);
+        let mut meta = Vec::new();
+        write_box(&mut meta, b"meta", &meta_body);
+        let bytes = with_moov_children(&file, &meta);
+
+        let error = verify_video_location_absent(&bytes).unwrap_err();
+        assert!(error.contains("malformed") || error.contains("unreadable"), "{error}");
     }
 
     /// A 90-degree display matrix is read as Rotate90.

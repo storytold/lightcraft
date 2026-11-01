@@ -30,6 +30,7 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+    ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
     ("lc", LC_NS),
     // Read-only: develop settings written by other raw developers (interchange; see docs/xmp-interop.md).
     ("crs", CRS_NS),
@@ -80,6 +81,95 @@ pub struct XmpData {
     /// live with a partial map; a check that must prove a property is *absent* (an embedded
     /// location before copying an Original) must treat it as unverifiable instead.
     pub properties_truncated: bool,
+}
+
+impl XmpData {
+    /// Whether the XMP inventory names GPS or a non-empty place field. LocationShown and
+    /// LocationCreated are IPTC Extension structures; their flattened array entries can be empty
+    /// strings even when their struct children contain a city or coordinates, so inspect their
+    /// retained structured value and flattened child fields as well. Callers that must prove
+    /// absence must check [`Self::properties_truncated`] first.
+    pub fn has_location_metadata(&self) -> bool {
+        const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
+
+        let has_text = |root: &XmpValue| {
+            let mut pending = Vec::new();
+            if pending.try_reserve(1).is_err() {
+                return true;
+            }
+            pending.push(root);
+            let mut visited = 0usize;
+            while let Some(value) = pending.pop() {
+                visited = visited.saturating_add(1);
+                // Parsed trees are capped at MAX_NODES. If a caller constructs an XmpData with a
+                // larger tree, conservatively treat it as location-bearing rather than risk an
+                // unbounded walk in an export privacy check.
+                if visited > MAX_NODES {
+                    return true;
+                }
+                match value {
+                    XmpValue::Text(text) if !text.trim().is_empty() => return true,
+                    XmpValue::Array(items) => {
+                        if pending.len().saturating_add(items.len()) > MAX_NODES || pending.try_reserve(items.len()).is_err() {
+                            return true;
+                        }
+                        pending.extend(items);
+                    }
+                    XmpValue::Struct(fields) => {
+                        if pending.len().saturating_add(fields.len()) > MAX_NODES || pending.try_reserve(fields.len()).is_err() {
+                            return true;
+                        }
+                        pending.extend(fields.values());
+                    }
+                    XmpValue::Text(_) => {}
+                }
+            }
+            false
+        };
+
+        for (key, values) in &self.properties {
+            let parts = key.split('/');
+            if parts.clone().any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")) {
+                // Even an isolated/blank GPS property is not proof that GPS was removed.
+                return true;
+            }
+
+            let Some(location_part) = parts.clone().find(|part| {
+                matches!(
+                    *part,
+                    "Iptc4xmpCore:Location"
+                        | "Iptc4xmpCore:CountryCode"
+                        | "photoshop:City"
+                        | "photoshop:State"
+                        | "photoshop:Country"
+                        | "lc:location"
+                        | "Iptc4xmpExt:LocationShown"
+                        | "Iptc4xmpExt:LocationCreated"
+                )
+            }) else {
+                continue;
+            };
+
+            if IPTC_LOCATION_STRUCTS.contains(&location_part) {
+                let root = parts.clone().next().unwrap_or(key);
+                if self.values.get(root).is_some_and(has_text) || values.iter().any(|value| !value.trim().is_empty()) {
+                    return true;
+                }
+                // `values` retains only the last occurrence of a top-level field across RDF
+                // descriptions, whereas flattened child properties retain every occurrence.
+                if self.properties.iter().any(|(candidate, nested_values)| {
+                    candidate.strip_prefix(root).is_some_and(|suffix| suffix.starts_with('/'))
+                        && nested_values.iter().any(|value| !value.trim().is_empty())
+                }) {
+                    return true;
+                }
+            } else if values.iter().any(|value| !value.trim().is_empty()) {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 /// A structured XMP value.
