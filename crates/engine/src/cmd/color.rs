@@ -137,12 +137,14 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
                 if !bw {
                     d.mixer = Default::default();
                 }
+                // (a B&W profile turns the render grey again: sample the source colour, with the profile's own
+                // adjustments before the mixer, its contrast say, and its other options kept)
+                if d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.") {
+                    *d = lightcraft_pipeline::profiles::effective(d).into_owned();
+                    d.profile.id = "lc.color".into();
+                }
                 d.bw_mix = Default::default();
                 after_mixer_neutral(d);
-                // (a B&W profile turns the render grey again: sample the source colour)
-                if d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.") {
-                    d.profile = Default::default();
-                }
             })?;
             let [_, _, h] = encoded_to_oklch(e);
             let w = lightcraft_pipeline::colorops::band_weights(h);

@@ -217,3 +217,56 @@ fn point_colors_picker_is_put_down_when_the_photo_turns_bw() {
     h.settle(SETTLE);
     assert_eq!(h.app.ui.tool, "", "no Point Color on a B&W photo");
 }
+
+/// Another panel's targeted adjustment (Curve's) is put down too when the Color Mixer opens from Masking: only the
+/// mixer's own tools stay.
+#[test]
+fn the_color_mixer_command_puts_down_the_curves_targeted_adjustment() {
+    let mut h = mixer();
+    let r = h.request("ui.set", json!({"right": "masking"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.tool = "tat:curve".into();
+    run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(h.app.ui.tool, "");
+}
+
+/// The band the command reports is the one the panel shows: a remembered value from before the bands ("hue")
+/// shows Red, and the reply can be fed back.
+#[test]
+fn the_color_mixer_reports_the_band_it_shows() {
+    let mut h = mixer();
+    h.app.ui.mixer_mode = "hue".into();
+    let r = run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(r["band"], "red", "{r}");
+    run(&mut h, "view.colorMixer", json!({"band": r["band"]}));
+}
+
+/// Each HSL slider sets its own band's own adjustment: a drag on a representative band of each group moves that
+/// control and no other.
+#[test]
+fn an_hsl_slider_drag_sets_its_bands_control() {
+    let mut h = mixer();
+    run(&mut h, "view.colorMixer", json!({"adjust": "hsl", "group": "all"}));
+    h.settle(SETTLE);
+    let mut moved: Vec<String> = Vec::new();
+    for (band, part) in [("red", "hue"), ("blue", "sat"), ("green", "lum")] {
+        let ctl = format!("mixer.{band}.{part}");
+        let r = h.request("ui.dragWidget", json!({"id": format!("slider:{ctl}"), "fx": 0.5, "fy": 0.5, "dx": 40.0, "dy": 0.0, "steps": 8}), T);
+        assert_eq!(r["ok"], true, "{ctl}: {r}");
+        h.settle(SETTLE);
+        moved.push(ctl.clone());
+        let id = h.app.session.active().expect("a photo");
+        let d = h.app.session.develop_of(id).expect("settings");
+        for b in BANDS {
+            for p in ["hue", "sat", "lum"] {
+                let other = format!("mixer.{b}.{p}");
+                let v = lightcraft_develop::controls::get(&d, &other).unwrap_or(0.0);
+                if moved.contains(&other) {
+                    assert!(v > 0.0, "{other} moves with its own slider: {v}");
+                } else {
+                    assert_eq!(v, 0.0, "{other} stays when {ctl} is dragged");
+                }
+            }
+        }
+    }
+}

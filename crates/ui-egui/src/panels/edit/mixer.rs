@@ -120,7 +120,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
                 // (named by its group for a screen reader: All shows three of them)
                 crate::widgets::announce_selected(
                     &button,
-                    crate::i18n::tr_format!("Targeted adjustment ({group})", group = crate::i18n::tr(label)),
+                    format!("{} ({})", crate::i18n::tr("Targeted Adjustment"), crate::i18n::tr(label)),
                     active,
                 );
                 if button.clicked() {
@@ -137,7 +137,8 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
             let Some(spec) = controls::find(&id) else { continue };
             // labelled by the colour alone: the group says what it adjusts (a screen reader hears both)
             let v = controls::get(d, &id).unwrap_or(spec.default);
-            let spoken = crate::i18n::tr_format!("{color} ({group})", color = crate::i18n::tr(name), group = crate::i18n::tr(label));
+            // (both parts translated; the brackets read the same in every language the app has)
+            let spoken = format!("{} ({})", crate::i18n::tr(name), crate::i18n::tr(label));
             let out = crate::widgets::slider_named(ui, spec, v, true, Some(name), Some(&spoken));
             apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
         }

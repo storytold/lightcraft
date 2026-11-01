@@ -50,7 +50,7 @@ fn color_mixer_layout(app: &mut LightcraftApp, p: &Value) -> Result<Value, Strin
     }
     // coming from another panel puts its tool down (Masking's colour picker would keep taking the photo's clicks),
     // as the panel switch does; the White Balance picker and the mixer's own tools stay
-    let mixer_tool = app.ui.tool == "pointColor" || app.ui.tool.starts_with("tat:");
+    let mixer_tool = matches!(app.ui.tool.as_str(), "pointColor" | "tat:hue" | "tat:sat" | "tat:lum");
     if app.ui.right != RightPanel::Edit && app.ui.tool != "wbPicker" && !mixer_tool {
         app.ui.tool.clear();
     }
@@ -73,7 +73,9 @@ fn color_mixer_layout(app: &mut LightcraftApp, p: &Value) -> Result<Value, Strin
     // (a B&W photo shows its B&W mix, never the Point Color tab; the choice is kept for colour photos)
     let bw = app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| crate::is_bw(&d));
     let tab = if bw { "mixer" } else { app.ui.mixer_tab.as_str() };
-    Ok(json!({"tab": tab, "adjust": app.ui.mixer_adjust, "group": app.ui.mixer_group, "band": app.ui.mixer_mode}))
+    // (the band the panel shows: a value from before the bands, such as "hue", shows the first)
+    let band = lightcraft_develop::MIXER_BANDS.iter().copied().find(|b| *b == app.ui.mixer_mode).unwrap_or("red");
+    Ok(json!({"tab": tab, "adjust": app.ui.mixer_adjust, "group": app.ui.mixer_group, "band": band}))
 }
 
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
