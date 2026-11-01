@@ -270,3 +270,16 @@ fn an_hsl_slider_drag_sets_its_bands_control() {
         }
     }
 }
+
+/// In Solo Mode the Color Mixer command closes the Light section and its Curve, so the Curve's targeted adjustment
+/// is put down; without Solo Mode the Curve stays on screen and keeps it.
+#[test]
+fn solo_mode_puts_down_the_curves_targeted_adjustment() {
+    let mut h = mixer();
+    h.app.ui.tool = "tat:curve".into();
+    run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(h.app.ui.tool, "tat:curve", "the Curve is still shown");
+    h.app.ui.single_panel = true;
+    run(&mut h, "view.colorMixer", json!({}));
+    assert_eq!(h.app.ui.tool, "", "Solo Mode hides the Curve");
+}

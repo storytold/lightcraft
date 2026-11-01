@@ -67,6 +67,11 @@ fn color_mixer_layout(app: &mut LightcraftApp, p: &Value) -> Result<Value, Strin
     if !app.ui.section_open("color") {
         app.ui.toggle_section("color");
     }
+    // (Solo Mode closes the Light section that holds the Curve: its targeted adjustment would go on adjusting a
+    // curve no longer shown)
+    if app.ui.single_panel && app.ui.tool == "tat:curve" {
+        app.ui.tool.clear();
+    }
     if !app.ui.flyout_open("mixer") {
         app.ui.toggle_flyout("mixer");
     }
