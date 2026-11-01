@@ -404,6 +404,9 @@ fn automatic_masks_without_their_model_are_approximate() {
     }
     let e = s.execute("mask.add", &json!({"kind": "landscape", "class": "lava"})).unwrap_err().to_string();
     assert!(e.contains("naturalGround"), "{e}");
+    // a People part the models don't know is refused, not stored selecting nothing
+    let e = s.execute("mask.add", &json!({"kind": "people", "parts": ["Hair", "Elbows"]})).unwrap_err().to_string();
+    assert!(e.contains("Elbows") && e.contains("iris and pupil"), "{e}");
     // a stored segmentation needs no model
     let seg = serde_json::to_value(lightcraft_develop::SegMask::from_logits(2, &[4.0, -4.0, 4.0, -4.0])).unwrap();
     let r = s.execute("mask.add", &json!({"kind": "sky", "seg": seg})).unwrap();

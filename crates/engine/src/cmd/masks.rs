@@ -53,15 +53,22 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
-        "people" => MaskShape::People {
-            person: p.get("person").and_then(Value::as_u64).map_or(0, |n| n.min(u64::from(u32::MAX)) as u32),
-            parts: p
+        "people" => {
+            let parts: Vec<String> = p
                 .get("parts")
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(16).collect())
-                .unwrap_or_default(),
-            seg: seg_param(p),
-        },
+                .unwrap_or_default();
+            // (a part the models don't know would be stored selecting nothing, without an error)
+            if let Some(unknown) = parts.iter().find(|x| !crate::segment::PEOPLE_PARTS.contains(&x.to_ascii_lowercase().as_str())) {
+                return Err(bad(c, format!("unknown People part `{unknown}` (one of {})", crate::segment::PEOPLE_PARTS.join(", "))));
+            }
+            MaskShape::People {
+                person: p.get("person").and_then(Value::as_u64).map_or(0, |n| n.min(u64::from(u32::MAX)) as u32),
+                parts,
+                seg: seg_param(p),
+            }
+        }
         "landscape" => {
             let class = str_param(p, "class").unwrap_or_default();
             if !LANDSCAPE_CLASSES.contains(&class) {

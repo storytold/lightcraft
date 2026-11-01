@@ -592,6 +592,34 @@ fn ai_shapes_render_their_stored_segmentation() {
     }
 }
 
+/// A damaged stored segmentation (unreadable data, a wrong size, a bad rectangle) is passed over:
+/// the shape renders what it would without one (the source's mattes here), not an empty mask.
+#[test]
+fn ai_shapes_with_a_damaged_segmentation_fall_back() {
+    let (w, h) = (200, 100);
+    let img = Rgb32f::filled(w, h, [0.2; 3]);
+    let l = img.map(crate::local::log_lum);
+    let f = frame(w, h);
+    let mut mattes = Mattes::default();
+    mattes.push(MatteKind::Skin, left_matte(w, h, 0.25));
+    let good = SegMask::from_logits(4, &[0.0; 16]);
+    for damaged in [
+        SegMask { side: 4, data: "damaged!".into(), rect: None },
+        SegMask { side: 5, ..good.clone() },
+        SegMask { rect: Some([0.8, 0.0, 0.2, 1.0]), ..good.clone() },
+    ] {
+        for (with, without) in [
+            (MaskShape::Subject { seg: Some(damaged.clone()) }, MaskShape::Subject { seg: None }),
+            (MaskShape::Background { seg: Some(damaged.clone()) }, MaskShape::Background { seg: None }),
+            (MaskShape::People { person: 0, parts: vec![], seg: Some(damaged.clone()) }, MaskShape::People { person: 0, parts: vec![], seg: None }),
+        ] {
+            let a = shape_alpha(&with, &f, w, h, &img, &l, 0.0, Some(&mattes));
+            assert_eq!(a, shape_alpha(&without, &f, w, h, &img, &l, 0.0, Some(&mattes)), "{with:?}");
+            assert!(a.data.iter().any(|v| *v > 0.5), "{with:?} still selects something");
+        }
+    }
+}
+
 /// A half-resolution matte selecting the left `frac` of a `w × h` source.
 fn left_matte(w: usize, h: usize, frac: f64) -> Image<u8> {
     Image::from_fn(w / 2, h / 2, |x, _| if (x as f64 + 0.5) < frac * (w / 2) as f64 { 255 } else { 0 })
