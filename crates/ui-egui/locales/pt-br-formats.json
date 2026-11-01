@@ -321,5 +321,6 @@
   "No duplicate photos found among {photos} photos.": "Nenhuma foto duplicada entre {photos} fotos.",
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} grupos entre {photos} fotos · {delete} para excluir",
   "Group {n} · {count} photos · {kind}": "Grupo {n} · {count} fotos · {kind}",
-  "Hashed {done} of {total} photos": "{done} de {total} fotos analisadas"
+  "Hashed {done} of {total} photos": "{done} de {total} fotos analisadas",
+  "visually identical, {bits} bits apart": "visualmente idênticas, a {bits} bits"
 }

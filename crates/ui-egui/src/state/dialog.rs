@@ -18,6 +18,9 @@ impl Dialog {
 pub struct DuplicateGroup {
     /// The members are byte-identical files (else visually identical).
     pub exact: bool,
+    /// The most bits two members' hashes differ in (0 for exact groups): how sure the match is.
+    #[serde(default)]
+    pub max_distance: u32,
     /// Best first, as the finder ranked them.
     pub photos: Vec<DuplicatePhoto>,
 }

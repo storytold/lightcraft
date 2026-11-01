@@ -324,5 +324,6 @@
   "No duplicate photos found among {photos} photos.": "{photos} ფოტოს შორის დუბლიკატები ვერ მოიძებნა.",
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} ჯგუფი {photos} ფოტოს შორის · წასაშლელი: {delete}",
   "Group {n} · {count} photos · {kind}": "ჯგუფი {n} · {count} ფოტო · {kind}",
-  "Hashed {done} of {total} photos": "დამუშავებულია {done} / {total} ფოტო"
+  "Hashed {done} of {total} photos": "დამუშავებულია {done} / {total} ფოტო",
+  "visually identical, {bits} bits apart": "ვიზუალურად იდენტური, {bits} ბიტის სხვაობა"
 }

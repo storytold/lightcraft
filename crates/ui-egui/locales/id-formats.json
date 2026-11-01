@@ -324,5 +324,6 @@
   "No duplicate photos found among {photos} photos.": "Tidak ada foto duplikat di antara {photos} foto.",
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} grup di antara {photos} foto · {delete} akan dihapus",
   "Group {n} · {count} photos · {kind}": "Grup {n} · {count} foto · {kind}",
-  "Hashed {done} of {total} photos": "{done} dari {total} foto diproses"
+  "Hashed {done} of {total} photos": "{done} dari {total} foto diproses",
+  "visually identical, {bits} bits apart": "identik secara visual, selisih {bits} bit"
 }

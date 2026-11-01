@@ -321,5 +321,6 @@
   "No duplicate photos found among {photos} photos.": "Mezi {photos} fotografiemi nebyly nalezeny žádné duplicity.",
   "{groups} groups among {photos} photos · {delete} to delete": "Skupin: {groups} mezi {photos} fotografiemi · ke smazání: {delete}",
   "Group {n} · {count} photos · {kind}": "Skupina {n} · fotografií: {count} · {kind}",
-  "Hashed {done} of {total} photos": "Zpracováno {done} z {total} fotografií"
+  "Hashed {done} of {total} photos": "Zpracováno {done} z {total} fotografií",
+  "visually identical, {bits} bits apart": "vizuálně shodné, vzdálenost {bits} bitů"
 }

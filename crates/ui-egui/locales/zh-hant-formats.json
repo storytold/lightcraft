@@ -321,5 +321,6 @@
   "No duplicate photos found among {photos} photos.": "在 {photos} 張照片中未發現重複照片。",
   "{groups} groups among {photos} photos · {delete} to delete": "{photos} 張照片中有 {groups} 組 · 待刪除 {delete} 張",
   "Group {n} · {count} photos · {kind}": "第 {n} 組 · {count} 張照片 · {kind}",
-  "Hashed {done} of {total} photos": "已處理 {done}/{total} 張照片"
+  "Hashed {done} of {total} photos": "已處理 {done}/{total} 張照片",
+  "visually identical, {bits} bits apart": "視覺上相同，相差 {bits} 位元"
 }

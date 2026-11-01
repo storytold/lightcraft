@@ -321,5 +321,6 @@
   "No duplicate photos found among {photos} photos.": "{photos} 枚の写真に重複は見つかりませんでした。",
   "{groups} groups among {photos} photos · {delete} to delete": "{photos} 枚中 {groups} グループ · 削除 {delete} 枚",
   "Group {n} · {count} photos · {kind}": "グループ {n} · {count} 枚 · {kind}",
-  "Hashed {done} of {total} photos": "{total} 枚中 {done} 枚を処理"
+  "Hashed {done} of {total} photos": "{total} 枚中 {done} 枚を処理",
+  "visually identical, {bits} bits apart": "見た目が同一、ハッシュ差 {bits} ビット"
 }

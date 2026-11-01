@@ -321,5 +321,6 @@
   "No duplicate photos found among {photos} photos.": "Không tìm thấy ảnh trùng lặp trong {photos} ảnh.",
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} nhóm trong {photos} ảnh · {delete} ảnh sẽ xóa",
   "Group {n} · {count} photos · {kind}": "Nhóm {n} · {count} ảnh · {kind}",
-  "Hashed {done} of {total} photos": "Đã xử lý {done} trong {total} ảnh"
+  "Hashed {done} of {total} photos": "Đã xử lý {done} trong {total} ảnh",
+  "visually identical, {bits} bits apart": "giống hệt về hình ảnh, cách {bits} bit"
 }
