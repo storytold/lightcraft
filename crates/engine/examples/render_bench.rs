@@ -91,107 +91,119 @@ fn diff(a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8) -> (u8, f64)
     (max, sum as f64 / (a.data.len() * 3).max(1) as f64)
 }
 
+fn benchmark_jpeg(args: &[String], n: usize) {
+    // a JPEG (e.g. an embedded preview pulled out with exiftool) decoded to fit a few boxes
+    for path in args {
+        let bytes = std::fs::read(path).expect("read");
+        for edge in [256u32, 512, 1600, 2560] {
+            let o = lightcraft_codecs::DecodeOptions::fit(edge, edge);
+            let d = lightcraft_codecs::decode(&bytes, o).expect("decode");
+            println!(
+                "  {path} fit {edge}: {}×{} {}",
+                d.image.width,
+                d.image.height,
+                best(n, || drop(lightcraft_codecs::decode(&bytes, o).expect("decode")))
+            );
+        }
+    }
+}
+
+fn benchmark_load(args: &[String], n: usize, only: &str) {
+    // opening a photo in the loupe, step by step: what the app's loaders cost (per file)
+    for path in args {
+        let bytes = std::fs::read(path).expect("read");
+        println!("{path}");
+        if std::env::var("LOADONLY").is_ok() {
+            // only the preview load (for a profiler)
+            println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+            continue;
+        }
+        println!("  {:<36} {}", "file read:", best(n, || drop(std::fs::read(path).expect("read"))));
+        println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
+        let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
+        if let lightcraft_raw::RawData::U16(d) = &raw.data {
+            let sum = d.iter().enumerate().fold(0u64, |a, (i, &v)| a.wrapping_mul(31).wrapping_add(v as u64 ^ i as u64));
+            println!("  decode checksum: {sum:016x}");
+        }
+        if only == "load1" {
+            println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+            continue;
+        }
+        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+            println!("  {:<36} {}", format!("binned ×{k} masked:"), best(n, || drop(raw.develop_binned_masked(k, 0.99))));
+        }
+        for edge in [2560usize, 1600] {
+            println!(
+                "  {:<36} {}",
+                format!("embedded srgb, whole file ({edge}):"),
+                best(n, || drop(lightcraft_engine::files::embedded_preview_srgb(&bytes, edge)))
+            );
+            let quick = lightcraft_engine::files::fs_preview_loader();
+            println!("  {:<36} {}", format!("fs_preview_loader ({edge}):"), best(n, || drop(quick(path, edge))));
+        }
+        println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+        let (loader, _) = lightcraft_engine::files::fs_hooks();
+        println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560).expect("load"))));
+    }
+}
+
+fn benchmark_source(args: &[String], n: usize) {
+    // opening a photo: where the time goes before the first sharp loupe (per file)
+    for path in args {
+        let bytes = std::fs::read(path).expect("read");
+        println!("{path}");
+        let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
+        // as the loader does: lens corrections are applied by the pipeline, not in the raw develop
+        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        println!("  {}×{} cpp {} cfa {:?}", raw.width, raw.height, raw.cpp, raw.cfa.as_ref().map(|c| c.name()));
+        println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
+        println!("  {:<36} {}", "normalize:", best(n, || drop(raw.normalized().expect("norm"))));
+        let norm = raw.normalized().expect("norm");
+        println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(lightcraft_raw::demosaic(&norm, lightcraft_raw::Method::Ahd))));
+        if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+            println!("  {:<36} {}", format!("binned ×{k} (2560 preview):"), best(n, || drop(raw.develop_binned(k, 0.99))));
+            let img = raw.develop_binned(k, 0.99).expect("bin").expect("binnable");
+            let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+            println!(
+                "  {:<36} {}",
+                "highlight reconstruct (binned):",
+                best(n, || {
+                    let mut i = img.clone();
+                    lightcraft_raw::highlight::reconstruct(&mut i, t.wb, 0.99);
+                })
+            );
+            println!("  {:<36} {}", "clone (binned):", best(n, || drop(img.clone())));
+            println!("  {:<36} {}", "fit 2560 (binned):", best(n, || drop(fit(&img, 2560, 2560, Filter::Box))));
+        }
+        println!("  {:<36} {}", "embedded preview (2560):", best(n, || drop(lightcraft_engine::files::load_embedded_preview(&bytes, 2560))));
+        for edge in [512usize, 2560, usize::MAX] {
+            println!(
+                "  {:<36} {}",
+                format!("load_bytes({edge}):"),
+                best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, edge).expect("load")))
+            );
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let n: usize = std::env::var("N").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
     let only = std::env::var("ONLY").unwrap_or_default();
-    let run = |name: &str| only.is_empty() || only.split(',').any(|o| name.contains(o));
     if only == "jpeg" {
-        // a JPEG (e.g. an embedded preview pulled out with exiftool) decoded to fit a few boxes
-        for path in &args {
-            let bytes = std::fs::read(path).expect("read");
-            for edge in [256u32, 512, 1600, 2560] {
-                let o = lightcraft_codecs::DecodeOptions::fit(edge, edge);
-                let d = lightcraft_codecs::decode(&bytes, o).expect("decode");
-                println!(
-                    "  {path} fit {edge}: {}×{} {}",
-                    d.image.width,
-                    d.image.height,
-                    best(n, || drop(lightcraft_codecs::decode(&bytes, o).expect("decode")))
-                );
-            }
-        }
+        benchmark_jpeg(&args, n);
         return;
     }
     if only == "load" || only == "load1" {
-        // opening a photo in the loupe, step by step: what the app's loaders cost (per file)
-        for path in &args {
-            let bytes = std::fs::read(path).expect("read");
-            println!("{path}");
-            if std::env::var("LOADONLY").is_ok() {
-                // only the preview load (for a profiler)
-                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
-                continue;
-            }
-            println!("  {:<36} {}", "file read:", best(n, || drop(std::fs::read(path).expect("read"))));
-            println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
-            let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
-            if let lightcraft_raw::RawData::U16(d) = &raw.data {
-                let sum = d.iter().enumerate().fold(0u64, |a, (i, &v)| a.wrapping_mul(31).wrapping_add(v as u64 ^ i as u64));
-                println!("  decode checksum: {sum:016x}");
-            }
-            if only == "load1" {
-                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
-                continue;
-            }
-            raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
-                println!("  {:<36} {}", format!("binned ×{k} masked:"), best(n, || drop(raw.develop_binned_masked(k, 0.99))));
-            }
-            for edge in [2560usize, 1600] {
-                println!(
-                    "  {:<36} {}",
-                    format!("embedded srgb, whole file ({edge}):"),
-                    best(n, || drop(lightcraft_engine::files::embedded_preview_srgb(&bytes, edge)))
-                );
-                let quick = lightcraft_engine::files::fs_preview_loader();
-                println!("  {:<36} {}", format!("fs_preview_loader ({edge}):"), best(n, || drop(quick(path, edge))));
-            }
-            println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
-            let (loader, _) = lightcraft_engine::files::fs_hooks();
-            println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560).expect("load"))));
-        }
+        benchmark_load(&args, n, &only);
         return;
     }
     if only == "source" {
-        // opening a photo: where the time goes before the first sharp loupe (per file)
-        for path in &args {
-            let bytes = std::fs::read(path).expect("read");
-            println!("{path}");
-            let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
-            // as the loader does: lens corrections are applied by the pipeline, not in the raw develop
-            raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-            println!("  {}×{} cpp {} cfa {:?}", raw.width, raw.height, raw.cpp, raw.cfa.as_ref().map(|c| c.name()));
-            println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
-            println!("  {:<36} {}", "normalize:", best(n, || drop(raw.normalized().expect("norm"))));
-            let norm = raw.normalized().expect("norm");
-            println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(lightcraft_raw::demosaic(&norm, lightcraft_raw::Method::Ahd))));
-            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
-                println!("  {:<36} {}", format!("binned ×{k} (2560 preview):"), best(n, || drop(raw.develop_binned(k, 0.99))));
-                let img = raw.develop_binned(k, 0.99).expect("bin").expect("binnable");
-                let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-                println!(
-                    "  {:<36} {}",
-                    "highlight reconstruct (binned):",
-                    best(n, || {
-                        let mut i = img.clone();
-                        lightcraft_raw::highlight::reconstruct(&mut i, t.wb, 0.99);
-                    })
-                );
-                println!("  {:<36} {}", "clone (binned):", best(n, || drop(img.clone())));
-                println!("  {:<36} {}", "fit 2560 (binned):", best(n, || drop(fit(&img, 2560, 2560, Filter::Box))));
-            }
-            println!("  {:<36} {}", "embedded preview (2560):", best(n, || drop(lightcraft_engine::files::load_embedded_preview(&bytes, 2560))));
-            for edge in [512usize, 2560, usize::MAX] {
-                println!(
-                    "  {:<36} {}",
-                    format!("load_bytes({edge}):"),
-                    best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, edge).expect("load")))
-                );
-            }
-        }
+        benchmark_source(&args, n);
         return;
     }
+    let run = |name: &str| only.is_empty() || only.split(',').any(|o| name.contains(o));
     let (full, info) = match args.first() {
         Some(path) => {
             let bytes = std::fs::read(path).expect("read");

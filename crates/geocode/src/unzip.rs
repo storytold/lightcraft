@@ -61,7 +61,13 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>, GeocodeErr
         return match method {
             0 if data.len() <= max => Ok(data.to_vec()),
             0 => Err(GeocodeError::Invalid(format!("{name} is larger than {max} bytes"))),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(data, max).map_err(|e| bad(&format!("deflate: {e:?}"))),
+            8 => {
+                let decoded = miniz_oxide::inflate::decompress_to_vec_with_limit(data, max).map_err(|e| bad(&format!("deflate: {e:?}")))?;
+                if decoded.len() != usize_ {
+                    return Err(bad("uncompressed size"));
+                }
+                Ok(decoded)
+            }
             m => Err(bad(&format!("compression method {m}"))),
         };
     }
@@ -119,5 +125,16 @@ mod tests {
             bad[i] ^= 0xff;
             let _ = extract(&bad, "cities15000.txt", 100);
         }
+    }
+
+    #[test]
+    fn rejects_deflated_entry_with_inconsistent_directory_size() {
+        let mut z = make("cities15000.txt", b"hello world");
+        let eocd = z.len() - 22;
+        let cd = u32::from_le_bytes([z[eocd + 16], z[eocd + 17], z[eocd + 18], z[eocd + 19]]) as usize;
+        let declared_size = cd + 24;
+        z[declared_size..declared_size + 4].copy_from_slice(&2u32.to_le_bytes());
+
+        assert!(extract(&z, "cities15000.txt", 100).is_err());
     }
 }
