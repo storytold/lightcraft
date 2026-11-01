@@ -385,7 +385,7 @@ pub(crate) fn shade_color(shade: Shade, t: &Tokens, x: f32) -> Option<Color32> {
 fn paint_handle(ui: &Ui, at: egui::Pos2, hot: bool, color: Color32, under: Option<Color32>, t: &Tokens) {
     let r = if hot { HANDLE_R_HOT } else { HANDLE_R };
     let p = ui.painter();
-    p.circle_filled(at, r + 1.0, handle_ring(t, under));
+    p.circle_filled(at, r + 1.0, handle_ring(t, color, under));
     p.circle_filled(at, r, color);
 }
 
@@ -400,11 +400,12 @@ pub(crate) fn contrast(a: Color32, b: Color32) -> f32 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-/// The ring round a slider handle: the theme's chrome, unless neither it nor the handle reaches 3:1 against the
-/// shaded track under it (mid-ramp in a light theme), where it turns black or white, whichever stands out more.
-pub(crate) fn handle_ring(t: &Tokens, under: Option<Color32>) -> Color32 {
+/// The ring round a slider handle filled with `fill` (normal or hovered): the theme's chrome, unless neither it nor
+/// the fill reaches 3:1 against the shaded track under it (mid-ramp in a light theme), where it turns black or
+/// white, whichever stands out more.
+pub(crate) fn handle_ring(t: &Tokens, fill: Color32, under: Option<Color32>) -> Color32 {
     let Some(under) = under else { return t.chrome };
-    if contrast(t.thumb, under).max(contrast(t.chrome, under)) >= 3.0 {
+    if contrast(fill, under).max(contrast(t.chrome, under)) >= 3.0 {
         return t.chrome;
     }
     if contrast(Color32::BLACK, under) >= contrast(Color32::WHITE, under) { Color32::BLACK } else { Color32::WHITE }

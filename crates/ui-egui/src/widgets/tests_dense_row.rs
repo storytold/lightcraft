@@ -396,10 +396,13 @@ fn the_handle_stands_out_on_every_shaded_track_in_every_theme() {
             for i in 0..=20 {
                 let x = i as f32 / 20.0;
                 let under = shade_color(shade, &t, x).unwrap();
-                let best = contrast(t.thumb, under).max(contrast(handle_ring(&t, Some(under)), under));
+                let best = contrast(t.thumb, under).max(contrast(handle_ring(&t, t.thumb, Some(under)), under));
                 if best < worst.0 {
                     worst = (best, format!("{kind:?} {shade:?} at {x}"));
                 }
+                // hovered or scrubbed, the handle is filled with thumb_hover: its own check, so a failure names it
+                let hot = contrast(t.thumb_hover, under).max(contrast(handle_ring(&t, t.thumb_hover, Some(under)), under));
+                assert!(hot >= 3.0, "the hovered handle against its track: {hot:.2}:1 at {kind:?} {shade:?} at {x}");
             }
         }
     }
@@ -415,12 +418,12 @@ fn the_handle_ring_keeps_the_theme_colour_where_it_already_stands_out() {
     for kind in ThemeKind::ALL {
         let t = Tokens::for_kind(kind);
         // a plain track has no shade under the handle: the theme ring, as before
-        assert_eq!(handle_ring(&t, shade_color(Shade::Plain, &t, 0.5)), t.chrome, "{kind:?}: a plain track keeps the theme ring");
+        assert_eq!(handle_ring(&t, t.thumb, shade_color(Shade::Plain, &t, 0.5)), t.chrome, "{kind:?}: a plain track keeps the theme ring");
         for shade in [Shade::Ramp, Shade::ReverseRamp, Shade::CentreLight, Shade::Tinted] {
             for i in 0..=20 {
                 let under = shade_color(shade, &t, i as f32 / 20.0).unwrap();
                 if contrast(t.thumb, under).max(contrast(t.chrome, under)) >= 3.0 {
-                    assert_eq!(handle_ring(&t, Some(under)), t.chrome, "{kind:?} {shade:?} at {i}/20 already stands out");
+                    assert_eq!(handle_ring(&t, t.thumb, Some(under)), t.chrome, "{kind:?} {shade:?} at {i}/20 already stands out");
                 } else {
                     changed += 1;
                 }
@@ -429,4 +432,47 @@ fn the_handle_ring_keeps_the_theme_colour_where_it_already_stands_out() {
     }
     // (only the stretches that failed 3:1 change, the mid-ramp of a light theme)
     assert!(changed > 0, "the light themes' mid-ramp is where the ring changes");
+}
+
+/// CodeRabbit on #3164: the ring a real slider paints is the one `handle_ring` picks, the black or
+/// white one included where the theme's ring would fade into a light ramp (read from the frame's
+/// circles, not the helper).
+#[test]
+fn the_painted_handle_ring_is_the_one_that_stands_out() {
+    use super::{HANDLE_R, handle_ring, shade_color};
+    use crate::theme::{ThemeKind, Tokens};
+    use lightcraft_develop::Shade;
+    let spec = *controls::find("light.exposure").unwrap();
+    assert_eq!(spec.shade, Shade::Ramp);
+    let mut fallback = 0;
+    for kind in ThemeKind::ALL {
+        let t = Tokens::for_kind(kind);
+        for i in 0..=20 {
+            let v = spec.min + (spec.max - spec.min) * f64::from(i) / 20.0;
+            let mut view = HeadlessView::new();
+            view.ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
+            let mut registry = Vec::new();
+            for frame in 0..2 {
+                view.run(HeadlessView::raw_input(vec2(300.0, 100.0), 1.0, f64::from(frame) * 0.02, vec![]), |ui| {
+                    slider(ui, &spec, v, true, None);
+                });
+                registry = take_registry(&view.ctx);
+            }
+            let track = registry.iter().find(|(r, _)| r == "slider:light.exposure").map(|(_, r)| *r).expect("the track");
+            let ring = view
+                .painted_shapes()
+                .into_iter()
+                .find_map(|s| match s {
+                    egui::epaint::Shape::Circle(c) if c.radius == HANDLE_R + 1.0 && (c.center.y - track.center().y).abs() < 0.5 => Some(c),
+                    _ => None,
+                })
+                .expect("the handle's ring");
+            let under = shade_color(Shade::Ramp, &t, (ring.center.x - track.left()) / track.width()).unwrap();
+            assert_eq!(ring.fill, handle_ring(&t, t.thumb, Some(under)), "{kind:?} at {i}/20");
+            if ring.fill != t.chrome {
+                fallback += 1;
+            }
+        }
+    }
+    assert!(fallback > 0, "some handle on a light theme's ramp is painted with the black or white ring");
 }
