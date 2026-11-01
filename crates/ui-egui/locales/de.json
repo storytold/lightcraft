@@ -3470,5 +3470,8 @@
   "Top bar": "Obere Leiste",
   "Tool strip": "Werkzeugleiste",
   "Bottom bar": "Untere Leiste",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC-/FreeSync-Flimmern verhindern (gilt ab dem nächsten Start)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC-/FreeSync-Flimmern verhindern (gilt ab dem nächsten Start)",
+  "Home Screen": "Startbildschirm",
+  "Welcome to LightCraft": "Willkommen bei LightCraft",
+  "Your photo library and raw developer: local, open and scriptable.": "Fotobibliothek und Raw-Entwicklung: lokal, offen und skriptfähig."
 }

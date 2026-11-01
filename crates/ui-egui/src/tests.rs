@@ -38,6 +38,7 @@ mod grid;
 mod grid_drag;
 mod guided_guides;
 mod histogram_drag;
+mod home;
 mod import_thumbnails;
 mod info_dialogs;
 mod keymap;

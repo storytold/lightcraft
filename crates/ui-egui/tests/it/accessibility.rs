@@ -91,7 +91,9 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
         lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: glyphs only craft-fonts has are drawn as boxes, not checked");
     }
     let mut problems = Vec::new();
-    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail, ViewMode::Compare, ViewMode::Survey, ViewMode::Reference] {
+    for view in
+        [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail, ViewMode::Compare, ViewMode::Survey, ViewMode::Reference, ViewMode::Home]
+    {
         let h = harness(view, RightPanel::None);
         problems.extend(audit(&h, &format!("{view:?}")));
     }

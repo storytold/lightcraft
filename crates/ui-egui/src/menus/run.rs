@@ -188,6 +188,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
 /// Part 1 of 12 of the UI commands; `None` means the id is not one of this part's.
 fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
+        "view.home" => {
+            app.ui.view = ViewMode::Home;
+            Ok(Value::Null)
+        }
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
             Ok(Value::Null)
