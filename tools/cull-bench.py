@@ -119,6 +119,10 @@ if "--skip-browse" not in args:
             thumbs12 = thumb_times.get(min(12, shown))
         if allp is not None and (thumbs12 is not None or not shown):
             break
+        # every thumbnail was in memory already (a folder browsed before in this session): no new
+        # ones will come, so this run can't time them; said in the output instead of waiting
+        if allp is not None and tt == 0 and el - allp > 1:
+            break
         # a layout that never holds twelve thumbnails: give up on that number a while after loading
         if allp is not None and el - allp > 30:
             break
@@ -126,6 +130,8 @@ if "--skip-browse" not in args:
     out["browse_first_thumb_s"] = thumb1
     out["browse_12_thumbs_s"] = thumbs12
     out["browse_all_s"] = allp
+    # the thumbnail times are a cold browse's: none when every one was already in memory
+    out["browse_thumbs_were_in_memory"] = thumb1 is None and allp is not None
     out["photos"] = shown
 
 # --- loupe on the first photo ----------------------------------------------------------------------
@@ -160,15 +166,21 @@ wait(lambda s: loupe(s).get("source") in ("render", "cached") and not loupe(s).g
 n0 = steps_total()
 conns = [Conn() for _ in range(4)]
 t0 = time.perf_counter() + 0.05
+sender_errors = []
 def sender(k):
-    for i in range(k, STEPS, len(conns)):
-        delay = t0 + i * HOLD_MS / 1000 - time.perf_counter()
-        if delay > 0:
-            time.sleep(delay)
-        conns[k].call("ui.key", {"key": "ArrowRight"})
+    try:
+        for i in range(k, STEPS, len(conns)):
+            delay = t0 + i * HOLD_MS / 1000 - time.perf_counter()
+            if delay > 0:
+                time.sleep(delay)
+            conns[k].call("ui.key", {"key": "ArrowRight"})
+    except Exception as e:  # a failed key: the hold's numbers would be for fewer steps than sent
+        sender_errors.append(f"sender {k}: {e}")
 threads = [threading.Thread(target=sender, args=(k,)) for k in range(len(conns))]
 [t.start() for t in threads]
 [t.join() for t in threads]
+if sender_errors:
+    sys.exit("the held arrow failed: " + "; ".join(sender_errors))
 held_for = time.perf_counter() - t0
 rel_t, _ = wait(lambda s: loupe(s).get("source") in ("render", "cached") and not loupe(s).get("pending"), 60)
 time.sleep(0.2)
@@ -195,13 +207,26 @@ wait(lambda s: loupe(s).get("source") in ("render", "cached") and not loupe(s).g
 t0 = time.perf_counter()
 ex("view.zoom100")
 cam = None
+settled_whole = None  # since when the whole-frame render has stood settled with no region asked for
 while time.perf_counter() - t0 < 60:
     st = inspect()
+    now = time.perf_counter() - t0
     if cam is None and loupe(st).get("source") == "embedded":
-        cam = time.perf_counter() - t0
-    if (loupe(st).get("region") or {}).get("pending") is False and not loupe(st).get("pending") and loupe(st).get("source") != "embedded":
+        cam = now
+    region = loupe(st).get("region")
+    settled = not loupe(st).get("pending") and loupe(st).get("source") in ("render", "cached")
+    if settled and region is not None and region.get("pending") is False:
         break
-t = time.perf_counter() - t0
+    # the whole-frame render already holds 100 %: no region is asked for (the app asks within a
+    # frame of the zoom, so half a second without one means none is coming)
+    if settled and region is None:
+        settled_whole = now if settled_whole is None else settled_whole
+        if now - settled_whole >= 0.5:
+            break
+    else:
+        settled_whole = None
+# (with no region, the zoom was done when the whole-frame render stood settled, not half a second on)
+t = settled_whole if settled_whole is not None else time.perf_counter() - t0
 out["zoom100_camera_s_client"] = cam
 out["zoom100_s_client"] = t
 out["zoom100_region"] = loupe(st).get("region")
