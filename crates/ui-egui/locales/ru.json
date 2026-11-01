@@ -2596,5 +2596,13 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "AI masks": "ИИ-маски",
+  "Device": "Устройство",
+  "Last photo": "Последнее фото",
+  "Remote worker": "Удалённый обработчик",
+  "Run on": "Выполнять на",
+  "Automatic (GPU when available)": "Автоматически (GPU, если есть)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Маски «Объект» и «Описать» анализируют каждое фото один раз — на видеокарте, если не выбран ЦП и не выключено «Использовать GPU для рендеринга». На процессоре это намного дольше.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "«Автоматически» запускает модель на видеокарте Mac. Если ИИ-маски там не работают, выберите ЦП; на процессоре они намного дольше."
 }
