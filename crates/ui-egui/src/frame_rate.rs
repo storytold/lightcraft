@@ -230,7 +230,7 @@ mod tests {
     fn debug_item(app: &LightcraftApp) -> Option<Option<bool>> {
         let help = menu_bar(app).into_iter().find(|(t, _)| t == "Help").map(|(_, items)| items).unwrap_or_default();
         help.into_iter().find_map(|n| match n {
-            MenuNode::Submenu { label, children } if label == "Debug" => children.into_iter().find_map(|c| match c {
+            MenuNode::Submenu { label, children, .. } if label == "Debug" => children.into_iter().find_map(|c| match c {
                 MenuNode::Item { id, checked, .. } if id == "view.frameRate" => Some(checked),
                 _ => None,
             }),

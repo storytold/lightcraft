@@ -14,6 +14,8 @@ use crate::LightcraftApp;
 use crate::menus::MenuEntry;
 use crate::state::{RightPanel, ViewMode};
 
+mod album_destinations;
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MenuNode {
@@ -31,6 +33,9 @@ pub enum MenuNode {
     },
     Separator,
     Submenu {
+        /// A stable identity for a user-named submenu. Its label is data, not a translation key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         label: String,
         children: Vec<MenuNode>,
     },
@@ -41,6 +46,11 @@ impl MenuNode {
     pub fn key(id: &str, params: &Value) -> String {
         if params.is_null() { id.to_string() } else { format!("{id}|{params}") }
     }
+}
+
+/// User-named submenus keep their names in every UI language, including native menus.
+pub fn display_submenu_label<'a>(id: Option<&str>, label: &'a str) -> &'a str {
+    if id.is_some() { label } else { crate::i18n::tr(label) }
 }
 
 /// User-defined names in parameterized menus are data, not message keys.
@@ -99,8 +109,9 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
                     out.push_str(native_item_presentation(keymap, id, params, label, shortcut.as_deref()).1.unwrap_or(""));
                 }
                 MenuNode::Separator => out.push('-'),
-                MenuNode::Submenu { label, children } => {
+                MenuNode::Submenu { id, label, children } => {
                     out.push('[');
+                    out.push_str(id.as_deref().unwrap_or(""));
                     out.push_str(label);
                     walk(children, out, keymap);
                     out.push(']');
@@ -723,7 +734,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 v.push(MenuNode::Separator);
                 // one entry at a time, missing ones too: only the list forgets it (issue #1290)
                 let forget = recent.iter().map(|r| item("app.recentLibraries", json!({"remove": r}), label(r), None, true, None)).collect();
-                v.push(MenuNode::Submenu { label: "Remove from List".into(), children: forget });
+                v.push(MenuNode::Submenu { id: None, label: "Remove from List".into(), children: forget });
                 v.push(item("app.clearRecentLibraries", Value::Null, "Clear Recent Libraries", None, true, None));
             }
             v
@@ -799,10 +810,9 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 v.push(item("photo.addToLibrary", Value::Null, crate::i18n::tr("Add to My Photos First"), None, false, None));
                 v.push(MenuNode::Separator);
             }
-            let mut albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.name.clone(), a.id.0)).collect();
-            albums.sort_by_key(|(n, _)| n.to_lowercase());
+            let albums = album_destinations::nodes(&app.session.catalog, sel && !local_only);
             let any = !albums.is_empty();
-            v.extend(albums.into_iter().map(|(name, id)| item("album.addPhotos", json!({"id": id}), name, None, sel && !local_only, None)));
+            v.extend(albums);
             if any {
                 v.push(MenuNode::Separator);
             }
@@ -833,12 +843,12 @@ fn tidy(v: Vec<MenuNode>) -> Vec<MenuNode> {
     let mut out: Vec<MenuNode> = Vec::with_capacity(v.len());
     for n in v {
         let n = match n {
-            MenuNode::Submenu { label, children } => {
+            MenuNode::Submenu { id, label, children } => {
                 let children = tidy(children);
                 if children.is_empty() {
                     continue;
                 }
-                MenuNode::Submenu { label, children }
+                MenuNode::Submenu { id, label, children }
             }
             n => n,
         };
@@ -884,7 +894,7 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
                 items.push(MenuNode::Separator);
             } else if let Some(name) = slot.strip_prefix('@') {
                 let children = sub(name, &mut used);
-                items.push(MenuNode::Submenu { label: name.to_string(), children });
+                items.push(MenuNode::Submenu { id: None, label: name.to_string(), children });
             } else if let Some(i) = entries.iter().position(|e| e.id == *slot && e.menu.first().map(String::as_str) == Some(title)) {
                 used[i] = true;
                 if LAST.contains(slot) { last.push(node(app, &entries[i])) } else { items.push(node(app, &entries[i])) }
@@ -906,7 +916,7 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
         }
         for name in extra_subs {
             let children = sub(&name, &mut used);
-            items.push(MenuNode::Submenu { label: name, children });
+            items.push(MenuNode::Submenu { id: None, label: name, children });
         }
         if !last.is_empty() {
             items.push(MenuNode::Separator);
@@ -1166,10 +1176,15 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
             MenuNode::Separator => {
                 ui.separator();
             }
-            MenuNode::Submenu { label, children } => {
-                submenu(ui, label, format!("      {}", crate::i18n::tr(label)), depth, bar_bottom, |ui| {
-                    nodes_ui(ui, children, mac, clicked, depth + 1, bar_bottom)
-                });
+            MenuNode::Submenu { id, label, children } => {
+                submenu(
+                    ui,
+                    id.as_deref().unwrap_or(label),
+                    format!("      {}", display_submenu_label(id.as_deref(), label)),
+                    depth,
+                    bar_bottom,
+                    |ui| nodes_ui(ui, children, mac, clicked, depth + 1, bar_bottom),
+                );
             }
             MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
                 // a gutter for check marks, like native menus
@@ -1179,6 +1194,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                 }
                 let r = ui.add_enabled(*enabled, b);
                 crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
+                register_album_item(ui, id, params, r.rect);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
@@ -1193,5 +1209,28 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
     }
 }
 
+/// Parameter-qualified destination IDs, plus the photo context menu's existing aliases.
+fn register_album_item(ui: &egui::Ui, id: &str, params: &Value, rect: egui::Rect) {
+    if id == "album.addPhotos" {
+        crate::widgets::register(ui, format!("menuitem:{}", MenuNode::key(id, params)), rect);
+        if let Some(album) = params.get("id").and_then(Value::as_u64) {
+            crate::widgets::register(ui, format!("button:contextAlbum:{album}"), rect);
+        }
+    } else if id == "dialog.newAlbum" {
+        crate::widgets::register(ui, "button:contextNewAlbum", rect);
+    }
+}
+
+/// Draw the same album destinations as the Photo menu, inside a photo's context menu.
+pub(crate) fn album_destinations_menu(app: &LightcraftApp, ui: &mut egui::Ui) -> Option<(String, Value)> {
+    let nodes = expanded(app, "Add to Album").unwrap_or_default();
+    let mut clicked = None;
+    nodes_ui(ui, &nodes, cfg!(target_os = "macos"), &mut clicked, 1, None);
+    clicked
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod album_destinations_tests;

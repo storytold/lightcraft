@@ -1375,27 +1375,12 @@ fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
         register(ui, "button:contextAddToAlbum", add.rect);
     } else {
         let add = crate::widgets::menu_button(ui, crate::i18n::tr("Add to Album"), |ui| {
-            let albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.id.0, a.name.clone())).collect();
-            let any = !albums.is_empty();
-            for (aid, name) in albums {
-                let b = ui.button(name);
-                register(ui, format!("button:contextAlbum:{aid}"), b.rect);
-                if b.clicked() {
-                    match app.run("album.addPhotos", json!({"id": aid})) {
-                        Ok(r) => toast_skipped(app, ui.ctx(), &r),
-                        Err(e) => app.toast(ui.ctx(), e),
-                    }
+            if let Some((command, params)) = crate::menubar::album_destinations_menu(app, ui) {
+                match app.run(&command, params) {
+                    Ok(r) if command == "album.addPhotos" => toast_skipped(app, ui.ctx(), &r),
+                    Ok(_) => {}
+                    Err(e) => app.toast(ui.ctx(), e),
                 }
-            }
-            if any {
-                ui.separator();
-            }
-            // as in the Photo menu: a new album holding the selection, also when there is none yet
-            // to pick (issue #676: the submenu came up empty)
-            let new = ui.button(crate::i18n::tr("New Album…"));
-            register(ui, "button:contextNewAlbum", new.rect);
-            if new.clicked() {
-                let _ = app.run("dialog.newAlbum", json!({}));
             }
         });
         register(ui, "button:contextAddToAlbum", add.response.rect);
