@@ -215,6 +215,9 @@ pub enum Dialog {
         /// Find was pressed: the run is going or done, and the settings are locked.
         #[serde(default)]
         started: bool,
+        /// "Delete unticked in every group" was pressed once: the window asks before doing it.
+        #[serde(default)]
+        armed: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {

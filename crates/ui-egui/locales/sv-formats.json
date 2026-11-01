@@ -325,5 +325,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} grupper bland {photos} foton · {delete} att radera",
   "Group {n} · {count} photos · {kind}": "Grupp {n} · {count} foton · {kind}",
   "Hashed {done} of {total} photos": "{done} av {total} foton bearbetade",
-  "visually identical, {bits} bits apart": "visuellt identiska, {bits} bitars avstånd"
+  "visually identical, {bits} bits apart": "visuellt identiska, {bits} bitars avstånd",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} grupper bland {photos} foton · {unticked} obockade",
+  "Delete {unticked} unticked": "Radera {unticked} obockade",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Detta raderar {unticked} foton ur {groups} grupper, vare sig du tittat på dem eller inte."
 }

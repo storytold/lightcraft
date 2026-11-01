@@ -322,5 +322,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "Груп: {groups} серед {photos} фото · до видалення: {delete}",
   "Group {n} · {count} photos · {kind}": "Група {n} · фото: {count} · {kind}",
   "Hashed {done} of {total} photos": "Опрацьовано {done} з {total} фото",
-  "visually identical, {bits} bits apart": "візуально однакові, відстань {bits} біт"
+  "visually identical, {bits} bits apart": "візуально однакові, відстань {bits} біт",
+  "{groups} groups among {photos} photos · {unticked} unticked": "Груп: {groups} серед {photos} фото · не позначено: {unticked}",
+  "Delete {unticked} unticked": "Видалити непозначені: {unticked}",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Буде видалено {unticked} фото з {groups} груп, переглядали ви їх чи ні."
 }

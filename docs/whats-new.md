@@ -6,8 +6,10 @@
 - Photo ▸ Find Duplicate Photos… looks through the library for photos that are the same picture: a file imported from
   two places, a JPEG kept beside its raw, a resized or re-saved copy. A window shows each group with a thumbnail per
   photo, the best copy ticked (a raw over a rendered file, lossless over lossy, more pixels, a larger file, then edits
-  and rating) and the others unticked with why they lose. Change any tick, then "Delete N Photos" moves the unticked
-  ones to Recently Deleted (Edit ▸ Undo brings them back). The window opens with its settings and waits for Find:
+  and rating) and the others unticked with why they lose. Change any tick, then each group's own "Delete N unticked"
+  moves that group's unticked photos to Recently Deleted (Edit ▸ Undo brings them back) or "Keep all" settles it;
+  nothing happens to a group you haven't acted on, and the one bulk button asks again before it runs. The window
+  opens with its settings and waits for Find:
   Strict / Normal / Loose sets how alike photos must be, and "Same moment only" (on to start with) asks for the same
   capture time too, which copies keep and the next frame of a burst doesn't. The search runs in the background on half
   the machine's cores, from the grid's thumbnails, with a row in the activity stack; look before you delete, as

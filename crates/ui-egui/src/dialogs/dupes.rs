@@ -1,9 +1,12 @@
 //! Photo ▸ Find Duplicate Photos…: the review window. It opens with its settings — Strict / Normal / Loose and "same
 //! moment only" — and waits; Find starts the engine's finder (`library.findDuplicates`, with the view and selection
 //! left alone) and locks the settings, the window shows the run's progress, then every group with a thumbnail per
-//! photo, the finder's keeper ticked and the others unticked with why they lose. The confirm, "Delete N Photos",
-//! moves the unticked photos to Recently Deleted through `photo.delete` (one undo step); any tick can be changed
-//! first. Another search with other settings is another opening of the window (the hashes are kept, so it is quick).
+//! photo, the finder's keeper ticked and the others unticked with why they lose. Deleting is per group: each group
+//! has "Delete N unticked" (its unticked photos go to Recently Deleted through `photo.delete`, one undo step, and the
+//! group leaves the window) and "Keep all" (the group leaves the window, nothing deleted); nothing happens to a group
+//! the user hasn't acted on. "Delete unticked in every group…" is the one bulk action, and it asks once more first.
+//! The window's bottom button only closes it. Another search with other settings is another opening of the window
+//! (the hashes are kept, so it is quick).
 
 use egui::{Color32, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -35,6 +38,7 @@ pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
         distance: crate::state::default_distance(),
         same_moment: true,
         started: false,
+        armed: false,
     });
     Ok(Value::Null)
 }
@@ -93,18 +97,49 @@ pub fn take_result(dlg: &mut Dialog, last: &Value) {
     *done = true;
 }
 
-/// The photos the confirm deletes: every unticked one.
+/// The unticked photos of `groups`.
 pub fn delete_ids(groups: &[DuplicateGroup]) -> Vec<u64> {
     groups.iter().flat_map(|g| g.photos.iter().filter(|p| !p.keep).map(|p| p.id)).collect()
 }
 
-/// The confirm: move the unticked photos to Recently Deleted (nothing unticked: nothing happens).
-pub fn confirm(app: &mut LightcraftApp, groups: &[DuplicateGroup]) -> Result<Value, String> {
-    let ids = delete_ids(groups);
-    if ids.is_empty() {
-        return Ok(Value::Null);
+/// The window's bottom button only closes it: deleting is done group by group inside, or by the bulk action that
+/// asks first. Nothing is deleted here.
+pub fn confirm(_app: &mut LightcraftApp, _groups: &[DuplicateGroup]) -> Result<Value, String> {
+    Ok(Value::Null)
+}
+
+/// What a button inside the list asked for.
+enum Action {
+    /// Delete the unticked photos of group `n` and drop the group.
+    Delete(usize),
+    /// Drop group `n` without deleting (the user looked and keeps them all).
+    Keep(usize),
+    /// Delete the unticked photos of every group left (after the question was answered).
+    DeleteAll,
+}
+
+/// Do what a button asked: the deletion (one undo step through `photo.delete`) and the groups it settles. A refused
+/// deletion is shown above the list and the group stays.
+fn apply(app: &mut LightcraftApp, dlg: &mut Dialog, action: Action) {
+    let Dialog::Duplicates { groups, error, armed, .. } = dlg else { return };
+    *armed = false;
+    let (ids, settled): (Vec<u64>, Vec<usize>) = match action {
+        Action::Delete(n) => (groups.get(n).map(|g| delete_ids(std::slice::from_ref(g))).unwrap_or_default(), vec![n]),
+        Action::Keep(n) => (Vec::new(), vec![n]),
+        Action::DeleteAll => (delete_ids(groups), (0..groups.len()).collect()),
+    };
+    if !ids.is_empty()
+        && let Err(e) = app.run("photo.delete", json!({"ids": ids}))
+    {
+        *error = Some(e);
+        return;
     }
-    app.run("photo.delete", json!({"ids": ids}))
+    let mut n = 0;
+    groups.retain(|_| {
+        let keep = !settled.contains(&n);
+        n += 1;
+        keep
+    });
 }
 
 /// The window's body.
@@ -125,10 +160,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
         }
         _ => {}
     }
-    let Dialog::Duplicates { groups, photos, error, .. } = dlg else { return };
+    let Dialog::Duplicates { groups, photos, error, armed, .. } = dlg else { return };
     if let Some(e) = error {
         ui.label(egui::RichText::new(e.as_str()).color(t.text));
-        return;
+        if groups.is_empty() {
+            return;
+        }
     }
     if groups.is_empty() {
         ui.label(
@@ -136,41 +173,33 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
         );
         return;
     }
-    let delete = delete_ids(groups).len();
+    let unticked = delete_ids(groups).len();
     ui.label(
         egui::RichText::new(crate::i18n::tr_format!(
-            "{groups} groups among {photos} photos · {delete} to delete",
+            "{groups} groups among {photos} photos · {unticked} unticked",
             groups = groups.len(),
             photos = *photos,
-            delete = delete
+            unticked = unticked
         ))
         .color(t.text_label),
     );
     ui.label(
         egui::RichText::new(crate::i18n::tr(
-            "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too.",
+            "The best copy of each group is ticked: a raw over a rendered file, lossless over lossy, more pixels, a larger file. Untick a photo to delete it instead, or tick more to keep them too. Each group is deleted from, or kept, with its own buttons.",
         ))
         .color(t.text_dim),
     );
+    let mut action = bulk_row(ui, t, groups, armed, unticked);
     ui.add_space(6.0);
-    let height = super::list_height(ui, (ui.ctx().content_rect().height() - 320.0).clamp(300.0, 1200.0));
+    let height = super::list_height(ui, (ui.ctx().content_rect().height() - 360.0).clamp(300.0, 1200.0));
     // rows of a known number of cards: the layout's own wrapping trusted the window's width, which the window
     // takes from its content, so nothing ever wrapped and the cards ran off the screen
     let per_row = ((width - 24.0) / (THUMB_W + 8.0 + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
     egui::ScrollArea::vertical().max_height(height).max_width(width).auto_shrink([false, true]).show(ui, |ui| {
         for (n, g) in groups.iter_mut().enumerate() {
-            // (how far apart the hashes are says how sure a visual match is: 0–2 bits is the same picture
-            // at another size or compression, the top of the range deserves a look)
-            let kind = if g.exact {
-                crate::i18n::tr("byte-identical").to_string()
-            } else {
-                crate::i18n::tr_format!("visually identical, {bits} bits apart", bits = g.max_distance)
-            };
-            ui.label(
-                egui::RichText::new(crate::i18n::tr_format!("Group {n} · {count} photos · {kind}", n = n + 1, count = g.photos.len(), kind = kind))
-                    .font(t.semibold(12.5))
-                    .color(t.text),
-            );
+            if let Some(a) = group_header(ui, t, n, g) {
+                action = Some(a);
+            }
             for row in g.photos.chunks_mut(per_row) {
                 ui.horizontal(|ui| {
                     for p in row {
@@ -181,6 +210,68 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
             ui.add_space(8.0);
         }
     });
+    if let Some(action) = action {
+        apply(app, dlg, action);
+    }
+}
+
+/// The one bulk action, "Delete unticked in every group…", which asks once more before it runs; `Some` once the
+/// question was answered yes.
+fn bulk_row(ui: &mut egui::Ui, t: &Tokens, groups: &[DuplicateGroup], armed: &mut bool, unticked: usize) -> Option<Action> {
+    let mut action = None;
+    ui.horizontal(|ui| {
+        if !*armed {
+            let r = crate::button::Button::new("Delete unticked in every group…").enabled(unticked > 0).widget("button:dupesDeleteAll").show(ui);
+            if r.clicked() {
+                *armed = true;
+            }
+            return;
+        }
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!(
+                "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.",
+                unticked = unticked,
+                groups = groups.len()
+            ))
+            .color(t.text),
+        );
+        if crate::button::Button::new("Yes, delete them all").widget("button:dupesDeleteAllYes").show(ui).clicked() {
+            action = Some(Action::DeleteAll);
+        }
+        if crate::button::Button::new("Cancel").widget("button:dupesDeleteAllNo").show(ui).clicked() {
+            *armed = false;
+        }
+    });
+    action
+}
+
+/// A group's header: what it is, how sure the match is, and its two buttons.
+fn group_header(ui: &mut egui::Ui, t: &Tokens, n: usize, g: &DuplicateGroup) -> Option<Action> {
+    // (how far apart the hashes are says how sure a visual match is: 0–2 bits is the same picture
+    // at another size or compression, the top of the range deserves a look)
+    let kind = if g.exact {
+        crate::i18n::tr("byte-identical").to_string()
+    } else {
+        crate::i18n::tr_format!("visually identical, {bits} bits apart", bits = g.max_distance)
+    };
+    let unticked = g.photos.iter().filter(|p| !p.keep).count();
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!("Group {n} · {count} photos · {kind}", n = n + 1, count = g.photos.len(), kind = kind))
+                .font(t.semibold(12.5))
+                .color(t.text),
+        );
+        ui.add_space(8.0);
+        let label = crate::i18n::tr_format!("Delete {unticked} unticked", unticked = unticked);
+        if crate::button::Button::new(&label).enabled(unticked > 0).widget(format!("button:dupesGroupDelete:{}", n + 1)).show(ui).clicked() {
+            action = Some(Action::Delete(n));
+        }
+        if crate::button::Button::new("Keep all").widget(format!("button:dupesGroupKeep:{}", n + 1)).show(ui).clicked() {
+            action = Some(Action::Keep(n));
+        }
+    });
+    action
 }
 
 /// The strictness and same-moment settings and the Find button. The settings can be changed until Find is pressed
@@ -320,7 +411,40 @@ mod tests {
 
     /// A window whose Find was pressed and whose run is still going.
     fn fresh() -> Dialog {
-        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: 6, same_moment: true, started: true }
+        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: 6, same_moment: true, started: true, armed: false }
+    }
+
+    fn in_library(h: &Headless) -> Vec<u64> {
+        h.app.session.catalog.photos().filter(|p| p.in_library()).map(|p| p.id.0).collect()
+    }
+
+    /// The bulk action asks first; Cancel leaves everything, Yes deletes the unticked photos of every group and the
+    /// groups go; the window stays open and says there is nothing left.
+    #[test]
+    fn deleting_in_every_group_asks_first_and_then_deletes_all_unticked() {
+        let (mut h, ids) = app_with_duplicates("bulk");
+        open_and_wait(&mut h);
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesDeleteAll"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { armed: true, .. })), "{:?}", h.app.ui.dialog);
+        assert_eq!(in_library(&h).len(), 4, "asking deletes nothing");
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesDeleteAllNo"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { armed: false, .. })));
+        assert_eq!(in_library(&h).len(), 4, "Cancel deletes nothing");
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesDeleteAll"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesDeleteAllYes"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        let left = in_library(&h);
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert!(left.contains(&ids["a.jpg"]) && left.contains(&ids["b.jpg"]));
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { groups, .. }) if groups.is_empty()), "the window stays, with nothing left");
     }
 
     /// Press Find and wait for the run to end.
@@ -401,8 +525,15 @@ mod tests {
         assert_eq!((gs[0].photos[0].id, gs[0].photos[0].keep), (ids["a.jpg"], true));
         assert!(gs[0].photos.iter().skip(1).all(|p| !p.keep && !p.why.is_empty()), "{gs:?}");
         let text = h.painted_text();
-        assert!(text.iter().any(|t| t == "Delete 2 Photos"), "{text:?}");
+        assert!(text.iter().any(|t| t == "Delete 2 unticked"), "{text:?}");
         assert!(text.iter().any(|t| t.starts_with("1 groups among 4 photos")), "{text:?}");
+        assert!(text.iter().any(|t| t == "Close"), "the bottom button only closes: {text:?}");
+        // the bottom button deletes nothing
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.dialog.is_none());
+        assert_eq!(in_library(&h).len(), 4);
+        open_and_wait(&mut h);
         // keep the small copy too
         let r = h.request("ui.clickWidget", json!({"id": format!("check:dupeKeep:{}", ids["a_small.jpg"])}), T);
         assert_eq!(r["ok"], true, "{r}");
@@ -410,16 +541,28 @@ mod tests {
         h.step();
         let gs = groups(&h);
         assert!(gs[0].photos.iter().find(|p| p.id == ids["a_small.jpg"]).is_some_and(|p| p.keep));
-        assert!(h.painted_text().iter().any(|t| t == "Delete 1 Photo"));
-        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert!(h.painted_text().iter().any(|t| t == "Delete 1 unticked"));
+        // the group's own button deletes its unticked photo and the group leaves the window, which stays open
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesGroupDelete:1"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.app.ui.dialog.is_none());
-        let left: Vec<u64> = h.app.session.catalog.photos().filter(|p| p.in_library()).map(|p| p.id.0).collect();
+        h.step();
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { groups, .. }) if groups.is_empty()), "{:?}", h.app.ui.dialog);
+        let left = in_library(&h);
         assert!(!left.contains(&ids["a_resaved.jpg"]), "{left:?}");
         for name in ["a.jpg", "a_small.jpg", "b.jpg"] {
             assert!(left.contains(&ids[name]), "{name} stays: {left:?}");
         }
         assert_eq!(h.app.session.visible_cloned().len(), 3, "the view was never filtered by the window");
+        // Keep all settles a group without deleting
+        h.app.ui.dialog = None;
+        open_and_wait(&mut h);
+        assert_eq!(groups(&h).len(), 1, "a and a_small are still a pair");
+        let r = h.request("ui.clickWidget", json!({"id": "button:dupesGroupKeep:1"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { groups, .. }) if groups.is_empty()));
+        assert_eq!(in_library(&h).len(), 3);
     }
 
     /// The window opens with its settings and runs nothing; Strict and the same-moment box can be changed until Find

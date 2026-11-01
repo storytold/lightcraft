@@ -189,11 +189,9 @@ pub enum ConfirmStyle {
 
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
-        Dialog::ConfirmDelete { .. }
-        | Dialog::DeleteKeyword { .. }
-        | Dialog::DeleteEffects { .. }
-        | Dialog::RemoveFolder { .. }
-        | Dialog::Duplicates { .. } => ConfirmStyle::Plain,
+        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. } => {
+            ConfirmStyle::Plain
+        }
         _ if only_shows(dlg) => ConfirmStyle::Plain,
         _ => ConfirmStyle::Primary,
     }
@@ -212,5 +210,6 @@ pub(super) fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::WhatsNew
             | Dialog::ManageEffects { .. }
             | Dialog::ViewOptions
+            | Dialog::Duplicates { .. }
     ) || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.up_to_date())
 }

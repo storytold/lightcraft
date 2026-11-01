@@ -322,5 +322,8 @@
   "{groups} groups among {photos} photos · {delete} to delete": "{groups} ryhmää {photos} kuvan joukossa · {delete} poistettavaa",
   "Group {n} · {count} photos · {kind}": "Ryhmä {n} · {count} kuvaa · {kind}",
   "Hashed {done} of {total} photos": "Käsitelty {done}/{total} kuvaa",
-  "visually identical, {bits} bits apart": "ulkoisesti samat, {bits} bitin etäisyys"
+  "visually identical, {bits} bits apart": "ulkoisesti samat, {bits} bitin etäisyys",
+  "{groups} groups among {photos} photos · {unticked} unticked": "{groups} ryhmää {photos} kuvan joukossa · {unticked} valitsematta",
+  "Delete {unticked} unticked": "Poista {unticked} valitsematonta",
+  "This deletes {unticked} photos from {groups} groups, whether you looked at them or not.": "Tämä poistaa {unticked} kuvaa {groups} ryhmästä riippumatta siitä, katsoitko niitä."
 }
