@@ -3573,5 +3573,12 @@
   "Top bar": "Barre supérieure",
   "Tool strip": "Barre d’outils",
   "Bottom bar": "Barre inférieure",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)",
+  "Use as Person's Picture": "Utiliser comme image de la personne",
+  "Use Their Largest Face": "Revenir au visage le plus grand",
+  "This face is now their picture in People": "Ce visage est maintenant son image dans Personnes",
+  "Their largest face is their picture again": "Son visage le plus grand redevient son image",
+  "Bring Back Set-Aside Faces": "Remettre les visages écartés",
+  "The faces you set aside with × are offered again": "Les visages écartés avec × sont de nouveau proposés",
+  "Open Photo": "Ouvrir la photo"
 }
