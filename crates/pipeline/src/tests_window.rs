@@ -460,3 +460,142 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
 }
+
+/// A flat grey photo: every difference between two renders of it is the vignette's.
+fn flat() -> Rgb32f {
+    Rgb32f { width: 480, height: 320, data: vec![[0.18; 3]; 480 * 320] }
+}
+
+/// A strong post-crop vignette on an off-centre, straightened crop.
+fn crop_tool_vignette() -> DevelopSettings {
+    let mut s = DevelopSettings::default();
+    controls::set(&mut s, "vignette.amount", -80.0);
+    controls::set(&mut s, "vignette.midpoint", 20.0);
+    s.crop.geometry.rect = Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 };
+    s.crop.geometry.angle = 5.0;
+    s
+}
+
+/// The crop tool's render: the whole photo, uncropped.
+fn uncropped(s: &DevelopSettings, window: Option<PixelWindow>) -> Rgba8 {
+    let req = RenderRequest { apply_crop: false, window, ..RenderRequest::fit(W, H) };
+    render(&flat(), &SourceInfo::default(), s, &req).image
+}
+
+/// Largest difference between the cropped render and `shown`, the crop tool's uncropped render
+/// (or the window of it at `at`), over points of the crop that land on the photo in both.
+fn crop_tool_vs_cropped(s: &DevelopSettings, shown: &Rgba8, at: PixelWindow) -> u8 {
+    let src = flat();
+    let cropped = render(&src, &SourceInfo::default(), s, &RenderRequest::fit(W, H)).image;
+    let (cw, ch) = (cropped.width, cropped.height);
+    let (full_w, full_h) = crate::geometry::Frame::new(src.width, src.height, s, false).fit(W, H);
+    let to_norm = crate::geometry::Frame::new(src.width, src.height, s, true).out_to_norm(cw, ch);
+    let to_uncropped = crate::geometry::Frame::new(src.width, src.height, s, false).norm_to_out(full_w, full_h);
+    let mut max = 0u8;
+    let mut n = 0;
+    for j in 1..16 {
+        for i in 1..16 {
+            let (x, y) = (cw * i / 16, ch * j / 16);
+            let norm = to_norm.apply(lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            if !(0.02..0.98).contains(&norm.x) || !(0.02..0.98).contains(&norm.y) {
+                continue;
+            }
+            let q = to_uncropped.apply(norm);
+            let (ux, uy) = (q.x.floor() as isize - at.x as isize, q.y.floor() as isize - at.y as isize);
+            if ux < 0 || uy < 0 || ux as usize >= shown.width || uy as usize >= shown.height {
+                continue;
+            }
+            let (a, b) = (cropped.get(x, y), shown.get(ux as usize, uy as usize));
+            max = max.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+            n += 1;
+        }
+    }
+    assert!(n >= 30, "only {n} points compared");
+    max
+}
+
+// Issue #3484: given a post-crop vignette, the crop tool's uncropped view shows it around the crop
+// (where the edit's export has it), not around the whole photo
+#[test]
+fn the_crop_tools_uncropped_view_anchors_the_vignette_to_the_crop() {
+    let mut s = crop_tool_vignette();
+    let whole = |img: &Rgba8| PixelWindow { x: 0, y: 0, w: img.width, h: img.height };
+    for (name, flip_h, flip_v) in [("crop", false, false), ("crop + flip H", true, false), ("crop + flip V", false, true)] {
+        s.crop.flip_h = flip_h;
+        s.crop.flip_v = flip_v;
+        let shown = uncropped(&s, None);
+        // the vignette is there: the photo's far corner, outside the crop, is darker than the crop's middle
+        let bright = shown.get(shown.width / 2, shown.height / 2)[1].max(shown.get(shown.width * 36 / 100, shown.height * 45 / 100)[1]);
+        let (fx, fy) = (if flip_h { 4 } else { shown.width - 5 }, if flip_v { 4 } else { shown.height - 5 });
+        assert!(bright as i32 - shown.get(fx, fy)[1] as i32 > 40, "{name}: no vignette outside the crop");
+        let max = crop_tool_vs_cropped(&s, &shown, whole(&shown));
+        assert!(max <= 2, "{name}: the crop tool's vignette differs from the export's by {max} levels");
+    }
+}
+
+// Given Constrain Crop under a keystone correction, the crop tool's vignette frames the crop the
+// export uses: the one Constrain Crop shrank, not the stored one
+#[test]
+fn the_crop_tools_vignette_frames_the_constrained_crop() {
+    let mut s = crop_tool_vignette();
+    s.crop.geometry = lightcraft_geom::CropGeometry::default();
+    s.geometry.vertical = -60.0;
+    s.geometry.rotate = 4.0;
+    s.geometry.constrain_crop = true;
+    let shown = uncropped(&s, None);
+    let max = crop_tool_vs_cropped(&s, &shown, PixelWindow { x: 0, y: 0, w: shown.width, h: shown.height });
+    assert!(max <= 2, "the crop tool's vignette differs from the export's by {max} levels");
+}
+
+// Given the crop tool, dragging the crop leaves its frame as it was: the rendered stages, keyed by
+// the frame, are reused and only the per-pixel stage (where the vignette is) runs again
+#[test]
+fn the_crop_tools_frame_does_not_change_with_the_crop() {
+    let s = crop_tool_vignette();
+    let mut moved = s.clone();
+    moved.crop.geometry.rect = Rect { x0: 0.3, y0: 0.2, x1: 0.9, y1: 0.95 };
+    moved.crop.geometry.angle = -8.0;
+    let (a, b) = (crate::geometry::Frame::new(480, 320, &s, false), crate::geometry::Frame::new(480, 320, &moved, false));
+    assert_eq!(a, b);
+    assert_eq!(format!("{a:?}"), format!("{b:?}"));
+    // …while the vignette's frame follows the crop
+    assert_ne!(a.vignette_frame(&s, W, H), b.vignette_frame(&moved, W, H));
+}
+
+// Given the crop tool zoomed in (a window of its uncropped view), the window shows the same
+// crop-anchored vignette
+#[test]
+fn a_window_of_the_crop_tools_view_anchors_the_vignette_to_the_crop() {
+    let s = crop_tool_vignette();
+    let whole = uncropped(&s, None);
+    // over the crop's top left, and over its bottom right corner and the photo past it
+    for at in [PixelWindow { x: 40, y: 40, w: 400, h: 300 }, PixelWindow { x: 360, y: 300, w: 400, h: 300 }] {
+        let win = uncropped(&s, Some(at));
+        assert_eq!((win.width, win.height), (at.w, at.h));
+        let (max, _) = compare_inset(&whole, &win, at, 2);
+        assert!(max <= 1, "window at {at:?}: differs from the whole view by {max}");
+        let max = crop_tool_vs_cropped(&s, &win, at);
+        assert!(max <= 2, "window at {at:?}: the vignette differs from the export's by {max} levels");
+    }
+}
+
+// Given a crop with nothing in it, reversed, not finite or far past the photo, the crop tool's view
+// renders without a panic and its vignette falls back to the whole photo
+#[test]
+fn the_crop_tools_vignette_survives_degenerate_crops() {
+    let mut s = crop_tool_vignette();
+    s.crop.geometry.angle = 0.0;
+    let mut plain = s.clone();
+    plain.crop.geometry.rect = Rect::UNIT;
+    let expected = uncropped(&plain, None);
+    for rect in [
+        Rect { x0: 0.3, y0: 0.3, x1: 0.3, y1: 0.3 },
+        Rect { x0: 0.6, y0: 0.6, x1: 0.2, y1: 0.2 },
+        Rect { x0: f64::NAN, y0: 0.1, x1: 0.5, y1: f64::INFINITY },
+        Rect { x0: -50.0, y0: -50.0, x1: 80.0, y1: 80.0 },
+    ] {
+        s.crop.geometry.rect = rect;
+        let shown = uncropped(&s, None);
+        assert_eq!(shown.data, expected.data, "{rect:?}");
+    }
+}

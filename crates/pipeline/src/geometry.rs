@@ -6,7 +6,7 @@
 //! lens correction and perspective, at the source's size. Everything is sampled in one resample.
 
 use lightcraft_develop::{DevelopSettings, EmbeddedLens};
-use lightcraft_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect};
+use lightcraft_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect, Vec2};
 use lightcraft_raster::resample::{Filter, resize};
 use lightcraft_raster::{Rgb32f, par_rows};
 
@@ -33,6 +33,9 @@ pub struct Frame {
     pub warp: Option<Warp>,
     /// Set when this frame draws only a window of a larger output (see [`Frame::window`]).
     pub view: Option<ViewWindow>,
+    /// Shows the whole photo whatever its crop (the crop tool's view). The crop is not part of
+    /// the frame, so dragging it reuses the rendered stages; post-crop effects still follow it.
+    pub uncropped: bool,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -77,6 +80,7 @@ impl Frame {
             flip_v: s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
+            uncropped: !apply_crop,
         };
         if apply_crop && s.geometry.constrain_crop {
             f.constrain_to_image();
@@ -110,6 +114,37 @@ impl Frame {
         let t = lo.max(0.02);
         let r = self.crop.rect;
         self.crop.rect = Rect::from_center(r.center(), r.width() * t, r.height() * t);
+    }
+
+    /// The frame the post-crop vignette belongs to, for a `w × h` render of this frame with `s`: an
+    /// affine from the render's pixels to that frame's pixels, and its size. It is the whole
+    /// output, of which a windowed render is a part, or, in the crop tool's uncropped view, the
+    /// crop the edit exports (#3484).
+    pub fn vignette_frame(&self, s: &DevelopSettings, w: usize, h: usize) -> (Affine, (f64, f64)) {
+        let (vx, vy, fw, fh) = self.view.map_or((0.0, 0.0, w as f64, h as f64), |v| (v.x, v.y, v.full_w, v.full_h));
+        let offset = Affine::translate(Vec2::new(vx, vy));
+        let whole = (offset, (fw, fh));
+        if !self.uncropped {
+            return whole;
+        }
+        // the crop as the cropped render has it: bounded, and shrunk by Constrain Crop
+        let mut cropped = Frame { crop: s.crop.geometry.bounded(self.ow, self.oh), view: None, uncropped: false, ..self.clone() };
+        if s.geometry.constrain_crop {
+            cropped.constrain_to_image();
+        }
+        let (cw, ch) = cropped.native_size();
+        // a crop with nothing in it has no frame: the vignette stays on the whole photo
+        if !(cw > 0.0 && ch > 0.0 && cw.is_finite() && ch.is_finite()) {
+            return whole;
+        }
+        // the whole uncropped output → oriented pixels (flips included) → the crop's own pixels
+        let to_oriented = Frame { crop: CropGeometry::default(), ..cropped.clone() }.out_to_oriented(fw as usize, fh as usize);
+        let Some(to_crop) = cropped.crop.output_to_source(self.ow, self.oh, cw, ch).inverse() else { return whole };
+        let a = to_crop * to_oriented * offset;
+        if a.0.iter().any(|v| !v.is_finite()) {
+            return whole;
+        }
+        (a, (cw, ch))
     }
 
     /// Long edge, in pixels, of the whole output this frame draws (its own size unless it is a

@@ -1005,3 +1005,26 @@ fn soft_proofs_match() {
     };
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
+
+/// Issue #3484: the crop tool's uncropped view frames the post-crop vignette by the crop, on the
+/// GPU as on the CPU, whole and as a zoomed window, with flips.
+#[test]
+fn crop_tool_vignette_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 480, 320);
+    let mut s = DevelopSettings::default();
+    s.vignette.amount = -80.0;
+    s.vignette.midpoint = 20.0;
+    s.crop.geometry.rect = Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 };
+    s.crop.geometry.angle = 5.0;
+    let info = SourceInfo::default();
+    let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(480, 480) };
+    check("crop tool vignette", &src, &info, &s, &req);
+    let window = lightcraft_pipeline::PixelWindow { x: 100, y: 60, w: 240, h: 180 };
+    check("crop tool vignette, window", &src, &info, &s, &RenderRequest { window: Some(window), ..req });
+    s.crop.flip_h = true;
+    s.vignette.roundness = -40.0;
+    check("crop tool vignette, flip H", &src, &info, &s, &req);
+}

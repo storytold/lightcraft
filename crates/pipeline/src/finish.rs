@@ -192,8 +192,10 @@ pub struct FinishParams {
     pub w: usize,
     pub h: usize,
     pub px_per_long: f64,
-    /// The window's offset and the whole output's size (pixels): `(0, 0, w, h)` unless windowed.
-    pub view: [f32; 4],
+    /// The post-crop vignette's frame ([`Frame::vignette_frame`]): an affine from this render's
+    /// pixels (centres at +0.5) to that frame's pixels, and the frame's size in them.
+    pub vig_aff: [f32; 6],
+    pub vig_size: [f32; 2],
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
@@ -235,6 +237,7 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let (vig_aff, (vig_w, vig_h)) = frame.vignette_frame(s, w, h);
         FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -267,7 +270,8 @@ impl FinishParams {
             w,
             h,
             px_per_long,
-            view: frame.view.map_or([0.0, 0.0, w as f32, h as f32], |v| [v.x as f32, v.y as f32, v.full_w as f32, v.full_h as f32]),
+            vig_aff: vig_aff.0.map(|v| v as f32),
+            vig_size: [vig_w as f32, vig_h as f32],
         }
     }
 
@@ -381,8 +385,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
-    let [vx, vy, vw, vh] = fp.view;
-    // the vignette belongs to the whole output frame, not to the window being drawn
+    // the vignette belongs to its frame (the whole output, or the crop), not to the pixels drawn
+    let [va, vb, vc, vd, ve, vf] = fp.vig_aff;
+    let [vw, vh] = fp.vig_size;
     let aspect = vw / vh;
 
     let srgb = srgb_lut();
@@ -437,8 +442,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
-                let u = (vx + x as f32 + 0.5) / vw * 2.0 - 1.0;
-                let vv = (vy + y as f32 + 0.5) / vh * 2.0 - 1.0;
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let u = (va * px + vc * py + ve) / vw * 2.0 - 1.0;
+                let vv = (vb * px + vd * py + vf) / vh * 2.0 - 1.0;
                 let sx = 1.0 + (aspect - 1.0) * v.aspect_mix;
                 let sy = 1.0 + (1.0 / aspect - 1.0) * v.aspect_mix;
                 let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
