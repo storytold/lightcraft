@@ -79,10 +79,12 @@ fn main() {
         session.set_develop(id, settings.clone(), "bench").expect("settings");
     }
     let mut o = ExportOptions { hdr, quality: 90, ..ExportOptions::default() };
-    if let Some(edge) = value("--long-edge") {
-        // (a value past u32 is refused, not cut to another size: review of PR #3565)
-        let Ok(edge) = u32::try_from(edge) else {
-            eprintln!("--long-edge {edge}: too large");
+    if let Some(i) = args.iter().position(|a| a == "--long-edge") {
+        // (a size that is missing, not a number, 0 or past u32 is refused, not ignored or cut to
+        // another size: review of PR #3565 / #3532)
+        let raw = args.get(i + 1).map_or("", String::as_str);
+        let Some(edge) = raw.parse::<u32>().ok().filter(|e| *e > 0) else {
+            eprintln!("--long-edge {raw:?}: give a size in pixels from 1 to {}", u32::MAX);
             std::process::exit(2);
         };
         o.resize = Some(lightcraft_engine::export::Resize::long_edge(edge));

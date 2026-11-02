@@ -185,21 +185,24 @@ fn start_recovery(create: fn() -> Result<Gpu, String>) {
 }
 
 /// Put a new device in place of the lost one, or count the failed attempt.
-fn replace(made: Result<Gpu, String>) {
+pub(crate) fn replace(made: Result<Gpu, String>) {
     let mut s = slot();
     match made {
         Ok(g) => {
             let generation = g.generation;
             s.state = State::Ready(Arc::new(g));
-            if let Some(l) = s.lost.take() {
+            let was_lost = s.lost.take();
+            if was_lost.is_some() {
                 s.recoveries += 1;
-                drop(s);
+            }
+            drop(s);
+            // (a replacement lost already says so, not that the card is back: review of PR #3532)
+            if !lost_while_made(generation)
+                && let Some(l) = was_lost
+            {
                 log::warn!("gpu: a new device replaces the lost one ({})", l.reason);
                 event(EventKind::Recovered, "LightCraft restarted the graphics card and uses it again.".into());
-            } else {
-                drop(s);
             }
-            lost_while_made(generation);
         }
         Err(why) => {
             if let Some(l) = s.lost.as_mut() {
