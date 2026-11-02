@@ -607,6 +607,8 @@ mod tests {
         assert_eq!(editing_key(&e, None, &format!("dx12:10de:2783:{}#2", k4070.name)), Some(k4070.clone()), "same model");
         assert_eq!(editing_key(&e, Some("4070"), &k5070.to_string()), Some(k4070.clone()), "the variable wins");
         assert_eq!(editing_key(&e, Some("5070"), &k4070.to_string()), Some(k5070));
+        // no screen's card known and nothing chosen: wgpu picks, no key (review of PR #3506)
+        assert_eq!(editing_key(&entries_from(&two_cards(), None), None, ""), None);
     }
 
     /// A fake laptop list: the variable picks among several matches in the defined order (dedicated
