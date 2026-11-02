@@ -270,7 +270,9 @@ fn read_udta_text(body: &[u8]) -> Option<String> {
     if body.len() >= 16 && body.get(4..8) == Some(b"data") {
         let size = be32(body, 0)? as usize;
         let data_payload = body.get(16..size.min(body.len()))?;
-        return String::from_utf8(data_payload.to_vec()).ok();
+        // Lossy like the classic branch: undecodable text (UTF-16, say) is still a value, which the
+        // location check must see rather than take for an empty atom.
+        return Some(String::from_utf8_lossy(data_payload).into_owned());
     }
     // Classic QuickTime atom: a 16-bit text length, a 16-bit language, then the text (the length
     // says where the text ends, so trailing bytes of the box are not part of the value)
@@ -285,7 +287,9 @@ fn read_udta_text(body: &[u8]) -> Option<String> {
 
 /// Keep the first XMP packet found in an `XMP_` or XMP `uuid` box.
 fn take_xmp(body: &[u8], xmp: &mut Option<String>) {
-    if let Ok(s) = std::str::from_utf8(body) {
+    if xmp.is_none()
+        && let Ok(s) = std::str::from_utf8(body)
+    {
         *xmp = Some(s.to_string());
     }
 }
@@ -740,11 +744,8 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
     let mut xmp = None;
 
     for b in read_boxes(bytes, &mut budget) {
-        if &b.kind == b"uuid"
-            && b.uuid == Some(XMP_UUID)
-            && let Ok(s) = std::str::from_utf8(b.body)
-        {
-            xmp = Some(s.to_string());
+        if &b.kind == b"uuid" && b.uuid == Some(XMP_UUID) {
+            take_xmp(b.body, &mut xmp);
         }
         if &b.kind == b"moov" {
             for child in read_boxes(b.body, &mut budget) {
@@ -904,6 +905,25 @@ mod tests {
     }
 
     #[test]
+    fn probing_keeps_the_first_xmp_packet() {
+        let packet = |make: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Make="{make}"/></rdf:RDF>"#
+            )
+        };
+        for uuid in [false, true] {
+            let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+            for make in ["First", "Second"] {
+                let mut body = if uuid { XMP_UUID.to_vec() } else { Vec::new() };
+                body.extend_from_slice(packet(make).as_bytes());
+                write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
+            }
+            assert_eq!(probe_video(&bytes).unwrap().metadata.make.as_deref(), Some("First"), "uuid={uuid}");
+            assert!(extract_video_xmp(&bytes).unwrap().contains("First"), "uuid={uuid}");
+        }
+    }
+
+    #[test]
     fn location_verification_rejects_place_names_without_gps_in_every_xmp_container() {
         let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
         for (namespace, local, canonical) in [
@@ -1049,6 +1069,12 @@ mod tests {
             assert_eq!(verify_video_location_absent(&bytes).is_ok(), allows, "©xyz {body:?}");
             assert_eq!(probe_video(&bytes).unwrap().metadata.gps.is_some(), !allows, "©xyz probe {body:?}");
         }
+        // a `data`-wrapped value that is not UTF-8 (UTF-16 with a byte order mark) still names a place
+        let mut utf16 = vec![0xfe, 0xff];
+        utf16.extend(located.encode_utf16().flat_map(u16::to_be_bytes));
+        let mut data = Vec::new();
+        write_box(&mut data, b"data", &[[0u8; 8].as_slice(), &utf16].concat());
+        assert!(verify_video_location_absent(&with(b"\xa9xyz", &data)).is_err(), "undecodable ©xyz text is not empty");
 
         // a `loci` atom written as all zeroes names no place; spec coordinates do
         let cleared = vec![0u8; 4 + 2 + 1 + 1 + 12];
