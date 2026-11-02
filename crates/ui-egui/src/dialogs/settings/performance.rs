@@ -93,6 +93,8 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             let _ = app.run("library.preferences", json!({"cacheMb": v}));
         }
     });
+    // the size Custom… stays chosen for: the one saved by its field this frame, if any
+    let mut remembered = cur;
     // a size of one's own, on its own line: the field keeps its unit beside it, also while it is typed in
     row(ui, t, "", |ui| {
         if crate::widgets::text_button(ui, "settingsCacheCustom", "Custom…", custom).clicked() {
@@ -102,9 +104,10 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             // the size being typed or dragged is held here, and saved once the edit is over: typing 16 must not set
             // 1 GB on the way
             let edit_id = pending_gb_id(library);
-            // the size in force as it is (512 MB is 0.5 GB, not a rounded 1 GB)
-            let mut gb = ui.data(|d| d.get_temp::<f32>(edit_id)).unwrap_or_else(|| (cur as f32 / 1024.0).clamp(MIN_CACHE_GB, MAX_CACHE_GB));
-            let field = egui::DragValue::new(&mut gb).range(MIN_CACHE_GB..=MAX_CACHE_GB).speed(0.5).max_decimals(2);
+            // the size in force as it is (512 MB is 0.5 GB, not a rounded 1 GB), also below the field's range (one set
+            // by `library.preferences`): only a size typed or dragged is held to the range
+            let mut gb = ui.data(|d| d.get_temp::<f32>(edit_id)).unwrap_or(cur as f32 / 1024.0);
+            let field = egui::DragValue::new(&mut gb).range(MIN_CACHE_GB..=MAX_CACHE_GB).clamp_existing_to_range(false).speed(0.5).max_decimals(2);
             let r = crate::widgets::named(ui.add(field), crate::i18n::tr("Custom size limit, in GB"));
             register(ui, "drag:settingsCacheCustom", r.rect);
             ui.label(RichText::new("GB").color(t.text));
@@ -116,13 +119,15 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             let editing = ui.memory(|m| m.has_focus(r.id)) || r.dragged();
             if !editing && ui.data(|d| d.get_temp::<f32>(edit_id)).is_some() {
                 ui.data_mut(|d| d.remove::<f32>(edit_id));
-                let _ = app.run("library.preferences", json!({"cacheMb": gb_to_mb(gb)}));
+                remembered = gb_to_mb(gb);
+                let _ = app.run("library.preferences", json!({"cacheMb": remembered}));
             }
         }
     });
     ui.data_mut(|d| {
         if custom {
-            d.insert_temp(custom_id, cur);
+            // a size typed that is a preset's (1 GB) keeps Custom… chosen
+            d.insert_temp(custom_id, remembered);
         } else {
             d.remove::<u32>(custom_id);
         }

@@ -4431,6 +4431,15 @@ fn custom_cache_size_pending(h: &mut Headless, t: Duration) {
     h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
     h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
     assert_eq!(h.app.session.cache_mb, 512);
+    // a preset's size typed in keeps Custom… chosen
+    type_size(h, "1");
+    h.request("ui.key", json!({"key": "enter"}), t);
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 1024);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "drag:settingsCacheCustom"), "Custom… stays chosen");
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+    assert_eq!(h.app.session.cache_mb, 512);
 }
 
 #[test]
