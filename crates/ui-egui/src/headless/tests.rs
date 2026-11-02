@@ -4366,6 +4366,82 @@ fn previews_follow_the_screen_profile_while_none_is_chosen() {
 
 /// Settings (⌘,): tabs switch, app settings change the UI state, library settings go through
 /// the engine; the delete confirmation guards ⌫.
+/// #3252: Settings ▸ Performance ▸ Custom… opens a cache size of one's own, in GB; a custom size is shown as such, not as
+/// 2 GB. (The Performance tab is open.)
+fn custom_cache_size(h: &mut Headless, t: Duration) {
+    let custom_field = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "drag:settingsCacheCustom");
+    assert!(!custom_field(h));
+    h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+    h.step();
+    assert!(custom_field(h), "the size field");
+    assert_eq!(h.app.session.cache_mb, 512, "nothing changed until a size is chosen");
+    // typed in: nothing is saved before the edit is over (typing 16 must not set 1 GB on the way)
+    let r = h.request("ui.clickWidget", json!({"id": "drag:settingsCacheCustom"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.request("ui.key", json!({"key": "a", "modifiers": ["command"]}), t);
+    h.request("ui.text", json!({"text": "1"}), t);
+    h.step();
+    h.request("ui.text", json!({"text": "6"}), t);
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 512, "still being typed");
+    h.request("ui.key", json!({"key": "enter"}), t);
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 16384, "saved when the edit is over");
+    h.app.session.execute("library.preferences", &json!({"cacheMb": 16384})).unwrap();
+    h.step();
+    h.step();
+    assert!(custom_field(h) && h.app.session.cache_mb == 16384, "16 GB stays, shown as custom");
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-3"}), t);
+    h.step();
+    assert!(!custom_field(h) && h.app.session.cache_mb == 4096);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+    assert_eq!(h.app.session.cache_mb, 512);
+}
+
+/// A custom size still being typed is dropped by a preset chosen meanwhile, and saved when the tab is left. (The
+/// Performance tab is open, at 512 MB; it is again at the end.)
+fn custom_cache_size_pending(h: &mut Headless, t: Duration) {
+    let type_size = |h: &mut Headless, text: &str| {
+        h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "drag:settingsCacheCustom"}), t);
+        h.step();
+        h.request("ui.key", json!({"key": "a", "modifiers": ["command"]}), t);
+        h.request("ui.text", json!({"text": text}), t);
+        h.step();
+    };
+    // 3 typed, then 1 GB chosen: Custom… again starts from 1 GB, and the 3 is not saved behind it
+    type_size(h, "3");
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-1"}), t);
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 1024);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.app.session.cache_mb, 1024, "the preset stays");
+    // 5 typed, then another tab: saved on the way out
+    type_size(h, "5");
+    assert_eq!(h.app.session.cache_mb, 1024, "still being typed");
+    h.request("ui.clickWidget", json!({"id": "button:settingsTab-display"}), t);
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 5120, "saved when the tab is left");
+    h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+    assert_eq!(h.app.session.cache_mb, 512);
+    // a preset's size typed in keeps Custom… chosen
+    type_size(h, "1");
+    h.request("ui.key", json!({"key": "enter"}), t);
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 1024);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "drag:settingsCacheCustom"), "Custom… stays chosen");
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+    assert_eq!(h.app.session.cache_mb, 512);
+}
+
 #[test]
 fn settings_dialog_by_keyboard_and_clicks() {
     let mut h = demo([1300.0, 820.0]);
@@ -4407,6 +4483,8 @@ fn settings_dialog_by_keyboard_and_clicks() {
     h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
     h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
     assert_eq!(h.app.session.cache_mb, 512);
+    custom_cache_size(&mut h, t);
+    custom_cache_size_pending(&mut h, t);
     h.request("ui.clickWidget", json!({"id": "button:settingsPreview-3"}), t);
     assert_eq!(h.app.ui.settings.preview_limit, 3840);
     {

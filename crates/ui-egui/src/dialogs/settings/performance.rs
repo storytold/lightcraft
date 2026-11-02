@@ -5,6 +5,31 @@ use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Token
 
 // --------------------------------------------------------------------------------- Performance
 
+/// The largest thumbnail cache Custom… offers (1 TB).
+const MAX_CACHE_GB: f32 = 1024.0;
+
+/// The smallest, the smallest preset (512 MB).
+const MIN_CACHE_GB: f32 = 0.5;
+
+/// The custom size being typed or dragged, in GB, until the edit is over (see [`performance_tab`]), for the library open
+/// now (its generation): a size typed for one library is never saved to the next one opened meanwhile.
+fn pending_gb_id(library: u64) -> egui::Id {
+    egui::Id::unique(("settings-cache-custom-gb", library))
+}
+
+/// A size in GB (two decimals at most, as the field shows it) as the MB the library keeps.
+fn gb_to_mb(gb: f32) -> u32 {
+    (gb.clamp(MIN_CACHE_GB, MAX_CACHE_GB) * 1024.0).round() as u32
+}
+
+/// Save a custom size still being typed when the Performance tab is left: its field, which would save it, is no
+/// longer drawn.
+pub(super) fn save_pending_cache_size(app: &mut LightcraftApp, ui: &egui::Ui) {
+    if let Some(gb) = ui.data_mut(|d| d.remove_temp::<f32>(pending_gb_id(app.session.library_generation()))) {
+        let _ = app.run("library.preferences", json!({"cacheMb": gb_to_mb(gb)}));
+    }
+}
+
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
@@ -51,11 +76,60 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     });
     heading(ui, t, crate::i18n::tr("Thumbnail cache"));
     let cur = (app.session.cache_bytes() >> 20) as u32;
+    // a size of the user's own, in whole GB: a large library outgrows 8 GB (#3252)
+    // Custom… chosen while a preset size is set, remembered with that size and library: a size changed elsewhere (another
+    // library opened, a command) shows as itself again
+    let library = app.session.library_generation();
+    let custom_id = egui::Id::unique(("settings-cache-custom", library));
+    let mut custom = !CACHE_SIZES.contains(&cur) || ui.data(|d| d.get_temp::<u32>(custom_id)) == Some(cur);
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
         let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB")];
-        let mut v = if CACHE_SIZES.contains(&cur) { cur } else { 2048 };
+        // none of the five lit while a custom size is chosen
+        let mut v = if custom { 0 } else { cur };
         if choices(ui, "settingsCache", &opts, &mut v) {
+            custom = false;
+            // a size typed earlier does not come back with Custom…
+            ui.data_mut(|d| d.remove::<f32>(pending_gb_id(library)));
             let _ = app.run("library.preferences", json!({"cacheMb": v}));
+        }
+    });
+    // the size Custom… stays chosen for: the one saved by its field this frame, if any
+    let mut remembered = cur;
+    // a size of one's own, on its own line: the field keeps its unit beside it, also while it is typed in
+    row(ui, t, "", |ui| {
+        if crate::widgets::text_button(ui, "settingsCacheCustom", "Custom…", custom).clicked() {
+            custom = true;
+        }
+        if custom {
+            // the size being typed or dragged is held here, and saved once the edit is over: typing 16 must not set
+            // 1 GB on the way
+            let edit_id = pending_gb_id(library);
+            // the size in force as it is (512 MB is 0.5 GB, not a rounded 1 GB), also below the field's range (one set
+            // by `library.preferences`): only a size typed or dragged is held to the range
+            let mut gb = ui.data(|d| d.get_temp::<f32>(edit_id)).unwrap_or(cur as f32 / 1024.0);
+            let field = egui::DragValue::new(&mut gb).range(MIN_CACHE_GB..=MAX_CACHE_GB).clamp_existing_to_range(false).speed(0.5).max_decimals(2);
+            let r = crate::widgets::named(ui.add(field), crate::i18n::tr("Custom size limit, in GB"));
+            register(ui, "drag:settingsCacheCustom", r.rect);
+            ui.label(RichText::new("GB").color(t.text));
+            if r.changed() {
+                ui.data_mut(|d| d.insert_temp(edit_id, gb));
+            }
+            // the focus egui keeps for the field, also while another application is in front (`r.has_focus()` is then
+            // false): switching away mid-edit must not save half a number
+            let editing = ui.memory(|m| m.has_focus(r.id)) || r.dragged();
+            if !editing && ui.data(|d| d.get_temp::<f32>(edit_id)).is_some() {
+                ui.data_mut(|d| d.remove::<f32>(edit_id));
+                remembered = gb_to_mb(gb);
+                let _ = app.run("library.preferences", json!({"cacheMb": remembered}));
+            }
+        }
+    });
+    ui.data_mut(|d| {
+        if custom {
+            // a size typed that is a preset's (1 GB) keeps Custom… chosen
+            d.insert_temp(custom_id, remembered);
+        } else {
+            d.remove::<u32>(custom_id);
         }
     });
     let used = app.session.media.rendered.disk().map(|d| d.size());
@@ -192,4 +266,16 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_custom_size_keeps_its_fraction_of_a_gb_and_its_library() {
+        assert_eq!((gb_to_mb(0.5), gb_to_mb(1.5), gb_to_mb(16.0)), (512, 1536, 16384));
+        assert_eq!((gb_to_mb(0.0), gb_to_mb(5000.0)), (512, 1024 * 1024), "out of range is clamped");
+        assert_ne!(pending_gb_id(1), pending_gb_id(2), "a size typed for one library is not the next one's");
+    }
 }
