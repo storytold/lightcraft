@@ -162,6 +162,43 @@ fn mcp_over_stdio_sets_exposure_and_renders() {
     assert!(b > a + 10.0, "{a} → {b}");
 }
 
+#[cfg(unix)]
+#[test]
+fn non_utf8_argument_fails_without_a_panic() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let out = tmp("non-utf8-output.png");
+    let _ = std::fs::remove_file(&out);
+    let output = Command::new(binary()).arg("render").arg(OsString::from_vec(b"bad-\xff.png".to_vec())).arg("-o").arg(&out).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("argument 2"), "{stderr}");
+    assert!(stderr.contains("is not valid Unicode"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(!out.exists());
+    assert!(Command::new(binary()).arg("--version").status().unwrap().success());
+}
+
+#[cfg(windows)]
+#[test]
+fn non_unicode_argument_fails_without_a_panic_on_windows() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    let out = tmp("non-unicode-output.png");
+    let _ = std::fs::remove_file(&out);
+    let name: Vec<u16> = "bad-".encode_utf16().chain([0xD800]).chain(".png".encode_utf16()).collect();
+    let output = Command::new(binary()).arg("render").arg(OsString::from_wide(&name)).arg("-o").arg(&out).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("argument 2"), "{stderr}");
+    assert!(stderr.contains("is not valid Unicode"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(!out.exists());
+    assert!(Command::new(binary()).arg("--version").status().unwrap().success());
+}
+
 #[test]
 fn render_subcommand() {
     let input = tmp("r-in.png");
@@ -184,6 +221,12 @@ fn render_subcommand() {
     let o = Command::new(binary()).args(["render", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "--set", "nope=1"]).output().unwrap();
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("unknown control"));
+    // Values that parse as f64 but are not finite fail cleanly too.
+    for bad in ["light.exposure=inf", "light.exposure=-inf", "light.exposure=NaN", "light.exposure=1e999"] {
+        let o = Command::new(binary()).args(["render", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "--set", bad]).output().unwrap();
+        assert!(!o.status.success(), "{bad} must be refused");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("not a finite number"), "{bad}");
+    }
 }
 
 /// Issue #1730: `render --settings` took a `.lcpreset` from `preset.export`, ignored its wrapper
@@ -443,7 +486,12 @@ fn snapshot_defaults_to_cpu_without_gpu_environment_overrides() {
     let script = tmp("default-cpu.jsonl");
     std::fs::write(
         &script,
-        format!("{}\n{}\n", json!({"method": "engine.execute", "params": {"command": "app.gpu"}}), json!({"method": "ui.screenshot"})),
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"method": "engine.execute", "params": {"command": "app.gpu", "params": {"wait": false}}}),
+            json!({"method": "engine.execute", "params": {"command": "app.gpu"}}),
+            json!({"method": "ui.screenshot"})
+        ),
     )
     .unwrap();
     let image = tmp("default-cpu.png");
@@ -457,13 +505,50 @@ fn snapshot_defaults_to_cpu_without_gpu_environment_overrides() {
     assert!(output.status.success(), "status {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let replies: Vec<Value> = String::from_utf8_lossy(&output.stdout).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     assert!(replies.iter().all(|reply| reply["ok"] == true), "{replies:?}");
-    let gpu = &replies[0]["result"];
-    assert_eq!(gpu["enabled"], false, "{gpu}");
-    assert_eq!(gpu["available"], false, "{gpu}");
-    assert_eq!(gpu["adapter"], Value::Null, "no device is created: {gpu}");
-    assert!(gpu["reason"].as_str().is_some_and(|reason| reason.contains("preference")), "{gpu}");
+    // `wait: false` (what the UI sends) still says why the GPU is off: no device is being created
+    for gpu in [&replies[0]["result"], &replies[1]["result"]] {
+        assert_eq!(gpu["enabled"], false, "{gpu}");
+        assert_eq!(gpu["available"], false, "{gpu}");
+        assert_eq!(gpu["adapter"], Value::Null, "no device is created: {gpu}");
+        assert!(gpu["reason"].as_str().is_some_and(|reason| reason.contains("preference")), "{gpu}");
+    }
     let decoded = lightcraft_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
     assert_eq!((decoded.width, decoded.height), (480, 320));
+}
+
+/// Issue #136: `app.gpu {enabled: true, wait: false}` (what the UI sends on its first frame) answers
+/// at once while the device is still being created: enabled, and nothing known yet (`null`), instead
+/// of waiting for the driver. It starts creating the device (off the calling thread), so this test
+/// touches the GPU driver and skips when the environment turns the GPU off.
+#[test]
+fn enabling_the_gpu_without_waiting_answers_before_the_device_exists() {
+    if std::env::var("LIGHTCRAFT_GPU").is_ok_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no")) {
+        lightcraft_testkit::skip!(Gpu, "LIGHTCRAFT_GPU=0: enabling the GPU starts creating a device");
+        return;
+    }
+    let script = tmp("gpu-starting.jsonl");
+    std::fs::write(
+        &script,
+        format!("{}\n", json!({"method": "engine.execute", "params": {"command": "app.gpu", "params": {"enabled": true, "wait": false}}})),
+    )
+    .unwrap();
+    let image = tmp("gpu-starting.png");
+    let output = Command::new(binary())
+        .env_remove("LIGHTCRAFT_GPU")
+        .env_remove("LIGHTCRAFT_GPU_BACKEND")
+        .env_remove("WGPU_BACKEND")
+        .args(["snapshot", "--demo", "--script", script.to_str().unwrap(), "-o", image.to_str().unwrap(), "--size", "480x320"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "status {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    let replies: Vec<Value> = String::from_utf8_lossy(&output.stdout).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["ok"], true, "{replies:?}");
+    let gpu = &replies[0]["result"];
+    assert_eq!(gpu["enabled"], true, "{gpu}");
+    for field in ["available", "adapter", "reason"] {
+        assert_eq!(gpu[field], Value::Null, "{field} is not known while the device is created: {gpu}");
+    }
 }
 
 /// Issue #136: with the GPU switched off from the environment the UI starts and renders on the CPU,
@@ -502,6 +587,29 @@ fn snapshot_starts_without_a_gpu() {
     }
 }
 
+/// A loopback port nothing listens on, for tests that need `--connect` to be refused (#3070).
+/// A fixed port is not safe: agents give their apps' control servers ports in 18000–19999 (and
+/// 7980 is the default), so a test could reach someone's running app and drive it. The OS hands
+/// out a free port for `:0`; the listener is dropped so connecting to it is refused. Another
+/// process could bind the port between the drop and the connect. That window is a few
+/// milliseconds, and `:0` draws from the OS's ephemeral range (from 32768 on Linux, 49152 on
+/// macOS and Windows), where nobody puts a control server (7980, 18000–19999): the standard
+/// trade-off for a test that needs a refused connection.
+///
+/// Within this binary the window is closed: the tests that take an ephemeral port and let it go
+/// hold [`ephemeral_ports`], so `denoise-serve` can't start on a port a refused-connection test
+/// picked while it runs.
+fn unused_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Held by each test that picks an ephemeral port and releases it before use, for the whole test.
+fn ephemeral_ports() -> std::sync::MutexGuard<'static, ()> {
+    static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // a test that failed while holding it doesn't fail the others
+    PORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn run_cli(args: &[&str], stdin: Option<&str>) -> (bool, Vec<Value>, String) {
     let mut child = Command::new(binary()).arg("run").args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     if let Some(text) = stdin {
@@ -511,6 +619,230 @@ fn run_cli(args: &[&str], stdin: Option<&str>) -> (bool, Vec<Value>, String) {
     let o = child.wait_with_output().unwrap();
     let lines = String::from_utf8_lossy(&o.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     (o.status.success(), lines, String::from_utf8_lossy(&o.stderr).to_string())
+}
+
+/// Windows PowerShell 5.1 writes a UTF-8 BOM; `--script` (file and stdin) must accept it.
+#[test]
+fn run_script_accepts_a_utf8_bom() {
+    let text = "\u{feff}{\"command\": \"library.info\", \"params\": {}}\n";
+    let script = tmp("bom-steps.jsonl");
+    std::fs::write(&script, text).unwrap();
+    let (ok, lines, err) = run_cli(&["--demo", "--script", script.to_str().unwrap()], None);
+    assert!(ok, "file: {err}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let (ok, lines, err) = run_cli(&["--demo", "--script", "-"], Some(text));
+    assert!(ok, "stdin: {err}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+}
+
+#[test]
+fn run_script_params_validate_before_any_commands() {
+    let path = tmp("run-invalid-params.jsonl");
+    let path_str = path.to_str().unwrap();
+    for params in [json!([]), json!("invalid"), json!(42), json!(true)] {
+        let script = format!("{}\n{}\n", json!({"command": "library.info"}), json!({"command": "develop.reset", "params": params}));
+        std::fs::write(&path, &script).unwrap();
+        for (source, stdin) in [("-", Some(script.as_str())), (path_str, None)] {
+            let (ok, lines, err) = run_cli(&["--script", source], stdin);
+            assert!(!ok, "{source}: {params}: {lines:?}");
+            assert!(lines.is_empty(), "{source}: {params}: {lines:?}");
+            assert!(err.contains(&format!("{source}:2")), "{err}");
+            assert!(err.contains("`params` must be a JSON object"), "{err}");
+        }
+    }
+    for script in
+        ["{\"command\":\"library.info\"}\n", "{\"command\":\"library.info\",\"params\":null}\n", "{\"command\":\"library.info\",\"params\":{}}\n"]
+    {
+        let (ok, lines, err) = run_cli(&["--script", "-"], Some(script));
+        assert!(ok, "{script}: {err}");
+        assert_eq!(lines.len(), 1, "{script}: {lines:?}");
+        assert_eq!(lines[0]["ok"], true, "{script}: {lines:?}");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn run_failed_import_never_edits_existing_selection() {
+    let dir = tmp("failed-import");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lib = dir.join("library");
+    let missing = dir.join("missing.png");
+    let empty = dir.join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    assert!(!missing.exists());
+    let lib = lib.to_str().unwrap();
+    let (ok, lines, err) = run_cli(&["--demo", "--library", lib, "library.state"], None);
+    assert!(ok, "{err}");
+    let id = lines[0]["result"]["selection"]["active"].as_u64().unwrap();
+    let (ok, _, err) = run_cli(&["--library", lib, "photo.rate", &format!("ids=[{id}]"), "rating=0"], None);
+    assert!(ok, "{err}");
+    for path in [&missing, &empty] {
+        let (ok, lines, err) = run_cli(&["--library", lib, "--import", path.to_str().unwrap(), "photo.rate", "rating=5"], None);
+        assert!(!ok, "import unexpectedly succeeded for {}: {lines:?}", path.display());
+        assert!(lines.is_empty(), "commands ran: {lines:?}");
+        assert!(err.contains("import") && err.contains("no commands were run"), "{err}");
+        if path == &missing {
+            assert!(err.contains("failed") && err.contains("missing.png"), "{err}");
+        }
+        let (ok, lines, err) = run_cli(&["--library", lib, "photo.inspect", &format!("id={id}")], None);
+        assert!(ok, "{err}");
+        assert_eq!(lines[0]["result"]["rating"], 0);
+    }
+}
+
+#[test]
+fn run_partial_import_stops_commands_and_import_targets_remain_usable() {
+    let dir = tmp("partial-import");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("valid.png");
+    let broken = dir.join("broken.png");
+    gradient_png(&input);
+    std::fs::write(&broken, b"not a PNG").unwrap();
+    let mixed_lib = dir.join("mixed");
+    let mixed_lib = mixed_lib.to_str().unwrap();
+    let input = input.to_str().unwrap();
+    let (ok, lines, err) = run_cli(&["--demo", "--library", mixed_lib, "catalog.query"], None);
+    assert!(ok, "{err}");
+    let photos = lines[0]["result"]["photos"].as_array().unwrap();
+    let a = photos[0]["id"].as_u64().unwrap();
+    let b = photos[1]["id"].as_u64().unwrap();
+    let (ok, lines, err) = run_cli(
+        &[
+            "--library",
+            mixed_lib,
+            "library.select",
+            &format!("ids=[{a},{b}]"),
+            &format!("active={a}"),
+            "photo.rate",
+            &format!("ids=[{a}]"),
+            "rating=0",
+            "library.state",
+        ],
+        None,
+    );
+    assert!(ok, "{err}");
+    let selection = lines[2]["result"]["selection"].clone();
+    assert_eq!(selection["ids"], json!([a, b]));
+    assert_eq!(selection["active"], a);
+    let (ok, lines, err) =
+        run_cli(&["--library", mixed_lib, "--import", input, "--import", broken.to_str().unwrap(), "photo.rate", "rating=5"], None);
+    let (query_ok, after, query_err) =
+        run_cli(&["--library", mixed_lib, "library.state", "photo.inspect", &format!("id={a}"), "catalog.query"], None);
+    assert!(query_ok, "{query_err}");
+    assert_eq!(after[0]["result"]["selection"], selection, "selection changed after partial import");
+    assert!(!ok, "partial import unexpectedly succeeded: {lines:?}");
+    assert!(lines.is_empty() && err.contains("failed") && err.contains("no commands were run"), "{err}: {lines:?}");
+    assert_eq!(after[1]["result"]["rating"], 0);
+    assert!(after[2]["result"]["photos"].as_array().unwrap().iter().any(|p| p["fileName"] == "valid.png"));
+
+    let lib = dir.join("duplicates");
+    let lib = lib.to_str().unwrap();
+    let (ok, lines, err) = run_cli(&["--demo", "--library", lib, "library.state"], None);
+    assert!(ok, "{err}");
+    let previous = lines[0]["result"]["selection"]["active"].as_u64().unwrap();
+    let (ok, lines, err) = run_cli(&["--library", lib, "--import", input, "photo.rate", "rating=4", "library.state"], None);
+    assert!(ok, "{err}");
+    let id = lines[1]["result"]["selection"]["active"].as_u64().unwrap();
+    assert_ne!(id, previous);
+    let (ok, _, err) = run_cli(&["--library", lib, "library.select", &format!("ids=[{previous}]"), "photo.rate", "rating=0"], None);
+    assert!(ok, "{err}");
+    let (ok, _, err) = run_cli(&["--library", lib, "--import", input, "photo.rate", "rating=3"], None);
+    assert!(ok, "{err}");
+    let (ok, lines, err) = run_cli(&["--library", lib, "photo.inspect", &format!("id={id}"), "photo.inspect", &format!("id={previous}")], None);
+    assert!(ok, "{err}");
+    assert_eq!(lines[0]["result"]["rating"], 3);
+    assert_eq!(lines[1]["result"]["rating"], 0);
+}
+
+#[test]
+fn run_restored_import_is_selected() {
+    let dir = tmp("restored-import");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("valid.png");
+    gradient_png(&input);
+    let lib = dir.join("library");
+    let (lib, input) = (lib.to_str().unwrap(), input.to_str().unwrap());
+    let (ok, lines, err) = run_cli(&["--library", lib, "--import", input, "library.state"], None);
+    assert!(ok, "{err}");
+    let id = lines[0]["result"]["selection"]["active"].as_u64().unwrap();
+    let (ok, _, err) = run_cli(&["--library", lib, "photo.delete"], None);
+    assert!(ok, "{err}");
+    let (ok, _, err) = run_cli(&["--library", lib, "--import", input, "photo.rate", "rating=4"], None);
+    assert!(ok, "{err}");
+    let (ok, lines, err) = run_cli(&["--library", lib, "catalog.query"], None);
+    assert!(ok, "{err}");
+    assert_eq!(lines[0]["result"]["photos"].as_array().unwrap().len(), 1);
+    assert_eq!(lines[0]["result"]["photos"][0]["id"], id);
+    assert_eq!(lines[0]["result"]["photos"][0]["rating"], 4);
+}
+
+#[test]
+fn run_same_batch_duplicates_selects_photo_once() {
+    let dir = tmp("same-batch-duplicates");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("first.png");
+    let second = dir.join("second.png");
+    gradient_png(&first);
+    std::fs::copy(&first, &second).unwrap();
+    let library = dir.join("library");
+    let (ok, lines, err) = run_cli(
+        &[
+            "--library",
+            library.to_str().unwrap(),
+            "--import",
+            first.to_str().unwrap(),
+            "--import",
+            second.to_str().unwrap(),
+            "photo.rate",
+            "rating=4",
+            "library.state",
+            "catalog.query",
+        ],
+        None,
+    );
+    assert!(ok, "{err}");
+    let selection = &lines[1]["result"]["selection"];
+    let ids = selection["ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 1, "same photo selected more than once: {selection}");
+    assert_eq!(selection["active"], ids[0]);
+    let photos = lines[2]["result"]["photos"].as_array().unwrap();
+    assert_eq!(photos.len(), 1);
+    assert_eq!(photos[0]["id"], ids[0]);
+    assert_eq!(photos[0]["rating"], 4);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn run_mixed_new_and_restored_import_selects_both() {
+    let dir = tmp("mixed-restored-import");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let restored = dir.join("restored.png");
+    let new = dir.join("new.png");
+    gradient_png(&restored);
+    let image = lightcraft_raster::Rgba8::from_fn(120, 80, |x, y| [(x * 2) as u8, (y * 3) as u8, 200, 255]);
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+    std::fs::write(&new, png).unwrap();
+    let lib = dir.join("library");
+    let (lib, restored, new) = (lib.to_str().unwrap(), restored.to_str().unwrap(), new.to_str().unwrap());
+    let (ok, lines, err) = run_cli(&["--library", lib, "--import", restored, "library.state"], None);
+    assert!(ok, "{err}");
+    let restored_id = lines[0]["result"]["selection"]["active"].as_u64().unwrap();
+    let (ok, _, err) = run_cli(&["--library", lib, "photo.delete"], None);
+    assert!(ok, "{err}");
+    let (ok, lines, err) = run_cli(&["--library", lib, "--import", new, "--import", restored, "photo.rate", "rating=4", "library.state"], None);
+    assert!(ok, "{err}");
+    assert_eq!(lines[1]["result"]["selection"]["ids"].as_array().unwrap().len(), 2);
+    let (ok, lines, err) = run_cli(&["--library", lib, "catalog.query"], None);
+    assert!(ok, "{err}");
+    let photos = lines[0]["result"]["photos"].as_array().unwrap();
+    assert_eq!(photos.len(), 2);
+    assert!(photos.iter().any(|p| p["id"] == restored_id && p["rating"] == 4));
+    assert!(photos.iter().any(|p| p["fileName"] == "new.png" && p["id"] != restored_id && p["rating"] == 4));
 }
 
 #[test]
@@ -614,9 +946,11 @@ fn a_library_open_in_another_process_is_refused() {
 /// ADDR actually names — following the old fixed "7980" left the retry connecting elsewhere.
 #[test]
 fn connect_failure_hint_names_the_attempted_port() {
-    let (ok, _lines, err) = run_cli(&["--connect", "127.0.0.1:18437", "ui.inspect"], None);
+    let _ports = ephemeral_ports();
+    let port = unused_port();
+    let (ok, _lines, err) = run_cli(&["--connect", &format!("127.0.0.1:{port}"), "ui.inspect"], None);
     assert!(!ok);
-    assert!(err.contains("--control 18437"), "the hint must name the port it tried: {err}");
+    assert!(err.contains(&format!("--control {port}")), "the hint must name the port it tried: {err}");
     assert!(!err.contains("--control 7980"), "{err}");
 }
 
@@ -626,20 +960,23 @@ fn connect_failure_hint_names_the_attempted_port() {
 /// works; non-numeric, non-`ADDR`-shaped tokens (e.g. a real command id) keep falling through.
 #[test]
 fn connect_bare_port_is_treated_as_loopback_port() {
+    let _ports = ephemeral_ports();
+    let port = unused_port();
+    let hint = format!("--control {port}");
     // Bare port: the failure hint names that port.
-    let (ok, _lines, err) = run_cli(&["--connect", "18437", "ui.inspect"], None);
+    let (ok, _lines, err) = run_cli(&["--connect", &port.to_string(), "ui.inspect"], None);
     assert!(!ok);
-    assert!(err.contains("--control 18437"), "bare port must reach the hint: {err}");
+    assert!(err.contains(&hint), "bare port must reach the hint: {err}");
     assert!(!err.contains("--control 7980"), "{err}");
     // `<host>:<port>` still works (issue #167 case).
-    let (ok, _lines, err) = run_cli(&["--connect", "127.0.0.1:18437", "ui.inspect"], None);
+    let (ok, _lines, err) = run_cli(&["--connect", &format!("127.0.0.1:{port}"), "ui.inspect"], None);
     assert!(!ok);
-    assert!(err.contains("--control 18437"), "{err}");
+    assert!(err.contains(&hint), "{err}");
     // `--connect=<bare-port>` already worked (the `a.starts_with("--connect=")` arm); spot-check
     // the hint matches its port too.
-    let (ok, _lines, err) = run_cli(&["--connect=18437", "ui.inspect"], None);
+    let (ok, _lines, err) = run_cli(&[&format!("--connect={port}"), "ui.inspect"], None);
     assert!(!ok);
-    assert!(err.contains("--control 18437"), "{err}");
+    assert!(err.contains(&hint), "{err}");
 }
 
 /// The CLI logs warnings on stderr (#168): with `RUST_LOG=warn` an unknown GPU backend name is
@@ -785,7 +1122,8 @@ fn denoise_serve_runs_tiles_for_another_computer() {
         Command::new(binary()).args(["denoise-serve", "--models", models.to_str().unwrap(), "--token-env", "LC_TEST_NO_SUCH_VAR"]).output().unwrap();
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("LC_TEST_NO_SUCH_VAR"));
 
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let _ports = ephemeral_ports();
+    let port = unused_port();
     let addr = format!("127.0.0.1:{port}");
     let token = "cli-test-token-0123456789";
     let mut child = Command::new(binary())

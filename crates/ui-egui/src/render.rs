@@ -207,6 +207,8 @@ const VARIANT_PRIORITY: u32 = 6;
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
+    #[cfg(test)]
+    pub(crate) import_jobs_built: usize,
     requests: HashMap<Slot, Requested>,
     /// Only jobs actually accepted by an offload: queued replacements retain identity in the job.
     offload_looks: HashMap<u64, (u64, bool)>,
@@ -252,7 +254,7 @@ pub struct Renderer {
     /// asks every frame.
     failed: HashMap<Slot, (u64, String, u64, PhotoId)>,
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
-    /// (a relinked or re-imported file).
+    /// its photo (a relinked or re-imported file), see [`Self::follow_catalog`].
     catalog_rev: u64,
     /// Prefetch slot → key of the last job submitted (each runs once).
     prefetched: HashMap<Slot, u64>,
@@ -288,10 +290,28 @@ impl Slot {
     }
 }
 
+/// Render workers of an app built by this crate's own tests. Most of them build an app, several
+/// run at once, and a test needs a render or two at a time, not the machine's six (issue #3067:
+/// sixteen tests at once ran about 96 render threads on 16 cores). A test that needs more asks
+/// for them with [`Renderer::with_worker_threads`].
+#[cfg(test)]
+pub(crate) const TEST_WORKERS: usize = 2;
+
+/// Render workers an app starts with: the machine's job-pool size, at most six (none on wasm).
+#[cfg(not(test))]
+fn default_workers() -> usize {
+    if cfg!(target_arch = "wasm32") { 0 } else { JobPool::<Slot, Finished>::default_threads().min(6) }
+}
+
+/// Render workers an app starts with in this crate's tests: [`TEST_WORKERS`].
+#[cfg(test)]
+fn default_workers() -> usize {
+    TEST_WORKERS
+}
+
 impl Default for Renderer {
     fn default() -> Self {
-        let threads = if cfg!(target_arch = "wasm32") { 0 } else { JobPool::<Slot, Finished>::default_threads().min(6) };
-        Self::with_worker_threads(threads)
+        Self::with_worker_threads(default_workers())
     }
 }
 
@@ -303,6 +323,8 @@ impl Renderer {
         Renderer {
             #[cfg(test)]
             thumb_jobs_built: 0,
+            #[cfg(test)]
+            import_jobs_built: 0,
             requests: HashMap::new(),
             offload_looks: HashMap::new(),
             #[cfg(test)]
@@ -605,6 +627,26 @@ impl Renderer {
         );
     }
 
+    /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
+    pub fn import_preview(&mut self, session: &mut Session, candidate: &lightcraft_engine::import::ImportCandidate, index: u32, edge: usize) {
+        let slot = Slot::Import(index);
+        let edge = edge.clamp(64, 1024);
+        if candidate.error.is_some() || self.textures.get(&slot).is_some_and(|tex| tex.size.into_iter().max().unwrap_or(0) >= edge) {
+            return;
+        }
+        let key = lightcraft_engine::import::candidate_thumb_key(candidate, edge);
+        if self.quick_tried.get(&slot) == Some(&key) {
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.import_jobs_built += 1;
+        }
+        if let Some(job) = session.candidate_thumb_job(candidate, edge, u64::from(index)) {
+            self.request_quick(slot, job, 4);
+        }
+    }
+
     /// Request a stand-in for `slot` (once per job key).
     pub fn request_quick(&mut self, slot: Slot, mut job: QuickJob, priority: u32) {
         if self.quick_tried.get(&slot) == Some(&job.key) {
@@ -801,9 +843,32 @@ impl Renderer {
     }
 
     /// Whether `slot`'s pending render asks again for the key that last failed (a library change
-    /// retries failures): what is on screen stays what the failure left until it answers.
+    /// to its photo retries it): what is on screen stays what the failure left until it answers.
     pub fn retrying(&self, slot: Slot) -> bool {
         self.pending.get(&slot).zip(self.failed.get(&slot)).is_some_and(|(p, f)| p.0 == f.0)
+    }
+
+    /// Follow the library to `catalog`'s revision. A failure stands while its photo is unchanged:
+    /// only the photos the ops since the last poll touched are tried again, and every photo when
+    /// the catalog can't say which. So faces found or metadata written for other photos don't
+    /// send each undecodable file back to the decoder (issue #2682: 37 tries each in 154 s idle).
+    /// A file `files` knows to be missing (its drive unplugged) is still tried at every change, so
+    /// its photo comes back with the drive, as before.
+    fn follow_catalog(&mut self, catalog: &lightcraft_catalog::Catalog, files: &lightcraft_engine::availability::Availability) {
+        let rev = catalog.revision;
+        if rev == self.catalog_rev {
+            return;
+        }
+        if let Some(touched) = catalog.touched_since(self.catalog_rev) {
+            let missing =
+                |id| matches!(catalog.photo(id).map(|p| &p.source), Some(lightcraft_catalog::Source::File { path }) if files.is_offline(path));
+            for f in self.failed.values_mut() {
+                if f.2 == self.catalog_rev && touched.binary_search(&f.3).is_err() && !missing(f.3) {
+                    f.2 = rev;
+                }
+            }
+        }
+        self.catalog_rev = rev;
     }
 
     /// The slots with a render pending (diagnostics: `ui.inspect`).
@@ -902,7 +967,7 @@ impl Renderer {
             self.forget_all();
         }
         self.preview_generation = Some((Arc::downgrade(cache), generation));
-        self.catalog_rev = session.catalog.revision;
+        self.follow_catalog(&session.catalog, &session.media.availability);
         self.frame += 1;
         self.trim_stages();
         // wasm: run one job per frame on this thread, timed with the host clock
@@ -1144,12 +1209,20 @@ impl Renderer {
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
     pub fn forget_imports(&mut self) {
-        self.pool.reprioritize(|s, p| if matches!(s, Slot::Import(_)) { None } else { Some(p) });
-        self.queue.retain(|q| !matches!(q.slot, Slot::Import(_)));
-        self.pending.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.requests.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.textures.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.quick_tried.retain(|s, _| !matches!(s, Slot::Import(_)));
+        self.retain_imports(&Default::default());
+    }
+
+    /// Keep only the import tiles near the viewport, including queued work. Large thumbnails
+    /// must not accumulate for every candidate while scrolling through a whole card.
+    pub fn retain_imports(&mut self, keep: &std::collections::HashSet<u32>) {
+        let retained = |s: &Slot| !matches!(s, Slot::Import(i) if !keep.contains(i));
+        self.pool.reprioritize(|s, p| retained(s).then_some(p));
+        self.queue.retain(|q| retained(&q.slot));
+        self.pending.retain(|s, _| retained(s));
+        self.requests.retain(|s, _| retained(s));
+        self.textures.retain(|s, _| retained(s));
+        self.quick_tried.retain(|s, _| retained(s));
+        self.failed.retain(|s, _| retained(s));
     }
 
     /// Drop thumbnails that aren't in `keep` (bounded memory for huge libraries), and queued

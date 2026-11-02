@@ -76,11 +76,17 @@ pub fn fs_pair_loader() -> PairLoader {
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
     let probe: FileProbe = Arc::new(|path: &str| {
-        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        use std::io::Read;
+        // one open, then everything from the open file: its size and modification time are not
+        // round trips of their own (on a network share each of them is one)
+        let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let meta = file.metadata().ok();
+        let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
         let _permit = crate::memory::work_gate().acquire(len);
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
-        info.file_modified = file_modified(path);
+        info.file_modified = meta.as_ref().and_then(modified_iso);
         Ok(info)
     });
     (loader, probe)
@@ -104,10 +110,10 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     r
 }
 
-/// `path`'s modification time as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
+/// The modification time in `meta` as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
 /// filesystem doesn't say or the time is before 1970.
-fn file_modified(path: &str) -> Option<String> {
-    let t = std::fs::metadata(path).ok()?.modified().ok()?;
+fn modified_iso(meta: &std::fs::Metadata) -> Option<String> {
+    let t = meta.modified().ok()?;
     let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
     Some(crate::import::civil(secs))
 }

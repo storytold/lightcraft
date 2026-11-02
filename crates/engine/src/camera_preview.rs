@@ -79,7 +79,12 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// a tone-only fallback for near-black scenes with too few colour pairs (#1587); DNG tone fitting uses a
 /// lens-corrected proxy when the file carries lens opcodes; validated A7CR distortion, including the lens data
 /// stored with each smart preview.
-pub const LOOK_VERSION: u32 = 12;
+/// 13: tone curves no steeper than a log-log slope of 4 between knots (#1904).
+/// 13: the Canon CR3/CR2 camera JPEG read in the colour space of the Canon maker note (#2654).
+/// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
+/// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
+/// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
+pub const LOOK_VERSION: u32 = 13;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

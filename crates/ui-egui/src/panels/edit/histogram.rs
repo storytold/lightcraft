@@ -33,7 +33,16 @@ fn steady_hdr_histogram(ctx: &egui::Context, id: PhotoId, hdr_edit: bool, hist: 
     }
 }
 
-pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+/// The histogram of the last drag's small HDR render, while an HDR edit of `id` is being dragged. It stays in
+/// `Renderer` after the drag, so an edit with HDR switched off must not read it: its drags would show the old HDR
+/// histogram (`dragging`: a drag of an HDR edit is on).
+fn live_hdr_histogram(live: Option<&(PhotoId, u64, Histogram)>, id: PhotoId, dragging: bool) -> Option<Histogram> {
+    live.filter(|l| dragging && l.0 == id).map(|l| l.2.clone())
+}
+
+/// The histogram, its clipping buttons and the EXIF strip, drawn above the Edit panel's scrolling sliders
+/// ([`crate::panels::right::show`]).
+pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let hdr_edit = app.session.develop_of(id).is_some_and(|d| d.hdr.enabled);
@@ -48,7 +57,7 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
             app.renderer.request(Slot::HdrHistogram, job, 95);
         }
     }
-    let live = app.renderer.live_hdr_histogram.as_ref().filter(|l| interacting && l.0 == id).map(|l| l.2.clone());
+    let live = live_hdr_histogram(app.renderer.live_hdr_histogram.as_ref(), id, interacting && hdr_edit);
     // else the loupe render of this photo, else its thumbnail (grid view before the loupe has
     // rendered it)
     let hist = live.or_else(|| preview_histogram(app, id));
@@ -155,8 +164,8 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         }
     }
     let mut clicked = resp.clicked();
-    // the panel's floating scroll bar widens over the right edge when hovered: both buttons keep
-    // clear of it, the left one too so they stay symmetric (#1640)
+    // both buttons keep clear of the panel's right edge, where its floating scroll bar widens when
+    // hovered beside the sliders, the left one too so they stay symmetric (#1640)
     let [shadow_rect, highlight_rect] = crate::panels::histogram::clipping_rects(ui, plot);
     for (name, rect, label, clipped) in [
         ("shadows", shadow_rect, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),
@@ -169,26 +178,12 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         let active = app.ui.show_clipping;
         // Keep the hit target comfortable, with a smaller box and clear space to the plot edges.
         let box_rect = rect.shrink2(vec2(2.0, 2.0));
-        p.rect_filled(
-            box_rect,
-            3.0,
-            if active {
-                t.pressed
-            } else if response.hovered() {
-                t.hover
-            } else {
-                Color32::from_gray(60)
-            },
-        );
+        let (tile, mark) = clip_button_colors(&t, active, response.hovered(), clipped == Some(true));
+        p.rect_filled(box_rect, 3.0, tile);
         if active {
             p.rect_stroke(box_rect, 3.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
         }
-        paint(
-            p,
-            Rect::from_center_size(rect.center(), vec2(16.0, 16.0)),
-            Icon::ChevronDown,
-            if clipped == Some(true) || active { t.text } else { t.text_dim },
-        );
+        paint(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, mark);
         let status = match clipped {
             Some(true) => "Clipping detected in this preview.",
             Some(false) => "No clipping detected in this preview.",
@@ -317,9 +312,38 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
     divider(ui);
 }
 
+/// The tile and chevron colours of a clipping button, from the theme's own raised fills: the tile
+/// sits one step above the plot's backdrop (`button`) and the chevron (bright when clipping shows, dim otherwise) stands 3:1 on it in every
+/// state and theme.
+fn clip_button_colors(t: &Tokens, active: bool, hovered: bool, clipped: bool) -> (Color32, Color32) {
+    let tile = if active || hovered { t.pressed } else { t.hover };
+    (tile, if clipped || active { t.text } else { t.text_dim })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two clipping chevrons were a fixed dark-grey tile (`from_gray(60)`) with a dimmed mark: on
+    /// a light theme they were near-black tiles on a light panel, and the mark barely read.
+    #[test]
+    fn the_clipping_chevron_stands_3_to_1_against_its_tile_in_every_theme() {
+        use crate::theme::ThemeKind;
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            for (active, hovered, clipped) in
+                [(false, false, false), (false, false, true), (false, true, false), (true, false, false), (true, true, true)]
+            {
+                let (tile, mark) = clip_button_colors(&t, active, hovered, clipped);
+                let c = crate::widgets::button::contrast(mark, tile);
+                assert!(c >= 3.0, "{kind:?} active={active} hovered={hovered} clipped={clipped}: chevron {c:.2}:1 on its tile");
+            }
+            // the idle tile is the theme's own raised fill, not a fixed gray, and a quiet one next to the plot's backdrop
+            let (idle, _) = clip_button_colors(&t, false, false, false);
+            assert_ne!(idle, t.button, "{kind:?}: the tile vanishes into the histogram's backdrop");
+            assert!(crate::widgets::button::contrast(idle, t.button) < 3.0, "{kind:?}: the tile is a heavy block, not a quiet raised fill");
+        }
+    }
 
     #[test]
     fn an_hdr_edit_keeps_its_hdr_histogram_through_8_bit_renders() {
@@ -342,12 +366,27 @@ mod tests {
         assert_eq!(steady_hdr_histogram(&ctx, PhotoId(8), true, Some(sdr.clone())), Some(sdr));
     }
 
+    /// Issue #2819: the last HDR drag's histogram is kept in `Renderer`; with HDR switched off, a drag must not read it.
+    #[test]
+    fn a_drag_with_hdr_off_does_not_read_the_last_hdr_drags_histogram() {
+        let id = PhotoId(7);
+        let kept = (id, 3, Histogram::of_hdr(&[[2.0, 2.0, 2.0]], 5.0));
+        assert!(kept.2.hdr.is_some());
+        // a drag of an HDR edit: the small HDR render's histogram
+        assert_eq!(live_hdr_histogram(Some(&kept), id, true), Some(kept.2.clone()));
+        // HDR switched off, a drag of the SDR edit: the panel's own (SDR) histogram
+        assert_eq!(live_hdr_histogram(Some(&kept), id, false), None);
+        // another photo, or nothing rendered yet
+        assert_eq!(live_hdr_histogram(Some(&kept), PhotoId(8), true), None);
+        assert_eq!(live_hdr_histogram(None, id, true), None);
+    }
+
     /// Issue #1751: Windows and Linux read Ctrl where macOS reads Cmd, and a rebound shortcut shows.
     #[test]
     fn reset_tooltip_names_the_shortcut_of_this_platform() {
         let keymap = crate::shortcuts::Keymap::new();
         assert_eq!(reset_tip(&keymap, false), "Reset all edits (Ctrl+Shift+R)");
-        assert_eq!(reset_tip(&keymap, true), "Reset all edits (⌘⇧R)");
+        assert_eq!(reset_tip(&keymap, true), "Reset all edits (⇧⌘R)");
         let rebound: crate::shortcuts::Keymap = [("develop.reset".to_string(), "Cmd+Alt+R".to_string())].into();
         assert_eq!(reset_tip(&rebound, false), "Reset all edits (Ctrl+Alt+R)");
         let unbound: crate::shortcuts::Keymap = [("develop.reset".to_string(), String::new())].into();

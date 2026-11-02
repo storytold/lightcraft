@@ -240,7 +240,7 @@ lightcraft --control 7980 ~/Pictures/trip
 - **指令註冊表。** `engine.commands` 列出可用的指令；`develop.controls` 列出每個滑桿的範圍、
   預設值與目前值。
 - **MCP 伺服器。** `lightcraft-cli mcp` 把指令註冊表開放給 Claude（或任何 MCP 用戶端），
-  同時提供匯入、查詢、顯影、遮色片、算繪（以影像回傳）與匯出的輔助工具。它可以無介面執行，也可以附掛
+  同時提供匯入、查詢、顯影、算繪（以影像回傳）與匯出的輔助工具。遮色片沒有專屬的輔助工具，請透過 `run_command` 使用（例如 `mask.add`）。它可以無介面執行，也可以附掛
   到正在執行的應用程式上，支援截圖、點擊與手勢。詳見 [docs/mcp.md](docs/mcp.md)。
 
   ```sh
@@ -401,6 +401,34 @@ CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false
 的建置機器上同時使用完整除錯資訊、LTO 與單一程式碼產生單元。自行匯出 profile 設定的
 PKGBUILD 可能會覆寫繼承的環境變數；請在本機調整打包腳本或聯絡維護者，而不要假設替
 `makepkg` 加上環境變數前綴就能優先生效。
+
+**Linux/Arch 建置故障：rustc 在 ThinLTO 階段發生 SIGILL。**
+在 [#2811](https://github.com/storytold/lightcraft/issues/2811) 中，回報者的 Arch Linux x86_64
+機器配備 AMD Ryzen 9 7900X3D 與 64 GB RAM，使用 rustc 1.99.0 / LLVM 23.1.1、AUR
+`lightcraft` `0.7.1-1` 與 `0.13.0-1`、`RUSTFLAGS="-C opt-level=3 -C target-cpu=native"`，
+以及 release 設定 `opt-level=3`、`lto=thin`、`codegen-units=1`。
+`cargo build --frozen --release` 在編譯到可執行 crate 時，rustc 因 signal 4
+（`SIGILL` / `ILL_ILLOPN`）當機。core dump 指向 LLVM 的 SelectionDAG / vector-combine
+最佳化路徑；編譯器的具體根因尚未確定。這不表示所有使用這些硬體或工具鏈的機器都會失敗。
+此故障與上文 [#1196](https://github.com/storytold/lightcraft/issues/1196) 中 16 GB 機器上的
+OOM 終止表現不同，沒有證據顯示兩者根因相同。
+
+直接使用 Cargo 從原始碼建置時，等價的單條指令 LTO 覆寫方式是：
+
+```sh
+CARGO_PROFILE_RELEASE_LTO=off cargo build --frozen --release
+```
+
+回報者 @rwarmstr 驗證成功的是：在 **AUR PKGBUILD 的 `_srcenv()` 函式內部**匯出
+`CARGO_PROFILE_RELEASE_LTO=off` 後重新建置上述兩個版本，無須變更 `RUSTFLAGS`。
+回報者測試的是 AUR 腳本，並未單獨驗證上面的直接 Cargo 指令。僅在 `makepkg` 前加上變數，
+可能會被 PKGBUILD 自己的 export 覆寫；打包腳本必須保留或設定該覆寫值。
+AUR 的 `!lto` 選項行為由 [#2813](https://github.com/storytold/lightcraft/issues/2813) 另行追蹤。
+
+[Cargo 的 LTO 文件](https://doc.rust-lang.org/cargo/reference/profiles.html#lto) 區分了 `false`
+與 `off`：`false` 仍可能在程式碼產生單元之間執行 thin local LTO（除非 `codegen-units=1`
+或 `opt-level=0`）；`off` 則明確停用 LTO。上文的低記憶體建置配方維持不變。
+此繞過方法僅適用於受影響的建置，不是新的預設建議；停用 LTO 可能改變效能、二進位檔大小與建置行為。
 
 測試在缺少 GPU、語料庫、craft-fonts 字型或模型時會直接通過而不檢查任何內容（libtest 沒有「已跳過」
 這個狀態），所以 `cargo xtask ci` 會把它們列出來：測試會用 `lightcraft_testkit::skip!` 記錄跳過原因，
