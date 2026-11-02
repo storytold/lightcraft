@@ -53,6 +53,11 @@ impl Drop for PendingSave {
 
 static SAVE_BUSY: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::new());
 
+/// Resolve aliases once during library open, never while processing a UI frame.
+pub(crate) fn save_key(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()).join("unnamed-face-groups.json")
+}
+
 struct SaveSlot(std::path::PathBuf);
 impl SaveSlot {
     fn acquire(path: &std::path::Path) -> Option<Self> {
@@ -335,8 +340,9 @@ pub(crate) fn query(s: &mut Session, p: &Value, model_threshold: f32) -> Result<
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
-        } else if let Some(path) = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("unnamed-face-groups.json")) {
-            let Some(slot) = SaveSlot::acquire(&path) else {
+        } else if let Some(library) = s.library.as_ref().filter(|l| l.on_disk) {
+            let path = library.dir.join("unnamed-face-groups.json");
+            let Some(slot) = SaveSlot::acquire(&library.face_groups_save_key) else {
                 return Ok(
                     json!({"complete": false, "strict": g.strict, "processed": g.next, "total": g.faces.len(), "unindexed": g.unindexed, "groups": []}),
                 );
@@ -442,6 +448,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn aliased_library_folders_share_a_save_slot() {
+        let dir = std::env::temp_dir().join(format!("lc-group-alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let direct = save_key(&dir);
+        let alias = save_key(&dir.join("."));
+        assert_eq!(direct, alias);
+        let slot = SaveSlot::acquire(&direct).unwrap();
+        assert!(SaveSlot::acquire(&alias).is_none());
+        drop(slot);
+        assert!(SaveSlot::acquire(&alias).is_some());
+        let missing = dir.join("missing");
+        assert_eq!(save_key(&missing), missing.join("unnamed-face-groups.json"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_library_folders_share_a_save_slot() {
+        let root = std::env::temp_dir().join(format!("lc-group-symlink-{}", std::process::id()));
+        let dir = root.join("library");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(&dir, &alias).unwrap();
+        let direct_key = save_key(&dir);
+        let alias_key = save_key(&alias);
+        assert_eq!(direct_key, alias_key);
+        let slot = SaveSlot::acquire(&direct_key).unwrap();
+        assert!(SaveSlot::acquire(&alias_key).is_none());
+        drop(slot);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn save_slots_are_scoped_to_the_cache_path() {
         let a = std::env::temp_dir().join("lc-group-slot-a");
         let b = std::env::temp_dir().join("lc-group-slot-b");
@@ -460,7 +499,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut s = Session::new().with_fs();
         s.open_library(&dir, false).unwrap();
-        let path = dir.join("unnamed-face-groups.json");
+        let path = save_key(&dir);
         let mut guard = None;
         for _ in 0..5000 {
             if let Some(slot) = SaveSlot::acquire(&path) {

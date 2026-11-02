@@ -118,6 +118,9 @@ mod home_tests {
 pub struct Library {
     /// The library directory, or a descriptive pseudo-path when the library isn't on disk.
     pub dir: PathBuf,
+    /// Canonical cache identity, computed while opening so grouping frames do no path I/O.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) face_groups_save_key: PathBuf,
     /// The library is a real directory: photos can be copied into `Originals/` and thumbnails are
     /// cached in `thumbs/`.
     pub on_disk: bool,
@@ -622,8 +625,12 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
+        #[cfg(not(target_arch = "wasm32"))]
+        let face_groups_save_key = if on_disk { crate::face_groups::save_key(&dir) } else { dir.join("unnamed-face-groups.json") };
         self.library = Some(Library {
             dir,
+            #[cfg(not(target_arch = "wasm32"))]
+            face_groups_save_key,
             on_disk,
             journal,
             files,
