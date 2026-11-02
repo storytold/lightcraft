@@ -47,15 +47,19 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md] [--quick [--base REF]]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
+                  fmt --check, clippy -D warnings, heif, test, GPU probe, gpu-software, parity refs, layers, assets, wasm
                   (stops at first failure). Tests run under cargo test (cargo nextest with
                   LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
                   them it prints the translation gaps report (never a failure). Writes
                   target/ci/report.json (machine, GPU adapters, data,
-                  steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
-                  every backend with a hardware adapter; --summary-md prints the Markdown summary.
+                  steps, skipped tests) and target/ci/summary.md. gpu-software: when the only adapter
+                  is a software one (lavapipe, WARP), runs lightcraft-gpu's tests on it with
+                  LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 and fails if a GPU test still skips (but the listed
+                  ones that can't run there, ci_report::SOFTWARE_ADAPTER_SKIPS). --hardware also runs the GPU tests on every backend with a hardware
+                  adapter; --summary-md prints the Markdown summary.
                   --quick: only what the changes since the merge base with origin/main (or REF) can
-                  break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
+                  break: clippy, the changed packages' tests, and heif / parity / wasm / gpu-software
+                  when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
                   LIGHTCRAFT_CI_LOCK=off to skip the lock)
   corpus [--download]

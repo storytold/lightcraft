@@ -238,6 +238,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     };
     let gpu = std::cell::RefCell::new(serde_json::Value::Null);
     let hardware_runs = std::cell::RefCell::new(Vec::new());
+    let software_run = std::cell::RefCell::new(serde_json::Value::Null);
     // What this machine offers the GPU tests, once, after the workspace tests (whose build the
     // probe reuses). Never fails the run: the report says what went wrong.
     let probe = || {
@@ -258,6 +259,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
             "clippy" | "test" | "wasm" => p.rust(),
             "heif" => p.heif,
             "parity" => p.parity,
+            "gpu-software" => p.gpu(),
             _ => true,
         },
     };
@@ -302,6 +304,9 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         ),
     ];
     steps.retain(|(name, _)| wants(name));
+    if wants("gpu-software") {
+        steps.push(("gpu-software", Box::new(|| gpu_software(&root, &probe, &gpu, &software_run))));
+    }
     if hardware {
         steps.push((
             "gpu-backends",
@@ -401,6 +406,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         "capabilities": {"gpu": gpu.take(), "data": ci_report::data(&root, &RAW_SAMPLES.iter().map(|s| s.0).collect::<Vec<_>>())},
         "steps": results,
         "hardware": hardware_runs.take(),
+        "software": software_run.take(),
         "skips": ci_report::skips_json(&skips),
     });
     print!("{}", ci_report::summary_text(&report));
@@ -420,6 +426,64 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         Some((name, _)) => Err(format!("ci failed at `{name}`")),
         None => Ok(()),
     }
+}
+
+/// The `gpu-software` step: when the probe finds only a software adapter (lavapipe, WARP), run
+/// `lightcraft-gpu`'s tests on it with [`ci_report::ALLOW_SOFTWARE_ENV`], so the CPU ↔ GPU
+/// equivalence tests run on a machine without a GPU (the CI gate) instead of skipping. The opt-in
+/// is set on this one command: the other steps' tests check the CPU fallback without it. No
+/// `denoise` feature: the model runners refuse software adapters on their own. Fails if a GPU test
+/// still skips (but those of [`ci_report::SOFTWARE_ADAPTER_SKIPS`]), so a runner that loses the
+/// adapter can't pass silently. The skip log is created empty first and must still be there; the
+/// tests run with [`ci_report::SKIP_LOG_REQUIRED_ENV`], so a skip that can't be logged fails its
+/// test, and a line of the log that isn't a skip record fails the step. Nothing to run (a hardware
+/// adapter, none, a failed probe) is not a failure.
+fn gpu_software(
+    root: &Path,
+    probe: &dyn Fn(),
+    gpu: &std::cell::RefCell<serde_json::Value>,
+    run_record: &std::cell::RefCell<serde_json::Value>,
+) -> Result<(), String> {
+    probe();
+    let found = ci_report::software_only(&gpu.borrow());
+    let Some((backend, adapter)) = found else {
+        eprintln!("no software-only GPU setup (a hardware adapter, none, or the probe failed): nothing to run");
+        return Ok(());
+    };
+    let log = ci_report::skip_log(root, "gpu-software");
+    // an empty log now, so a missing one afterwards means the skips went elsewhere
+    std::fs::write(&log, "").map_err(|e| format!("can't create the skip log {}: {e}", log.display()))?;
+    let (mut c, what) = tests(&with_test_targets(&["-p", ci_quick::GPU_PACKAGE]));
+    let opt_in = ci_report::ALLOW_SOFTWARE_ENV;
+    c.env(opt_in, "1").env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, &log);
+    // a skip that can't be logged fails its test: the check below needs all of them
+    c.env(ci_report::SKIP_LOG_REQUIRED_ENV, "1");
+    eprintln!("only a software adapter: {adapter} ({backend})");
+    let t = std::time::Instant::now();
+    let ran = run(c, &format!("{opt_in}=1 LIGHTCRAFT_GPU_BACKEND={backend} {what}"));
+    let seconds = t.elapsed().as_secs_f64();
+    let skips = std::fs::read_to_string(&log).map(|text| ci_report::unexpected_gpu_skips(&text)).map_err(|e| format!("{}: {e}", log.display()));
+    let result = match (ran, &skips) {
+        (Err(e), _) => Err(e),
+        (Ok(()), Err(e)) => Err(format!("can't read the skip log: {e}")),
+        (Ok(()), Ok(left)) if !left.is_empty() => Err(format!("{} unexpected GPU skip(s) on {adapter}: {}", left.len(), left.join("; "))),
+        (Ok(()), Ok(_)) => Ok(()),
+    };
+    match &skips {
+        Ok(left) if left.is_empty() => {
+            eprintln!("skip log: no GPU test skipped but the {} that can't run on a software adapter", ci_report::SOFTWARE_ADAPTER_SKIPS.len())
+        }
+        Ok(left) => eprintln!("skip log: {} unexpected GPU skip(s):\n  {}", left.len(), left.join("\n  ")),
+        Err(e) => eprintln!("skip log: {e}"),
+    }
+    *run_record.borrow_mut() = serde_json::json!({
+        "backend": backend,
+        "adapter": adapter,
+        "status": if result.is_ok() { "ok" } else { "fail" },
+        "seconds": seconds,
+        "unexpected_skips": skips.unwrap_or_default(),
+    });
+    result
 }
 
 /// Run the ignored `gpu_probe` test of lightcraft-gpu: the pipeline's device (`None`) or one
