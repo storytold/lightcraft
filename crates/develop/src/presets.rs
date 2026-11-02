@@ -106,7 +106,7 @@ impl SettingsGroup {
             SettingsGroup::Light => &["light", "hdr"],
             SettingsGroup::ToneCurve => &["curve"],
             SettingsGroup::Color => &["color"],
-            SettingsGroup::ColorMixer => &["mixer", "bw_mix", "point_colors"],
+            SettingsGroup::ColorMixer => &["mixer", "bw_mix", "point_colors", "channel_mixer"],
             SettingsGroup::ColorGrading => &["grading"],
             SettingsGroup::Effects => &["effects"],
             SettingsGroup::Vignette => &["vignette"],
@@ -124,9 +124,20 @@ impl SettingsGroup {
     }
 }
 
+/// `s` as JSON with the channel mixer written out even when it is the identity (which [`DevelopSettings::to_json`]
+/// leaves out to keep old settings' hashes): copying or syncing the Color Mixer group then resets a mixed photo, and
+/// an amount below 100 % has a number on both sides to blend.
+fn to_json_with_mixer(s: &DevelopSettings) -> Value {
+    let mut v = s.to_json();
+    if let (Some(o), Ok(m)) = (v.as_object_mut(), serde_json::to_value(s.channel_mixer)) {
+        o.entry("channel_mixer").or_insert(m);
+    }
+    v
+}
+
 /// The subset of `s` covering `groups`, as a partial JSON object.
 pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
-    let full = s.to_json();
+    let full = to_json_with_mixer(s);
     let mut out = Map::new();
     for g in groups {
         for k in g.keys() {
@@ -186,7 +197,7 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
 /// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
-    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json(), partial, amount)) };
+    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&to_json_with_mixer(s), partial, amount)) };
     // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
     s.merged(&patch).unwrap_or_else(|_| s.clone())
 }
@@ -237,6 +248,27 @@ impl Preset {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Copying the Color Mixer group carries the channel mixer, and pasting an untouched one resets a mixed photo,
+    /// though the identity isn't otherwise written (issue #2158).
+    #[test]
+    fn color_mixer_group_carries_and_resets_the_channel_mixer() {
+        let mut mixed = DevelopSettings::default();
+        mixed.channel_mixer.red.red = 0.0;
+        mixed.channel_mixer.red.blue = 100.0;
+        let plain = DevelopSettings::default();
+        let copied = extract_groups(&mixed, &[SettingsGroup::ColorMixer]);
+        assert_eq!(apply_partial(&plain, &copied, 1.0).channel_mixer, mixed.channel_mixer);
+        let untouched = extract_groups(&plain, &[SettingsGroup::ColorMixer]);
+        assert!(untouched.get("channel_mixer").is_some());
+        assert!(apply_partial(&mixed, &untouched, 1.0).channel_mixer.is_identity());
+        // other groups leave it alone
+        let light = extract_groups(&plain, &[SettingsGroup::Light]);
+        assert_eq!(apply_partial(&mixed, &light, 1.0).channel_mixer, mixed.channel_mixer);
+        // at half strength the mix blends halfway (both sides are numbers, so the preset isn't dropped)
+        let half = apply_partial(&plain, &copied, 0.5);
+        assert_eq!((half.channel_mixer.red.red, half.channel_mixer.red.blue), (50.0, 50.0));
+    }
 
     #[test]
     fn extract_and_apply_roundtrip() {
