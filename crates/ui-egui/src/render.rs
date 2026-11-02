@@ -836,7 +836,10 @@ impl Renderer {
         let request_id = lightcraft_preview::next_tick();
         self.requests.insert(slot, Requested { look: None, id: request_id, source: None });
         let display = self.display.clone();
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)));
+        // (on the view pool too, as a photo's view render: an export can't hold an on-screen title
+        // slide back; review of PR #3530)
+        let turn = Turn::of(slot, priority);
+        self.pool.submit(slot, key, priority, Box::new(move || turn.scope(move || Self::run_for(|| compose.result(request_id), &display))));
     }
 
     /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one

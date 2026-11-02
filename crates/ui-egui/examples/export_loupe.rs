@@ -35,8 +35,13 @@ fn main() {
     let long_edge: u32 = env("LONG_EDGE", "6000").parse().unwrap();
     let limit_kb: u32 = env("LIMIT_KB", "5120").parse().unwrap();
     let pause = Duration::from_millis(env("PAUSE_MS", "3000").parse().unwrap());
-    if let (Ok(mb), Ok(jobs)) = (std::env::var("GPU_MB"), std::env::var("GPU_JOBS")) {
-        lightcraft_engine::gpu::set_batch_limits(Some(mb.parse::<u64>().unwrap() << 20), Some(jobs.parse().unwrap()));
+    // (each applies on its own, as wedding_export_bench's flags do; review of PR #3530)
+    let (mb, jobs) = (std::env::var("GPU_MB").ok(), std::env::var("GPU_JOBS").ok());
+    if mb.is_some() || jobs.is_some() {
+        lightcraft_engine::gpu::set_batch_limits(
+            mb.map(|mb| mb.parse::<u64>().expect("GPU_MB: megabytes") << 20),
+            jobs.map(|j| j.parse().expect("GPU_JOBS: a number of renders")),
+        );
     }
 
     let mut s = Session::new().with_fs().with_system_clock();
@@ -128,7 +133,9 @@ fn main() {
         track(&h);
         std::thread::sleep(Duration::from_millis(5));
     }
-    eprintln!("{:8.1} s export finished: {:?}", t0.elapsed().as_secs_f64(), h.app.last_export_result.as_ref().map(|r| r["exported"].clone()));
+    // (the wait can end at its deadline with the export still going: say so; review of PR #3530)
+    let state = if h.app.export.is_some() { "export still running after 900 s" } else { "export finished" };
+    eprintln!("{:8.1} s {state}: {:?}", t0.elapsed().as_secs_f64(), h.app.last_export_result.as_ref().map(|r| r["exported"].clone()));
     println!("open,during_export,first_ms,finished_ms");
     for (k, e, f, m) in results {
         println!("{k},{e},{f:.0},{m:.0}");

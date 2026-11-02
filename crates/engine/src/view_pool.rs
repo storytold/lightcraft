@@ -22,7 +22,16 @@ pub fn run<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 #[cfg(not(target_arch = "wasm32"))]
 fn pool() -> Option<&'static rayon::ThreadPool> {
     static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().thread_name(|i| format!("lc-view-{i}")).build().ok()).as_ref()
+    POOL.get_or_init(|| {
+        // (a pool that can't be made is said once: view renders then share the export's pool,
+        // and the log tells why the loupe is slow during an export; review of PR #3530)
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("lc-view-{i}"))
+            .build()
+            .inspect_err(|e| log::warn!("view pool: no threads of its own ({e}); view renders share the processor pool"))
+            .ok()
+    })
+    .as_ref()
 }
 
 #[cfg(target_arch = "wasm32")]

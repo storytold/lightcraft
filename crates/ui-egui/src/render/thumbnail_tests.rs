@@ -1457,3 +1457,17 @@ fn stand_ins_take_the_turn_of_their_thumbnail() {
         assert_eq!(LAST_TURN.with(std::cell::Cell::get), Some(turn), "a stand-in at priority {priority}");
     }
 }
+
+/// Review of PR #3530: a view job run through its turn runs on the view pool's own threads (not
+/// only `view_pool::run` called directly); a thumbnail's doesn't.
+#[test]
+fn a_view_job_runs_on_the_view_pool() {
+    use crate::render::Turn;
+    let name = || std::thread::current().name().unwrap_or_default().to_string();
+    let turn = Turn::of(Slot::Main, 0);
+    assert_eq!(turn, Turn::View);
+    assert!(turn.run(name).starts_with("lc-view-"), "the loupe's render");
+    assert!(turn.scope(name).starts_with("lc-view-"), "the loupe's whole job");
+    let background = crate::panels::grid::BACKGROUND_THUMB_PRIORITY;
+    assert!(!Turn::of(Slot::Thumb(PhotoId(1)), background + 10).run(name).starts_with("lc-view-"), "a thumbnail's");
+}

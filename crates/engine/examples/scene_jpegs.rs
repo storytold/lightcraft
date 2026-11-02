@@ -26,7 +26,11 @@ fn main() {
         // a different seed per copy, so no two files are the same picture
         let img = lightcraft_scenes::Scene { seed: s.seed.wrapping_add(i as u32 * 7919), ..s.clone() }.render(w, h).to_srgb8();
         let bytes = encode_jpeg(&EncodeImage::rgba8(&img), 92, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
-        std::fs::write(&path, bytes).unwrap();
+        // (written under another name, then renamed: an interrupted run leaves no cut-short
+        // scene-NN.jpg that the next run would skip as done; review of PR #3530)
+        let part = path.with_extension("jpg.part");
+        std::fs::write(&part, bytes).unwrap();
+        std::fs::rename(&part, &path).unwrap();
         eprintln!("{} ({} MB)", path.display(), std::fs::metadata(&path).unwrap().len() >> 20);
     }
 }
