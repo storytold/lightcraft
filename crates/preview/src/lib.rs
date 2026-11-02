@@ -226,9 +226,11 @@ impl PreviewCache {
                 a.clear();
             }
             a.insert(alias, real);
+            // (an earlier picture read back from the alias's file is no longer the latest one; under the
+            // aliases lock, so a `put_latest_own` can't put its picture in between and lose it: CodeRabbit
+            // on #3577)
+            self.mem.lock().unwrap_or_else(|e| e.into_inner()).remove(&alias);
         }
-        // (an earlier picture read back from the alias's file is no longer the latest one)
-        self.mem.lock().unwrap_or_else(|e| e.into_inner()).remove(&alias);
         if let Some(d) = &self.disk {
             // (the photo's only picture of its edit, until its next render: pruned last)
             d.keep_last_one(alias);
@@ -248,9 +250,13 @@ impl PreviewCache {
         if *current != Some(generation) {
             return;
         }
-        self.aliases.lock().unwrap_or_else(|e| e.into_inner()).remove(&alias);
         let c = cost(&img);
-        self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(alias, img.clone(), c);
+        {
+            // (both under the aliases lock, as in `put_latest`: the alias and its picture change together)
+            let mut a = self.aliases.lock().unwrap_or_else(|e| e.into_inner());
+            a.remove(&alias);
+            self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(alias, img.clone(), c);
+        }
         drop(current);
         if let Some(d) = &self.disk {
             d.keep_last_one(alias);
