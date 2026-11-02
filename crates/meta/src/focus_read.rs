@@ -116,23 +116,43 @@ fn cr3(reader: &mut Reader<'_>, head: Vec<u8>) -> io::Result<Option<FocusPoint>>
     bytes.truncate(usize::try_from(end).unwrap_or(usize::MAX));
     // the XMP box Canon writes right after `moov`: it may name the camera when the Exif doesn't
     // (the whole-file read uses it too; review of #3566)
-    // (a read error or the budget there leaves the point to the moov box alone)
-    if end.saturating_add(24) <= reader.len
-        && let Ok(h) = reader.fetch(end, end.saturating_add(24))
-    {
-        let size = h.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map_or(0, |b| u64::from(u32::from_be_bytes(b)));
-        let is_xmp = h.get(4..8) == Some(b"uuid".as_slice()) && h.get(8..24) == Some(crate::cr3::XMP_UUID.as_slice());
-        let box_end = end.saturating_add(size);
-        if is_xmp
-            && size >= 24
-            && box_end <= reader.len
-            && let Ok(body) = reader.fetch(end.saturating_add(24), box_end)
-        {
-            bytes.extend_from_slice(&h);
-            bytes.extend_from_slice(&body);
-        }
+    if let Some(xmp) = xmp_box(reader, end) {
+        bytes.extend_from_slice(&xmp);
     }
     Ok(crate::extract(&bytes).focus)
+}
+
+/// The XMP `uuid` box starting at `at`, whole (header, UUID and body), or `None` when there is
+/// none, it is cut short, or reading it fails or goes over the budget (the point then comes from
+/// the `moov` box alone). Its size word may be `1`, a 64-bit size after the type, as
+/// [`crate::cr3::boxes`] reads it in the whole-file read.
+fn xmp_box(reader: &mut Reader<'_>, at: u64) -> Option<Vec<u8>> {
+    let mut head = reader.fetch(at, at.checked_add(8)?).ok()?;
+    let word = head.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes)?;
+    if head.get(4..8) != Some(b"uuid".as_slice()) {
+        return None;
+    }
+    let (size, hdr) = if word == 1 {
+        let ext = reader.fetch(at.checked_add(8)?, at.checked_add(16)?).ok()?;
+        let size = ext.get(..8).and_then(|b| <[u8; 8]>::try_from(b).ok()).map(u64::from_be_bytes)?;
+        head.extend_from_slice(&ext);
+        (size, 16u64)
+    } else {
+        (u64::from(word), 8u64)
+    };
+    let uuid_end = at.checked_add(hdr)?.checked_add(16)?;
+    let box_end = at.checked_add(size)?;
+    if box_end < uuid_end || box_end > reader.len {
+        return None;
+    }
+    let uuid = reader.fetch(at.checked_add(hdr)?, uuid_end).ok()?;
+    if uuid.as_slice() != crate::cr3::XMP_UUID.as_slice() {
+        return None;
+    }
+    head.extend_from_slice(&uuid);
+    let body = reader.fetch(uuid_end, box_end).ok()?;
+    head.extend_from_slice(&body);
+    Some(head)
 }
 
 /// A file whose focus data would take more than [`MAX_HEADER_BYTES`] to read.

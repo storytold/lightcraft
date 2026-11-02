@@ -572,6 +572,30 @@ mod tests {
         assert_eq!(h.focus, m.focus, "the header read finds the XMP after moov");
     }
 
+    /// The XMP box after `moov` with a 64-bit size word (size `1`, the size after the type): the
+    /// header read takes it as the whole-file read does (review of #3566).
+    #[test]
+    fn canon_af_point_from_cr3_with_the_camera_in_an_xmp_box_of_64_bit_size() {
+        let mut file = sample_with_af_exif(tiff_with(lightcraft_tiff::tags::ISO_SPEED, lightcraft_tiff::Value::Short(vec![100])));
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Make="Canon" tiff:Model="Canon EOS R5 C"/></rdf:RDF></x:xmpmeta>"#;
+        let mut big = 1u32.to_be_bytes().to_vec();
+        big.extend_from_slice(b"uuid");
+        big.extend_from_slice(&((16 + 16 + xmp.len()) as u64).to_be_bytes());
+        big.extend_from_slice(&XMP_UUID);
+        big.extend_from_slice(xmp);
+        let moov_end = file.windows(4).position(|w| w == b"mdat").unwrap() - 4;
+        file.splice(moov_end..moov_end, big);
+        let m = crate::extract(&file);
+        assert_eq!(m.model.as_deref(), Some("Canon EOS R5 C"), "the whole-file read takes the 64-bit box");
+        assert!(m.focus.is_some(), "a point");
+        let h = crate::focus::read_header(file.len() as u64, &mut |off, buf| {
+            buf.copy_from_slice(&file[off as usize..off as usize + buf.len()]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(h.focus, m.focus, "the header read takes it too");
+    }
+
     /// Canon's AF point comes out of a CR3, read whole or by its header alone (the moov box).
     #[test]
     fn canon_af_point_from_cr3_whole_and_header() {
