@@ -287,6 +287,13 @@ pub struct LightcraftApp {
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
+    /// Zoomed past the whole-frame render: the share (0..1) of the photo on screen that the last
+    /// frame drew sharp, from window renders (the rest is the whole-frame render magnified); `None`
+    /// when the view needs no window.
+    pub loupe_sharp: Option<f32>,
+    /// Where the zoomed view's visible area began last frame (photo, frame size, top-left in frame
+    /// pixels): how far it moved, so a pan asks for the window it is heading into.
+    pub(crate) pan_seen: Option<(lightcraft_catalog::PhotoId, (usize, usize), (f32, f32))>,
     /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
     /// windows whose textures can be on screen, and for the inspector.
     pub region_view: Option<region::RegionView>,

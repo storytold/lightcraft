@@ -94,6 +94,8 @@ impl LightcraftApp {
             space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            loupe_sharp: None,
+            pan_seen: None,
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),

@@ -141,7 +141,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
             // why its render failed (the loupe then shows a stand-in, or nothing, for good)
             "failed": app.renderer.failure_of(crate::render::Slot::Main, p),
             // zoomed past the whole-frame render: the window rendered at no more than 100 % (pixels of its frame)
-            "region": app.region_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::Region)})),
+            "region": app.region_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::Region), "sharp": app.loupe_sharp, "panTiles": app.renderer.pan_tile_count()})),
             // …and the same for the Before side of a Before/After view
             "regionBefore": app.region_before_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::RegionBefore)})),
         })),

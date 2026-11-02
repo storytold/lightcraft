@@ -1306,3 +1306,34 @@ fn undo_to_embedded_thumb_rejects_late_full_render() {
     assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
     assert!(!app.renderer.is_pending(full_slot));
 }
+
+#[test]
+fn a_window_made_ahead_and_let_go_by_the_byte_limit_is_not_made_again() {
+    // (a demo photo: its pixels are made, not read from a file)
+    let mut session = Session::with_demo();
+    let id = session.catalog.photos().next().expect("a demo photo").id;
+    let mut renderer = Renderer { pool: JobPool::new(0), ..Default::default() };
+    let job = session.thumb_job(id, 64).unwrap();
+    let key = job.key;
+    let make = |renderer: &mut Renderer, session: &mut Session| {
+        renderer.prefetch_near(job.clone(), 1);
+        assert!(renderer.is_pending(Slot::RegionNear));
+        assert_eq!(renderer.pool.run_inline(1), 1);
+        assert!(renderer.wait_for_worker(std::time::Duration::ZERO));
+        renderer.poll(&egui::Context::default(), session);
+        assert_eq!(renderer.pan_tile_count(), 1);
+        assert!(renderer.near_made(key));
+    };
+    make(&mut renderer, &mut session);
+    // let go by the view (it left that photo, zoom or look): made again when it comes back
+    renderer.retain_pan_tiles(|_| false);
+    assert!(!renderer.near_made(key));
+    make(&mut renderer, &mut session);
+    // let go as the byte limit does: not made again while the view stays
+    renderer.pan_tiles.clear();
+    renderer.prefetch_near(job.clone(), 1);
+    assert!(!renderer.is_pending(Slot::RegionNear), "a neighbour window the byte limit let go is rendered again");
+    // leaving the zoomed view forgets it
+    renderer.release(Slot::Region);
+    assert!(!renderer.near_made(key));
+}
