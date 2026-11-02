@@ -184,7 +184,7 @@ fn locale_tags_normalize() {
     assert_eq!(Locale::parse_tag("xx"), None);
 }
 
-/// The web host's "Auto" (issue #2085): the browser's `navigator.languages` in order, first
+/// The hosts' "Auto" (issue #2085): the browser's `navigator.languages`, or the system's languages, in order, first
 /// shipped language wins, unsupported tags are skipped, an empty or foreign list stays English
 /// ([`default_language`] fallback).
 #[test]
@@ -196,6 +196,9 @@ fn locale_from_tags_takes_the_first_shipped_language() {
     assert_eq!(locale_from_tags(&["zh-TW".into(), "en".into()]), Some(Locale::ZhHant));
     assert_eq!(locale_from_tags(&["ja_JP.UTF-8".into(), "en".into()]), Some(Locale::Ja));
     assert_eq!(locale_from_tags(&["pt".into(), "pt-BR".into()]), Some(Locale::PtBr));
+    // A language set up with a region it has no catalog of its own for (Russian in Slovakia).
+    assert_eq!(locale_from_tags(&["ru-SK".into(), "en-SK".into(), "sk-SK".into()]), Some(Locale::Ru));
+    assert_eq!(locale_from_tags(&["en-US".into(), "ru-RU".into()]), Some(Locale::En));
 }
 
 #[test]
