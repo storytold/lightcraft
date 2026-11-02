@@ -350,7 +350,7 @@ pub fn roll_plan(s: &mut Session, p: &Value) -> Result<RollPlan> {
 /// each frame; stops with an error when `cancel` is set. A frame that can't be read or measured is left out (its id
 /// and why come back in the list); an error when fewer than two frames could be measured.
 pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, progress: &dyn Fn(usize)) -> std::result::Result<RollMeasured, String> {
-    use lightcraft_pipeline::negative::{analyze_roll, base_spread, measure_frame, thin_for_roll};
+    use lightcraft_pipeline::negative::{analyze_roll, measure_frame, thin_for_roll};
     let mut measured = Vec::with_capacity(plan.frames.len());
     let mut skipped = Vec::new();
     for (i, f) in plan.frames.iter().enumerate() {
@@ -372,13 +372,18 @@ pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, pro
     if measured.len() < 2 {
         return Err(format!("only {} of {} frames could be measured", measured.len(), plan.frames.len()));
     }
-    let frames: Vec<_> = measured.iter().map(|(_, m)| m.clone()).collect();
+    let (ids, frames): (Vec<PhotoId>, Vec<_>) = measured.into_iter().unzip();
     let analysis = analyze_roll(plan.film, &frames)?;
-    let spread = base_spread(&frames);
-    let mixed = (spread > MIXED_SCANS).then(|| {
+    let mixed = mixed_scans(&frames);
+    Ok(RollMeasured { analysis, skipped, mixed, frames: ids.into_iter().zip(frames).collect() })
+}
+
+/// The warning a roll sync gives when its frames' film bases disagree (`base_spread` past [`MIXED_SCANS`]).
+fn mixed_scans(frames: &[lightcraft_pipeline::negative::FrameMeasure]) -> Option<String> {
+    let spread = lightcraft_pipeline::negative::base_spread(frames);
+    (spread > MIXED_SCANS).then(|| {
         format!("the film bases found on these frames differ by {:.0} %: they look scanned differently (light, exposure or scanner), so one analysis may not fit them all", (spread - 1.0) * 100.0)
-    });
-    Ok(RollMeasured { analysis, skipped, mixed, frames: measured })
+    })
 }
 
 /// Largest ratio between film bases found on a roll's frames before a sync warns that they look scanned differently.
@@ -399,7 +404,7 @@ pub struct RollMeasured {
 /// step; frames not yet converted are converted (their edits made on the negative reset unless the plan keeps them).
 pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Result<Value> {
     const C: &str = "negative.syncRoll";
-    let RollMeasured { analysis: mut roll, mut skipped, mixed, frames } = measured;
+    let RollMeasured { analysis: mut roll, mut skipped, mut mixed, frames } = measured;
     // a frame edited in any way while the roll was read (its crop or film type, an unlock, or an edit the sync would
     // reset) keeps its newer edit: it is left out, and neither written nor counted in the roll's numbers
     let before = skipped.len();
@@ -413,6 +418,8 @@ pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Re
         let kept: Vec<_> = frames.into_iter().filter(|(id, _)| !skipped.iter().any(|(k, _)| k == id)).map(|(_, m)| m).collect();
         if kept.len() >= 2 {
             roll = lightcraft_pipeline::negative::analyze_roll(plan.film, &kept).map_err(|e| bad(C, e))?;
+            // (and the warning about mixed scans, from the frames written only)
+            mixed = mixed_scans(&kept);
         }
     }
     let ids: Vec<PhotoId> = plan.frames.iter().map(|f| f.id).filter(|id| !skipped.iter().any(|(k, _)| k == id)).collect();

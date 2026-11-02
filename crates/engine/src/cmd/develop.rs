@@ -68,11 +68,17 @@ pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value,
     let info = &wb_info_after(info, d, partial);
     let mut d = (*d).clone();
     // the white the photo renders is read in the conversion state it ends in (a partial that switches the conversion
-    // off keeps the raw's as-shot white for the field it leaves out, not the positive's neutral)
-    if let Ok(after) = d.merged(partial) {
-        d.negative = after.negative;
-        d.set_section_enabled("negative", after.section_enabled("negative"));
-    }
+    // off keeps the raw's as-shot white for the field it leaves out, not the positive's neutral); the settings returned
+    // keep the photo's own conversion, since a preset interpolates from them (at 0 % it must change nothing)
+    let after = d.merged(partial).ok();
+    let in_final_state = |d: &DevelopSettings| {
+        let mut v = d.clone();
+        if let Some(a) = &after {
+            v.negative = a.negative;
+            v.set_section_enabled("negative", a.section_enabled("negative"));
+        }
+        v
+    };
     let wb = partial.get("wb").and_then(Value::as_object);
     // the partial names one of the two numbers, and not both or neither
     let one_field = wb.is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"));
@@ -92,13 +98,13 @@ pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value,
     // a mode that answers its own white would swallow the partial's number: write the white the photo really
     // renders as Custom values, so the number means what it says and the other field carries that white's look
     if !wb.is_some_and(|wb| wb.contains_key("mode")) && wb_mode_ignores_its_numbers(d.wb.mode, info) {
-        let (t, tint) = lightcraft_pipeline::local::effective_wb(info, &d);
+        let (t, tint) = lightcraft_pipeline::local::effective_wb(info, &in_final_state(&d));
         (d.wb.mode, d.wb.temp, d.wb.tint) = (WbMode::Custom, t, tint);
     }
     if kelvin_source && partial_scale == lightcraft_develop::WbScale::Legacy {
         // and onto the partial's scale, so the field the partial leaves out is the photo's own look read there
         let as_shot = (info.as_shot_temp, info.as_shot_tint);
-        let (kt, ktint) = lightcraft_pipeline::local::effective_wb(info, &d);
+        let (kt, ktint) = lightcraft_pipeline::local::effective_wb(info, &in_final_state(&d));
         if let Some((lt, ltint)) = lightcraft_pipeline::local::kelvin_to_legacy(kt, ktint, as_shot) {
             (d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale) = (WbMode::Custom, lt, ltint, lightcraft_develop::WbScale::Legacy);
         }
@@ -1201,7 +1207,15 @@ pub fn specs() -> Vec<CommandSpec> {
                     // the same keys as before, with the current values
                     None => {
                         let keys: Vec<String> = pr.settings.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
-                        Value::Object(keys.into_iter().filter_map(|k| current.get(&k).cloned().map(|v| (k, v))).collect())
+                        // (the Negative group spelled out in full, as extract_groups gives it: the photo's saved JSON
+                        // leaves it out while it is off, which would drop it from the preset)
+                        let photo: DevelopSettings = serde_json::from_value(current.clone()).unwrap_or_default();
+                        let negative = lightcraft_develop::extract_groups(&photo, &[SettingsGroup::Negative]).get("negative").cloned();
+                        Value::Object(
+                            keys.into_iter()
+                                .filter_map(|k| if k == "negative" { negative.clone() } else { current.get(&k).cloned() }.map(|v| (k, v)))
+                                .collect(),
+                        )
                     }
                 };
                 // (the conversion's options, never this frame's film base, range or roll lock)

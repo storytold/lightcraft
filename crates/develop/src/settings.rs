@@ -1420,6 +1420,7 @@ impl FilmAnalysis {
             && fin(&self.lo)
             && fin(&self.hi)
             && fin(&self.mid)
+            && self.tones.is_none_or(|t| t.iter().all(fin))
             && self.base.iter().all(|b| *b > 0.0)
             && self.lo.iter().zip(&self.hi).all(|(l, h)| h - l > 1e-4)
     }

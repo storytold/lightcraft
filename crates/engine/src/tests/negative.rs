@@ -344,6 +344,7 @@ fn updating_a_preset_from_a_converted_photo_keeps_out_its_film_base_and_lock() {
         s.execute("preset.update", &p).unwrap();
         let n = &s.presets.iter().find(|x| x.id == pid).unwrap().settings["negative"];
         assert!(n.get("analysis").is_none() && n.get("locked").is_none(), "{p}: {n}");
+        assert_eq!(n["film"], "colorNegative", "{p}: the group's options are kept");
     }
 }
 
@@ -375,4 +376,34 @@ fn a_frame_left_out_of_a_roll_doesn_t_count_in_its_numbers() {
     fresh.execute("negative.syncRoll", &json!({"ids": [ids[0], ids[2]], "wait": true})).unwrap();
     let alone = fresh.develop_of(lightcraft_catalog::PhotoId(ids[0])).unwrap().negative.analysis.unwrap();
     assert_eq!((written.lo, written.hi, written.tones), (alone.lo, alone.hi, alone.tones));
+}
+
+#[test]
+fn a_white_balance_preset_that_switches_the_conversion_off_changes_nothing_at_zero() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.presets.push(lightcraft_develop::Preset {
+        id: "user.wb-off".into(),
+        name: "WB, conversion off".into(),
+        group: "User".into(),
+        settings: json!({"negative": {"film": "off"}, "wb": {"temp": 5000.0}}),
+        favorite: false,
+        builtin: false,
+    });
+    s.execute("preset.apply", &json!({"id": "user.wb-off", "amount": 0})).unwrap();
+    assert!(neg(&s).converts(), "0 % leaves the photo converted");
+    s.execute("preset.apply", &json!({"id": "user.wb-off", "amount": 100})).unwrap();
+    assert!(!neg(&s).converts(), "100 % applies it");
+}
+
+#[test]
+fn updating_a_preset_from_an_unconverted_photo_keeps_its_negative_group() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.execute("preset.create", &json!({"name": "Conv", "groups": ["negative"]})).unwrap();
+    let pid = s.presets.iter().find(|p| p.name == "Conv").unwrap().id.clone();
+    s.execute("negative.reset", &json!({})).unwrap();
+    s.execute("preset.update", &json!({"id": pid})).unwrap();
+    let n = &s.presets.iter().find(|x| x.id == pid).unwrap().settings["negative"];
+    assert_eq!(n["film"], "off", "the group stays, now off: {n}");
 }

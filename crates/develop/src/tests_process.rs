@@ -211,7 +211,26 @@ fn absurd_film_analysis_numbers_are_not_valid() {
     use crate::FilmAnalysis;
     let ok = FilmAnalysis { base: [0.6, 0.5, 0.3], lo: [0.1; 3], hi: [1.4; 3], ..FilmAnalysis::default() };
     assert!(ok.is_valid());
-    for bad in [FilmAnalysis { hi: [1.0e30; 3], ..ok }, FilmAnalysis { base: [1.0e39, 0.5, 0.3], ..ok }, FilmAnalysis { mid: [-1.0e20; 3], ..ok }] {
+    for bad in [
+        FilmAnalysis { hi: [1.0e30; 3], ..ok },
+        FilmAnalysis { base: [1.0e39, 0.5, 0.3], ..ok },
+        FilmAnalysis { mid: [-1.0e20; 3], ..ok },
+        FilmAnalysis { tones: Some([[1.0e30; 3]; 9]), ..ok },
+    ] {
         assert!(!bad.is_valid(), "{bad:?}");
     }
+}
+
+/// A merge (a preset, a paste) that changes the film type unlocks a roll-synced frame: the roll's numbers were measured
+/// for the old type, and the frame is measured on its own now.
+#[test]
+fn a_merge_that_changes_the_film_type_unlocks_the_frame() {
+    use crate::FilmType;
+    let mut d = DevelopSettings::default();
+    d.negative.film = FilmType::ColorNegative;
+    d.negative.locked = true;
+    let other = d.merged(&serde_json::json!({"negative": {"film": "bwNegative"}})).unwrap();
+    assert!(!other.negative.locked);
+    let same = d.merged(&serde_json::json!({"negative": {"contrast": 20.0}})).unwrap();
+    assert!(same.negative.locked, "the same film type keeps the roll's lock");
 }

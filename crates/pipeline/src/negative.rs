@@ -251,7 +251,10 @@ pub fn detect_base(src: &Rgb32f, clear: [f32; 3], interior: Rect, one_strip: boo
     let mut group: Option<Vec<&([f32; 3], Rect, f32)>> = None;
     for (i, t) in found.iter().enumerate() {
         let anchor = t.0;
-        if rejected.iter().any(|r| same(&anchor, r)) {
+        // (only a colour nearly the rejected one's, within half the tolerance either way, would make the same
+        // cluster again: a darker rebate a few percent off a brighter patch is still tried)
+        let near = |a: &[f32; 3], r: &[f32; 3]| a.iter().zip(r).all(|(x, y)| (x - y).abs() <= 0.5 * SAME_EDGE * x.min(*y));
+        if rejected.iter().any(|r| near(&anchor, r)) {
             continue;
         }
         let g: Vec<&([f32; 3], Rect, f32)> = found.iter().skip(i).filter(|u| same(&u.0, &anchor)).collect();
