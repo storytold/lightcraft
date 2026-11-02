@@ -712,7 +712,9 @@ mod imp {
     /// is scored like a suggestion (the mean of its two closest faces of theirs) and kept above four fifths of the
     /// model's suggestion bar, since a person looks at these before anything is named; a face that does not look clearly
     /// more like them than like anyone else already named (by [`DEFAULT_MARGIN`]) is left out. Only faces already embedded can be
-    /// found; `ready` says whether recognition is running at all.
+    /// found, and only named faces already embedded count as someone else: while the scan runs, a face can be offered until
+    /// the faces of the person it looks more like are embedded. At most [`RIVAL_CHECKS`] times `limit` faces are checked
+    /// against everyone else; `ready` says whether recognition is running at all.
     pub fn similar(s: &mut Session, key: &str, limit: usize) -> Similar {
         let none = Similar { items: Vec::new(), ready: false, pending: 0 };
         let Some(dir) = s.face_models_dir.clone() else { return none };
@@ -765,6 +767,7 @@ mod imp {
         // the page. Best first, a batch at a time until the page is full
         let others: Vec<Vec<&[f32]>> = others.values().map(|faces| faces_of(faces, skip_odd)).collect();
         let mut kept = Vec::with_capacity(limit);
+        scored.truncate(limit.saturating_mul(RIVAL_CHECKS));
         for batch in scored.chunks(256) {
             let theirs: Vec<bool> = batch
                 .par_iter()
@@ -786,6 +789,12 @@ mod imp {
             .collect();
         Similar { items, ..ready }
     }
+
+    /// How many times the page's size in faces a person's page checks against everyone else already named, best first:
+    /// each check is a pass over every named face in the library (some 50 000), and it runs while the window waits, so
+    /// a person whose look-alikes are mostly someone else's gets a shorter page rather than a frozen window. The next
+    /// page (after a face is named) checks the next ones.
+    const RIVAL_CHECKS: usize = 4;
 
     /// Most faces put in order of likeness (the order is a pass over every pair of them).
     const MAX_ARRANGED: usize = 1500;
