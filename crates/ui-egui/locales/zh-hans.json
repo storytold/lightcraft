@@ -2395,7 +2395,7 @@
   "Always merge into the open library": "始终合并到当前打开的图库",
   "Don't ask again (always merge into the open library)": "不再询问（始终合并到当前打开的图库）",
   "When importing a Lightroom catalog": "导入 Lightroom 目录时",
-  "To be asked again: Settings → General → When importing a Lightroom catalog.": "如需再次询问，请转到“设置 → 一般 → 导入 Lightroom 目录时”。",
+  "To be asked again: Settings → General → When importing a Lightroom catalog.": "如需再次询问，请转到“设置 → 常规 → 导入 Lightroom 目录时”。",
   "Another library was opened since this window appeared: nothing was imported": "此窗口打开后切换了图库：未导入任何内容",
   "Create Library and Import": "创建图库并导入",
   "Create a new library": "创建新图库",
