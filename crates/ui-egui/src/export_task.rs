@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch_cancellable};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -56,12 +56,23 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
-        let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
-            if let Ok(mut g) = p.lock() {
-                *g = (done, name.to_string());
-            }
-            !c.load(Ordering::Relaxed)
-        });
+        // (the cancel flag is watched while photos render too: a cancel stops within a second, note 28)
+        let flag = Some(c.clone());
+        let r = run_batch_cancellable(
+            items,
+            &opts,
+            &to,
+            &mut w,
+            &|path| std::path::Path::new(path).exists(),
+            false,
+            &mut |done, name| {
+                if let Ok(mut g) = p.lock() {
+                    *g = (done, name.to_string());
+                }
+                !c.load(Ordering::Relaxed)
+            },
+            flag,
+        );
         let r = r.map(|files| {
             if !after.is_none() {
                 // Photos can't be stopped once asked: no ✕ from here, before the last look at

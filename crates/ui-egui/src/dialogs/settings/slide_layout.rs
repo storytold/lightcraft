@@ -258,7 +258,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
         return;
     };
     let drawn = crate::panels::detail::fit_texture_rect(rect, tex.size);
-    p.image(tex.tex.id(), drawn, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    p.image(tex.id(), drawn, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     if s.show_guides {
         // the margins, as lines across the slide (where the image cell's edges are)
         let aspect = app.session.slide_photo_aspect(id).unwrap_or(1.5);
@@ -302,7 +302,7 @@ fn title_preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, rect: R
     match app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == lightcraft_catalog::PhotoId(0)) {
         Some(tex) => {
             let drawn = crate::panels::detail::fit_texture_rect(rect, tex.size);
-            p.image(tex.tex.id(), drawn, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            p.image(tex.id(), drawn, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         None => {
             let c = look.titles.screen(title).color;

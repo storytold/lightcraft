@@ -419,11 +419,10 @@ pub fn compute(
     let ch = if o.multichannel { 3 } else { 1 };
     let y = |p: &[f32; 3]| luma[0] * p[0] + luma[1] * p[1] + luma[2] * p[2];
     let ratio = |a: f32, b: f32| ((b.max(0.0) + o.offset) / (a.max(0.0) + o.offset)).log2();
-    // block means of the log gains
+    // block means of the log gains, a row of blocks at a time (rows in parallel: a 45 MP photo's
+    // map took over a second on one core)
     let mut gains = vec![0f32; gw * gh * ch];
-    let mut lo = [f32::MAX; 3];
-    let mut hi = [f32::MIN; 3];
-    for gy in 0..gh {
+    let gain_row = |gy: usize, row: &mut [f32]| {
         for gx in 0..gw {
             let mut acc = [0f32; 3];
             let mut count = 0f32;
@@ -443,12 +442,19 @@ pub fn compute(
             }
             for c in 0..ch {
                 let g = if count > 0.0 { acc[c] / count } else { 0.0 };
-                let g = if g.is_finite() { g } else { 0.0 };
-                gains[(gy * gw + gx) * ch + c] = g;
-                lo[c] = lo[c].min(g);
-                hi[c] = hi[c].max(g);
+                if let Some(v) = row.get_mut(gx * ch + c) {
+                    *v = if g.is_finite() { g } else { 0.0 };
+                }
             }
         }
+    };
+    lightcraft_raster::par_rows(&mut gains, gw * ch, gain_row);
+    let mut lo = [f32::MAX; 3];
+    let mut hi = [f32::MIN; 3];
+    for (i, g) in gains.iter().enumerate() {
+        let c = i % ch;
+        lo[c] = lo[c].min(*g);
+        hi[c] = hi[c].max(*g);
     }
     let mut m = GainMapMeta {
         multichannel: o.multichannel,
@@ -782,6 +788,43 @@ mod tests {
             apply(&mut base, w, h, &g, &m, 0.0).unwrap();
             for (a, b) in base.iter().zip(&sdr) {
                 assert!((a[0] - b[0]).abs() < 1e-5);
+            }
+        }
+    }
+
+    /// The block means (rows of blocks worked side by side) are those of the one-pixel-at-a-time
+    /// definition, odd edges included.
+    #[test]
+    fn block_gains_match_the_definition() {
+        let (w, h) = (37, 23);
+        let (sdr, hdr) = renditions(w, h);
+        for (scale, multichannel) in [(2, false), (4, true), (1, false)] {
+            let o = GainMapOptions { scale, multichannel, ..GainMapOptions::default() };
+            let (g, m) = compute(&sdr, &hdr, w, h, [0.2126, 0.7152, 0.0722], &o).unwrap();
+            let ch = if multichannel { 3 } else { 1 };
+            let (gw, gh) = (w.div_ceil(scale), h.div_ceil(scale));
+            assert_eq!((g.width, g.height, g.data.len()), (gw, gh, gw * gh * ch));
+            let y = |p: &[f32; 3]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+            let ratio = |a: f32, b: f32| ((b.max(0.0) + o.offset) / (a.max(0.0) + o.offset)).log2();
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    let mut acc = [0f32; 3];
+                    let mut n = 0.0;
+                    for yy in gy * scale..((gy + 1) * scale).min(h) {
+                        for xx in gx * scale..((gx + 1) * scale).min(w) {
+                            let (a, b) = (&sdr[yy * w + xx], &hdr[yy * w + xx]);
+                            for c in 0..ch {
+                                acc[c] += if multichannel { ratio(a[c], b[c]) } else { ratio(y(a), y(b)) };
+                            }
+                            n += 1.0;
+                        }
+                    }
+                    for c in 0..ch {
+                        let norm = ((acc[c] / n - m.min[c]) / (m.max[c] - m.min[c])).clamp(0.0, 1.0);
+                        let want = (norm.powf(o.gamma) * 255.0).round() as u8;
+                        assert_eq!(g.data[(gy * gw + gx) * ch + c], want, "block {gx},{gy} channel {c} at scale {scale}");
+                    }
+                }
             }
         }
     }

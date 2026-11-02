@@ -19,7 +19,7 @@ use serde::Serialize;
 /// - an eighth for the GPU renderer's pool of recycled buffers (trimmed when the app is idle).
 ///
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
-/// batch may, in addition, hold up to twice the budget in photos rendering side by side
+/// batch may, in addition, hold up to twice the budget (or 45 % of the RAM, if more) in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
 /// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
@@ -33,8 +33,24 @@ pub fn default_budget() -> usize {
     }
 }
 
-/// Physical memory (bytes), when the platform tells us without native calls.
-pub(crate) fn total_ram() -> Option<usize> {
+/// Where the platform tells its memory only through a system call (Windows): the apps install
+/// `lightcraft_sysmem::total_physical_memory` before anything asks (first call wins).
+static RAM_PROBE: OnceLock<fn() -> Option<u64>> = OnceLock::new();
+
+/// Install the probe [`total_ram`] uses on platforms that need a system call (see [`RAM_PROBE`]).
+pub fn set_ram_probe(f: fn() -> Option<u64>) {
+    let _ = RAM_PROBE.set(f);
+}
+
+/// Physical memory (bytes): read from the system where that needs no native call, else from the
+/// probe the app installed ([`set_ram_probe`]); `None` when unknown.
+pub fn total_ram() -> Option<usize> {
+    // (read once: on macOS it is a process to run, and an export asks for every photo)
+    static RAM: OnceLock<Option<usize>> = OnceLock::new();
+    *RAM.get_or_init(read_total_ram)
+}
+
+fn read_total_ram() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
         let s = std::fs::read_to_string("/proc/meminfo").ok()?;
@@ -53,7 +69,7 @@ pub(crate) fn total_ram() -> Option<usize> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
     {
-        None
+        RAM_PROBE.get().and_then(|f| f()).and_then(|b| usize::try_from(b).ok())
     }
 }
 
@@ -193,8 +209,110 @@ pub fn export_gate() -> &'static WorkGate {
 }
 
 fn export_share(budget: usize) -> usize {
-    budget.saturating_mul(2)
+    export_share_of(budget, memory_limit())
 }
+
+/// The memory this process may use: the computer's ([`total_ram`]), or a container's or cgroup's
+/// limit when that is smaller (Linux: cgroup v2 `memory.max`, else v1 `memory.limit_in_bytes`, as
+/// the process sees them); `None` when unknown.
+pub fn memory_limit() -> Option<usize> {
+    static LIMIT: OnceLock<Option<usize>> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        let cgroup = {
+            let read = |p: &str| std::fs::read_to_string(p).ok();
+            // the process's own cgroup and the ones above it (a systemd slice or a container's
+            // limit sits there, not always at the root: review of PR #3499), the smallest limit
+            let own = read("/proc/self/cgroup").map(|t| cgroup_limit_files(&t)).unwrap_or_default();
+            let mut limits: Vec<usize> = own
+                .iter()
+                .filter_map(|(v2, v1)| cgroup_limit(v2.as_deref().and_then(read).as_deref(), v1.as_deref().and_then(read).as_deref()))
+                .collect();
+            limits.extend(cgroup_limit(read("/sys/fs/cgroup/memory.max").as_deref(), read("/sys/fs/cgroup/memory/memory.limit_in_bytes").as_deref()));
+            limits.into_iter().min()
+        };
+        #[cfg(not(target_os = "linux"))]
+        let cgroup = None;
+        effective_limit(total_ram(), cgroup)
+    })
+}
+
+/// A cgroup's memory limit from its v2 `memory.max` or v1 `memory.limit_in_bytes` text: `None`
+/// for no limit (`max`, or v1's huge "unlimited" number) or text that isn't a number.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn cgroup_limit(v2: Option<&str>, v1: Option<&str>) -> Option<usize> {
+    let parse = |s: &str| s.trim().parse::<u64>().ok();
+    let bytes = match v2.map(str::trim) {
+        Some("max") => None,
+        Some(t) => parse(t),
+        None => v1.and_then(parse),
+    };
+    // (v1 says "no limit" with a number near 2^63)
+    bytes.filter(|b| *b > 0 && *b < 1 << 60).and_then(|b| usize::try_from(b).ok())
+}
+
+/// The memory limit files of the process's cgroup and of each cgroup above it, from
+/// `/proc/self/cgroup`'s text: `(v2 memory.max, v1 memory.limit_in_bytes)` per level, the
+/// process's own first, at most [`MAX_CGROUP_DEPTH`] levels (paths with `..` are ignored).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn cgroup_limit_files(proc_self_cgroup: &str) -> Vec<(Option<String>, Option<String>)> {
+    let mut out = Vec::new();
+    for line in proc_self_cgroup.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let path = path.trim();
+        if !path.starts_with('/') || path.split('/').any(|c| c == "..") {
+            continue;
+        }
+        let v2 = controllers.is_empty();
+        let v1 = controllers.split(',').any(|c| c == "memory");
+        if !v2 && !v1 {
+            continue;
+        }
+        let mut dir = path.trim_end_matches('/');
+        for _ in 0..MAX_CGROUP_DEPTH {
+            if dir.is_empty() {
+                break;
+            }
+            out.push(if v2 {
+                (Some(format!("/sys/fs/cgroup{dir}/memory.max")), None)
+            } else {
+                (None, Some(format!("/sys/fs/cgroup/memory{dir}/memory.limit_in_bytes")))
+            });
+            dir = dir.rfind('/').and_then(|i| dir.get(..i)).unwrap_or("");
+        }
+    }
+    out
+}
+
+/// Levels of the cgroup tree looked at above the process's own.
+const MAX_CGROUP_DEPTH: usize = 32;
+
+/// The smaller of the computer's memory and a cgroup's limit, whichever is known.
+pub(crate) fn effective_limit(ram: Option<usize>, cgroup: Option<usize>) -> Option<usize> {
+    match (ram, cgroup) {
+        (Some(r), Some(c)) => Some(r.min(c)),
+        (r, c) => r.or(c),
+    }
+}
+
+/// Twice the budget, or (when the memory this process may use, `limit`, is known)
+/// [`EXPORT_RAM_PERCENT`] of it if that is more, never more than [`EXPORT_LIMIT_PERCENT`] of
+/// `limit`: the budget is the caches' (at most 1.5 GiB by default), and an export's photos are
+/// transient. With only 3 GiB, a 45 MP gain map export (~4 GB of working memory each) ran one
+/// photo at a time however many lanes there were; in a 4 GiB container, twelve lanes must not
+/// reserve more than the container has.
+pub(crate) fn export_share_of(budget: usize, limit: Option<usize>) -> usize {
+    let by_ram = limit.map_or(0, |r| r / 100 * EXPORT_RAM_PERCENT);
+    let share = budget.saturating_mul(2).max(by_ram);
+    limit.map_or(share, |r| share.min(r / 100 * EXPORT_LIMIT_PERCENT))
+}
+
+/// The most of the process's memory limit an export batch may reserve, whatever the budget.
+const EXPORT_LIMIT_PERCENT: usize = 80;
+
+/// Share of the computer's memory an export batch may hold in photos side by side.
+const EXPORT_RAM_PERCENT: usize = 45;
 
 static EXPORT_GATE: OnceLock<WorkGate> = OnceLock::new();
 
@@ -320,5 +438,67 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod export_share_tests {
+    use super::export_share_of;
+
+    /// The export gate follows the computer's memory, not only the caches' budget.
+    #[test]
+    fn exports_may_use_a_share_of_the_ram() {
+        let gb = 1usize << 30;
+        // 64 GB, the default 1.5 GiB budget: ~28.8 GB of photos side by side, not 3 GiB
+        assert_eq!(export_share_of(3 * gb / 2, Some(64 * gb)), 64 * gb / 100 * 45);
+        // a large budget set by hand still counts double
+        assert_eq!(export_share_of(20 * gb, Some(64 * gb)), 40 * gb);
+        // memory unknown: twice the budget, as before
+        assert_eq!(export_share_of(gb, None), 2 * gb);
+        assert!(export_share_of(usize::MAX, Some(usize::MAX)) > 0, "no overflow");
+        assert_eq!(export_share_of(usize::MAX, None), usize::MAX, "no overflow");
+    }
+
+    /// Review of PR #3499 / #3506: a container's memory limit, not the host's RAM, sizes the
+    /// export gate. A 4 GiB limit on a 16 GiB host admits one 2 GiB photo at a time (fewer than
+    /// three), and a budget set high by hand never reserves more than 80 % of the limit.
+    #[test]
+    fn a_container_limit_sizes_the_export_gate() {
+        use super::{MAX_CGROUP_DEPTH, cgroup_limit, cgroup_limit_files, effective_limit};
+        let gb = 1usize << 30;
+        assert_eq!(cgroup_limit(Some("4294967296\n"), None), Some(4 * gb));
+        assert_eq!(cgroup_limit(Some("max\n"), Some("4294967296")), None, "v2 without a limit");
+        assert_eq!(cgroup_limit(None, Some("9223372036854771712")), None, "v1's unlimited");
+        assert_eq!(cgroup_limit(None, Some("2147483648")), Some(2 * gb));
+        assert_eq!(cgroup_limit(Some("garbage"), None), None);
+        assert_eq!(cgroup_limit(None, None), None);
+        // the process's own cgroup and those above it (review of PR #3499)
+        let v2 = cgroup_limit_files("0::/user.slice/user-1000.slice/app.scope\n");
+        assert_eq!(
+            v2.iter().filter_map(|f| f.0.as_deref()).collect::<Vec<_>>(),
+            [
+                "/sys/fs/cgroup/user.slice/user-1000.slice/app.scope/memory.max",
+                "/sys/fs/cgroup/user.slice/user-1000.slice/memory.max",
+                "/sys/fs/cgroup/user.slice/memory.max"
+            ]
+        );
+        let v1 = cgroup_limit_files("12:cpu,cpuacct:/docker/abc\n4:memory:/docker/abc\n");
+        assert_eq!(
+            v1,
+            [
+                (None, Some("/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes".to_string())),
+                (None, Some("/sys/fs/cgroup/memory/docker/memory.limit_in_bytes".to_string()))
+            ]
+        );
+        assert!(cgroup_limit_files("0::/\n").is_empty(), "the root: read as before");
+        assert!(cgroup_limit_files("0::/../etc\ngarbage\n4:memory\n").is_empty());
+        assert!(cgroup_limit_files(&format!("0::{}\n", "/a".repeat(100))).len() <= MAX_CGROUP_DEPTH);
+        let limit = effective_limit(Some(16 * gb), Some(4 * gb));
+        assert_eq!(limit, Some(4 * gb));
+        assert_eq!(effective_limit(Some(16 * gb), None), Some(16 * gb));
+        assert_eq!(effective_limit(None, Some(4 * gb)), Some(4 * gb));
+        let share = export_share_of(3 * gb / 2, limit);
+        assert!(share / (2 * gb) < 3, "{share}");
+        assert!(export_share_of(20 * gb, limit) <= 4 * gb / 100 * 80);
     }
 }

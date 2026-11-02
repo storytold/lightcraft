@@ -41,6 +41,8 @@ lightcraft-denoise = { workspace = true, features = ["runtime"] }
 lightcraft-codecs = { workspace = true }
 lightcraft-faces = { workspace = true }
 lightcraft-merge = { workspace = true }
+# a device for the GPU-resident view test (`render.rs`)
+pollster = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

@@ -169,7 +169,7 @@ pub struct FinishParams {
     pub to_out: [[f32; 3]; 3],
     pub out_luma: [f32; 3],
     pub out_trc: OutputTrc,
-    /// Soft proofing (CPU only; the GPU path declines proof renders).
+    /// Soft proofing (the GPU kernel reads the same parameters).
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
@@ -685,7 +685,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for
 /// the gamut warnings (tolerates rounding at the gamut boundary).
-const GAMUT_WARN: f32 = 0.995;
+pub const GAMUT_WARN: f32 = 0.995;
 
 /// For the gamut warnings: `r` needed desaturating by `t` to fit, and isn't simply a neutral
 /// beyond white or below black (that's clipping, which the clipping warnings show).
