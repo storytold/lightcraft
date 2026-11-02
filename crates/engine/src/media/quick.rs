@@ -1,6 +1,6 @@
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, SourceLevel};
-use super::{Arc, Deserialize, Hash128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
+use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
 
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +25,15 @@ pub struct QuickJob {
     pub cached: Vec<(Arc<PreviewCache>, Hash128)>,
     /// Embedded preview of an unedited raw: (path, loader, max edge).
     pub embedded: Option<(String, PreviewLoader, usize)>,
+    /// Where a decoded [`Self::embedded`] preview is kept in memory, so stepping back to a photo
+    /// shows its camera JPEG again without reading and decoding it (culling goes back and forth):
+    /// the cache (memory only, never its disk), the key for this photo and edge, and the cache's
+    /// generation when the job was made (a Discard Preview Cache since then keeps the picture out).
+    pub embedded_cache: Option<(Arc<PreviewCache>, Hash128, u64)>,
+    /// Whether [`Self::embedded_cache`] keeps the decoded preview on disk too: a grid thumbnail,
+    /// so a folder seen before fills in from small files at once instead of every raw being read
+    /// and its camera JPEG decoded again (the loupe's large stand-ins stay in memory).
+    pub embedded_on_disk: bool,
     /// Import tiles need this many pixels when a render can provide them. `None` accepts any
     /// camera JPEG immediately (ordinary transient stand-ins and preview-only imports).
     /// An undersized JPEG remains the fallback if the render fails or is unavailable.
@@ -49,6 +58,7 @@ impl QuickJob {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         })
     }
 
@@ -66,6 +76,7 @@ impl QuickJob {
             loaded: None,
             quick,
             display: None,
+            frame: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
@@ -77,13 +88,30 @@ impl QuickJob {
             }
         }
         let mut embedded_fallback = None;
-        if let Some((path, loader, edge)) = &self.embedded
-            && let Some(image) = loader(path, *edge)
-        {
-            if self.minimum_embedded_edge.is_none_or(|minimum| image.width.max(image.height) >= minimum) {
-                return done(rendered(image), Some(QuickSource::Embedded));
+        if let Some((path, loader, edge)) = &self.embedded {
+            let kept =
+                self.embedded_cache.as_ref().and_then(|(cache, k, _)| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) });
+            let image = match kept {
+                Some(img) => Some(Arc::unwrap_or_clone(img)),
+                None => {
+                    let image = loader(path, *edge);
+                    // written for the generation the job was made in: a cache cleared meanwhile stays clear
+                    if let (Some(image), Some((cache, k, generation))) = (&image, &self.embedded_cache) {
+                        if self.embedded_on_disk {
+                            cache.put_deferred_at(*generation, *k, Arc::new(image.clone()));
+                        } else {
+                            cache.put_memory_at(*generation, *k, Arc::new(image.clone()));
+                        }
+                    }
+                    image
+                }
+            };
+            if let Some(image) = image {
+                if self.minimum_embedded_edge.is_none_or(|minimum| image.width.max(image.height) >= minimum) {
+                    return done(rendered(image), Some(QuickSource::Embedded));
+                }
+                embedded_fallback = Some(image);
             }
-            embedded_fallback = Some(image);
         }
         if let Some(job) = self.small {
             let r = job.run();
@@ -96,6 +124,11 @@ impl QuickJob {
         }
         done(Err("no quick preview".into()), None)
     }
+}
+
+/// The thumbnail cache's key for the camera JPEG standing for the thumbnail of cache key `k`.
+pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
+    Hasher128::new().str("embedded-thumb").u64((k.0 >> 64) as u64).u64(k.0 as u64).finish()
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.

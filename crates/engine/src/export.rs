@@ -23,8 +23,16 @@ mod prepare;
 mod watermark;
 
 #[cfg(test)]
+pub(crate) use batch::TUNING_TEST_LOCK;
+pub(crate) use batch::export_batch_tuned;
+#[cfg(test)]
 use batch::run_batch_with;
-pub use batch::{export_parallelism, run_batch};
+pub use batch::{
+    ExportCards, MAX_EXPORT_LANES, export_cards, export_gpu, export_lanes_override, export_mix, export_parallelism, run_batch, run_batch_cancellable,
+    set_export_cards, set_export_gpu, set_export_lanes, set_export_mix,
+};
+#[cfg(test)]
+use encoding::{FIT_ENCODES, FIT_QUALITIES, linear_of_8bit};
 pub use encoding::{
     encode_deep, encode_gain_map_jpeg, encode_image, encode_rendered, encode_with_metadata, export_metadata, named_space, output_sharpen,
     output_sharpen_deep, removes_location, srgb8_in,
@@ -40,15 +48,36 @@ pub use params::{
 #[cfg(test)]
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
+#[cfg(test)]
+pub(crate) use prepare::ENCODES_IN_TURN;
 pub use prepare::{
-    AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
+    AfterExport, CANCELLED, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch,
+    prepare_export,
 };
 #[cfg(test)]
-use prepare::{render_weight, too_big_for_memory};
+use prepare::{render_weight, too_big_for_memory, with_gain_map};
 #[cfg(test)]
 use watermark::watermark_coverage;
 pub(crate) use watermark::watermark_logo;
 pub use watermark::{Anchor, Watermark, draw_watermark, draw_watermark_deep, draw_watermark_in, draw_watermark_preview, read_graphic};
+
+/// Under `LIGHTCRAFT_PROFILE`: print how long the step since the last lap took (`t` restarts),
+/// with the thread and the time since the first lap (photos side by side overlap or queue).
+fn lap(what: &str, t: &mut Option<std::time::Instant>) {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    if let Some(t) = t {
+        let now = std::time::Instant::now();
+        let at = now.duration_since(*EPOCH.get_or_init(|| *t)).as_secs_f64();
+        let thread = std::thread::current();
+        eprintln!("  export {what}: {:.1} ms [{} at {at:.1} s]", t.elapsed().as_secs_f64() * 1e3, thread.name().unwrap_or("main"));
+        *t = now;
+    }
+}
+
+/// A clock for [`lap`] when profiling (never read otherwise: `Instant::now` panics on wasm32).
+fn lap_clock() -> Option<std::time::Instant> {
+    lightcraft_pipeline::profiling().then(std::time::Instant::now)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -60,7 +89,9 @@ pub struct ExportOptions {
     pub resize: Option<Resize>,
     /// Print resolution written into the file (pixels per inch).
     pub ppi: u16,
-    /// JPEG only: largest quality whose file fits in this many KB.
+    /// JPEG only: the file fits in this many KB, at a quality close below the largest that would
+    /// (a prediction from the photo itself, in about two encodes: a quality or two lower than an
+    /// exhaustive search could find, never larger than the limit).
     pub limit_kb: Option<u32>,
     pub sharpen: SharpenFor,
     pub sharpen_amount: SharpenAmount,

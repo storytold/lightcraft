@@ -1672,12 +1672,14 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     assert_eq!((q.quick, q.key), (Some(QuickSource::Embedded), job.key));
     drop(job.clone().run());
     assert_eq!(s.quick_thumb_job(&job).unwrap().run().quick, Some(QuickSource::Cached));
-    // an edited raw: no embedded stand-in (it wouldn't show the edit)
+    // an edited raw: the embedded preview is still its first picture, but only a stand-in (the
+    // grid renders the real thumbnail behind it: never an empty cell)
     s.execute("library.select", &serde_json::json!({"ids": [id.0]})).unwrap();
     s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 1.0})).unwrap();
     let job = s.thumb_job(id, 128).unwrap();
-    assert!(s.quick_thumb_job(&job).is_none());
-    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Small));
+    assert_eq!(s.quick_thumb_job(&job).unwrap().run().quick, Some(QuickSource::Embedded));
+    assert!(!s.embedded_thumb_is_final(s.catalog.photo(id).unwrap()));
+    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Embedded));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

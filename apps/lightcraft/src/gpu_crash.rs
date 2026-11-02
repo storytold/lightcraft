@@ -32,11 +32,11 @@ fn gpu_marker_path() -> Option<std::path::PathBuf> {
 /// A `--memory` session writes nothing (issue #169): it neither arms the sentinel — which would
 /// create the settings folder — nor removes a marker it finds. It still honours one, so the GPU
 /// starts off there too, and the next ordinary launch reports and clears it.
-pub(crate) fn gpu_crash_check(in_memory: bool) -> Option<String> {
-    gpu_crash_check_at(gpu_marker_path(), in_memory)
+pub(crate) fn gpu_crash_check(in_memory: bool, saved_card: &str) -> Option<GpuCrash> {
+    gpu_crash_check_at(gpu_marker_path(), in_memory, saved_card)
 }
 
-pub(crate) fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: bool) -> Option<String> {
+pub(crate) fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: bool, saved_card: &str) -> Option<GpuCrash> {
     use lightcraft_engine::gpu::backend;
     let left = if in_memory {
         marker.as_deref().and_then(backend::read_init_marker)
@@ -45,7 +45,81 @@ pub(crate) fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: 
         backend::set_init_marker(marker);
         left
     };
-    left.map(|what| gpu_crash_notice(&what))
+    left.map(|what| gpu_crash_from(&what, saved_card))
+}
+
+/// What a crash of the last launch inside the graphics driver costs this one, and the notice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GpuCrash {
+    pub(crate) notice: String,
+    /// GPU rendering starts off (the crash was in driver work that names no chosen card).
+    pub(crate) gpu_off: bool,
+    /// The graphics card chosen for editing goes back to Automatic (it crashed starting).
+    pub(crate) reset_card: bool,
+    /// The second graphics card is no longer used (it crashed starting).
+    pub(crate) helper_off: bool,
+}
+
+impl GpuCrash {
+    /// A crash (or a lost device) that turns GPU rendering off.
+    pub(crate) fn gpu_off(notice: String) -> GpuCrash {
+        GpuCrash { notice, gpu_off: true, reset_card: false, helper_off: false }
+    }
+
+    /// The start-up crash check's result and the lost-device check's together: both are read on
+    /// every launch, a lost device turns GPU rendering off, and both notices are shown (review of
+    /// PR #3506).
+    pub(crate) fn with_lost(crash: Option<GpuCrash>, lost: Option<String>) -> Option<GpuCrash> {
+        match (crash, lost) {
+            (Some(mut c), Some(l)) => {
+                c.gpu_off = true;
+                c.notice = format!("{}\n\n{l}", c.notice);
+                Some(c)
+            }
+            (c, None) => c,
+            (None, Some(l)) => Some(GpuCrash::gpu_off(l)),
+        }
+    }
+}
+
+/// [`GpuCrash`] from what the crash marker recorded: when every scope it names was a device of a
+/// card chosen in the settings (`saved_card`) or of the second card, only those choices are
+/// dropped and the GPU stays on; anything else (Automatic's card, listing the cards, AI kernels)
+/// turns GPU rendering off, as before.
+pub(crate) fn gpu_crash_from(what: &str, saved_card: &str) -> GpuCrash {
+    use lightcraft_engine::gpu::{backend, cards::AdapterKey};
+    let saved = AdapterKey::parse(saved_card);
+    let (mut card, mut helper) = (None, None);
+    let scopes = backend::marker_scopes(what);
+    let only_choices = !scopes.is_empty()
+        && scopes.iter().all(|s| match &s.card {
+            Some((k, role)) if role == "helper" => {
+                helper = Some(k.name.clone());
+                true
+            }
+            Some((k, role)) if role == "editing" && saved.as_ref().is_some_and(|c| c.same_model(k)) => {
+                card = Some(k.name.clone());
+                true
+            }
+            _ => false,
+        });
+    if !only_choices {
+        return GpuCrash::gpu_off(gpu_crash_notice(what));
+    }
+    let mut notice = Vec::new();
+    if let Some(name) = &card {
+        notice.push(format!(
+            "LightCraft closed unexpectedly while starting the graphics card chosen for editing ({name}) last time, so it now uses Automatic. \
+             To try that card again, choose it in Settings ▸ Performance ▸ Graphics card for editing."
+        ));
+    }
+    if let Some(name) = &helper {
+        notice.push(format!(
+            "LightCraft closed unexpectedly while starting the second graphics card ({name}) last time, so it isn't used any more. \
+             To try it again, choose it in Settings ▸ Performance ▸ Second graphics card."
+        ));
+    }
+    GpuCrash { notice: notice.join(" "), gpu_off: false, reset_card: card.is_some(), helper_off: helper.is_some() }
 }
 
 pub(crate) fn gpu_crash_notice(what: &str) -> String {
@@ -62,11 +136,10 @@ pub(crate) fn gpu_lost_marker_path() -> Option<std::path::PathBuf> {
     gpu_marker_path().map(|p| p.with_file_name("gpu-lost.marker"))
 }
 
-/// Why the GPU was lost, when the GPU pipeline stopped after a device failure in this process (a
-/// driver reset, a hang, the Windows watchdog): `None` for other reasons it is off, or when it
-/// never failed.
+/// Why the GPU was lost, when the device failed in this process (a driver reset, a hang, the
+/// Windows watchdog), even if a new device replaced it since: `None` when it never failed.
 pub(crate) fn gpu_lost_reason() -> Option<String> {
-    lightcraft_engine::gpu::unavailable_reason().and_then(|r| r.strip_prefix("stopped after a GPU failure: ").map(str::to_string))
+    lightcraft_engine::gpu::last_loss()
 }
 
 /// Record that LightCraft stopped after the GPU was lost, for the next launch.

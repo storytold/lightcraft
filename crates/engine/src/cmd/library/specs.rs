@@ -1363,6 +1363,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- persistence
         cmd!(query "library.info", "Library Info", [], None, "{}", always, |s, _| {
+            // the answer of a free-space read that ran on a worker (lowDiskSpace below)
+            s.poll_disk_space();
             let photos = s.catalog.len();
             let albums = s.catalog.albums().count();
             let (rendered_n, rendered_bytes) = s.media.rendered.mem_usage();
@@ -1398,6 +1400,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "lastError": lib.last_error,
                 // settings files that were unreadable or damaged at open (kept, defaults used)
                 "settingsWarnings": lib.settings_warnings,
+                // the drive holding the preview cache ran low this session (warned once)
+                "lowDiskSpace": s.disk_space_alert_raised(),
                 // changes applied in memory whose write failed (retried by every save)
                 "unsavedOps": s.unsaved().map_or(0, |u| u.0),
                 "unsavedError": s.unsaved().map(|u| u.1),

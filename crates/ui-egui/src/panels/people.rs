@@ -175,7 +175,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     if let Some(job) = app.session.face_job(person.photo, view, (edge * ppp).ceil() as usize)
         && let Some(tex) = app.renderer.variant(job)
     {
-        p.image(tex.tex.id(), face, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        p.image(tex.id(), face, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     // how many photos they are in, on the picture
     let g = p.layout_no_wrap(badge_count(person.count), t.font(11.5), Color32::WHITE);

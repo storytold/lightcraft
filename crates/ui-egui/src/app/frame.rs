@@ -44,12 +44,18 @@ impl LightcraftApp {
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
-        panels::notices::logic(self);
+        self.background_prep(ctx);
+        panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let now = self.tick_now();
+        // finished exports and machine tests first, also while the window is hidden or the
+        // full-screen preview is up: a control request below must not be refused for a job that
+        // has ended
+        export_task::poll(self, ctx);
+        crate::machine_test::poll(self, ctx);
         self.drain_control(ctx);
         self.apply_settings(ctx);
         if self.queued_input_needs_repaint() {
@@ -352,6 +358,8 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
+        self.loupe_timing.end_frame(ctx.input(|i| i.time));
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);
@@ -460,7 +468,6 @@ impl LightcraftApp {
         panels::dialogs::show(self, &ctx, notice_blocks);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
-        export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);

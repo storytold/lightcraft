@@ -121,6 +121,16 @@ fn rect_json(r: egui::Rect) -> Value {
 }
 
 pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
+    let mut v = inspect_main(app, ctx);
+    // the second graphics card and each card's batch work (here: the reply's macro is at its depth limit)
+    if let Some(perf) = v.get_mut("perf").and_then(Value::as_object_mut) {
+        perf.insert("gpuHelper".into(), lightcraft_engine::gpu_helper_json());
+        perf.insert("batchUsage".into(), lightcraft_engine::gpu_batch_usage_json());
+    }
+    v
+}
+
+fn inspect_main(app: &LightcraftApp, ctx: &egui::Context) -> Value {
     let r = ctx.content_rect();
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
@@ -133,7 +143,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
         "widgetCount": app.widgets.len(),
-        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "thumbsMade": app.renderer.thumbs_made, "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback(), "gpuWindowDevice": lightcraft_engine::gpu::on_window_device(), "screenTextures": app.renderer.has_screen_textures(), "mainOnGpu": app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|t| t.native.is_some()), "loupeSteps": app.loupe_timing.to_json(), "previewCache": preview_cache_json(app)}, "thumbFirst": app.thumb_first.summary(),
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
@@ -157,6 +167,8 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "scan": app.scan.as_ref().map(crate::import::ScanTask::status),
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
+        // "Test my machine" / `app.testMachine`: running, and how the last one ended
+        "machineTest": {"running": crate::machine_test::running(app), "last": app.machine_last},
         "tasks": app.tasks.labels(),
         // every long-running task in flight, as the activity stack shows them (`activity.list`)
         "activity": app.session.activity.list(),
@@ -391,6 +403,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Ok(s) => s,
                 Err(e) => return err(e),
             };
+            let prep_before = app.ui.settings.background_prep;
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
             lightcraft_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {
@@ -420,6 +433,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     u.status = app.ui.status.clone();
                     crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());
                     app.ui = u;
+                    // `settings.backgroundPrep` reaches the session too (else the next frame's
+                    // sync would put the session's older settings back)
+                    if app.ui.settings.background_prep != prep_before {
+                        app.session.prep.app = app.ui.settings.background_prep.sanitized();
+                        app.ui.settings.background_prep = app.session.prep.app;
+                    }
                     crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
@@ -553,6 +572,9 @@ pub fn default_export_dir() -> String {
 /// (exact output file, single photo), `ids` (default: the selection, else the active photo).
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
+    if crate::machine_test::running(app) {
+        return Err(crate::export_task::MACHINE_TEST_RUNNING.into());
+    }
     let p = &app.session.export_params(p)?;
     // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
     let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
@@ -886,4 +908,21 @@ pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target
             None => json!({"ok": false, "error": "no writer configured"}),
         }
     }
+}
+
+/// The preview cache's numbers for `ui.inspect` → `perf.previewCache`: what memory holds, and the
+/// disk cache's hits, misses and writes this session (notes 47 and 48: are built previews used?).
+fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
+    use std::sync::atomic::Ordering;
+    let (entries, bytes) = app.session.media.rendered.mem_usage();
+    let disk = app.session.media.rendered.disk();
+    serde_json::json!({
+        "memEntries": entries,
+        "memBytes": bytes,
+        "diskHits": disk.map(|d| d.hits.load(Ordering::Relaxed)),
+        "diskMisses": disk.map(|d| d.misses.load(Ordering::Relaxed)),
+        "diskWrites": disk.map(|d| d.writes.load(Ordering::Relaxed)),
+        "diskBudget": disk.map(|d| d.budget()),
+        "loupeEdge": app.session.loupe_edge,
+    })
 }

@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch_cancellable};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -37,6 +37,10 @@ impl ExportTask {
     }
 }
 
+/// Why an export, contact sheet or print doesn't start while Test my machine runs: it would share
+/// the test's temporary export settings and skew what the test measures.
+pub const MACHINE_TEST_RUNNING: &str = "the computer is being tested (Settings ▸ Performance): wait for the test to finish, then export";
+
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
 /// Photos). Errors per photo are collected, not fatal.
 pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
@@ -56,12 +60,23 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
-        let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
-            if let Ok(mut g) = p.lock() {
-                *g = (done, name.to_string());
-            }
-            !c.load(Ordering::Relaxed)
-        });
+        // (the cancel flag is watched while photos render too: a cancel stops within a second, note 28)
+        let flag = Some(c.clone());
+        let r = run_batch_cancellable(
+            items,
+            &opts,
+            &to,
+            &mut w,
+            &|path| std::path::Path::new(path).exists(),
+            false,
+            &mut |done, name| {
+                if let Ok(mut g) = p.lock() {
+                    *g = (done, name.to_string());
+                }
+                !c.load(Ordering::Relaxed)
+            },
+            flag,
+        );
         let r = r.map(|files| {
             if !after.is_none() {
                 // Photos can't be stopped once asked: no ✕ from here, before the last look at
@@ -87,6 +102,9 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
 
 /// Export a single paginated PDF with the same activity row and cancellation as image exports.
 pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
+    if crate::machine_test::running(app) {
+        return Err(MACHINE_TEST_RUNNING.into());
+    }
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
@@ -136,6 +154,9 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
 /// activity row and cancellation as the other exports.
 pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
     use lightcraft_engine::print::{compose, output};
+    if crate::machine_test::running(app) {
+        return Err(MACHINE_TEST_RUNNING.into());
+    }
     if app.export.is_some() {
         return Err("an export is already running".into());
     }

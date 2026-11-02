@@ -588,7 +588,7 @@ mod in_the_loupe {
     // Given soft proofing against an output-device profile (rendered on the CPU even with a GPU), a
     // drag drafts small (#330); proofs into an output space run on the GPU like any render
     #[test]
-    fn a_soft_proofed_drag_drafts_small() {
+    fn a_drag_soft_proofed_to_a_device_profile_drafts_small() {
         // the GPU device up front (the loupe never waits for it): with one, this is the case where
         // the GPU is there and the render still goes to the CPU
         let _ = lightcraft_engine::gpu::available();
@@ -599,6 +599,24 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let (main, small) = drag_exposure(&mut h);
         assert!(main <= small, "the draft is {main} px, a small one at most {small}");
+    }
+
+    // Given soft proofing into a colour space (the GPU renders it), a drag drafts as it does
+    // without the proof: at full size where the GPU draws the view (review of PR #1065: it
+    // drafted small, as if the proof went to the CPU)
+    #[test]
+    fn a_drag_soft_proofed_into_a_colour_space_drafts_full_size_on_the_gpu() {
+        let gpu = lightcraft_engine::gpu::available();
+        let (_fx, mut h, _) = detail();
+        assert_eq!(h.app.ui.proof.profile, 0, "a colour space, no device profile");
+        h.app.ui.soft_proof = true;
+        h.settle(SETTLE);
+        let (main, small) = drag_exposure(&mut h);
+        if !gpu {
+            lightcraft_testkit::skip!(Gpu, "no GPU: every drag drafts small");
+            return;
+        }
+        assert!(main > small, "the draft is {main} px, a small one would be at most {small}");
     }
 
     fn tile(h: &Headless, slot: Slot) -> Option<(usize, usize)> {
@@ -1211,7 +1229,7 @@ mod in_the_loupe {
             .iter()
             .enumerate()
             .filter_map(|(i, c)| match &c.shape {
-                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
+                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
                 _ => None,
             })
             .collect()
@@ -1272,6 +1290,38 @@ mod in_the_loupe {
         assert!(window[0].1.right() >= canvas.right() - 0.5, "the Before window stops at the wipe line: {:?}", window[0].1);
     }
 
+    // Given Before and After side by side at 1:1 with `\` held, the After pane is still the view
+    // shown: a Before window drawn while the After pane shows a stand-in does not make the loupe
+    // say the render is on screen
+    #[test]
+    fn holding_backslash_side_by_side_the_before_window_is_not_the_shown_render() {
+        let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        h.events.push(egui::Event::Key {
+            key: egui::Key::Backslash,
+            physical_key: Some(egui::Key::Backslash),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.settle(SETTLE);
+        // (the key's own shortcut switches to the Before view; side by side is chosen again with the key down)
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.settle(SETTLE);
+        assert!(h.app.renderer.textures.contains_key(&Slot::RegionBefore), "the Before window is rendered");
+        // the After pane back to a stand-in: no whole-frame render and no window of its own
+        h.app.renderer.textures.remove(&Slot::Main);
+        h.app.renderer.textures.remove(&Slot::Region);
+        h.step();
+        assert!(!drawn(&h, Slot::RegionBefore).is_empty(), "the Before window is painted");
+        // (the step must not bring the After pane's render back, or the check below proves nothing)
+        assert!(!h.app.renderer.textures.contains_key(&Slot::Main), "the whole-frame render came back during the step");
+        assert!(!h.app.renderer.textures.contains_key(&Slot::Region), "the After window came back during the step");
+        assert_ne!(h.app.loupe_shown.map(|l| l.1), Some("render"), "the After pane shows a stand-in, not the render");
+    }
+
     // Given Before and After side by side at 1:1, each window is painted inside its own pane: its
     // margin (a window is wider than what its pane shows) does not spill into the neighbour
     #[test]
@@ -1279,6 +1329,33 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        h.step();
+        let canvas = h.app.canvas_rect.unwrap();
+        let (before, after) = (drawn(&h, Slot::RegionBefore), drawn(&h, Slot::Region));
+        assert!(!before.is_empty() && !after.is_empty());
+        assert!(before.iter().all(|(_, clip, _)| clip.right() <= canvas.center().x), "the Before window spills into the After pane: {before:?}");
+        assert!(after.iter().all(|(_, clip, _)| clip.left() >= canvas.center().x), "the After window spills into the Before pane: {after:?}");
+    }
+
+    // Given Before and After side by side at 1:1 with `\` held, both panes stay, so each window
+    // stays clipped to its own pane: the Before window's margin does not cover the After pane
+    #[test]
+    fn holding_backslash_side_by_side_keeps_each_window_in_its_pane() {
+        let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        h.events.push(egui::Event::Key {
+            key: egui::Key::Backslash,
+            physical_key: Some(egui::Key::Backslash),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.settle(SETTLE);
+        // (the key's own shortcut switches to the Before view; side by side is chosen again with the key down)
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.settle(SETTLE);
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
@@ -1564,4 +1641,17 @@ mod in_the_loupe {
         let after = h.app.compare_windows[1].expect("a window for the new look");
         assert_ne!(after.settings, before.settings);
     }
+}
+
+// Build Standard-Sized Previews on Automatic: the loupe's size once one was drawn (the engine's standard), the
+// standard 2560 px in a fresh session, not the engine's 2048 px minimum a fit view would render again over
+// (CodeRabbit on #3077); a chosen limit as is
+#[test]
+fn standard_build_keeps_the_standard_size_before_a_loupe_was_drawn() {
+    use crate::menubar::standard_build_params;
+    use serde_json::json;
+    assert_eq!(standard_build_params(&with_limit(0), 0), json!({"size": "standard", "edge": STANDARD_PREVIEW_EDGE}));
+    assert_eq!(standard_build_params(&with_limit(0), 2400), json!({"size": "standard"}));
+    assert_eq!(standard_build_params(&with_limit(3840), 0), json!({"size": "standard", "edge": 3840}));
+    assert_eq!(standard_build_params(&with_limit(3840), 2400), json!({"size": "standard", "edge": 3840}));
 }

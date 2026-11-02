@@ -45,6 +45,13 @@ pub enum Slot {
     /// Background preparation of a neighbouring photo (no texture: its decoded source and view
     /// render are cached by the engine). 0 = next, 1 = previous.
     Prefetch(u8),
+    /// The loupe's stand-in for a photo the user is likely to step to next (the camera JPEG of an
+    /// unedited raw, or a cached render), made ahead in the direction of travel so a step shows it
+    /// at once: [`Renderer::request_quick`] takes the texture over into [`Slot::Preview`].
+    QuickAhead(u8),
+    /// The loupe zoomed in on an unedited raw: its camera JPEG at full size, drawn under the window
+    /// render until that arrives (a focus check at 100 % without waiting for the raw).
+    QuickFull,
     /// A variant thumbnail (profile / preset browsers), by its job key ([`Session::variant_job`]).
     /// Kept in a bounded LRU ([`VARIANT_TEXTURES`]).
     Variant(u64),
@@ -93,6 +100,44 @@ pub struct Tex {
     pub quick: Option<QuickSource>,
     /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
+    /// Showing a render that stayed on the GPU ([`ScreenTextures`]): drawn by this id instead of `tex`.
+    pub native: Option<egui::TextureId>,
+}
+
+impl Tex {
+    /// Draw this slot from the GPU-resident texture `id` from now on. On the switch from pixels, the egui texture
+    /// (never drawn while `native` is set) drops its full-size image for a 1 × 1 placeholder, so a view slot on the
+    /// GPU path doesn't keep a second copy of the picture until it is released (review of PR #1065).
+    fn show_native(&mut self, id: egui::TextureId) {
+        if self.native.is_none() {
+            self.tex.set(egui::ColorImage::filled([1, 1], egui::Color32::BLACK), egui::TextureOptions::LINEAR);
+        }
+        self.native = Some(id);
+        self.pixels = None;
+    }
+
+    /// The texture to draw.
+    pub fn id(&self) -> egui::TextureId {
+        self.native.unwrap_or_else(|| egui::TextureHandle::id(&self.tex))
+    }
+}
+
+/// Draws renders that stayed on the GPU ([`lightcraft_engine::media::ScreenFrame`]): the window's
+/// renderer registers their textures. Installed by a host whose GPU renderer runs on the window's
+/// device (the desktop app); without one, every render comes back as pixels.
+pub trait ScreenTextures {
+    /// Show `frame` under `id` (one this returned before, updated in place) or a new id; `None`
+    /// when it can't be shown.
+    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId>;
+    /// Release `id` (and the texture it shows).
+    fn free(&mut self, id: egui::TextureId);
+    /// The pixels `frame` holds, read back from the GPU: only for a headless screenshot of a view
+    /// that shows it ([`Renderer::cpu_textures`]). `None` when they can't be read (the view is
+    /// then left out of the picture).
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        let _ = frame;
+        None
+    }
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -204,6 +249,11 @@ pub const MAX_VARIANT_TEXTURES: usize = 800;
 /// Priority of variant thumbnail jobs: below on-screen grid thumbnails and the loupe.
 const VARIANT_PRIORITY: u32 = 6;
 
+/// The camera-preview edge a loupe stand-in is made at (0: one that doesn't depend on the size).
+fn quick_edge(job: &QuickJob) -> usize {
+    job.embedded.as_ref().map_or(0, |e| e.2)
+}
+
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
@@ -242,6 +292,14 @@ pub struct Renderer {
     pub completed: u64,
     /// Finished jobs thrown away because a newer request for their slot had replaced them.
     pub discarded: u64,
+    /// Photos given a grid thumbnail since start (a render replacing a stand-in isn't counted again):
+    /// unlike [`Renderer::thumb_textures`] it never goes down when old thumbnails are evicted (for
+    /// benchmarks).
+    pub thumbs_made: u64,
+    /// The photos [`Self::thumbs_made`] counted, by library (a hash of its folder) and id: a
+    /// thumbnail made again after eviction, or after going to another library and back, is the
+    /// same photo (photo ids are a library's own). Never cleared.
+    thumbs_counted: std::collections::HashSet<(u64, PhotoId)>,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
@@ -249,6 +307,10 @@ pub struct Renderer {
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
     quick_tried: HashMap<Slot, u64>,
+    /// The camera-preview edge each loupe stand-in ([`Slot::Preview`], [`Slot::QuickAhead`]) was
+    /// asked for (0: one that doesn't depend on the size): a stand-in made ahead for a smaller loupe
+    /// isn't taken over by a larger one.
+    quick_edge: HashMap<Slot, usize>,
     /// Jobs that failed (unreadable or missing file…), by slot and job key, with the error and
     /// the photo: not requested again until the key changes (an edit, another size) — the grid
     /// asks every frame.
@@ -276,7 +338,18 @@ pub struct Renderer {
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
+    /// Draws GPU-resident renders; with it, interactive drafts of views stay on the GPU.
+    screen: Option<Box<dyn ScreenTextures>>,
+    /// The texture id each view slot shows GPU-resident renders under (one per slot, reused).
+    natives: HashMap<Slot, egui::TextureId>,
+    /// The GPU-resident render each of those shows, kept with [`Self::keep_pixels`]: a headless
+    /// screenshot reads it back ([`Self::cpu_textures`]) instead of finding no pixels (a white
+    /// photo, review of PR #1065).
+    native_frames: HashMap<Slot, lightcraft_engine::media::ScreenFrame>,
 }
+
+/// How many [`Slot::QuickAhead`] stand-ins the loupe keeps ready.
+pub const AHEAD_SLOTS: u8 = 6;
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
 #[cfg(not(target_arch = "wasm32"))]
@@ -315,7 +388,45 @@ impl Default for Renderer {
     }
 }
 
+/// Workers kept for the stand-ins ([`Slot::is_stand_in`]) on top of the others: the cheapest
+/// pictures (a raw's embedded JPEG, a cached thumbnail or render) never wait for a worker while the
+/// others render raws for seconds ("Rendering…" in the loupe and empty
+/// cells in the filmstrip and grid while every worker decoded a 45 MP raw).
+const STAND_IN_WORKERS: usize = 2;
+
+/// Jobs below this priority are background work (the real thumbnails rendered behind the
+/// stand-ins, [`crate::panels::grid::BACKGROUND_THUMB_PRIORITY`]: for a folder of raws with a
+/// camera profile picked, every cell's): at most [`BACKGROUND_AT_ONCE`] of them run at once, so a
+/// worker is always free for the photo on screen. (The neighbours prepared ahead have their own
+/// limit.)
+const BACKGROUND_BELOW: u32 = 4;
+const BACKGROUND_AT_ONCE: usize = 2;
+
+impl Slot {
+    /// A stand-in picture: cheap to make (a raw's embedded JPEG, a cached picture), and what a view
+    /// shows first, before any render ([`STAND_IN_WORKERS`]).
+    pub fn is_stand_in(&self) -> bool {
+        matches!(self, Slot::ThumbQuick(_) | Slot::Preview | Slot::QuickAhead(_))
+    }
+}
+
 impl Renderer {
+    fn pool(threads: usize) -> JobPool<Slot, Finished> {
+        Self::pool_of(threads)
+    }
+
+    /// The renderer's job pool, for any result type (tests look inside its jobs): stand-ins on
+    /// workers of their own, at most [`BACKGROUND_AT_ONCE`] background jobs at once, and those run
+    /// as background GPU work ([`lightcraft_engine::media::as_background_gpu`]): on the second
+    /// graphics card when it is on and ready, else on the editing card as before.
+    fn pool_of<R: Send + 'static>(threads: usize) -> JobPool<Slot, R> {
+        let pool = if threads == 0 { JobPool::new(0) } else { JobPool::with_fast_lane(threads, STAND_IN_WORKERS, Slot::is_stand_in) };
+        pool.cap_background(BACKGROUND_BELOW, BACKGROUND_AT_ONCE);
+        // (they render on the second graphics card first, never in the way of the photo on screen)
+        pool.run_background_with(lightcraft_engine::media::as_background_gpu);
+        pool
+    }
+
     /// Explicit worker count for hosts and bounded validation runs (one to six on native).
     /// Browser hosts continue to use inline jobs or their installed worker offload.
     pub fn with_worker_threads(threads: usize) -> Self {
@@ -332,7 +443,7 @@ impl Renderer {
             shown_ids: HashMap::new(),
             epoch: 0,
             preview_generation: None,
-            pool: JobPool::new(threads),
+            pool: Self::pool(threads),
             thumb_inputs: HashMap::new(),
             embedded_thumbs: HashMap::new(),
             offload: None,
@@ -344,9 +455,12 @@ impl Renderer {
             last_main_ms: 0.0,
             completed: 0,
             discarded: 0,
+            thumbs_made: 0,
+            thumbs_counted: Default::default(),
             keep_pixels: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
+            quick_edge: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
@@ -360,6 +474,9 @@ impl Renderer {
             display: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
+            screen: None,
+            natives: HashMap::new(),
+            native_frames: HashMap::new(),
         }
     }
 }
@@ -395,7 +512,7 @@ impl Renderer {
             if let Some(&(k, p)) = self.pending.get(&quick_slot)
                 && k == key
             {
-                return p == priority.saturating_add(1) || !self.is_queued(quick_slot);
+                return p == crate::panels::grid::stand_in_priority(priority) || !self.is_queued(quick_slot);
             }
             return !self.request_needed(slot, key, crate::panels::grid::BACKGROUND_THUMB_PRIORITY);
         }
@@ -435,7 +552,7 @@ impl Renderer {
             && *size == bucket
             && *quick
             && self.pending.contains_key(&slot)
-            && !self.request_needed(slot, *key, priority.saturating_add(1))
+            && !self.request_needed(slot, *key, crate::panels::grid::stand_in_priority(priority))
     }
 
     /// Whether a request for this photo's thumbnail is already in flight at another bucket and a
@@ -521,7 +638,23 @@ impl Renderer {
     /// `job` as [`Self::request`] would run it for `slot` (its key included): views render for
     /// the display profile in use.
     pub fn job_for(&self, slot: Slot, job: RenderJob) -> RenderJob {
-        if Self::renders_for_display(slot) { job.with_display(self.display.clone()) } else { job }
+        if !Self::renders_for_display(slot) {
+            return job;
+        }
+        let job = job.with_display(self.display.clone());
+        // a drag's drafts are only drawn: they may stay on the GPU when the window can show them
+        if self.screen.is_some() && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
+    }
+
+    /// Show GPU-resident renders through `screen` from now on (the desktop app, once its GPU
+    /// renderer runs on the window's device).
+    pub fn set_screen_textures(&mut self, screen: Box<dyn ScreenTextures>) {
+        self.screen = Some(screen);
+    }
+
+    /// Whether GPU-resident renders can be shown.
+    pub fn has_screen_textures(&self) -> bool {
+        self.screen.is_some()
     }
 
     /// The display profile in use (id).
@@ -567,6 +700,19 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        // and its GPU-resident texture, which can be window-sized (review of PR #1065)
+        self.free_native(slot);
+    }
+
+    /// Let go of `slot`'s GPU-resident texture: its registration with the window, and the frame
+    /// kept for headless screenshots.
+    fn free_native(&mut self, slot: Slot) {
+        self.native_frames.remove(&slot);
+        if let Some(id) = self.natives.remove(&slot)
+            && let Some(screen) = self.screen.as_mut()
+        {
+            screen.free(id);
+        }
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -647,7 +793,9 @@ impl Renderer {
         }
     }
 
-    /// Request a stand-in for `slot` (once per job key).
+    /// Request a stand-in for `slot` (once per job key). The loupe's [`Slot::Preview`] takes over
+    /// a stand-in already made ahead for the same photo ([`Slot::QuickAhead`]) instead of making it
+    /// again: shown in this frame when it is ready, or as soon as that job finishes.
     pub fn request_quick(&mut self, slot: Slot, mut job: QuickJob, priority: u32) {
         if self.quick_tried.get(&slot) == Some(&job.key) {
             if self.pending.get(&slot).is_some_and(|p| p.0 == job.key && p.1 != priority) {
@@ -669,6 +817,14 @@ impl Renderer {
             return;
         }
         self.quick_tried.insert(slot, job.key);
+        if matches!(slot, Slot::Preview | Slot::QuickAhead(_)) {
+            self.quick_edge.insert(slot, quick_edge(&job));
+        }
+        if slot == Slot::Preview && self.take_ahead(job.photo, job.key, quick_edge(&job)) {
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+            return;
+        }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         let source = job
@@ -682,7 +838,78 @@ impl Renderer {
         );
         let key = job.key;
         let display = self.display.clone();
+        // (no stand-in waits at the memory gate as background work, not even one made ahead: it is a
+        // small read and a JPEG decoded at the size shown, on a worker kept for stand-ins, which
+        // must not sit there while the renders hold the memory)
         self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
+    }
+
+    /// Whether the stand-in asked for in `slot` is at least `edge` pixels (see `quick_edge`).
+    fn ahead_covers(&self, slot: Slot, edge: usize) -> bool {
+        self.quick_edge.get(&slot).copied().unwrap_or(0) >= edge
+    }
+
+    /// Move a [`Slot::QuickAhead`] texture of `photo` made for `key`, at least `edge` pixels, into
+    /// [`Slot::Preview`].
+    fn take_ahead(&mut self, photo: PhotoId, key: u64, edge: usize) -> bool {
+        let Some(slot) = self
+            .textures
+            .iter()
+            .find(|(s, t)| matches!(s, Slot::QuickAhead(_)) && t.photo == photo && t.key == key && self.ahead_covers(**s, edge))
+            .map(|(s, _)| *s)
+        else {
+            return false;
+        };
+        let Some(tex) = self.textures.remove(&slot) else { return false };
+        self.quick_tried.remove(&slot);
+        self.textures.insert(Slot::Preview, tex);
+        true
+    }
+
+    /// Make the loupe's stand-ins for the photos it is likely to be stepped to next (see
+    /// [`Slot::QuickAhead`]), most likely first: `jobs[0]` gets `priority`, each next one less.
+    /// A slot keeps a photo for as long as the photo stays wanted (made or being made, it is not
+    /// made again when the user steps and the photos shift places); slots holding photos not
+    /// wanted any more are freed for the new ones, and their queued jobs dropped.
+    pub fn look_ahead(&mut self, jobs: Vec<QuickJob>, priority: u32) {
+        let slots: Vec<Slot> = (0..AHEAD_SLOTS).map(Slot::QuickAhead).collect();
+        let held = |r: &Self, s: Slot| r.textures.get(&s).map(|t| t.key).or_else(|| r.quick_tried.get(&s).copied());
+        // (a stand-in asked for at a smaller loupe size isn't kept for a larger one)
+        let wanted: HashMap<u64, usize> = jobs.iter().map(|j| (j.key, quick_edge(j))).collect();
+        let mut free = Vec::new();
+        for &s in &slots {
+            let key = held(self, s);
+            if key.is_none_or(|k| wanted.get(&k).is_none_or(|&edge| !self.ahead_covers(s, edge))) {
+                self.textures.remove(&s);
+                // a job already running: its result is thrown away when it arrives (not left as a
+                // hidden stand-in), unless the loupe is waiting for just that one (a step to the
+                // photo): then the slot stays reserved for it until it arrives
+                let preview_edge = self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0);
+                let loupe_waits =
+                    key.is_some_and(|k| self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == k)) && self.ahead_covers(s, preview_edge);
+                if !self.drop_queued(s) && loupe_waits {
+                    continue;
+                }
+                self.quick_tried.remove(&s);
+                self.pending.remove(&s);
+                self.requests.remove(&s);
+                free.push(s);
+            }
+        }
+        let have: HashMap<u64, Slot> = slots.iter().filter_map(|&s| held(self, s).map(|k| (k, s))).collect();
+        let mut free = free.into_iter();
+        for (rank, job) in jobs.into_iter().enumerate() {
+            let priority = priority.saturating_sub(rank as u32);
+            if let Some(&s) = have.get(&job.key) {
+                // kept: a job still queued moves to its new place in the order
+                if self.quick_tried.get(&s) == Some(&job.key) {
+                    self.request_quick(s, job, priority);
+                }
+                continue;
+            }
+            let Some(slot) = free.next() else { break };
+            self.request_quick(slot, job, priority);
+        }
     }
 
     /// Render a slideshow title screen into `slot` (once per screen key, like [`Self::request`]):
@@ -725,6 +952,21 @@ impl Renderer {
         );
     }
 
+    /// Prepared-ahead jobs ([`Slot::Prefetch`]) queued or running.
+    pub fn prefetches_pending(&self) -> usize {
+        self.pending.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
+    }
+
+    /// Prepared-ahead slots asked for since the renderer last forgot everything.
+    pub fn prefetch_slots_asked(&self) -> usize {
+        self.prefetched.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
+    }
+
+    /// Whether `slot` was last asked for the job of `key` (queued, running or done).
+    pub fn prefetch_asked(&self, slot: Slot, key: u64) -> bool {
+        self.prefetched.get(&slot) == Some(&key)
+    }
+
     /// Drop the slideshow slides other than `keep`: their textures and their requests that have
     /// not started (a slide that is no longer near is not worth rendering).
     pub fn release_slides(&mut self, keep: &[lightcraft_engine::slideshow::Item]) {
@@ -759,6 +1001,20 @@ impl Renderer {
         self.prefetched.clear();
         self.pending.clear();
         self.queue.clear();
+        self.free_natives();
+    }
+
+    /// Release every GPU-resident texture shown.
+    fn free_natives(&mut self) {
+        if let Some(screen) = self.screen.as_mut() {
+            for (_, id) in self.natives.drain() {
+                screen.free(id);
+            }
+        }
+        self.natives.clear();
+        self.native_frames.clear();
+        // a view drawn from a freed texture would show nothing: it is rendered again, as pixels
+        self.textures.retain(|_, t| t.native.is_none());
     }
 
     pub fn is_pending(&self, slot: Slot) -> bool {
@@ -955,6 +1211,11 @@ impl Renderer {
         }
     }
 
+    /// Frames polled so far (one a frame).
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
     pub fn thumb_textures(&self) -> usize {
         self.textures.keys().filter(|s| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_))).count()
     }
@@ -1008,8 +1269,9 @@ impl Renderer {
         }
     }
 
-    /// Turn finished jobs into textures. Returns true if anything changed.
-    fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
+    /// The jobs the pool and the offload finished: (slot, result, texture pixels, look, ms).
+    #[allow(clippy::type_complexity)]
+    fn take_finished(&mut self, inline_ms: f64) -> Vec<(Slot, RenderResult, Option<Arc<egui::ColorImage>>, Option<(u64, bool)>, f64)> {
         let mut finished = Vec::new();
         while let Some(done) = self.pool.try_recv() {
             finished.push((done.slot, done.result.result, done.result.color, done.result.look, if done.ms > 0.0 { done.ms } else { inline_ms }));
@@ -1020,6 +1282,57 @@ impl Renderer {
                 (slot, r, None, look, ms)
             }));
         }
+        finished
+    }
+
+    /// Show `r` from its GPU texture when it stayed on the GPU: `None` when it came back as
+    /// pixels, else whether a texture changed (`false`: it can't be shown, and from now on
+    /// views come back as pixels).
+    fn show_gpu_frame(&mut self, ctx: &egui::Context, slot: Slot, r: &RenderResult, look: Option<(u64, bool)>, ms: f64) -> Option<bool> {
+        let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) else { return None };
+        self.failed.remove(&slot);
+        let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied()));
+        let Some(id) = shown else {
+            // can't be shown: from now on views come back as pixels
+            log::warn!("render {slot:?}: a GPU-resident render can't be shown; rendering pixels");
+            self.free_natives();
+            self.screen = None;
+            return Some(false);
+        };
+        self.natives.insert(slot, id);
+        if self.keep_pixels {
+            self.native_frames.insert(slot, frame.clone());
+        }
+        let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
+        match self.textures.get_mut(&slot) {
+            Some(t) => {
+                t.show_native(id);
+                t.look = look;
+                t.key = r.key;
+                t.photo = r.photo;
+                t.size = size;
+                t.histogram = Some(histogram);
+                t.ms = ms;
+                t.quick = None;
+            }
+            None => {
+                // (`tex` is never drawn while `native` is set)
+                let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
+                let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
+                let t =
+                    Tex { look, key: r.key, photo: r.photo, tex, size, histogram: Some(histogram), ms, quick: None, pixels: None, native: Some(id) };
+                self.textures.insert(slot, t);
+            }
+        }
+        if slot == Slot::Main {
+            self.last_main_ms = ms;
+        }
+        Some(true)
+    }
+
+    /// Turn finished jobs into textures. Returns true if anything changed.
+    fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
+        let finished = self.take_finished(inline_ms);
         self.dispatch();
         let mut changed = false;
         for (mut slot, mut r, mut color, completed_look, ms) in finished {
@@ -1065,13 +1378,35 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // made ahead for the photo the loupe is now waiting for: it is the loupe's stand-in
+            // (the loupe's own request for it, if one was started, is dropped when it arrives)
+            // (also when the loupe's own request failed and it still wants that photo: the stand-in
+            // made ahead still shows, but never over another photo's request)
+            if matches!(slot, Slot::QuickAhead(_))
+                && r.rendered.is_ok()
+                && (self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == r.key)
+                    || (!self.pending.contains_key(&Slot::Preview)
+                        && self.quick_tried.get(&Slot::Preview) == Some(&r.key)
+                        && self.failed.get(&Slot::Preview).is_some_and(|f| f.0 == r.key && f.3 == r.photo)))
+                && self.ahead_covers(slot, self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0))
+            {
+                self.pending.remove(&Slot::Preview);
+                self.requests.remove(&Slot::Preview);
+                self.quick_tried.remove(&slot);
+                slot = Slot::Preview;
+            }
+            // a render that stayed on the GPU: drawn from its texture
+            if let Some(shown) = self.show_gpu_frame(ctx, slot, &r, look, ms) {
+                changed |= shown;
+                continue;
+            }
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
                     x
                 }
                 Err(e) => {
-                    if !matches!(slot, Slot::Prefetch(_)) {
+                    if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
                         let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
                         #[cfg(test)]
                         self.failure_messages.push(message.clone());
@@ -1100,6 +1435,11 @@ impl Renderer {
                     slot = Slot::Thumb(id);
                 }
             }
+            // (a photo's first thumbnail: not a render replacing its stand-in, nor one made again)
+            let first_thumb = match slot {
+                Slot::Thumb(id) | Slot::ThumbQuick(id) => self.thumbs_counted.insert((library_key(session), id)),
+                _ => false,
+            };
             if let Slot::Thumb(id) = slot {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
@@ -1107,9 +1447,12 @@ impl Renderer {
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
+            // pixels again: the slot's GPU-resident texture is let go
+            self.free_native(slot);
             match self.textures.get_mut(&slot) {
                 Some(t) => {
                     t.tex.set(color, egui::TextureOptions::LINEAR);
+                    t.native = None;
                     t.pixels = pixels;
                     t.look = look;
                     t.key = r.key;
@@ -1133,11 +1476,16 @@ impl Renderer {
                             ms,
                             quick: r.quick,
                             pixels,
+                            native: None,
                         },
                     );
                 }
             }
-            if slot == Slot::Main {
+            if first_thumb {
+                self.thumbs_made += 1;
+            }
+            // (a preview taken from the cache says nothing about how long a render takes)
+            if slot == Slot::Main && r.quick.is_none() {
                 self.last_main_ms = ms;
             }
             changed = true;
@@ -1202,9 +1550,43 @@ impl Renderer {
         })
     }
 
-    /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
+    /// CPU copies of the current textures by id (see [`Self::keep_pixels`]); a view drawn straight
+    /// from the GPU is read back from it (only here: drawing it never does).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .iter()
+            .filter_map(|(slot, t)| {
+                let pixels = match (&t.pixels, t.native, self.native_frames.get(slot), self.screen.as_ref()) {
+                    (Some(p), ..) => p.clone(),
+                    (None, Some(_), Some(frame), Some(screen)) => Arc::new(screen.read(frame)?),
+                    _ => return None,
+                };
+                Some((t.id(), crate::softpaint::CpuTexture::linear(pixels)))
+            })
+            .collect()
+    }
+
+    /// Forget everything about `slot`: its texture, its queued job, and that its stand-in was asked
+    /// for (so asking again makes it again).
+    pub fn forget(&mut self, slot: Slot) {
+        self.drop_queued(slot);
+        self.pending.remove(&slot);
+        self.requests.remove(&slot);
+        self.quick_tried.remove(&slot);
+        self.release(slot);
+    }
+
+    /// Drop `slot`'s job if it is still queued (a running one finishes). Returns whether one was.
+    pub fn drop_queued(&mut self, slot: Slot) -> bool {
+        let dropped = self.pool.reprioritize(|s, p| if *s == slot { None } else { Some(p) });
+        let before = self.queue.len();
+        self.queue.retain(|q| q.slot != slot);
+        let any = !dropped.is_empty() || self.queue.len() != before;
+        if any {
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+        }
+        any
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -1230,7 +1612,7 @@ impl Renderer {
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
         let dropped = self.pool.reprioritize(|s, p| match s {
-            Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && p <= 11 => None,
+            Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && (p <= 11 || p == crate::panels::grid::STAND_IN_ON_SCREEN) => None,
             _ => Some(p),
         });
         for s in dropped {
@@ -1286,7 +1668,7 @@ mod stage_budget_tests {
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
         r.textures.insert(
             Slot::Region,
-            Tex { look: None, key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex { look: None, key: 1, photo: PhotoId(1), tex, native: None, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
         );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));
@@ -1296,6 +1678,59 @@ mod stage_budget_tests {
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle, Some((long_ago, true)), "trimmed once the window is gone");
+    }
+
+    // Given views drawn from GPU-resident frames, freeing those frames (the screen can't show one any more) drops
+    // the views that point at them, so they are rendered again as pixels; a view held as pixels stays
+    #[test]
+    fn freeing_gpu_frames_drops_the_views_drawn_from_them() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        let tex = |name: &str| ctx.load_texture(name, egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
+        let view = |tex, native| Tex {
+            look: None,
+            key: 1,
+            photo: PhotoId(1),
+            tex,
+            native,
+            size: [64, 48],
+            histogram: None,
+            ms: 0.0,
+            quick: None,
+            pixels: None,
+        };
+        r.textures.insert(Slot::Before, view(tex("before"), Some(egui::TextureId::User(7))));
+        r.textures.insert(Slot::Compare(0), view(tex("compare"), Some(egui::TextureId::User(8))));
+        r.textures.insert(Slot::Main, view(tex("main"), None));
+        r.free_natives();
+        assert!(!r.textures.contains_key(&Slot::Before), "its frame is gone");
+        assert!(!r.textures.contains_key(&Slot::Compare(0)), "its frame is gone");
+        assert!(r.textures.contains_key(&Slot::Main), "pixels stay");
+    }
+
+    /// A view slot switching from pixels to a GPU-resident texture lets go of its pixel image (it is never drawn
+    /// while the native texture is set): before, the full-size image stayed in egui's texture manager.
+    #[test]
+    fn a_view_switching_to_a_gpu_texture_drops_its_pixel_image() {
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::new([64, 48], vec![egui::Color32::GRAY; 64 * 48]);
+        let mut t = Tex {
+            look: None,
+            key: 1,
+            photo: PhotoId(1),
+            tex: ctx.load_texture("main", image, Default::default()),
+            native: None,
+            size: [64, 48],
+            histogram: None,
+            ms: 0.0,
+            quick: None,
+            pixels: Some(std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]))),
+        };
+        t.show_native(egui::TextureId::User(7));
+        assert_eq!(t.tex.size(), [1, 1], "the pixel image is released");
+        assert_eq!((t.native, t.pixels.is_none()), (Some(egui::TextureId::User(7)), true));
+        t.show_native(egui::TextureId::User(8));
+        assert_eq!((t.native, t.tex.size()), (Some(egui::TextureId::User(8)), [1, 1]));
     }
 
     // Given stage caches within the budget, nothing is cleared
@@ -1418,6 +1853,7 @@ mod color_image_tests {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
@@ -1431,4 +1867,14 @@ mod color_image_tests {
         let img = lightcraft_raster::Rgba8::new(0, 0);
         assert!(color_image(&img).pixels.is_empty());
     }
+}
+
+/// Which library `session` has open, for [`Renderer::thumbs_made`]: a hash of its folder (the same
+/// library opened again is the same), 0 with none.
+fn library_key(session: &Session) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(lib) = session.library.as_ref() else { return 0 };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lib.dir.hash(&mut h);
+    h.finish()
 }

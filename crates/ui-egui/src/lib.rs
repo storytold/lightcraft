@@ -31,6 +31,8 @@ pub mod i18n;
 pub mod icons;
 pub mod lightroom_import;
 pub mod links;
+pub mod loupe_timing;
+pub mod machine_test;
 pub mod menus;
 mod missing_sweep;
 mod model_setup;
@@ -48,6 +50,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+pub mod thumb_first;
 pub mod widgets;
 pub mod window_place;
 
@@ -221,6 +224,9 @@ pub struct LightcraftApp {
     /// effects (which the global shortcut guard also hides).
     #[cfg(test)]
     pub(crate) library_passes: Vec<panels::library_problem::LibraryPass>,
+    /// Test-only: how many times background preparation was advanced (once per logic pass).
+    #[cfg(test)]
+    pub(crate) prep_ticks: u32,
     /// Test-only: a delay for the sidebar's Missing Photos count worker (a slow disk). Kept here,
     /// not in `ui`, because `ui.set` rebuilds `ui` and would drop it.
     #[cfg(test)]
@@ -287,6 +293,19 @@ pub struct LightcraftApp {
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
+    /// When each photo stepped to in the loupe first showed (`ui.inspect` → `perf.loupeSteps`).
+    pub loupe_timing: loupe_timing::LoupeTiming,
+    /// The app-wide background preparation settings were handed from the saved app settings to
+    /// the session ([`Self::background_prep`]).
+    prep_synced: bool,
+    /// How long thumbnails on screen wait for their first pixels (`ui.inspect` → `thumbFirst`).
+    pub thumb_first: thumb_first::ThumbFirst,
+    /// The frame ([`render::Renderer::frame`]) in which a cell on screen or the loupe last lacked its first picture
+    /// ([`LightcraftApp::pictures_missing`]).
+    pub pictures_missing_pass: Option<u64>,
+    /// The loupe's look-ahead: the photo it was made for, the direction of travel (+1 / -1), the
+    /// catalog revision and the edge, so it is worked out again only when one of them changes.
+    pub(crate) look_ahead: panels::detail::LookAhead,
     /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
     /// windows whose textures can be on screen, and for the inspector.
     pub region_view: Option<region::RegionView>,
@@ -312,6 +331,9 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// Scans stopped without waiting for their workers: each channel is kept until its worker ends, so
+    /// the probes it took from the session come back.
+    pub(crate) scans_stopping: Vec<std::sync::mpsc::Receiver<import::ScanEnd>>,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
     /// A Synchronize Folder scan in progress (feeds its dialog).
@@ -345,9 +367,34 @@ pub struct LightcraftApp {
     pub window_is_fullscreen: bool,
     /// The GPU preference last applied (`app.gpu`), to apply Settings changes once.
     gpu_applied: Option<bool>,
+    /// The graphics card for editing last applied (`app.gpu {card}`).
+    gpu_card_applied: Option<String>,
+    /// The second graphics card's setting last applied.
+    gpu_helper_applied: Option<String>,
     /// Say once, when the GPU device has been tried, that no graphics processor was found
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,
+    /// The last GPU event told (`lightcraft_gpu::events_after`: the graphics card stopped
+    /// responding, was restarted …). (The web build has no GPU events.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    gpu_event_seen: u64,
+    /// The window's size last frame: a resize asks the GPU's batch work (exports) to make room.
+    last_screen: egui::Vec2,
+    /// The export lanes, processor-only switch and GPU share last applied (install settings).
+    export_tuning_applied: Option<machine_test::Tuning>,
+    /// "Test my machine" while it runs (Settings ▸ Performance).
+    pub machine: Option<machine_test::MachineTask>,
+    /// How the last test ended (`ui.inspect` → `machineTest.last`): its report and whether it was
+    /// applied, or why it stopped; kept also when `app.testMachine {apply: false}` only reports.
+    pub machine_last: Option<serde_json::Value>,
+    /// Tell the user once per session when the drive holding the preview cache runs low
+    /// ([`panels::notices::disk_space_notice`]). The desktop app sets it; headless sessions and tests
+    /// don't (their drive is whatever the machine has).
+    pub disk_space_notice: bool,
+    /// The low-disk notice's text while it is queued in [`LightcraftApp::notices`]: it is shown with a
+    /// button to Settings ▸ Performance. With the library it was raised for
+    /// ([`lightcraft_engine::Session::library_generation`]): another library open drops it.
+    pub(crate) disk_notice: Option<(u64, String)>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
     /// The display profile setting last applied (`app.displayProfile`).
