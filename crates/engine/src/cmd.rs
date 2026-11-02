@@ -271,6 +271,31 @@ pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
     Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }
 
+/// An optional `[x0, y0, x1, y1]` rectangle. Absent, or anything that is not four finite numbers
+/// with `x1 > x0` and `y1 > y0`, is `None`: the caller then uses the crop as it stands.
+pub(crate) fn opt_rect(p: &Value, key: &str) -> Option<lightcraft_geom::Rect> {
+    let a = p.get(key)?.as_array()?;
+    if a.len() != 4 {
+        return None;
+    }
+    let [x0, y0, x1, y1] = [a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?, a[3].as_f64()?];
+    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite() && x1 > x0 && y1 > y0) {
+        return None;
+    }
+    Some(lightcraft_geom::Rect::new(x0, y0, x1, y1))
+}
+
+/// An optional crop the caller sends as `{rect: [x0, y0, x1, y1], angle: degrees}`: the crop a
+/// straighten drag started from, where it was when the drag began. Anything that is not that, a
+/// rect without its angle included, is `None`. The angle is required with the rect because nothing
+/// downstream can tell whether a drawn crop was the largest of its aspect without the angle it was
+/// drawn at.
+pub(crate) fn opt_crop(p: &Value, key: &str) -> Option<lightcraft_geom::CropGeometry> {
+    let o = p.get(key)?;
+    let angle = o.get("angle")?.as_f64().filter(|a| a.is_finite())?;
+    Some(lightcraft_geom::CropGeometry { rect: opt_rect(o, "rect")?, angle })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

@@ -5,7 +5,7 @@ use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, Setti
 use lightcraft_geom::{CropGeometry, CropHandle, MIN_CROP_FRACTION, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
+use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, opt_crop, str_param};
 use crate::{Result, Session, media::SourceLevel};
 
 fn active(s: &Session, c: &str) -> Result<PhotoId> {
@@ -689,15 +689,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "Straighten",
             [],
             None,
-            "{angle: degrees -45..45} — keeps the crop if it still fits, else shrinks it about its centre (the largest crop of its aspect stays the largest)",
+            "{angle: degrees -45..45, from: {rect: [x0 y0 x1 y1], angle} optional} — keeps the crop if it still fits, else shrinks it about its centre (the largest crop of its aspect stays the largest)",
             has_active,
             |s, p| {
                 let id = active(s, "crop.straighten")?;
                 let (w, h) = crop_dims(s, id);
                 let angle = f64_req(p, "angle", "crop.straighten")?.clamp(-45.0, 45.0);
+                // `from` is the crop the drag started from — where it was, and at what angle, when
+                // the drag began. A rotate drag re-enters here on every pointer move, and shrinking
+                // the last step's crop loses the drawn one (issue #1794). The angle comes with it
+                // because whether that crop was the largest of its aspect is a property of the crop
+                // the user drew, not of the step being applied (PR #1876 review)
+                let from = opt_crop(p, "from");
+                // a drag's starting crop is still a crop: the smallest the tool can draw applies
+                if let Some(c) = from.as_ref() {
+                    let min_side = MIN_CROP_FRACTION * w.min(h) * (1.0 - 1e-9);
+                    if c.rect.width() * w < min_side || c.rect.height() * h < min_side {
+                        return Err(bad(
+                            "crop.straighten",
+                            format!("from.rect is smaller than the smallest crop ({} % of the shorter side)", MIN_CROP_FRACTION * 100.0),
+                        ));
+                    }
+                }
                 edit(s, "crop.straighten", "Straighten", |d| {
-                    // keep the current crop if it still fits, else shrink it about its centre until it does
-                    d.crop.geometry = d.crop.geometry.with_angle(angle, w, h);
+                    d.crop.geometry = match from {
+                        Some(c) => d.crop.geometry.with_angle_from(c.rect, c.angle, angle, w, h),
+                        None => d.crop.geometry.with_angle(angle, w, h),
+                    };
                     Ok(())
                 })
             }

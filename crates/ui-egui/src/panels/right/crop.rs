@@ -124,7 +124,23 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let ang = lightcraft_develop::controls::find("crop.angle").copied();
     if let Some(spec) = ang {
         let out = slider(ui, &spec, d.crop.geometry.angle, true, Some("Straighten"));
-        crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
+        // A slider drag re-enters `crop.straighten` on every step. Without the rect the drag began
+        // with, each step measures against the previous step's shrunken crop and it never grows
+        // back (issue #1794, the same gap the rotate handle closes with `Gesture::CropRotate`).
+        if out.drag_started {
+            app.ui.crop_angle_from = Some(d.crop.geometry);
+        }
+        let from = (!out.reset).then_some(app.ui.crop_angle_from).flatten();
+        crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| {
+            let from = from.map(|c| json!({"rect": [c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1], "angle": c.angle}));
+            match from {
+                Some(f) => app.run("crop.straighten", json!({"angle": v, "from": f})),
+                None => app.run("crop.straighten", json!({"angle": v})),
+            }
+        });
+        if out.drag_stopped || out.reset {
+            app.ui.crop_angle_from = None;
+        }
         // an exact angle, typed (issue #534): a field of its own, besides the slider's value
         padded(ui, |ui| {
             ui.horizontal(|ui| {
@@ -160,11 +176,26 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if escape && r.lost_focus() {
                     ui.data_mut(|m| m.insert_temp(cancel, true));
                 }
+                if r.drag_started() {
+                    // same as the slider: measure the whole drag against the drawn crop (issue #1794)
+                    app.ui.crop_angle_from = Some(d.crop.geometry);
+                }
                 if r.changed() && !escaped && angle.is_finite() && angle != d.crop.geometry.angle {
-                    let _ = app.run("crop.straighten", json!({"angle": (angle.clamp(spec.min, spec.max) * 100.0).round() / 100.0}));
+                    let a = (angle.clamp(spec.min, spec.max) * 100.0).round() / 100.0;
+                    let from = app.ui.crop_angle_from;
+                    let _ = match from {
+                        // a dragged field is a drag: every step from the drawn crop
+                        Some(base) if r.dragged() => app.run(
+                            "crop.straighten",
+                            json!({"angle": a, "from": {"rect": [base.rect.x0, base.rect.y0, base.rect.x1, base.rect.y1], "angle": base.angle}}),
+                        ),
+                        // a typed value is one shot: the crop as it stands is the base
+                        _ => app.run("crop.straighten", json!({"angle": a})),
+                    };
                 }
                 if r.drag_stopped() {
                     let _ = app.run("develop.endInteraction", json!({}));
+                    app.ui.crop_angle_from = None;
                 }
             });
         });
