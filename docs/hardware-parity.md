@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (pen pressure for brush masks; monitor profile from colord on Linux); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (SAM 3's mask decoder on the GPU through wgpu on Windows and Linux); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 What Lightroom does with the machine's hardware, per platform, and what LightCraft does. Sources:
 [gpu-pipeline.md](gpu-pipeline.md), [display-profiles.md](display-profiles.md), [denoise.md](denoise.md),
@@ -10,7 +10,7 @@ What Lightroom does with the machine's hardware, per platform, and what LightCra
 |---|---|---|---|---|---|---|
 | GPU for display and editing | Metal / DX12, "Use GPU for display / image processing / export" | wgpu Metal: geometry, resize, blur, WB, NR, guided filter, dehaze, masks, finish; CPU fallback per render | DX12 only (Vulkan opt-in, #136) | Vulkan (CPU ↔ GPU equivalence verified on an AMD Radeon 8060S, RADV) | CPU only (no WebGPU yet) | 🟡 defringe, spot removal, heuristic masks, long brushes and high-bit exports stay on CPU |
 | GPU export | ✅ | ✅ (6000 × 4000 in ~0.3 s vs ~1.2 s CPU) | ✅ | ✅ | — | ✅ (black-export fix on an Intel iGPU, #78) |
-| AI on GPU / neural engine | Metal / DirectML / Core ML, model per feature | AI denoise on GPU or CPU (setting); SAM 3 on Metal via candle; faces on CPU | CPU / GPU denoise | CPU / GPU denoise | — | 🟡 no Core ML / Neural Engine / DirectML |
+| AI on GPU / neural engine | Metal / DirectML / Core ML, model per feature | AI denoise on GPU or CPU (setting); SAM 3 on Metal via candle; faces on GPU when faster (CPU-only setting) | CPU / GPU denoise; SAM 3 image encoder, necks, DETR encoder and mask decoder on the GPU (wgpu, DX12), the rest of the heads on CPU (untested on DX12 so far); faces GPU / CPU | CPU / GPU denoise; SAM 3 image encoder, necks, DETR encoder and mask decoder on the GPU (wgpu, Vulkan), the rest of the heads on CPU (a photo's analysis ~0.6 s on an RTX 5070 vs ~33 s on a Ryzen 9 3900X, a description ~0.5–0.7 s vs ~4.5 s); faces GPU / CPU | — | 🟡 no Core ML / Neural Engine / DirectML; SAM 3's click decoder, text encoder and DETR decoder on CPU outside macOS |
 | HDR (EDR) display | ✅ (macOS EDR, Windows HDR) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ (LR-VIEW-HDR-DISPLAY) |
 | Monitor profile | automatic per display, follows the window | ✅ the screen's profile, followed across screens | 🟡 picked by hand (WCS needs FFI) | 🟡 colord's profile (one display, or all sharing one); no follow across monitors | — | 🟡 Windows OS profile not read; Linux per-monitor follow missing |
 | Second window / second monitor | ✅ (Classic) | ✅ (⌘F11) | ✅ | ✅ | — | ✅ (Classic secondary-window keys missing) |
@@ -49,6 +49,9 @@ NVIDIA, Intel and Windows DX12 still rely on user reports.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | AI on GPU: SAM 3's text detector mask decoder also runs on the GPU through wgpu on Windows and Linux (a description ~0.5–0.7 s with the text cache and box bias of the same change) |
+| 2026-10-17 | minor | AI on GPU: SAM 3's necks and DETR encoder also run on the GPU through wgpu on Windows and Linux |
+| 2026-10-17 | minor | AI on GPU: SAM 3's image encoder runs on the GPU through wgpu on Windows and Linux (CPU fallback; follows the GPU switches); faces run on the GPU when faster |
 | 2026-10-12 | minor | Monitor profile: Linux reads the display profile from colord; macOS row reflects #787 |
 | 2026-10-12 | minor | CPU ↔ GPU equivalence suite run on an AMD Radeon 8060S (Vulkan, RADV, Linux): 16 tests / 135 cases pass, max 2 LSB, mean ≤ 0.0003; first GPU verified outside Apple |
 | 2026-10-12 | minor | Pen pressure: strokes record per-point pressure from egui touch force, scaling dab size and flow; per-platform status |
