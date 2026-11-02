@@ -161,6 +161,7 @@ fn main() -> eframe::Result {
     }
     alloc_release::install();
     let mut control_port = control_port_from("LIGHTCRAFT_CONTROL_PORT", std::env::var("LIGHTCRAFT_CONTROL_PORT").ok().filter(|v| !v.is_empty()));
+    let mut control_token: Option<String> = std::env::var("LIGHTCRAFT_CONTROL_TOKEN").ok().filter(|t| !t.trim().is_empty());
     let mut files = Vec::new();
     let mut seed_demo = true;
     let mut in_memory = false;
@@ -169,6 +170,7 @@ fn main() -> eframe::Result {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = control_port_from("--control", Some(args.next().unwrap_or_default())),
+            "--control-token" => control_token = args.next().filter(|t| !t.trim().is_empty()),
             "--library" => library_dir = args.next().map(std::path::PathBuf::from),
             "--no-demo" => seed_demo = false,
             "--memory" | "--demo" => in_memory = true,
@@ -337,7 +339,22 @@ fn main() -> eframe::Result {
                     app.notices.push(notice);
                 }
                 if let Some(port) = control_port {
-                    let rx = control_server::start(port, cc.egui_ctx.clone());
+                    let no_auth = matches!(std::env::var("LIGHTCRAFT_CONTROL_NO_AUTH").as_deref(), Ok("1") | Ok("true"));
+                    let token = if no_auth {
+                        log::warn!("control channel started WITHOUT authentication (LIGHTCRAFT_CONTROL_NO_AUTH)");
+                        control_server::remove_token_file(port);
+                        None
+                    } else {
+                        let t = control_token.take().unwrap_or_else(control_server::random_token);
+                        match control_server::write_token_file(port, &t) {
+                            Ok(p) => log::info!("control token written to {} (or pass LIGHTCRAFT_CONTROL_TOKEN to lightcraft-cli)", p.display()),
+                            Err(e) => {
+                                log::warn!("could not write the control token file: {e}; pass --control-token / LIGHTCRAFT_CONTROL_TOKEN to clients")
+                            }
+                        }
+                        Some(t)
+                    };
+                    let rx = control_server::start(port, cc.egui_ctx.clone(), token);
                     app = app.with_control(rx);
                 }
                 if let Some(mut p) = problem {

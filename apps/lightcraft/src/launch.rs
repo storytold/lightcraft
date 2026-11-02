@@ -14,6 +14,9 @@ OPTIONS:
   --memory         throwaway in-memory session (alias --demo); nothing is saved
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
+  --control-token T   the token every control connection must send first (env LIGHTCRAFT_CONTROL_TOKEN; default:
+                   a random one written to ~/.lightcraft/control-PORT.token, which lightcraft-cli reads too).
+                   LIGHTCRAFT_CONTROL_NO_AUTH=1 turns the token off: set it for the app and for lightcraft-cli
   --version, --help
 
 ENVIRONMENT:
