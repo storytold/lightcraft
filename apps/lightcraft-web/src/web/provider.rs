@@ -404,7 +404,8 @@ impl WebApp {
                 &[doc],
             );
         }
-        bridge.leave.set(enabled && dirty);
+        // Pausing new provider work does not remove an existing connection's unsaved revision.
+        bridge.leave.set(bridge.host.connected() && dirty);
         crate::file_providers::publish(&bridge.host, ctx);
     }
 }

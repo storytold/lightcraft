@@ -38,6 +38,11 @@ const DRAFT_ERROR: &str = "Finish or cancel the current text edit, gesture or pr
 export function lightcraftProviderBrowserTurnForTest() {
     return new Promise(resolve => setTimeout(resolve, 0));
 }
+export function lightcraftProviderUnloadForTest() {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+}
 export function lightcraftProviderDatabaseCountForTest(db) {
     return new Promise((resolve, reject) => {
         const request = db.transaction('files', 'readonly').objectStore('files').count();
@@ -89,6 +94,8 @@ export function lightcraftProviderCopyFailureForTest(callback) {
 extern "C" {
     #[wasm_bindgen(js_name = lightcraftProviderBrowserTurnForTest)]
     fn browser_turn() -> js_sys::Promise;
+    #[wasm_bindgen(catch, js_name = lightcraftProviderUnloadForTest)]
+    fn unload_prompted() -> Result<bool, JsValue>;
     #[wasm_bindgen(js_name = lightcraftProviderDatabaseCountForTest)]
     fn database_count(db: &web_sys::IdbDatabase) -> js_sys::Promise;
     #[wasm_bindgen(catch, js_name = lightcraftProviderCopyFailureForTest)]
@@ -372,14 +379,24 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     crate::file_providers::install(host.clone(), ctx.clone())?;
     let _installed = InstalledApi { window: window.clone(), value: Reflect::get(&window, &API.into())?, host: host.clone() };
     assert!(!host.enabled() && !host.connected());
-    let connection = host.connect("fixture".into(), "Fixture files".into(), "fixture-account".into()).map_err(error)?;
-    host.set_resources(&connection, vec![Resource { id: "incoming".into(), name: "Incoming.zip".into(), updated_at: String::new() }])
-        .map_err(error)?;
     let events = PublishedEvents::listen(&window)?;
     let current = tiny_library(&backend, CURRENT_DIR, "current.png", 4).await?;
     let current_original = current.original_key.clone();
     let mut app = real_web_app(current, backend.clone(), host.clone(), &ctx);
     settle_writes(&mut app).await?;
+    app.provider_publish(&ctx);
+    assert!(!unload_prompted()?, "publishing the API alone must not change unload behavior");
+    let connection = host.connect("fixture".into(), "Fixture files".into(), "fixture-account".into()).map_err(error)?;
+    host.set_resources(&connection, vec![Resource { id: "incoming".into(), name: "Incoming.zip".into(), updated_at: String::new() }])
+        .map_err(error)?;
+    app.provider_publish(&ctx);
+    assert!(!host.busy());
+    assert!(unload_prompted()?, "a registered unsaved library needs unload protection");
+    host.set_enabled(false).map_err(error)?;
+    app.provider_publish(&ctx);
+    assert!(!host.busy());
+    assert!(unload_prompted()?, "pausing the provider must keep unsaved revision protection");
+    host.set_enabled(true).map_err(error)?;
     backend.write(ACTIVE_LIBRARY, CURRENT_DIR.as_bytes()).await.map_err(error)?;
     let incoming = tiny_library(&backend, "library-browser-incoming-fixture", "incoming.png", 5).await?;
     let incoming_original = incoming.original_key.clone();
@@ -510,8 +527,21 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     app.provider_tick(&ctx);
     assert_eq!(app.provider.as_ref().unwrap().saved, Some((connection, retry_capture.revision)));
     assert_eq!(host.filename(retry_capture.doc).as_deref(), Some("Retry.zip"));
+    app.provider_publish(&ctx);
     assert!(!host.busy());
+    assert!(!unload_prompted()?, "a durably acknowledged unchanged revision is clean");
+    host.set_enabled(false).map_err(error)?;
+    app.provider_publish(&ctx);
+    assert!(!unload_prompted()?, "a paused clean provider must not add an unload prompt");
+    app.app.run("photo.rate", json!({"rating":1})).map_err(error)?;
+    app.capture_provider_ui().map_err(error)?;
+    settle_writes(&mut app).await?;
+    app.provider_publish(&ctx);
+    assert!(!host.busy());
+    assert!(unload_prompted()?, "edits made while paused still need unload protection");
     host.disconnect().map_err(error)?;
+    app.provider_publish(&ctx);
+    assert!(!unload_prompted()?, "disconnect must restore ordinary unload behavior");
     // Only keys created in the verified-empty isolated database are removed; never clear a store.
     let admitted = app.lib_dir.clone();
     assert_eq!(backend.read_capped(ACTIVE_LIBRARY, 128).await.map_err(error)?, Some(admitted.as_bytes().to_vec()));

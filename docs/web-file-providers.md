@@ -30,12 +30,15 @@ scheduled to consume it on another frame. It does not acknowledge persistence or
 saved checkpoint. Later events still dispatch. A result already accepted from a synchronous host
 listener is retained instead of being replaced by the delivery failure. This recovery covers
 returned JavaScript exceptions, not unrecoverable WASM traps or process termination.
+A failed openRequest or saveDialog delivery releases only its still-owned read or choice so it can
+be retried. A synchronous listener that has already supplied bytes or resolved the destination
+keeps that admitted operation; delivery recovery does not cancel the accepted callback.
 
-snapshot() describes the active library, generation, dirty/pending/loading state and separate provider resources. Library metadata refreshes only while a provider is registered and enabled. Disconnect clears the cached document snapshot; disconnected frames cannot repopulate it, and pausing stops refresh until re-enabled. Library IDs are session-local and change on replacement even if catalog photo IDs or generations repeat. Before-unload protection applies to pending provider work and unsaved provider revisions only after explicit registration; publishing the API alone does not change the default page behavior.
+snapshot() describes the active library, generation, dirty/pending/loading state and separate provider resources. Library metadata refreshes only while a provider is registered and enabled. Disconnect clears the cached document snapshot; disconnected frames cannot repopulate it, and pausing stops refresh until re-enabled. Library IDs are session-local and change on replacement even if catalog photo IDs or generations repeat. Before-unload protection applies to pending provider work and unsaved provider revisions only after explicit registration; publishing the API alone does not change the default page behavior. Pausing with setEnabled(false) retains this protection, including revisions edited while paused. A clean acknowledged revision does not add a prompt, and unregistering restores ordinary unload behavior.
 
 ## Account boundaries and limits
 
-unregisterProvider rejects while choices, encoding, reads or acknowledgements are pending, or completion events remain queued for the publisher. This includes retained terminals moved into the next batch while the earlier batch dispatches. setEnabled(false) pauses new work while retaining the identity of existing requests. Old resource lists, duplicate completions and replies from earlier page sessions are rejected using bounded IDs, a random page nonce and a checked request counter.
+unregisterProvider rejects while choices, encoding, reads or acknowledgements are pending, or completion events remain queued for the publisher. This includes both undelivered terminals in the currently taken batch and retained terminals moved into the next batch while the earlier batch dispatches. setEnabled(false) pauses new work while retaining the identity of existing requests. Old resource lists, duplicate completions and replies from earlier page sessions are rejected using bounded IDs, a random page nonce and a checked request counter.
 
 Each transfer, retained snapshot and bounded queue is limited to 80 MiB, 16 pending operations, 64 events and 100 Recent resources. Original files are size-checked before copying from browser storage into WASM. ZIP headers and the final central directory count toward the limit. Filename limits apply separately to host-visible resource names and embedded ZIP paths.
 
@@ -97,6 +100,11 @@ not establish an execution result.
 It does not exercise WebApp::new/eframe startup, DOM keyboard routing or rendering. A saved
 result for an older library after another becomes active remains outside this browser fixture;
 the closed-document Host test continues to claim only Host correlation/state coverage.
+
+The same browser fixture dispatches synthetic cancelable beforeunload events through the actual
+registered window listener. It checks default-off, registered dirty, paused dirty, acknowledged
+clean, edits made while paused and disconnected states without navigating away from the page.
+This proves listener cancellation, not the browser's user-activation-dependent navigation dialog.
 
 ## Native UI preview
 
