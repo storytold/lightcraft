@@ -105,7 +105,7 @@ fn cr3(reader: &mut Reader<'_>, head: Vec<u8>) -> io::Result<Option<FocusPoint>>
         at = at.saturating_add(size);
     }
     let Some(end) = end.filter(|e| *e <= MAX_HEADER_BYTES && *e <= reader.len) else { return Ok(None) };
-    let bytes = if end <= head.len() as u64 {
+    let mut bytes = if end <= head.len() as u64 {
         head
     } else {
         let mut all = head;
@@ -113,6 +113,25 @@ fn cr3(reader: &mut Reader<'_>, head: Vec<u8>) -> io::Result<Option<FocusPoint>>
         all.extend_from_slice(&more);
         all
     };
+    bytes.truncate(usize::try_from(end).unwrap_or(usize::MAX));
+    // the XMP box Canon writes right after `moov`: it may name the camera when the Exif doesn't
+    // (the whole-file read uses it too; review of #3566)
+    // (a read error or the budget there leaves the point to the moov box alone)
+    if end.saturating_add(24) <= reader.len
+        && let Ok(h) = reader.fetch(end, end.saturating_add(24))
+    {
+        let size = h.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map_or(0, |b| u64::from(u32::from_be_bytes(b)));
+        let is_xmp = h.get(4..8) == Some(b"uuid".as_slice()) && h.get(8..24) == Some(crate::cr3::XMP_UUID.as_slice());
+        let box_end = end.saturating_add(size);
+        if is_xmp
+            && size >= 24
+            && box_end <= reader.len
+            && let Ok(body) = reader.fetch(end.saturating_add(24), box_end)
+        {
+            bytes.extend_from_slice(&h);
+            bytes.extend_from_slice(&body);
+        }
+    }
     Ok(crate::extract(&bytes).focus)
 }
 

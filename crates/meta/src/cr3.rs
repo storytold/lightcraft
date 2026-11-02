@@ -556,11 +556,20 @@ mod tests {
         // an Exif block that names no camera
         let mut file = sample_with_af_exif(tiff_with(lightcraft_tiff::tags::ISO_SPEED, lightcraft_tiff::Value::Short(vec![100])));
         let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Make="Canon" tiff:Model="Canon EOS R5 C"/></rdf:RDF></x:xmpmeta>"#;
-        file.extend(uuid(&XMP_UUID, xmp));
+        // where Canon writes it: right after `moov`, before `mdat`
+        let moov_end = file.windows(4).position(|w| w == b"mdat").unwrap() - 4;
+        file.splice(moov_end..moov_end, uuid(&XMP_UUID, xmp));
         let m = crate::extract(&file);
         assert_eq!(m.model.as_deref(), Some("Canon EOS R5 C"), "the XMP names the camera");
         assert!(m.focus.is_some(), "a point");
         assert!(crate::try_extract(&file).unwrap().focus.is_some(), "try_extract too");
+        // and by the header alone, as the background scan reads it (review of #3566)
+        let h = crate::focus::read_header(file.len() as u64, &mut |off, buf| {
+            buf.copy_from_slice(&file[off as usize..off as usize + buf.len()]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(h.focus, m.focus, "the header read finds the XMP after moov");
     }
 
     /// Canon's AF point comes out of a CR3, read whole or by its header alone (the moov box).
