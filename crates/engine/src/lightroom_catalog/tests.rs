@@ -881,6 +881,14 @@ fn a_duplicate_collection_id_costs_only_the_duplicate() {
         json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
     );
     assert_eq!(s.undo.len(), 1);
+    // a row listed twice as it is imports once, without a warning (as #3145 does)
+    let mut data = sample();
+    data.collections.push(data.collections[1].clone());
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 2, "{r}");
+    assert_eq!(s.catalog.albums().filter(|a| a.name == "Keepers").count(), 1);
+    assert_eq!(r["warnings"], json!([]));
 }
 
 /// A looping (or too deep) collection hierarchy used to fail the whole import: it is cut at the

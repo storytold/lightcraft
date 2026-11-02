@@ -347,18 +347,23 @@ pub(crate) fn skip_inconsistent_records(data: &mut CatalogImport) {
     }
 }
 
-/// Keep the first collection of each id and leave out the rest with a warning naming both: two
-/// albums can't have one id. The photos and collections the catalog lists under that id stay
-/// there, so they land in the collection kept.
+/// Keep the first collection of each id and leave out the rest: a row repeated as it is drops
+/// quietly, and a different collection with that id gets a warning naming both, since two albums
+/// can't have one id. The photos and collections the catalog lists under that id stay there, so
+/// they land in the collection kept.
 fn skip_duplicate_collections(data: &mut CatalogImport) {
-    let mut kept: HashMap<i64, String> = HashMap::new();
+    let mut kept: HashMap<i64, Row> = HashMap::new();
     let mut warnings = Vec::new();
     data.collections.retain(|c| {
         let id = number(c, "id_local");
         let Some(first) = kept.get(&id) else {
-            kept.insert(id, text(c, "name").to_string());
+            kept.insert(id, c.clone());
             return true;
         };
+        if first == c {
+            return false;
+        }
+        let first = text(first, "name");
         let photos = if data.members.iter().any(|m| number(m, "collection") == id) {
             format!("; the photos listed under that id go to “{first}”")
         } else {
