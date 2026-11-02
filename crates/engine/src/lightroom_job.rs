@@ -297,6 +297,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     let options = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
     let now = prepared.now.clone();
     let files = crate::import::commit_prepared(s, &options, &now, prepared.normal)?;
+    let before: HashSet<lightcraft_catalog::PhotoId> = s.catalog.photos().map(|p| p.id).collect();
     let applied = lightroom_catalog::apply_prepared(
         s,
         prepared.data,
@@ -309,6 +310,15 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
             undo0,
         },
     )?;
+    // the catalog's own photos (virtual copies and the like, added by `apply_prepared`) that start with AI Denoise
+    // on (Settings ▸ Import) get their pictures made in the background too, as the files imported above do
+    if s.import_defaults.denoise_above_iso.is_some() {
+        let on: Vec<lightcraft_catalog::PhotoId> =
+            s.catalog.photos().filter(|p| !p.local && !before.contains(&p.id) && p.develop.denoise_amount() > 0.0).map(|p| p.id).collect();
+        if !on.is_empty() {
+            s.denoise_enqueue_all(&on);
+        }
+    }
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
     let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })

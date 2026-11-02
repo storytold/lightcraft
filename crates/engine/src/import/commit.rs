@@ -208,7 +208,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     for it in prepared.items {
         match it {
             PreparedItem::Promote(id) => {
-                if s.catalog.photo(id).is_some_and(|p| p.local) {
+                if let Some(p) = s.catalog.photo(id).filter(|p| p.local) {
+                    // browsed without import defaults: AI Denoise from the ISO chosen is switched on now
+                    if !opts.local
+                        && let Some(d) = s.import_defaults.denoise_for_promoted(p)
+                    {
+                        ops.push(Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "AI Denoise".into(), edited: p.edited.clone() });
+                    }
                     ops.push(Op::SetLocal { id, local: false });
                 }
                 report.imported.push(id.0);
@@ -263,6 +269,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
+                // (before the defaults: a folder being browsed gets no import-only default, AI Denoise from an ISO)
+                p.local = opts.local;
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
                     crate::sidecar::merge_into(&mut p, sc, &now);
@@ -289,7 +297,6 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
                 }
                 report.imported.push(id.0);
-                p.local = opts.local;
                 if opts.local {
                     // the state as browsed: a later change keeps the record from being forgotten
                     p.set_local_baseline();
@@ -317,6 +324,15 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     }
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
+    }
+    // AI Denoise switched on at import (above the ISO chosen): their pictures are made in the background
+    // (not for a folder being browsed: nothing was imported)
+    if s.import_defaults.denoise_above_iso.is_some() && !opts.local {
+        let on: Vec<PhotoId> =
+            report.imported.iter().map(|i| PhotoId(*i)).filter(|id| s.develop_of(*id).is_some_and(|d| d.denoise_amount() > 0.0)).collect();
+        if !on.is_empty() {
+            s.denoise_enqueue_all(&on);
+        }
     }
     Ok(report)
 }

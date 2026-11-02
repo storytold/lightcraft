@@ -133,6 +133,8 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
+            activity_open: Default::default(),
+            activity_seen_seq: 0,
             model_setup: Default::default(),
         }
     }

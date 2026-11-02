@@ -51,7 +51,7 @@ fn row(m: &DenoiserManifest, download_host: Option<String>, installed: bool, sel
 }
 
 fn host_of(k: &Known) -> Option<String> {
-    k.download.as_ref().map(|d| lightcraft_denoise::known::host(&d.url).to_string())
+    k.download.as_ref().map(known::hosts)
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
@@ -391,7 +391,7 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     if installed_models(&dir).iter().any(|i| i.manifest.id == spec.id) {
         return Err(bad(C, "that model is already installed"));
     }
-    let host = lightcraft_denoise::known::host(&spec.url).to_string();
+    let host = known::hosts(&spec);
     s.denoise.downloads.start(spec, &dir, &s.activity, &k.manifest.name).map_err(|e| bad(C, e))?;
     Ok(json!({"started": id, "from": host}))
 }
@@ -551,26 +551,43 @@ fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
     v
 }
 
-/// A per-photo switch, independent of the selection and Auto Sync. Turning on starts at 50%.
+/// The most photos one `denoise.toggle` switches (a whole wedding is far below it).
+const MAX_TOGGLE: usize = 50_000;
+
+/// The AI Denoise switch. Without `id` / `ids` it follows the Develop sliders: the active photo, and with
+/// Auto Sync on every selected photo. All of them switch in one undo step; the ones that are not raw are skipped. Turning
+/// on starts a photo that never had an Amount at 50 %, and queues the pictures in the background (the active photo first)
+/// under one batch row in the activity stack.
 fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "denoise.toggle";
-    let id = match p.get("id") {
-        Some(v) => PhotoId(v.as_u64().ok_or_else(|| bad(C, "`id` must be a photo id"))?),
-        None => s.active().ok_or_else(|| bad(C, "select a raw photo"))?,
+    let (ids, explicit) = match (p.get("ids"), p.get("id")) {
+        (Some(Value::Array(_)), _) => (s.targets(p).map_err(|_| bad(C, "`ids` must be photo ids"))?, true),
+        (Some(v), _) if !v.is_null() => return Err(bad(C, "`ids` must be photo ids")),
+        (_, Some(v)) if !v.is_null() => (vec![PhotoId(v.as_u64().ok_or_else(|| bad(C, "`id` must be a photo id"))?)], true),
+        _ => (s.slider_targets(), false),
     };
-    let photo = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?;
-    if !crate::denoise::eligible(photo) {
+    if ids.is_empty() {
+        return Err(bad(C, "select a raw photo"));
+    }
+    if ids.len() > MAX_TOGGLE {
+        return Err(bad(C, format!("at most {MAX_TOGGLE} photos at a time")));
+    }
+    let first = ids[0];
+    s.catalog.photo(first).ok_or_else(|| bad(C, "no such photo"))?;
+    // the photos it applies to (raw, developed from their sensor data); the one named or active must be one of them
+    let raws: Vec<PhotoId> = ids.iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| crate::denoise::eligible(p))).collect();
+    if !raws.contains(&first) && (!explicit || ids.len() == 1) {
         return Err(bad(C, "AI Denoise applies to raw photos developed from their sensor data"));
     }
-    let mut d = (*s.develop_of(id).ok_or_else(|| bad(C, "no such photo"))?).clone();
+    if raws.is_empty() {
+        return Err(bad(C, "AI Denoise applies to raw photos developed from their sensor data: none of these are"));
+    }
+    let lead = (*s.develop_of(raws[0]).ok_or_else(|| bad(C, "no such photo"))?).clone();
     let on = match p.get("enabled") {
         Some(v) => v.as_bool().ok_or_else(|| bad(C, "`enabled` must be true or false"))?,
-        None => !d.enhance.denoise_enabled(),
+        None => !lead.enhance.denoise_enabled(),
     };
     if on {
-        if !d.enhance.denoise.is_finite() {
-            return Err(bad(C, "the photo has an invalid Denoise amount"));
-        }
         s.denoise_refresh_active(true);
         if s.denoise.active.is_none() {
             return Err(bad(C, "AI Denoise needs a model: install one in Settings > AI Denoise"));
@@ -578,20 +595,45 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // The switch is its own setting: the Amount stays where it is (0 included) when it is flipped, so flipping compares
     // with and without. A photo that never had an Amount starts at 50 the first time.
-    let amount = if on && d.enhance.denoise_on.is_none() && d.enhance.denoise <= 0.0 { 50.0 } else { d.enhance.denoise };
-    if d.enhance.denoise != amount || d.enhance.denoise_on != Some(on) {
+    let mut ops = Vec::new();
+    let mut amounts = Vec::with_capacity(raws.len());
+    for id in &raws {
+        let Some(mut d) = s.develop_of(*id).map(|d| (*d).clone()) else { continue };
+        if on && !d.enhance.denoise.is_finite() {
+            if *id == raws[0] {
+                return Err(bad(C, "the photo has an invalid Denoise amount"));
+            }
+            continue;
+        }
+        let amount = if on && d.enhance.denoise_on.is_none() && d.enhance.denoise <= 0.0 { 50.0 } else { d.enhance.denoise };
+        amounts.push(amount);
+        if d.enhance.denoise != amount || d.enhance.denoise_on != Some(on) {
+            d.enhance.denoise = amount;
+            d.enhance.denoise_on = Some(on);
+            ops.extend(s.develop_op(*id, d, "AI Denoise"));
+        }
+    }
+    if !ops.is_empty() {
         s.end_interaction()?;
-        d.enhance.denoise = amount;
-        d.enhance.denoise_on = Some(on);
-        let op = s.develop_op(id, d, "AI Denoise").ok_or_else(|| bad(C, "no such photo"))?;
+        let op = if ops.len() == 1 { ops.remove(0) } else { lightcraft_catalog::Op::Batch { ops } };
         s.commit("AI Denoise", op)?;
     }
     if on {
-        s.denoise_enqueue(&[id], true, false);
+        s.denoise_release(&raws);
+        // the photo being looked at first, the others behind it in the order given (those the queue can't hold wait in
+        // the backlog: thousands of photos switched on at once are all made)
+        let (front, rest): (Vec<PhotoId>, Vec<PhotoId>) = raws.iter().copied().partition(|id| *id == raws[0]);
+        s.denoise_enqueue(&front, true, false);
+        s.denoise_enqueue_all(&rest);
     } else {
-        s.denoise_cancel(Some(id), false);
+        for id in &raws {
+            s.denoise_cancel(Some(*id), false);
+        }
     }
-    Ok(json!({"id": id.0, "enabled": on, "amount": amount}))
+    let amount = amounts.first().copied().unwrap_or(0.0);
+    Ok(
+        json!({"id": raws[0].0, "ids": raws.iter().map(|i| i.0).collect::<Vec<_>>(), "enabled": on, "amount": amount, "skipped": ids.len() - raws.len()}),
+    )
 }
 
 fn queue(s: &mut Session, p: &Value) -> Result<Value> {
@@ -612,6 +654,7 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
             other => return Err(bad(C, format!("unknown scope `{other}`: use selected, visible or withAmount"))),
         },
     };
+    s.denoise_release(&ids);
     let queued = s.denoise_enqueue(&ids, false, bool_or(p, "retry", false));
     let mut v = status_json(s, None);
     if let Some(o) = v.as_object_mut() {
@@ -622,7 +665,17 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn cancel(s: &mut Session, p: &Value) -> Result<Value> {
     let photo = super::photo_id(p, "denoise.cancel")?;
-    let n = s.denoise_cancel(photo, bool_or(p, "all", photo.is_none()));
+    let all = bool_or(p, "all", photo.is_none());
+    // what is cancelled by hand waits until asked for again: Auto doesn't queue it again just because it is looked at
+    // (as with a cancelled batch)
+    let cancelled = match photo {
+        Some(id) => vec![id],
+        None => s.denoise_in_flight(all),
+    };
+    let n = s.denoise_cancel(photo, all);
+    for id in cancelled {
+        s.denoise_hold(id);
+    }
     Ok(json!({"cancelled": n}))
 }
 
@@ -667,7 +720,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Denoise",
             [],
             None,
-            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo, independent of selection and Auto Sync; needs an installed model to turn on",
+            "{id?: photoId, ids?: [photoId], enabled?: bool} → {id, ids, enabled, amount, skipped} — turn AI Denoise on (50% initially) or off, in one undo step. Without `id` / `ids` it follows the Develop sliders: the active photo, and with Auto Sync on every selected photo. Photos that are not raw are skipped (`skipped`). Turning on queues their denoised pictures in the background (one batch row in the activity stack, the active photo first); `enabled` omitted flips the first photo's switch and sets the others the same. Needs an installed model to turn on",
             always,
             toggle
         ),

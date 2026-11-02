@@ -43,6 +43,18 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = i.get("perCamera").and_then(Value::as_bool) {
             d.per_camera = v;
         }
+        match i.get("denoiseAboveIso") {
+            None => {}
+            Some(Value::Null) => d.denoise_above_iso = None,
+            Some(v) => {
+                let iso = v.as_u64().ok_or_else(|| bad(ID, "denoiseAboveIso must be an ISO (50..409600), or 0 / null for off"))?;
+                d.denoise_above_iso = match iso {
+                    0 => None,
+                    50..=409_600 => Some(iso as u32),
+                    _ => return Err(bad(ID, "denoiseAboveIso must be an ISO (50..409600), or 0 / null for off")),
+                };
+            }
+        }
         if let Some(v) = i.get("showOnCard").and_then(Value::as_bool) {
             d.show_on_card = v;
         }
@@ -110,7 +122,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Library Preferences",
         [],
         None,
-        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), showOnCard?: bool (open the import review when a camera or card is connected)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
+        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), showOnCard?: bool (open the import review when a camera or card is connected), denoiseAboveIso?: ISO | 0 | null (AI Denoise on for new raw photos shot at this ISO or above, their pictures made in the background; 0 / null = off)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
         always,
         prefs
     )]

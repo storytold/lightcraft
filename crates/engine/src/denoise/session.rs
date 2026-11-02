@@ -3,7 +3,7 @@ use super::model::Model;
 use super::model::STACK;
 use super::products::{Active, JobSpec, MakeError, Progress, eligible, make_product, product_key, product_path, products_in};
 use super::settings::{DIR, SETTINGS_TTL, installed_models, read_settings};
-use super::state::{AUTO_LOOK, Failure, MAX_QUEUE, Outcome, Pace, PhotoState, Running};
+use super::state::{AUTO_LOOK, Failure, Outcome, Pace, PhotoState, Running};
 use super::{
     Arc, DenoiseSpec, DevelopSettings, HashMap, HashSet, MakeProduct, Mutex, Ordering, PairLoader, Path, PathBuf, Photo, PhotoId, PoisonError,
     Selection, Session, Source, Value, json, product,
@@ -180,7 +180,7 @@ impl Session {
             if !eligible(&p) || self.media.denoise.spec(*id).is_some() || self.denoise.queue.contains(id) {
                 continue;
             }
-            if self.denoise.running.as_ref().is_some_and(|r| r.photo == *id) || self.denoise.queue.len() >= MAX_QUEUE {
+            if self.denoise.running.as_ref().is_some_and(|r| r.photo == *id) || self.denoise.queue.len() >= self.denoise.queue_cap {
                 continue;
             }
             let Some((_, key)) = self.denoise_spec(&p) else { continue };
@@ -199,6 +199,63 @@ impl Session {
         added
     }
 
+    /// Queue photos that should all be made (an import's): what doesn't fit in the queue waits in
+    /// the backlog and is queued as the queue drains.
+    pub(crate) fn denoise_enqueue_all(&mut self, ids: &[PhotoId]) {
+        // nothing can be made (no model, or a library only in memory): nothing waits either, as with the queue, else
+        // the backlog would keep the activity row up for good
+        self.denoise_refresh_active(false);
+        if self.denoise.active.is_none() || self.denoise_products_dir().is_none() {
+            return;
+        }
+        // photos already in flight (queued, being made, waiting) are not taken in twice: an import of thousands of
+        // photos, or the switch flipped on again, checks membership by set, not by walking the queues for each
+        let mut waiting: HashSet<PhotoId> = self.denoise.backlog.iter().chain(self.denoise.queue.iter()).copied().collect();
+        waiting.extend(self.denoise.running.as_ref().map(|r| r.photo));
+        let ids: Vec<PhotoId> = ids.iter().copied().filter(|id| !waiting.contains(id)).collect();
+        let room = self.denoise.queue_cap.saturating_sub(self.denoise.queue.len());
+        let (now, later) = ids.split_at(room.min(ids.len()));
+        self.denoise_enqueue(now, false, false);
+        for id in later {
+            if waiting.insert(*id) {
+                self.denoise.backlog.push_back(*id);
+            }
+        }
+    }
+
+    /// Move backlog photos into the queue while it has room.
+    fn denoise_refill(&mut self) {
+        while self.denoise.queue.len() < self.denoise.queue_cap {
+            let Some(id) = self.denoise.backlog.pop_front() else { break };
+            self.denoise_enqueue(&[id], false, false);
+        }
+    }
+
+    /// Was photo `id` waiting in a batch that was cancelled? It is then not made until asked for again.
+    pub fn denoise_held(&self, id: PhotoId) -> bool {
+        self.denoise.held.contains(&id)
+    }
+
+    /// Photo `id` was cancelled by hand (`denoise.cancel {id}`): looking at it doesn't queue it again
+    /// until it is asked for, as with a cancelled batch's photos.
+    pub(crate) fn denoise_hold(&mut self, id: PhotoId) {
+        self.denoise.held.insert(id);
+    }
+
+    /// Photos asked for again (the switch, `denoise.queue`): a cancelled batch no longer holds them back.
+    pub(crate) fn denoise_release(&mut self, ids: &[PhotoId]) {
+        for id in ids {
+            self.denoise.held.remove(id);
+        }
+    }
+
+    /// The photo being made, and with `all` every one waiting too: what [`Session::denoise_cancel`] with no photo
+    /// stops.
+    pub(crate) fn denoise_in_flight(&self, all: bool) -> Vec<PhotoId> {
+        let waiting = all.then(|| self.denoise.queue.iter().chain(self.denoise.backlog.iter()).copied()).into_iter().flatten();
+        waiting.chain(self.denoise.running.as_ref().map(|r| r.photo)).collect()
+    }
+
     /// Stop the job that is running, and with `all` forget everything that waits.
     pub(crate) fn denoise_cancel(&mut self, photo: Option<PhotoId>, all: bool) -> usize {
         let mut n = 0;
@@ -208,13 +265,19 @@ impl Session {
             r.progress.cancel_now();
             n += 1;
         }
-        let before = self.denoise.queue.len();
+        let before = self.denoise.queue.len() + self.denoise.backlog.len();
         match photo {
-            Some(p) => self.denoise.queue.retain(|q| *q != p),
-            None if all => self.denoise.queue.clear(),
+            Some(p) => {
+                self.denoise.queue.retain(|q| *q != p);
+                self.denoise.backlog.retain(|q| *q != p);
+            }
+            None if all => {
+                self.denoise.queue.clear();
+                self.denoise.backlog.clear();
+            }
             None => {}
         }
-        n + before - self.denoise.queue.len()
+        n + before.saturating_sub(self.denoise.queue.len() + self.denoise.backlog.len())
     }
 
     /// The photos the automatic queue looks at: the one open and the ones selected, those with a Denoise amount.
@@ -224,7 +287,8 @@ impl Session {
             .iter()
             .chain(ids.iter().take(AUTO_LOOK))
             .copied()
-            .filter(|id| self.catalog.photo(*id).is_some_and(|p| p.develop.denoise_amount() > 0.0))
+            // (a photo of a folder being browsed isn't imported: its picture is made when asked for)
+            .filter(|id| self.catalog.photo(*id).is_some_and(|p| !p.local && p.develop.denoise_amount() > 0.0))
             .collect()
     }
 
@@ -292,13 +356,21 @@ impl Session {
         let Some(r) = &self.denoise.running else { return };
         let Some(outcome) = r.outcome.lock().unwrap_or_else(PoisonError::into_inner).take() else { return };
         let Some(r) = self.denoise.running.take() else { return };
+        self.denoise.photo_task = None;
         match outcome {
             Outcome::Done => {
                 self.denoise.made += 1;
+                if let Some(t) = &self.denoise.task {
+                    t.item_done();
+                }
                 self.denoise_check_photo(r.photo);
                 self.denoise_evict(Some(&r.product));
             }
             Outcome::Failed(why, unsupported) => {
+                if let Some(t) = &self.denoise.task {
+                    let name = self.catalog.photo(r.photo).map_or("", |p| p.file_name.as_str());
+                    t.item_failed(&format!("{name}: {why}"));
+                }
                 self.denoise.failed.insert(r.photo, Failure { key: r.key, why, unsupported });
             }
             Outcome::Cancelled => {}
@@ -389,14 +461,16 @@ impl Session {
         if self.denoise.active.is_none() || self.denoise_products_dir().is_none() {
             return;
         }
+        self.denoise_refill();
         let (cap, auto) = (self.denoise.settings.threads, self.denoise.settings.auto());
         let wanted = self.denoise_wanted();
         for id in &wanted {
             self.denoise_check_photo(*id);
         }
         if auto {
-            // the photo being edited goes first
-            let (open, others): (Vec<PhotoId>, Vec<PhotoId>) = wanted.into_iter().partition(|id| self.selection.active == Some(*id));
+            // the photo being edited goes first; photos whose batch was cancelled wait until asked for
+            let (open, others): (Vec<PhotoId>, Vec<PhotoId>) =
+                wanted.into_iter().filter(|id| !self.denoise.held.contains(id)).partition(|id| self.selection.active == Some(*id));
             self.denoise_enqueue(&others, false, false);
             self.denoise_enqueue(&open, true, false);
         }
@@ -424,29 +498,55 @@ impl Session {
 
     /// Is a picture being made, or waiting for its turn with a model to make it? (Headless runs wait for this.)
     pub fn denoise_busy(&self) -> bool {
-        self.denoise.running.is_some() || (!self.denoise.queue.is_empty() && self.denoise.active.is_some())
+        self.denoise.running.is_some() || ((!self.denoise.queue.is_empty() || !self.denoise.backlog.is_empty()) && self.denoise.active.is_some())
     }
 
-    /// Keep AI Denoise's row in the activity stack up to date (each `denoise.pump`): there while a photo is being made or
-    /// waits its turn, with the running photo's tiles and its file name; gone when the queue is idle. It has no ✕: what is
-    /// made follows the photos' Denoise amounts and Settings ▸ AI Denoise.
+    /// Keep AI Denoise's rows in the activity stack up to date (each `denoise.pump`). One batch row while a photo is
+    /// being made or waits its turn: "AI Denoise: 37 of 200 · about 6 min left", the photos counted
+    /// since the queue was last idle, failures counted and named in its summary. Under it, the running photo's row with
+    /// its tiles. Gone when the queue is idle. ✕ forgets the photos waiting and stops the one being made (they are made
+    /// again when wanted: shown, exported, or queued by hand).
     pub(crate) fn denoise_track(&mut self) {
         if !self.denoise_busy() {
+            self.denoise.photo_task = None;
             self.denoise.task = None;
             return;
         }
-        let task = self.denoise.task.get_or_insert_with(|| {
-            let t = self.activity.start("denoise", "AI Denoise", crate::activity::Cancel::No);
-            t.set_unit(crate::activity::Unit::Percent);
-            t
-        });
+        if self.denoise.task.as_ref().is_some_and(|t| t.is_cancelled()) {
+            // what was waiting stays put until asked for again (not re-queued by looking at it)
+            let held: Vec<PhotoId> =
+                self.denoise.queue.iter().chain(self.denoise.backlog.iter()).copied().chain(self.denoise.running.as_ref().map(|r| r.photo)).collect();
+            self.denoise.held.extend(held);
+            self.denoise_cancel(None, true);
+            self.denoise.photo_task = None;
+            self.denoise.task = None;
+            return;
+        }
+        // a job told to stop, with nothing waiting after it, is no new batch while it winds down
+        let stopping =
+            self.denoise.queue.is_empty() && self.denoise.backlog.is_empty() && self.denoise.running.as_ref().is_some_and(|r| r.progress.cancelled());
+        if stopping && self.denoise.task.is_none() {
+            self.denoise.photo_task = None;
+            return;
+        }
+        let task = self.denoise.task.get_or_insert_with(|| self.activity.start_batch("denoise", "AI Denoise", crate::activity::Cancel::Yes));
+        let left = (self.denoise.queue.len() + self.denoise.backlog.len()) as u64 + u64::from(self.denoise.running.is_some());
+        let done = task.done();
+        task.progress(done, done.saturating_add(left));
         match &self.denoise.running {
             Some(r) => {
-                task.progress(r.progress.done.load(Ordering::Relaxed) as u64, r.progress.total.load(Ordering::Relaxed) as u64);
-                task.detail(self.catalog.photo(r.photo).map_or("", |p| p.file_name.as_str()));
+                let name = self.catalog.photo(r.photo).map_or("", |p| p.file_name.as_str());
+                task.detail(name);
+                let child = self.denoise.photo_task.get_or_insert_with(|| {
+                    let t = task.child("denoise", "AI Denoise");
+                    t.set_unit(crate::activity::Unit::Percent);
+                    t
+                });
+                child.progress(r.progress.done.load(Ordering::Relaxed) as u64, r.progress.total.load(Ordering::Relaxed) as u64);
+                child.detail(name);
             }
             None => {
-                task.progress(0, 0);
+                self.denoise.photo_task = None;
                 task.detail("");
             }
         }

@@ -11,9 +11,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Background Tasks",
             [],
             None,
-            "{} → {tasks: [{id, kind, label, done, total, unit: count|bytes|percent, detail, cancellable, cancelling, ageMs}]} — the long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first; total 0 = not known yet",
+            "{} → {tasks: [{id, kind, label, done, total, unit: count|bytes|percent, detail, cancellable, cancelling, ageMs, parent?, batch, failed, etaMs?}], finished: [{id, seq, kind, label, done, failed, total, cancelled, reasons, seconds}]} — the long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first; total 0 = not known yet. A batch (AI Denoise, AI masks, export, Remove Dust on many photos) is one row with `batch: true`, the photos done and `failed`, and `etaMs` (time left, from the time per photo so far); its per-photo rows name it as `parent`. `finished`: what the last batches did when they ended (newest last)",
             always,
-            |s, _| Ok(json!({"tasks": s.activity.list()}))
+            |s, _| Ok(json!({"tasks": s.activity.list(), "finished": s.activity.finished()}))
         ),
         cmd!(
             "activity.cancel",

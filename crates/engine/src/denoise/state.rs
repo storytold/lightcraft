@@ -1,7 +1,7 @@
 use super::model::{Loader, default_loader};
 use super::products::{Active, Progress};
 use super::settings::Settings;
-use super::{Arc, Downloads, HashMap, Mutex, PathBuf, PhotoId, Serialize, VecDeque};
+use super::{Arc, Downloads, HashMap, HashSet, Mutex, PathBuf, PhotoId, Serialize, VecDeque};
 
 /// Most photos waiting in the queue.
 pub(super) const MAX_QUEUE: usize = 5000;
@@ -120,8 +120,19 @@ pub(crate) struct State {
     pub generation: u64,
     /// Photos made since the session started.
     pub(super) made: u64,
-    /// AI Denoise's row in the activity stack, while a photo is being made or waits its turn.
+    /// AI Denoise's batch row in the activity stack, while a photo is being made or waits its
+    /// turn: the photos done and failed since the queue was last idle, and the time left.
     pub(super) task: Option<crate::activity::TaskGuard>,
+    /// The running photo's row under it (its tiles).
+    pub(super) photo_task: Option<crate::activity::TaskGuard>,
+    /// Photos whose batch was cancelled (the row's cancel): looking at them doesn't queue them again; asking for them
+    /// does (the switch, `denoise.queue`, an export).
+    pub(super) held: HashSet<PhotoId>,
+    /// Photos an import switched AI Denoise on for that didn't fit in the queue: queued as it
+    /// drains (a big import of high-ISO raws doesn't lose any).
+    pub(super) backlog: VecDeque<PhotoId>,
+    /// How many photos the queue holds (tests make it small).
+    pub(crate) queue_cap: usize,
 }
 
 impl Default for State {
@@ -142,6 +153,10 @@ impl Default for State {
             generation: 0,
             made: 0,
             task: None,
+            photo_task: None,
+            held: HashSet::new(),
+            backlog: VecDeque::new(),
+            queue_cap: MAX_QUEUE,
         }
     }
 }
@@ -162,7 +177,9 @@ impl State {
             r.progress.cancel_now();
         }
         self.queue.clear();
+        self.backlog.clear();
         self.failed.clear();
+        self.held.clear();
         self.dirty = true;
         self.generation += 1;
     }

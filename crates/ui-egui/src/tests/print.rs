@@ -307,6 +307,7 @@ fn printing_shows_a_row_in_the_activity_stack_and_stops() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!((rows[0].kind, rows[0].label.as_str()), ("export", "Printing to PDF"));
     assert!(rows[0].cancellable);
+    assert!(rows[0].batch, "a batch row, like the image exports: time left and a summary (CodeRabbit on #2932)");
     app.session.activity.cancel(rows[0].id).unwrap();
     let task = app.export.take().unwrap();
     assert!(task.cancel.load(std::sync::atomic::Ordering::Relaxed));

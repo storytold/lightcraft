@@ -1328,6 +1328,16 @@ impl Session {
         (self.visible_gen, self.visible.clone())
     }
 
+    /// The photos a Develop slider changes: the active photo, and with Auto Sync on every selected
+    /// photo (the active one first).
+    pub fn slider_targets(&self) -> Vec<PhotoId> {
+        let Some(active) = self.active() else { return Vec::new() };
+        if !self.auto_sync || self.selection.ids.len() < 2 || !self.selection.contains(active) {
+            return vec![active];
+        }
+        std::iter::once(active).chain(self.selection.ids.iter().copied().filter(|x| *x != active)).collect()
+    }
+
     /// Targets of photo commands: the explicit `ids` (photo ids) or `id` (a photo id) param, else [`Self::selected`].
     /// An `ids` or `id` that is there but isn't photo ids is an error, never the selection or part of the list
     /// (issue #1506): a mistyped target mustn't turn a command meant for one photo into one for every selected photo.
