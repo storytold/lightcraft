@@ -57,7 +57,10 @@ fn with_a_loop() -> Headless {
         smart(13, "Delta", json!([rating, is_in(13)])),
         smart(14, "Quiet", json!([none])),
     ] {
-        h.app.session.commit("Add album", Op::AddAlbum { album }).unwrap();
+        // An edit can no longer make a loop (the catalog refuses it), but a library from before that
+        // rule still opens with one: the journal replays its ops the way `apply` does here, so the
+        // album the loop leaves on screen is the one the user still sees.
+        h.app.session.catalog.apply(Op::AddAlbum { album }).unwrap();
     }
     h.settle(SETTLE);
     h
