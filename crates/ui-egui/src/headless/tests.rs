@@ -641,6 +641,17 @@ fn face_boxes_are_off_by_default_and_show_only_when_needed() {
     assert!(!boxes(&mut h), "a name box on another photo shows no boxes here");
     assert!(h.app.ui.name_edit.is_none(), "and is dropped");
     assert!(!boxes(&mut h));
+    // opened from People, then the grid, then the same photo again from the grid: no boxes (review of #3582)
+    h.app.ui.person_from = Some((Some("Person A".into()), id.0));
+    assert!(boxes(&mut h));
+    // (by keys: `ui.set` rebuilds the UI state, which drops `person_from` by itself)
+    h.request("ui.key", json!({"key": "g"}), t);
+    h.settle(SETTLE);
+    assert!(matches!(h.app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid), "{:?}", h.app.ui.view);
+    h.request("ui.key", json!({"key": "e"}), t);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+    assert!(!boxes(&mut h), "opened again from the grid, the photo is not from People");
     let r = h.request("engine.execute", json!({"command": "view.faceBoxes", "params": {}}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert!(boxes(&mut h), "View ▸ Face Boxes switches them on");

@@ -52,6 +52,9 @@ pub struct GridStats {
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t0 = web_time::Instant::now();
+    // back at the grid, a photo opened from the People view is no longer "from People": opened
+    // again from here, Escape returns to the grid and its face boxes follow the View setting
+    app.ui.person_from = None;
     show_inner(app, ui);
     app.caches.grid_stats.frames += 1;
     app.caches.grid_stats.last_show = t0.elapsed();
