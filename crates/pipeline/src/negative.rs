@@ -242,27 +242,35 @@ pub fn detect_base(src: &Rgb32f, clear: [f32; 3], interior: Rect, one_strip: boo
     }
     // the brightest cluster: from the top, each tile starts a cluster of the tiles of its colour (every channel within
     // SAME_EDGE); the first with at least MIN_TILES tiles that looks like a film edge wins. A few stray bright tiles
-    // can't form one, a film edge always does. A rejected cluster's colour isn't tried again as an anchor (so a large
-    // clear patch costs one rejection, not one per tile), but its tiles stay free to join a later cluster: a rebate
-    // close in colour to a brighter patch is still found.
+    // can't form one, a film edge always does. A rejected cluster's core (its tiles within a quarter of SAME_EDGE of its
+    // median colour: the patch it is) is spent, neither an anchor again nor part of a later cluster, so a large clear
+    // patch costs one rejection, not one per tile, and no fragment of it passes for an edge later; its other tiles stay
+    // free, so a rebate a few percent off a brighter patch is still found.
     found.sort_by(|a, b| b.2.total_cmp(&a.2));
-    let same = |a: &[f32; 3], b: &[f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= SAME_EDGE * y);
-    let mut rejected: Vec<[f32; 3]> = Vec::new();
+    let same = |a: &[f32; 3], b: &[f32; 3], tol: f32| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol * y);
+    let mut spent = vec![false; found.len()];
     let mut group: Option<Vec<&([f32; 3], Rect, f32)>> = None;
     for (i, t) in found.iter().enumerate() {
-        let anchor = t.0;
-        // (only a colour nearly the rejected one's, within half the tolerance either way, would make the same
-        // cluster again: a darker rebate a few percent off a brighter patch is still tried)
-        let near = |a: &[f32; 3], r: &[f32; 3]| a.iter().zip(r).all(|(x, y)| (x - y).abs() <= 0.5 * SAME_EDGE * x.min(*y));
-        if rejected.iter().any(|r| near(&anchor, r)) {
+        if spent.get(i).copied().unwrap_or(true) {
             continue;
         }
-        let g: Vec<&([f32; 3], Rect, f32)> = found.iter().skip(i).filter(|u| same(&u.0, &anchor)).collect();
+        let anchor = t.0;
+        let members: Vec<usize> = (i..found.len())
+            .filter(|k| !spent.get(*k).copied().unwrap_or(true) && found.get(*k).is_some_and(|u| same(&u.0, &anchor, SAME_EDGE)))
+            .collect();
+        let g: Vec<&([f32; 3], Rect, f32)> = members.iter().filter_map(|k| found.get(*k)).collect();
         if g.len() >= MIN_TILES && looks_like_edge(&g, (sx, sy), one_strip) {
             group = Some(g);
             break;
         }
-        rejected.push(anchor);
+        let core = median(&g.iter().map(|u| u.0).collect::<Vec<_>>());
+        for k in members {
+            if found.get(k).is_some_and(|u| same(&u.0, &core, 0.25 * SAME_EDGE))
+                && let Some(s) = spent.get_mut(k)
+            {
+                *s = true;
+            }
+        }
     }
     let group = group?;
     let colours: Vec<[f32; 3]> = group.iter().map(|t| t.0).collect();
@@ -487,7 +495,8 @@ fn range_of(film: FilmType, px: &[[f32; 3]], base: [f32; 3], base_source: BaseSo
         }
     }
     Ok(FilmAnalysis {
-        base: base.map(f64::from),
+        // (no lower than the conversion's floor in f64, so the analysis stored stays valid; density floors it alike)
+        base: base.map(|b| f64::from(b).max(FilmAnalysis::MIN_BASE)),
         lo: lo.map(f64::from),
         hi: hi.map(f64::from),
         mid,
@@ -938,6 +947,41 @@ mod tests {
         assert!([back.x0 - c.x0, back.y0 - c.y0, back.x1 - c.x1, back.y1 - c.y1].iter().all(|d| d.abs() < 1e-9), "{back:?}");
         s.crop.geometry.rect = Rect::new(f64::NAN, 0.0, 1.0, 1.0);
         assert_eq!(s.negative_region(), Rect::UNIT);
+    }
+
+    /// A base channel measured below the conversion's floor is stored at the floor, so the analysis stays valid (and
+    /// isn't measured again on every render).
+    #[test]
+    fn a_base_below_the_floor_is_stored_valid() {
+        // (a red layer so dense that its clear base, and the picture, read below the floor)
+        let px: Vec<[f32; 3]> = (1..200).map(|k| on_film([k as f32 / 200.0; 3])).map(|p| [p[0] * 1.0e-8, p[1], p[2]]).collect();
+        let a = range_of(FilmType::ColorNegative, &px, [0.7e-8, 0.45, 0.25], BaseSource::Sampled, None).unwrap();
+        assert_eq!(a.base[0], FilmAnalysis::MIN_BASE);
+        assert!(a.is_valid(), "{a:?}");
+    }
+
+    /// A large clear patch a little brighter than the rebate, and close to it in colour, is rejected (with the rebate
+    /// it makes a solid area, not an edge); the rebate, a strip along the top, is still tried on its own and found.
+    #[test]
+    fn a_rebate_close_in_colour_to_a_brighter_rejected_patch_is_found() {
+        let (w, h) = (600, 400);
+        let mut img = Rgb32f::new(w, h);
+        let patch = BASE.map(|c| c * 1.02);
+        for y in 0..h {
+            for x in 0..w {
+                img.data[y * w + x] = if y < 8 {
+                    BASE
+                } else if (30..570).contains(&x) && (60..390).contains(&y) {
+                    patch
+                } else {
+                    BASE.map(|c| c * 0.3)
+                };
+            }
+        }
+        let clear = BASE.map(|c| c * 0.5);
+        let (base, rect) = detect_base(&img, clear, Rect::new(0.0, 0.0, 0.0, 0.0), true).expect("the rebate is found");
+        assert!(base.iter().zip(&BASE).all(|(b, r)| (b - r).abs() < 1e-4), "base {base:?}, not the patch {patch:?}");
+        assert!(rect.y1 < 0.1, "the strip along the top: {rect:?}");
     }
 
     #[test]

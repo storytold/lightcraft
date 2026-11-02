@@ -1424,6 +1424,8 @@ impl FilmAnalysis {
             && fin(&self.hi)
             && fin(&self.mid)
             && self.tones.is_none_or(|t| t.iter().all(fin))
+            // (each channel's density rises with the tone level, as quantiles do: samples out of order weren't measured)
+            && self.tones.is_none_or(|t| t.iter().zip(t.iter().skip(1)).all(|(a, b)| a.iter().zip(b).all(|(x, y)| x <= y)))
             // (at least the smallest transmittance the conversion divides by, so the base stored is the base used)
             && self.base.iter().all(|b| *b >= Self::MIN_BASE)
             && self.lo.iter().zip(&self.hi).all(|(l, h)| h - l > 1e-4)
