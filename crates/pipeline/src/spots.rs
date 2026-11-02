@@ -648,6 +648,30 @@ mod tests {
         assert!(img.get(5, 50)[0] < 0.2);
     }
 
+    /// A Remove spot saved before Remove was content-aware (#2359) loads as Heal and renders as it
+    /// did then, when Remove and Heal shared the healing path; a Remove spot made now is rebuilt from
+    /// its surroundings.
+    #[test]
+    fn a_remove_spot_saved_before_content_aware_renders_as_it_did() {
+        let original = Rgb32f::from_fn(96, 64, |x, y| {
+            let n = ((x * 7 + y * 13) % 11) as f32 / 100.0;
+            [0.2 + x as f32 / 200.0 + n, 0.35 + n, 0.5 - y as f32 / 300.0]
+        });
+        let frame = Frame::new(96, 64, &DevelopSettings::default(), true);
+        let render = |spot: Spot| {
+            let mut img = original.clone();
+            apply(&mut img, &[spot], &frame, frame.px_per_long(96));
+            img
+        };
+        let saved = serde_json::json!({"mode": "remove", "points": [{"x": 0.5, "y": 0.5}], "size": 0.06, "feather": 50.0, "opacity": 100.0, "source_offset": {"x": 0.2, "y": 0.0}});
+        let old: Spot = serde_json::from_value(saved).unwrap();
+        assert_eq!(old.mode, SpotMode::Heal);
+        let heal = render(old.clone());
+        assert_ne!(heal.data, original.data, "the spot changes the photo");
+        assert_eq!(heal.data, render(Spot { mode: SpotMode::Heal, ..old.clone() }).data);
+        assert_ne!(heal.data, render(Spot { mode: SpotMode::Remove, ..old }).data, "a Remove spot made now is content-aware");
+    }
+
     fn with_spots(spots: Vec<Spot>) -> DevelopSettings {
         DevelopSettings { spots, ..Default::default() }
     }
