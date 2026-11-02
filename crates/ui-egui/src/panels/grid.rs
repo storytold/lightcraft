@@ -808,7 +808,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, view: 
     } else {
         r
     };
-    let flags = ThumbFlags { square, state, onscreen, ppp, aspect: photo_aspect(Some(&*photo)) };
+    let flags = ThumbFlags { state, onscreen, ppp, aspect: photo_aspect(Some(&*photo)) };
     let (photo_rect, failure) = paint_cell_thumbnail(app, p, &t, id, img_rect, flags);
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
@@ -859,7 +859,7 @@ fn paint_cell_thumbnail(
     img_rect: Rect,
     flags: ThumbFlags,
 ) -> (Rect, Option<String>) {
-    let ThumbFlags { square: _, state, onscreen, ppp, aspect } = flags;
+    let ThumbFlags { state, onscreen, ppp, aspect } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
     let (photo_rect, failure) = if let Some(tex) = app.renderer.thumb(id) {
@@ -956,7 +956,6 @@ fn cell_interaction(
 }
 
 struct ThumbFlags {
-    square: bool,
     state: lightcraft_engine::SelectionState,
     onscreen: bool,
     ppp: f32,

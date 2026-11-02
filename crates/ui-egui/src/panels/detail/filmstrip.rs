@@ -128,7 +128,6 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
                     p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                     crate::panels::grid::selection_ring(p, &t, fr, state);
-                    }
                     (fr, None)
                 } else {
                     let ph = crate::thumb::placeholder_rect(img_area, crate::panels::grid::photo_aspect(Some(&*photo)));
