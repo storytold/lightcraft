@@ -298,10 +298,19 @@ impl ImportJob {
         // The sidecar of every file that was probed, looked up for the batch at once: each is a few
         // names asked of the disk, which on a network share made a folder of thousands of photos wait
         // a round trip per name, one name after another.
-        // (a file whose content the library has is read too: a Lightroom import makes it a new record
-        // from its file and sidecar, #2589)
         let asked: Vec<&str> = todo.iter().zip(&probed).filter(|(_, p)| p.is_ok()).map(|(f, _)| f.as_str()).collect();
-        let mut found = sidecars_of(&asked, cancel, |f| crate::sidecar::find_sidecar_for_import(&stems, self.naming, f)).into_iter();
+        // (a file whose content the library has is skipped below as a duplicate: it asks the disk
+        // nothing, unless the import makes a record of it from its file and sidecar, #2589)
+        let skipped = !opts.local && !opts.read_duplicates;
+        let known: std::collections::HashSet<&str> = todo
+            .iter()
+            .zip(&probed)
+            .filter(|(_, p)| skipped && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
+            .map(|(f, _)| f.as_str())
+            .collect();
+        let mut found =
+            sidecars_of(&asked, cancel, |f| if known.contains(f) { None } else { crate::sidecar::find_sidecar_for_import(&stems, self.naming, f) })
+                .into_iter();
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -331,13 +340,18 @@ impl ImportJob {
                     break;
                 }
             }
-            // same bytes as a library photo: skipped below, once it is read as a file import reads it
+            // same bytes as a library photo: skipped below, once its capture time is known (and,
+            // when the import makes a record of it, once it is read as a file import reads it)
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
-            // and names the copy when the file itself has none
+            // and names the copy when the file itself has none (a skipped duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
-            let packet = found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw));
+            let packet = if duplicate_of.is_some() && info.captured.is_some() && !opts.read_duplicates {
+                None
+            } else {
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+            };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),

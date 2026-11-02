@@ -398,6 +398,44 @@ fn a_content_duplicate_keeps_what_its_sidecar_says() {
     assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+/// Only the Lightroom import reads a content duplicate's XMP sidecar: any other import skips the
+/// duplicate without looking its sidecar up (#2954), so the same file beside the same sidecar
+/// reaches the report with no sidecar unless the import makes a record of it (#2589).
+#[test]
+fn only_an_import_that_makes_a_record_of_a_content_duplicate_reads_its_sidecar() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-skip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("test.ARW");
+    std::fs::write(&file, b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let paths = [file.to_string_lossy().into_owned()];
+    for read_duplicates in [false, true] {
+        let mut s = crate::Session::new();
+        let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+        s.media.file_probe =
+            Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), content_hash: Some("same-bytes".into()), ..Default::default() })));
+        let opts = crate::import::ImportOptions { read_duplicates, ..Default::default() };
+        let r = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+        assert!(r.imported.is_empty() && s.catalog.photos().count() == 1, "{read_duplicates}: {r:?}");
+        let [d] = r.duplicates.as_slice() else { panic!("{read_duplicates}: {r:?}") };
+        assert_eq!((d.reason, d.existing), ("content", Some(other.0)), "{read_duplicates}");
+        let caption = d.file.as_ref().and_then(|f| f.sidecar.as_ref()).and_then(|sc| sc.caption.clone());
+        if read_duplicates {
+            assert_eq!(caption.as_deref(), Some("Harbour at dawn"), "the Lightroom import reads it: {r:?}");
+        } else {
+            assert_eq!(caption, None, "a skipped duplicate's sidecar isn't looked up: {r:?}");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
 /// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
 /// the import was set up to do (a Lightroom import doesn't restore, see `OnDeleted`), and the report
 /// counts it so the photos don't go missing unexplained (#2589). A new virtual copy of it is
