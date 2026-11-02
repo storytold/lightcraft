@@ -17,7 +17,7 @@
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
 
-use crate::{LibrarySource, Session, filter_chips};
+use crate::{LibrarySource, Selection, Session, filter_chips};
 
 fn source_folder(s: &mut Session, path: &str) -> serde_json::Value {
     s.execute("library.source", &json!({"kind": "libraryFolder", "path": path})).unwrap()
@@ -617,6 +617,244 @@ fn a_folder_is_created_on_disk_and_undo_removes_it() {
     std::fs::write(dir.0.join("picks/note.txt"), "x").unwrap();
     assert!(s.execute("edit.undo", &json!({})).is_err(), "a folder with something in it is never removed");
     assert!(dir.0.join("picks/note.txt").is_file());
+}
+
+#[test]
+fn a_row_above_a_made_folder_stays_choosable_when_the_photos_beside_it_leave() {
+    let dir = Scratch::new("made-above");
+    std::fs::create_dir_all(dir.0.join("p/a")).unwrap();
+    let mut s = Session::new();
+    add_file(&mut s, &dir.path("p/a/x.jpg"), "X");
+    s.execute("folder.create", &json!({"parent": dir.path("p"), "name": "new"})).unwrap();
+    s.execute("library.removeFolder", &json!({"path": dir.path("p/a")})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("p")).iter().map(|r| r.0).collect::<Vec<_>>(), vec![0], "the row above the made folder is still listed");
+    let r = s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("p")}));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(s.visible().len(), 0);
+    assert_eq!(s.source, LibrarySource::LibraryFolder, "the folder shown is still in the list, so the view stays");
+}
+
+/// A folder made inside a relative `parent` (as an agent or the CLI may give it) is made and
+/// listed under its absolute path, like the folders of an absolute one.
+#[test]
+fn a_folder_made_inside_a_relative_parent_is_listed_under_its_absolute_path() {
+    /// Removes the folder the test makes in the working folder, however the test ends.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let name = format!("lc-folders-relative-{}", std::process::id());
+    let made = std::path::absolute(".").unwrap().join(&name);
+    let _cleanup = Cleanup(made.clone());
+    let mut s = Session::new();
+    let r = s.execute("folder.create", &json!({"parent": ".", "name": name})).unwrap();
+    assert_eq!(std::path::Path::new(r["path"].as_str().unwrap()), made);
+    assert!(made.is_dir());
+    let rows = rows_for(&mut s, &made.to_string_lossy());
+    assert_eq!(rows.len(), 1, "the made folder is listed: {rows:?}");
+}
+
+#[test]
+fn a_made_folder_can_be_given_a_color_label_before_it_holds_a_photo() {
+    let dir = Scratch::new("made-label");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("folder.label", &json!({"path": dir.path("b"), "label": "green"})).unwrap();
+    assert_eq!(listed_label(&mut s, &dir.path("b")).as_deref(), Some("green"));
+    s.execute("folder.label", &json!({"path": dir.path("nope"), "label": "green"})).unwrap_err();
+}
+
+#[test]
+fn removing_a_made_folder_from_the_library_takes_its_row_away_and_undo_brings_it_back() {
+    let dir = Scratch::new("made-remove");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "c"})).unwrap();
+    add_file(&mut s, &dir.path("c/x.jpg"), "X");
+    let r = s.execute("library.removeFolder", &json!({"path": dir.path("b")})).unwrap();
+    assert_eq!(r["removed"], 0);
+    assert!(rows_for(&mut s, &dir.path("b")).is_empty(), "no photos, so no row once it is removed");
+    assert!(dir.0.join("b").is_dir(), "no file is touched");
+    s.execute("library.removeFolder", &json!({"path": dir.path("c")})).unwrap();
+    assert!(rows_for(&mut s, &dir.path("c")).is_empty(), "a made folder with photos goes with them");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("c")).iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), vec![(1, 1)], "one step brings back photos and row");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("b")).len(), 1);
+    assert!(s.execute("library.removeFolder", &json!({"path": dir.path("nope")})).is_err(), "a folder the library never listed is still refused");
+}
+
+#[test]
+fn removing_an_empty_made_folder_leaves_the_selection_alone() {
+    let dir = Scratch::new("made-remove-selection");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "c"})).unwrap();
+    let first = add_file(&mut s, &dir.path("c/x.jpg"), "X");
+    let second = add_file(&mut s, &dir.path("c/y.jpg"), "Y");
+    let (a, b) = (s.visible_cloned()[0], s.visible_cloned()[1]);
+    assert!([a, b].contains(&first) && [a, b].contains(&second));
+    s.selection = Selection::single(b);
+    s.execute("library.removeFolder", &json!({"path": dir.path("b")})).unwrap();
+    assert_eq!(s.selection, Selection::single(b), "no photo went and the view is the same: the selection stays");
+    // a folder that was shown and has been left again (the grid shows everything) is not the view either
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "e"})).unwrap();
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("e")})).unwrap();
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    s.selection = Selection::single(b);
+    s.execute("library.removeFolder", &json!({"path": dir.path("e")})).unwrap();
+    assert_eq!(s.selection, Selection::single(b), "the grid did not change, so the selection stays");
+    // a folder shown only because a made folder is inside it: removing that one empties the grid's name, so it shows everything
+    std::fs::create_dir_all(dir.0.join("p")).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path("p"), "name": "q"})).unwrap();
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("p")})).unwrap();
+    s.execute("library.removeFolder", &json!({"path": dir.path("p/q")})).unwrap();
+    assert_eq!(s.source, LibrarySource::All, "the folder shown is no longer listed");
+    let first_visible = s.visible_cloned()[0];
+    assert_eq!(s.selection, Selection::single(first_visible), "everything is shown now: its first photo is selected");
+    // a view that showed the removed folder is replaced, so the selection follows it
+    s.selection = Selection::single(b);
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("c")})).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "d"})).unwrap();
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("d")})).unwrap();
+    s.execute("library.removeFolder", &json!({"path": dir.path("d")})).unwrap();
+    let first_visible = s.visible_cloned()[0];
+    assert_eq!(s.selection, Selection::single(first_visible), "the shown folder is gone: back to everything, first photo selected");
+}
+
+#[test]
+fn a_made_folder_can_be_chosen_empty_and_undoing_its_creation_leaves_the_choice() {
+    let dir = Scratch::new("made-source");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    let r = s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("b")}));
+    assert_eq!(r.as_ref().map(|r| r["count"].clone()).ok(), Some(json!(0)), "{r:?}");
+    assert_eq!(s.visible().len(), 0);
+    assert_eq!(s.source, LibrarySource::LibraryFolder, "an empty grid under the folder's own name, not everything");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.visible().len(), 0);
+    assert_eq!((s.source, s.library_folder.as_deref()), (LibrarySource::All, None), "the folder is gone");
+}
+
+/// Every row of `library.folders` for `path` (a folder spelled any way), at any depth, as
+/// `(count, own, parent path)`.
+fn rows_for(s: &mut Session, path: &str) -> Vec<(u64, u64, Option<String>)> {
+    fn walk(rows: &serde_json::Value, parent: Option<&str>, key: &str, out: &mut Vec<(u64, u64, Option<String>)>) {
+        for r in rows.as_array().into_iter().flatten() {
+            let p = r["path"].as_str().unwrap_or_default();
+            if lightcraft_catalog::query::folder_key(p) == key {
+                out.push((r["count"].as_u64().unwrap(), r["own"].as_u64().unwrap(), parent.map(str::to_string)));
+            }
+            walk(&r["children"], Some(p), key, out);
+        }
+    }
+    let rows = s.execute("library.folders", &json!({})).unwrap();
+    let mut out = Vec::new();
+    walk(&rows, None, &lightcraft_catalog::query::folder_key(path), &mut out);
+    out
+}
+
+fn parent_key(row: &(u64, u64, Option<String>)) -> Option<String> {
+    row.2.as_deref().map(lightcraft_catalog::query::folder_key)
+}
+
+#[test]
+fn a_folder_made_here_has_a_row_with_no_photos_at_once_and_undo_and_redo_take_it_and_bring_it_back() {
+    let dir = Scratch::new("made-row");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("b")).iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), vec![(0, 0)], "one row, no photos");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(rows_for(&mut s, &dir.path("b")).is_empty(), "undo takes the row with the folder");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("b")).len(), 1, "redo brings it back");
+    assert!(s.catalog.folder_record(&dir.path("b")).is_some(), "the library records the folder it made");
+}
+
+#[test]
+fn a_made_folder_stays_one_row_when_it_gains_photos() {
+    let dir = Scratch::new("made-gains");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    add_file(&mut s, &dir.path("b/x.jpg"), "X");
+    let rows = rows_for(&mut s, &dir.path("b"));
+    assert_eq!(rows.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), vec![(1, 1)]);
+}
+
+#[test]
+fn a_folder_made_inside_a_folder_with_no_photos_of_its_own_nests_there() {
+    let dir = Scratch::new("made-nested");
+    std::fs::create_dir_all(dir.0.join("a/sub")).unwrap();
+    let mut s = Session::new();
+    add_file(&mut s, &dir.path("a/sub/p.jpg"), "P");
+    s.execute("folder.create", &json!({"parent": dir.path("a"), "name": "new"})).unwrap();
+    let made = rows_for(&mut s, &dir.path("a/new"));
+    assert_eq!(made.len(), 1);
+    assert_eq!((made[0].0, parent_key(&made[0])), (0, Some(lightcraft_catalog::query::folder_key(&dir.path("a")))));
+    let a = rows_for(&mut s, &dir.path("a"));
+    assert_eq!(a.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), vec![(1, 0)], "the parent counts what is inside it, once");
+}
+
+#[test]
+fn photos_moved_into_a_made_folder_leave_one_row_each_with_the_right_counts() {
+    let dir = Scratch::new("made-move");
+    std::fs::create_dir_all(dir.0.join("a")).unwrap();
+    let mut s = Session::new();
+    let ids: Vec<_> = ["1", "2", "3"].iter().map(|n| add_file(&mut s, &dir.path(&format!("a/{n}.jpg")), n)).collect();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("photo.moveToFolder", &json!({"ids": [ids[0].0, ids[1].0], "folder": dir.path("b")})).unwrap();
+    let counts = |s: &mut Session, p: &str| rows_for(s, &dir.path(p)).iter().map(|r| (r.0, r.1)).collect::<Vec<_>>();
+    assert_eq!(counts(&mut s, "b"), vec![(2, 2)]);
+    assert_eq!(counts(&mut s, "a"), vec![(1, 1)]);
+    s.execute("photo.moveToFolder", &json!({"ids": [ids[2].0], "folder": dir.path("b")})).unwrap();
+    assert_eq!(counts(&mut s, "b"), vec![(3, 3)]);
+    assert!(rows_for(&mut s, &dir.path("a")).is_empty(), "an emptied folder the library never made is a row only while it holds photos, as before");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(counts(&mut s, "b"), vec![(2, 2)]);
+    assert_eq!(counts(&mut s, "a"), vec![(1, 1)]);
+}
+
+#[test]
+fn a_made_folder_stays_a_row_when_its_photos_move_away() {
+    let dir = Scratch::new("made-empties");
+    std::fs::create_dir_all(dir.0.join("a")).unwrap();
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    let id = add_file(&mut s, &dir.path("b/x.jpg"), "X");
+    s.execute("photo.moveToFolder", &json!({"ids": [id.0], "folder": dir.path("a")})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("b")).iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), vec![(0, 0)]);
+}
+
+#[test]
+fn a_folder_moved_into_a_made_folder_lands_under_it_and_the_made_folder_stays_one_row() {
+    let dir = Scratch::new("made-folder-in");
+    std::fs::create_dir_all(dir.0.join("c")).unwrap();
+    let mut s = Session::new();
+    add_file(&mut s, &dir.path("c/x.jpg"), "X");
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("folder.move", &json!({"path": dir.path("c"), "into": dir.path("b")})).unwrap();
+    let b = rows_for(&mut s, &dir.path("b"));
+    assert_eq!(b.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), vec![(1, 0)]);
+    let c = rows_for(&mut s, &dir.path("b/c"));
+    assert_eq!(c.len(), 1);
+    assert_eq!(parent_key(&c[0]), Some(lightcraft_catalog::query::folder_key(&dir.path("b"))));
+    assert!(rows_for(&mut s, &dir.path("c")).is_empty());
+}
+
+#[test]
+fn a_made_folder_that_is_renamed_or_moved_keeps_its_row_under_the_new_name() {
+    let dir = Scratch::new("made-rename");
+    std::fs::create_dir_all(dir.0.join("into")).unwrap();
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("folder.move", &json!({"path": dir.path("b"), "into": dir.path("into")})).unwrap();
+    assert!(rows_for(&mut s, &dir.path("b")).is_empty());
+    assert_eq!(rows_for(&mut s, &dir.path("into/b")).len(), 1, "the record went with the folder");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(rows_for(&mut s, &dir.path("b")).len(), 1);
+    assert!(rows_for(&mut s, &dir.path("into/b")).is_empty());
 }
 
 #[test]

@@ -2,8 +2,9 @@
 //!
 //! A *folder* here is a folder holding at least one photo of the library (imported, not deleted,
 //! not merely browsed in Local; demo scenes have no folder). The tree lists those folders and the
-//! ones above them, never a folder that holds nothing of the library, with how many photos each
-//! holds — its subfolders included, like a year in By Date counts its months.
+//! ones above them, with how many photos each holds — its subfolders included, like a year in By
+//! Date counts its months. The folders made through LightCraft are listed too, empty or not, with
+//! the folders above them (see below); no other folder that holds nothing of the library is.
 //!
 //! Every folder is a row of its own, the ones above the imported photos included
 //! (`/Users` → `me` → `Pictures`), so a row is exactly the folder it names. A folder spelled two
@@ -24,10 +25,17 @@
 //! two rows. Each row is still consistent: choosing it shows exactly the photos it counts.
 //!
 //! A folder is otherwise only where photos are, but the library can also keep a
-//! [`FolderRecord`] about it (its colour label), stored under the folder's identity
-//! ([`crate::query::folder_key`]). A record follows its folder when the folder is renamed or moved
-//! here ([`Catalog::folder_records_follow`]); one about a folder that no longer holds a photo is
-//! kept (undo can bring the photos back) and shows again when the folder does.
+//! [`FolderRecord`] about it (its colour label, and whether it was made through LightCraft),
+//! stored under the folder's identity ([`crate::query::folder_key`]). A folder made through
+//! LightCraft has a row (count 0) from the start and for good: it is one row before and after it
+//! gains photos, and it stays when they leave. If it is renamed or deleted outside LightCraft its
+//! row stays, like any folder of the library whose files are missing: choosing it shows nothing.
+//! Undoing its creation removes it, and so does Remove from Library ([`Catalog::folders_unmade_ops`];
+//! undo brings it back). The row spells the folder as it was made, or as its move or rename put
+//! it (the record's key alone would be lower case on Windows). A record follows its folder
+//! when the folder is renamed or moved here ([`Catalog::folder_records_follow`]); one about a
+//! folder that no longer holds a photo is kept (undo can bring the photos back) and shows again
+//! when the folder does.
 //!
 //! This is the library's own view of its photos; browsing any folder on disk without importing
 //! is Local's job (see [`crate::local`]).
@@ -77,12 +85,18 @@ pub struct FolderRecord {
     /// A colour label, as a photo has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<ColorLabel>,
+    /// Where the folder is, as it was spelled when it was made through LightCraft
+    /// (`folder.create`), if it was: it has a row in the tree before it holds a photo, and keeps
+    /// it after the photos are moved elsewhere. Kept as spelled so the row's path has the folder's
+    /// own letter case (the record's key is lower case on Windows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<String>,
 }
 
 impl FolderRecord {
     /// Whether the record says nothing (and so is not kept).
     pub fn is_empty(&self) -> bool {
-        self.label.is_none()
+        self.label.is_none() && self.made.is_none()
     }
 }
 
@@ -201,6 +215,46 @@ impl Catalog {
         Op::SetFolderRecord { folder: path.to_string(), record: Some(record) }
     }
 
+    /// The made folders (see [`FolderRecord::made`]) at or inside folder `path`: on the disk
+    /// `path` is on, or on any disk with `all_disks` (a folder above disks, `/Volumes`, holds
+    /// none of their made folders, as it holds none of their photos).
+    fn made_within<'a>(&'a self, path: &str, all_disks: bool) -> impl Iterator<Item = (&'a String, &'a FolderRecord)> {
+        let root = record_key(path);
+        let mount = place(path).map(|p| folder_key(&p.mount));
+        self.folder_records.iter().filter(move |(k, r)| {
+            let Some(spelled) = &r.made else { return false };
+            root.as_deref().is_some_and(|root| key_within(k, root)) && (all_disks || place(spelled).map(|p| folder_key(&p.mount)) == mount)
+        })
+    }
+
+    /// Whether folder `path` or a folder inside it was made through LightCraft: the tree lists
+    /// `path` as a row then, with or without photos.
+    pub fn holds_made_folder(&self, path: &str) -> bool {
+        self.made_within(path, false).next().is_some()
+    }
+
+    /// The ops that make the library forget that folder `path` and the folders inside it were
+    /// made through LightCraft (their rows then show only while they hold photos, like any other
+    /// folder); a label stays. `all_disks`: also those on other disks (a whole folder of disks
+    /// removed from the library). Empty when none was made.
+    pub fn folders_unmade_ops(&self, path: &str, all_disks: bool) -> Vec<Op> {
+        self.made_within(path, all_disks)
+            .map(|(k, r)| {
+                let record = FolderRecord { made: None, ..r.clone() };
+                Op::SetFolderRecord { folder: k.clone(), record: Some(record) }
+            })
+            .collect()
+    }
+
+    /// The op that records folder `path` as made through LightCraft, so the tree lists it before
+    /// it holds a photo, spelled as `path` is. Its inverse (undo) forgets it again. Applying it
+    /// checks the path.
+    pub fn folder_made_op(&self, path: &str) -> Op {
+        let mut record = self.folder_record(path).cloned().unwrap_or_default();
+        record.made = Some(path.to_string());
+        Op::SetFolderRecord { folder: path.to_string(), record: Some(record) }
+    }
+
     /// The ops that carry the records of folder `from` and the folders inside it over to `to`
     /// (the same place below it), for a folder renamed or moved on disk: commit them with the
     /// photos' relinks so undo puts both back. Records already at or below `to` are left from a
@@ -220,7 +274,9 @@ impl Catalog {
 
     fn folder_records_carried(&self, from: &str, to: &str, clear_destination: bool) -> Vec<Op> {
         let (Some(root), Some(dest)) = (record_key(from), record_key(to)) else { return Vec::new() };
-        if root == dest {
+        // (the same identity under another spelling, a rename of case only on Windows, still
+        // rewrites the spelling a made folder is listed under)
+        if root == dest && (from == to || !self.holds_made_folder(from)) {
             return Vec::new();
         }
         // a folder located below itself: what is already at or below `to` belongs to the folders
@@ -236,7 +292,15 @@ impl Catalog {
                 let rest = folder_rest(k, &root)?;
                 let base = dest.trim_end_matches('/');
                 let path = if rest.is_empty() { dest.clone() } else { format!("{base}/{}", rest.join("/")) };
-                Some((folder_key(&path), r.clone()))
+                let mut record = r.clone();
+                // the spelling a made folder is listed under follows too, as `to` spells its place
+                if let Some(spelled) = &r.made
+                    && let Some(rest) = folder_rest(spelled, from)
+                {
+                    let base = to.trim_end_matches(['/', '\\']);
+                    record.made = Some(if rest.is_empty() { base.to_string() } else { format!("{base}/{}", rest.join("/")) });
+                }
+                Some((folder_key(&path), record))
             })
             .collect();
         // what was known at the old place goes, and so does what is left at the new one (also
@@ -264,7 +328,10 @@ impl Catalog {
         }
         let mut levels: HashMap<String, Level> = HashMap::new();
         let mut roots: Vec<String> = Vec::new();
-        for (dir, n) in dirs {
+        // folders made through LightCraft count 0 until photos arrive; read after the photos' own
+        // spellings, so a folder that has photos is named as they spell it
+        let made = self.folder_records.values().filter_map(|r| r.made.as_deref());
+        for (dir, n) in dirs.into_iter().chain(made.map(|spelled| (spelled, 0))) {
             let Some(placed) = place(dir) else { continue };
             let vkey = folder_key(&placed.mount);
             if !levels.contains_key(&vkey) {
