@@ -1352,6 +1352,23 @@ pub fn card_setting() -> String {
     }
 }
 
+/// The key ([`CardInfo::key`]) of the card photos are edited on with `saved` as the editing card's
+/// setting, picked as the editing card is (`LIGHTCRAFT_GPU_ADAPTER` first, keys in any case, the
+/// same model under another number): for the settings. `None` until the cards were listed, or
+/// when wgpu picks.
+pub fn editing_card_key(saved: &str) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let listed = cards::listed()?;
+        cards::editing_key(&listed, backend::wanted_adapter().as_deref(), saved).map(|k| k.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = saved;
+        None
+    }
+}
+
 /// The name in a card's key (`dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1` → the name), for a
 /// card that isn't there; `None` for text that isn't a key.
 pub fn card_name(key: &str) -> Option<String> {
