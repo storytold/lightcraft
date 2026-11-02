@@ -53,14 +53,26 @@ pub fn clean_token(token: Option<String>) -> Option<String> {
 /// The token the control channel on `port` will require (`None`: authentication is off, and the
 /// token file of an earlier run is removed). Without `explicit` a random one is generated. It is
 /// also written to the token file for `lightcraft-cli`; call this only after [`bind`] succeeded.
-pub fn prepare_token(port: u16, explicit: Option<String>, no_auth: bool) -> Option<String> {
+///
+/// `ephemeral` (a `--memory` session, which saves nothing): no file is written or removed. A
+/// generated token is logged once instead, because that is the only way a client can learn it.
+pub fn prepare_token(port: u16, explicit: Option<String>, no_auth: bool, ephemeral: bool) -> Option<String> {
     if no_auth {
         log::warn!("control channel started WITHOUT authentication (LIGHTCRAFT_CONTROL_NO_AUTH)");
-        remove_token_file(port);
+        if !ephemeral {
+            remove_token_file(port);
+        }
         return None;
     }
     let generated = explicit.is_none();
     let token = explicit.unwrap_or_else(random_token);
+    if ephemeral && generated {
+        log::warn!(
+            "control token for this --memory session: {token} (--memory saves nothing, so no token file is written; \
+             give it to lightcraft-cli in LIGHTCRAFT_CONTROL_TOKEN, or start with --control-token)"
+        );
+        return Some(token);
+    }
     match write_token_file(port, &token) {
         Ok(path) => log::info!("control token written to {} (lightcraft-cli reads it from there)", path.display()),
         Err(e) if generated => log::warn!(
@@ -648,6 +660,21 @@ mod tests {
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_memory_session_generates_a_token_but_writes_no_file() {
+        // a port nothing here uses; the real token file path is only checked, not written
+        let port = 65_531;
+        let existed = token_file(port).is_some_and(|p| p.exists());
+        let token = prepare_token(port, None, false, true).expect("a token is generated");
+        assert_eq!(token.len(), 32);
+        assert_eq!(token_file(port).is_some_and(|p| p.exists()), existed, "no token file written");
+        if !existed {
+            remove_token_file(port); // clean up if the assertion above ever fails
+        }
+        // with authentication off there is no token, in memory or not
+        assert_eq!(prepare_token(port, Some("given".into()), true, true), None, "no_auth still means no token");
     }
 
     #[test]

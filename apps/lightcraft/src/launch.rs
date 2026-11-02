@@ -11,7 +11,8 @@ OPTIONS:
                    a list of the recent ones with Settings > General > At launch: Ask me or Alt/Option held,
                    else ~/Pictures/LightCraft Library)
   --no-demo        don't seed a new library with the procedural demo photos
-  --memory         throwaway in-memory session (alias --demo); nothing is saved
+  --memory         throwaway in-memory session (alias --demo); nothing is saved (with --control, a generated
+                   control token is logged instead of written to ~/.lightcraft)
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
   --control-token T   the token every control connection must send first (env LIGHTCRAFT_CONTROL_TOKEN; default:

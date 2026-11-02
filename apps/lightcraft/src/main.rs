@@ -343,7 +343,7 @@ fn main() -> eframe::Result {
                     match control_server::bind(port) {
                         Ok(listener) => {
                             let no_auth = matches!(std::env::var("LIGHTCRAFT_CONTROL_NO_AUTH").as_deref(), Ok("1") | Ok("true"));
-                            let token = control_server::prepare_token(port, control_token.take(), no_auth);
+                            let token = control_server::prepare_token(port, control_token.take(), no_auth, in_memory);
                             let rx = control_server::start(listener, cc.egui_ctx.clone(), token);
                             app = app.with_control(rx);
                         }
