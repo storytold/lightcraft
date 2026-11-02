@@ -2552,6 +2552,7 @@
   "Monitor profile": "Monitorprofil",
   "None (the display is treated as sRGB)": "Keins (der Bildschirm wird als sRGB behandelt)",
   "this screen's profile": "Profil dieses Bildschirms",
+  "The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again": "Die Zeilen des Kanalmischers lassen sich nicht umkehren: ändern oder setzen Sie den Mischer zurück und wählen Sie dann erneut",
   "This spot can't be made neutral: pick a brighter, less saturated area": "Diese Stelle lässt sich nicht neutral machen: wähle eine hellere, weniger gesättigte Stelle",
   "Choose Profile…": "Profil auswählen…",
   "Use Screen Profile": "Bildschirmprofil verwenden",

@@ -120,7 +120,7 @@ fn mixer_picker_is_in_the_tools_menu_beside_the_wb_selector() {
 
 /// A pick whose source cannot be loaded toasts the load failure itself (a source gone from disk),
 /// not the picker's "can't be made neutral" advice — that is only for a spot the maths refuses
-/// (issue #2158 review). The refusal branch is guarded by the singular-mixer case at the end.
+/// (issue #2158 review). The refusal branch is guarded by the flip-mixer case at the end.
 #[test]
 fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     let dir = std::env::temp_dir().join(format!("lc-ui-mixer-src-{}", std::process::id()));
@@ -157,20 +157,17 @@ fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     assert!(toast.contains("gone.png") || toast.contains("could not"), "the load failure itself: {toast}");
     assert!(!toast.contains("can't be made neutral"), "not the refusal: {toast}");
 
-    // the refusal branch still shows the advice: a singular mixer is refused as a bad parameter
+    // the refusal branch still shows the advice: the flip mixer's negative gain refuses every spot
+    // as a bad parameter (the spot-dependent refusal — a singular mixer now has its own message,
+    // covered by a_singular_mixer_toasts_its_own_message_not_the_pick_elsewhere_advice)
     let gone = h.app.session.active().expect("the imported photo");
     let demo_id = h.app.session.visible_cloned().into_iter().find(|id| *id != gone).expect("a demo photo");
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [demo_id.0], "active": demo_id.0}}), T);
     h.settle(SETTLE);
     assert!(h.app.widgets.iter().any(|(w, _)| w == "canvas:image"), "the canvas is back");
-    for (control, value) in [
-        ("channelMixer.red.red", 100.0),
-        ("channelMixer.green.red", 100.0),
-        ("channelMixer.green.green", 0.0),
-        ("channelMixer.blue.red", 100.0),
-        ("channelMixer.blue.green", 0.0),
-        ("channelMixer.blue.blue", 0.0),
-    ] {
+    for (control, value) in
+        [("channelMixer.red.red", 100.0), ("channelMixer.red.green", 200.0), ("channelMixer.green.red", -100.0), ("channelMixer.blue.blue", 100.0)]
+    {
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T);
     }
     h.app.ui.toast = None;
@@ -200,4 +197,53 @@ fn swap_button_wraps_to_its_own_line_in_a_narrow_panel() {
     let swap = rect("button:mixerSwapRB").expect("the swap button");
     assert!(swap.right() <= 900.0 - 4.0, "the swap button fits the panel: {swap:?}");
     assert!(swap.top() >= eye.bottom() - 2.0, "it wrapped below the eyedropper: {eye:?} vs {swap:?}");
+}
+
+/// A singular mixer refuses every spot, so the toast names the cause (the rows can't be inverted)
+/// instead of advising to pick elsewhere; a spot-dependent refusal (the flip mixer's negative gains)
+/// keeps that advice (issue #2158 review).
+#[test]
+fn a_singular_mixer_toasts_its_own_message_not_the_pick_elsewhere_advice() {
+    let mut h = mixer_open();
+    let set = |h: &mut Headless, control: &str, value: f64| {
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T);
+    };
+    let pick = |h: &mut Headless| {
+        h.app.ui.toast = None;
+        h.request("engine.execute", json!({"command": "tool.mixerPicker"}), T);
+        let r = h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.5, "fy": 0.5}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.app.ui.toast.clone().expect("a toast").0
+    };
+
+    // three identical rows: singular, refused for every spot with its own message
+    for (control, value) in [
+        ("channelMixer.red.red", 100.0),
+        ("channelMixer.green.red", 100.0),
+        ("channelMixer.green.green", 0.0),
+        ("channelMixer.blue.red", 100.0),
+        ("channelMixer.blue.green", 0.0),
+        ("channelMixer.blue.blue", 0.0),
+    ] {
+        set(&mut h, control, value);
+    }
+    let toast = pick(&mut h);
+    assert!(toast.contains("can't be inverted"), "the singular cause is named: {toast}");
+    assert!(!toast.contains("pick a brighter"), "not the pick-elsewhere advice: {toast}");
+
+    // the flip mixer (a negative gain for every spot) keeps the spot-dependent advice
+    for (control, value) in [
+        ("channelMixer.red.red", 100.0),
+        ("channelMixer.red.green", 200.0),
+        ("channelMixer.green.red", -100.0),
+        ("channelMixer.green.green", 100.0),
+        ("channelMixer.green.green", 100.0),
+        ("channelMixer.blue.blue", 100.0),
+    ] {
+        set(&mut h, control, value);
+    }
+    let toast = pick(&mut h);
+    assert!(toast.contains("pick a brighter"), "the spot-dependent advice stays: {toast}");
+    assert!(!toast.contains("can't be inverted"), "not the singular message: {toast}");
 }

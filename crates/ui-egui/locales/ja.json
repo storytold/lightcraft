@@ -2299,6 +2299,7 @@
   "End": "終了",
   "The intro plays once before the first photo; the ending after the last photo when Repeat is off. The identity plate is the one set under Overlays. Titles fade like slides and random order never moves them.": "イントロは最初の写真の前に 1 回再生され、エンディングは繰り返しがオフのとき最後の写真の後に再生されます。ID プレートはオーバーレイで設定したものです。タイトルはスライドと同様にフェードし、ランダム順でも位置は変わりません。",
   "This screen is off: turn it on under Titles to play it.": "この画面はオフです。再生するにはタイトルでオンにしてください。",
+  "The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again": "チャンネルミキサーの行を反転できません：ミキサーを変更またはリセットして、もう一度選択してください",
   "This spot can't be made neutral: pick a brighter, less saturated area": "この場所はニュートラルにできません：もっと明るく彩度の低い場所を選んでください",
   "The intro screen, before the first photo.": "イントロ画面（最初の写真の前）。",
   "The ending screen, after the last photo.": "エンディング画面（最後の写真の後）。",

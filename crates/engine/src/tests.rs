@@ -911,7 +911,7 @@ fn mixer_swap_rb_and_the_singular_pick_error() {
     assert_eq!(singular.red, singular.green, "sanity: the rows really are identical");
     assert_eq!(singular.green, singular.blue);
     let err = s.execute("develop.mixerNeutralPick", &json!({"x": 0.5, "y": 0.5})).unwrap_err();
-    assert!(err.to_string().contains("can't be made neutral"), "{err}");
+    assert!(err.to_string().contains("can't be inverted"), "the singular mixer has its own message: {err}");
     assert_eq!(active_dev(&s).channel_mixer, singular, "the refused pick changes nothing");
 }
 

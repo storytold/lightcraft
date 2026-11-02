@@ -317,8 +317,13 @@ pub fn scene_colour_matrix(s: &DevelopSettings) -> Option<[[f32; 3]; 3]> {
     }
 }
 
-/// What every refusal of [`mixer_neutral`] says: one message the UI can translate and the user act on.
+/// What the spot-dependent refusals of [`mixer_neutral`] say: one message the UI can translate and
+/// the user act on.
 pub const MIXER_NEUTRAL_ERROR: &str = "This spot can't be made neutral: pick a brighter, less saturated area";
+
+/// What a singular mixer refuses with: no spot can be made neutral while the rows can't be inverted,
+/// so the advice to pick elsewhere can't help — the mixer has to change or be reset (issue #2158).
+pub const MIXER_SINGULAR_ERROR: &str = "The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again";
 
 /// The Rec.2020 luminance weights, as the tone map reads them.
 fn luminance(c: [f64; 3]) -> f64 {
@@ -339,16 +344,16 @@ fn luminance(c: [f64; 3]) -> f64 {
 /// only the brightness target, and `C · M' · c` comes out neutral at it. Returns the new nine
 /// values in per cent and how much the whole matrix was scaled down to fit the ±200 % sliders
 /// (1.0 when it already fitted; the point stays neutral at that lower luminance, and Exposure can
-/// compensate). `Err` ([`MIXER_NEUTRAL_ERROR`]) when `m` is singular, the sample has no usable
-/// signal (a component ≤ 1e-6, or not a number) or the gains come out non-finite or non-positive;
-/// nothing is changed then.
+/// compensate). `Err` ([`MIXER_SINGULAR_ERROR`]) when `m` is singular, or ([`MIXER_NEUTRAL_ERROR`])
+/// when the sample has no usable signal (a component ≤ 1e-6, or not a number) or the gains come out
+/// non-finite or non-positive; nothing is changed then.
 pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3], calib: Option<[[f64; 3]; 3]>) -> Result<(ChannelMixer, f64), &'static str> {
     let rows = m.rows().map(|r| r.map(|v| v.clamp(-200.0, 200.0) / 100.0));
     if c.iter().any(|v| !(v.is_finite() && *v > 1e-6)) {
         return Err(MIXER_NEUTRAL_ERROR);
     }
     let mat = Mat3(rows);
-    let u = mat.inverse().ok_or(MIXER_NEUTRAL_ERROR)?.apply([1.0, 1.0, 1.0]);
+    let u = mat.inverse().ok_or(MIXER_SINGULAR_ERROR)?.apply([1.0, 1.0, 1.0]);
     let q = luminance(calib.map_or_else(|| mat.apply(c), |cm| Mat3(cm).apply(mat.apply(c))).map(|v| v.max(0.0)));
     let g = [q * u[0] / c[0], q * u[1] / c[1], q * u[2] / c[2]];
     if !(q.is_finite() && q > 0.0) || g.iter().any(|v| !(v.is_finite() && *v > 0.0)) {

@@ -2507,6 +2507,7 @@
   "End": "Конец",
   "The intro plays once before the first photo; the ending after the last photo when Repeat is off. The identity plate is the one set under Overlays. Titles fade like slides and random order never moves them.": "Вступление показывается один раз перед первым фото, финал — после последнего фото, если повтор выключен. Фирменная табличка — та, что задана в разделе «Наложения». Титры появляются и исчезают как слайды, а случайный порядок их не перемещает.",
   "This screen is off: turn it on under Titles to play it.": "Этот экран выключен: включите его в разделе «Титры», чтобы показывать.",
+  "The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again": "Строки микшера каналов нельзя обратить: измените или сбросьте микшер и выберите снова",
   "This spot can't be made neutral: pick a brighter, less saturated area": "Эту точку нельзя сделать нейтральной: выберите более светлую и менее насыщенную область",
   "The intro screen, before the first photo.": "Вступительный экран, перед первым фото.",
   "The ending screen, after the last photo.": "Заключительный экран, после последнего фото.",
