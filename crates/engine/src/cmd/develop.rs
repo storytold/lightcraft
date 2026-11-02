@@ -591,8 +591,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 // render once the section is on.
                 let section_off = !d.section_enabled("channelMixer");
                 let current = d.channel_mixer;
-                let (mixer, scaled) =
-                    lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from)).map_err(|e| bad("develop.mixerNeutralPick", e))?;
+                // the calibration the render will apply after the mixer (the pick keeps the mixer
+                // neutral through it: it is white-preserving), gated by its own section's eye
+                let calib = if d.section_enabled("calibration") {
+                    lightcraft_pipeline::colorops::calibration_matrix(&d.calibration).map(|m| m.map(|r| r.map(f64::from)))
+                } else {
+                    None
+                };
+                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib)
+                    .map_err(|e| bad("develop.mixerNeutralPick", e))?;
                 // A mixer scaled down to fit the ±200 % sliders is a gain lost. Exposure is a linear
                 // gain the render applies before the mixer, so raising it by log2(1/scaled) in the
                 // same undo step keeps the photo's brightness exactly; at Exposure's maximum what's

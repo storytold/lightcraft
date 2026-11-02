@@ -1538,6 +1538,56 @@ fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     }
 }
 
+/// Issue #2158 review: the pick's brightness target runs through the calibration the render applies
+/// after the mixer, so with a non-identity Calibration the picked spot keeps the rendered luma it
+/// actually had — not the luma it would have had without the calibration.
+#[test]
+fn mixer_neutral_pick_keeps_brightness_through_a_calibration() {
+    use crate::media::SourceLevel;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    s.execute("develop.set", &json!({"control": "calibration.redHue", "value": 100.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "calibration.redSat", "value": 100.0})).unwrap();
+    let d = s.develop_of(id).unwrap_or_default();
+    let src = s.source_now(id, SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    let mut pick = None;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let c = picked_sample(&o, x, y);
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let chroma = (c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])) / (c[0].max(c[1]).max(c[2]) + 1e-6);
+            if lum > 0.05 && (0.3..0.7).contains(&chroma) {
+                pick = Some((x, y));
+                break;
+            }
+        }
+        if pick.is_some() {
+            break;
+        }
+    }
+    let Some((x, y)) = pick else { panic!("the demo photo has no saturated bright spot") };
+
+    let render_luma = |s: &mut Session| {
+        let r = s.render_now(id, o.width, o.height).unwrap();
+        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
+        let c = r.image.get(px, py);
+        let lin = |v: u8| {
+            let v = v as f32 / 255.0;
+            (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
+        };
+        0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+    };
+    let before = render_luma(&mut s);
+
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    assert!(!active_dev(&s).channel_mixer.is_identity(), "the pick set the mixer: {r}");
+    let after = render_luma(&mut s);
+    assert!((after - before).abs() <= 2.0, "the calibrated brightness is kept: {before} -> {after}");
+}
+
 /// Issue #2158 review: with the Color section's eye off the render resets the stored white balance
 /// to the defaults (`effective()`), so the pick reads the white balance the same way — neutralizing
 /// for the look the photo actually renders, not the stored one the render ignores.

@@ -330,22 +330,26 @@ fn luminance(c: [f64; 3]) -> f64 {
 /// the mixer's input (linear Rec.2020: the sample with the photo's current white balance already
 /// applied), the new mixer is `M · diag(g)` where `g` are input gains, so a mix already set (a
 /// red/blue swap) is kept: `M · diag(g) · c` is neutral when `g ⊙ c` is proportional to
-/// `M⁻¹ · [1,1,1]`, and the constant is the Rec.2020 luminance of the mixer's output clamped at
-/// zero — what the spot rendered as before the pick, since the colour step clamps each output
-/// channel at zero ahead of the tone map ([`calibrate`], CPU and GPU alike) — so the point keeps
-/// the brightness it actually had. Returns the new nine values in per cent and how much the whole
-/// matrix was scaled down to fit the ±200 % sliders (1.0 when it already fitted; the point stays
-/// neutral at that lower luminance, and Exposure can compensate). `Err` ([`MIXER_NEUTRAL_ERROR`])
-/// when `m` is singular, the sample has no usable signal (a component ≤ 1e-6, or not a number) or
-/// the gains come out non-finite or non-positive; nothing is changed then.
-pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3]) -> Result<(ChannelMixer, f64), &'static str> {
+/// `M⁻¹ · [1,1,1]`. `calib` is the calibration matrix the render will apply after the mixer (row-
+/// major, `None` when its section is off or neutral): the colour step clamps each channel of
+/// `C · M · c` at zero ahead of the tone map ([`calibrate`], CPU and GPU alike), and the constant
+/// the point keeps is that clamped output's Rec.2020 luminance — what the spot rendered as before
+/// the pick. Calibration matrices are white-preserving (`C · [1,1,1] = [1,1,1]`, how
+/// [`calibration_matrix`] normalizes them), so `C⁻¹ · [1,1,1] = [1,1,1]`: the calibration moves
+/// only the brightness target, and `C · M' · c` comes out neutral at it. Returns the new nine
+/// values in per cent and how much the whole matrix was scaled down to fit the ±200 % sliders
+/// (1.0 when it already fitted; the point stays neutral at that lower luminance, and Exposure can
+/// compensate). `Err` ([`MIXER_NEUTRAL_ERROR`]) when `m` is singular, the sample has no usable
+/// signal (a component ≤ 1e-6, or not a number) or the gains come out non-finite or non-positive;
+/// nothing is changed then.
+pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3], calib: Option<[[f64; 3]; 3]>) -> Result<(ChannelMixer, f64), &'static str> {
     let rows = m.rows().map(|r| r.map(|v| v.clamp(-200.0, 200.0) / 100.0));
     if c.iter().any(|v| !(v.is_finite() && *v > 1e-6)) {
         return Err(MIXER_NEUTRAL_ERROR);
     }
     let mat = Mat3(rows);
     let u = mat.inverse().ok_or(MIXER_NEUTRAL_ERROR)?.apply([1.0, 1.0, 1.0]);
-    let q = luminance(mat.apply(c).map(|v| v.max(0.0)));
+    let q = luminance(calib.map_or_else(|| mat.apply(c), |cm| Mat3(cm).apply(mat.apply(c))).map(|v| v.max(0.0)));
     let g = [q * u[0] / c[0], q * u[1] / c[1], q * u[2] / c[2]];
     if !(q.is_finite() && q > 0.0) || g.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
         return Err(MIXER_NEUTRAL_ERROR);
@@ -524,7 +528,7 @@ mod tests {
         let red_cast = [0.4, 0.2, 0.15];
 
         // the identity mixer: the point comes out neutral at the same luminance
-        let (m, scaled) = mixer_neutral(&ChannelMixer::default(), red_cast).unwrap();
+        let (m, scaled) = mixer_neutral(&ChannelMixer::default(), red_cast, None).unwrap();
         assert_eq!(scaled, 1.0);
         let out = apply(&m, red_cast);
         assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "{out:?}");
@@ -536,7 +540,7 @@ mod tests {
             green: MixRow { green: 100.0, ..MixRow::default() },
             blue: MixRow { red: 100.0, ..MixRow::default() },
         };
-        let (m, scaled) = mixer_neutral(&swap, red_cast).unwrap();
+        let (m, scaled) = mixer_neutral(&swap, red_cast, None).unwrap();
         assert_eq!(scaled, 1.0);
         let out = apply(&m, red_cast);
         assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "{out:?}");
@@ -549,7 +553,7 @@ mod tests {
 
         // a spot whose gains run past ±200 %: the whole matrix scales down to fit and stays neutral
         let extreme = [1.0, 0.01, 0.02];
-        let (m, scaled) = mixer_neutral(&ChannelMixer::default(), extreme).unwrap();
+        let (m, scaled) = mixer_neutral(&ChannelMixer::default(), extreme, None).unwrap();
         assert!(scaled < 1.0, "{scaled}");
         for v in m.rows().iter().flatten() {
             assert!(*v >= -200.0 && *v <= 200.0 && v.is_finite(), "{v}");
@@ -564,9 +568,9 @@ mod tests {
             green: MixRow { red: 100.0, ..MixRow::default() },
             blue: MixRow { red: 100.0, ..MixRow::default() },
         };
-        assert!(mixer_neutral(&singular, red_cast).is_err(), "a singular mixer");
+        assert!(mixer_neutral(&singular, red_cast, None).is_err(), "a singular mixer");
         for bad_spot in [[0.0, 0.1, 0.1], [0.2, 1e-6, 0.1], [0.2, f64::NAN, 0.1], [f64::NEG_INFINITY, 0.1, 0.1]] {
-            assert!(mixer_neutral(&ChannelMixer::default(), bad_spot).is_err(), "{bad_spot:?}");
+            assert!(mixer_neutral(&ChannelMixer::default(), bad_spot, None).is_err(), "{bad_spot:?}");
         }
         // gains that come out non-positive (a mixer whose inverse answers a negative input share)
         let flip = ChannelMixer {
@@ -574,7 +578,7 @@ mod tests {
             green: MixRow { red: -100.0, green: 100.0, ..MixRow::default() },
             blue: MixRow { blue: 100.0, ..MixRow::default() },
         };
-        assert!(mixer_neutral(&flip, red_cast).is_err(), "a negative gain is refused");
+        assert!(mixer_neutral(&flip, red_cast, None).is_err(), "a negative gain is refused");
     }
 
     /// Issue #2158 review: the render clamps each mixer output channel at zero before the tone map
@@ -595,7 +599,7 @@ mod tests {
         let spot = [0.05, 0.4, 0.1];
         let rendered_before = apply(&m, spot).map(|v| v.max(0.0));
         assert!(apply(&m, spot)[0] < 0.0, "sanity: the mixer drives red negative: {:?}", apply(&m, spot));
-        let (picked, scaled) = mixer_neutral(&m, spot).unwrap();
+        let (picked, scaled) = mixer_neutral(&m, spot, None).unwrap();
         let out = apply(&picked, spot);
         assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "still neutral: {out:?}");
         assert!(
@@ -608,6 +612,39 @@ mod tests {
             (luminance(apply(&m, spot)) - luminance(rendered_before)).abs() > 0.02,
             "the unclamped target differs (here it is darker: the negative red subtracted)"
         );
+    }
+
+    /// Issue #2158 review: the brightness target runs through the calibration the render applies
+    /// after the mixer: the picked mixer's output has the luminance of `max(C·M·c, 0)` — what the
+    /// spot rendered as — not of `max(M·c, 0)`. `C` is white-preserving by construction, so the
+    /// neutral result itself is unchanged.
+    #[test]
+    fn mixer_neutral_targets_the_calibrated_luminance() {
+        use lightcraft_develop::Calibration;
+        let apply = |m: &lightcraft_develop::ChannelMixer, c: [f64; 3]| Mat3(m.rows().map(|r| r.map(|v| v / 100.0))).apply(c);
+        let calib = calibration_matrix(&Calibration { red_hue: 40.0, red_sat: 30.0, ..Default::default() })
+            .map(|m| m.map(|r| r.map(f64::from)))
+            .expect("an invertible calibration");
+        let spot = [0.4, 0.2, 0.15];
+        let shown = Mat3(calib).apply(spot).map(|v| v.max(0.0));
+        assert!(
+            (luminance(shown) - luminance(spot)).abs() > 5e-3,
+            "sanity: the calibration moves the spot's luminance: {} vs {}",
+            luminance(shown),
+            luminance(spot)
+        );
+        let (picked, scaled) = mixer_neutral(&lightcraft_develop::ChannelMixer::default(), spot, Some(calib)).unwrap();
+        let out = apply(&picked, spot);
+        assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "still neutral: {out:?}");
+        assert!(
+            (luminance(out) - scaled * luminance(shown)).abs() < 1e-9,
+            "the calibrated luminance is kept: {} vs {}",
+            luminance(out),
+            luminance(shown)
+        );
+        // without the calibration the target is the raw mixer output
+        let (plain, _) = mixer_neutral(&lightcraft_develop::ChannelMixer::default(), spot, None).unwrap();
+        assert!((luminance(apply(&plain, spot)) - luminance(spot)).abs() < 1e-9);
     }
 
     #[test]
