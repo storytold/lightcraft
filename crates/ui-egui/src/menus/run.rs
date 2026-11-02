@@ -1442,7 +1442,21 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                 Some(x) => Some(x.to_string()),
                 None => {
                     let name = format!("{}.lcpreset", group.as_deref().unwrap_or("LightCraft Presets"));
-                    let req = PickRequest::save(crate::i18n::tr("Export Presets"), crate::i18n::tr("LightCraft Preset"), &["lcpreset"], name.clone());
+                    // titled after the menu item: a group's Export Group… names the group as the
+                    // panel shows it (a stock group's name in the UI language)
+                    let title = match &group {
+                        Some(g) => {
+                            let builtin = app.session.presets.iter().any(|p| p.builtin && p.group == *g);
+                            crate::i18n::tr_format!("Export Group “{name}”", name = crate::i18n::builtin_label(g, builtin))
+                        }
+                        None => crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Export Presets").to_string(),
+                    };
+                    let req = PickRequest::save(
+                        title,
+                        crate::i18n::tr("LightCraft Preset"),
+                        &["lcpreset"],
+                        name.clone(),
+                    );
                     match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
                         Picked::Now(v) => v.into_iter().next(),
                         Picked::Later => return Some(Ok(Value::Null)),
@@ -2027,10 +2041,12 @@ fn toast_import_news(app: &mut LightcraftApp, ctx: &egui::Context, news: &Import
     app.toast_error(ctx, msg);
 }
 
-/// The `file.importPresets` command.
+/// The `file.importPresets` command. Its dialog is titled after the menu item: File ▸ Import
+/// Profiles & Presets…, or a panel's Import Presets… (`{from: "panel"}`).
 fn file_import_presets_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
-    let request =
-        PickRequest::files(Some(crate::i18n::tr("Import Presets").into()), crate::i18n::tr("Presets & Profiles"), crate::pick::PRESET_EXTENSIONS);
+    let panel = p.get("from").and_then(Value::as_str) == Some("panel");
+    let title = crate::i18n::tr(if panel { "Import Presets" } else { "Import Profiles & Presets" });
+    let request = PickRequest::files(Some(title.into()), crate::i18n::tr("Presets & Profiles"), crate::pick::PRESET_EXTENSIONS);
     let paths = match paths_or_pick(app, id, p, request, |s| s.pick_preset_files.as_mut().map(|f| f())) {
         Ok(paths) => paths,
         Err(answer) => return answer,

@@ -115,11 +115,16 @@ pub(super) fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
 }
 
 pub(super) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    translated_field(ui, crate::i18n::tr(label), add)
+}
+
+/// [`field`] with a label already translated (a [`crate::i18n::tr_ctx`] message).
+pub(super) fn translated_field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);
-            ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text_label));
+            ui.label(egui::RichText::new(label).color(t.text_label));
         });
         add(ui)
     })
