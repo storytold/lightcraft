@@ -10,10 +10,11 @@ use std::time::Duration;
 
 const T: Duration = Duration::from_secs(20);
 
+#[track_caller]
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1300.0, 1000.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new demo session");
     h
 }
 

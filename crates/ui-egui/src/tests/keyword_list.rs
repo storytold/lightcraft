@@ -211,7 +211,7 @@ fn opening_another_library_drops_the_picked_keyword() {
     h.app.ui.keyword_list_selected = Some("Weddings".into());
     let r = h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()}));
     assert!(r.is_ok(), "{r:?}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.openLibrary");
     run(&mut h, "keyword.create", json!({"name": "Weddings"}));
     ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "shift": true}));
     assert_eq!(h.app.ui.keyword_list_selected, None, "nothing is picked in the second library");

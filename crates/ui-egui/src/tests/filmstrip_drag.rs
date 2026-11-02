@@ -51,9 +51,10 @@ fn glide(h: &mut Headless, from: Pos2, to: Pos2) {
     }
 }
 
+#[track_caller]
 fn select(h: &mut Headless, ids: &[u64]) {
     h.app.run("library.select", json!({"ids": ids})).unwrap();
-    h.settle(Duration::from_secs(60));
+    h.settled(Duration::from_secs(60), "after library.select");
 }
 
 fn selected(h: &Headless) -> Vec<u64> {
@@ -157,7 +158,7 @@ fn a_filmstrip_drag_in_compare_keeps_the_active_photo_on_screen() {
     let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
     h.app.run("library.select", json!({"ids": [vis[0], vis[1]], "active": vis[0]})).unwrap();
     h.app.run("view.compare", json!({})).unwrap();
-    h.settle(Duration::from_secs(60));
+    h.settled(Duration::from_secs(60), "after view.compare");
     let (sel, cand) = h.app.ui.compare.expect("comparing");
     let before = selected(&h);
     let active_before = h.app.session.selection.active.map(|p| p.0);

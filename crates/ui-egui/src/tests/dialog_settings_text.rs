@@ -14,10 +14,11 @@ use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
+#[track_caller]
 fn demo() -> Headless {
     let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default()), [1200.0, 900.0], 1.0);
     // let the first renders finish (a render still running at exit can crash in GPU teardown)
-    h.settle(T);
+    h.settled(T, "the demo's first renders");
     h
 }
 
@@ -27,10 +28,11 @@ fn steps(h: &mut Headless) {
     }
 }
 
+#[track_caller]
 fn show(h: &mut Headless, tab: &str) {
     let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": tab}}), T);
     assert_eq!(r["ok"], true, "app.settings {tab}: {r}");
-    h.settle(T);
+    h.settled(T, "after app.settings");
     steps(h);
 }
 

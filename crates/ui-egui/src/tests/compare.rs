@@ -410,7 +410,7 @@ fn survey_rings_the_active_tile_in_the_theme_colour() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
     let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.survey");
     let t = crate::theme::Tokens::get(&h.view.ctx);
     assert_ne!(t.ring_active, egui::Color32::WHITE);
     // the filmstrip below rings its active cell the same way: only the tile counts here
@@ -447,17 +447,18 @@ fn survey_of_three(h: &mut Headless) -> [u64; 3] {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids, "active": ids[1]}}), T);
     let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.survey");
     ids
 }
 
 /// Move the pointer to `pos` and press and release the primary button there, with `modifiers`.
+#[track_caller]
 fn click_with(h: &mut Headless, pos: egui::Pos2, modifiers: egui::Modifiers) {
     h.app.synthetic.push(egui::Event::PointerMoved(pos));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after moving the pointer");
     h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
     h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the click");
 }
 
 /// Click the centre of photo `id`'s survey tile with `modifiers`.
