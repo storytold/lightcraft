@@ -251,6 +251,55 @@ fn ca_estimate_recovers_scale() {
     assert!(r.abs() < 0.0005 && b.abs() < 0.0005, "{r} {b}");
 }
 
+/// Issue #3590: a defect tied to a source pixel must be located on the transformed
+/// image even after manual distortion, lens correction and perspective change.
+#[test]
+fn source_anchored_point_roundtrips_through_optical_warps() {
+    let mut warps = vec![Warp::identity(600.0, 400.0)];
+    for distortion in [-100.0, -50.0, 50.0, 100.0] {
+        let mut s = DevelopSettings::default();
+        s.optics.distortion = distortion;
+        warps.push(Warp::from_settings(600.0, 400.0, &s, None));
+    }
+    let mut with_lens = Warp::identity(600.0, 400.0);
+    with_lens.lens = Some(EmbeddedLens {
+        warp: Some(EmbeddedWarp { planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002]; 3], center: Point::new(0.52, 0.49), radius: 0.6 }),
+        ..Default::default()
+    });
+    with_lens.lens_dist = 1.0;
+    with_lens.k1 = -0.08;
+    warps.push(with_lens);
+    let mut with_perspective = Warp::identity(600.0, 400.0);
+    with_perspective.persp_inv = Homography([1.0, 0.02, 0.04, 0.01, 1.0, -0.02, 0.001, 0.002, 1.0]);
+    with_perspective.persp = with_perspective.persp_inv.inverse().expect("invertible synthetic perspective");
+    warps.push(with_perspective);
+
+    for warp in &warps {
+        for original in
+            [Point::new(65.0, 55.0), Point::new(140.0, 310.0), Point::new(300.0, 200.0), Point::new(480.0, 92.0), Point::new(540.0, 365.0)]
+        {
+            for ch in 0..3 {
+                let transformed = warp.from_source(original, ch).expect("source pixel can be located in transformed image");
+                let recovered = warp.to_source(transformed, ch);
+                assert!(recovered.dist(original) < 0.01, "source {original:?}, transformed {transformed:?}, recovered {recovered:?}, ch {ch}");
+            }
+        }
+    }
+    // At the defect's location, distortion really moves its displayed position.
+    let p = Point::new(65.0, 55.0);
+    assert!(warps[3].from_source(p, 1).expect("mapped").dist(p) > 2.0);
+}
+
+/// Invalid or non-invertible geometry must never introduce NaNs or panics.
+#[test]
+fn source_to_transformed_rejects_non_finite_and_degenerate_mappings() {
+    let mut warp = Warp::identity(600.0, 400.0);
+    assert!(warp.from_source(Point::new(f64::NAN, 20.0), 1).is_none());
+    assert!(warp.from_source(Point::new(10.0, 20.0), 3).is_none());
+    warp.ca[1] = -1.0; // every transformed green pixel would sample the same source point
+    assert!(warp.from_source(Point::new(65.0, 55.0), 1).is_none());
+}
+
 #[test]
 fn warp_identity_and_distortion_direction() {
     let s = DevelopSettings::default();
