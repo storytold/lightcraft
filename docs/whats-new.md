@@ -260,6 +260,15 @@
 
 ## 2026-10-24
 
+### A Curve in every mask
+- Masks have a Curve of their own (issue #1932): open Curve under Blacks in a mask's adjustments. It is the Tone
+  Curve's editor with the RGB, Red, Green and Blue point curves (click to add a point, drag it, double-click to
+  remove it, double-click a channel to reset it) and the same Point Curve presets, so a curve saved from the Tone
+  Curve can be used in a mask and the other way round. It works inside the mask only, faded by its feather and
+  Amount, after the photo's Tone Curve. Local adjustment presets don't keep it yet.
+- The catalog format is now version 10 (`Mask.curve`). Once this version has opened a library, older LightCraft
+  versions refuse it ("written by a newer version") instead of dropping the masks' curves.
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works

@@ -3,7 +3,7 @@
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
+use lightcraft_develop::{DevelopSettings, LocalAdjustments, PointCurves, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
@@ -18,6 +18,43 @@ use crate::{Prepared, SourceInfo, for_rows};
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Entries per tone-curve table ([`curve_luts`], [`local_curve_luts`]; the GPU kernel reads tables of this size).
+pub const CURVE_LUT_N: usize = crate::curve::PARAM_LUT;
+
+/// A point curve as a table over `0..1`.
+fn point_lut(p: &[Point]) -> Lut1 {
+    MonotoneCurve::new(&p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>()).to_lut(CURVE_LUT_N)
+}
+
+/// A mask's local Curve as per-channel tables on encoded values (the RGB curve, then each colour
+/// channel's own, as in the Tone Curve), or `None` while every channel is linear. The CPU stage
+/// and the GPU kernel both take their tables from here.
+pub fn local_curve_luts(c: &PointCurves) -> Option<[Lut1; 3]> {
+    if c.is_identity() {
+        return None;
+    }
+    let lut = |p: &[Point]| (!ToneCurve::point_curve_is_identity(p)).then(|| point_lut(p));
+    let master = lut(&c.master);
+    let per = [&c.red, &c.green, &c.blue];
+    Some(std::array::from_fn(|i| match (lut(per[i]), &master) {
+        (Some(ch), Some(m)) => ch.compose(m),
+        (Some(ch), None) => ch,
+        (None, Some(m)) => m.clone(),
+        (None, None) => Lut1::identity(CURVE_LUT_N),
+    }))
+}
+
+/// Curve tables `l` on encoded values `e`; for HDR renders (`hdr`) a value above SDR white continues with
+/// slope 1 from the curve's end point.
+#[inline]
+fn eval_curves(l: &[Lut1; 3], e: [f32; 3], hdr: bool) -> [f32; 3] {
+    if hdr {
+        std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+    } else {
+        [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+    }
 }
 
 /// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
@@ -37,7 +74,7 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     if !parametric && !master && !chans.iter().any(|b| *b) {
         return None;
     }
-    const N: usize = 1024;
+    const N: usize = CURVE_LUT_N;
     let mut base = crate::curve::ParametricCurve::new(c).to_lut();
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
@@ -379,6 +416,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let p_lut = fp.lut.clone();
     let FinishParams { curves, vig, to_out, out_luma, grain, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
+    let local_curves: Vec<_> = p.masks.iter().filter_map(|m| Some((m, m.curve.as_ref()?))).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
@@ -511,14 +549,18 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             };
             if let Some(l) = curves {
                 let e0 = e;
-                e = if hdr {
-                    // above SDR white the curves continue with slope 1 from their end point
-                    std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
-                } else {
-                    [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
-                };
+                e = eval_curves(l, e, hdr);
                 if fp.refine_sat < 1.0 {
                     e = refine_saturation(e0, e, fp.refine_sat);
+                }
+            }
+            // --- the masks' local Curves, in mask order, each weighted by its mask (feather, Amount, invert and
+            // combined components are all in the alpha)
+            for (m, l) in &local_curves {
+                let a = m.alpha.data[i];
+                if a > 0.0 {
+                    let c = eval_curves(l, e, hdr);
+                    e = std::array::from_fn(|k| e[k] + (c[k] - e[k]) * a);
                 }
             }
             if let Some((amt, cell, rough, seed)) = *grain {

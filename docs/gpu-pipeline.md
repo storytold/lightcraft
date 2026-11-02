@@ -163,7 +163,8 @@ walks the drive.
 - Shared parameters, so the two implementations cannot drift apart: `pipeline::plan` (effective
   settings, frame, output size, stage-cache keys), `Frame::sample_plan`, `local::{wb_matrix_for,
   nr_params, plane_sigmas, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
-  `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps) and the OkLab
+  `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, the masks' local Curves from
+  `finish::local_curve_luts`, resample taps) and the OkLab
   matrices are uploaded / generated into the WGSL prelude from the CPU values.
 - Buffers, not textures: images are `array<f32>` with the CPU's interleaved layout (RGB, 1–3
   channels), so upload / readback are plain copies of `Rgb32f` / `Plane` / `Rgba8` data.

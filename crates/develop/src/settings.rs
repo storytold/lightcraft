@@ -372,6 +372,73 @@ impl ToneCurve {
     pub fn point_curve_is_identity(pts: &[Point]) -> bool {
         pts.is_empty() || pts.iter().all(|p| (p.x - p.y).abs() < 1e-9)
     }
+
+    /// The four point curves (the parametric curve and Refine Saturation left out).
+    pub fn points(&self) -> PointCurves {
+        PointCurves { master: self.master.clone(), red: self.red.clone(), green: self.green.clone(), blue: self.blue.clone() }
+    }
+
+    /// Replace the four point curves (the parametric curve and Refine Saturation stay).
+    pub fn set_points(&mut self, p: PointCurves) {
+        self.master = p.master;
+        self.red = p.red;
+        self.green = p.green;
+        self.blue = p.blue;
+    }
+}
+
+/// Point curves without a parametric part: a mask's local Curve. Points in 0..1 (in, out); a
+/// channel is linear when it is empty or every point lies on the diagonal. The RGB (`master`)
+/// curve applies to all three channels and each colour channel's curve after it, as in the Tone
+/// Curve.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PointCurves {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub master: Vec<Point>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub red: Vec<Point>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub green: Vec<Point>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blue: Vec<Point>,
+}
+
+impl PointCurves {
+    /// The channels, in the order the curve editor shows them.
+    pub const CHANNELS: [&str; 4] = ["master", "red", "green", "blue"];
+
+    /// No points in any channel (the default).
+    pub fn is_empty(&self) -> bool {
+        self.master.is_empty() && self.red.is_empty() && self.green.is_empty() && self.blue.is_empty()
+    }
+
+    /// Every channel linear.
+    pub fn is_identity(&self) -> bool {
+        [&self.master, &self.red, &self.green, &self.blue].iter().all(|c| ToneCurve::point_curve_is_identity(c))
+    }
+
+    /// Channel `ch`: `master` (also `rgb`), `red`, `green` or `blue`.
+    pub fn channel(&self, ch: &str) -> Option<&Vec<Point>> {
+        match ch {
+            "master" | "rgb" => Some(&self.master),
+            "red" => Some(&self.red),
+            "green" => Some(&self.green),
+            "blue" => Some(&self.blue),
+            _ => None,
+        }
+    }
+
+    /// Channel `ch` to change (see [`PointCurves::channel`]).
+    pub fn channel_mut(&mut self, ch: &str) -> Option<&mut Vec<Point>> {
+        match ch {
+            "master" | "rgb" => Some(&mut self.master),
+            "red" => Some(&mut self.red),
+            "green" => Some(&mut self.green),
+            "blue" => Some(&mut self.blue),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1054,6 +1121,10 @@ pub struct Mask {
     /// Refine Edges 0..100: the mask's edges snap to the photo's (guided filter).
     #[serde(skip_serializing_if = "is_zero")]
     pub refine: f64,
+    /// The local Curve: point curves applied inside the mask, after the photo's Tone Curve. Not written while it has
+    /// no points, so masks without one keep their JSON (and every cached preview its `hash64`).
+    #[serde(skip_serializing_if = "PointCurves::is_empty")]
+    pub curve: PointCurves,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1062,7 +1133,16 @@ fn is_zero(v: &f64) -> bool {
 
 impl Default for Mask {
     fn default() -> Self {
-        Self { id: 0, name: "Mask 1".into(), visible: true, invert: false, components: Vec::new(), adjust: LocalAdjustments::default(), refine: 0.0 }
+        Self {
+            id: 0,
+            name: "Mask 1".into(),
+            visible: true,
+            invert: false,
+            components: Vec::new(),
+            adjust: LocalAdjustments::default(),
+            refine: 0.0,
+            curve: PointCurves::default(),
+        }
     }
 }
 
