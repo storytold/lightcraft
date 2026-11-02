@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### The targeted-adjustment button is a plain ring with a dot
+- The Tone Curve's targeted-adjustment button (and the label before the Color Mixer's Hue / Saturation / Luminance
+  tabs) drew a ring with a pair of arrows jammed against it, which looked like one blob and sat off-centre in its
+  button. It is now a ring with a dot, centred, as the tool looks in Lightroom Classic. The tooltip and the message
+  shown when the tool is on still say to drag up or down on the photo.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
