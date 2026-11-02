@@ -124,20 +124,9 @@ impl SettingsGroup {
     }
 }
 
-/// `s` as JSON with the channel mixer written out even when it is the identity (which [`DevelopSettings::to_json`]
-/// leaves out to keep old settings' hashes): copying or syncing the Color Mixer group then resets a mixed photo, and
-/// an amount below 100 % has a number on both sides to blend.
-fn to_json_with_mixer(s: &DevelopSettings) -> Value {
-    let mut v = s.to_json();
-    if let (Some(o), Ok(m)) = (v.as_object_mut(), serde_json::to_value(s.channel_mixer)) {
-        o.entry("channel_mixer").or_insert(m);
-    }
-    v
-}
-
 /// The subset of `s` covering `groups`, as a partial JSON object.
 pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
-    let full = to_json_with_mixer(s);
+    let full = s.to_json_with_mixer();
     let mut out = Map::new();
     for g in groups {
         for k in g.keys() {
@@ -197,7 +186,7 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
 /// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
-    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&to_json_with_mixer(s), partial, amount)) };
+    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json_with_mixer(), partial, amount)) };
     // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
     s.merged(&patch).unwrap_or_else(|_| s.clone())
 }
