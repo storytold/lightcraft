@@ -249,7 +249,9 @@ fn docking_survives_native_settings_file_reload() {
 fn future_docking_preserves_library_settings_and_the_original_preferences_file() {
     let d = dir("future-docking");
     let path = d.join("ui.json");
-    let mut ui = UiState { thumb_size: 210.0, filmstrip: false, ..Default::default() };
+    let mut ui = UiState::default();
+    ui.thumb_size = 210.0;
+    ui.filmstrip = false;
     ui.settings.library_path = "/Volumes/Photos/Synthetic Library".into();
     for docking in [serde_json::json!({"layout":{"root":{"FutureLayout":{}}}}), serde_json::json!(false)] {
         let mut saved = serde_json::to_value(&ui).unwrap();
