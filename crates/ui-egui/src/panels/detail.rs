@@ -396,10 +396,11 @@ fn transform_grid(app: &LightcraftApp, p: &egui::Painter, img_rect: Rect) {
     }
 }
 
-/// Whether the loupe draws the photo's face boxes: when switched on (View ▸ Face Boxes), and
-/// otherwise only while they are needed: a face being named, a photo opened from the People view.
-pub(crate) fn face_boxes_shown(app: &LightcraftApp) -> bool {
-    app.ui.face_boxes || app.ui.name_edit.is_some() || app.ui.person_from.is_some()
+/// Whether the loupe draws photo `photo`'s face boxes: when switched on (View ▸ Face Boxes), and
+/// otherwise only while they are needed: one of its faces being named, or it is the photo opened
+/// from the People view (another photo stepped to from there is not).
+pub(crate) fn face_boxes_shown(app: &LightcraftApp, photo: u64) -> bool {
+    app.ui.face_boxes || app.ui.name_edit.as_ref().is_some_and(|e| e.photo == photo) || app.ui.person_from.as_ref().is_some_and(|(_, p)| *p == photo)
 }
 
 /// The photo's face boxes and the name box on them.
@@ -874,7 +875,11 @@ fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
     if !o.fullscreen {
         filter_pill(app, ui, canvas);
     }
-    if face_boxes_shown(app) {
+    // a name box left open on another photo is dropped (before the check: it shows no boxes here)
+    if app.ui.name_edit.as_ref().is_some_and(|e| e.photo != o.photo.id.0) {
+        app.ui.name_edit = None;
+    }
+    if face_boxes_shown(app, o.photo.id.0) {
         face_boxes(app, ui, p, o.map, o.photo, o.d);
     }
     if app.ui.settings.focus_point && !o.crop_tool {

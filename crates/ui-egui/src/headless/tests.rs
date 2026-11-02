@@ -633,7 +633,13 @@ fn face_boxes_are_off_by_default_and_show_only_when_needed() {
     assert!(!boxes(&mut h), "no face box over the photo by default");
     h.app.ui.person_from = Some((Some("Person A".into()), id.0));
     assert!(boxes(&mut h), "a photo opened from the People view shows its faces");
+    // opened from People on another photo, or a name box left open on another photo: none here (review of #3582)
+    h.app.ui.person_from = Some((Some("Person A".into()), id.0 + 1_000_000));
+    assert!(!boxes(&mut h), "only the photo opened from People shows its faces");
     h.app.ui.person_from = None;
+    h.app.ui.name_edit = Some(crate::state::NameEdit { photo: id.0 + 1_000_000, ..Default::default() });
+    assert!(!boxes(&mut h), "a name box on another photo shows no boxes here");
+    assert!(h.app.ui.name_edit.is_none(), "and is dropped");
     assert!(!boxes(&mut h));
     let r = h.request("engine.execute", json!({"command": "view.faceBoxes", "params": {}}), t);
     assert_eq!(r["ok"], true, "{r}");
