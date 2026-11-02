@@ -143,12 +143,17 @@ pub(crate) fn gpu_helper_choices(cards: &[lightcraft_engine::gpu::CardInfo], edi
     let others: Vec<&lightcraft_engine::gpu::CardInfo> = cards.iter().filter(|c| c.usable && Some(c.key.as_str()) != editing).collect();
     let auto = others.iter().find(|c| c.kind == "dedicated").or_else(|| others.iter().find(|c| c.kind != "virtual"));
     let auto = match auto {
+        // the editing card isn't known yet (wgpu picks it): any card named could be that one,
+        // which can't be its own second card (review of PR #3506)
+        _ if editing.is_none() => crate::i18n::tr("Automatic").to_string(),
         // (what the card does is in the hint below: a longer label is one button too wide for a
         // small Settings window, which no wrapping can fix)
         Some(c) => format!("{} ({})", crate::i18n::tr("Automatic"), c.name),
         None => format!("{} ({})", crate::i18n::tr("Automatic"), crate::i18n::tr("no other card found")),
     };
     let mut opts = vec![("off".to_string(), crate::i18n::tr("Off").to_string()), (String::new(), auto)];
+    // (until the editing card is known, only a card already chosen is offered by name)
+    let others: Vec<&lightcraft_engine::gpu::CardInfo> = others.into_iter().filter(|c| editing.is_some() || c.key == saved).collect();
     for c in &others {
         let twins = others.iter().filter(|o| o.name == c.name).count();
         let n = others.iter().take_while(|o| o.key != c.key).filter(|o| o.name == c.name).count() + 1;
@@ -472,6 +477,14 @@ mod tests {
         // one card: Automatic finds none
         let o = super::gpu_helper_choices(&cards[..1], Some("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1"), "");
         assert_eq!(o[1].1, "Automatic (no other card found)");
+        // (review of PR #3506) the editing card not known yet: no card is offered by name, as
+        // it could be the editing one; a card already chosen keeps its name
+        let o = super::gpu_helper_choices(&cards, None, "");
+        let labels: Vec<&str> = o.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(labels, ["Off", "Automatic"]);
+        let chosen = "dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1";
+        let o = super::gpu_helper_choices(&cards, None, chosen);
+        assert_eq!(o.last().map(|(k, l)| (k.as_str(), l.as_str())), Some((chosen, "NVIDIA GeForce RTX 4070 SUPER")));
         // identical cards, the saved one's number gone: the engine edits on the first identical
         // card, so that one is left out of the second card's choices
         let twins = [
