@@ -449,7 +449,7 @@ fn failed_open_request_delivery_releases_only_its_read_and_preserves_capacity() 
     host.open(retry.clone(), "One.zip".into(), vec![7]).unwrap();
     let commands = host.take_commands();
     assert!(matches!(commands.as_slice(), [Command::Open { request, resource, bytes, .. }]
-        if request == &retry && resource == "one" && bytes.as_slice() == &[7]));
+        if request == &retry && resource == "one" && bytes.as_slice() == [7]));
     host.opened(&retry, Some(capture(1, 23)), "");
     host.cancel_open(other, "fixture complete".into()).unwrap();
     let events = host.take_events();
@@ -529,7 +529,7 @@ fn delivery_error_preserves_open_and_choice_already_accepted_by_synchronous_list
     ));
     let commands = host.take_commands();
     assert!(matches!(commands.as_slice(), [Command::Open { request, resource, bytes, .. }]
-        if request == &read && resource == "one" && bytes.as_slice() == &[7]));
+        if request == &read && resource == "one" && bytes.as_slice() == [7]));
     assert!(host.disconnect().is_err());
     host.opened(&read, Some(capture(1, 23)), "");
     assert!(!host.publish_events_with(
