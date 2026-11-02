@@ -20,7 +20,8 @@ pub enum RatingOp {
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
-    /// location or format. Tokens like `rating:3`, `rating:>=3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
+    /// location or format. Tokens like `rating:3`, `rating:>=3`, `flag:pick`, `iso:>800`, `camera:x2`,
+    /// `film:"classic chrome"` (a Fujifilm film simulation) are fielded.
     pub text: String,
     pub rating: u8,
     pub rating_op: RatingOp,
@@ -222,6 +223,7 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "focal" => p.meta.focal_mm.is_some_and(|a| cmp32(a, val)),
             "camera" => p.meta.camera.to_lowercase().contains(val),
             "lens" => p.meta.lens.to_lowercase().contains(val),
+            "film" => p.meta.film_simulation.to_lowercase().contains(val),
             "keyword" | "kw" => p.meta.keywords.iter().any(|k| crate::keywords::is_under(k, val)),
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),

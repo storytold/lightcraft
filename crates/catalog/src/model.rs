@@ -207,6 +207,10 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+    /// The film simulation a Fujifilm camera recorded (e.g. "Classic Chrome"; read at import or Reload from Disk).
+    /// Read-only. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub film_simulation: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

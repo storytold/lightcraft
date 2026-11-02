@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ColorLabel, Flag, PhotoId, Source};
+use crate::{ColorLabel, Filter, Flag, PhotoId, Source};
 use serde_json::json;
 
 fn photo(id: u64) -> Photo {
@@ -35,6 +35,21 @@ fn f32_boundary_values_match_gte_lte() {
             assert!(!matches(&p, field, "lt", w), "{field} lt {w}");
         }
     }
+}
+
+#[test]
+fn film_simulation_is_a_rule_field_and_a_search_field() {
+    let cat = Catalog::new();
+    let mut p = photo(1);
+    p.meta.film_simulation = "Classic Chrome".into();
+    let rule = |op: &str, value: &str| rs(json!({"rules": [{"field": "filmSimulation", "op": op, "value": value}]})).matches(&p, &cat);
+    assert!(rule("contains", "chrome"));
+    assert!(!rule("contains", "acros"));
+    let search = |text: &str| Filter { text: text.into(), ..Default::default() }.matches(&p, &cat);
+    assert!(search("film:\"classic chrome\""));
+    assert!(!search("film:velvia"));
+    // a photo without one (any other make) matches no film
+    assert!(!Filter { text: "film:chrome".into(), ..Default::default() }.matches(&photo(2), &cat));
 }
 
 #[test]
@@ -646,7 +661,7 @@ fn related_fields_share_a_group() {
     same(&["album", "virtualCopy", "copyName", "stacked"], "Source");
     same(&["longEdge", "shortEdge", "aspect", "megapixels"], "Size");
     same(&["edited", "cropped", "treatment"], "Develop");
-    same(&["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"], "Camera Info");
+    same(&["camera", "lens", "filmSimulation", "focalLength", "aperture", "shutterSpeed", "iso"], "Camera Info");
     same(&["captureDate", "importDate", "editDate"], "Date");
     same(&["keywords", "keywordCount", "person", "personCount"], "Keywords & People");
     same(&["title", "caption", "altText", "creator", "copyright", "copyrightStatus"], "Description");
