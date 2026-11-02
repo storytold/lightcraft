@@ -67,6 +67,10 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// A duplicate by content is read as a new file is, its XMP sidecar included: the Lightroom
+    /// import makes a record of its own from it ([`Duplicate::file`], #2589). Any other import
+    /// skips it without looking up its sidecar (a round trip per name on a network share, #2954).
+    pub read_duplicates: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
