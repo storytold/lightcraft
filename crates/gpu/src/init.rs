@@ -356,6 +356,42 @@ mod tests {
         eventually("the marker is removed once the driver work ended", || !marker.exists());
     }
 
+    // Given a quit while a creation is still within its limit (a slow driver, not a stuck one), the
+    // quit's wait stays bounded and nothing marks the creation as given up on: the marker is there
+    // only because the driver work is, and the waiting caller still gets its device
+    #[test]
+    fn a_quit_during_a_creation_within_its_limit_does_not_give_it_up() {
+        static STUCK: Stuck = Stuck::new();
+        static GATE: Gate = Gate::new();
+        static ACTIVE: Mutex<u32> = Mutex::new(0);
+        let local = Local::new("quit-in-time", &STUCK, &GATE, &ACTIVE);
+        let (release, blocked) = mpsc::channel::<()>();
+        let (entered_tx, entered) = mpsc::channel::<()>();
+        let scope = local.scope();
+        let caller = std::thread::spawn(move || {
+            create_on(scope, Duration::from_secs(30), B, move || -> Result<u32, String> {
+                let _ = entered_tx.send(());
+                let _ = blocked.recv();
+                Ok(1)
+            })
+        });
+        entered.recv_timeout(Duration::from_secs(20)).expect("the creation never reached the driver");
+        let marker = local.marker();
+        assert!(marker.exists(), "the sentinel is written while the driver works");
+
+        // a quit now: bounded, and the creation is not given up on (no reason recorded)
+        GATE.close();
+        let t0 = Instant::now();
+        assert!(!GATE.wait_idle(Duration::from_millis(100)), "the creation is still in flight");
+        assert!(t0.elapsed() < Duration::from_secs(10), "the quit's wait stays bounded");
+        assert_eq!(STUCK.reason(), None, "within its limit: not given up on");
+
+        drop(release);
+        assert_eq!(caller.join().ok(), Some(Ok(1)), "the waiting caller gets its device");
+        assert!(GATE.wait_idle(Duration::from_secs(20)));
+        assert!(!marker.exists(), "removed once the driver work ended");
+    }
+
     // Given two creations in the driver at once (B started before A's limit passed) and A given
     // up on, A coming back does not let new creations in while B is still inside: they keep
     // failing at once until B is out too
