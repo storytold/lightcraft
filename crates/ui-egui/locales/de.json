@@ -138,6 +138,8 @@
   "Auto-Tag from Tracklog…": "Anhand eines GPS-Tracks automatisch verorten…",
   "Add Locations": "Orte hinzufügen",
   "Automatic": "Automatisch",
+  "Tested": "Getestet",
+  "tested": "getestet",
   "Automatic renders the Detail view at the size it is shown, up to the photo's own pixels. Choose a size to cap it: smaller is faster.": "Automatisch rendert die Detailansicht in der angezeigten Größe, bis zu den eigenen Pixeln des Fotos. Eine Größe wählen, um sie zu begrenzen: kleiner ist schneller.",
   "Automatically Write Changes into XMP": "Änderungen automatisch in XMP schreiben",
   "Automatically write changes into XMP sidecars": "Änderungen automatisch in XMP-Begleitdateien schreiben",

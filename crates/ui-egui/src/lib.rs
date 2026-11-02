@@ -31,6 +31,7 @@ pub mod i18n;
 pub mod icons;
 pub mod lightroom_import;
 pub mod links;
+pub mod machine_test;
 pub mod menus;
 mod missing_sweep;
 mod model_setup;
@@ -348,6 +349,19 @@ pub struct LightcraftApp {
     /// Say once, when the GPU device has been tried, that no graphics processor was found
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,
+    /// The last GPU event told (`lightcraft_gpu::events_after`: the graphics card stopped
+    /// responding, was restarted …). (The web build has no GPU events.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    gpu_event_seen: u64,
+    /// The window's size last frame: a resize asks the GPU's batch work (exports) to make room.
+    last_screen: egui::Vec2,
+    /// The export lanes, processor-only switch and GPU share last applied (install settings).
+    export_tuning_applied: Option<machine_test::Tuning>,
+    /// "Test my machine" while it runs (Settings ▸ Performance).
+    pub machine: Option<machine_test::MachineTask>,
+    /// How the last test ended (`ui.inspect` → `machineTest.last`): its report and whether it was
+    /// applied, or why it stopped; kept also when `app.testMachine {apply: false}` only reports.
+    pub machine_last: Option<serde_json::Value>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
     /// The display profile setting last applied (`app.displayProfile`).
