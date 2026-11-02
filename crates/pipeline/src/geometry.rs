@@ -18,9 +18,11 @@ pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
 /// The most pixels a render enlarged past its photo's own size can have: 512 megapixels,
 /// Lightroom's ceiling too, and the same cap the export path applies (`MAX_ENLARGED_PIXELS` in
 /// `crates/engine/src/export/options.rs`; that path was already bounded — this bounds the pipeline
-/// itself, so every caller of [`Frame::fit`] is covered). An output at or under the photo's own
-/// (cropped) pixel count is never held to the ceiling, so a full-size render of a photo larger
-/// than this is unaffected. [`Frame::fit`] scales an over-ceiling output down to it instead of
+/// itself, so every caller of [`Frame::fit`] is covered). An in-bounds render — at or under the
+/// photo's own pixels — is never held to the ceiling, so a full-size render of a photo larger
+/// than this is unaffected. The (cropped) exemption is the photo's area at most: a turned crop
+/// can name more pixels than the photo has (issue #1946), and 512 megapixels is the least the
+/// ceiling allows. [`Frame::fit`] scales an over-ceiling output down to it instead of
 /// allocating it: a request box far beyond the photo aborted the process on allocation, which
 /// `catch_unwind` cannot catch (issue #3320). The size `fit` returns is held to the ceiling in
 /// whole pixels: never more pixels than it allows, never smaller than 1 × 1.
