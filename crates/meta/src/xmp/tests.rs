@@ -190,6 +190,8 @@ fn iso_packet(attrs: &str, element: &str) -> String {
 fn xmp_iso_rejects_fractional_values() {
     let cases = [
         (iso_packet(r#"exif:ISOSpeedRatings="0.5""#, ""), "exif:ISOSpeedRatings", "0.5"),
+        (iso_packet(r#"exif:ISOSpeedRatings="1.0000000000000001""#, ""), "exif:ISOSpeedRatings", "1.0000000000000001"),
+        (iso_packet(r#"exif:ISOSpeedRatings="1.0000000000000001/1""#, ""), "exif:ISOSpeedRatings", "1.0000000000000001/1"),
         (iso_packet("", "<exif:ISOSpeedRatings><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exif:ISOSpeedRatings>"), "exif:ISOSpeedRatings", "160.9"),
         (iso_packet(r#"exifEX:PhotographicSensitivity="160.9""#, ""), "exifEX:PhotographicSensitivity", "160.9"),
         (iso_packet("", "<exifEX:PhotographicSensitivity>0.5</exifEX:PhotographicSensitivity>"), "exifEX:PhotographicSensitivity", "0.5"),
@@ -225,7 +227,7 @@ fn xmp_iso_rejects_out_of_range_values() {
 
 #[test]
 fn xmp_iso_invalid_primary_allows_fallback() {
-    for primary in ["0.5", "160.9", "4294967296", "0", "-1", "bad", "NaN"] {
+    for primary in ["0.5", "1.0000000000000001", "160.9", "4294967296", "0", "-1", "bad", "NaN"] {
         let packet = iso_packet(&format!(r#"exif:ISOSpeedRatings="{primary}" exifEX:PhotographicSensitivity="200""#), "");
         assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, Some(200), "{primary}");
     }
@@ -233,7 +235,15 @@ fn xmp_iso_invalid_primary_allows_fallback() {
 
 #[test]
 fn xmp_iso_preserves_valid_values() {
-    for (value, expected) in [("200", 200), ("200.0", 200), ("400/2", 200), ("4294967295", u32::MAX)] {
+    for (value, expected) in [
+        ("200", 200),
+        ("200.0", 200),
+        ("2e2", 200),
+        ("400/2", 200),
+        ("1.5/0.5", 3),
+        ("1.0000000000000001/1.0000000000000001", 1),
+        ("4294967295", u32::MAX),
+    ] {
         let packet = iso_packet(&format!(r#"exif:ISOSpeedRatings="{value}""#), "");
         assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, Some(expected), "{value}");
     }
@@ -250,6 +260,15 @@ fn xmp_iso_rejected_value_is_not_written() {
     assert_eq!(parsed.metadata.title.as_deref(), Some("kept"));
     let written = write_xmp(&parsed.metadata, None);
     assert!(!written.contains("ISOSpeedRatings"), "{written}");
+}
+
+#[test]
+fn xmp_iso_writer_omits_zero() {
+    let written = write_xmp(&Metadata { iso: Some(0), ..Default::default() }, None);
+    assert!(!written.contains("ISOSpeedRatings"), "{written}");
+
+    let written = write_xmp(&Metadata { iso: Some(200), ..Default::default() }, None);
+    assert!(written.contains("<rdf:li>200</rdf:li>"), "{written}");
 }
 
 #[test]

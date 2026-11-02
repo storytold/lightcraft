@@ -518,6 +518,103 @@ fn iso_from_number(value: f64) -> Option<u32> {
     if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 || value > u32::MAX as f64 { None } else { Some(value as u32) }
 }
 
+// Preserve the numeric text exactly: parsing it as `f64` first can round a fractional value to an integer.
+#[derive(Clone, Copy)]
+struct ExactDecimal {
+    negative: bool,
+    numerator: u128,
+    denominator: u128,
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    a
+}
+
+fn exact_decimal(value: &str) -> Option<ExactDecimal> {
+    let value = value.trim();
+    let (negative, value) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    let (mantissa, exponent) = if let Some((mantissa, exponent)) = value.split_once('e').or_else(|| value.split_once('E')) {
+        if exponent.contains('e') || exponent.contains('E') {
+            return None;
+        }
+        (mantissa, exponent.parse::<i64>().ok()?)
+    } else {
+        (value, 0)
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if fraction.contains('.') {
+        return None;
+    }
+    let digits = whole.bytes().chain(fraction.bytes());
+    if !digits.clone().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    let digit_count = whole.len().checked_add(fraction.len())?;
+    if digit_count == 0 {
+        return None;
+    }
+    let leading_zeroes = digits.clone().take_while(|digit| *digit == b'0').count();
+    if leading_zeroes == digit_count {
+        return Some(ExactDecimal { negative, numerator: 0, denominator: 1 });
+    }
+    let trailing_zeroes = digits.clone().rev().take_while(|digit| *digit == b'0').count();
+    let significant_digits = digit_count.checked_sub(leading_zeroes)?.checked_sub(trailing_zeroes)?;
+    let mut coefficient = 0u128;
+    for digit in digits.skip(leading_zeroes).take(significant_digits) {
+        coefficient = coefficient.checked_mul(10)?.checked_add(u128::from(digit - b'0'))?;
+    }
+    let scale = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing_zeroes).ok()?)?;
+    let (numerator, denominator) = if scale >= 0 {
+        (coefficient.checked_mul(10u128.checked_pow(u32::try_from(scale).ok()?)?)?, 1)
+    } else {
+        (coefficient, 10u128.checked_pow(u32::try_from(scale.checked_neg()?).ok()?)?)
+    };
+    let divisor = gcd(numerator, denominator);
+    Some(ExactDecimal { negative, numerator: numerator / divisor, denominator: denominator / divisor })
+}
+
+fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactDecimal> {
+    if denominator.numerator == 0 {
+        return None;
+    }
+    let negative = numerator.negative ^ denominator.negative;
+    let numerator_divisor = gcd(numerator.numerator, denominator.numerator);
+    let denominator_divisor = gcd(denominator.denominator, numerator.denominator);
+    let combined_numerator = (numerator.numerator / numerator_divisor).checked_mul(denominator.denominator / denominator_divisor)?;
+    let combined_denominator = (numerator.denominator / denominator_divisor).checked_mul(denominator.numerator / numerator_divisor)?;
+    let divisor = gcd(combined_numerator, combined_denominator);
+    Some(ExactDecimal { negative, numerator: combined_numerator / divisor, denominator: combined_denominator / divisor })
+}
+
+fn exact_iso_from_text(value: &str) -> Option<u32> {
+    let value = value.trim();
+    let exact = if let Some((numerator, denominator)) = value.split_once('/') {
+        exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
+    } else {
+        exact_decimal(value)?
+    };
+    if exact.negative || exact.numerator == 0 || exact.numerator % exact.denominator != 0 {
+        return None;
+    }
+    u32::try_from(exact.numerator / exact.denominator).ok().filter(|value| *value > 0)
+}
+
+fn iso_from_text(value: &str) -> Option<u32> {
+    let exact = exact_iso_from_text(value)?;
+    (iso_from_number(parse_number(value)?) == Some(exact)).then_some(exact)
+}
+
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
@@ -575,7 +672,8 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         label: first("xmp:Label"),
         ..Default::default()
     };
-    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find_map(iso_from_number);
+    let iso = |key: &str| first(key).and_then(|value| iso_from_text(&value));
+    m.iso = [iso("exif:ISOSpeedRatings"), iso("exifEX:PhotographicSensitivity")].into_iter().flatten().next();
     if let Some(spec) = props.get("exifEX:LensSpecification").filter(|v| v.len() == 4) {
         let v: Vec<f64> = spec.iter().filter_map(|s| parse_number(s)).collect();
         if v.len() == 4 {
@@ -723,7 +821,7 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     array(&mut x, "dc:creator", "Seq", &one(&meta.artist), false);
     array(&mut x, "dc:subject", "Bag", &meta.keywords, false);
     array(&mut x, "lr:hierarchicalSubject", "Bag", &meta.hierarchical_keywords, false);
-    array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.map(|v| vec![v.to_string()]).unwrap_or_default(), false);
+    array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.filter(|value| *value > 0).map(|v| vec![v.to_string()]).unwrap_or_default(), false);
     if let Some(s) = meta.lens_spec {
         array(&mut x, "exifEX:LensSpecification", "Seq", &s.iter().map(|&v| frac(v)).collect::<Vec<_>>(), false);
     }
