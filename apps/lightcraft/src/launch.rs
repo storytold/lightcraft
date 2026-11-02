@@ -114,24 +114,35 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
 /// The emergency crash log, `lightcraft-panics.log` beside the other logs in the user's own
 /// settings folder (an isolated profile's with `LIGHTCRAFT_CONFIG_DIR`). Never the shared temp
 /// folder, where another user on the machine could create the file first, read it, or point it
-/// at one of the user's files (issue #2572). `None` (standard error only) where no logs are kept.
-pub(crate) fn panic_log_path() -> Option<std::path::PathBuf> {
-    log_dir().map(|d| d.join("lightcraft-panics.log"))
+/// at one of the user's files (issue #2572). `None` (standard error only) where no logs are kept,
+/// and in a `--memory` session, which saves nothing (issue #164). `args` are the program's
+/// arguments, read before they are parsed: the panic hook is installed first to catch a panic
+/// while parsing. They are `OsString`s, so an argument that isn't UTF-8 can't panic here.
+pub(crate) fn panic_log_path(args: impl IntoIterator<Item = std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    panic_log_with(args, |name| std::env::var_os(name), config_dir)
 }
 
-/// Whether the arguments ask for a `--memory` (or `--demo`) session. Read before they are parsed, so
-/// the panic hook, installed first to catch a panic while parsing, already knows not to keep a log
-/// file: a `--memory` session saves nothing (issue #164). The values of `--control` and `--library`
-/// are skipped, as the parser takes them.
-pub(crate) fn in_memory_session(args: impl IntoIterator<Item = String>) -> bool {
+/// [`panic_log_path`] with the environment and the settings folder passed in.
+fn panic_log_with(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    config: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if in_memory_session(args) {
+        return None;
+    }
+    log_dir_with(env, config).map(|d| d.join("lightcraft-panics.log"))
+}
+
+/// Whether the arguments ask for a `--memory` (or `--demo`) session. The values of `--control`
+/// and `--library` are skipped, as the parser takes them.
+fn in_memory_session(args: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
     let mut args = args.into_iter();
     while let Some(a) = args.next() {
-        match a.as_str() {
-            "--control" | "--library" => {
-                args.next();
-            }
-            "--memory" | "--demo" => return true,
-            _ => {}
+        if a == "--control" || a == "--library" {
+            args.next();
+        } else if a == "--memory" || a == "--demo" {
+            return true;
         }
     }
     false
@@ -190,7 +201,7 @@ mod config_path_tests {
     /// `--memory` is not the flag.
     #[test]
     fn in_memory_sessions_are_spotted_before_parsing() {
-        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let args = |a: &[&str]| a.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
         assert!(in_memory_session(args(&["--memory"])));
         assert!(in_memory_session(args(&["photo.jpg", "--demo"])));
         assert!(in_memory_session(args(&["--control", "7980", "--memory"])));
@@ -209,5 +220,27 @@ mod config_path_tests {
         assert_eq!(log_dir_with(no_env, || None), None);
         let no_prefs = |name: &str| (name == "LIGHTCRAFT_NO_PREFS").then(|| "1".into());
         assert_eq!(log_dir_with(no_prefs, || panic!("the settings folder isn't asked for")), None);
+    }
+
+    /// The panic log is `lightcraft-panics.log` in the logs folder; none without logs or in a
+    /// `--memory` session, and an argument that isn't UTF-8 doesn't stop the check.
+    #[test]
+    fn the_panic_log_follows_the_logs_and_the_session() {
+        let no_env = |_: &str| None;
+        let settings = || Some(std::path::PathBuf::from("isolated"));
+        let args = |a: &[&str]| a.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        let log = Some(std::path::PathBuf::from("isolated/logs/lightcraft-panics.log"));
+        assert_eq!(panic_log_with(args(&["photo.jpg"]), no_env, settings), log);
+        assert_eq!(panic_log_with(args(&["--memory"]), no_env, settings), None);
+        assert_eq!(panic_log_with(args(&[]), no_env, || None), None);
+        let no_prefs = |name: &str| (name == "LIGHTCRAFT_NO_PREFS").then(|| "1".into());
+        assert_eq!(panic_log_with(args(&[]), no_prefs, settings), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let odd = std::ffi::OsString::from_vec(vec![0x66, 0xff, 0x6f]);
+            assert_eq!(panic_log_with([odd.clone()], no_env, settings), log);
+            assert_eq!(panic_log_with([odd, "--demo".into()], no_env, settings), None);
+        }
     }
 }
