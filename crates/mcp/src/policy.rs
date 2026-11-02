@@ -111,6 +111,11 @@ impl Policy {
         if self.deny_tools.contains(name) {
             return Err(format!("tool `{name}` is denied by policy"));
         }
+        for id in helper_commands(name).unwrap_or(&[]) {
+            if self.command_denied(id) {
+                return Err(format!("tool `{name}` runs command `{id}`, which is denied by policy"));
+            }
+        }
         // `tools.rs` maps `cmd_a_b` back to the command `a.b` (ids never contain `_`), so the match is exact.
         if let Some(rest) = name.strip_prefix(COMMAND_TOOL_PREFIX) {
             let id = rest.replace('_', ".");
@@ -142,9 +147,6 @@ impl Policy {
             return Ok(());
         }
         self.tool_allowed(name)?;
-        for id in helper_commands(name).unwrap_or(&[]) {
-            self.deny_check(id)?;
-        }
         match name {
             "command_run" => self.check_slot(args, "id", "params"),
             "run_command" => self.check_slot(args, "command", "params"),
@@ -408,6 +410,9 @@ mod tests {
         assert!(call(&p, "cmd_catalog_query", json!({})).is_err());
         assert!(call(&p, "run_command", json!({"command": "catalog.query"})).is_err());
         assert!(call(&p, "get_develop", json!({})).is_ok(), "other helpers stay usable");
+        // and it is not offered either
+        let listed = p.filter_tools(vec![json!({"name": "query_photos"}), json!({"name": "get_develop"})]);
+        assert_eq!(listed, vec![json!({"name": "get_develop"})]);
         // every helper maps to the ids it dispatches
         for (tool, id) in [
             ("select_photos", "library.select"),
