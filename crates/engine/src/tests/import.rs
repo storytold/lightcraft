@@ -1457,6 +1457,168 @@ fn assisted_culling_burst_limits_are_adjustable() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A box blur of radius `r`: the larger `r`, the lower the focus score.
+fn soften(img: &lightcraft_raster::Rgb32f, r: usize) -> lightcraft_raster::Rgb32f {
+    let (w, h) = (img.width, img.height);
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let (mut acc, mut n) = ([0f32; 3], 0.0);
+            for yy in y.saturating_sub(r)..(y + r + 1).min(h) {
+                for xx in x.saturating_sub(r)..(x + r + 1).min(w) {
+                    let c = img.data[yy * w + xx];
+                    acc = [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]];
+                    n += 1.0;
+                }
+            }
+            out.data[y * w + x] = acc.map(|v| v / n);
+        }
+    }
+    out
+}
+
+/// Write a linear image as an sRGB PNG.
+fn save_png(img: &lightcraft_raster::Rgb32f, path: &std::path::Path) {
+    let data: Vec<[u8; 4]> = img
+        .data
+        .iter()
+        .map(|c| {
+            let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+            [e(c[0]), e(c[1]), e(c[2]), 255]
+        })
+        .collect();
+    let png = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+        &Default::default(),
+    )
+    .unwrap();
+    std::fs::write(path, png).unwrap();
+}
+
+/// Assisted culling with `stackGroups` (#2277): each burst becomes one collapsed stack with its
+/// sharpest photo on top, an unrelated photo stays loose, analysis and stack are one undo step,
+/// and a second run neither makes another stack nor splits the existing one.
+#[test]
+fn assisted_culling_stacks_each_burst_best_on_top() {
+    let dir = temp_dir("cull-stack");
+    let scene = lightcraft_scenes::demo_library()[0].render(480, 320);
+    let save = |img: &lightcraft_raster::Rgb32f, name: &str| save_png(img, &dir.join(name));
+    save(&soften(&scene, 3), "a_soft.png");
+    save(&scene, "b_sharp.png");
+    save(&soften(&scene, 6), "c_softer.png");
+    save(&lightcraft_scenes::demo_library()[7].render(480, 320), "d_other.png");
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png", "d_other.png"].iter().enumerate() {
+        let id = by_name(&s, n);
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+    }
+    let (soft, sharp, softer, other) =
+        (by_name(&s, "a_soft.png"), by_name(&s, "b_sharp.png"), by_name(&s, "c_softer.png"), by_name(&s, "d_other.png"));
+    // a photo named twice is measured and stacked once
+    let mut twice = ids.clone();
+    twice.push(sharp.0);
+    s.selection = crate::Selection { ids: vec![soft, sharp, softer, other], active: Some(soft) };
+    let r = s.execute("photo.analyze", &json!({"ids": twice, "stackGroups": true})).unwrap();
+    assert_eq!((r["stacks"].clone(), r["groups"].clone()), (json!(1), json!(1)), "{r}");
+    // the active photo went into the collapsed stack: its top takes over, the loose photo stays selected
+    assert_eq!(s.selection.active, Some(sharp));
+    assert!(s.selection.ids.contains(&other) && s.selection.ids.contains(&sharp) && !s.selection.ids.contains(&soft), "{:?}", s.selection.ids);
+    let st = s.catalog.stack_of(sharp).unwrap().clone();
+    assert!(st.collapsed && st.top() == sharp, "the sharpest photo tops the stack");
+    let mut members = st.photos.clone();
+    members.sort();
+    let mut want = vec![soft, sharp, softer];
+    want.sort();
+    assert_eq!(members, want);
+    assert!(s.catalog.stack_of(other).is_none(), "the unrelated photo stays loose");
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_some_and(|a| a.best));
+    // one undo step removes the stack and the analysis together
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stacks().next().is_none());
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_none());
+    // without `stackGroups` nothing is stacked
+    let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["stacks"], 0, "{r}");
+    assert!(s.catalog.stacks().next().is_none());
+    s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(s.catalog.stacks().count(), 1);
+    // a second run leaves the stack as it is
+    let before = s.catalog.stack_of(sharp).unwrap().clone();
+    let commits = s.commits();
+    let r = s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(r["stacks"], 0, "{r}");
+    assert_eq!(s.catalog.stacks().count(), 1);
+    assert_eq!(s.catalog.stack_of(sharp).unwrap(), &before);
+    assert!(s.commits() > commits);
+    // a burst partly stacked already: the loose photos are stacked among themselves when two remain
+    let mut s2 = Session::new().with_fs();
+    s2.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png", "d_other.png"].iter().enumerate() {
+        let id = by_name(&s2, n);
+        s2.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+    }
+    let (soft, sharp, softer, other) =
+        (by_name(&s2, "a_soft.png"), by_name(&s2, "b_sharp.png"), by_name(&s2, "c_softer.png"), by_name(&s2, "d_other.png"));
+    let ids: Vec<u64> = [soft, sharp, softer, other].iter().map(|p| p.0).collect();
+    s2.execute("stack.group", &json!({"ids": [soft.0, other.0]})).unwrap();
+    let r = s2.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!(r["stacks"], 1, "{r}");
+    assert!(s2.catalog.stack_of(soft).unwrap().photos.contains(&other), "the existing stack is untouched");
+    let st = s2.catalog.stack_of(sharp).unwrap();
+    assert!(st.top() == sharp && st.photos.len() == 2 && st.photos.contains(&softer));
+    // a non-boolean value is refused before anything changes
+    let n = s2.commits();
+    assert!(s2.execute("photo.analyze", &json!({"ids": ids, "stackGroups": "yes"})).is_err());
+    assert_eq!(s2.commits(), n);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assisted culling with `stackGroups` (#2277): two bursts make two stacks in one undo step, and a
+/// deleted photo is measured but left out of its burst's stack, even when it is the sharpest.
+#[test]
+fn assisted_culling_stacks_two_bursts_and_leaves_deleted_photos_out() {
+    let dir = temp_dir("cull-stack-two");
+    let (one, two) = (lightcraft_scenes::demo_library()[0].render(480, 320), lightcraft_scenes::demo_library()[7].render(480, 320));
+    let files = [
+        ("a_soft.png", soften(&one, 3), "10:00:00"),
+        ("b_sharp.png", one.clone(), "10:00:01"),
+        ("c_softer.png", soften(&one, 6), "10:00:02"),
+        ("d_sharp.png", two.clone(), "10:05:00"),
+        ("e_soft.png", soften(&two, 4), "10:05:01"),
+    ];
+    for (name, img, _) in &files {
+        save_png(img, &dir.join(name));
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for (name, _, at) in &files {
+        let id = by_name(&s, name);
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T{at}")) }).unwrap();
+    }
+    let [soft, sharp, softer, d, e] = files.map(|f| by_name(&s, f.0));
+    let ids: Vec<u64> = [soft, sharp, softer, d, e].iter().map(|p| p.0).collect();
+    s.commit("t", lightcraft_catalog::Op::SetDeleted { id: sharp, deleted: true }).unwrap();
+    let n = s.commits();
+    let r = s.execute("photo.analyze", &json!({"ids": ids, "stackGroups": true})).unwrap();
+    assert_eq!((r["groups"].clone(), r["stacks"].clone()), (json!(2), json!(2)), "{r}");
+    assert_eq!(s.commits(), n + 1, "analysis and both stacks are one undo step");
+    // the deleted photo is measured, but its burst is stacked from the other two
+    assert!(s.catalog.photo(sharp).unwrap().analysis.is_some());
+    assert!(s.catalog.stack_of(sharp).is_none(), "a deleted photo is never stacked");
+    let st = s.catalog.stack_of(soft).unwrap();
+    assert!(st.collapsed && st.top() == soft && st.photos.len() == 2 && st.photos.contains(&softer), "{st:?}");
+    let st = s.catalog.stack_of(d).unwrap();
+    assert!(st.collapsed && st.top() == d && st.photos.len() == 2 && st.photos.contains(&e), "{st:?}");
+    // one undo removes both stacks
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stacks().next().is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Find Dust Spots: soft dark spots on a smooth sky are found and healed (one undo step).
 #[test]
 fn dust_spots_are_found_and_healed() {

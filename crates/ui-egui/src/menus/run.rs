@@ -1291,7 +1291,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, stack_groups: app.ui.cull_stack, burst_gap, similarity });
             Ok(Value::Null)
         }
         "app.whatsNew" => {

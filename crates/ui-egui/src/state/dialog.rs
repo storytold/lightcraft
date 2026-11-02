@@ -166,11 +166,13 @@ pub enum Dialog {
     /// Help ▸ What's New.
     WhatsNew,
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
-    /// of each burst; shots at most `burst_gap` seconds apart and at least `similarity` alike are
-    /// a burst.
+    /// of each burst (and stack each burst, best on top, with `stack_groups`); shots at most
+    /// `burst_gap` seconds apart and at least `similarity` alike are a burst.
     Cull {
         reject_below: f32,
         pick_best: bool,
+        #[serde(default)]
+        stack_groups: bool,
         burst_gap: f32,
         similarity: f32,
     },
