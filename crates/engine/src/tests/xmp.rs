@@ -288,6 +288,80 @@ fn a_crs_change_after_a_read_is_taken_with_auto_write_on() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar with keywords as Lightroom Classic and darktable write them: names in `dc:subject`,
+/// paths in `lr:hierarchicalSubject`.
+const KEYWORDED: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmp:Rating="0" crs:Exposure2012="+0.40">
+   <dc:subject><rdf:Bag><rdf:li>Places</rdf:li><rdf:li>Italy</rdf:li><rdf:li>Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Italy|Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+
+/// Saving a sidecar keeps keywords where other applications look for them: names in `dc:subject`
+/// and paths in `lr:hierarchicalSubject`, each property once. LightCraft 0.13 wrote the paths into
+/// `dc:subject` (`Places|Italy|Rome`), so after any change, even a rating, a search for "Rome" in
+/// another DAM no longer found the photo. A sidecar written that way is put right on the next save,
+/// and keywords added here keep their hierarchy when the sidecar is read back.
+#[test]
+fn saving_a_sidecar_writes_keyword_names_flat_and_paths_hierarchical() {
+    let src = temp_dir("keywords-flat");
+    write_png(&src.join("rome.png"), 8);
+    let sidecar = src.join("rome.xmp");
+    std::fs::write(&sidecar, KEYWORDED).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset"]);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+
+    let lists = |text: &str| {
+        let x = lightcraft_meta::parse_xmp(text).unwrap();
+        (x.metadata.keywords, x.metadata.hierarchical_keywords)
+    };
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    let (flat, hierarchical) = lists(&text);
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset"], "names, not paths, in dc:subject:\n{text}");
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset"], "{text}");
+    assert_eq!(text.matches("<dc:subject>").count(), 1, "{text}");
+    assert_eq!(text.matches("lr:hierarchicalSubject>").count(), 2, "one lr:hierarchicalSubject, opened and closed:\n{text}");
+    assert!(text.contains("<xmp:Rating>3</xmp:Rating>") && text.contains(r#"crs:Exposure2012="+0.40""#), "{text}");
+
+    // a keyword added here keeps its hierarchy through the file
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["Places|Italy|Rome", "sunset", "people|Ada"]})).unwrap();
+    let (flat, hierarchical) = lists(&std::fs::read_to_string(&sidecar).unwrap());
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset", "people", "Ada"]);
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset", "people|Ada"]);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": []})).unwrap();
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(!text.contains("dc:subject") && !text.contains("lr:hierarchicalSubject"), "clearing keywords clears both lists:\n{text}");
+    s.execute("edit.undo", &json!({})).unwrap(); // undo rewrites the sidecar with the three keywords
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset", "people|Ada"], "read back as written");
+
+    // a sidecar from LightCraft 0.13 (paths in dc:subject) reads as paths and is written properly
+    let old = KEYWORDED
+        .replace("<rdf:li>Places</rdf:li><rdf:li>Italy</rdf:li><rdf:li>Rome</rdf:li>", "<rdf:li>Places|Italy|Rome</rdf:li>")
+        .replace("<lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Italy|Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>", "");
+    std::fs::write(&sidecar, old).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset"]);
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    let (flat, hierarchical) = lists(&std::fs::read_to_string(&sidecar).unwrap());
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset"]);
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset"]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Lightroom's default profiles (`Adobe Standard`, `Adobe Color`) are named by nearly every sidecar
 /// and our own starting look stands in for them: importing one gives no camera-profile warning.
 #[test]
@@ -1572,6 +1646,39 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     s.execute("photo.rate", &json!({"ids": [j.0, p.0], "rating": 0})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({"ids": [j.0, p.0]})).unwrap();
     assert_eq!((s.catalog.photo(j).unwrap().rating, s.catalog.photo(p).unwrap().rating), (2, 5));
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// A file that shares its stem with another catalogued file never reads the stem sidecar the
+/// other one owns, whichever naming the library uses (issue #1523).
+#[test]
+fn a_non_owner_does_not_read_its_siblings_stem_sidecar() {
+    let src = temp_dir("stem-read");
+    let lib = temp_dir("stem-read-lib");
+    write_png(&src.join("IMG_1.png"), 1);
+    let img = lightcraft_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
+    let jpg =
+        crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Jpeg, ..Default::default() }).unwrap();
+    std::fs::write(src.join("IMG_1.jpg"), jpg).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (j, p) = (id(&s, "IMG_1.jpg"), id(&s, "IMG_1.png"));
+    s.execute("photo.rate", &json!({"ids": [j.0], "rating": 2})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [j.0]})).unwrap();
+    assert!(src.join("IMG_1.xmp").is_file());
+    assert!(!src.join("IMG_1.png.xmp").exists());
+    for naming in [crate::sidecar::SidecarNaming::Stem, crate::sidecar::SidecarNaming::Full] {
+        s.xmp.naming = naming;
+        // the owner reads its packet; the other file has none of its own
+        assert!(s.read_sidecar_op(j).unwrap().is_some(), "{naming:?}");
+        assert!(s.read_sidecar_op(p).unwrap().is_none(), "{naming:?}");
+        let (jpg_file, png_file) = (src.join("IMG_1.jpg"), src.join("IMG_1.png"));
+        assert_eq!(s.sidecar_lookup(j).find(&jpg_file.to_string_lossy()), Some(src.join("IMG_1.xmp")), "{naming:?}");
+        assert_eq!(s.sidecar_lookup(p).find(&png_file.to_string_lossy()), None, "{naming:?}");
+    }
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }

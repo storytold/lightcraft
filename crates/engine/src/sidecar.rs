@@ -76,16 +76,37 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
     sidecar_candidates(original, naming).find(|p| p.is_file())
 }
 
+/// Where to look for a catalogued photo's sidecar: how the library names it, and whether the photo
+/// may read the shared stem sidecar (`IMG_0001.xmp`) of its stem. A photo that shares its stem
+/// with a file that owns that sidecar (see [`Session::sidecar_naming`]) reads its own `<file>.xmp`
+/// and never the packet of the sibling that owns the stem one (issue #1523).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SidecarLookup {
+    pub naming: SidecarNaming,
+    /// False when another file with the same stem owns the stem sidecar.
+    pub owns_stem: bool,
+}
+
+impl SidecarLookup {
+    /// The names a sidecar for `original` can have, in the order they are looked for: those of
+    /// [`sidecar_candidates`], without the shared stem sidecar when the photo does not own it.
+    pub(crate) fn candidates(self, original: &str) -> impl Iterator<Item = PathBuf> {
+        let shared = (!self.owns_stem).then(|| xmp_cases(sidecar_path(original, SidecarNaming::Stem)));
+        sidecar_candidates(original, self.naming).filter(move |p| shared.as_ref().is_none_or(|shared| !shared.contains(p)))
+    }
+
+    /// [`find_sidecar`], except that a photo that does not own its stem sidecar never reads it.
+    pub fn find(self, original: &str) -> Option<PathBuf> {
+        self.candidates(original).find(|p| p.is_file())
+    }
+}
+
 /// Find the sidecar for a file an import is adding, by the ownership [`ImportStems`] worked out
 /// (issue #1905): [`find_sidecar`] with the library's naming, except that a file which does not
 /// own its stem sidecar reads its own `<file>.xmp` (the name it writes) and never the packet of
 /// the sibling that owns the stem one.
 pub(crate) fn find_sidecar_for_import(stems: &ImportStems, naming: SidecarNaming, original: &str) -> Option<PathBuf> {
-    if stems.owns(original) {
-        return find_sidecar(original, naming);
-    }
-    let shared = xmp_cases(sidecar_path(original, SidecarNaming::Stem));
-    sidecar_candidates(original, SidecarNaming::Full).filter(|p| !shared.contains(p)).find(|p| p.is_file())
+    SidecarLookup { naming, owns_stem: stems.owns(original) }.find(original)
 }
 
 /// The names `original`'s sidecar can have, in the order they are looked for: under `naming`,
@@ -202,7 +223,8 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         out.label = Some(ColorLabel::parse(l.trim()));
         out.label_text = Some(l.trim().to_string());
     }
-    let full = d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_json(&v).ok());
+    let full =
+        d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_untrusted_json(&v).ok());
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
@@ -354,6 +376,8 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
+    // Names in `dc:subject`, paths in `lr:hierarchicalSubject` (`keywords::to_file`).
+    let keywords = lightcraft_catalog::keywords::to_file(&p.meta.keywords);
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
         title: nz(&p.meta.title),
@@ -369,7 +393,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         usage_terms: nz(&p.meta.usage_terms),
         copyright_url: nz(&p.meta.copyright_url),
         artist: nz(&p.meta.creator),
-        keywords: p.meta.keywords.clone(),
+        keywords: keywords.flat,
+        hierarchical_keywords: keywords.hierarchical,
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
@@ -404,6 +429,7 @@ pub const OWNED: &[&str] = &[
     "dc:rights",
     "dc:creator",
     "dc:subject",
+    "lr:hierarchicalSubject",
     "Iptc4xmpCore:Location",
     "Iptc4xmpCore:AltTextAccessibility",
     "Iptc4xmpCore:ExtDescrAccessibility",
@@ -523,8 +549,8 @@ fn file_path(p: &Photo) -> Option<&str> {
 }
 
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
-pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
-    if let Some(sc) = find_sidecar(original, naming) {
+pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
+    if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
         return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
@@ -675,6 +701,11 @@ impl StemOwners {
         StemOwners(best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect())
     }
 
+    /// Whether photo `p` may read the shared stem sidecar of its stem: no other file owns it.
+    fn owns(&self, p: &Photo) -> bool {
+        file_path(p).is_none_or(|path| self.0.get(&stem_key(path)).is_none_or(|owner| *owner == p.id))
+    }
+
     /// `naming` for photo `p`, except that a stem sidecar another file owns becomes Full.
     fn naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
         match (naming, file_path(p)) {
@@ -747,11 +778,16 @@ impl ImportStems {
 /// How the sidecar of each of photos `ids` is named in library `cat`, whose naming is `naming`
 /// ([`Session::sidecar_namings`], for a thread that has the library and not the session).
 pub(crate) fn namings_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarNaming> {
-    let owners = (naming == SidecarNaming::Stem).then(|| StemOwners::among(cat, ids));
+    lookups_in(cat, naming, ids).into_iter().map(|l| l.naming).collect()
+}
+
+/// [`namings_in`], with whether each photo may read the stem sidecar of its stem.
+pub(crate) fn lookups_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarLookup> {
+    let owners = StemOwners::among(cat, ids);
     ids.iter()
-        .map(|id| match (cat.photo(*id), &owners) {
-            (Some(p), Some(o)) => o.naming(p, naming),
-            _ => naming,
+        .map(|id| match cat.photo(*id) {
+            Some(p) => SidecarLookup { naming: owners.naming(p, naming), owns_stem: owners.owns(p) },
+            None => SidecarLookup { naming, owns_stem: true },
         })
         .collect()
 }
@@ -765,6 +801,16 @@ impl Session {
     /// photo that is a pass over the whole catalog).
     pub fn sidecar_namings(&self, ids: &[PhotoId]) -> Vec<SidecarNaming> {
         namings_in(&self.catalog, self.xmp.naming, ids)
+    }
+
+    /// [`Session::sidecar_naming`] and the stem-sidecar ownership of photo `id`, for reading its sidecar.
+    pub fn sidecar_lookup(&self, id: PhotoId) -> SidecarLookup {
+        lookups_in(&self.catalog, self.xmp.naming, &[id]).into_iter().next().unwrap_or(SidecarLookup { naming: self.xmp.naming, owns_stem: true })
+    }
+
+    /// [`Session::sidecar_lookup`] for many photos, their stems' owners worked out once.
+    pub fn sidecar_lookups(&self, ids: &[PhotoId]) -> Vec<SidecarLookup> {
+        lookups_in(&self.catalog, self.xmp.naming, ids)
     }
 
     pub fn sidecar_naming(&self, id: PhotoId) -> SidecarNaming {
@@ -830,7 +876,7 @@ impl Session {
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
+        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
@@ -978,6 +1024,23 @@ mod tests {
         };
         let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
+    }
+
+    /// Issue #2556: a sidecar's `lc:settings` colour-range mask keeps at most `MAX_COLOR_RANGE_SAMPLES` samples.
+    #[test]
+    fn sidecar_color_range_samples_are_capped() {
+        use lightcraft_develop::{MAX_COLOR_RANGE_SAMPLES, Mask, MaskComponent, MaskOp, MaskShape};
+        let samples: Vec<[f64; 3]> = (0..1000).map(|i| [i as f64 / 1000.0, 0.1, -0.1]).collect();
+        let mut d = DevelopSettings::default();
+        let shape = MaskShape::ColorRange { samples: samples.clone(), refine: 50.0 };
+        d.masks.push(Mask { id: 1, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Default::default() });
+        let xmp = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata::default(), Some(&d.to_json().to_string()));
+        let sc = super::parse_sidecar(&xmp, crate::crs::Target::Rendered).unwrap();
+        let Some(DevelopPatch::Full(s)) = sc.develop else { panic!("expected full settings") };
+        let Some(MaskShape::ColorRange { samples: got, .. }) = s.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) else {
+            panic!("expected a colour range")
+        };
+        assert_eq!(got.as_slice(), &samples[..MAX_COLOR_RANGE_SAMPLES]);
     }
 
     use super::*;

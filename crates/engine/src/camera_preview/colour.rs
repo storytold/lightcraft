@@ -1,6 +1,6 @@
-use super::look_fit::{fit_dng_tone, fit_preview};
+use super::look_fit::{fit_dng_tone, fit_preview, look_proxies};
 use super::mono::{fit_dark_tone, monochrome_look};
-use super::proxy::{LensGeometry, proxies};
+use super::proxy::LensGeometry;
 use super::{CameraLook, CameraTone, CameraTransform, ColorData, D50, D65, Mat3, ProfileLook, REC2020, RawFormat, RawImage, ToneCurve, Xy, bradford};
 
 /// Long edge of the sensor/JPEG proxy a single photo's look is fitted on (the acceptance gates
@@ -42,7 +42,8 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
 /// as-shot white, the camera transform at it and the fitted look.
 /// `lens` is the file's own lens-correction warp ([`lens_geometry`], read before the caller removes it from
 /// `OpcodeList3`): the camera applied it to its JPEG, so the sensor proxy is warped the same way before pairing.
-/// `embedded` is the file's embedded lens vignetting, for the DNG tone fit.
+/// `embedded` is the file's embedded lens correction: its vignetting is applied to the sensor proxy of every fit, as
+/// the render applies it.
 pub(crate) fn starting_colour(
     raw: &mut RawImage,
     bytes: &[u8],
@@ -51,13 +52,13 @@ pub(crate) fn starting_colour(
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
     let (xy, t, look) = starting_colour_with(
         raw,
-        |raw, t| fit_preview(raw, bytes, t, lens),
-        |raw, t| monochrome_look(raw, bytes, t, lens),
+        |raw, t| fit_preview(raw, bytes, t, lens, embedded),
+        |raw, t| monochrome_look(raw, bytes, t, lens, embedded),
         |raw, t| {
             if !file_local_look(raw.format) {
                 return None;
             }
-            let (sensor, reference, clipped) = proxies(raw, bytes, t, PROXY, 0.0, lens)?;
+            let (sensor, reference, clipped) = look_proxies(raw, bytes, t, lens, embedded)?;
             fit_dark_tone(&sensor, &reference, &clipped)
         },
     );

@@ -118,6 +118,74 @@ impl Item {
     }
 }
 
+impl SyncRow for Item {
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn show_label(&mut self, label: String) {
+        match &self.handle {
+            Handle::Plain(h) => h.set_text(label.replace('&', "&&")),
+            Handle::Check(h) => h.set_text(label.replace('&', "&&")),
+        }
+        self.label = label;
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn show_enabled(&mut self, enabled: bool) {
+        match &self.handle {
+            Handle::Plain(h) => h.set_enabled(enabled),
+            Handle::Check(h) => h.set_enabled(enabled),
+        }
+        self.enabled = enabled;
+    }
+
+    fn show_checked(&mut self, checked: bool) {
+        if let Handle::Check(h) = &self.handle {
+            // also resyncs after AppKit toggled it on click
+            if h.is_checked() != checked {
+                h.set_checked(checked);
+            }
+            self.checked = Some(checked);
+        }
+    }
+}
+
+/// What the per-frame sync needs of a native row, so it can be run on stand-ins without a
+/// main-thread `muda::Menu` (as [`SwapTarget`] does for the swap).
+trait SyncRow {
+    fn label(&self) -> &str;
+    fn show_label(&mut self, label: String);
+    fn enabled(&self) -> bool;
+    fn show_enabled(&mut self, enabled: bool);
+    /// Only a row that is a check item takes it.
+    fn show_checked(&mut self, checked: bool);
+}
+
+/// Puts each model row's live label, enabled and checked state on its own native row, found by
+/// the row's native id (two rows may run the same command and params).
+fn sync_rows<R: SyncRow>(nodes: &[MenuNode], items: &mut HashMap<String, R>, keymap: &lightcraft_ui_egui::shortcuts::Keymap) {
+    let mut rows = Vec::new();
+    native_rows(nodes, &mut RowIds::default(), &mut rows);
+    for (native_id, node) in rows {
+        let MenuNode::Item { id, params, label, shortcut, enabled, checked } = node else { continue };
+        let Some(it) = items.get_mut(&native_id) else { continue };
+        let (native_label, _) = native_item_presentation(keymap, id, params, label, shortcut.as_deref());
+        if it.label() != native_label {
+            it.show_label(native_label);
+        }
+        if it.enabled() != *enabled {
+            it.show_enabled(*enabled);
+        }
+        if let Some(c) = checked {
+            it.show_checked(*c);
+        }
+    }
+}
+
 /// The accelerator the native item has after trying to put `want` on it: `want` when the native
 /// call worked, else what it had, so the caller sees the mismatch and tries again.
 fn settled(had: Option<Accelerator>, want: Option<Accelerator>, native_call_worked: bool) -> Option<Accelerator> {
@@ -311,6 +379,50 @@ fn tidy_separators(nodes: Vec<MenuNode>) -> Vec<MenuNode> {
     out
 }
 
+/// The model's rows of one menu as the native menu installs them: About, Settings and Quit live in
+/// the app menu on macOS.
+fn install_nodes(nodes: &[MenuNode]) -> Vec<MenuNode> {
+    let kept = nodes.iter().filter(|n| !matches!(n, MenuNode::Item { id, .. } if id == "app.about" || id == SETTINGS || id == QUIT));
+    tidy_separators(kept.cloned().collect())
+}
+
+/// Native (muda) ids, one per menu row. muda ids must be unique, but the model may hold the same
+/// command and params twice (`dialog.export` is File ▸ Export… and Export with Preset ▸ Custom…;
+/// `dialog.newAlbum` is in File and in Photo ▸ Add to Album), so a repeated key gets an occurrence
+/// suffix. The first row keeps the plain [`MenuNode::key`]. Rows are numbered in model order, so
+/// the install and the per-frame sync, which both walk the model in that order, agree.
+#[derive(Default)]
+struct RowIds {
+    seen: HashMap<String, usize>,
+}
+
+impl RowIds {
+    /// The row's native id, and whether an earlier row already has the same command and params.
+    fn next(&mut self, id: &str, params: &Value) -> (String, bool) {
+        let key = MenuNode::key(id, params);
+        let n = self.seen.entry(key.clone()).or_insert(0);
+        *n += 1;
+        if *n == 1 { (key, false) } else { (format!("{key}#{n}"), true) }
+    }
+}
+
+/// The key a row is installed with. A repeated row has none: AppKit would list one key twice, and
+/// the first row of the command keeps it (a click on either row runs the command).
+fn row_accelerator(native_key: Option<&str>, repeated: bool) -> Option<Accelerator> {
+    native_key.filter(|s| !repeated && !CONTEXTUAL.contains(s)).and_then(accelerator)
+}
+
+/// Every item of the model with its native id, in model order.
+fn native_rows<'a>(nodes: &'a [MenuNode], ids: &mut RowIds, out: &mut Vec<(String, &'a MenuNode)>) {
+    for n in nodes {
+        match n {
+            MenuNode::Item { id, params, .. } => out.push((ids.next(id, params).0, n)),
+            MenuNode::Submenu { children, .. } => native_rows(children, ids, out),
+            MenuNode::Separator => {}
+        }
+    }
+}
+
 impl NativeMenu {
     /// Build the menu bar and install it as the application menu (main thread, after launch).
     pub fn install(app: &mut LightcraftApp, ctx: &egui::Context) -> NativeMenu {
@@ -379,6 +491,8 @@ impl NativeMenu {
         }
         let _ = self.menu.append(&app_menu);
 
+        let mut ids = RowIds::default();
+        let mut help_menu = None;
         for (title, nodes) in &bar {
             let sub = Submenu::new(label_text(title), true);
             if title == "Window" {
@@ -388,16 +502,10 @@ impl NativeMenu {
                     &PredefinedMenuItem::separator(),
                 ]);
             }
-            // About and Settings live in the app menu on macOS
-            let nodes: Vec<MenuNode> = nodes
-                .iter()
-                .filter(|n| !matches!(n, MenuNode::Item { id, .. } if id == "app.about" || id == SETTINGS || id == QUIT))
-                .cloned()
-                .collect();
-            let nodes = tidy_separators(nodes);
+            let nodes = install_nodes(nodes);
             // Swapping an item in the Help menu leaves the old row in place and adds a second one
             // (measured on macOS 27 with muda 0.21): the Help menu is not addressed row for row.
-            self.append_nodes(&sub, &nodes, &app.ui.settings.keymap, title != "Help");
+            self.append_nodes(&sub, &nodes, &app.ui.settings.keymap, title != "Help", &mut ids);
             if title == "File" {
                 // ⌘W, the system's own item
                 let _ = sub.append_items(&[
@@ -413,11 +521,16 @@ impl NativeMenu {
                 sub.set_as_windows_menu_for_nsapp();
             }
             if title == "Help" {
-                sub.set_as_help_menu_for_nsapp();
+                help_menu = Some(sub.clone());
             }
             let _ = self.menu.append(&sub);
         }
         self.menu.init_for_nsapp();
+        // muda finds the submenu through the main menu installed just above; asked earlier it does
+        // nothing, and AppKit never learns which menu is the Help menu
+        if let Some(help) = help_menu {
+            help.set_as_help_menu_for_nsapp();
+        }
         self.text_focus = false;
         self.capturing = false;
         self.accelerators_pending = false;
@@ -426,7 +539,7 @@ impl NativeMenu {
 
     /// Install translated rows with their effective accelerators, preserving hint-only keys.
     /// `swappable`: whether its items may be replaced to drop their key (see `Item::swappable`).
-    fn append_nodes(&mut self, sub: &Submenu, nodes: &[MenuNode], keymap: &lightcraft_ui_egui::shortcuts::Keymap, swappable: bool) {
+    fn append_nodes(&mut self, sub: &Submenu, nodes: &[MenuNode], keymap: &lightcraft_ui_egui::shortcuts::Keymap, swappable: bool, ids: &mut RowIds) {
         for n in nodes {
             match n {
                 MenuNode::Separator => {
@@ -434,16 +547,13 @@ impl NativeMenu {
                 }
                 MenuNode::Submenu { label, children } => {
                     let s = Submenu::new(label_text(label), true);
-                    self.append_nodes(&s, children, keymap, swappable);
+                    self.append_nodes(&s, children, keymap, swappable, ids);
                     let _ = sub.append(&s);
                 }
                 MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
-                    let key = MenuNode::key(id, params);
-                    if self.items.contains_key(&key) {
-                        continue; // muda ids must be unique
-                    }
+                    let (key, repeated) = ids.next(id, params);
                     let (native_label, native_key) = native_item_presentation(keymap, id, params, label, shortcut.as_deref());
-                    let accel = native_key.filter(|s| !CONTEXTUAL.contains(s)).and_then(accelerator);
+                    let accel = row_accelerator(native_key, repeated);
                     let handle = match checked {
                         Some(c) => {
                             let it = CheckMenuItem::with_id(key.clone(), native_label.replace('&', "&&"), *enabled, *c, accel);
@@ -497,9 +607,7 @@ impl NativeMenu {
             // events never reach `shortcuts::handle`, so this is the one guard for AppKit's
             // accelerators and clicks: while the blocking library window or a quit/settings notice
             // owns input, a queued command is dropped (Quit stays for the existing confirmation).
-            let (cmd, params) = if key == QUIT {
-                (key, serde_json::json!({}))
-            } else if key == "app.about" || key == SETTINGS {
+            let (cmd, params) = if key == QUIT || key == "app.about" || key == SETTINGS {
                 (key, serde_json::json!({}))
             } else if let Some(it) = self.items.get(&key) {
                 (it.cmd.clone(), it.params.clone())
@@ -516,41 +624,10 @@ impl NativeMenu {
             // to, so the sync below runs in this same frame and no key reaches the menu in between)
             self.rebuild(app);
         }
-        /// Synchronize live labels and states; accelerator ownership changes already triggered a rebuild.
-        fn walk(nodes: &[MenuNode], items: &mut HashMap<String, Item>, keymap: &lightcraft_ui_egui::shortcuts::Keymap) {
-            for n in nodes {
-                match n {
-                    MenuNode::Submenu { children, .. } => walk(children, items, keymap),
-                    MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
-                        let Some(it) = items.get_mut(&MenuNode::key(id, params)) else { continue };
-                        let (native_label, _) = native_item_presentation(keymap, id, params, label, shortcut.as_deref());
-                        if it.label != native_label {
-                            match &it.handle {
-                                Handle::Plain(h) => h.set_text(native_label.replace('&', "&&")),
-                                Handle::Check(h) => h.set_text(native_label.replace('&', "&&")),
-                            }
-                            it.label = native_label;
-                        }
-                        if it.enabled != *enabled {
-                            match &it.handle {
-                                Handle::Plain(h) => h.set_enabled(*enabled),
-                                Handle::Check(h) => h.set_enabled(*enabled),
-                            }
-                            it.enabled = *enabled;
-                        }
-                        if let (Handle::Check(h), Some(c)) = (&it.handle, checked) {
-                            // also resyncs after AppKit toggled it on click
-                            if h.is_checked() != *c {
-                                h.set_checked(*c);
-                            }
-                            it.checked = Some(*c);
-                        }
-                    }
-                    MenuNode::Separator => {}
-                }
-            }
-        }
-        walk(&bar.iter().flat_map(|(_, v)| v.clone()).collect::<Vec<_>>(), &mut self.items, &app.ui.settings.keymap);
+        // Synchronize live labels and states row by row (accelerator ownership changes already
+        // triggered a rebuild).
+        let all: Vec<MenuNode> = bar.into_iter().flat_map(|(_, v)| v).collect();
+        sync_rows(&all, &mut self.items, &app.ui.settings.keymap);
 
         let focus = ctx.egui_wants_keyboard_input();
         let capturing = app.recording_shortcut.is_some();
@@ -611,6 +688,134 @@ mod tests {
             assert!(seen.insert(structure_of(&bar, &app.ui.settings.keymap)), "{language:?} shares another language's menu structure key");
         }
         set_language(Locale::En);
+    }
+
+    /// Every row of the model gets its own native row and keeps its own label, and a click on a
+    /// native id runs that row's command (two rows may share a command and params).
+    #[test]
+    fn rows_sharing_a_command_get_their_own_native_ids_and_labels() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let bar = menu_bar(&app);
+        let all: Vec<MenuNode> = bar.iter().flat_map(|(_, v)| v.clone()).collect();
+        let mut rows = Vec::new();
+        native_rows(&all, &mut RowIds::default(), &mut rows);
+        fn count(n: &[MenuNode]) -> usize {
+            n.iter()
+                .map(|x| match x {
+                    MenuNode::Item { .. } => 1,
+                    MenuNode::Submenu { children, .. } => count(children),
+                    MenuNode::Separator => 0,
+                })
+                .sum()
+        }
+        assert_eq!(rows.len(), count(&all));
+        let ids: HashSet<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids.len(), rows.len(), "a native id per row");
+        // The install walks each menu as `install_nodes` leaves it, the per-frame sync walks the whole
+        // bar: a row the menu has must get the same id, so the same node (label, command, params),
+        // from both, and a click on its id runs that row's command.
+        let mut installed = Vec::new();
+        let mut install_ids = RowIds::default();
+        let menus: Vec<Vec<MenuNode>> = bar.iter().map(|(_, nodes)| install_nodes(nodes)).collect();
+        for nodes in &menus {
+            native_rows(nodes, &mut install_ids, &mut installed);
+        }
+        let synced: HashMap<&str, &MenuNode> = rows.iter().map(|(id, n)| (id.as_str(), *n)).collect();
+        for (nid, n) in &installed {
+            assert_eq!(synced.get(nid.as_str()), Some(n), "{nid}");
+        }
+        for (cmd, labels) in [("dialog.export", ["Export…", "Custom…"]), ("dialog.newAlbum", ["New Album…", "New Album…"])] {
+            let own: Vec<(&str, &str)> = installed
+                .iter()
+                .filter_map(|(nid, n)| match n {
+                    MenuNode::Item { id, label, params, .. } if id == cmd && params.is_null() => Some((nid.as_str(), label.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(own.len(), 2, "{cmd} is in two menus");
+            assert_ne!(own[0].0, own[1].0, "{cmd}: one native id per row");
+            assert_eq!([own[0].1, own[1].1], labels, "{cmd}: each row keeps its label");
+        }
+        // A repeated row is installed without its key (AppKit would list one key twice).
+        assert_eq!(row_accelerator(Some("G"), false), accelerator("G"));
+        assert_eq!(row_accelerator(Some("G"), true), None);
+        let mut ids = RowIds::default();
+        assert_eq!(ids.next("view.layoutImage", &Value::Null), ("view.layoutImage".to_string(), false));
+        assert_eq!(ids.next("view.layoutImage", &Value::Null), ("view.layoutImage#2".to_string(), true));
+    }
+
+    /// A native row's shown state, to run the per-frame sync without a main-thread `muda::Menu`.
+    #[derive(Debug, PartialEq)]
+    struct FakeRow {
+        label: String,
+        enabled: bool,
+        checked: Option<bool>,
+    }
+    impl SyncRow for FakeRow {
+        fn label(&self) -> &str {
+            &self.label
+        }
+        fn show_label(&mut self, label: String) {
+            self.label = label;
+        }
+        fn enabled(&self) -> bool {
+            self.enabled
+        }
+        fn show_enabled(&mut self, enabled: bool) {
+            self.enabled = enabled;
+        }
+        fn show_checked(&mut self, checked: bool) {
+            self.checked = Some(checked);
+        }
+    }
+
+    /// Two rows with the same command and params keep their own label, enabled and checked state
+    /// when the model changes (the sync once wrote the last row's state onto the first).
+    #[test]
+    fn the_sync_updates_rows_sharing_a_command_independently() {
+        use lightcraft_ui_egui::i18n::{Locale, set_language};
+        set_language(Locale::En);
+        let keymap = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default()).ui.settings.keymap.clone();
+        let item = |cmd: &str, label: &str, enabled: bool, checked: Option<bool>| MenuNode::Item {
+            id: cmd.into(),
+            params: Value::Null,
+            label: label.into(),
+            shortcut: None,
+            enabled,
+            checked,
+        };
+        let model = |a: (&str, bool, Option<bool>), b: (&str, bool, Option<bool>), c: (&str, bool, Option<bool>), d: (&str, bool, Option<bool>)| {
+            vec![
+                item("dialog.export", a.0, a.1, a.2),
+                MenuNode::Separator,
+                MenuNode::Submenu { label: "Export with Preset".into(), children: vec![item("dialog.export", b.0, b.1, b.2)] },
+                item("view.toggle", c.0, c.1, c.2),
+                MenuNode::Submenu { label: "More".into(), children: vec![item("view.toggle", d.0, d.1, d.2)] },
+            ]
+        };
+        // what the native rows show after the install
+        let installed = model(("Export…", true, None), ("Custom…", true, None), ("Show", true, Some(false)), ("Show", true, Some(false)));
+        let mut rows = Vec::new();
+        native_rows(&installed, &mut RowIds::default(), &mut rows);
+        let mut items: HashMap<String, FakeRow> = rows
+            .iter()
+            .filter_map(|(nid, n)| match n {
+                MenuNode::Item { label, enabled, checked, .. } => {
+                    Some((nid.clone(), FakeRow { label: label.clone(), enabled: *enabled, checked: *checked }))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(items.len(), 4, "a native row for each of the four rows");
+        // the model changes: each row of a pair gets a different state
+        let live = model(("Export…", false, None), ("Custom…", true, None), ("Show", true, Some(true)), ("Hide", false, Some(false)));
+        sync_rows(&live, &mut items, &keymap);
+        let shown: Vec<&FakeRow> = rows.iter().map(|(nid, _)| &items[nid]).collect();
+        let row = |label: &str, enabled: bool, checked: Option<bool>| FakeRow { label: label.into(), enabled, checked };
+        assert_eq!(shown[0], &row("Export…", false, None), "File ▸ Export… keeps its label and is disabled alone");
+        assert_eq!(shown[1], &row("Custom…", true, None), "Custom… stays enabled and keeps its label");
+        assert_eq!(shown[2], &row("Show", true, Some(true)), "the first toggle is checked alone");
+        assert_eq!(shown[3], &row("Hide", false, Some(false)), "the second toggle has its own label and state");
     }
 
     #[test]

@@ -38,6 +38,14 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
+    /// [`Self::from_json`] for settings from outside the app, such as a sidecar's `lc:settings`
+    /// (issue #2555): kept in range as [`Self::merged`] keeps them.
+    pub fn from_untrusted_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
+        let mut s = DevelopSettings::from_json(v)?;
+        s.keep_in_range(&DevelopSettings::default());
+        Ok(s)
+    }
+
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
     /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
@@ -58,8 +66,9 @@ impl DevelopSettings {
 
     /// What crs XMP import does to the values it reads, for settings that arrive as JSON (presets, `develop.merge`,
     /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves in 0..1, and a
-    /// crop with no area left as it was in `before`. Unrotated, the crop is clipped to the photo first; a turned crop
-    /// may reach past 0..1 and is left to the crop tools, which know the photo's size.
+    /// crop with no area left as it was in `before`. The angle is kept within ±45° (not finite: 0). Unrotated, the crop
+    /// is clipped to the photo first; a turned crop may reach past 0..1 and is bounded where the photo's size is known
+    /// (`CropGeometry::bounded`, applied by the pipeline).
     fn keep_in_range(&mut self, before: &DevelopSettings) {
         for c in controls::CONTROLS {
             if let Some(v) = controls::get(self, c.id) {
@@ -71,6 +80,7 @@ impl DevelopSettings {
             *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
         let g = &mut self.crop.geometry;
+        g.angle = if g.angle.is_finite() { g.angle.clamp(-45.0, 45.0) } else { 0.0 };
         if g.angle == 0.0 {
             g.rect = g.rect.intersect(&lightcraft_geom::Rect::UNIT);
         }
@@ -145,7 +155,8 @@ impl DevelopSettings {
         }
     }
 
-    /// Reset every control in `section` to its default.
+    /// Reset every control in `section` to its default, and the settings of the section that are not
+    /// controls (the creative profile, the curve, the white balance mode).
     pub fn reset_section(&mut self, section: Section) {
         for c in controls::in_section(section) {
             controls::set(self, c.id, c.default);
@@ -157,13 +168,29 @@ impl DevelopSettings {
             }
             Section::Color => self.wb.mode = WbMode::AsShot,
             Section::Detail => self.enhance.denoise_on = None,
+            // the creative profile is not a control: the chosen look goes back to the default one,
+            // and so does the camera's own local tone mapping
+            Section::Profile => {
+                self.profile = Profile::default();
+            }
             _ => {}
         }
     }
 
-    /// Next free mask id.
+    /// Next free mask id: one past the highest, or, when that is `u32::MAX` (ids come from files,
+    /// pastes and agents), the lowest one no mask uses.
     pub fn next_mask_id(&self) -> u32 {
-        self.masks.iter().map(|m| m.id).max().map_or(1, |m| m + 1)
+        match self.masks.iter().map(|m| m.id).max() {
+            None => 1,
+            // fewer masks than ids: one of the first `masks.len() + 1` is free
+            Some(max) => max
+                .checked_add(1)
+                .or_else(|| {
+                    let used: std::collections::HashSet<u32> = self.masks.iter().map(|m| m.id).collect();
+                    (1..=u32::MAX).find(|id| !used.contains(id))
+                })
+                .unwrap_or(0),
+        }
     }
 }
 
@@ -271,6 +298,54 @@ mod tests {
         assert_eq!(s.grading.blending, 50.0);
     }
 
+    /// Settings with one colour-range mask of `n` distinct samples (built in code, so not capped).
+    fn color_range_settings(n: usize) -> DevelopSettings {
+        let samples = (0..n).map(|i| [i as f64 / 1000.0, 0.1, -0.1]).collect();
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask {
+            id: 1,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::ColorRange { samples, refine: 50.0 } }],
+            ..Default::default()
+        });
+        s
+    }
+
+    fn color_range_samples(s: &DevelopSettings) -> &[[f64; 3]] {
+        match s.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) {
+            Some(MaskShape::ColorRange { samples, .. }) => samples,
+            other => panic!("expected a colour range, got {other:?}"),
+        }
+    }
+
+    /// Issue #2556: `mask.add`/`mask.update` capped a colour range's samples, but a sidecar `lc:settings`, a
+    /// preset, `develop.merge`, `render --settings` or a catalog / history load took any number (render cost is
+    /// pixels x samples). Every load now keeps the first [`MAX_COLOR_RANGE_SAMPLES`], in order.
+    #[test]
+    fn color_range_samples_are_capped_however_settings_load() {
+        let big = color_range_settings(1000);
+        let want = &color_range_samples(&big)[..MAX_COLOR_RANGE_SAMPLES];
+        let v = big.to_json();
+        let loaded = DevelopSettings::from_json(&v).unwrap();
+        assert_eq!(color_range_samples(&loaded).len(), MAX_COLOR_RANGE_SAMPLES);
+        assert_eq!(color_range_samples(&loaded), want);
+        let from_str: DevelopSettings = serde_json::from_str(&v.to_string()).unwrap();
+        assert_eq!(color_range_samples(&from_str), want);
+        // `develop.merge`, `render --settings` and presets merge a partial
+        let merged = DevelopSettings::default().merged(&json!({"masks": v["masks"]})).unwrap();
+        assert_eq!(color_range_samples(&merged), want);
+        let preset =
+            Preset { id: "p".into(), name: "P".into(), group: "G".into(), settings: json!({"masks": v["masks"]}), favorite: false, builtin: false };
+        assert_eq!(color_range_samples(&preset.apply(&DevelopSettings::default(), 1.0)), want);
+        // a capped list round-trips, and a short one is unchanged
+        assert_eq!(DevelopSettings::from_json(&loaded.to_json()).unwrap(), loaded);
+        let few = color_range_settings(2);
+        assert_eq!(DevelopSettings::from_json(&few.to_json()).unwrap(), few);
+        // a list that isn't samples is still refused
+        let mut bad = v.clone();
+        bad["masks"][0]["components"][0]["shape"]["samples"] = json!([[0.1, 0.2]]);
+        assert!(DevelopSettings::from_json(&bad).is_err());
+    }
+
     #[test]
     fn merge_partial() {
         let s = DevelopSettings::default();
@@ -314,6 +389,26 @@ mod tests {
         assert!(!s.is_unedited());
         s.reset_section(Section::Light);
         assert!(s.is_unedited());
+    }
+
+    #[test]
+    fn resetting_the_profile_section_restores_the_default_profile() {
+        // the chosen creative profile is not a control, so resetting the section must restore it too
+        let mut s = DevelopSettings::default();
+        s.profile.id = "lc.muted.matte-soft".into();
+        s.profile.amount = 40.0;
+        s.reset_section(Section::Profile);
+        assert_eq!(s.profile.id, "lc.color", "the creative profile is reset to the default one");
+        assert_eq!(s.profile.amount, 100.0);
+    }
+
+    #[test]
+    fn resetting_the_profile_section_clears_the_camera_local_tone() {
+        // the camera's local tone mapping is not a control either: a Profile reset switches it off
+        let mut s = DevelopSettings::default();
+        s.profile.camera_local_tone = true;
+        s.reset_section(Section::Profile);
+        assert!(!s.profile.camera_local_tone);
     }
 
     #[test]
@@ -362,5 +457,17 @@ mod tests {
         assert!(s.enhance.denoise_enabled());
         s.reset_section(Section::Detail);
         assert_eq!(s.enhance.denoise_on, None);
+    }
+
+    #[test]
+    fn next_mask_id_after_the_highest_id_is_unused() {
+        // ids come from files, pastes and agents: one at the limit must not overflow (a panic in
+        // debug builds) or wrap to an id another mask has
+        let mut s = DevelopSettings::default();
+        assert_eq!(s.next_mask_id(), 1);
+        s.masks = vec![Mask { id: u32::MAX, ..Default::default() }, Mask { id: 1, ..Default::default() }];
+        let next = s.next_mask_id();
+        assert!(!s.masks.iter().any(|m| m.id == next), "{next}");
+        assert_eq!(next, 2);
     }
 }

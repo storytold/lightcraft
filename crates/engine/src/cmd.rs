@@ -193,6 +193,20 @@ pub(crate) fn names_photos(p: &Value) -> bool {
     ["ids", "id"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()))
 }
 
+/// The call names its target photos in `ids`, whatever else it carries in `id` (`album.addPhotos`'s `id` is the album).
+pub(crate) fn names_photo_ids(p: &Value) -> bool {
+    p.get("ids").is_some_and(|v| !v.is_null())
+}
+
+/// For a command that opts into `explicit_targets` but whose `id` isn't a photo: [`Session::execute`] skipped the
+/// selection check because the call carries an `id`, so the command makes it itself unless `ids` names the photos.
+pub(crate) fn enabled_unless_ids(s: &Session, p: &Value, id: &str, enabled: Enabled) -> Result<()> {
+    if names_photo_ids(p) {
+        return Ok(());
+    }
+    enabled(s).map_err(|why| EngineError::Disabled(id.to_string(), why))
+}
+
 /// The photos `ids` names: `None` when it is missing or null (the command then falls back to the
 /// selection, or its own default), else every entry as a photo id. An `ids` that isn't a list of
 /// whole numbers is an error, never `None`: falling back would act on the selection instead of
