@@ -408,3 +408,6 @@ impl WebApp {
         crate::file_providers::publish(&bridge.host, ctx);
     }
 }
+
+#[cfg(test)]
+mod browser_tests;

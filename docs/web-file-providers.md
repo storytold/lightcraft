@@ -66,13 +66,35 @@ The Host closed-document fixture verifies result correlation and Host state, not
 application's closed-document binding guard. Neither fixture runs WebApp::provider_tick or
 begin_provider_open.
 
-Browser integration still needs to deliver a valid provider ZIP after a live draft starts and
-verify openFailed plus preservation of the current library/draft with no staging. It also needs
-to deliver a saved result for an older library instance after another becomes active and verify
-that the old instance is not rebound. A recoverable JavaScript payload-copy failure must be
-checked through actual event dispatch, confirming the error log, failed request consumption,
-unchanged saved checkpoint and a subsequent successful save. These are runtime requirements,
-not results established by native unit fixtures.
+One WASM-only browser fixture, `web::provider::browser_tests::page_local_provider_boundary_preserves_live_draft_and_recovers_failed_dispatch`,
+adds source assertions for two integration boundaries. It constructs the real private WebApp
+with a real tiny library, Files/Originals and IndexedDB backend, without WebRunner, graphics,
+render workers or a large procedural demo. Requests begin while idle; real public slider widgets
+then receive egui input and retain invalid numeric drafts, both focused and parked. Delivery follows
+an event-empty frame, with no held keys or pointer buttons and settled writes.
+Parking hides the slider while retaining its draft; explicit cancellation also releases Escape
+before the positive admission control. Host::open queues the actual Command::Open for
+WebApp::provider_tick. Correlated window openFailed,
+unchanged library/selection/develop state, identical file snapshot/draft and no staging are
+required. The guard-deletion mutation must fail the explicit assertion `live draft must keep
+provider admission closed`. After explicit draft cancellation, the same valid tiny native ZIP
+must load and bind through the real asynchronous admission path.
+
+The same single fixture temporarily makes JavaScript Uint8Array.from throw a deterministic
+RangeError while calling the actual WASM catch binding and production publisher. JavaScript
+try/finally restores the original Uint8Array.from and console.error descriptors even on an
+escaping error. Assertions require the real error log, consumption of the exact failed capture,
+continued terminal dispatch, unchanged provider checkpoint and actual application consumption
+of the correlated failure. A subsequent save must deliver its exact bytes normally and remain
+pending until the test host explicitly reports saved. This is an injected JavaScript exception,
+not a true out-of-memory experiment or proof of backend durability.
+
+Validate this fixture with a reviewed lock, WASM compilation, a real browser run and causal
+guard-deletion/restoration checks before attributing runtime coverage. Its presence alone does
+not establish an execution result.
+It does not exercise WebApp::new/eframe startup, DOM keyboard routing or rendering. A saved
+result for an older library after another becomes active remains outside this browser fixture;
+the closed-document Host test continues to claim only Host correlation/state coverage.
 
 ## Native UI preview
 
