@@ -2347,3 +2347,28 @@ fn background_preparation_advances_while_the_window_is_hidden() {
     let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
     assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
 }
+/// CodeRabbit on #3077/#3080: a background build that couldn't start asks for a frame at its retry
+/// time, so the retry happens with no input and no other timed frame.
+#[test]
+fn a_build_waiting_to_retry_asks_for_a_frame_at_its_time() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = delays.clone();
+    ctx.set_request_repaint_callback(move |info| seen.lock().unwrap().push(info.delay));
+    let wait = std::time::Duration::from_secs(7);
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    // (the first passes ask for frames at once, which would hide a later request)
+    for _ in 0..3 {
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    }
+    delays.lock().unwrap().clear();
+    app.session.prep.retry_at = Some((0, std::time::Instant::now() + wait));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let got = delays.lock().unwrap().clone();
+    assert!(got.iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "a frame at the retry time: {got:?}");
+    app.session.prep.retry_at = None;
+    delays.lock().unwrap().clear();
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert!(!delays.lock().unwrap().iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "none without a retry waiting");
+}

@@ -384,6 +384,22 @@ pub(crate) mod test_gate {
     pub(crate) fn take() -> Option<Arc<PreviewGate>> {
         NEXT_GATE.with(|g| g.borrow_mut().take())
     }
+
+    thread_local! {
+        /// The next build started on this thread fails to start its worker (a thread the system
+        /// won't give), taken by `build`.
+        static FAIL_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Have the next build started on this thread fail to start its worker.
+    pub(crate) fn fail_next_spawn() {
+        FAIL_SPAWN.with(|f| f.set(true));
+    }
+
+    /// Whether this build's worker is to fail to start (once).
+    pub(crate) fn take_fail_spawn() -> bool {
+        FAIL_SPAWN.with(std::cell::Cell::take)
+    }
 }
 
 /// One photo's work in a build: its id and its render jobs ([`jobs_for`]).
@@ -509,9 +525,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         s.visible_cloned()
     };
     let jobs: Vec<PhotoJobs> = ids.iter().map(|id| (id.0, jobs_for(s, *id, edge))).filter(|j| !j.1.is_empty()).collect();
-    if let Some(cancel) = gives_way {
-        cancel.store(true, Ordering::Relaxed);
-    }
+    // the background build stays the session's until this one has started (a worker that can't
+    // start leaves it running and in place: CodeRabbit on #3544)
+    let previous = s.preview_build.clone();
     let order = jobs.iter().map(|j| j.0).collect();
     #[cfg_attr(not(test), allow(unused_mut))]
     let mut build_state = PreviewBuild { total: jobs.len(), background, order, ..Default::default() };
@@ -529,6 +545,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     let lanes = if background { crate::prep::background_lanes() } else { lanes(jobs.len(), edge.is_none()) };
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
     if wait {
+        if let Some(cancel) = gives_way {
+            cancel.store(true, Ordering::Relaxed);
+        }
         run_all(jobs, &state, task.as_ref(), lanes, force);
         return Ok(state.json());
     }
@@ -536,13 +555,28 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     {
         // the row stays while the worker runs (it is dropped with the closure, however that ends)
         let st = state.clone();
+        #[cfg(test)]
+        let started = if test_gate::take_fail_spawn() {
+            drop(task);
+            Err(std::io::Error::other("no thread (test)"))
+        } else {
+            std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &st, task.as_ref(), lanes, force))
+        };
+        #[cfg(not(test))]
         let started = std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &st, task.as_ref(), lanes, force));
         if let Err(e) = started {
-            // never started: not left "running", which would hold every later build back
+            // never started: not left "running", which would hold every later build back, and the
+            // build it was to replace carries on
             state.finished.store(true, Ordering::Relaxed);
+            s.preview_build = previous;
             return Err(bad(C, format!("could not start: {e}")));
         }
+        if let Some(cancel) = gives_way {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = previous;
     Ok(state.json())
 }
 

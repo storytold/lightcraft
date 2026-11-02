@@ -219,7 +219,7 @@ pub struct PrepState {
     declined_for: Option<u64>,
     /// A build that couldn't start: the view (its signature), and when it may try again (not on
     /// every tick while the cause lasts; CodeRabbit on #3080).
-    pub(crate) retry_at: Option<(u64, web_time::Instant)>,
+    pub retry_at: Option<(u64, web_time::Instant)>,
     /// Tests: the next starts to fail, as a build thread that can't be spawned does.
     #[cfg(test)]
     pub(crate) fail_starts: usize,
@@ -426,6 +426,17 @@ pub fn marked(s: &Session, id: PhotoId) -> bool {
 }
 
 impl Session {
+    /// How long until a view whose build couldn't start tries again ([`RETRY_AFTER`]), while one
+    /// waits: the app asks for a frame then, so the retry doesn't wait for the next input
+    /// (CodeRabbit on #3077/#3080). `None` once the time has come.
+    pub fn prep_retry_in(&self) -> Option<std::time::Duration> {
+        // (a deadline that has passed asks for nothing: the pass at it tried again, or the view
+        // can't be tried now and a frame at once on every pass would keep an idle window drawing:
+        // CodeRabbit on #3077 / #3080)
+        let wait = self.prep.retry_at.map(|(_, at)| at.saturating_duration_since(web_time::Instant::now()))?;
+        (!wait.is_zero()).then_some(wait)
+    }
+
     /// The background preparation settings in use (this library's own, else the app-wide ones).
     pub fn prep_settings(&self) -> PrepSettings {
         self.prep.settings()
