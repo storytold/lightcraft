@@ -520,11 +520,7 @@ mod tests {
     /// the attempts before it still count (the loss `lose` records for it starts at 0).
     #[test]
     fn a_replacement_lost_while_made_keeps_the_attempts_before_it() {
-        let mut s = Slot {
-            state: State::NotTried,
-            lost: Some(Lost { reason: "lost".into(), at: Instant::now(), attempts: 0 }),
-            recoveries: 1,
-        };
+        let mut s = Slot { state: State::NotTried, lost: Some(Lost { reason: "lost".into(), at: Instant::now(), attempts: 0 }), recoveries: 1 };
         assert_eq!(charge_attempt(&mut s, 3), 5, "one recovery and four failed attempts");
         assert_eq!(s.lost.as_ref().map(|l| l.attempts), Some(4));
         assert_eq!(s.recoveries, 1, "not counted as a recovery");
