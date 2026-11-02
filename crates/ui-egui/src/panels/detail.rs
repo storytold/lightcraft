@@ -396,6 +396,12 @@ fn transform_grid(app: &LightcraftApp, p: &egui::Painter, img_rect: Rect) {
     }
 }
 
+/// Whether the loupe draws the photo's face boxes: when switched on (View ▸ Face Boxes), and
+/// otherwise only while they are needed: a face being named, a photo opened from the People view.
+pub(crate) fn face_boxes_shown(app: &LightcraftApp) -> bool {
+    app.ui.face_boxes || app.ui.name_edit.is_some() || app.ui.person_from.is_some()
+}
+
 /// The photo's face boxes and the name box on them.
 fn face_boxes(
     app: &mut LightcraftApp,
@@ -868,7 +874,7 @@ fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
     if !o.fullscreen {
         filter_pill(app, ui, canvas);
     }
-    if app.ui.face_boxes {
+    if face_boxes_shown(app) {
         face_boxes(app, ui, p, o.map, o.photo, o.d);
     }
     if app.ui.settings.focus_point && !o.crop_tool {

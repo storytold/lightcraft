@@ -118,7 +118,12 @@ pub struct UiState {
     pub grid_info: String,
     /// Photo counts next to sources and albums in the left panel.
     pub show_counts: bool,
-    /// Face / pet boxes (read from XMP) over the photo in the loupe.
+    /// Face / pet boxes (read from XMP) over the photo in the loupe, switched on (View ▸ Face
+    /// Boxes). Off by default: the boxes get in the way of looking at the photo. They also show
+    /// while a face is being named or the photo was opened from the People view
+    /// ([`crate::panels::detail::face_boxes_shown`]). A new key: earlier builds saved
+    /// `faceBoxes: true` without the user choosing it, so only a choice made since is kept.
+    #[serde(rename = "faceBoxesOn")]
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
@@ -418,7 +423,7 @@ impl Default for UiState {
             show_filenames: true,
             grid_info: "filename".into(),
             show_counts: true,
-            face_boxes: true,
+            face_boxes: false,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,
