@@ -92,7 +92,9 @@ struct Source {
     file_name: String,
 }
 
-fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
+/// Read `path` as a model. `expected` is the model id a download was started for: one archive can hold several models, and
+/// the hash alone cannot say which of them the user asked for.
+fn identify(path: &Path, c: &str, sha_known: Option<&str>, expected: Option<&str>) -> Result<Source> {
     let meta = std::fs::metadata(path).map_err(|e| bad(c, format!("cannot read `{}`: {e}", path.display())))?;
     if !meta.is_file() {
         return Err(bad(c, format!("`{}` is not a file", path.display())));
@@ -105,8 +107,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
         None => sha256_file(path).map_err(|e| fail(&format!("could not read {}", path.display()), e))?,
     };
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    // an archive LightCraft knows (the file darktable publishes the model in)
-    if let Some(k) = known::all().into_iter().find(|k| k.download.as_ref().is_some_and(|d| d.sha256 == sha256)) {
+    // an archive LightCraft knows (the file darktable publishes the models in); `expected` picks the model the download
+    // was started for when the archive holds several
+    if let Some(k) = known::by_download_sha256(&sha256, expected) {
         return Ok(Source { manifest: k.manifest, entry: k.entry, file_name });
     }
     // the `.onnx` of a known model
@@ -132,7 +135,8 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
 }
 
 /// Install the model in `src`. A model that passes its self-test becomes the one in use (`activate`, the default): installing
-/// a model is how someone says they want it. `verified` is for a download whose hash was already checked.
+/// a model is how someone says they want it. `verified` is for a download whose hash was already checked; `expected` is the
+/// model that download was started for, since one archive can hold several.
 struct InstallFile<'a> {
     dir: &'a Path,
     run_on: RunOn,
@@ -141,11 +145,12 @@ struct InstallFile<'a> {
     src: &'a Path,
     acknowledged: bool,
     verified: bool,
+    expected: Option<&'a str>,
 }
 
 fn install_file(loader: &crate::denoise::Loader, request: InstallFile<'_>) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
-    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified } = request;
-    let ident = identify(src, c, None)?;
+    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified, expected } = request;
+    let ident = identify(src, c, None, expected)?;
     let m = ident.manifest.clone();
     manifest::validate(&m).map_err(|e| bad(c, e.to_string()))?;
     if !acknowledged {
@@ -261,6 +266,8 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
     let loader = s.denoise.loader.clone();
     let run_on = s.denoise.settings.run_on();
     let at = (s.clock)();
+    // a download knows which model it was started for: the archive may hold more than one
+    let expected = known::find(&id).map(|k| k.manifest.id);
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("denoise-model-install".into())
@@ -268,8 +275,17 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _held = crate::memory::work_gate().acquire(512 * 1024 * 1024);
-                install_file(&loader, InstallFile { dir: &dir, run_on, accepted_at: at, command: C, src: &src, acknowledged: true, verified })
-                    .map_err(|e| plain(&e))
+                let request = InstallFile {
+                    dir: &dir,
+                    run_on,
+                    accepted_at: at,
+                    command: C,
+                    src: &src,
+                    acknowledged: true,
+                    verified,
+                    expected: expected.as_deref(),
+                };
+                install_file(&loader, request).map_err(|e| plain(&e))
             }))
             .unwrap_or_else(|_| Err("the model installation stopped unexpectedly".into()));
             if verified {
@@ -307,6 +323,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
             src: Path::new(path),
             acknowledged,
             verified: false,
+            expected: None,
         },
     )?;
     activate_install(s, &result, model, activate)

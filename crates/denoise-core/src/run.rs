@@ -541,10 +541,13 @@ pub fn pack_tile_linear_rgb(image: &Rgb32f, x0: isize, y0: isize, tile: usize, o
     true
 }
 
-/// Bring a linear RGB tile's output to the input's scale and keep clipped highlights as they were (in place).
+/// Bring a linear RGB tile's output to the input's scale, one gain per colour plane, and keep clipped highlights as they were
+/// (in place).
 ///
-/// In linear RGB, gain matching computes a single scalar across all three colour planes combined,
-/// preserving strict RGB chromaticity ratios (hue and saturation) across tile borders.
+/// The model's output scale drifts between channels, most in dark, strongly coloured scenes, so one gain across all three
+/// planes turns that drift into a colour cast (on X-Trans night shots, 8-bit red came out 7–9 levels down and green 3 up).
+/// Each plane is matched on its own, as the Bayer path does; a model that scales the planes equally still gets three equal
+/// gains.
 fn finish_tile_linear_rgb(input: &[f32], out: &mut [f32], p: &Params, edges: (bool, bool, bool, bool)) {
     let t = p.tile;
     if let Gain::MatchMean { nominal, max_deviation } = p.gain {
@@ -553,35 +556,29 @@ fn finish_tile_linear_rgb(input: &[f32], out: &mut [f32], p: &Params, edges: (bo
         let (j0, j1) = (if edges.2 { m } else { 0 }, t - if edges.3 { m } else { 0 });
         if i1 > i0 && j1 > j0 {
             let cells = ((i1 - i0) * (j1 - j0)) as f64;
-            let mut in_sum = 0.0f64;
-            let mut out_sum = 0.0f64;
-            for c in 0..3 {
-                let plane_offset = c * t * t;
-                in_sum += (j0..j1)
-                    .map(|j| {
-                        input.get(plane_offset + j * t + i0..plane_offset + j * t + i1).map_or(0.0, |r| r.iter().map(|&v| f64::from(v)).sum::<f64>())
-                    })
-                    .sum::<f64>();
-                out_sum += (j0..j1)
-                    .map(|j| {
-                        out.get(plane_offset + j * t + i0..plane_offset + j * t + i1).map_or(0.0, |r| r.iter().map(|&v| f64::from(v)).sum::<f64>())
-                    })
-                    .sum::<f64>();
-            }
-            let total_cells = cells * 3.0;
-            let mean_in = in_sum / total_cells;
-            let mean_out = out_sum / total_cells;
-
-            let measured = if mean_in as f32 >= MIN_SIGNAL && mean_out.abs() > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
+            let side = t * t;
+            let plane_sum = |src: &[f32], offset: usize| -> f64 {
+                (j0..j1)
+                    .map(|j| src.get(offset + j * t + i0..offset + j * t + i1).map_or(0.0, |r| r.iter().map(|&v| f64::from(v)).sum::<f64>()))
+                    .sum()
+            };
             let (min_g, max_g) = if nominal >= 0.0 {
                 (nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation))
             } else {
                 (nominal * (1.0 + max_deviation), nominal * (1.0 - max_deviation))
             };
-            let g = measured.clamp(min_g, max_g);
-            if g.is_finite() && g != 0.0 {
-                let inv = 1.0 / g;
-                out.iter_mut().for_each(|v| *v *= inv);
+            for c in 0..3 {
+                let offset = c * side;
+                let mean_in = plane_sum(input, offset) / cells;
+                let mean_out = plane_sum(out, offset) / cells;
+                let measured = if mean_in >= f64::from(MIN_SIGNAL) && mean_out.abs() > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
+                let g = measured.clamp(min_g, max_g);
+                if g.is_finite() && g != 0.0 {
+                    let inv = 1.0 / g;
+                    if let Some(pl) = out.get_mut(offset..offset + side) {
+                        pl.iter_mut().for_each(|v| *v *= inv);
+                    }
+                }
             }
         }
     }
@@ -1140,7 +1137,7 @@ mod tests {
         assert_eq!(tile_count_linear_rgb(100, 80, 32, 8), sx.len() * sy.len());
     }
 
-    /// Verifies that global scalar gain matching in linear RGB preserves inter-channel color ratios.
+    /// Verifies that linear RGB gain matching undoes a uniform model scale and keeps the colour ratios.
     #[test]
     fn linear_rgb_gain_matching_preserves_color_ratios() {
         let t = 16;
@@ -1165,6 +1162,46 @@ mod tests {
             assert!((b - 0.8).abs() < 1e-5, "b was {b}, expected ~0.8");
             assert!((g / r - 2.0).abs() < 1e-5, "G/R ratio must be 2.0");
             assert!((b / r - 4.0).abs() < 1e-5, "B/R ratio must be 4.0");
+        }
+    }
+
+    /// A model whose output scale drifts between channels must not shift colour: each plane is matched on its own, within
+    /// the same deviation limits as the whole-tile match (the Bayer path does the same).
+    #[test]
+    fn linear_rgb_gain_matching_is_per_channel() {
+        let t = 16;
+        let plane = t * t;
+        let mut input = vec![0.0f32; 3 * plane];
+        let mut out = vec![0.0f32; 3 * plane];
+        for i in 0..plane {
+            input[i] = 0.2;
+            input[plane + i] = 0.4;
+            input[2 * plane + i] = 0.8;
+            // the model scales each plane differently, all inside the nominal 2.0 ± 50 %
+            out[i] = 0.2 * 2.6;
+            out[plane + i] = 0.4 * 1.8;
+            out[2 * plane + i] = 0.8 * 2.2;
+        }
+        let p = Params { tile: t, overlap: 4, gain: Gain::MatchMean { nominal: 2.0, max_deviation: 0.5 }, clip: None, parallel: 1 };
+        finish_tile_linear_rgb(&input, &mut out, &p, (true, true, true, true));
+        for i in 0..plane {
+            let (r, g, b) = (out[i], out[plane + i], out[2 * plane + i]);
+            assert!((r - 0.2).abs() < 1e-5, "r was {r}, expected ~0.2");
+            assert!((g - 0.4).abs() < 1e-5, "g was {g}, expected ~0.4");
+            assert!((b - 0.8).abs() < 1e-5, "b was {b}, expected ~0.8");
+        }
+        // a plane beyond the limit is clamped on its own, not by the other two
+        for i in 0..plane {
+            out[i] = 0.2 * 5.0;
+            out[plane + i] = 0.4 * 2.0;
+            out[2 * plane + i] = 0.8 * 2.0;
+        }
+        finish_tile_linear_rgb(&input, &mut out, &p, (true, true, true, true));
+        for i in 0..plane {
+            let (r, g, b) = (out[i], out[plane + i], out[2 * plane + i]);
+            assert!((r - 0.2 * 5.0 / 3.0).abs() < 1e-5, "r was {r}, expected the clamped 1/3");
+            assert!((g - 0.4).abs() < 1e-5, "g was {g}, expected ~0.4");
+            assert!((b - 0.8).abs() < 1e-5, "b was {b}, expected ~0.8");
         }
     }
 }

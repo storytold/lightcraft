@@ -51,7 +51,8 @@ fn rawnind_bayer() -> Known {
     let download = Download {
         id: manifest.id.clone(),
         url: "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel".into(),
-        file_name: "rawdenoise-nind.dtmodel".into(),
+        // the archive holds both RawNIND models: each stages under its own name so two downloads cannot collide
+        file_name: "rawdenoise-nind-bayer.dtmodel".into(),
         size_bytes: 57_700_134,
         sha256: "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af".into(),
     };
@@ -90,7 +91,8 @@ fn rawnind_linear() -> Known {
     let download = Download {
         id: manifest.id.clone(),
         url: "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel".into(),
-        file_name: "rawdenoise-nind.dtmodel".into(),
+        // the archive holds both RawNIND models: each stages under its own name so two downloads cannot collide
+        file_name: "rawdenoise-nind-linear.dtmodel".into(),
         size_bytes: 57_700_134,
         sha256: "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af".into(),
     };
@@ -117,6 +119,15 @@ pub fn find(id: &str) -> Option<Known> {
 /// The known model whose `.onnx` has this SHA-256.
 pub fn by_sha256(sha256: &str) -> Option<DenoiserManifest> {
     all().into_iter().map(|k| k.manifest).find(|m| m.sha256.as_deref() == Some(sha256))
+}
+
+/// The model whose download archive has this SHA-256. One archive can hold more than one model (darktable publishes a
+/// Bayer and a linear RawNIND in the same file), so `expected` — the model a download was started for — decides; without
+/// it, or when it names another archive, the first match is taken.
+pub fn by_download_sha256(sha256: &str, expected: Option<&str>) -> Option<Known> {
+    let matching: Vec<Known> = all().into_iter().filter(|k| k.download.as_ref().is_some_and(|d| d.sha256 == sha256)).collect();
+    let chosen = expected.and_then(|id| matching.iter().position(|k| k.manifest.id == id)).or_else(|| (!matching.is_empty()).then_some(0));
+    chosen.and_then(|i| matching.into_iter().nth(i))
 }
 
 #[cfg(test)]
@@ -156,6 +167,35 @@ mod tests {
             by_sha256("df957efadcc152c007d5d3b0917bdff9e41c0d4a0efe56584ef30b36393cd181").map(|m| m.id),
             if cfg!(feature = "rawnind-model") { Some("rawnind-linear".into()) } else { None }
         );
+    }
+
+    /// Darktable publishes both RawNIND models in one archive: a download is identified by the model it was started for,
+    /// so the two must also stage under different names for that to be possible side by side.
+    #[test]
+    fn one_archive_stages_under_a_name_per_model() {
+        let (Some(bayer), Some(linear)) = (rawnind_bayer().download, rawnind_linear().download) else {
+            return;
+        };
+        assert_eq!(bayer.sha256, linear.sha256, "the same archive");
+        assert_ne!(bayer.file_name, linear.file_name, "two downloads of one archive would collide in the staging folder");
+    }
+
+    /// The archive's hash alone cannot say which of its models the user asked for; the id the download was started for does.
+    #[test]
+    fn an_archive_is_identified_by_the_model_it_was_started_for() {
+        if !cfg!(feature = "rawnind-model") {
+            return;
+        }
+        let archive = "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af";
+        assert_eq!(
+            by_download_sha256(archive, Some("rawnind-linear")).map(|k| (k.manifest.id, k.entry)),
+            Some(("rawnind-linear".into(), Some("model_linear.onnx")))
+        );
+        assert_eq!(by_download_sha256(archive, Some("rawnind-bayer")).map(|k| k.entry), Some(Some("model_bayer.onnx")));
+        // no id (a file the user picked), or one that names another archive: the first model it holds
+        assert_eq!(by_download_sha256(archive, None).map(|k| k.manifest.id).as_deref(), Some("rawnind-bayer"));
+        assert_eq!(by_download_sha256(archive, Some("nothing")).map(|k| k.manifest.id).as_deref(), Some("rawnind-bayer"));
+        assert!(by_download_sha256("00", None).is_none());
     }
 }
 
