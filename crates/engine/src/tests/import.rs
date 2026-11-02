@@ -2979,3 +2979,18 @@ fn a_link_before_dotdot_names_the_folder_the_system_reads() {
     assert_eq!(listed, ["in-real.png"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A broken link before `..` is an error, not the link's own folder by name: the system can't read
+/// `broken/..` either (CodeRabbit on #3577).
+#[cfg(unix)]
+#[test]
+fn a_broken_link_before_dotdot_is_an_error() {
+    let dir = temp_dir("browse-broken-link-dotdot");
+    std::fs::create_dir_all(&dir).unwrap();
+    let link = dir.join("broken");
+    std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
+    assert!(crate::import::browse_path(&link.join("..")).is_err());
+    // without reading the disk the spelling is still the folder by name
+    assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}

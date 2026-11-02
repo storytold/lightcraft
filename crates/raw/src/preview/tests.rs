@@ -375,6 +375,13 @@ fn the_smallest_preview_covering_the_size_is_chosen() {
     let height = p + 20 + 7;
     wide[height..height + 2].copy_from_slice(&911u16.to_be_bytes());
     assert_eq!(embedded_preview_covering(&wide, 512).unwrap(), big);
+    // without the JPEG track the boxes are chosen from too: the smallest that covers, else the largest
+    // (CodeRabbit on #3577: a box-only CR3 always gave its largest box)
+    let boxes_only = &file[..file.windows(4).position(|w| w == b"moov").unwrap() - 4];
+    assert_eq!(embedded_preview_covering(boxes_only, 100).unwrap(), thmb);
+    assert_eq!(embedded_preview_covering(boxes_only, 512).unwrap(), prvw);
+    assert_eq!(embedded_preview_covering(boxes_only, 2560).unwrap(), prvw, "none covers: the largest");
+    assert_eq!(embedded_preview(boxes_only).unwrap(), prvw);
     // damaged files never panic
     for n in (0..file.len()).step_by(7) {
         let _ = embedded_preview_covering(&file[..n], 512);

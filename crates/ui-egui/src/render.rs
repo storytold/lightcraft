@@ -915,6 +915,11 @@ impl Renderer {
         self.queue.clear();
     }
 
+    /// Changes when [`Self::forget_all`] drops every texture and request: what was asked for before is gone.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     pub fn is_pending(&self, slot: Slot) -> bool {
         self.pending.contains_key(&slot)
     }

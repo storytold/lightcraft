@@ -41,30 +41,64 @@ impl ScanEnd {
     }
 }
 
+/// Scans stopped without waiting for their workers ([`stop_scan`]), in the order they were stopped, which is
+/// the order they started (one scan runs at a time), and which of their probes went back to the session.
+#[derive(Default)]
+pub(crate) struct StoppingScans {
+    /// How many scans were stopped: each one's number.
+    stopped: u64,
+    /// Each stopped scan's number and channel, kept until its worker ends.
+    pending: Vec<(u64, std::sync::mpsc::Receiver<ScanEnd>)>,
+    /// The probes a stopped scan put back: by whom, and what they said (to tell they are still the ones there).
+    from: std::collections::HashMap<String, (u64, ProbeMark)>,
+}
+
+/// What tells two probes of one file apart: a file that changed but kept its size has another content hash.
+type ProbeMark = (u64, Option<String>, Option<String>);
+
+fn mark(p: &lightcraft_engine::media::ProbeInfo) -> ProbeMark {
+    (p.file_size, p.content_hash.clone(), p.file_modified.clone())
+}
+
 /// Stop the running scan (if any) without waiting for its worker: the scan is closed at once, and its
 /// channel is kept until the worker ends, so the probes it holds still come back ([`collect_stopped`]).
 fn stop_scan(app: &mut LightcraftApp) {
     if let Some(t) = app.scan.take() {
         t.progress.cancel.store(true, Ordering::Relaxed);
-        app.scans_stopping.push(t.rx);
+        let s = &mut app.scans_stopping;
+        s.stopped = s.stopped.saturating_add(1);
+        s.pending.push((s.stopped, t.rx));
     }
 }
 
-/// The probes of stopped scans whose workers have ended go back to the session (called every frame).
+/// The probes of stopped scans whose workers have ended go back to the session (called every frame). A probe
+/// the session got since a scan started is newer than that scan's and stays, except one that a scan stopped
+/// before it put back: a later scan read that file again, so its probe wins, whichever worker ends first
+/// (an older probe of a file changed at the same size would hand the copy check a stale content hash).
 fn collect_stopped(app: &mut LightcraftApp, ctx: &egui::Context) {
     let probes = &mut app.session.import_probes;
-    app.scans_stopping.retain(|rx| match rx.try_recv() {
+    let StoppingScans { pending, from, .. } = &mut app.scans_stopping;
+    pending.retain(|(seq, rx)| match rx.try_recv() {
         Ok(end) => {
-            // (newer probes, taken since, win)
             for (k, v) in end.into_probes() {
-                probes.entry(k).or_insert(v);
+                let replace = match probes.get(&k) {
+                    None => true,
+                    Some(have) => from.get(&k).is_some_and(|(by, m)| by < seq && *m == mark(have)),
+                };
+                if replace {
+                    from.insert(k.clone(), (*seq, mark(&v)));
+                    probes.insert(k, v);
+                }
             }
             false
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => true,
         Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
     });
-    if !app.scans_stopping.is_empty() {
+    if pending.is_empty() {
+        // no stopped scan left to compare with
+        from.clear();
+    } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
