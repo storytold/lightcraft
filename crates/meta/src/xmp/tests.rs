@@ -188,19 +188,24 @@ fn iso_packet(attrs: &str, element: &str) -> String {
 
 #[test]
 fn xmp_iso_rejects_fractional_values() {
-    let packets = [
-        iso_packet(r#"exif:ISOSpeedRatings="0.5""#, ""),
-        iso_packet("", "<exif:ISOSpeedRatings><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exif:ISOSpeedRatings>"),
-        iso_packet(r#"exifEX:PhotographicSensitivity="160.9""#, ""),
-        iso_packet("", "<exifEX:PhotographicSensitivity>0.5</exifEX:PhotographicSensitivity>"),
-        iso_packet("", "<exifEX:PhotographicSensitivity><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exifEX:PhotographicSensitivity>"),
+    let cases = [
+        (iso_packet(r#"exif:ISOSpeedRatings="0.5""#, ""), "exif:ISOSpeedRatings", "0.5"),
+        (iso_packet("", "<exif:ISOSpeedRatings><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exif:ISOSpeedRatings>"), "exif:ISOSpeedRatings", "160.9"),
+        (iso_packet(r#"exifEX:PhotographicSensitivity="160.9""#, ""), "exifEX:PhotographicSensitivity", "160.9"),
+        (iso_packet("", "<exifEX:PhotographicSensitivity>0.5</exifEX:PhotographicSensitivity>"), "exifEX:PhotographicSensitivity", "0.5"),
+        (
+            iso_packet("", "<exifEX:PhotographicSensitivity><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exifEX:PhotographicSensitivity>"),
+            "exifEX:PhotographicSensitivity",
+            "160.9",
+        ),
     ];
-    for packet in packets {
+    for (packet, key, raw) in cases {
         let d = parse_xmp(&packet).unwrap();
         assert_eq!(d.metadata.iso, None, "{packet}");
-        assert!(
-            d.properties.keys().any(|key| key.ends_with("ISOSpeedRatings") || key.ends_with("PhotographicSensitivity")),
-            "raw property lost: {packet}"
+        assert_eq!(
+            d.properties.get(key).map(|values| values.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(vec![raw]),
+            "raw property changed: {packet}"
         );
         assert_eq!(d.metadata.make, None);
     }
