@@ -129,7 +129,9 @@ fn prepare_guarded(
         // a gain map also holds the HDR rendition (float), the SDR one in linear light and the
         // stages the two renders share (counted before the check below: review of PR #3565)
         let weight = with_gain_map(render_weight(full_px, long, job.level, w.saturating_mul(h)), (w, h), gain_map);
-        if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
+        // (the memory this process may use: a container's limit when it has one, as the export
+        // gate counts: review of PR #3532)
+        if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::memory_limit()) {
             return Err(format!("{label}: {why}"));
         }
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };

@@ -236,8 +236,9 @@ fn parse_registry(text: &str, name: &str) -> Option<u64> {
             named.iter().all(|k| memory(k) == Some(b)).then_some(b)
         }
         // no adapter of that name: a size counts only when the listing has one adapter (another
-        // adapter's size is not this one's: review of PR #3506 / #3511; `assumed` applies instead)
-        None if keys.iter().filter(|k| k.desc.is_some()).count() <= 1 => only(keys.iter().filter_map(memory)),
+        // adapter's size is not this one's: review of PR #3506 / #3511; `assumed` applies instead;
+        // a key with a size but no name is an adapter too: review of PR #3532)
+        None if keys.iter().filter(|k| k.desc.is_some() || memory(k).is_some()).count() <= 1 => only(keys.iter().filter_map(memory)),
         None => None,
     }
 }
@@ -383,6 +384,10 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         // one adapter in the listing, under another name: its size is the card's
         let one = "HKEY_X\\0000\n    DriverDesc    REG_SZ    Card B\n    HardwareInformation.qwMemorySize    REG_QWORD    0x300000000\n";
         assert_eq!(parse_registry(one, "Card B (driver name)"), Some(12 << 30));
+        // a size under a key without a name is another adapter's (review of PR #3532)
+        let unnamed =
+            "HKEY_X\\0000\n    DriverDesc    REG_SZ    Card A\n\nHKEY_X\\0001\n    HardwareInformation.qwMemorySize    REG_QWORD    0x300000000\n";
+        assert_eq!(parse_registry(unnamed, "Card A (driver name)"), None);
     }
 
     /// One query a value (`reg query … /s /v …`, fast) instead of every value of every adapter
