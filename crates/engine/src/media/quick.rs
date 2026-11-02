@@ -204,14 +204,16 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
 
 /// The alias of photo `p`'s latest loupe view, whatever settings it was rendered with
 /// ([`PreviewCache::put_latest`]): an edited photo's first picture while the render for its current
-/// settings is on its way (notes 3, 11 and 31 of 2026-10-24).
+/// settings is on its way (notes 3, 11 and 31 of 2026-10-24). The photo's id is part of it: virtual
+/// copies share their file, but each shows its own edit.
 pub fn latest_view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-    Hasher128::new().str(&content_key(p)).str("latest-view").u64(apply_crop as u64).u64(RENDER_CACHE_VERSION).finish()
+    Hasher128::new().str(&content_key(p)).str("latest-view").u64(p.id.0).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION).finish()
 }
 
-/// The alias of photo `p`'s latest grid thumbnail, whatever settings it was rendered with.
+/// The alias of photo `p`'s latest grid thumbnail, whatever settings it was rendered with (one per
+/// photo, virtual copies too).
 pub fn latest_thumb_key(p: &Photo) -> Hash128 {
-    Hasher128::new().str(&content_key(p)).str("latest-thumb").u64(RENDER_CACHE_VERSION).finish()
+    Hasher128::new().str(&content_key(p)).str("latest-thumb").u64(p.id.0).u64(RENDER_CACHE_VERSION).finish()
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.

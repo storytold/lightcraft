@@ -252,6 +252,14 @@ impl RenderJob {
         // the loupe: a cached view render of these settings at least this big is the render (built
         // previews and the photos prepared ahead are used, not rendered again; PERF-PREVIEW-REUSE)
         if let Some(mut image) = self.cached_view() {
+            // the cached view is the photo's latest view too (a view built before the aliases
+            // existed, or in an earlier session: what the photo shows once its settings change)
+            if let (Some((latest, alias)), Some((cache, key))) = (&self.latest, &self.view_cache)
+                && !latest.latest_is(*alias, *key)
+                && let Some(full) = cache.get_memory(*key)
+            {
+                latest.put_latest(self.cache_generation, *alias, *key, full, false);
+            }
             // as for a render: the histogram of the full picture, then the display fit
             let histogram = Histogram::of_srgb8(&image);
             if let Some((fw, fh)) = self.display_fit
@@ -345,7 +353,9 @@ impl RenderJob {
                         Some(d.id())
                     }
                     (Some(d), Some(_)) => {
-                        let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
+                        // (an sRGB copy for the view preview, or for the latest view when the job
+                        // keeps no view preview: the loupe while editing)
+                        let keep = (self.view_cache.is_some() || self.latest.is_some()) && self.request.quality == Quality::Full;
                         let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
                         // (an HDR edit's HDR histogram stays)
                         if let Some(h) = h.filter(|_| rendered.histogram.hdr.is_none()) {
@@ -373,6 +383,15 @@ impl RenderJob {
                     if let Some((latest, alias)) = &self.latest {
                         latest.put_latest(self.cache_generation, *alias, *key, img, false);
                     }
+                } else if let Some((latest, alias)) = &self.latest
+                    && self.view_cache.is_none()
+                    && self.cache.is_none()
+                    && full
+                    && (display.is_none() || srgb.is_some())
+                {
+                    // the loupe while editing keeps no view preview (it renders from the source, kept
+                    // decoded for the next slider draft), but its render is the photo's latest view
+                    latest.put_latest_own(self.cache_generation, *alias, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
                 }
                 // the display fit, after the caches have the full render
                 if let Some((fw, fh)) = self.display_fit

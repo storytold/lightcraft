@@ -964,6 +964,45 @@ fn the_latest_picture_is_found_by_its_alias_in_memory_and_next_session_on_disk()
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// CodeRabbit on #3577: an earlier picture read back from the alias's file (the newer one's
+/// alias write skipped or still queued, the newer picture gone from memory) is never shown as the
+/// latest one: the picture the alias points at comes first, from its own file.
+#[test]
+fn an_older_alias_file_never_stands_for_a_newer_latest_picture() {
+    let dir = temp_dir("latest-newer");
+    let one = 16 * 8 * 4 + 64;
+    // room in memory for one picture
+    let cache = Arc::new(PreviewCache::with_disk(one + one / 2, &dir, 1 << 30));
+    let (old, new, alias) = (hash_bytes(b"render 1"), hash_bytes(b"render 2"), hash_bytes(b"photo 7: latest view"));
+    // (told apart by their sizes: the files are JPEGs)
+    let (img1, img2) = (Arc::new(gradient(16, 8, 1)), Arc::new(gradient(12, 6, 2)));
+    let g = cache.generation();
+    cache.put_at(g, old, img1.clone());
+    cache.put_latest(g, alias, old, img1.clone(), true);
+    // the newer render, on disk under its own key; the older one leaves memory
+    cache.put_at(g, new, img2.clone());
+    // read back while the alias still points at the older picture: its file, kept under the alias
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((16, 8)));
+    // the newer render becomes the latest; its alias file is not written yet (and the picture
+    // itself is gone from memory)
+    {
+        let mut a = cache.aliases.lock().unwrap();
+        a.insert(alias, new);
+    }
+    cache.mem.lock().unwrap().remove(&alias);
+    cache.mem.lock().unwrap().remove(&new);
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((12, 6)), "the newer picture, from its file");
+    // put_latest itself drops an earlier picture read back under the alias
+    cache.put_latest(g, alias, old, img1.clone(), true);
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((16, 8)));
+    cache.mem.lock().unwrap().remove(&old);
+    let _ = cache.get_latest(alias);
+    cache.put_latest(g, alias, new, img2.clone(), false);
+    cache.mem.lock().unwrap().remove(&new);
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((12, 6)), "not the earlier picture kept under the alias");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A full cache lets the edited photos' latest previews go only after everything else.
 #[test]
 fn a_full_cache_prunes_the_pictures_kept_last_after_everything_else() {
