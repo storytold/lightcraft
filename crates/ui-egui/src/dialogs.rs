@@ -1014,13 +1014,15 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     );
     crate::widgets::register(ui, "field:smartName", r.rect);
     ui.add_space(6.0);
-    // the folder an album made from a folder view carries is not in the editor, but it counts
-    let folder = id
+    // the folders an album made from a folder view carries are not in the editor, but they count
+    let folders: Vec<String> = id
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)))
-        .and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
+        .and_then(|a| a.smart.as_deref())
+        .map(|f| f.library_folder.iter().chain(&f.library_folders).cloned().collect())
+        .unwrap_or_default();
     // problems, count and albums: cached until the catalog or the rules change (not per frame)
     let now = (app.session.clock)();
-    let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
+    let view = app.caches.rules_view(&app.session.catalog, rules, *id, folders, &now);
     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
