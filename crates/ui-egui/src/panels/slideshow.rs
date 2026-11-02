@@ -39,6 +39,16 @@ pub const AHEAD: usize = 2;
 /// Seconds the playback controls stay after the pointer last moved.
 pub const CONTROLS_SECS: f64 = 2.5;
 
+/// Start the photo-only preview, taking native window full screen only when it is not already
+/// active. The prior state is transient so ending the preview can restore a windowed window.
+pub(crate) fn begin_full_screen_preview(app: &mut LightcraftApp) {
+    let was_fullscreen = app.ui.window_fullscreen.unwrap_or(app.window_is_fullscreen);
+    app.ui.full_screen_preview_window_was_fullscreen = Some(was_fullscreen);
+    if !was_fullscreen {
+        app.ui.window_fullscreen = Some(true);
+    }
+}
+
 /// A running slideshow.
 #[derive(Clone, Debug)]
 pub struct Run {
@@ -88,11 +98,17 @@ pub fn start(app: &mut LightcraftApp, p: &Value, now: f64) -> Result<Value, Stri
     Ok(out)
 }
 
-/// End the slideshow (back to the view it started from, on the last photo shown).
+/// End the photo presentation (slideshow or preview), release its slides, and restore any native
+/// fullscreen state the preview acquired.
 pub fn end(app: &mut LightcraftApp) {
     app.ui.slideshow = None;
     app.ui.fullscreen = false;
     app.renderer.release_slides(&[]);
+    if let Some(was_fullscreen) = app.ui.full_screen_preview_window_was_fullscreen.take()
+        && !was_fullscreen
+    {
+        app.ui.window_fullscreen = Some(false);
+    }
 }
 
 /// The slideshow's own commands (the playback controls and their keys).

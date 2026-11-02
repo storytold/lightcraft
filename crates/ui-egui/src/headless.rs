@@ -260,6 +260,8 @@ pub struct Headless {
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
     pub window_maximized: bool,
+    /// The simulated window is full screen; fullscreen viewport requests are reported back on the next frame.
+    window_fullscreen: bool,
     /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`,
     /// `CursorPosition`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
@@ -292,6 +294,7 @@ impl Headless {
             (egui::vec2(1600.0, 1000.0), 1.0)
         };
         let (tx, rx) = std::sync::mpsc::channel();
+        let window_fullscreen = app.window_is_fullscreen;
         let mut app = app.with_control(rx);
         app.headless_host = true;
         Headless {
@@ -307,6 +310,7 @@ impl Headless {
             control: tx,
             quit: false,
             window_maximized: false,
+            window_fullscreen,
             window_commands: vec![],
             last_cursor: egui::CursorIcon::Default,
             #[cfg(test)]
@@ -346,6 +350,7 @@ impl Headless {
         (self.size, self.pixels_per_point) = bounded_viewport(self.size, self.pixels_per_point);
         let mut raw = HeadlessView::raw_input(self.size, self.pixels_per_point, self.time, std::mem::take(&mut self.events));
         raw.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.window_maximized);
+        raw.viewports.entry(ViewportId::ROOT).or_default().fullscreen = Some(self.window_fullscreen);
         raw.max_texture_side = (self.reported_texture_side != Some(self.max_texture_side)).then_some(self.max_texture_side);
         self.reported_texture_side = Some(self.max_texture_side);
         // A headless run's timers follow its simulated clock, not the host's wall clock.
@@ -379,6 +384,10 @@ impl Headless {
                 ViewportCommand::Close => self.quit = true,
                 ViewportCommand::Maximized(on) => {
                     self.window_maximized = on;
+                    self.window_commands.push(c);
+                }
+                ViewportCommand::Fullscreen(on) => {
+                    self.window_fullscreen = on;
                     self.window_commands.push(c);
                 }
                 // recorded, not carried out: the simulated pointer moves only when a test moves it

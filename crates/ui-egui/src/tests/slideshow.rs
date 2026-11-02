@@ -103,6 +103,8 @@ fn slideshow_advances_pauses_and_ends() {
     run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0, "manual": false}));
     assert!(!play(&h).settings().manual, "playback advances automatically");
     assert!(h.app.ui.fullscreen && h.app.ui.slideshow.is_some());
+    assert!(!h.app.window_is_fullscreen, "a direct slideshow keeps its existing window behavior");
+    assert!(h.window_commands.iter().all(|command| !matches!(command, egui::ViewportCommand::Fullscreen(_))));
     assert_eq!(h.app.session.active(), Some(first), "starts at the first photo in view");
     assert!(h.step_until(SETTLE, |h| h.app.session.active() != Some(first)), "the next photo comes up and is selected");
     let advanced = photo_up(&h);
@@ -135,6 +137,111 @@ fn turning_off_the_full_screen_preview_frees_the_slides() {
     assert_eq!(r["fullscreen"], false);
     assert!(!h.app.ui.fullscreen && h.app.ui.slideshow.is_none(), "the toggle ends the slideshow");
     assert_eq!(slides_held(&h), 0, "slide textures freed");
+}
+
+#[test]
+fn full_screen_preview_requests_native_fullscreen() {
+    let mut h = grid();
+    h.window_commands.clear();
+
+    let result = run(&mut h, "view.fullScreenPreview", json!({}));
+    assert_eq!(result["fullscreen"], true);
+    assert!(h.app.ui.fullscreen, "the photo preview is active");
+
+    h.step();
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(true)]);
+    assert!(h.app.window_is_fullscreen, "the host receives the native fullscreen request");
+}
+
+#[test]
+fn full_screen_preview_restores_windowed_state() {
+    let mut h = grid();
+    h.window_commands.clear();
+
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(h.app.ui.fullscreen && h.app.window_is_fullscreen);
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(true)]);
+
+    h.window_commands.clear();
+    let result = run(&mut h, "view.fullScreenPreview", json!({}));
+    assert_eq!(result["fullscreen"], false);
+    assert!(!h.app.ui.fullscreen, "the photo preview has ended");
+    h.step();
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(false)]);
+    assert!(!h.app.window_is_fullscreen, "the originally windowed state is restored");
+}
+
+#[test]
+fn full_screen_preview_preserves_existing_fullscreen() {
+    let mut h = grid();
+    run(&mut h, "view.enterFullScreen", json!({"on": true}));
+    h.step();
+    assert!(h.app.window_is_fullscreen, "the direct window command took effect");
+    h.window_commands.clear();
+
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(h.app.ui.fullscreen && h.app.window_is_fullscreen);
+    assert!(h.window_commands.is_empty(), "preview does not take ownership of an already-fullscreen window");
+
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(!h.app.ui.fullscreen);
+    assert!(h.app.window_is_fullscreen, "ending preview leaves the pre-existing fullscreen state alone");
+    assert!(h.window_commands.is_empty());
+}
+
+#[test]
+fn full_screen_preview_escape_restores_window_state() {
+    let mut h = grid();
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(h.app.ui.fullscreen && h.app.window_is_fullscreen);
+    h.window_commands.clear();
+
+    let result = h.request("ui.key", json!({"key": "escape"}), T);
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(!h.app.ui.fullscreen, "Escape ends the photo preview");
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(false)]);
+    assert!(!h.app.window_is_fullscreen, "Escape restores the originally windowed state");
+}
+
+#[test]
+fn full_screen_preview_repeated_toggle_restores_once() {
+    let mut h = grid();
+    h.window_commands.clear();
+
+    // Toggle three times before a host frame consumes the pending requests. Only the net
+    // state should reach the window, and leaving on the next toggle restores it once.
+    for _ in 0..3 {
+        let result = h.app.run("view.fullScreenPreview", json!({}));
+        assert!(result.is_ok(), "{result:?}");
+    }
+    assert!(h.app.ui.fullscreen);
+    h.step();
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(true)]);
+    assert!(h.app.window_is_fullscreen);
+
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    assert!(!h.app.ui.fullscreen);
+    h.step();
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(true), egui::ViewportCommand::Fullscreen(false)]);
+    assert!(!h.app.window_is_fullscreen, "the pending fullscreen request is restored only once");
+}
+
+#[test]
+fn full_screen_preview_keeps_direct_window_toggle_working() {
+    let mut h = grid();
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(h.app.ui.fullscreen && h.app.window_is_fullscreen);
+
+    let result = run(&mut h, "view.enterFullScreen", json!({}));
+    assert_eq!(result["windowFullscreen"], false, "the direct toggle uses the pending native state");
+    h.step();
+    assert!(!h.app.window_is_fullscreen, "the direct command still leaves the windowed state in effect");
+    assert!(h.app.ui.fullscreen, "the direct window command does not end photo preview");
 }
 
 #[test]
