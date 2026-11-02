@@ -11,6 +11,8 @@
   The ILCE-7M3 frames that showed it now render smooth, though darker and cooler than their camera JPEG. Thumbnails
   and smart previews of affected raws are redrawn.
 
+## 2026-10-30
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 
