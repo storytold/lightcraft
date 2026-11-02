@@ -5205,6 +5205,41 @@ fn ui_set_background_prep_reaches_the_session() {
     assert_eq!(h.app.ui.settings.background_prep.library.ahead, 7, "and the app settings keep it");
 }
 
+/// `ui.set settings.backgroundPrep` after a `prefs.setBackgroundPrep` handled in the same drain (no frame
+/// between to sync the app settings): the value set last wins, even one equal to what the app settings
+/// still showed, and the reply shows it (CodeRabbit on #3577).
+#[test]
+fn ui_set_background_prep_after_a_command_in_the_same_drain() {
+    use crate::control::{ControlRequest, Outcome};
+    let mut h = demo([1000.0, 700.0]);
+    h.step();
+    let shown = h.app.ui.settings.background_prep.library.ahead;
+    let ctx = egui::Context::default();
+    let run = |app: &mut LightcraftApp, method: &str, params: Value| {
+        let (req, _) = ControlRequest::new(method, params);
+        match crate::control::handle(app, &ctx, &req) {
+            Outcome::Done(reply) => reply,
+            _ => panic!("expected a reply"),
+        }
+    };
+    let other = shown + 4;
+    let cmd = json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": other}}}});
+    assert_eq!(run(&mut h.app, "engine.execute", cmd)["ok"], true);
+    assert_eq!(h.app.session.prep.app.library.ahead, other);
+    // back to the value the app settings still show
+    let r = run(&mut h.app, "ui.set", json!({"settings": {"backgroundPrep": {"library": {"ahead": shown}}}}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.prep.app.library.ahead, shown, "the value set last");
+    assert_eq!(r["result"]["settings"]["backgroundPrep"]["library"]["ahead"], shown, "{r}");
+    // another field set alone keeps what the command set beside it
+    let cmd = json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": other}}}});
+    assert_eq!(run(&mut h.app, "engine.execute", cmd)["ok"], true);
+    let r = run(&mut h.app, "ui.set", json!({"language": "en"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.prep.app.library.ahead, other, "not put back by an unrelated ui.set");
+    assert_eq!(h.app.ui.settings.background_prep.library.ahead, other);
+}
+
 /// The app-wide background preparation settings are kept with the app settings (`ui.json`):
 /// the saved ones reach the session at launch, and a change made through the command is saved.
 #[test]

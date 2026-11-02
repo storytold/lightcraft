@@ -391,8 +391,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Ok(s) => s,
                 Err(e) => return err(e),
             };
-            let prep_before = app.ui.settings.background_prep;
+            // the session's preparation settings are the current ones: an earlier request in this drain
+            // (`prefs.setBackgroundPrep`) may have changed them after the app settings were last synced
+            // (CodeRabbit on #3577), so a patch of them is merged onto those
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
+            if let Some(settings) = v.get_mut("settings").and_then(Value::as_object_mut) {
+                settings.insert("backgroundPrep".into(), serde_json::to_value(app.session.prep.app).unwrap_or_default());
+            }
             lightcraft_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {
                 Ok(mut u) => {
@@ -423,10 +428,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     app.ui = u;
                     // `settings.backgroundPrep` reaches the session too (else the next frame's
                     // sync would put the session's older settings back)
-                    if app.ui.settings.background_prep != prep_before {
+                    if p.pointer("/settings/backgroundPrep").is_some() {
                         app.session.prep.app = app.ui.settings.background_prep.sanitized();
-                        app.ui.settings.background_prep = app.session.prep.app;
                     }
+                    app.ui.settings.background_prep = app.session.prep.app;
                     crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())

@@ -175,9 +175,10 @@ fn check_outputs(folder: &Path, json: Option<&Path>, work: &Path) -> Result<(), 
 
 /// The first `k` supported files of `folder` by name (`--files K`), hidden ones left out as browsing lists the folder.
 fn first_files(folder: &Path, k: usize) -> Result<Vec<String>, String> {
-    let mut list: Vec<String> = std::fs::read_dir(folder)
-        .map_err(|e| format!("{}: {e}", folder.display()))?
-        .flatten()
+    // an entry that can't be read is an error, not a smaller sample (CodeRabbit on #3577)
+    let entries = std::fs::read_dir(folder).and_then(|d| d.collect::<std::io::Result<Vec<_>>>()).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let mut list: Vec<String> = entries
+        .into_iter()
         .filter(|e| !lightcraft_engine::walk::is_hidden_entry(e))
         .map(|e| e.path())
         .filter(|p| p.is_file() && lightcraft_engine::import::is_supported(p))
@@ -357,11 +358,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     out["loupeRender"] = st;
 
     // --- rating: a culling pass of keypresses ---------------------------------------------------
-    let ms: Vec<f64> = ids
+    // (a key that fails counts as failed, not left out: CodeRabbit on #3577)
+    let rated: Vec<Option<f64>> = ids
         .iter()
         .take(50)
         .enumerate()
-        .filter_map(|(k, id)| {
+        .map(|(k, id)| {
             // the key acts on the selected photo, as in the loupe
             s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).ok()?;
             let a = Instant::now();
@@ -369,7 +371,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some(ms_since(a))
         })
         .collect();
-    let st = stats(&ms);
+    let ms: Vec<f64> = rated.iter().flatten().copied().collect();
+    let st = with_failed(&ms, rated.len() - ms.len());
     line("rate one photo (journal written)", &st);
     out["rate"] = st;
     drop(s);
@@ -383,6 +386,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let t = Instant::now();
     let r = s.execute("library.import", &json!({"paths": add, "mode": "add"})).map_err(|e| e.to_string())?;
     let add_ms = ms_since(t);
+    all_imported("import in place", &r)?;
     let added = r["imported"].as_array().map(Vec::len).unwrap_or(0);
     println!("import {added} photos in place: {add_ms:.1} ms wall");
     out["importAdd"] = json!({"ms": round(add_ms), "photos": added, "perPhotoMs": round(add_ms / added.max(1) as f64)});
@@ -396,6 +400,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .execute("library.import", &json!({"paths": some, "mode": "copy", "destination": lib.join("Originals").display().to_string()}))
             .map_err(|e| e.to_string())?;
         let copy_ms = ms_since(t);
+        all_imported("import by copying", &r)?;
         let copied = r["imported"].as_array().map(Vec::len).unwrap_or(0);
         println!("import {copied} photos by copying: {copy_ms:.1} ms wall");
         out["importCopy"] = json!({"ms": round(copy_ms), "photos": copied, "perPhotoMs": round(copy_ms / copied.max(1) as f64)});
@@ -403,6 +408,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(&lib);
     }
     finish(out, json_out)
+}
+
+/// An import stage's photos all came in: a time over fewer photos than asked is not that stage's time
+/// (CodeRabbit on #3577).
+fn all_imported(stage: &str, r: &Value) -> Result<(), String> {
+    let failed = r["failed"].as_array().map(Vec::as_slice).unwrap_or_default();
+    match failed.first() {
+        None => Ok(()),
+        Some(first) => Err(format!("{stage}: {} photos failed to import (the first: {first})", failed.len())),
+    }
 }
 
 fn finish(out: Value, json_out: Option<PathBuf>) -> Result<(), String> {
@@ -481,6 +496,15 @@ mod tests {
             first_files(&work, 2).unwrap().iter().map(|p| Path::new(p).file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["a.jpg", "b.jpg"]);
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// An import stage with a failed photo is an error, not a time over fewer photos (CodeRabbit on #3577).
+    #[test]
+    fn an_import_stage_with_failures_is_an_error() {
+        assert!(all_imported("add", &json!({"imported": [1, 2], "failed": []})).is_ok());
+        assert!(all_imported("add", &json!({"imported": [1, 2]})).is_ok());
+        let e = all_imported("add", &json!({"imported": [1], "failed": [{"path": "b.jpg", "error": "unreadable"}]})).unwrap_err();
+        assert!(e.contains("add: 1 photos failed") && e.contains("b.jpg"), "{e}");
     }
 
     /// Previews that didn't load are counted apart, not timed (CodeRabbit on #3080).

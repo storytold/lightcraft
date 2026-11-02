@@ -645,6 +645,7 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.thumb_first.logic_tick();
         self.sync_prep_settings();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
@@ -698,6 +699,7 @@ impl LightcraftApp {
             return;
         }
         self.sync_theme(&ctx);
+        self.thumb_first.for_library(self.session.library_generation());
         self.thumb_first.begin_frame(ctx.cumulative_frame_nr());
         self.ui_pass(&ctx);
         self.draw_window(ui);
