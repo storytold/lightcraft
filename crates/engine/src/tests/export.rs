@@ -1607,7 +1607,6 @@ fn a_cancelled_export_stops_within_a_second() {
         Ok(())
     };
     let to = crate::export::Destination::default();
-    let c = cancel.clone();
     let files = crate::export::run_batch_cancellable(
         items,
         &o,
@@ -1620,7 +1619,8 @@ fn a_cancelled_export_stops_within_a_second() {
                 cancelled_at = Some(std::time::Instant::now());
                 flag.store(true, Ordering::Relaxed);
             }
-            !c.load(Ordering::Relaxed)
+            // (only the shared flag stops the batch, not this answer: review of PR #3565)
+            true
         },
         Some(cancel.clone()),
     )

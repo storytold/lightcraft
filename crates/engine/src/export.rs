@@ -51,7 +51,7 @@ pub use prepare::{
     prepare_export,
 };
 #[cfg(test)]
-use prepare::{render_weight, too_big_for_memory};
+use prepare::{render_weight, too_big_for_memory, with_gain_map};
 #[cfg(test)]
 use watermark::watermark_coverage;
 pub(crate) use watermark::watermark_logo;
