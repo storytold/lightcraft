@@ -447,6 +447,23 @@ fn survey_tiles_glide_when_a_photo_joins() {
     }
 }
 
+/// A photo that joins takes its cell at once, so it asks for its own render while the others are
+/// still gliding (it doesn't wait on the thumbnail until they land).
+#[test]
+fn a_photo_that_joins_renders_while_the_others_glide() {
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let joining = h.app.session.visible_cloned().into_iter().find(|p| !ids.contains(&p.0)).expect("a fourth photo");
+    h.app.run("library.select", json!({"ids": [joining.0], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let now = h.time();
+    assert!(h.app.survey_motion.moving(now), "the others are on their way");
+    assert!(!h.app.survey_motion.gliding(joining, now), "the photo that joined stays put");
+    let slot = h.app.survey_motion.slot(joining).expect("the photo that joined has a slot");
+    assert!(h.app.renderer.wanted(crate::render::Slot::Compare(slot)).is_some(), "its render is asked for");
+}
+
 /// Photo ids are local to a library: opening another one forgets the survey's tiles, so a photo
 /// there with the same id doesn't glide from a cell of the library left.
 #[test]

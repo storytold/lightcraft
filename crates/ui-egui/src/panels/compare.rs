@@ -253,9 +253,9 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
-    // a survey tile asks for its render once it has landed, not one per size it passes on the way;
-    // its thumbnail (one size) meanwhile, so a photo that joins doesn't wait for it
-    if app.ui.view == ViewMode::Survey && app.survey_motion.moving(ui.input(|i| i.time)) {
+    // a gliding survey tile asks for its render once it has landed, not one per size it passes on
+    // the way, and for its thumbnail (one size) meanwhile; tiles that stay put render as usual
+    if app.ui.view == ViewMode::Survey && app.survey_motion.gliding(id, ui.input(|i| i.time)) {
         request_thumb(app, id);
     } else {
         request_tile_renders(app, id, slot, want, aspect);

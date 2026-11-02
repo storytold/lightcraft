@@ -83,6 +83,10 @@ impl Glide {
         self.from.lerp_towards(&self.to, e)
     }
 
+    fn on_its_way(&self, now: f64) -> bool {
+        !self.done(now) && self.from != self.to
+    }
+
     fn done(&self, now: f64) -> bool {
         // (a hair early: the clock's rounding must not keep a landed tile moving)
         now - self.start >= GLIDE_SECS - 1e-9
@@ -127,7 +131,13 @@ impl SurveyMotion {
 
     /// Whether a tile is still on its way.
     pub fn moving(&self, now: f64) -> bool {
-        self.tiles.values().any(|g| !g.done(now) && g.from != g.to)
+        self.tiles.values().any(|g| g.on_its_way(now))
+    }
+
+    /// Whether the tile of `id` is still on its way (a tile that stays put, or a photo that just
+    /// joined, is not, while others glide).
+    pub fn gliding(&self, id: PhotoId, now: f64) -> bool {
+        self.tiles.get(&id).is_some_and(|g| g.on_its_way(now))
     }
 
     /// The render slot of each of `photos`: the one it had, else the lowest free one. Returns the
@@ -139,6 +149,12 @@ impl SurveyMotion {
         let mut free = (0..=u8::MAX).filter(move |s| !used.contains(s));
         let slots = photos.iter().map(|id| *self.slots.entry(*id).or_insert_with(|| free.next().unwrap_or(u8::MAX))).collect();
         (slots, freed)
+    }
+
+    /// The render slot `id` keeps, if it has one.
+    #[cfg(test)]
+    pub fn slot(&self, id: PhotoId) -> Option<u8> {
+        self.slots.get(&id).copied()
     }
 
     /// Whether `id` has a tile here (its place or its render slot).
