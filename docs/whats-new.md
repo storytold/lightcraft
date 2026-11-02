@@ -4,6 +4,14 @@
 
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, local time), and `{hour}` (batch export time in `HHMM`, local time). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
+
+### Edit in Other Editor works again on a photo whose copy was never changed
+- Running Edit in Other Editor a second time on a photo, with its first copy left as LightCraft rendered it (the editor
+  didn't open, or was closed without saving), failed with "invalid parameters for `photo.editExternal`", never opened
+  the editor, and left another full-size `-Edit-N.tif` on disk each time. The render is the same bytes as the existing
+  copy, so the library skipped it as a duplicate. The editor now opens that existing copy, and the file just written
+  is removed.
+
 ### Heal meets its surroundings (process 14)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
   longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
