@@ -29,9 +29,7 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
         // an idle window still takes the read's answer and makes the next check: a pass soon while
         // the read runs, and one when the next check is due
         if !app.session.disk_space_alert_raised() {
-            let wait =
-                if app.session.disk_space_reading() { std::time::Duration::from_millis(250) } else { lightcraft_engine::disk_space::CHECK_EVERY };
-            ctx.request_repaint_after(wait);
+            ctx.request_repaint_after(disk_check_wait(app.session.disk_space_read_running_for()));
         }
         if let Some(alert) = app.session.take_disk_space_alert() {
             let text = disk_space_notice(&alert);
@@ -45,6 +43,18 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
         if !gpu::available() {
             app.notices.extend(gpu_notice(gpu::unavailable_reason().as_deref(), app.ui.settings.gpu));
         }
+    }
+}
+
+/// How soon the notice logic looks again for the free-space read: soon while a read runs, less often once it has
+/// run for a while (a drive that hangs must not keep an idle window drawing four times a second for good), and
+/// when the next check is due when none runs.
+fn disk_check_wait(running_for: Option<std::time::Duration>) -> std::time::Duration {
+    use std::time::Duration;
+    match running_for {
+        Some(d) if d < Duration::from_secs(5) => Duration::from_millis(250),
+        Some(_) => Duration::from_secs(5),
+        None => lightcraft_engine::disk_space::CHECK_EVERY,
     }
 }
 
@@ -644,7 +654,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     if let Some(text) = app.notices.first().cloned() {
-        if app.disk_notice.as_ref().is_some_and(|(_, t)| *t == text) {
+        let disk = app.disk_notice.as_ref().filter(|(_, t)| *t == text).map(|(generation, _)| *generation);
+        if let Some(generation) = disk {
+            // another library opened since `logic` ran this frame: the notice is the previous library's,
+            // and the next `logic` takes it away
+            if generation != app.session.library_generation() {
+                return;
+            }
             let buttons = [("noticeSettings", "Open Performance Settings", Choice::Settings), ("noticeOk", "OK", Choice::Ok)];
             let Some(i) = window(ctx, "settings-notice", "Drive almost full", &text, &buttons, &mut app.notice_input) else { return };
             app.notices.remove(0);
@@ -664,6 +680,39 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::{PromptKey, gpu_notice, prepare_ui_pass, prompt_allows_event, prompt_key};
+
+    /// A library switch between `logic` and drawing leaves the previous library's low-disk notice queued for
+    /// that frame: it is not drawn, nor answered (CodeRabbit on #3577).
+    #[test]
+    fn a_low_disk_notice_of_the_library_before_is_not_drawn() {
+        let ctx = egui::Context::default();
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let text = "Drive almost full".to_string();
+        app.notices.push(text.clone());
+        app.disk_notice = Some((app.session.library_generation().wrapping_add(1), text));
+        // the prompt's first button pressed, as Enter would
+        app.notice_input.activate = Some(0);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert_eq!(app.notices.len(), 1, "not answered");
+        assert!(app.ui.dialog.is_none(), "Settings didn't open");
+        // the current library's: drawn and answered
+        app.disk_notice = app.disk_notice.take().map(|(_, t)| (app.session.library_generation(), t));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert!(app.notices.is_empty(), "answered");
+    }
+
+    /// The window wakes four times a second while a free-space read runs, then every few seconds once it hangs
+    /// (CodeRabbit on #3577: it asked for 250 ms passes for as long as the drive hung).
+    #[test]
+    fn a_hanging_free_space_read_is_looked_at_less_often() {
+        use std::time::Duration;
+        assert_eq!(super::disk_check_wait(Some(Duration::ZERO)), Duration::from_millis(250));
+        assert_eq!(super::disk_check_wait(Some(Duration::from_secs(60))), Duration::from_secs(5));
+        assert_eq!(super::disk_check_wait(Some(Duration::MAX)), Duration::from_secs(5));
+        assert_eq!(super::disk_check_wait(None), lightcraft_engine::disk_space::CHECK_EVERY);
+    }
 
     /// The prompt barrier keeps its own keys and pointer input, drops text/wheel input, and drops
     /// the start/move half of a new touch gesture while keeping End/Cancel to clear egui's private

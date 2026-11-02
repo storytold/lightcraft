@@ -9,6 +9,9 @@ use lightcraft_catalog::PhotoId;
 
 /// Samples kept (the latest ones).
 const KEEP: usize = 4096;
+/// Photos remembered as timed: past this many the list starts again (a photo seen again then counts
+/// once more, as one that had its picture at once), so stepping through a huge library keeps it small.
+const MAX_DONE: usize = 1 << 16;
 
 #[derive(Debug, Default)]
 pub struct ThumbFirst {
@@ -24,6 +27,10 @@ pub struct ThumbFirst {
     empty_this_frame: usize,
     /// Empty cells summed over every frame (a cell empty for 10 frames counts 10).
     empty_cell_frames: u64,
+    /// The library the counts are for ([`Self::for_library`]): photo ids start again in another one.
+    library: Option<u64>,
+    /// Logic passes since the last frame drawn: more than one means the window was hidden meanwhile.
+    ticks: u32,
 }
 
 /// What [`ThumbFirst`] measured since its last reset.
@@ -58,11 +65,11 @@ impl ThumbFirst {
             (true, Some(since)) => {
                 self.waiting.remove(&id);
                 self.push((now - since).max(0.0));
-                self.done.insert(id);
+                self.mark_done(id);
             }
             (true, None) => {
                 self.push(0.0);
-                self.done.insert(id);
+                self.mark_done(id);
             }
             (false, None) => {
                 self.waiting.insert(id, (now, frame));
@@ -76,6 +83,11 @@ impl ThumbFirst {
     /// Frame `frame` is being drawn. Called every frame (and by [`Self::note`]), so a frame that
     /// draws no cells (the grid and filmstrip hidden) leaves nothing waiting or empty on screen.
     pub fn begin_frame(&mut self, frame: u64) {
+        // logic passes without a frame drawn (a hidden window): nothing was on screen meanwhile, so the
+        // cells waiting then are timed afresh when drawn again, not counting the hidden time
+        if std::mem::take(&mut self.ticks) > 1 {
+            self.waiting.clear();
+        }
         if frame != self.frame {
             // cells not drawn in the frame just finished left the screen
             let last = self.frame;
@@ -83,6 +95,27 @@ impl ThumbFirst {
             self.empty_this_frame = 0;
             self.frame = frame;
         }
+    }
+
+    /// A logic pass ran (every pass, drawn or hidden: see [`Self::begin_frame`]).
+    pub fn logic_tick(&mut self) {
+        self.ticks = self.ticks.saturating_add(1);
+    }
+
+    /// The counts are for library `generation`: another one starts them afresh (its photo ids start
+    /// again at 1, and would be taken for the photos timed in the one before).
+    pub fn for_library(&mut self, generation: u64) {
+        if self.library != Some(generation) {
+            self.reset();
+            self.library = Some(generation);
+        }
+    }
+
+    fn mark_done(&mut self, id: PhotoId) {
+        if self.done.len() >= MAX_DONE {
+            self.done.clear();
+        }
+        self.done.insert(id);
     }
 
     fn push(&mut self, ms: f64) {
@@ -94,7 +127,7 @@ impl ThumbFirst {
 
     /// Start counting afresh (a new view to time).
     pub fn reset(&mut self) {
-        *self = Self { frame: self.frame, ..Self::default() };
+        *self = Self { frame: self.frame, library: self.library, ..Self::default() };
     }
 
     pub fn summary(&self) -> ThumbFirstSummary {
@@ -115,16 +148,83 @@ impl ThumbFirst {
             // (asked between frames: the frame counted last is whole)
             empty_now: self.empty_this_frame,
             empty_cell_frames: self.empty_cell_frames,
-            p50: at(0.5),
+            p50: median(&v),
             p90: at(0.9),
             max: v.last().copied().unwrap_or(0.0),
         }
     }
 }
 
+/// The median of sorted `v`: the middle one, or the mean of the two middle ones for an even count; 0 for none.
+fn median(v: &[f64]) -> f64 {
+    let n = v.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let hi = v.get(n / 2).copied().unwrap_or(0.0);
+    if n % 2 == 1 { hi } else { (v.get(n / 2 - 1).copied().unwrap_or(hi) + hi) / 2.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The median of an even count is the mean of the two middle samples (CodeRabbit on #3577: it was the
+    /// upper one).
+    #[test]
+    fn the_median_of_an_even_count_is_between_the_middle_two() {
+        let mut t = ThumbFirst::default();
+        for (k, ms) in [10.0, 20.0, 30.0, 40.0].into_iter().enumerate() {
+            t.note(1, PhotoId(k as u64 + 1), false, 0.0);
+            t.note(2, PhotoId(k as u64 + 1), true, ms);
+        }
+        assert_eq!(t.summary().p50, 25.0);
+        t.note(2, PhotoId(9), false, 0.0);
+        t.note(3, PhotoId(9), true, 50.0);
+        assert_eq!(t.summary().p50, 30.0, "odd: the middle one");
+        assert_eq!(median(&[]), 0.0);
+    }
+
+    /// Another library's photo 1 is not the photo 1 timed before (CodeRabbit on #3577).
+    #[test]
+    fn another_library_is_timed_afresh() {
+        let mut t = ThumbFirst::default();
+        t.for_library(1);
+        t.note(1, PhotoId(1), true, 0.0);
+        t.for_library(1);
+        assert_eq!(t.summary().seen, 1, "the same library keeps its counts");
+        t.for_library(2);
+        assert_eq!(t.summary(), ThumbFirstSummary::default());
+        t.note(2, PhotoId(1), false, 10.0);
+        t.note(3, PhotoId(1), true, 30.0);
+        assert_eq!((t.summary().seen, t.summary().max), (1, 20.0), "timed in the new library");
+    }
+
+    /// Logic passes while the window is hidden: a waiting cell is timed from when it is drawn again, not
+    /// counting the hidden time (CodeRabbit on #3577).
+    #[test]
+    fn the_time_hidden_is_not_counted() {
+        let mut t = ThumbFirst::default();
+        t.logic_tick();
+        t.note(1, PhotoId(1), false, 0.0);
+        for _ in 0..50 {
+            t.logic_tick();
+        }
+        t.note(2, PhotoId(1), false, 9000.0);
+        t.logic_tick();
+        t.note(3, PhotoId(1), true, 9040.0);
+        assert_eq!(t.summary().max, 40.0);
+    }
+
+    /// The photos timed are remembered up to a bound, not one entry per photo ever drawn.
+    #[test]
+    fn the_photos_timed_stay_bounded() {
+        let mut t = ThumbFirst::default();
+        for id in 0..(MAX_DONE as u64 + 10) {
+            t.note(1, PhotoId(id), true, 0.0);
+        }
+        assert!(t.done.len() <= MAX_DONE);
+    }
 
     #[test]
     fn cells_are_timed_from_first_seen_empty_to_first_pixels() {

@@ -26,7 +26,7 @@ pub struct LookAhead {
     /// (photo, direction, catalog revision, visible list generation, edge, crop, which photos) the
     /// requests were made for: a new source, filter or sort changes the neighbours without an edit,
     /// and a change of the preparation settings what may be made.
-    made_for: Option<(PhotoId, i8, u64, u64, usize, bool, Prepare)>,
+    made_for: Option<(PhotoId, i8, u64, u64, usize, bool, Prepare, u64)>,
 }
 
 /// Which photos the look-ahead may prepare, from Settings ▸ Performance for what the user is doing
@@ -94,7 +94,8 @@ pub(crate) fn look_ahead(app: &mut LightcraftApp, id: PhotoId, edge: usize, crop
         app.look_ahead.last = Some(id);
     }
     let (visible_gen, ids) = app.session.visible_shared();
-    let want = (id, app.look_ahead.dir, rev, visible_gen, edge, crop, prepare);
+    // (the renderer's epoch: a reset drops the stand-ins made, which are then asked for again)
+    let want = (id, app.look_ahead.dir, rev, visible_gen, edge, crop, prepare, app.renderer.epoch());
     if app.look_ahead.made_for == Some(want) {
         return;
     }

@@ -65,6 +65,11 @@ fn main() {
     h.app.ui.settings.background_prep = h.app.session.prep.app;
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let n = h.app.session.visible_cloned().len();
+    if n == 0 {
+        // (nothing to step through: the numbers would be empty, not this folder's; CodeRabbit on #3577)
+        eprintln!("{folder}: no photos to cull");
+        std::process::exit(1);
+    }
     let start_at = n / 10;
     let first = h.app.session.visible_cloned().get(start_at).map(|p| p.0).unwrap_or(1);
     req(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [first]}}));
@@ -86,6 +91,10 @@ fn main() {
     if let Ok(shot) = std::env::var("CULL_SHOT") {
         let r = req(&mut h, "ui.screenshot", json!({"path": shot, "headless": true}));
         eprintln!("screenshot: {r}");
+        if r["ok"] != true {
+            eprintln!("CULL_SHOT={shot}: the screenshot was not written");
+            std::process::exit(1);
+        }
     }
     let lt = h.app.loupe_timing.to_json();
     let st = lt["steps"].as_array().cloned().unwrap_or_default();

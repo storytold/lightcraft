@@ -112,8 +112,13 @@ fn bench_cull_times_a_folder_and_leaves_it_untouched() {
         let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
         std::fs::write(dir.join(name), png).unwrap();
     }
+    // every file's name and bytes: nothing added, and no photo written into (CodeRabbit on #3577)
     let listing = |d: &std::path::Path| {
-        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        let mut v: Vec<(String, Vec<u8>)> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .map(|e| (e.file_name().to_string_lossy().to_string(), std::fs::read(e.path()).unwrap()))
+            .collect();
         v.sort();
         v
     };

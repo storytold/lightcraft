@@ -171,6 +171,29 @@ fn a_build_skips_what_is_there_and_leaves_it_on_disk() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A forced build renders the grid thumbnail again too, not the one its cache holds (CodeRabbit on #3577:
+/// the thumbnail job read its cache first, so `force` rebuilt only the view).
+#[test]
+fn a_forced_build_renders_the_thumbnail_again() {
+    let (mut s, root, ids) = library("force-thumb", 1);
+    let build = |s: &mut Session, force: bool| {
+        s.execute("library.buildPreviews", &json!({"ids": [ids[0].0], "edge": 300, "wait": true, "force": force})).unwrap()
+    };
+    build(&mut s, false);
+    let jobs = crate::cmd::previews::jobs_for(&mut s, ids[0], Some(300));
+    let thumb = jobs.iter().find(|j| j.view_cache.is_none() && j.cache.is_some()).expect("a thumbnail job");
+    let ((cache, key), generation) = (thumb.cache.clone().unwrap(), thumb.cache_generation);
+    let stand_in = lightcraft_raster::Rgba8 { width: 1, height: 1, data: vec![[1, 2, 3, 255]] };
+    assert!(cache.put_at(generation, key, std::sync::Arc::new(stand_in)));
+    let r = build(&mut s, false);
+    assert_eq!(r["skipped"], 1, "{r}");
+    assert_eq!(cache.get_at(generation, key).map(|i| i.width), Some(1), "unforced: kept");
+    let r = build(&mut s, true);
+    assert_eq!(r["failed"], 0, "{r}");
+    assert!(cache.get_at(generation, key).is_some_and(|i| i.width > 1), "forced: rendered again");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Note 47: standard previews are built at least as big as the loupe on this screen asks for.
 #[test]
 fn standard_previews_are_as_big_as_the_loupe() {
@@ -586,6 +609,20 @@ fn a_bad_build_request_leaves_the_background_build_running() {
     let b = s.preview_build.clone().expect("the background build");
     assert!(b.running());
     assert!(s.execute("library.buildPreviews", &json!({"ids": ["x"]})).is_err(), "ids that are not photo ids");
+    assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// CodeRabbit on #3577: smart previews asked for in the background with malformed ids fail without
+/// stopping the background preparation either.
+#[test]
+fn a_bad_smart_preview_request_leaves_the_background_build_running() {
+    let _hold = crate::prep::TestHold::new();
+    let (mut s, root, ids) = library("prep-bad-smart-ids", 3);
+    s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "background": true})).unwrap();
+    let b = s.preview_build.clone().expect("the background build");
+    assert!(b.running());
+    assert!(s.execute("library.smartPreviews", &json!({"ids": ["x"], "background": true})).is_err(), "ids that are not photo ids");
     assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
     let _ = std::fs::remove_dir_all(&root);
 }

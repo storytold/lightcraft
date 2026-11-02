@@ -33,6 +33,8 @@ pub struct RenderJob {
     /// Keep a full-quality result also as the photo's latest picture of its kind, whatever its
     /// settings ([`PreviewCache::put_latest`]; the alias, [`latest_view_key`] or [`latest_thumb_key`]):
     /// what an edited photo shows while the render for its current settings is on its way.
+    /// Native only: a render the web build hands to its worker doesn't carry it, so web renders
+    /// don't update the latest picture.
     pub latest: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,

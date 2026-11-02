@@ -122,23 +122,30 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(folder), Some(dir)) = (args.next(), args.next()) else {
         eprintln!("usage: display_bench FOLDER LIBRARY_DIR [N] [START]");
-        return;
+        std::process::exit(2);
     };
     let n: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(20);
     let start: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(100);
     let mut s = Session::new().with_fs();
     // nothing is written next to the photos
     s.xmp.auto_write = false;
+    // (a library that won't open or a folder that won't browse is a failed run, not an empty one: CodeRabbit on #3583)
     if let Err(e) = s.open_library(&dir, false) {
         eprintln!("{dir}: {e}");
-        return;
+        std::process::exit(1);
     }
-    let r = s.execute("library.browse", &json!({"path": folder}));
-    eprintln!("browse: {}", r.map(|v| v["photos"].to_string()).unwrap_or_else(|e| e.to_string()));
+    match s.execute("library.browse", &json!({"path": folder})) {
+        Ok(v) => eprintln!("browse: {}", v["photos"]),
+        Err(e) => {
+            eprintln!("{folder}: browse failed: {e}");
+            std::process::exit(1);
+        }
+    }
     let all = s.visible_cloned();
     let ids: Vec<PhotoId> = all.iter().skip(start).take(n).copied().collect();
-    if ids.is_empty() {
-        eprintln!("no photos to measure: {} in the folder, START {start}, N {n}", all.len());
+    // (a step needs two photos: one alone would time nothing and print NaN: CodeRabbit on #3577)
+    if ids.len() < 2 {
+        eprintln!("fewer than two photos to step through: {} in the folder, START {start}, N {n}", all.len());
         std::process::exit(1);
     }
     // an edited gallery: exposure and a crop on each
@@ -187,8 +194,10 @@ fn main() {
     let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     let zoom: Vec<PhotoId> = ids.iter().take(env("BENCH_ZOOM_N", 11.0).max(0.0) as usize).copied().collect();
     let zoom_dwell = env("BENCH_ZOOM_DWELL_MS", 3000.0);
-    // (BENCH_ZOOM_N=0: no 100 % passes)
-    if let Some(first) = zoom.first() {
+    // (BENCH_ZOOM_N under 2: no 100 % passes, which would time no step)
+    if zoom.len() >= 2
+        && let Some(first) = zoom.first()
+    {
         req(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [first.0]}}));
         req(&mut h, "engine.execute", json!({"command": "view.zoom100"}));
         run(&mut h, 4000.0, &mut |_, _| {});

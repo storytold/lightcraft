@@ -85,6 +85,41 @@ fn a_cancelled_scan_whose_worker_ends_without_a_result_is_not_a_failure() {
     assert!(!failed_toast(&h), "a cancelled scan says nothing: {:?}", h.app.ui.toast);
 }
 
+/// Two stopped scans hand back a probe of one file: the later scan read it again, so its probe stays,
+/// whichever worker ends first (CodeRabbit on #3577: the older one won when its worker ended first,
+/// and its content hash is stale for a file changed at the same size).
+#[test]
+fn the_later_stopped_scans_probe_wins_whichever_worker_ends_first() {
+    let probe = |hash: &str| {
+        let p = lightcraft_engine::media::ProbeInfo { file_size: 7, content_hash: Some(hash.into()), ..Default::default() };
+        [(KEPT.to_string(), p)].into_iter().collect()
+    };
+    for later_ends_first in [false, true] {
+        let mut h = demo();
+        let older = crate::import::scan_by_hand(&mut h.app, true);
+        cancel_scan(&mut h);
+        h.step();
+        let newer = crate::import::scan_by_hand(&mut h.app, true);
+        cancel_scan(&mut h);
+        h.step();
+        assert!(h.app.scan.is_none(), "both stopped");
+        let a = ScanEnd::Stopped { probes: probe("older"), failed: false };
+        let b = ScanEnd::Stopped { probes: probe("newer"), failed: false };
+        if later_ends_first {
+            newer.send(b).unwrap();
+            h.step();
+            older.send(a).unwrap();
+        } else {
+            older.send(a).unwrap();
+            h.step();
+            newer.send(b).unwrap();
+        }
+        h.step();
+        let hash = h.app.session.import_probes.get(KEPT).and_then(|p| p.content_hash.clone());
+        assert_eq!(hash.as_deref(), Some("newer"), "later worker ends first: {later_ends_first}");
+    }
+}
+
 /// Browsing reads the disk only on its worker (CodeRabbit on #3077): a folder whose resolution is held (a link on
 /// a stalled network mount) still lets `browse` return at once, the view shows the folder as given, and the scan
 /// waits; once resolved, the folder is read.
