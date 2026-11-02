@@ -105,8 +105,9 @@ impl Session {
             return own;
         }
         let others: Vec<PhotoId> = self.selection.ids.iter().copied().filter(|x| *x != id).collect();
-        for x in others {
-            match self.source_now(x, crate::media::SourceLevel::Thumb) {
+        // (decoded in parallel: a selection costs about one thumbnail decode per core)
+        for (x, src) in self.sources_now(&others, crate::media::SourceLevel::Thumb) {
+            match src {
                 Ok(src) => {
                     let info = self.source_info(x);
                     own.insert(x, lightcraft_pipeline::auto::auto_wb(&src, &info));

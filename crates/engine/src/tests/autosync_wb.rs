@@ -1,8 +1,10 @@
 //! LRC-DEV-AUTOSYNC (N-A3, test notes 2026-10-24 note 18): Auto Sync sets every selected photo to
 //! the active photo's value, and where white balance is a mode or another scale, each photo applies
 //! it to itself. As Shot gives each photo its own camera white, Auto each photo's own from its
-//! pixels, a light preset its numbers, and a typed or dragged Temp the same Kelvin on every raw,
-//! leaving each photo's own tint (an old relative-scale value converted first, never read as Kelvin).
+//! pixels, a light preset its numbers. A typed or dragged Temp is the same number on each photo of
+//! the same scale (the same Kelvin on raws edited in Kelvin; an old relative-scale value converted
+//! first, never read as Kelvin), moves a photo of another scale (a JPEG beside a raw) by as much as
+//! the active photo, and leaves each photo's own tint.
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{WbMode, WbScale, WhiteBalance};
@@ -142,4 +144,18 @@ fn auto_sync_temp_moves_a_jpeg_by_as_much_as_the_raw() {
     let before = wb(&s, b);
     s.execute("develop.set", &json!({"control": "wb.temp", "value": 5600.0})).unwrap();
     assert!(close(wb(&s, b), (before.0 + 400.0, before.1)), "the JPEG: {:?}, was {before:?}", wb(&s, b));
+}
+
+/// The other photos' pixels for Auto are read together (in parallel, review of #3571): in the
+/// order asked, each photo its own, and a photo the library doesn't have is an error, not a panic.
+#[test]
+fn sources_for_auto_come_back_in_order_and_per_photo() {
+    let (mut s, [a, b, c]) = three_raws();
+    let want: Vec<_> = [b, c, a].iter().map(|&x| s.source_now(x, crate::media::SourceLevel::Thumb).unwrap()).collect();
+    let got = s.sources_now(&[b, PhotoId(u64::MAX), c, a], crate::media::SourceLevel::Thumb);
+    assert_eq!(got.iter().map(|(x, _)| *x).collect::<Vec<_>>(), vec![b, PhotoId(u64::MAX), c, a]);
+    assert!(got[1].1.is_err());
+    for (i, k) in [0, 2, 3].into_iter().enumerate() {
+        assert!(std::sync::Arc::ptr_eq(got[k].1.as_ref().unwrap(), &want[i]), "photo {k}");
+    }
 }
