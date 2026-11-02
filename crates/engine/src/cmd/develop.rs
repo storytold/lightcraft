@@ -558,7 +558,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Mixer Neutral",
             [],
             None,
-            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); only the global white balance is modelled (a mask's local temperature/tint is not: the mixer is global)",
+            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); the white balance is read as the render does (Color's eye off means its defaults; a mask's local temperature/tint is not modelled: the mixer is global)",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
@@ -569,12 +569,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 let src = s.source_now(id, SourceLevel::Thumb).map_err(crate::EngineError::Other)?;
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
-                // The colour at the mixer's input: the sample with the photo's global white balance
-                // applied, so whatever that white balance has already done stays. The mixer is global,
-                // so a mask's local temperature/tint is deliberately not modelled here: the pick
-                // neutralizes for the photo as a whole, not per masked region.
+                // The colour at the mixer's input: the sample with the white balance the photo
+                // actually renders applied — read through `effective()`, because with the Color
+                // section's eye off the render resets the stored white balance to the defaults, and
+                // a pick computed on the stored one would neutralize for a look the photo doesn't
+                // have. The mixer is global, so a mask's local temperature/tint is deliberately not
+                // modelled here: the pick neutralizes for the photo as a whole, not per masked
+                // region. The channel mixer itself keeps its own eye (below): `effective()` never
+                // resets it.
                 let sample = sample_point(&src, &d, x, y);
-                let c = lightcraft_pipeline::local::wb_matrix_for(&info, &d).map_or(sample, |m| {
+                let c = lightcraft_pipeline::local::wb_matrix_for(&info, &d.effective()).map_or(sample, |m| {
                     [
                         m[0][0] * sample[0] + m[0][1] * sample[1] + m[0][2] * sample[2],
                         m[1][0] * sample[0] + m[1][1] * sample[1] + m[1][2] * sample[2],

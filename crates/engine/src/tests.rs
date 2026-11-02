@@ -1538,6 +1538,51 @@ fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     }
 }
 
+/// Issue #2158 review: with the Color section's eye off the render resets the stored white balance
+/// to the defaults (`effective()`), so the pick reads the white balance the same way — neutralizing
+/// for the look the photo actually renders, not the stored one the render ignores.
+#[test]
+fn mixer_neutral_pick_with_color_off_uses_the_white_balance_the_render_shows() {
+    use crate::media::SourceLevel;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // a warm stored white balance the render will ignore (Color's eye off)
+    s.execute("develop.wb", &json!({"mode": "custom", "temp": 2000.0, "tint": 20.0})).unwrap();
+    s.execute("develop.sectionEnabled", &json!({"section": "color", "enabled": false})).unwrap();
+    let d = s.develop_of(id).unwrap_or_default();
+    assert_ne!(d.effective().wb.mode, lightcraft_develop::WbMode::Custom, "sanity: effective() drops the stored white balance");
+
+    // a mildly coloured bright spot, as the composing test picks
+    let src = s.source_now(id, SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    let mut pick = None;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let c = picked_sample(&o, x, y);
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let chroma = (c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])) / (c[0].max(c[1]).max(c[2]) + 1e-6);
+            if lum > 0.05 && (0.1..0.3).contains(&chroma) {
+                pick = Some((x, y));
+                break;
+            }
+        }
+        if pick.is_some() {
+            break;
+        }
+    }
+    let Some((x, y)) = pick else { panic!("the demo photo has no mildly coloured bright spot") };
+
+    s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    assert!(!active_dev(&s).channel_mixer.is_identity(), "the pick set the mixer");
+    assert!(!active_dev(&s).section_enabled("color"), "Color stays off");
+    let render = s.render_now(id, o.width, o.height).unwrap();
+    let (px, py) = ((x * render.image.width as f64) as usize, (y * render.image.height as f64) as usize);
+    let c = render.image.get(px, py);
+    assert!(c[0].abs_diff(c[1]).max(c[1].abs_diff(c[2])) <= 3, "the picked spot renders neutral: {c:?}");
+}
+
 /// Issue #2158 review: Auto Sync carries the channel mixer both ways — a mix that returns to the
 /// identity on the active photo is a change (stored JSON omits the identity, so the delta would
 /// otherwise have no mixer key at all), and the other selected photos reset with it.
