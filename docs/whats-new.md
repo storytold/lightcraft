@@ -1,6 +1,15 @@
 # What's new in LightCraft
 
-## 2026-10-30
+## 2026-11-02
+
+### No more flat grey in some unedited raws
+- A raw whose camera JPEG is darker toward the frame's edges than in its middle could open posterised, before any
+  edit: a white sheet filling the frame came out as a flat grey with contour bands, a dark ring around the subject and
+  pale colours turned into orange blobs. On those frames the starting look learned the JPEG's darker edges as a tone
+  curve that held over a stop of the scene at one grey. Such a curve is no longer used, and those frames start the way
+  other photos whose camera JPEG can't be followed do: a partial look when it fits, else the camera's measured colour.
+  The ILCE-7M3 frames that showed it now render smooth, though darker and cooler than their camera JPEG. Thumbnails
+  and smart previews of affected raws are redrawn.
 
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
