@@ -1014,7 +1014,10 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                // each photo keeps (or computes) its own AI shapes: only their settings sync
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                lightcraft_develop::keep_own_ai_shapes(&d, &mut synced);
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()

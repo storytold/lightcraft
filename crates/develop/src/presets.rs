@@ -206,11 +206,22 @@ pub struct Preset {
 }
 
 impl Preset {
+    /// A preset of `s`'s settings in `groups`. Its AI masks keep what the AI was asked for but not
+    /// the shape it found on this photo ([`crate::Mask::clear_ai_segmentations`]).
     pub fn from_settings(id: &str, name: &str, group: &str, s: &DevelopSettings, groups: &[SettingsGroup]) -> Preset {
-        Preset { id: id.into(), name: name.into(), group: group.into(), settings: extract_groups(s, groups), favorite: false, builtin: false }
+        Preset {
+            id: id.into(),
+            name: name.into(),
+            group: group.into(),
+            settings: extract_groups(&without_ai_shapes(s), groups),
+            favorite: false,
+            builtin: false,
+        }
     }
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it
-    /// already has are skipped), their effect scaled by the amount.
+    /// already has are skipped), their effect scaled by the amount. An AI component comes without
+    /// a shape (a preset saved before presets stopped storing one has it dropped here): the photo
+    /// computes its own.
     pub fn apply(&self, s: &DevelopSettings, amount: f64) -> DevelopSettings {
         let Some(masks) = self.settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
             return apply_partial(s, &self.settings, amount);
@@ -222,7 +233,14 @@ impl Preset {
         let mut out = apply_partial(s, &rest, amount);
         for m in masks {
             let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
-            if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
+            m.clear_ai_segmentations();
+            // the photo's own copy of this mask has its own AI shapes: compare what was asked for
+            let same = |q: &crate::Mask| {
+                let mut q = q.clone();
+                q.clear_ai_segmentations();
+                q.name == m.name && q.components == m.components
+            };
+            if out.masks.iter().any(same) {
                 continue;
             }
             m.id = out.next_mask_id();
@@ -231,6 +249,13 @@ impl Preset {
         }
         out
     }
+}
+
+/// `s` with no AI segmentation left in its masks (what presets store).
+pub fn without_ai_shapes(s: &DevelopSettings) -> DevelopSettings {
+    let mut s = s.clone();
+    s.masks.iter_mut().for_each(crate::Mask::clear_ai_segmentations);
+    s
 }
 
 #[cfg(test)]

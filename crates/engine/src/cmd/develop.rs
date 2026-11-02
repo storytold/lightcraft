@@ -33,6 +33,14 @@ fn groups_param(p: &Value, c: &str) -> Result<Option<Vec<SettingsGroup>>> {
     }
 }
 
+/// A photo's settings with copied settings applied (Paste, Sync Settings). AI masks keep the
+/// photo's own shapes: only their settings and components come from the copy.
+fn synced(own: &DevelopSettings, partial: &Value) -> DevelopSettings {
+    let mut out = lightcraft_develop::apply_partial(own, partial, 1.0);
+    lightcraft_develop::keep_own_ai_shapes(own, &mut out);
+    out
+}
+
 fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let p = s.catalog.photo(id);
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
@@ -924,7 +932,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let ops = ids
                     .iter()
                     .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &partial, 1.0), "Paste from Previous"))
+                    .filter_map(|(id, d)| s.develop_op(id, synced(&d, &partial), "Paste from Previous"))
                     .collect::<Vec<_>>();
                 let n = ops.len();
                 s.commit("Paste from Previous", Op::Batch { ops })?;
@@ -951,7 +959,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let ops = ids
                     .iter()
                     .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &clip, 1.0), "Paste Settings"))
+                    .filter_map(|(id, d)| s.develop_op(id, synced(&d, &clip), "Paste Settings"))
                     .collect::<Vec<_>>();
                 let n = ops.len();
                 s.commit("Paste Settings", Op::Batch { ops })?;
@@ -978,7 +986,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     .into_iter()
                     .filter(|x| *x != id)
                     .filter_map(|x| s.develop_of(x).map(|d| (x, d)))
-                    .filter_map(|(x, dd)| s.develop_op(x, lightcraft_develop::apply_partial(&dd, &partial, 1.0), "Sync Settings"))
+                    .filter_map(|(x, dd)| s.develop_op(x, synced(&dd, &partial), "Sync Settings"))
                     .collect::<Vec<_>>();
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
@@ -1158,7 +1166,8 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json();
+                // (a preset stores no AI shape found on this photo)
+                let current = lightcraft_develop::presets::without_ai_shapes(&s.develop_of(id).unwrap_or_default()).to_json();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {

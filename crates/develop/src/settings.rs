@@ -1030,6 +1030,52 @@ pub enum MaskShape {
     },
 }
 
+impl MaskShape {
+    /// The segmentation an AI model computed for this shape (`seg` and its zoomed-in `detail`
+    /// passes), when it is an AI shape that stores one. It belongs to the photo it was computed on.
+    pub fn ai_segmentation_mut(&mut self) -> Option<(&mut Option<crate::SegMask>, &mut Vec<crate::SegMask>)> {
+        match self {
+            MaskShape::Object { seg, detail, .. } | MaskShape::Prompt { seg, detail, .. } => Some((seg, detail)),
+            _ => None,
+        }
+    }
+
+    /// What the AI was asked for (the clicks, the description): the shape without its computed
+    /// segmentation and its Edge setting. `None` for a shape that stores no segmentation.
+    fn ai_prompt(&self) -> Option<MaskShape> {
+        let mut p = self.clone();
+        let (seg, detail) = p.ai_segmentation_mut()?;
+        *seg = None;
+        detail.clear();
+        if let MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } = &mut p {
+            *edge = 0.0;
+        }
+        Some(p)
+    }
+}
+
+/// After `synced` was made from photo settings `own` with another photo's masks (Auto Sync, Sync
+/// Settings, Paste): every AI segmentation in `synced` is `own`'s where this photo asked the AI the
+/// same thing (same mask, same component, same clicks or description), and empty otherwise, to be
+/// computed for this photo. Mask settings, Edge and added or subtracted components come from the
+/// other photo; the shape an AI found on one photo never lands on another.
+pub fn keep_own_ai_shapes(own: &DevelopSettings, synced: &mut DevelopSettings) {
+    for m in &mut synced.masks {
+        let mine = own.masks.iter().find(|o| o.id == m.id);
+        for (i, c) in m.components.iter_mut().enumerate() {
+            let Some(asked) = c.shape.ai_prompt() else { continue };
+            let kept = mine
+                .and_then(|o| o.components.get(i))
+                .filter(|o| o.shape.ai_prompt().as_ref() == Some(&asked))
+                .map(|o| o.shape.clone())
+                .and_then(|mut o| o.ai_segmentation_mut().map(|(seg, detail)| (seg.take(), std::mem::take(detail))));
+            if let Some((seg, detail)) = c.shape.ai_segmentation_mut() {
+                (*seg, *detail) = kept.unwrap_or_default();
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaskComponent {
     /// A name given in the Masking panel (Rename); `None` shows the shape's kind.
@@ -1058,6 +1104,20 @@ pub struct Mask {
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
+}
+
+impl Mask {
+    /// Drop the AI segmentation (`seg`, `detail`) every component computed on its photo, keeping
+    /// what the AI was asked for, Edge and Add/Subtract: what a preset stores and brings, so the
+    /// photo it is applied to computes its own shape.
+    pub fn clear_ai_segmentations(&mut self) {
+        for c in &mut self.components {
+            if let Some((seg, detail)) = c.shape.ai_segmentation_mut() {
+                *seg = None;
+                detail.clear();
+            }
+        }
+    }
 }
 
 impl Default for Mask {
