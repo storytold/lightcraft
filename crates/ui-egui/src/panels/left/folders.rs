@@ -49,7 +49,7 @@ pub(super) fn folder_tree(
         }
         crate::widgets::context_menu(&resp, |ui| {
             // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
-            let library = app.caches.folder_tree(&app.session.catalog);
+            let library = app.caches.folder_tree(&app.session.catalog, app.session.library_generation());
             let held = library_node_for(&library, path);
             if (transient || indent > 0.0)
                 && ui
@@ -377,7 +377,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     }
     spring_open(ui, n, open_id, open);
     // (the label, the confirmation and the toast say which folder when another row has the name)
-    let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog), &n.path);
+    let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog, app.session.library_generation()), &n.path);
     let photos: Vec<_> = ids.iter().filter_map(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(*id))).collect();
     let refused = if !n.selectable {
         Some(crate::i18n::tr("This row covers more than one disk: drop on a folder inside it"))
@@ -678,7 +678,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
                 .on_hover_text(crate::i18n::tr("Moves the files and their XMP sidecars into this folder; never overwrites"))
                 .clicked()
         {
-            let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog), path);
+            let name = crate::destination::folder(&app.caches.folder_tree(&app.session.catalog, app.session.library_generation()), path);
             move_photos_here(app, ui.ctx(), None, path, &name);
             ui.close();
         }

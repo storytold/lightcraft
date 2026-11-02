@@ -17,6 +17,10 @@ impl LightcraftApp {
             // worker fills: a sleeping NAS or a dropped share never stalls a frame
             let repaint = ctx.clone();
             self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
+            // …and the library's counts, when they were made on a worker
+            let repaint = ctx.clone();
+            self.caches.library.set_wake(std::sync::Arc::new(move || repaint.request_repaint()));
+            self.caches.library.set_activity(self.session.activity.clone());
             self.styled = true;
             self.font_language = self.ui.language;
         } else if self.font_language != self.ui.language {

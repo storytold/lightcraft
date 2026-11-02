@@ -48,7 +48,8 @@ fn keyword_rows(h: &Headless) -> Vec<String> {
 fn keywords_section_draws_only_the_rows_near_the_screen() {
     const KEYWORDS: u64 = 2000;
     let mut h = app(KEYWORDS / 6 + 1, KEYWORDS);
-    assert_eq!(h.app.caches.keyword_tree(&h.app.session.catalog).len(), KEYWORDS as usize);
+    let library = h.app.session.library_generation();
+    assert_eq!(h.app.caches.keyword_tree(&h.app.session.catalog, library).len(), KEYWORDS as usize);
     let rows = keyword_rows(&h);
     assert!(!rows.is_empty() && rows.len() < 100, "{} of {KEYWORDS} keyword rows drawn", rows.len());
     assert!(rows.contains(&"Keyword 00000".to_string()), "{rows:?}");
