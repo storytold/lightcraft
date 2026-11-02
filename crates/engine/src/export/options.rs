@@ -102,8 +102,11 @@ impl Default for Resize {
 }
 
 /// The most pixels an export enlarged past its photo's own size can have: 512 megapixels, also
-/// Lightroom's ceiling. A full-size or smaller export is never held to it.
-pub const MAX_ENLARGED_PIXELS: f64 = 512e6;
+/// Lightroom's ceiling. A full-size or smaller export is never held to it. The develop pipeline
+/// holds its own renders to the same ceiling, and this constant *is* that one
+/// (`lightcraft_pipeline::geometry::MAX_RENDER_PIXELS`) — a single source of truth, so the two
+/// ceilings cannot drift apart.
+pub const MAX_ENLARGED_PIXELS: f64 = lightcraft_pipeline::geometry::MAX_RENDER_PIXELS;
 
 impl Resize {
     pub fn long_edge(px: u32) -> Self {
