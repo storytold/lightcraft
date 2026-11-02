@@ -569,7 +569,12 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if app.session.selection.active == Some(*id) {
             app.image_rect = Some(img);
         }
-        if resp.clicked() {
+        // ⌘/Ctrl-click removes the photo from the survey (deselects it), as the × does
+        if resp.clicked() && ui.input(|i| i.modifiers.command) {
+            if photos.len() > 1 {
+                let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
+            }
+        } else if resp.clicked() {
             app.session.selection.active = Some(*id);
         }
         if resp.double_clicked() {
