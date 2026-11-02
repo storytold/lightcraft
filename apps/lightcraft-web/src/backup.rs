@@ -9,10 +9,11 @@
 //!   name so an unzipped backup is browsable;
 //! - `README.txt`.
 //!
-//! Restoring preserves existing libraries: the files go to a new library folder in browser
-//! storage, originals that aren't stored yet are added (they're named by content, so existing
-//! ones are identical; a restored one must match its content hash, see [`verify_original`]),
-//! and only then does a small pointer file ([`ACTIVE_LIBRARY`]) switch to the restored library.
+//! Restoring preserves existing libraries: metadata goes to a new browser-storage folder.
+//! Missing originals are added; corrupt or oversized stored copies are repaired only from
+//! archive bytes verified against their content hash (see [`verify_original`]). Verified stored
+//! copies are kept, and unrelated storage read errors abort restore. Only after staging succeeds
+//! does a small pointer file ([`ACTIVE_LIBRARY`]) switch to the restored library.
 //! The library that was there before stays in storage.
 //!
 //! No zip64: a backup holds at most [`MAX_BYTES`] and 65 535 entries.

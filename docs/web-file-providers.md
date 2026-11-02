@@ -30,6 +30,10 @@ The API and ready event retain protocol version 1; this describes the existing p
 
 A trusted same-origin host explicitly calls registerProvider(id, label, namespace) and receives a new connectionId. The opaque namespace identifies the signed-in account; it is not a credential. setResources(connectionId, [{id,name,updatedAt}]) supplies up to 100 external libraries. File > Open Recent Library separates Recent — provider label from Recent on this device. Provider IDs are opaque and never become local filesystem paths.
 
+Provider IDs, account namespaces and resource IDs must be nonempty, at most 160 bytes, and contain
+only ASCII letters, digits, `_` or `-`. Map email addresses, filesystem paths and other external
+identifiers to stable IDs that satisfy this contract; display labels and filenames are separate.
+
 requestOpen(resourceId) emits openRequest. The host replies using openResource(requestId, filename, Uint8Array), or cancelOpen(requestId,error). The supplied open filename must end in .zip (case insensitive, so .ZIP is accepted). A valid name without that suffix can pass the callback checks but is rejected later during library admission. ZIPs restore into a fresh browser-storage folder; the old library is retained. CRCs, original content hashes and required catalog originals are checked. The new catalog must load through the engine before its browser pointer changes.
 
 A read may be requested while the editor is idle and finish after editing starts. Both the Recent command and byte-delivery admission recheck real text-edit/slider drafts, interactions, photo/control drags, hover previews and the existing dialog/import/export/storage-error guards. Delivery additionally refuses queued or unconsumed editing input and held presses before a UI pass, without treating idle pointer movement, raw mouse motion, idle pointer leave or its own provider read as editing. Motion or pointer leave while a button is held still blocks admission until release or actual focus loss/pointer cancellation. Numeric draft tracking references the widgets' actual resident buffers, including hidden controls. Refusal does not commit/cancel text or gestures, capture UI files, decode bytes, create staging data or change the active-library pointer. The user can commit/cancel the edit and request the library again.
@@ -52,6 +56,11 @@ remains paused and the page asks for a reload instead of claiming the old pointe
 Provider ZIP admission remains an in-page operation with its existing draft, byte and revision
 ownership guards; it does not use this reload-based browser-local Restore flow.
 
+Archive bytes must pass both ZIP integrity and original-content hash verification before they
+can repair a corrupted or oversized stored original. A verified same-hash stored copy is kept.
+Existing originals are read with a size cap; unrelated backend I/O errors abort restore rather
+than being treated as missing or corrupt data. Invalid archive bytes never replace an original.
+
 ## Save and acknowledgement
 
 Registering a provider adds Save Library (Ctrl/Cmd+S) and Save Library As (Ctrl/Cmd+Shift+S). These entries are hidden without an enabled provider. Each Save emits saveDialog with requestId, documentId, revision, name, saveAs and an optional resourceId. The host calls resolveSaveDialog(requestId, provider|device|cancel, filename). A .zip filename is required.
@@ -59,6 +68,12 @@ Registering a provider adds Save Library (Ctrl/Cmd+S) and Save Library As (Ctrl/
 The capture is an immutable atomic snapshot of the six small library files, paired with the originals referenced by that snapshot. An absent, corrupted or non-browser original fails the save. Unrelated originals left in browser storage are never uploaded. Subsequent edits can continue while the archive is prepared and persisted.
 
 The device destination uses the existing browser download writer. The provider destination emits save with destination=provider and native ZIP bytes. Only after a durable write may the host call saveResult(requestId,saved,resourceId). failed, cancel and download never advance the provider checkpoint. Acknowledgement records only the captured file-generation counter; later changes remain dirty. The catalog's independent local autosave is never marked as a successful remote save. Save As does not reuse the old resource ID.
+
+Every saveResult call requires a string resourceId, including non-success results. For `failed`,
+`cancel` or `download`, the host may pass an empty string, for example
+`saveResult(requestId, "failed", "")`. For `saved`, resourceId must be a nonempty valid ID under
+the restrictions above. Any nonempty resourceId must satisfy those same restrictions; `null`
+and an omitted argument are rejected. A non-success result never claims persistence.
 
 Recoverable JavaScript payload-copy and event-dispatch errors are logged. If a taken save event
 cannot be delivered, its exact captured request becomes a failed result and the application is
@@ -143,6 +158,13 @@ immediately before the first library publication, clean idempotent registration 
 without an intervening publication. It retains default-off, registered dirty, paused dirty, acknowledged
 clean, edits made while paused and disconnected controls without navigating away from the page.
 This proves listener cancellation, not the browser's user-activation-dependent navigation dialog.
+
+Two separate WASM-only `safety::tests` storage regressions declare actual File/ZIP and isolated
+IndexedDB restore coverage: keeping a verified original, repairing hash-invalid or oversized
+copies, propagating a closed-database read error, and rejecting CRC/hash-invalid archive data
+while preserving shared originals, the active pointer and failed-stage cleanup. They do not
+exercise OPFS or page navigation. These declarations require real browser execution before
+any runtime result can be claimed.
 
 ## Native UI preview
 

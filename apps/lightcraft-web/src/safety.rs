@@ -12,7 +12,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, CappedRead};
 use crate::backup::{
     ACTIVE_LIBRARY, ProviderZip, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, tail_len, valid_hash,
     verify, verify_original, verify_original_bytes,
@@ -306,11 +306,12 @@ async fn restore_entry(file: &web_sys::File, backend: &Backend, dir: &str, entry
     verify(entry, &data)?;
     if let Some(hash) = key.strip_prefix("originals/") {
         verify_original(entry, hash, &data)?;
-        // Existing content-addressed bytes are not overwritten. Verify both the archive
-        // and stored copy rather than silently trusting a corrupted existing original.
+        // Keep a verified stored copy; the verified archive repairs corrupt or oversized
+        // content-addressed bytes. Unrelated backend read failures must still abort restore.
         let max = usize::try_from(entry.size).map_err(|_| "original is too large for this browser")?;
-        if let Some(existing) = backend.read_capped(&key, max).await? {
-            verify_original_bytes(&entry.name, hash, &existing)?;
+        if let CappedRead::Bytes(existing) = backend.read_capped_outcome(&key, max).await?
+            && verify_original_bytes(&entry.name, hash, &existing).is_ok()
+        {
             return Ok(false);
         }
     }
@@ -410,4 +411,182 @@ pub fn pick_and_restore(backend: Backend, frozen: Rc<Cell<bool>>) {
     input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
     on_change.forget();
     input.click();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use js_sys::{Array, Function};
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    // The web provider fixture already configures this crate's tests for the browser.
+
+    fn error(message: impl ToString) -> JsValue {
+        JsValue::from_str(&message.to_string())
+    }
+
+    async fn request(request: &web_sys::IdbRequest) -> Result<JsValue, JsValue> {
+        let promise = js_sys::Promise::new(&mut |resolve, reject| {
+            let result = request.clone();
+            let rejected = reject.clone();
+            let success = Closure::once_into_js(move || match result.result() {
+                Ok(value) => {
+                    let _ = resolve.call1(&JsValue::UNDEFINED, &value);
+                }
+                Err(value) => {
+                    let _ = rejected.call1(&JsValue::UNDEFINED, &value);
+                }
+            });
+            let failure = Closure::once_into_js(move |event: JsValue| {
+                let _ = reject.call1(&JsValue::UNDEFINED, &event);
+            });
+            request.set_onsuccess(Some(success.unchecked_ref()));
+            request.set_onerror(Some(failure.unchecked_ref()));
+        });
+        JsFuture::from(promise).await
+    }
+
+    struct Database {
+        factory: web_sys::IdbFactory,
+        name: String,
+        database: Option<web_sys::IdbDatabase>,
+    }
+
+    impl Database {
+        async fn new() -> Result<(Self, Backend), JsValue> {
+            let window = web_sys::window().ok_or_else(|| error("real browser Window required"))?;
+            let factory = window.indexed_db()?.ok_or_else(|| error("real IndexedDB required"))?;
+            let crypto = Reflect::get(&window, &"crypto".into())?;
+            let random = Reflect::get(&crypto, &"getRandomValues".into())?.dyn_into::<Function>()?;
+            let nonce = Uint8Array::new_with_length(16);
+            random.call1(&crypto, &nonce)?;
+            let nonce: String = nonce.to_vec().iter().map(|byte| format!("{byte:02x}")).collect();
+            // A fresh random database is owned before any fallible open/upgrade; never clear
+            // the application's database or another test's browser storage.
+            let mut owned = Self { factory, name: format!("lightcraft-restore-originals-test-{nonce}"), database: None };
+            let backend = owned.connect().await?;
+            Ok((owned, backend))
+        }
+
+        async fn connect(&mut self) -> Result<Backend, JsValue> {
+            let open = self.factory.open_with_u32(&self.name, 1)?;
+            let upgrading = open.clone();
+            let upgrade = Closure::<dyn FnMut() -> Result<(), JsValue>>::new(move || {
+                let database = upgrading.result()?.dyn_into::<web_sys::IdbDatabase>()?;
+                database.create_object_store("files")?;
+                Ok(())
+            });
+            open.set_onupgradeneeded(Some(upgrade.as_ref().unchecked_ref()));
+            let outcome = request(&open).await;
+            open.set_onupgradeneeded(None);
+            let database = outcome?.dyn_into::<web_sys::IdbDatabase>()?;
+            self.database = Some(database.clone());
+            Ok(Backend::Idb(database))
+        }
+
+        async fn keys(&self) -> Result<Vec<String>, JsValue> {
+            let database = self.database.as_ref().ok_or_else(|| error("fixture database is not open"))?;
+            let transaction = database.transaction_with_str_and_mode("files", web_sys::IdbTransactionMode::Readonly)?;
+            let store = transaction.object_store("files")?;
+            let keys = request(&store.get_all_keys_with_key(&JsValue::UNDEFINED)?).await?.dyn_into::<Array>()?;
+            let mut keys = keys
+                .iter()
+                .map(|value| value.as_string().ok_or_else(|| error("unexpected non-string storage key")))
+                .collect::<Result<Vec<_>, _>>()?;
+            keys.sort();
+            Ok(keys)
+        }
+    }
+
+    impl Drop for Database {
+        fn drop(&mut self) {
+            if let Some(database) = &self.database {
+                database.close();
+            }
+            let _ = self.factory.delete_database(&self.name);
+        }
+    }
+
+    // Contributor-original byte strings exercise archive/hash integrity; no external image,
+    // decoder, renderer, application startup or production browser database is required.
+    fn archive(files: &[(&str, &[u8])], damage_payload: bool) -> Result<(web_sys::File, Vec<crate::backup::ZipEntry>, u64), JsValue> {
+        let mut zip = ProviderZip::default();
+        for (name, bytes) in files {
+            zip.entry(name, bytes).map_err(error)?;
+        }
+        let mut bytes = zip.finish().map_err(error)?;
+        let (offset, size) = find_central(&bytes).map_err(error)?;
+        let entries = parse_central(&bytes[offset as usize..(offset + size) as usize]).map_err(error)?;
+        if damage_payload {
+            let entry = entries.first().ok_or_else(|| error("fixture archive has no entry"))?;
+            let start = data_offset(entry, &bytes[entry.header as usize..entry.header as usize + 30]).map_err(error)?;
+            *bytes.get_mut(start as usize).ok_or_else(|| error("fixture entry has no payload"))? ^= 1;
+        }
+        let parts = Array::new();
+        parts.push(&Uint8Array::from(bytes.as_slice()));
+        Ok((web_sys::File::new_with_u8_array_sequence(&parts, "Originals.zip")?, entries, offset))
+    }
+
+    #[wasm_bindgen_test]
+    async fn restore_original_keeps_verified_bytes_repairs_corruption_and_preserves_storage_errors() -> Result<(), JsValue> {
+        let (mut owned, backend) = Database::new().await?;
+        let bytes = b"contributor-original photo payload";
+        let hash = crate::store::content_hash(bytes);
+        let key = storage_key(&hash);
+        let name = original_entry(&hash, "Photo.bin");
+        let (file, entries, directory) = archive(&[(name.as_str(), bytes)], false)?;
+        let entry = entries.first().ok_or_else(|| error("fixture original is missing"))?;
+        backend.write(ACTIVE_LIBRARY, b"library").await.map_err(error)?;
+        backend.write("library/catalog.log", b"old library journal").await.map_err(error)?;
+        backend.write(&key, bytes).await.map_err(error)?;
+        assert!(!restore_entry(&file, &backend, "library-restored-test", entry, directory).await.map_err(error)?, "verified copy must be kept");
+        let corrupt = vec![b'x'; bytes.len()];
+        backend.write(&key, &corrupt).await.map_err(error)?;
+        assert!(
+            restore_entry(&file, &backend, "library-restored-test", entry, directory).await.map_err(error)?,
+            "hash-invalid copy must be repaired"
+        );
+        assert_eq!(backend.read_capped(&key, bytes.len()).await.map_err(error)?.as_deref(), Some(bytes.as_slice()));
+        let oversized = vec![b'x'; bytes.len() + 1];
+        backend.write(&key, &oversized).await.map_err(error)?;
+        assert!(matches!(backend.read_capped_outcome(&key, bytes.len()).await.map_err(error)?, CappedRead::TooLarge));
+        assert!(backend.read_capped(&key, bytes.len()).await.is_err(), "provider capture must still refuse oversized originals");
+        assert!(restore_entry(&file, &backend, "library-restored-test", entry, directory).await.map_err(error)?, "oversized copy must be repaired");
+        assert_eq!(backend.read_capped(&key, bytes.len()).await.map_err(error)?.as_deref(), Some(bytes.as_slice()));
+        assert_eq!(backend.read_capped(ACTIVE_LIBRARY, 128).await.map_err(error)?.as_deref(), Some(b"library".as_slice()));
+        assert_eq!(backend.read_capped("library/catalog.log", 128).await.map_err(error)?.as_deref(), Some(b"old library journal".as_slice()));
+        let Backend::Idb(database) = &backend else { return Err(error("fixture must use actual IndexedDB")) };
+        database.close();
+        let expected = backend.read_capped(&key, bytes.len()).await.unwrap_err();
+        let failure = restore_entry(&file, &backend, "library-restored-test", entry, directory).await.unwrap_err();
+        assert_eq!(failure, expected, "a real storage read error must propagate without attempting repair");
+        let reopened = owned.connect().await?;
+        assert_eq!(reopened.read_capped(&key, bytes.len()).await.map_err(error)?.as_deref(), Some(bytes.as_slice()));
+        Ok(())
+    }
+
+    #[wasm_bindgen_test]
+    async fn invalid_original_archive_preserves_shared_bytes_active_library_and_staged_cleanup() -> Result<(), JsValue> {
+        let (owned, backend) = Database::new().await?;
+        let bytes = b"contributor-original photo payload";
+        let hash = crate::store::content_hash(bytes);
+        let key = storage_key(&hash);
+        let name = original_entry(&hash, "Photo.bin");
+        backend.write(ACTIVE_LIBRARY, b"library").await.map_err(error)?;
+        backend.write("library/catalog.log", b"old library journal").await.map_err(error)?;
+        let corrupt = vec![b'x'; bytes.len()];
+        backend.write(&key, &corrupt).await.map_err(error)?;
+        let keys = owned.keys().await?;
+        // First fail the real CRC path; then use a valid CRC with the wrong original hash.
+        let (file, entries, directory) = archive(&[(name.as_str(), bytes)], true)?;
+        assert!(restore_entry(&file, &backend, "library-restored-test", &entries[0], directory).await.is_err());
+        assert_eq!(backend.read_capped(&key, bytes.len()).await.map_err(error)?, Some(corrupt.clone()));
+        let (file, _, _) = archive(&[("library/catalog.log", b"new staged journal"), (name.as_str(), &corrupt)], false)?;
+        assert!(restore_staged(file, backend.clone()).await.is_err(), "invalid archived original must abort the actual staging consumer");
+        assert_eq!(owned.keys().await?, keys, "actual failed-stage cleanup must remove only its fresh private metadata");
+        assert_eq!(backend.read_capped(&key, bytes.len()).await.map_err(error)?, Some(corrupt));
+        assert_eq!(backend.read_capped(ACTIVE_LIBRARY, 128).await.map_err(error)?.as_deref(), Some(b"library".as_slice()));
+        assert_eq!(backend.read_capped("library/catalog.log", 128).await.map_err(error)?.as_deref(), Some(b"old library journal".as_slice()));
+        Ok(())
+    }
 }

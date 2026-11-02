@@ -18,6 +18,13 @@ pub enum Backend {
     Idb(IdbDatabase),
 }
 
+/// A bounded read distinguishes an oversized stored copy from a storage I/O failure.
+pub(crate) enum CappedRead {
+    Missing,
+    Bytes(Vec<u8>),
+    TooLarge,
+}
+
 fn err(e: JsValue) -> String {
     e.as_string().or_else(|| e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message()))).unwrap_or_else(|| format!("{e:?}"))
 }
@@ -188,13 +195,23 @@ impl Backend {
     /// Read an original for a provider capture, refusing oversized browser data before copying
     /// it into the WASM heap. A File is an immutable OPFS snapshot; IDB already returns a clone.
     pub async fn read_capped(&self, path: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
+        match self.read_capped_outcome(path, max_bytes).await? {
+            CappedRead::Missing => Ok(None),
+            CappedRead::Bytes(bytes) => Ok(Some(bytes)),
+            CappedRead::TooLarge => Err(format!("{path}: file exceeds the remaining provider backup limit")),
+        }
+    }
+
+    /// Classify size without copying oversized data. Backend failures remain errors, so a
+    /// verified restore can repair an oversized copy without hiding an unreadable store.
+    pub(crate) async fn read_capped_outcome(&self, path: &str, max_bytes: usize) -> Result<CappedRead, String> {
         let bytes = match self {
             Backend::Opfs(root) => {
-                let Some(handle) = Self::opfs_file(root, path, false).await? else { return Ok(None) };
+                let Some(handle) = Self::opfs_file(root, path, false).await? else { return Ok(CappedRead::Missing) };
                 let file: web_sys::File = JsFuture::from(handle.get_file()).await.map_err(err)?.unchecked_into();
                 let size = file.size();
                 if !size.is_finite() || size < 0.0 || size > max_bytes as f64 {
-                    return Err(format!("{path}: file exceeds the remaining provider backup limit"));
+                    return Ok(CappedRead::TooLarge);
                 }
                 let buffer = JsFuture::from(file.array_buffer()).await.map_err(err)?;
                 Uint8Array::new(&buffer)
@@ -203,7 +220,7 @@ impl Backend {
                 let (_tx, store) = Self::idb_store(db, false)?;
                 let value = idb_req(&store.get(&path.into()).map_err(err)?).await?;
                 if value.is_undefined() || value.is_null() {
-                    return Ok(None);
+                    return Ok(CappedRead::Missing);
                 }
                 if let Some(array) = value.dyn_ref::<Uint8Array>() {
                     // Wrapping an existing typed array is cheap; constructing Uint8Array(array)
@@ -211,7 +228,7 @@ impl Backend {
                     array.clone()
                 } else if let Some(buffer) = value.dyn_ref::<js_sys::ArrayBuffer>() {
                     if u64::from(buffer.byte_length()) > max_bytes as u64 {
-                        return Err(format!("{path}: file exceeds the remaining provider backup limit"));
+                        return Ok(CappedRead::TooLarge);
                     }
                     Uint8Array::new(buffer)
                 } else {
@@ -220,9 +237,9 @@ impl Backend {
             }
         };
         if u64::from(bytes.length()) > max_bytes as u64 {
-            return Err(format!("{path}: file exceeds the remaining provider backup limit"));
+            return Ok(CappedRead::TooLarge);
         }
-        Ok(Some(bytes.to_vec()))
+        Ok(CappedRead::Bytes(bytes.to_vec()))
     }
 
     /// Replace a file atomically (OPFS: the writable's swap file is committed on close).
