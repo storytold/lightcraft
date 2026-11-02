@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 thread_local! {
     static FAIL_AFTER: Cell<Option<u64>> = const { Cell::new(None) };
     static SYNCS: Cell<u64> = const { Cell::new(0) };
+    #[cfg(feature = "fault-injection")]
     static NO_HARD_LINKS: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -73,7 +74,9 @@ impl Drop for FaultGuard {
 
 /// Fault injection for tests (in any crate): while the returned guard lives, [`publish_new`]
 /// **on the calling thread** acts as on a volume without hard links (FAT/exFAT, some shares), so
-/// it takes the exclusive-create + rename fallback. Product code never calls it.
+/// it takes the exclusive-create + rename fallback. It exists only with the `fault-injection`
+/// feature, which crates turn on in their `[dev-dependencies]`, so a shipped binary can't call it.
+#[cfg(feature = "fault-injection")]
 #[doc(hidden)]
 pub fn without_hard_links() -> NoHardLinksGuard {
     NoHardLinksGuard { previous: NO_HARD_LINKS.with(|c| c.replace(true)), _same_thread: std::marker::PhantomData }
@@ -81,12 +84,14 @@ pub fn without_hard_links() -> NoHardLinksGuard {
 
 /// Ends a [`without_hard_links`] when dropped, putting back what was set before (so nested guards
 /// work). It stays on the thread whose flag it set (not `Send`).
+#[cfg(feature = "fault-injection")]
 #[doc(hidden)]
 pub struct NoHardLinksGuard {
     previous: bool,
     _same_thread: std::marker::PhantomData<*const ()>,
 }
 
+#[cfg(feature = "fault-injection")]
 impl Drop for NoHardLinksGuard {
     fn drop(&mut self) {
         NO_HARD_LINKS.with(|c| c.set(self.previous));
@@ -251,13 +256,24 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
 /// (`AlreadyExists`): a hard link, or where the volume has none, [`publish_new_by_rename`]. After
 /// a hard link `tmp` is a second name of the file; after the fallback it is gone.
 pub fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
-    let linked = if NO_HARD_LINKS.with(Cell::get) { Err(io::Error::from(io::ErrorKind::Unsupported)) } else { fs::hard_link(tmp, path) };
-    match linked {
+    match hard_link(tmp, path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
         // no hard links on this volume (FAT/exFAT, some shares)
         Err(_) => publish_new_by_rename(tmp, path, &|| {}),
     }
+}
+
+/// `fs::hard_link`, failing as on a volume without hard links under `without_hard_links` (in a
+/// build with the `fault-injection` feature).
+fn hard_link(tmp: &Path, path: &Path) -> io::Result<()> {
+    #[cfg(feature = "fault-injection")]
+    {
+        if NO_HARD_LINKS.with(Cell::get) {
+            return Err(io::Error::from(io::ErrorKind::Unsupported));
+        }
+    }
+    fs::hard_link(tmp, path)
 }
 
 /// Fallback of [`publish_new`]: reserve the name with an exclusive create (atomic, so a file that
