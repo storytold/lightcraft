@@ -193,6 +193,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn extreme_seeds_render_without_overflow() {
+        let kinds = [
+            Kind::AlpineLake,
+            Kind::Dunes,
+            Kind::OceanSunset,
+            Kind::Aurora,
+            Kind::MistyForest,
+            Kind::Lavender,
+            Kind::Macro,
+            Kind::Canyon,
+            Kind::Beach,
+            Kind::BlueHour,
+        ];
+        for kind in kinds {
+            for seed in [u32::MAX, u32::MAX - 1] {
+                let img = paint::render_serial(kind, seed, 8, 8);
+                assert!(!img.data.is_empty(), "{kind:?} {seed}");
+            }
+        }
+    }
+
+    #[test]
     fn library_is_deterministic_and_varied() {
         let lib = demo_library();
         assert_eq!(lib.len(), 24);

@@ -309,7 +309,7 @@ fn alpine(p: &P, x: f32, v: f32, blue: bool) -> C {
     };
     let haze = if blue { hex(0x5d668f) } else { hex(0xc8b8b0) };
     let layers = [
-        Layer { base: 0.02, amp: 0.05, freq: 3.0, col: hex(0x24331f), haze: 0.1, snow: 0.0, ridged: false, seed: p.seed + 4 },
+        Layer { base: 0.02, amp: 0.05, freq: 3.0, col: hex(0x24331f), haze: 0.1, snow: 0.0, ridged: false, seed: p.seed.wrapping_add(4) },
         Layer {
             base: 0.08,
             amp: 0.16,
@@ -318,7 +318,7 @@ fn alpine(p: &P, x: f32, v: f32, blue: bool) -> C {
             haze: 0.18,
             snow: 0.7,
             ridged: true,
-            seed: p.seed + 3,
+            seed: p.seed.wrapping_add(3),
         },
         Layer {
             base: 0.16,
@@ -328,7 +328,7 @@ fn alpine(p: &P, x: f32, v: f32, blue: bool) -> C {
             haze: 0.42,
             snow: 1.0,
             ridged: true,
-            seed: p.seed + 2,
+            seed: p.seed.wrapping_add(2),
         },
     ];
     let wl = hz + 0.035;
@@ -374,7 +374,7 @@ fn dunes(p: &P, x: f32, v: f32) -> C {
         let freq = 1.3 + fi * 0.6;
         let ph = p.r(10 + i) * 6.0;
         let hfun = |x: f32| {
-            let w = (x * freq + ph + 0.4 * fbm(x * 0.8, fi, p.seed + i, 3)).sin();
+            let w = (x * freq + ph + 0.4 * fbm(x * 0.8, fi, p.seed.wrapping_add(i), 3)).sin();
             let crest = 1.0 - w.abs().powf(0.6);
             0.05 + fi * 0.085 + crest * (0.16 - fi * 0.02)
         };
@@ -457,8 +457,8 @@ fn aurora(p: &P, x: f32, v: f32) -> C {
         add(g, pur)
     };
     let layers = [
-        Layer { base: 0.03, amp: 0.05, freq: 2.2, col: hex(0x0a0e12), haze: 0.0, snow: 0.0, ridged: false, seed: p.seed + 3 },
-        Layer { base: 0.07, amp: 0.2, freq: 1.2, col: hex(0x1a2430), haze: 0.1, snow: 0.9, ridged: true, seed: p.seed + 2 },
+        Layer { base: 0.03, amp: 0.05, freq: 2.2, col: hex(0x0a0e12), haze: 0.0, snow: 0.0, ridged: false, seed: p.seed.wrapping_add(3) },
+        Layer { base: 0.07, amp: 0.2, freq: 1.2, col: hex(0x1a2430), haze: 0.1, snow: 0.9, ridged: true, seed: p.seed.wrapping_add(2) },
     ];
     let wl = hz + 0.05;
     let above = |x: f32, v: f32| -> C {
@@ -482,12 +482,20 @@ fn forest(p: &P, x: f32, v: f32) -> C {
     let sun_col = hex(0xfff0c8);
     let fog = hex(0xcfd6c8);
     let mut c = mix(hex(0xf4f0e0), hex(0xb8c4c0), (1.0 - v).powf(1.5));
-    for i in 0..6 {
+    for i in 0..6u32 {
         let fi = i as f32;
         let ground = 0.5 + fi * 0.1;
         let depth = 1.0 - fi / 5.0;
         let col = mix(mix(hex(0x0c1c10), hex(0x1c3020), depth), fog, depth.powf(0.8) * 0.88);
-        if pine(&P { seed: p.seed + i * 17, aspect: p.aspect }, x * (1.0 - fi * 0.08) + fi * 3.1, v, ground, 0.22 + fi * 0.07, 0.85).is_some()
+        if pine(
+            &P { seed: p.seed.wrapping_add(i.wrapping_mul(17)), aspect: p.aspect },
+            x * (1.0 - fi * 0.08) + fi * 3.1,
+            v,
+            ground,
+            0.22 + fi * 0.07,
+            0.85,
+        )
+        .is_some()
             || v > ground
         {
             c = col;
