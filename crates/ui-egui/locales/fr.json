@@ -3573,5 +3573,11 @@
   "Top bar": "Barre supérieure",
   "Tool strip": "Barre d’outils",
   "Bottom bar": "Barre inférieure",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)",
+  "Matching": "Correspondance",
+  "(default)": "(par défaut)",
+  "Faces per person in a match": "Visages par personne pour une correspondance",
+  "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos. A person with fewer faces than that is scored on the ones they have.": "Un visage est rapproché d'une personne par la moyenne de ce nombre de ses visages qui lui ressemblent le plus. Plus de visages : moins de propositions fausses pour les personnes qui ont beaucoup de photos. Une personne qui a moins de visages que ce nombre est jugée sur ceux qu'elle a.",
+  "Ignore a person's odd faces (from behind, misnamed)": "Ignorer les visages atypiques d'une personne (de dos, mal nommés)",
+  "Improves suggestions by leaving out faces seen from behind or misnamed. Double-edged: it also leaves out some for photos that look very different (childhood, beard…). Best used for a while, if you have many photos.": "Améliore les propositions en écartant les visages de dos ou mal nommés. À double tranchant : en écarte aussi pour les photos très différentes (enfance, barbe…). Parfait en usage temporaire si vous avez beaucoup de photos."
 }

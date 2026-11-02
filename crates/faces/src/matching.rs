@@ -8,8 +8,13 @@
 
 use std::cmp::Ordering;
 
-/// How many of a person's best matching faces are averaged into their score.
+/// How many of a person's best matching faces are averaged into their score, unless the user chose otherwise
+/// (Settings ▸ Faces). More faces make a stranger who happens to match two odd photos of someone (blurred, in
+/// profile) less likely to be suggested as them. A person with fewer faces than the count is scored on the ones they
+/// have, so their score does not change.
 pub const TOP_FACES: usize = 2;
+/// The most faces a score may be based on.
+pub const MAX_TOP_FACES: usize = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ranked {
@@ -53,6 +58,13 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 /// Rank the people in `gallery` (a name and one face's embedding per entry; a person appears once per face),
 /// best first. Names are compared case-insensitively and shown as first seen.
 pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
+    rank_top(query, gallery, TOP_FACES)
+}
+
+/// [`rank`], with each person's score the mean of their `top` best matching faces (1 to [`MAX_TOP_FACES`]; a person
+/// with fewer faces is scored on those they have).
+pub fn rank_top(query: &[f32], gallery: &[(&str, &[f32])], top: usize) -> Vec<Ranked> {
+    let top = top.clamp(1, MAX_TOP_FACES);
     let mut people: Vec<(String, String, Vec<f32>)> = Vec::new(); // (key, shown name, similarities)
     for (name, emb) in gallery {
         let Some(c) = cosine(query, emb) else { continue };
@@ -66,8 +78,8 @@ pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
         .into_iter()
         .map(|(_, name, mut sims)| {
             sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-            let top = sims.get(..sims.len().min(TOP_FACES)).unwrap_or(&[]);
-            Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: sims.len() }
+            let top = sims.get(..sims.len().min(top)).unwrap_or(&[]);
+            Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: top.len() }
         })
         .collect();
     out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
@@ -97,6 +109,30 @@ pub fn person_score(query: &[f32], gallery: &[&[f32]], top: usize) -> Option<f32
     }
     let n = seen.min(top);
     (n > 0).then(|| best[..n].iter().sum::<f32>() / n as f32)
+}
+
+/// How close to a person's average face one of theirs must be to stand for them when looking for look-alikes.
+pub const TYPICAL: f32 = 0.3;
+
+/// A person's faces without the odd ones: those far from their average face ([`TYPICAL`]), mostly a face from behind
+/// or in the dark named after whoever was in the photo, or someone else named by mistake. Such a face looks like every
+/// other face of its kind in the library (backs of heads all look alike), so it would bring them all along as
+/// look-alikes. All of them are kept when fewer than three would be left.
+pub fn typical<'a>(faces: &[&'a [f32]]) -> Vec<&'a [f32]> {
+    let Some(dim) = faces.first().map(|f| f.len()) else { return Vec::new() };
+    let mut mean = vec![0f32; dim];
+    for f in faces.iter().filter(|f| f.len() == dim) {
+        for (m, v) in mean.iter_mut().zip(f.iter()) {
+            *m += v;
+        }
+    }
+    let norm = dot(&mean, &mean).sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return faces.to_vec();
+    }
+    mean.iter_mut().for_each(|m| *m /= norm);
+    let kept: Vec<&[f32]> = faces.iter().copied().filter(|f| cosine(f, &mean).is_some_and(|c| c >= TYPICAL)).collect();
+    if kept.len() < 3 { faces.to_vec() } else { kept }
 }
 
 /// The best person if they pass both bars: a score of at least `threshold`, and at least `margin` ahead of the
@@ -135,6 +171,34 @@ mod tests {
     }
 
     #[test]
+    fn more_faces_in_a_score_keep_two_odd_photos_from_carrying_a_stranger() {
+        // Eve matches two odd photos of Ann very well, but none of her usual ones; Bob looks like Eve on all of his
+        let (odd1, odd2, usual) = (unit(&[1.0, 0.05, 0.0]), unit(&[1.0, 0.0, 0.05]), unit(&[0.0, 0.0, 1.0]));
+        let (b1, b2, b3) = (unit(&[0.8, 0.6, 0.0]), unit(&[0.8, 0.0, 0.6]), unit(&[0.8, 0.3, 0.3]));
+        let gallery: Vec<(&str, &[f32])> =
+            vec![("Ann", &odd1), ("Ann", &odd2), ("Ann", &usual), ("Ann", &usual), ("Bob", &b1), ("Bob", &b2), ("Bob", &b3)];
+        let eve = unit(&[1.0, 0.0, 0.0]);
+        assert_eq!(rank(&eve, &gallery)[0].name, "Ann", "two faces: the odd photos carry Ann");
+        let four = rank_top(&eve, &gallery, 4);
+        assert_eq!(four[0].name, "Bob", "{four:?}");
+        assert!(four.iter().find(|r| r.name == "Ann").is_some_and(|r| r.score < 0.6), "{four:?}");
+        // the More faces path scores with person_score: the same mean, and a count above two counts too
+        let ann: Vec<&[f32]> = vec![&odd1, &odd2, &usual, &usual];
+        let ann4 = person_score(&eve, &ann, 4).unwrap();
+        assert!((ann4 - four.iter().find(|r| r.name == "Ann").unwrap().score).abs() < 1e-6, "{ann4} against {four:?}");
+        assert!(ann4 < person_score(&eve, &ann, 2).unwrap() - 0.4, "{ann4}");
+        // out-of-range counts are clamped, never a panic or an empty score
+        assert_eq!(rank_top(&eve, &gallery, 0), rank_top(&eve, &gallery, 1));
+        assert_eq!(rank_top(&eve, &gallery, 1000), rank_top(&eve, &gallery, MAX_TOP_FACES));
+        // a person with fewer faces than asked is scored on the ones they have
+        let one: Vec<(&str, &[f32])> = vec![("Cy", &odd1)];
+        assert!(rank_top(&eve, &one, 4)[0].score > 0.99);
+        // and the count says how many faces the score is based on
+        assert_eq!(rank_top(&eve, &gallery, 1).iter().find(|r| r.name == "Ann").map(|r| r.faces), Some(1));
+        assert_eq!(rank_top(&eve, &one, 4)[0].faces, 1);
+    }
+
+    #[test]
     fn a_persons_score_is_the_one_ranking_gives_them() {
         // pseudo-random unit vectors, the same on every run
         let mut seed = 0x2545_f491_4f6c_dd1du64;
@@ -163,6 +227,19 @@ mod tests {
         assert_eq!(person_score(&q, &[&nan[..]], 2), None);
         assert_eq!(person_score(&q, &refs, 0), person_score(&q, &refs, 1));
         assert_eq!(person_score(&q, &refs, 1000), person_score(&q, &refs, 8));
+    }
+
+    #[test]
+    fn a_persons_odd_faces_are_left_out_unless_too_few_would_be_left() {
+        let (a, b, c) = (unit(&[1.0, 0.1, 0.0]), unit(&[0.9, 0.2, 0.0]), unit(&[1.0, 0.0, 0.1]));
+        let odd = unit(&[-0.2, 0.0, 1.0]);
+        let faces: Vec<&[f32]> = vec![&a, &b, &odd, &c];
+        assert_eq!(typical(&faces), vec![&a[..], &b[..], &c[..]], "the face from behind is left out");
+        let few: Vec<&[f32]> = vec![&a, &odd];
+        assert_eq!(typical(&few).len(), 2, "kept when fewer than three would be left");
+        assert!(typical(&[]).is_empty());
+        let zero = [0.0f32; 3];
+        assert_eq!(typical(&[&zero[..], &zero[..], &zero[..]]).len(), 3, "nothing to average: all kept");
     }
 
     #[test]
