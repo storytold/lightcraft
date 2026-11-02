@@ -133,6 +133,11 @@ fn main() {
             h.step();
             std::thread::sleep(Duration::from_millis(2));
         }
+        if !shows(&h) {
+            // the drag would start from no picture at all, and its numbers would mean nothing
+            eprintln!("no picture of the photo after {:.0} ms: not measured", t_open.elapsed().as_secs_f64() * 1e3);
+            std::process::exit(1);
+        }
         eprintln!("first picture after {:.0} ms", t_open.elapsed().as_secs_f64() * 1e3);
         let t = Instant::now();
         while t.elapsed() < Duration::from_millis(200) {

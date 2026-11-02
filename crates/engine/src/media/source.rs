@@ -108,13 +108,20 @@ pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, O
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
     pub image: Arc<Rgb32f>,
+    /// The denoised product it was read from ([`DenoiseSpec::key`]); `None` when not known.
+    pub key: Option<String>,
     /// The Amount (in thousandths) and the picture mixed for it, so dragging other sliders keeps one source picture.
     mix: std::sync::Mutex<Option<(u32, Arc<Rgb32f>)>>,
 }
 
 impl Twin {
     pub fn new(image: Arc<Rgb32f>) -> Twin {
-        Twin { image, mix: std::sync::Mutex::new(None) }
+        Twin { image, key: None, mix: std::sync::Mutex::new(None) }
+    }
+
+    /// A twin read from the denoised product with key `key`.
+    pub fn from_product(image: Arc<Rgb32f>, key: &str) -> Twin {
+        Twin { key: Some(key.to_string()), ..Twin::new(image) }
     }
 
     /// Bytes reserved for the twin and its lazy mix, before either cache cost can grow.
@@ -312,7 +319,7 @@ impl SourceRef {
                             image: Arc::new(image),
                             info: Some(info),
                             camera_tone: None,
-                            denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                            denoised: twin.map(|t| Arc::new(Twin::from_product(Arc::new(t), &spec.key))),
                             from_proxy: false,
                             reduced: false,
                         })

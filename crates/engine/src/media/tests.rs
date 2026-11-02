@@ -671,6 +671,38 @@ fn a_replaced_renders_plain_source_is_not_kept_once_the_denoised_picture_is_read
     assert!(s.media.has_source(id, r.level));
 }
 
+/// A replaced render whose denoised picture came from an older product (the denoise was redone
+/// while it ran) is not kept: later renders would show the old picture (review of PR #3569). One
+/// from the current product is.
+#[test]
+fn a_replaced_renders_source_from_an_older_denoise_is_not_kept() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let pair: PairLoader = Arc::new(|_, _, _| Ok((Rgb32f::new(64, 64), Some(Rgb32f::new(64, 64)), SourceInfo::default())));
+    s.media.denoise.loader = Some(pair.clone());
+    let spec = |key: &str| DenoiseSpec { product: format!("{key}.bin").into(), key: key.into(), make: None };
+    let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+    job.source = SourceRef::File {
+        path: "synthetic-twin.arw".into(),
+        max_edge: 64,
+        loader: Some(Arc::new(|_, _| Ok((Rgb32f::new(64, 64), SourceInfo::default())))),
+        fallback: None,
+        denoise: Some((spec("old"), pair)),
+        reduced: None,
+    };
+    let r = job.run();
+    assert!(r.loaded.as_ref().is_some_and(|src| src.denoised.as_ref().is_some_and(|t| t.key.as_deref() == Some("old"))));
+    // the denoise was redone while the render ran
+    s.media.denoise.set(id, spec("new"));
+    s.media.forget(id);
+    s.accept_replaced(&r);
+    assert!(!s.media.has_source(id, r.level), "the old product's picture is not kept");
+    // the same product: kept
+    s.media.denoise.set(id, spec("old"));
+    s.accept_replaced(&r);
+    assert!(s.media.has_source(id, r.level));
+}
+
 /// A decode is shared only with jobs for the same file content: after the photo's file changed
 /// (a new content key), a decode of the old file that is still held is not taken (review of PR
 /// #3569).
