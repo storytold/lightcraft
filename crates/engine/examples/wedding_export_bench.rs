@@ -85,6 +85,19 @@ fn main() {
     let gpu = !flag("--cpu");
     lightcraft_engine::gpu::set_enabled(gpu);
     let hdr = !flag("--sdr");
+    // (checked before the import and settings: a bad size stops at once; review of PR #3506)
+    let long_edge = if let Some(i) = args.iter().position(|a| a == "--long-edge") {
+        // (a size that is missing, not a number, 0 or past u32 is refused, not ignored or cut to
+        // another size: review of PR #3565 / #3532)
+        let raw = args.get(i + 1).map_or("", String::as_str);
+        let Some(edge) = raw.parse::<u32>().ok().filter(|e| *e > 0) else {
+            eprintln!("--long-edge {raw:?}: give a size in pixels from 1 to {}", u32::MAX);
+            std::process::exit(2);
+        };
+        Some(edge)
+    } else {
+        None
+    };
     let mut session = lightcraft_engine::Session::new().with_fs();
     let r = session.execute("library.import", &serde_json::json!({"paths": files})).expect("import");
     let ids: Vec<_> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(PhotoId).collect();
@@ -93,16 +106,7 @@ fn main() {
         session.set_develop(id, settings.clone(), "bench").expect("settings");
     }
     let mut o = ExportOptions { hdr, quality: 90, ..ExportOptions::default() };
-    if let Some(i) = args.iter().position(|a| a == "--long-edge") {
-        // (a size that is missing, not a number, 0 or past u32 is refused, not ignored or cut to
-        // another size: review of PR #3565 / #3532)
-        let raw = args.get(i + 1).map_or("", String::as_str);
-        let Some(edge) = raw.parse::<u32>().ok().filter(|e| *e > 0) else {
-            eprintln!("--long-edge {raw:?}: give a size in pixels from 1 to {}", u32::MAX);
-            std::process::exit(2);
-        };
-        o.resize = Some(lightcraft_engine::export::Resize::long_edge(edge));
-    }
+    o.resize = long_edge.map(lightcraft_engine::export::Resize::long_edge);
     o.limit_kb = value("--limit-kb").map(|kb| kb as u32);
     let lanes = lightcraft_engine::export::export_parallelism(ids.len());
     println!(
