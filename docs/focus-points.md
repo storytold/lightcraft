@@ -79,10 +79,11 @@ steps.
 Tag identities, layout and value names come from the public ExifTool tag-name documentation (Canon AFInfo2 table); no
 third-party code was read. A CR3 keeps its maker note in the `CMT3` block of the Canon `uuid` box; a CR2 or a Canon
 JPEG has a header-less maker-note IFD. The record is int16 values: size, AFAreaMode, NumAFPoints, ValidAFPoints, the
-Canon image size, the AF image size (the frame the positions are in), then the valid points' widths, heights, x and y
-positions from the frame's centre (x right, **y up**), then a bit mask of the points in focus and one of the points
-selected. The box drawn covers the in-focus points among the valid ones, else the selected ones, else the only valid
-point (never a DSLR's whole AF grid); AFAreaMode 0 (manual focus) or no usable frame gives no point. On the 6D's
+Canon image size, the AF image size (the frame the positions are in), then four arrays of NumAFPoints values each (all
+points, not only the valid ones): the widths, heights, x and y positions from the frame's centre (x right, **y up**);
+after them a bit mask of the points in focus and one of the points selected, each NumAFPoints bits rounded up to whole
+int16 words. The box drawn covers the in-focus points among the first ValidAFPoints, else the selected ones, else the only valid
+point (never a DSLR's whole AF grid); AFAreaMode 0 (manual focus), ValidAFPoints 0 or no usable frame gives no point. On the 6D's
 11-point CR2s that is the selected point, whether it was confirmed in focus or not.
 
 On the R5 C files (1053 AF points, one valid): Face + Tracking frames (115 px) land on the tracked face (a guest's
