@@ -208,6 +208,36 @@ fn full_screen_preview_ui_set_preserves_window_restoration_state() {
 }
 
 #[test]
+fn full_screen_preview_ui_set_preserves_pending_window_request() {
+    let mut h = grid();
+    h.window_commands.clear();
+    assert!(h.app.run("view.fullScreenPreview", json!({})).is_ok(), "preview command succeeds");
+    assert_eq!(h.app.ui.window_fullscreen, Some(true), "preview queues native fullscreen");
+
+    let result = h.request("ui.set", json!({"zoom": "fit"}), T);
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(true)]);
+    assert!(h.app.window_is_fullscreen, "the queued request reaches the host");
+}
+
+#[test]
+fn full_screen_preview_ui_set_false_restores_windowed_state() {
+    let mut h = grid();
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(h.app.ui.fullscreen && h.app.window_is_fullscreen);
+    assert_eq!(h.app.ui.full_screen_preview_window_was_fullscreen, Some(false));
+    h.window_commands.clear();
+
+    let result = h.request("ui.set", json!({"fullscreen": false}), T);
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(!h.app.ui.fullscreen, "ui.set ended the preview");
+    assert_eq!(h.app.ui.full_screen_preview_window_was_fullscreen, None, "the preview restoration marker is cleared");
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(false)]);
+    assert!(!h.app.window_is_fullscreen, "the preview restores the prior windowed state");
+}
+
+#[test]
 fn full_screen_preview_preserves_existing_fullscreen() {
     let mut h = grid();
     run(&mut h, "view.enterFullScreen", json!({"on": true}));
