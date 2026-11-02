@@ -2,8 +2,9 @@
 //! moment only" — and waits; Find starts the engine's finder (`library.findDuplicates`, with the view and selection
 //! left alone) and locks the settings, the window shows the run's progress, then every group with a thumbnail per
 //! photo, the finder's keeper ticked and the others unticked with why they lose. Deleting is per group: each group
-//! has "Delete N unticked" (its unticked photos go to Recently Deleted through `photo.delete`, one undo step, and the
-//! group leaves the window) and "Keep all" (the group leaves the window, nothing deleted); nothing happens to a group
+//! has "Delete N unticked" (its unticked photos go to Recently Deleted through `library.deleteDuplicates`, which first
+//! carries their keywords, rating, pick flag and colour label onto the photos kept, one undo step, and the group
+//! leaves the window) and "Keep all" (the group leaves the window, nothing deleted); nothing happens to a group
 //! the user hasn't acted on. "Delete unticked in every group…" is the one bulk action, and it asks once more first.
 //! The window's bottom button only closes it. Another search with other settings is another opening of the window
 //! (the hashes are kept, so it is quick).
@@ -19,8 +20,10 @@ use crate::theme::Tokens;
 /// A card's thumbnail box.
 const THUMB_W: f32 = 150.0;
 const THUMB_H: f32 = 100.0;
-/// A whole card (thumbnail, the Keep tick, three lines): cards off screen take this much room and lay out nothing.
-const CARD_H: f32 = 190.0;
+/// A whole card: the thumbnail and its margins wide; the thumbnail, the Keep tick and three lines tall. Every card
+/// takes this much, laid out or not, so the list never jumps as it scrolls; cards off screen lay out nothing.
+const CARD_W: f32 = THUMB_W + 8.0;
+const CARD_H: f32 = 216.0;
 /// Thumbnail requests from the window come before the grid's off-screen prefetch.
 const THUMB_PRIORITY: u32 = 20;
 /// The narrowest the window lays out for (it can be resized wider).
@@ -104,6 +107,19 @@ pub fn delete_ids(groups: &[DuplicateGroup]) -> Vec<u64> {
     groups.iter().flat_map(|g| g.photos.iter().filter(|p| !p.keep).map(|p| p.id)).collect()
 }
 
+/// What `library.deleteDuplicates` takes for `groups`: each group's ticked and unticked photos (groups with nothing
+/// unticked left out).
+fn settled(groups: &[DuplicateGroup]) -> Vec<Value> {
+    groups
+        .iter()
+        .filter(|g| g.photos.iter().any(|p| !p.keep))
+        .map(|g| {
+            let (keep, delete): (Vec<_>, Vec<_>) = g.photos.iter().partition(|p| p.keep);
+            json!({"keep": keep.iter().map(|p| p.id).collect::<Vec<_>>(), "delete": delete.iter().map(|p| p.id).collect::<Vec<_>>()})
+        })
+        .collect()
+}
+
 /// The window's bottom button only closes it: deleting is done group by group inside, or by the bulk action that
 /// asks first. Nothing is deleted here.
 pub fn confirm(_app: &mut LightcraftApp, _groups: &[DuplicateGroup]) -> Result<Value, String> {
@@ -120,25 +136,26 @@ enum Action {
     DeleteAll,
 }
 
-/// Do what a button asked: the deletion (one undo step through `photo.delete`) and the groups it settles. A refused
-/// deletion is shown above the list and the group stays.
+/// Do what a button asked: the deletion (one undo step through `library.deleteDuplicates`, which carries the deleted
+/// copies' metadata onto the photos kept) and the groups it settles. A refused deletion is shown above the list and
+/// the groups stay.
 fn apply(app: &mut LightcraftApp, dlg: &mut Dialog, action: Action) {
     let Dialog::Duplicates { groups, error, armed, .. } = dlg else { return };
     *armed = false;
-    let (ids, settled): (Vec<u64>, Vec<usize>) = match action {
-        Action::Delete(n) => (groups.get(n).map(|g| delete_ids(std::slice::from_ref(g))).unwrap_or_default(), vec![n]),
+    let (to_delete, done): (Vec<Value>, Vec<usize>) = match action {
+        Action::Delete(n) => (groups.get(n).map(|g| settled(std::slice::from_ref(g))).unwrap_or_default(), vec![n]),
         Action::Keep(n) => (Vec::new(), vec![n]),
-        Action::DeleteAll => (delete_ids(groups), (0..groups.len()).collect()),
+        Action::DeleteAll => (settled(groups), (0..groups.len()).collect()),
     };
-    if !ids.is_empty()
-        && let Err(e) = app.run("photo.delete", json!({"ids": ids}))
+    if !to_delete.is_empty()
+        && let Err(e) = app.run("library.deleteDuplicates", json!({"groups": to_delete}))
     {
         *error = Some(e);
         return;
     }
     let mut n = 0;
     groups.retain(|_| {
-        let keep = !settled.contains(&n);
+        let keep = !done.contains(&n);
         n += 1;
         keep
     });
@@ -190,13 +207,19 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
         ))
         .color(t.text_dim),
     );
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "Deleted photos go to Recently Deleted; their keywords, rating, pick flag and colour label are carried onto the photo kept.",
+        ))
+        .color(t.text_dim),
+    );
     let mut action = bulk_row(ui, t, groups, armed, unticked);
     ui.add_space(6.0);
     // the list takes what the window leaves above its button row
     let height = (ui.available_height() - BUTTON_ROW).max(200.0);
     // rows of a known number of cards: the layout's own wrapping trusted the window's width, which the window
     // takes from its content, so nothing ever wrapped and the cards ran off the screen
-    let per_row = ((width - 24.0) / (THUMB_W + 8.0 + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
+    let per_row = ((width - 24.0) / (CARD_W + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
     egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).max_width(width).auto_shrink([false, false]).show(ui, |ui| {
         for (n, g) in groups.iter_mut().enumerate() {
             if let Some(a) = group_header(ui, t, n, g) {
@@ -249,12 +272,12 @@ fn bulk_row(ui: &mut egui::Ui, t: &Tokens, groups: &[DuplicateGroup], armed: &mu
 
 /// A group's header: what it is, how sure the match is, and its two buttons.
 fn group_header(ui: &mut egui::Ui, t: &Tokens, n: usize, g: &DuplicateGroup) -> Option<Action> {
-    // (how far apart the hashes are says how sure a visual match is: 0–2 bits is the same picture
-    // at another size or compression, the top of the range deserves a look)
+    // (how far apart the hashes are — the larger of the two hashes' distances — says how sure a visual match is:
+    // 0–2 bits is the same picture at another size or compression, the top of the range deserves a look)
     let kind = if g.exact {
         crate::i18n::tr("byte-identical").to_string()
     } else {
-        crate::i18n::tr_format!("visually identical, {bits} bits apart", bits = g.max_distance)
+        crate::i18n::tr_format!("visually similar, at most {bits} bits apart", bits = g.max_distance)
     };
     let unticked = g.photos.iter().filter(|p| !p.keep).count();
     let mut action = None;
@@ -341,42 +364,44 @@ fn progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
 }
 
-/// One photo of a group: its thumbnail, the Keep tick, its name, format, size and the finder's reason.
+/// One photo of a group: its thumbnail, the Keep tick, its name, format, size and the finder's reason, in exactly
+/// [`CARD_W`] × [`CARD_H`].
 fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, p: &mut DuplicatePhoto) {
     let id = PhotoId(p.id);
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
-    // a card the scroll position hides takes its room and nothing else: no thumbnail request, no text layout
-    // (a library can have thousands of photos in groups)
-    let footprint = Rect::from_min_size(ui.cursor().min, vec2(THUMB_W + 8.0, CARD_H));
-    if !ui.clip_rect().intersects(footprint) {
-        ui.allocate_exact_size(footprint.size(), Sense::hover());
+    // the card's room first, then whether it is on screen: a card the scroll position hides takes its room and
+    // nothing else, no thumbnail request, no text layout (a library can have thousands of photos in groups)
+    let (rect, _) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::hover());
+    if !ui.is_rect_visible(rect) {
         return;
     }
     crate::panels::grid::request_thumb(app, id, THUMB_W as usize, THUMB_PRIORITY);
-    ui.vertical(|ui| {
-        ui.set_width(THUMB_W + 8.0);
-        ui.set_min_height(CARD_H);
-        let (rect, _) = ui.allocate_exact_size(vec2(THUMB_W, THUMB_H), Sense::hover());
-        let painter = ui.painter();
-        painter.rect_filled(rect, 4.0, t.skeleton);
-        match app.renderer.thumb(id) {
-            Some(tex) => {
-                painter.image(tex.tex.id(), fit(rect, tex.size), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            }
-            None => ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)),
+    let mut card = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    card.set_clip_rect(rect.intersect(card.clip_rect()));
+    let ui = &mut card;
+    let (thumb, _) = ui.allocate_exact_size(vec2(THUMB_W, THUMB_H), Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(thumb, 4.0, t.skeleton);
+    match app.renderer.thumb(id) {
+        Some(tex) => {
+            painter.image(tex.tex.id(), fit(thumb, tex.size), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
-        let r = ui.checkbox(&mut p.keep, crate::i18n::tr("Keep"));
-        crate::widgets::register(ui, format!("check:dupeKeep:{}", p.id), r.rect);
-        ui.label(egui::RichText::new(photo.file_name.as_str()).font(t.font(12.0)).color(t.text));
-        ui.label(
-            egui::RichText::new(format!("{} · {}×{} · {}", photo.format, photo.width, photo.height, human_size(photo.file_size)))
-                .font(t.font(11.5))
-                .color(t.text_dim),
-        );
-        if !p.why.is_empty() {
-            ui.label(egui::RichText::new(p.why.as_str()).font(t.font(11.5)).color(t.text_dim));
-        }
-    });
+        None => ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)),
+    }
+    let r = ui.checkbox(&mut p.keep, crate::i18n::tr("Keep"));
+    crate::widgets::register(ui, format!("check:dupeKeep:{}", p.id), r.rect);
+    // (one line each, cut short at the card's edge with the whole on hover, so a long name or reason never makes
+    // a taller card)
+    line(ui, photo.file_name.as_str(), t.font(12.0), t.text);
+    line(ui, &format!("{} · {}×{} · {}", photo.format, photo.width, photo.height, human_size(photo.file_size)), t.font(11.5), t.text_dim);
+    if !p.why.is_empty() {
+        line(ui, p.why.as_str(), t.font(11.5), t.text_dim);
+    }
+}
+
+/// One line of a card's text, cut short at the card's width, the whole on hover.
+fn line(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32) {
+    ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(color)).truncate()).on_hover_text(text);
 }
 
 /// Where a picture of `size` pixels sits inside `rect`, its aspect kept.

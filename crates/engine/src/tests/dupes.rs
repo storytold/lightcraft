@@ -255,3 +255,58 @@ fn an_unreadable_file_is_counted_and_the_rest_still_group() {
     assert_eq!(r["last"]["unreadable"], 1, "{r}");
     assert_eq!(r["last"]["groups"][0]["keep"], ids["a.jpg"]);
 }
+
+/// Deleting the copies a reviewed group settled on carries what they had onto the kept photo — keywords it lacks,
+/// a higher rating, a pick flag, a colour label — and moves them to Recently Deleted, as one undo step.
+#[test]
+fn deleting_duplicates_carries_their_metadata_onto_the_kept_photo() {
+    let (mut s, ids) = library("carry");
+    let (a, small, resaved) = (ids["a.jpg"], ids["a_small.jpg"], ids["a_resaved.jpg"]);
+    s.execute("photo.rate", &json!({"rating": 2, "ids": [resaved]})).unwrap();
+    s.execute("photo.flag", &json!({"flag": "pick", "ids": [small]})).unwrap();
+    s.execute("photo.label", &json!({"label": "red", "ids": [small]})).unwrap();
+    let mut meta = s.catalog.photo(PhotoId(small)).unwrap().meta.clone();
+    meta.keywords = vec!["cat".into(), "Garden".into()];
+    s.commit("Keywords", lightcraft_catalog::Op::SetMeta { id: PhotoId(small), meta: Box::new(meta) }).unwrap();
+    let mut meta = s.catalog.photo(PhotoId(a)).unwrap().meta.clone();
+    meta.keywords = vec!["garden".into()];
+    s.commit("Keywords", lightcraft_catalog::Op::SetMeta { id: PhotoId(a), meta: Box::new(meta) }).unwrap();
+    // the largest copy is still the keeper: pixels come before rating
+    let r = s.execute("library.findDuplicates", &json!({"wait": true, "filter": false, "selectExtras": false})).unwrap();
+    assert_eq!(r["last"]["groups"][0]["keep"], a, "{r}");
+    let undo = s.undo.len();
+    let r = s.execute("library.deleteDuplicates", &json!({"groups": [{"keep": [a], "delete": [small, resaved]}]})).unwrap();
+    assert_eq!(r, json!({"deleted": 2, "kept": 1, "keywords": 1, "ratings": 1, "flags": 1, "labels": 1}));
+    let kept = s.catalog.photo(PhotoId(a)).unwrap();
+    assert_eq!(kept.meta.keywords, vec!["garden".to_string(), "cat".to_string()], "what it had stays; another case of it is not added");
+    assert_eq!((kept.rating, kept.flag, kept.label), (2, lightcraft_catalog::Flag::Pick, Some(lightcraft_catalog::ColorLabel::Red)));
+    let left: Vec<u64> = s.catalog.photos().filter(|p| p.in_library()).map(|p| p.id.0).collect();
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.contains(&a) && left.contains(&ids["b.jpg"]));
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let kept = s.catalog.photo(PhotoId(a)).unwrap();
+    assert_eq!((kept.rating, kept.flag, kept.label, kept.meta.keywords.len()), (0, lightcraft_catalog::Flag::None, None, 1));
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 4);
+}
+
+/// `library.deleteDuplicates` refuses a photo named twice, one not in the library, and a call that deletes nothing;
+/// a refused call changes nothing.
+#[test]
+fn deleting_duplicates_refuses_bad_lists() {
+    let (mut s, ids) = library("refuse");
+    let (a, small) = (ids["a.jpg"], ids["a_small.jpg"]);
+    let undo = s.undo.len();
+    for p in [
+        json!({"keep": [a], "delete": [a, small]}),
+        json!({"groups": [{"keep": [a], "delete": [small]}, {"keep": [small], "delete": []}]}),
+        json!({"keep": [a], "delete": [999_999]}),
+        json!({"keep": [a], "delete": []}),
+        json!({"keep": [a], "delete": "all"}),
+        json!({"groups": {"keep": [a]}}),
+    ] {
+        assert!(s.execute("library.deleteDuplicates", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 4, "nothing changed");
+    assert_eq!(s.undo.len(), undo);
+}

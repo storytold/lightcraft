@@ -264,7 +264,7 @@ struct Group {
     keep: PhotoId,
     /// The photos to remove, best first, each with why the keeper beats it.
     extras: Vec<(PhotoId, String)>,
-    /// The most bits two members' DCT hashes differ in (0 for exact groups).
+    /// The most bits two members' hashes differ in, over both hashes (0 for exact groups).
     max_distance: u32,
 }
 
@@ -641,7 +641,7 @@ fn group_of(rows: &[Row], mut members: Vec<usize>) -> Group {
     for (n, a) in rs.iter().enumerate() {
         for b in rs.iter().skip(n + 1) {
             if let (Some(sa), Some(sb)) = (a.sig, b.sig) {
-                max_distance = max_distance.max(cull::hamming(sa.dct, sb.dct));
+                max_distance = max_distance.max(cull::hamming(sa.dct, sb.dct)).max(cull::hamming(sa.diff, sb.diff));
             }
         }
     }
@@ -729,6 +729,8 @@ pub(crate) fn find(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     fn row(id: u64, dct: u64, moment: Option<&str>) -> Row {
@@ -778,6 +780,49 @@ mod tests {
         assert_eq!(groups[0].extras.len(), 1, "the untimed photo joins one of them");
         let loose = Matching { distance: 6, same_moment: false };
         assert_eq!(group(&rows, loose, &never).unwrap()[0].extras.len(), 2);
+    }
+
+    /// Two copies nothing tells apart: the earlier import is kept, and the reason says so.
+    #[test]
+    fn a_tie_keeps_the_earlier_import() {
+        let rows = vec![row(7, 0, None), row(3, 0, None)];
+        let groups = group(&rows, Matching { distance: 0, same_moment: false }, &AtomicBool::new(false)).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].keep, PhotoId(3));
+        assert_eq!(groups[0].extras, vec![(PhotoId(7), "the same; the earlier import is kept".to_string())]);
+        assert_eq!(groups[0].max_distance, 0);
+    }
+
+    /// A group's distance counts both hashes: DCT hashes alike with difference hashes 3 bits apart are 3 apart.
+    #[test]
+    fn the_distance_shown_is_the_larger_of_both_hashes() {
+        let mut rows = vec![row(1, 0, None), row(2, 0, None)];
+        rows[1].sig = Some(Sig { dct: 0, diff: 0b111, aspect: 1.5 });
+        let groups = group(&rows, Matching { distance: 6, same_moment: false }, &AtomicBool::new(false)).unwrap();
+        assert_eq!((groups.len(), groups[0].max_distance), (1, 3));
+    }
+
+    /// A library the size of a real one groups without comparing every pair: 50,000 distinct pictures with a few
+    /// planted copies (and one byte-identical pair) group in the time the hash buckets promise, not a quadratic one.
+    #[test]
+    fn fifty_thousand_photos_group_through_their_buckets() {
+        // (a multiplicative hash spreads the ids over the 64 bits, so distinct pictures are far apart)
+        let spread = |i: u64| i.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(23) ^ 0x5DEE_CE66_D1CE_4E5F;
+        let mut rows: Vec<Row> = (1..=50_000u64).map(|i| row(i, spread(i), None)).collect();
+        let first = spread(1);
+        // twenty copies of the first picture, each one bit away from it (two from each other)
+        rows.extend((0..20u64).map(|k| row(60_000 + k, first ^ (1 << k), None)));
+        // a byte-identical pair of another picture
+        rows.push(row(70_000, spread(2), None));
+        rows[1].hash = Some("same-bytes".into());
+        rows.last_mut().unwrap().hash = Some("same-bytes".into());
+        let started = Instant::now();
+        let groups = group(&rows, Matching { distance: 6, same_moment: false }, &AtomicBool::new(false)).unwrap();
+        let took = started.elapsed();
+        assert_eq!(groups.len(), 2, "{:?}", groups.iter().map(|g| (g.keep, g.extras.len())).collect::<Vec<_>>());
+        assert_eq!((groups[0].keep, groups[0].extras.len(), groups[0].max_distance), (PhotoId(1), 20, 2));
+        assert_eq!((groups[1].keep, groups[1].extras.len(), groups[1].exact), (PhotoId(2), 1, true));
+        assert!(took < Duration::from_secs(30), "grouping 50,000 photos took {took:?}");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::{LibrarySource, Result, Selection, Session};
 mod filters;
 mod gps;
 mod import;
-mod selection;
+pub(crate) mod selection;
 mod specs;
 
 pub(crate) use filters::covers_other_disks;

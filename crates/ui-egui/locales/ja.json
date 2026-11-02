@@ -755,6 +755,7 @@
   "Find Duplicate Photos…": "重複した写真を検索…",
   "Keep": "残す",
   "Looking for duplicate photos…": "重複した写真を検索中…",
+  "Deleted photos go to Recently Deleted; their keywords, rating, pick flag and colour label are carried onto the photo kept.": "削除した写真は「最近削除した写真」に移動します。キーワード、評価、採用フラグ、カラーラベルは残す写真に引き継がれます。",
   "Keep all": "すべて残す",
   "Delete unticked in every group…": "すべてのグループの未チェックを削除…",
   "Yes, delete them all": "はい、すべて削除",
