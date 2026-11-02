@@ -257,6 +257,15 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
+## 2026-10-28
+
+### Choose the face that shows a person in People
+- On a person's page, right-click one of their faces and choose Use as Person's Picture: People shows them by that
+  face instead of their largest one (often a blurred close-up, or the moment they blinked). A star marks it on their
+  page, and Use Their Largest Face goes back. The choice follows the person through Rename Person, and a face that
+  loses their name no longer stands for them. It is kept in the library's `people.json`, beside the catalog, so the
+  catalog format does not change. Agents: `faces.setCover {name, photo, index}` (`photo: null` for the largest face);
+  `faces.person` says which face is chosen (`cover`). (#3246)
 
 ## 2026-10-24
 

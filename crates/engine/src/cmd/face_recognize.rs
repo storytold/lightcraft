@@ -173,6 +173,20 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     let photos = ops.len();
     s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
     s.skip_auto_write = true;
+    // their chosen picture follows them (and stays under the old name too, for an undo). The new name's own entry
+    // counts only when someone bears that name (a merge, where theirs is kept); otherwise it is left over from an
+    // earlier rename and is replaced, or dropped when they have no chosen picture
+    if from_key != to_key && !(other && s.person_covers.contains_key(&to_key)) {
+        let changed = match s.person_covers.get(&from_key).copied() {
+            Some(c) => s.person_covers.insert(to_key.clone(), c) != Some(c),
+            None => s.person_covers.remove(&to_key).is_some(),
+        };
+        if changed {
+            s.people_gen = s.people_gen.wrapping_add(1);
+            // the rename stands; a people.json that cannot take it now counts as unsaved
+            s.save_people_or_keep_unsaved();
+        }
+    }
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
     }
@@ -182,6 +196,45 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         f.person = Some(to.clone());
     }
     Ok(json!({"faces": faces, "photos": photos, "from": from, "to": to, "merged": other}))
+}
+
+/// `faces.setCover {name, photo, index}`: show `name` in the People view by this face of theirs instead of their largest
+/// one; `{name, photo: null}` goes back to the largest. Kept in the library's people.json, outside the catalog (#3246).
+fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.setCover";
+    let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?;
+    let key = name.to_lowercase();
+    let cover = match p.get("photo") {
+        None => return Err(bad(C, "missing `photo` (null for their largest face)")),
+        Some(Value::Null) => None,
+        Some(v) => {
+            let id = lightcraft_catalog::PhotoId(v.as_u64().ok_or_else(|| bad(C, "`photo` is a photo id, or null"))?);
+            let index =
+                p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
+            let photo = s.catalog.photo(id).filter(|ph| ph.in_library()).ok_or_else(|| bad(C, "no such photo"))?;
+            let region = photo
+                .meta
+                .regions
+                .get(index)
+                .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.as_deref().is_some_and(|n| n.trim().to_lowercase() == key))
+                .ok_or_else(|| bad(C, format!("that face is not named {name}")))?;
+            Some(lightcraft_catalog::PersonCover { photo: id, face: region.rect })
+        }
+    };
+    let before = match cover {
+        Some(c) => s.person_covers.insert(key.clone(), c),
+        None => s.person_covers.remove(&key),
+    };
+    s.people_gen = s.people_gen.wrapping_add(1);
+    if let Err(e) = s.save_people() {
+        // not saved: not done either, so the session says what the file will say at the next opening
+        match before {
+            Some(b) => s.person_covers.insert(key, b),
+            None => s.person_covers.remove(&key),
+        };
+        return Err(e);
+    }
+    Ok(json!({"name": name, "cover": cover.map(|c| json!({"photo": c.photo.0, "rect": rect_json(&c.face)}))}))
 }
 
 /// Most faces `faces.unnamed` lists.
@@ -249,6 +302,8 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
     let key = name.to_lowercase();
     let limit = p.get("more").and_then(Value::as_u64).map_or(120, |n| usize::try_from(n).unwrap_or(120)).min(1000);
     let (mut shown, mut total, mut confirmed) = (name.to_string(), 0usize, Vec::new());
+    let chosen = s.person_covers.get(&key).copied();
+    let mut cover = Value::Null;
     for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
             let Some(n) = r.name.as_deref().filter(|n| r.kind == lightcraft_meta::RegionKind::Face && n.trim().to_lowercase() == key) else {
@@ -258,6 +313,9 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
                 shown = n.trim().to_string();
             }
             total += 1;
+            if chosen.is_some_and(|c| c.is(ph.id, &r.rect)) {
+                cover = json!({"photo": ph.id.0, "index": index});
+            }
             if confirmed.len() < MAX_CONFIRMED {
                 confirmed.push(json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect), "view": rect_json(&s.face_view(ph.id, r.rect))}));
             }
@@ -265,7 +323,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let similar = if total > 0 { imp::similar(s, &key, limit) } else { Similar { items: Vec::new(), ready: false, pending: 0 } };
     Ok(
-        json!({"name": shown, "total": total, "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
+        json!({"name": shown, "total": total, "cover": cover, "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
     )
 }
 
@@ -1190,7 +1248,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Faces of a Person",
             [],
             None,
-            "{name, more?: 120} → {name, total, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
+            "{name, more?: 120} → {name, total, cover: {photo, index} | null, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
             super::always,
             person
         ),
@@ -1202,6 +1260,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?, index, name} — name a face region (null or empty clears it); undoable; the sidecar is not touched",
             super::always,
             set_name
+        ),
+        cmd!(
+            "faces.setCover",
+            "Use as Person's Picture",
+            [],
+            None,
+            "{name, photo, index} → {name, cover: {photo, rect} | null} — show `name` in the People view by this face of theirs (it must bear their name) instead of their largest one; `photo: null` goes back to the largest. Kept in the library's people.json, outside the catalog; a face that loses the name, or a photo the filter hides, falls back to the largest",
+            super::always,
+            set_cover
         ),
         cmd!(
             "faces.renamePerson",
