@@ -1,4 +1,4 @@
-use super::quick::{QuickJob, content_key, source_info};
+use super::quick::{DRAFT_EDGE, QuickJob, content_key, embedded_thumb_key, latest_thumb_key, latest_view_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
@@ -69,6 +69,8 @@ impl crate::Session {
             }
             (self.media.rendered.clone(), k.finish())
         });
+        // a thumbnail of the photo's own settings is its latest grid picture too
+        let latest = cache.as_ref().filter(|_| !before).map(|(c, _)| (c.clone(), latest_thumb_key(&p)));
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -84,6 +86,7 @@ impl crate::Session {
             cache,
             stages: None,
             view_cache: None,
+            latest,
             display: None,
             slide: None,
             preview_cut: None,
@@ -138,6 +141,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            latest: None,
             display: None,
             slide: None,
             preview_cut: None,
@@ -193,6 +197,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            latest: None,
             display: None,
             slide: None,
             preview_cut,
@@ -216,16 +221,22 @@ impl crate::Session {
         Some(crate::face_tiles::PreviewCut { path, loader, want, min, rect, aspect, edge })
     }
 
-    /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    /// Size-independent cache key of a photo's view render (loupe) for its current settings. The
+    /// denoised picture and camera profile in use are part of it (as of the render's own key): a
+    /// view rendered before the photo's AI Denoise result was there is not shown as the denoised one.
+    pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
+        let salt = self.media.denoise_salt(p.id, &p.develop);
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64())
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if salt != 0 {
+            k.u64(salt);
+        }
+        k.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
@@ -233,7 +244,8 @@ impl crate::Session {
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         let p = self.catalog.photo(id)?;
-        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop)));
+        job.view_cache = Some((self.media.rendered.clone(), self.view_key(p, apply_crop)));
+        job.latest = Some((self.media.rendered.clone(), latest_view_key(p, apply_crop)));
         Some(job)
     }
 
@@ -302,8 +314,18 @@ impl crate::Session {
 
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
+        self.embedded_stand_in_of(p).filter(|_| crate::import::has_import_look(p))
+    }
+
+    /// The embedded preview of any raw (path, loader), when the app installed a loader: the
+    /// cheapest full picture of the photo, shown until LightCraft's render of it arrives (a
+    /// body's default camera profile, picked for every photo of a folder
+    /// browsed before import, made each photo "edited", so the grid, the filmstrip and the loupe
+    /// had no picture at all until a full raw render, seconds a photo). Only an unedited raw's is
+    /// its final picture ([`Self::embedded_thumb_is_final`]); for the others a render replaces it.
+    fn embedded_stand_in_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {
-            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
+            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw => Some((path.clone(), l.clone())),
             _ => None,
         }
     }
@@ -337,16 +359,82 @@ impl crate::Session {
     }
 
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
-    /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
+    /// render, else its latest render with earlier settings, else the embedded preview of a raw as
+    /// shot, else a cached or fresh thumbnail. An edited photo never gets the camera's JPEG: it is
+    /// unedited and uncropped (notes 3, 11 and 31 of 2026-10-24: "land on any photo that I just
+    /// edited and you see the camera JPG").
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
+        let cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
+        // (the photo too: a virtual copy shares the file and, unedited, the settings)
+        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(id.0).finish();
         let key = h.0 as u64;
-        let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
-        Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, minimum_embedded_edge: None, small: apply_crop.then(|| Box::new(small)) })
+        let as_shot = crate::import::looks_as_shot(&p);
+        // an edited photo: its last view, else its last grid thumbnail (its edit, if older); a photo
+        // as shot has its camera JPEG, sharper than a thumbnail
+        let latest = if as_shot {
+            Vec::new()
+        } else {
+            vec![(self.media.rendered.clone(), latest_view_key(&p, apply_crop)), (self.media.rendered.clone(), latest_thumb_key(&p))]
+        };
+        let camera_jpeg = self.embedded_stand_in_of(&p);
+        // an edited raw never rendered: a fast draft with its settings from the camera JPEG
+        let draft = match (&camera_jpeg, as_shot) {
+            (Some((path, l)), false) => {
+                let e = max_edge.clamp(1, DRAFT_EDGE);
+                self.render_job(id, e, e, false, apply_crop).map(|j| (path.clone(), l.clone(), e, Box::new(j)))
+            }
+            _ => None,
+        };
+        let embedded = camera_jpeg.filter(|_| as_shot).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
+        let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
+            let cache = self.media.rendered.clone();
+            let generation = cache.generation();
+            (cache, Hasher128::new().str(&content_key(&p)).str("embedded").u64(*edge as u64).finish(), generation)
+        });
+        Some(QuickJob {
+            request_id: 0,
+            photo: id,
+            key,
+            cached,
+            embedded,
+            embedded_cache,
+            embedded_on_disk: false,
+            minimum_embedded_edge: None,
+            latest,
+            fit: None,
+            draft,
+            small: apply_crop.then(|| Box::new(small)),
+        })
+    }
+
+    /// The camera's embedded JPEG of an unedited raw at up to `max_edge` pixels (its full size for
+    /// a camera that stores one), for the loupe zoomed to 100 % while LightCraft renders the window
+    /// on screen: a focus check needs the pixels at once, and a 45 MP render of the window takes
+    /// seconds. Not kept in any cache (a full-size picture is 180 MB). `None` for other photos.
+    pub fn embedded_full_job(&mut self, id: PhotoId, max_edge: usize) -> Option<QuickJob> {
+        let p = self.catalog.photo(id)?.clone();
+        if !crate::import::looks_as_shot(&p) {
+            return None;
+        }
+        let (path, l) = self.embedded_stand_in_of(&p)?;
+        let key = Hasher128::new().str(&content_key(&p)).str("embedded-full").u64(id.0).u64(max_edge as u64).finish().0 as u64;
+        Some(QuickJob {
+            request_id: 0,
+            photo: id,
+            key,
+            cached: Vec::new(),
+            embedded: Some((path, l, max_edge.max(1))),
+            embedded_cache: None,
+            embedded_on_disk: false,
+            minimum_embedded_edge: None,
+            latest: Vec::new(),
+            fit: None,
+            draft: None,
+            small: None,
+        })
     }
 
     /// A first grid thumbnail for an unedited raw: the cached render for `job` (the real
@@ -355,17 +443,59 @@ impl crate::Session {
     /// itself: the grid queues no render behind an unedited raw's quick thumbnail
     /// ([`Self::embedded_thumb_is_final`]), so a preview that can't be read must not leave the
     /// cell empty (issue #1448). `None` for other photos (render them directly).
+    ///
+    /// An edited photo (not as shot, [`crate::import::looks_as_shot`]) never gets its camera JPEG
+    /// (unedited, uncropped): its stand-in is its own thumbnail for these settings, else its latest
+    /// thumbnail or view with earlier settings, shrunk to the cell ([`QuickSource::Last`]). `None`
+    /// when it has none of them: its render is the first picture.
     pub fn quick_thumb_job(&mut self, job: &RenderJob) -> Option<QuickJob> {
         let p = self.catalog.photo(job.photo)?.clone();
-        let (path, l) = self.embedded_of(&p)?;
         let edge = job.request.max_w.max(job.request.max_h);
+        if !crate::import::looks_as_shot(&p) {
+            let c = self.media.rendered.clone();
+            let latest = vec![(c.clone(), latest_thumb_key(&p)), (c.clone(), latest_view_key(&p, true))];
+            let exact = job.cache.clone();
+            // nothing of it rendered yet: a fast draft with its settings from the camera JPEG (a raw), else
+            // its render is its first picture
+            let draft = if !exact.iter().any(|(c, k)| c.has(*k)) && !latest.iter().any(|(c, k)| c.has(*k)) {
+                let jpeg = self.embedded_stand_in_of(&p)?;
+                let mut j = job.clone();
+                j.cache = None;
+                j.latest = None;
+                Some((jpeg.0, jpeg.1, edge, Box::new(j)))
+            } else {
+                None
+            };
+            return Some(QuickJob {
+                request_id: 0,
+                photo: job.photo,
+                key: job.key,
+                cached: exact.into_iter().collect(),
+                embedded: None,
+                embedded_cache: None,
+                embedded_on_disk: false,
+                minimum_embedded_edge: None,
+                latest,
+                fit: Some((edge, edge)),
+                draft,
+                small: None,
+            });
+        }
+        let (path, l) = self.embedded_stand_in_of(&p)?;
         Some(QuickJob {
             request_id: 0,
             photo: job.photo,
             key: job.key,
             cached: job.cache.clone().into_iter().collect(),
             embedded: Some((path, l, edge)),
+            // the camera JPEG is this thumbnail (an unedited raw): kept with the rendered ones, under
+            // a key of its own, so the folder's next visit reads it from the thumbnail cache
+            embedded_cache: job.cache.as_ref().map(|(c, k)| (c.clone(), embedded_thumb_key(*k), c.generation())),
+            embedded_on_disk: true,
             minimum_embedded_edge: None,
+            latest: Vec::new(),
+            fit: None,
+            draft: None,
             small: Some(Box::new(job.clone())),
         })
     }

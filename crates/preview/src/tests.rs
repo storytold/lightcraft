@@ -792,3 +792,233 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Notes 1 and 4 of 2026-10-22: with every worker busy with a long render, a cheap stand-in (a
+/// raw's embedded JPEG) waited for one of them to end; the fast lane runs it at once.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_fast_lane_runs_cheap_jobs_while_every_other_worker_is_busy() {
+    use std::time::{Duration, Instant};
+    let mut p: JobPool<u8, u8> = JobPool::with_fast_lane(2, 1, |s| *s >= 100);
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    // two long renders take both ordinary workers…
+    for slot in [1u8, 2] {
+        let h = held.clone();
+        p.submit(
+            slot,
+            0,
+            50,
+            Box::new(move || {
+                let _ = h.lock().map(|r| r.recv_timeout(Duration::from_secs(20)));
+                0
+            }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    // …and a third one waits for them: the fast worker never takes it
+    p.submit(3, 0, 60, Box::new(|| 3));
+    std::thread::sleep(Duration::from_millis(100));
+    // a cheap job still runs at once
+    let t0 = Instant::now();
+    p.submit(100, 0, 1, Box::new(|| 100));
+    let mut got = Vec::new();
+    while t0.elapsed() < Duration::from_secs(5) && !got.contains(&100) {
+        if p.wait(Duration::from_millis(20))
+            && let Some(d) = p.try_recv()
+        {
+            got.push(d.result);
+        }
+    }
+    assert!(got.contains(&100), "the cheap job ran while the other workers were busy");
+    assert!(!got.contains(&3), "the fast lane took only its own jobs: {got:?}");
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    drop(release);
+    p.shutdown(Duration::from_secs(5));
+}
+
+/// Background jobs (a folder's thumbnail renders) run a few at a time: a worker stays free for the
+/// photo on screen.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn background_jobs_leave_workers_free() {
+    use std::time::Duration;
+    let mut p: JobPool<u8, u8> = JobPool::new(3);
+    p.cap_background(10, 1);
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for slot in [1u8, 2, 3] {
+        let (h, r) = (held.clone(), running.clone());
+        p.submit(
+            slot,
+            0,
+            3,
+            Box::new(move || {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = h.lock().map(|x| x.recv_timeout(Duration::from_secs(20)));
+                0
+            }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(running.load(std::sync::atomic::Ordering::SeqCst), 1, "one background job at a time");
+    p.submit(9, 0, 50, Box::new(|| 9));
+    let mut got = None;
+    for _ in 0..100 {
+        if p.wait(Duration::from_millis(20))
+            && let Some(d) = p.try_recv()
+        {
+            got = Some(d.result);
+            break;
+        }
+    }
+    assert_eq!(got, Some(9), "the job on screen found a free worker");
+    drop(release);
+    p.shutdown(Duration::from_secs(5));
+}
+
+/// `put_at` says whether the image is kept where it lasts: not for a job made before the cache was cleared or
+/// retired, nor when the disk cache can't write it (CodeRabbit on #3077).
+#[test]
+fn put_at_says_whether_the_image_was_kept() {
+    let dir = temp_dir("put-at-kept");
+    let cache = PreviewCache::with_disk(1 << 20, &dir, 1 << 20);
+    let (key, img) = (hash_bytes(b"kept"), Arc::new(gradient(8, 8, 3)));
+    let old = cache.generation();
+    assert!(cache.put_at(old, key, img.clone()), "kept");
+    cache.clear();
+    assert!(!cache.put_at(old, key, img.clone()), "a job from before the clear keeps nothing");
+    assert!(cache.put_at(cache.generation(), key, img.clone()));
+    let generation = cache.generation();
+    cache.retire();
+    assert!(!cache.put_at(generation, key, img.clone()), "nor one for a retired cache");
+    // a file where the cache folder goes: the write fails
+    let blocked = temp_dir("put-at-blocked");
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    let cache = PreviewCache::with_disk(1 << 20, &blocked, 1 << 20);
+    assert!(!cache.put_at(cache.generation(), key, img.clone()), "not written");
+    let memory = PreviewCache::memory(1 << 20);
+    assert!(memory.put_at(memory.generation(), key, img), "a memory-only cache keeps it");
+    let _ = std::fs::remove_file(&blocked);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `dims` reads a cached file's first few KiB, and further when its size marker comes later (CodeRabbit on #3080).
+#[test]
+fn dims_finds_a_size_marker_past_the_first_few_kib() {
+    let dir = temp_dir("dims-far");
+    let d = DiskCache::new(&dir, 1 << 20);
+    let key = hash_bytes(b"far");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    // the same picture with a 10 KiB application segment before its frame header
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    let path = dir.join(file);
+    let jpeg = std::fs::read(&path).unwrap();
+    let mut padded = jpeg[..2].to_vec();
+    let pad = 10 << 10;
+    padded.extend_from_slice(&[0xFF, 0xEF, ((pad + 2) >> 8) as u8, ((pad + 2) & 0xFF) as u8]);
+    padded.extend(std::iter::repeat_n(0u8, pad));
+    padded.extend_from_slice(&jpeg[2..]);
+    std::fs::write(&path, padded).unwrap();
+    assert_eq!(d.dims(key), Some((40, 30)), "found past the first read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture bigger than the room pruning leaves is removed by the pruning its own write starts: `put` says it
+/// was not kept (CodeRabbit on #3077).
+#[test]
+fn a_write_the_pruning_removes_is_not_reported_as_kept() {
+    let dir = temp_dir("pruned-away");
+    let d = DiskCache::new(&dir, 64);
+    assert!(!d.put(hash_bytes(b"too big"), &gradient(64, 64, 9)), "pruned away at once");
+    let roomy = DiskCache::new(&dir, 1 << 20);
+    assert!(roomy.put(hash_bytes(b"fits"), &gradient(64, 64, 9)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Notes 3/11/31 of 2026-10-24: a photo's latest picture is found by its alias whatever settings
+/// it was made with, from memory (kept once) or, in the next session, from its own file.
+#[test]
+fn the_latest_picture_is_found_by_its_alias_in_memory_and_next_session_on_disk() {
+    let dir = temp_dir("latest");
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    let (real, alias) = (hash_bytes(b"view for exposure +1"), hash_bytes(b"photo 7: latest view"));
+    let img = Arc::new(gradient(16, 8, 3));
+    assert!(!cache.has(alias) && cache.get_latest(alias).is_none());
+    let g = cache.generation();
+    cache.put_at(g, real, img.clone());
+    cache.put_latest(g, alias, real, img.clone(), true);
+    assert!(cache.has(alias) && cache.has(real));
+    let (_, bytes) = cache.mem_usage();
+    assert!(bytes < 2 * (16 * 8 * 4 + 64), "kept once in memory: {bytes}");
+    assert!(Arc::ptr_eq(&cache.get_latest(alias).unwrap(), &img), "from memory, the same picture");
+    // the next session: only the files
+    let next = PreviewCache::with_disk(1 << 20, &dir, 1 << 30);
+    assert!(next.has(alias));
+    assert_eq!(next.get_latest(alias).map(|i| (i.width, i.height)), Some((16, 8)));
+    // cleared: gone everywhere
+    next.clear();
+    assert!(!next.has(alias) && next.get_latest(alias).is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// CodeRabbit on #3577: an earlier picture read back from the alias's file (the newer one's
+/// alias write skipped or still queued, the newer picture gone from memory) is never shown as the
+/// latest one: the picture the alias points at comes first, from its own file.
+#[test]
+fn an_older_alias_file_never_stands_for_a_newer_latest_picture() {
+    let dir = temp_dir("latest-newer");
+    let one = 16 * 8 * 4 + 64;
+    // room in memory for one picture
+    let cache = Arc::new(PreviewCache::with_disk(one + one / 2, &dir, 1 << 30));
+    let (old, new, alias) = (hash_bytes(b"render 1"), hash_bytes(b"render 2"), hash_bytes(b"photo 7: latest view"));
+    // (told apart by their sizes: the files are JPEGs)
+    let (img1, img2) = (Arc::new(gradient(16, 8, 1)), Arc::new(gradient(12, 6, 2)));
+    let g = cache.generation();
+    cache.put_at(g, old, img1.clone());
+    cache.put_latest(g, alias, old, img1.clone(), true);
+    // the newer render, on disk under its own key; the older one leaves memory
+    cache.put_at(g, new, img2.clone());
+    // read back while the alias still points at the older picture: its file, kept under the alias
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((16, 8)));
+    // the newer render becomes the latest; its alias file is not written yet (and the picture
+    // itself is gone from memory)
+    {
+        let mut a = cache.aliases.lock().unwrap();
+        a.insert(alias, new);
+    }
+    cache.mem.lock().unwrap().remove(&alias);
+    cache.mem.lock().unwrap().remove(&new);
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((12, 6)), "the newer picture, from its file");
+    // put_latest itself drops an earlier picture read back under the alias
+    cache.put_latest(g, alias, old, img1.clone(), true);
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((16, 8)));
+    cache.mem.lock().unwrap().remove(&old);
+    let _ = cache.get_latest(alias);
+    cache.put_latest(g, alias, new, img2.clone(), false);
+    cache.mem.lock().unwrap().remove(&new);
+    assert_eq!(cache.get_latest(alias).map(|i| (i.width, i.height)), Some((12, 6)), "not the earlier picture kept under the alias");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A full cache lets the edited photos' latest previews go only after everything else.
+#[test]
+fn a_full_cache_prunes_the_pictures_kept_last_after_everything_else() {
+    let dir = temp_dir("keep-last");
+    let disk = DiskCache::new(&dir, 1 << 30);
+    let keys: Vec<Hash128> = (0..10u8).map(|i| hash_bytes(&[i])).collect();
+    for (i, k) in keys.iter().enumerate() {
+        disk.put(*k, &gradient(32, 32, i as u8));
+    }
+    // the oldest file is the one to keep
+    disk.keep_last([keys[0]]);
+    let one = disk.size() / 10;
+    disk.set_budget(one * 4);
+    disk.prune();
+    assert!(disk.contains(keys[0]), "the picture to keep last stays");
+    let others = keys[1..].iter().filter(|k| disk.contains(**k)).count();
+    assert!(others <= 3, "the others went first: {others} of 9 left");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -45,6 +45,13 @@ pub enum Slot {
     /// Background preparation of a neighbouring photo (no texture: its decoded source and view
     /// render are cached by the engine). 0 = next, 1 = previous.
     Prefetch(u8),
+    /// The loupe's stand-in for a photo the user is likely to step to next (the camera JPEG of an
+    /// unedited raw, or a cached render), made ahead in the direction of travel so a step shows it
+    /// at once: [`Renderer::request_quick`] takes the texture over into [`Slot::Preview`].
+    QuickAhead(u8),
+    /// The loupe zoomed in on an unedited raw: its camera JPEG at full size, drawn under the window
+    /// render until that arrives (a focus check at 100 % without waiting for the raw).
+    QuickFull,
     /// A variant thumbnail (profile / preset browsers), by its job key ([`Session::variant_job`]).
     /// Kept in a bounded LRU ([`VARIANT_TEXTURES`]).
     Variant(u64),
@@ -64,7 +71,21 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// The loupe zoomed in: the window of the photo the user is likely to step to next, at the same
+    /// place and scale, made ahead into the kept windows ([`Renderer::prefetch_window`]), so the
+    /// step shows it at once. No texture of its own: it goes straight to the kept windows.
+    RegionAhead,
 }
+
+/// Full-quality zoom windows ([`Slot::Region`]) kept after the loupe moved on, newest last: going
+/// back to a photo at the same zoom and place shows its window at once instead of rendering it
+/// again. At most this many, and at most [`KEPT_WINDOW_BYTES`] together.
+pub const KEPT_WINDOWS: usize = 8;
+
+/// The most the kept windows ([`KEPT_WINDOWS`]) hold together, textures and their CPU copies
+/// (headless) counted: a 1:1 window of a 2560 x 1440 screen is about 15 MB, so about eight fit;
+/// one of the widest windows ([`crate::region::MAX_SPAN`]) evicts the others.
+pub const KEPT_WINDOW_BYTES: usize = 256 << 20;
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
 /// hidden grading wheels, must not discard a decoded RAW's actual aspect ratio.
@@ -204,6 +225,11 @@ pub const MAX_VARIANT_TEXTURES: usize = 800;
 /// Priority of variant thumbnail jobs: below on-screen grid thumbnails and the loupe.
 const VARIANT_PRIORITY: u32 = 6;
 
+/// The camera-preview edge a loupe stand-in is made at (0: one that doesn't depend on the size).
+fn quick_edge(job: &QuickJob) -> usize {
+    job.embedded.as_ref().map_or(0, |e| e.2)
+}
+
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
@@ -242,6 +268,14 @@ pub struct Renderer {
     pub completed: u64,
     /// Finished jobs thrown away because a newer request for their slot had replaced them.
     pub discarded: u64,
+    /// Photos given a grid thumbnail since start (a render replacing a stand-in isn't counted again):
+    /// unlike [`Renderer::thumb_textures`] it never goes down when old thumbnails are evicted (for
+    /// benchmarks).
+    pub thumbs_made: u64,
+    /// The photos [`Self::thumbs_made`] counted, by library (a hash of its folder) and id: a
+    /// thumbnail made again after eviction, or after going to another library and back, is the
+    /// same photo (photo ids are a library's own). Never cleared.
+    thumbs_counted: std::collections::HashSet<(u64, PhotoId)>,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
@@ -249,6 +283,10 @@ pub struct Renderer {
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
     quick_tried: HashMap<Slot, u64>,
+    /// The camera-preview edge each loupe stand-in ([`Slot::Preview`], [`Slot::QuickAhead`]) was
+    /// asked for (0: one that doesn't depend on the size): a stand-in made ahead for a smaller loupe
+    /// isn't taken over by a larger one.
+    quick_edge: HashMap<Slot, usize>,
     /// Jobs that failed (unreadable or missing file…), by slot and job key, with the error and
     /// the photo: not requested again until the key changes (an edit, another size) — the grid
     /// asks every frame.
@@ -258,6 +296,15 @@ pub struct Renderer {
     catalog_rev: u64,
     /// Prefetch slot → key of the last job submitted (each runs once).
     prefetched: HashMap<Slot, u64>,
+    /// Recent full-quality zoom windows ([`KEPT_WINDOWS`], least recently shown first).
+    kept_windows: std::collections::VecDeque<Tex>,
+    /// Request id of the [`Slot::Region`] request in flight when it is a full-quality one (a drag's
+    /// drafts are never kept).
+    region_full_request: Option<u64>,
+    /// Key of the [`Slot::Region`] texture when it is a full-quality window (kept when it leaves).
+    region_full: Option<u64>,
+    /// The zoom window (key) whose neighbours' windows are all made ahead and kept.
+    pub windows_ahead_done: Option<u64>,
     /// Variant key → frame it was last asked for (LRU of [`Slot::Variant`] textures).
     variant_used: HashMap<u64, u64>,
     /// How many variants the last frame's views showed at once (see [`Self::want_variants`]).
@@ -277,6 +324,9 @@ pub struct Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
 }
+
+/// How many [`Slot::QuickAhead`] stand-ins the loupe keeps ready.
+pub const AHEAD_SLOTS: u8 = 6;
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
 #[cfg(not(target_arch = "wasm32"))]
@@ -315,7 +365,35 @@ impl Default for Renderer {
     }
 }
 
+/// Workers kept for the stand-ins ([`Slot::is_stand_in`]) on top of the others: the cheapest
+/// pictures (a raw's embedded JPEG, a cached thumbnail or render) never wait for a worker while the
+/// others render raws for seconds ("Rendering…" in the loupe and empty
+/// cells in the filmstrip and grid while every worker decoded a 45 MP raw).
+const STAND_IN_WORKERS: usize = 2;
+
+/// Jobs below this priority are background work (the real thumbnails rendered behind the
+/// stand-ins, [`crate::panels::grid::BACKGROUND_THUMB_PRIORITY`]: for a folder of raws with a
+/// camera profile picked, every cell's): at most [`BACKGROUND_AT_ONCE`] of them run at once, so a
+/// worker is always free for the photo on screen. (The neighbours prepared ahead have their own
+/// limit.)
+const BACKGROUND_BELOW: u32 = 4;
+const BACKGROUND_AT_ONCE: usize = 2;
+
+impl Slot {
+    /// A stand-in picture: cheap to make (a raw's embedded JPEG, a cached picture), and what a view
+    /// shows first, before any render ([`STAND_IN_WORKERS`]).
+    pub fn is_stand_in(&self) -> bool {
+        matches!(self, Slot::ThumbQuick(_) | Slot::Preview | Slot::QuickAhead(_))
+    }
+}
+
 impl Renderer {
+    fn pool(threads: usize) -> JobPool<Slot, Finished> {
+        let pool = if threads == 0 { JobPool::new(0) } else { JobPool::with_fast_lane(threads, STAND_IN_WORKERS, Slot::is_stand_in) };
+        pool.cap_background(BACKGROUND_BELOW, BACKGROUND_AT_ONCE);
+        pool
+    }
+
     /// Explicit worker count for hosts and bounded validation runs (one to six on native).
     /// Browser hosts continue to use inline jobs or their installed worker offload.
     pub fn with_worker_threads(threads: usize) -> Self {
@@ -332,7 +410,7 @@ impl Renderer {
             shown_ids: HashMap::new(),
             epoch: 0,
             preview_generation: None,
-            pool: JobPool::new(threads),
+            pool: Self::pool(threads),
             thumb_inputs: HashMap::new(),
             embedded_thumbs: HashMap::new(),
             offload: None,
@@ -344,12 +422,19 @@ impl Renderer {
             last_main_ms: 0.0,
             completed: 0,
             discarded: 0,
+            thumbs_made: 0,
+            thumbs_counted: Default::default(),
             keep_pixels: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
+            quick_edge: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
+            kept_windows: std::collections::VecDeque::new(),
+            region_full_request: None,
+            region_full: None,
+            windows_ahead_done: None,
             variant_used: HashMap::new(),
             variant_want: 0,
             frame: 0,
@@ -395,7 +480,7 @@ impl Renderer {
             if let Some(&(k, p)) = self.pending.get(&quick_slot)
                 && k == key
             {
-                return p == priority.saturating_add(1) || !self.is_queued(quick_slot);
+                return p == crate::panels::grid::stand_in_priority(priority) || !self.is_queued(quick_slot);
             }
             return !self.request_needed(slot, key, crate::panels::grid::BACKGROUND_THUMB_PRIORITY);
         }
@@ -435,7 +520,7 @@ impl Renderer {
             && *size == bucket
             && *quick
             && self.pending.contains_key(&slot)
-            && !self.request_needed(slot, *key, priority.saturating_add(1))
+            && !self.request_needed(slot, *key, crate::panels::grid::stand_in_priority(priority))
     }
 
     /// Whether a request for this photo's thumbnail is already in flight at another bucket and a
@@ -565,7 +650,12 @@ impl Renderer {
     }
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {
-        self.textures.remove(&slot);
+        // (a full-quality zoom window is kept for a return to it, [`KEPT_WINDOWS`])
+        if let Some(t) = self.textures.remove(&slot)
+            && slot == Slot::Region
+        {
+            self.keep_window(t);
+        }
         self.stages.remove(&slot);
     }
 
@@ -594,11 +684,18 @@ impl Renderer {
             self.slides_live = true;
         }
         let mut job = self.job_for(slot, job);
+        // a zoom window shown before (kept): up at once, nothing rendered
+        if slot == Slot::Region && self.textures.get(&slot).is_none_or(|t| t.key != job.key) && self.take_kept_window(job.key) {
+            return;
+        }
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
+        if slot == Slot::Region {
+            self.region_full_request = (job.request.quality != lightcraft_pipeline::Quality::Draft).then_some(job.request_id);
+        }
         self.requests.insert(
             slot,
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
@@ -613,7 +710,7 @@ impl Renderer {
             return;
         }
         let key = job.key;
-        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_) | Slot::RegionAhead);
         let display = self.display.clone();
         self.pool.submit(
             slot,
@@ -625,6 +722,113 @@ impl Renderer {
                 Finished { look, ..Self::run_for(run, &display) }
             }),
         );
+    }
+
+    /// Show the kept window made for `key` ([`KEPT_WINDOWS`]) in [`Slot::Region`], keeping the one
+    /// shown there now. Whether there was one.
+    fn take_kept_window(&mut self, key: u64) -> bool {
+        let Some(i) = self.kept_windows.iter().position(|t| t.key == key) else { return false };
+        let Some(found) = self.kept_windows.remove(i) else { return false };
+        self.drop_queued(Slot::Region);
+        self.pending.remove(&Slot::Region);
+        self.requests.remove(&Slot::Region);
+        self.failed.remove(&Slot::Region);
+        self.region_full_request = None;
+        // (a render of the window asked for before, still running, is not drawn over it)
+        self.shown_ids.insert(Slot::Region, lightcraft_preview::next_tick());
+        if let Some(old) = self.textures.insert(Slot::Region, found) {
+            self.keep_window(old);
+        }
+        self.region_full = Some(key);
+        true
+    }
+
+    /// A zoom window rendered for `slot` ([`Slot::Region`] or [`Slot::RegionAhead`]; any other slot
+    /// is returned as it is), with `key`, for request `request_id`: the slot its texture goes to.
+    /// The full-quality window shown so far is kept for a return to it and the new one gets a
+    /// texture of its own; a window made ahead for the photo the loupe has stepped to before it was
+    /// done is the loupe's window (the loupe's own render of it, if one started, is dropped).
+    fn window_arrived(&mut self, slot: Slot, key: u64, request_id: u64) -> Slot {
+        let full = match slot {
+            Slot::Region => self.region_full_request.is_some_and(|id| id == request_id),
+            Slot::RegionAhead if self.pending.get(&Slot::Region).is_some_and(|p| p.0 == key) => {
+                self.drop_queued(Slot::Region);
+                self.pending.remove(&Slot::Region);
+                self.requests.remove(&Slot::Region);
+                self.region_full_request = None;
+                self.shown_ids.insert(Slot::Region, lightcraft_preview::next_tick());
+                true
+            }
+            _ => return slot,
+        };
+        if self.textures.get(&Slot::Region).is_some_and(|t| t.key != key)
+            && let Some(t) = self.textures.remove(&Slot::Region)
+        {
+            self.keep_window(t);
+        }
+        self.region_full = full.then_some(key);
+        Slot::Region
+    }
+
+    /// Move the window just made ahead (the texture of [`Slot::RegionAhead`]) to the kept windows,
+    /// when `slot` is that one.
+    fn keep_made_ahead(&mut self, slot: Slot) {
+        if slot == Slot::RegionAhead
+            && let Some(t) = self.textures.remove(&Slot::RegionAhead)
+        {
+            self.keep(t);
+        }
+    }
+
+    /// Keep `t`, a window that leaves [`Slot::Region`], if it is a full-quality one (a draft is let go).
+    fn keep_window(&mut self, t: Tex) {
+        if self.region_full.take() == Some(t.key) {
+            self.keep(t);
+        }
+    }
+
+    /// Bytes a texture holds (on the GPU, and its CPU copy if it has one).
+    fn tex_bytes(t: &Tex) -> usize {
+        let gpu = t.size[0].saturating_mul(t.size[1]).saturating_mul(4);
+        gpu.saturating_add(t.pixels.as_ref().map_or(0, |p| p.pixels.len().saturating_mul(4)))
+    }
+
+    /// Add `t` to the kept windows (the newest), dropping the oldest past [`KEPT_WINDOWS`] or
+    /// [`KEPT_WINDOW_BYTES`]. A window bigger than that alone isn't kept.
+    fn keep(&mut self, t: Tex) {
+        self.kept_windows.retain(|k| k.key != t.key);
+        if Self::tex_bytes(&t) > KEPT_WINDOW_BYTES {
+            return;
+        }
+        self.kept_windows.push_back(t);
+        while self.kept_windows.len() > KEPT_WINDOWS || self.kept_windows().1 > KEPT_WINDOW_BYTES {
+            if self.kept_windows.pop_front().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Make the window `job` (already keyed for [`Slot::Region`], see [`Self::job_for`]) ahead, at
+    /// `priority`, into the kept windows: the loupe zoomed in, for the photo the user steps to next.
+    /// Nothing when it is kept already or on screen. Whether it is being made (not when it failed
+    /// before: a photo that can't be read isn't asked for again until the catalog changes it).
+    pub fn prefetch_window(&mut self, job: RenderJob, priority: u32) -> bool {
+        let key = job.key;
+        if self.window_kept(key) || self.textures.get(&Slot::Region).is_some_and(|t| t.key == key) {
+            return false;
+        }
+        self.request(Slot::RegionAhead, job, priority);
+        self.pending.get(&Slot::RegionAhead).is_some_and(|p| p.0 == key)
+    }
+
+    /// Whether the window made for `key` is kept ([`KEPT_WINDOWS`]).
+    pub fn window_kept(&self, key: u64) -> bool {
+        self.kept_windows.iter().any(|t| t.key == key)
+    }
+
+    /// How many zoom windows are kept, and the bytes they hold ([`KEPT_WINDOW_BYTES`]).
+    pub fn kept_windows(&self) -> (usize, usize) {
+        (self.kept_windows.len(), self.kept_windows.iter().map(Self::tex_bytes).fold(0, usize::saturating_add))
     }
 
     /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
@@ -647,7 +851,9 @@ impl Renderer {
         }
     }
 
-    /// Request a stand-in for `slot` (once per job key).
+    /// Request a stand-in for `slot` (once per job key). The loupe's [`Slot::Preview`] takes over
+    /// a stand-in already made ahead for the same photo ([`Slot::QuickAhead`]) instead of making it
+    /// again: shown in this frame when it is ready, or as soon as that job finishes.
     pub fn request_quick(&mut self, slot: Slot, mut job: QuickJob, priority: u32) {
         if self.quick_tried.get(&slot) == Some(&job.key) {
             if self.pending.get(&slot).is_some_and(|p| p.0 == job.key && p.1 != priority) {
@@ -669,6 +875,14 @@ impl Renderer {
             return;
         }
         self.quick_tried.insert(slot, job.key);
+        if matches!(slot, Slot::Preview | Slot::QuickAhead(_)) {
+            self.quick_edge.insert(slot, quick_edge(&job));
+        }
+        if slot == Slot::Preview && self.take_ahead(job.photo, job.key, quick_edge(&job)) {
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+            return;
+        }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         let source = job
@@ -682,7 +896,78 @@ impl Renderer {
         );
         let key = job.key;
         let display = self.display.clone();
+        // (no stand-in waits at the memory gate as background work, not even one made ahead: it is a
+        // small read and a JPEG decoded at the size shown, on a worker kept for stand-ins, which
+        // must not sit there while the renders hold the memory)
         self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
+    }
+
+    /// Whether the stand-in asked for in `slot` is at least `edge` pixels (see `quick_edge`).
+    fn ahead_covers(&self, slot: Slot, edge: usize) -> bool {
+        self.quick_edge.get(&slot).copied().unwrap_or(0) >= edge
+    }
+
+    /// Move a [`Slot::QuickAhead`] texture of `photo` made for `key`, at least `edge` pixels, into
+    /// [`Slot::Preview`].
+    fn take_ahead(&mut self, photo: PhotoId, key: u64, edge: usize) -> bool {
+        let Some(slot) = self
+            .textures
+            .iter()
+            .find(|(s, t)| matches!(s, Slot::QuickAhead(_)) && t.photo == photo && t.key == key && self.ahead_covers(**s, edge))
+            .map(|(s, _)| *s)
+        else {
+            return false;
+        };
+        let Some(tex) = self.textures.remove(&slot) else { return false };
+        self.quick_tried.remove(&slot);
+        self.textures.insert(Slot::Preview, tex);
+        true
+    }
+
+    /// Make the loupe's stand-ins for the photos it is likely to be stepped to next (see
+    /// [`Slot::QuickAhead`]), most likely first: `jobs[0]` gets `priority`, each next one less.
+    /// A slot keeps a photo for as long as the photo stays wanted (made or being made, it is not
+    /// made again when the user steps and the photos shift places); slots holding photos not
+    /// wanted any more are freed for the new ones, and their queued jobs dropped.
+    pub fn look_ahead(&mut self, jobs: Vec<QuickJob>, priority: u32) {
+        let slots: Vec<Slot> = (0..AHEAD_SLOTS).map(Slot::QuickAhead).collect();
+        let held = |r: &Self, s: Slot| r.textures.get(&s).map(|t| t.key).or_else(|| r.quick_tried.get(&s).copied());
+        // (a stand-in asked for at a smaller loupe size isn't kept for a larger one)
+        let wanted: HashMap<u64, usize> = jobs.iter().map(|j| (j.key, quick_edge(j))).collect();
+        let mut free = Vec::new();
+        for &s in &slots {
+            let key = held(self, s);
+            if key.is_none_or(|k| wanted.get(&k).is_none_or(|&edge| !self.ahead_covers(s, edge))) {
+                self.textures.remove(&s);
+                // a job already running: its result is thrown away when it arrives (not left as a
+                // hidden stand-in), unless the loupe is waiting for just that one (a step to the
+                // photo): then the slot stays reserved for it until it arrives
+                let preview_edge = self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0);
+                let loupe_waits =
+                    key.is_some_and(|k| self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == k)) && self.ahead_covers(s, preview_edge);
+                if !self.drop_queued(s) && loupe_waits {
+                    continue;
+                }
+                self.quick_tried.remove(&s);
+                self.pending.remove(&s);
+                self.requests.remove(&s);
+                free.push(s);
+            }
+        }
+        let have: HashMap<u64, Slot> = slots.iter().filter_map(|&s| held(self, s).map(|k| (k, s))).collect();
+        let mut free = free.into_iter();
+        for (rank, job) in jobs.into_iter().enumerate() {
+            let priority = priority.saturating_sub(rank as u32);
+            if let Some(&s) = have.get(&job.key) {
+                // kept: a job still queued moves to its new place in the order
+                if self.quick_tried.get(&s) == Some(&job.key) {
+                    self.request_quick(s, job, priority);
+                }
+                continue;
+            }
+            let Some(slot) = free.next() else { break };
+            self.request_quick(slot, job, priority);
+        }
     }
 
     /// Render a slideshow title screen into `slot` (once per screen key, like [`Self::request`]):
@@ -725,6 +1010,21 @@ impl Renderer {
         );
     }
 
+    /// Prepared-ahead jobs ([`Slot::Prefetch`]) queued or running.
+    pub fn prefetches_pending(&self) -> usize {
+        self.pending.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
+    }
+
+    /// Prepared-ahead slots asked for since the renderer last forgot everything.
+    pub fn prefetch_slots_asked(&self) -> usize {
+        self.prefetched.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
+    }
+
+    /// Whether `slot` was last asked for the job of `key` (queued, running or done).
+    pub fn prefetch_asked(&self, slot: Slot, key: u64) -> bool {
+        self.prefetched.get(&slot) == Some(&key)
+    }
+
     /// Drop the slideshow slides other than `keep`: their textures and their requests that have
     /// not started (a slide that is no longer near is not worth rendering).
     pub fn release_slides(&mut self, keep: &[lightcraft_engine::slideshow::Item]) {
@@ -753,6 +1053,10 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.kept_windows.clear();
+        self.region_full_request = None;
+        self.region_full = None;
+        self.windows_ahead_done = None;
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -955,6 +1259,11 @@ impl Renderer {
         }
     }
 
+    /// Frames polled so far (one a frame).
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
     pub fn thumb_textures(&self) -> usize {
         self.textures.keys().filter(|s| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_))).count()
     }
@@ -1065,13 +1374,30 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // made ahead for the photo the loupe is now waiting for: it is the loupe's stand-in
+            // (the loupe's own request for it, if one was started, is dropped when it arrives)
+            // (also when the loupe's own request failed and it still wants that photo: the stand-in
+            // made ahead still shows, but never over another photo's request)
+            if matches!(slot, Slot::QuickAhead(_))
+                && r.rendered.is_ok()
+                && (self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == r.key)
+                    || (!self.pending.contains_key(&Slot::Preview)
+                        && self.quick_tried.get(&Slot::Preview) == Some(&r.key)
+                        && self.failed.get(&Slot::Preview).is_some_and(|f| f.0 == r.key && f.3 == r.photo)))
+                && self.ahead_covers(slot, self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0))
+            {
+                self.pending.remove(&Slot::Preview);
+                self.requests.remove(&Slot::Preview);
+                self.quick_tried.remove(&slot);
+                slot = Slot::Preview;
+            }
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
                     x
                 }
                 Err(e) => {
-                    if !matches!(slot, Slot::Prefetch(_)) {
+                    if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
                         let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
                         #[cfg(test)]
                         self.failure_messages.push(message.clone());
@@ -1100,9 +1426,15 @@ impl Renderer {
                     slot = Slot::Thumb(id);
                 }
             }
+            // (a photo's first thumbnail: not a render replacing its stand-in, nor one made again)
+            let first_thumb = match slot {
+                Slot::Thumb(id) | Slot::ThumbQuick(id) => self.thumbs_counted.insert((library_key(session), id)),
+                _ => false,
+            };
             if let Slot::Thumb(id) = slot {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
+            let slot = self.window_arrived(slot, r.key, r.request_id);
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
@@ -1137,7 +1469,13 @@ impl Renderer {
                     );
                 }
             }
-            if slot == Slot::Main {
+            if first_thumb {
+                self.thumbs_made += 1;
+            }
+            // a window made ahead: kept for the step to its photo
+            self.keep_made_ahead(slot);
+            // (a preview taken from the cache says nothing about how long a render takes)
+            if slot == Slot::Main && r.quick.is_none() {
                 self.last_main_ms = ms;
             }
             changed = true;
@@ -1199,12 +1537,36 @@ impl Renderer {
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
             "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "keptWindows": {"count": self.kept_windows.len(), "bytes": self.kept_windows().1, "budgetBytes": KEPT_WINDOW_BYTES},
         })
     }
 
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
         self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+    }
+
+    /// Forget everything about `slot`: its texture, its queued job, and that its stand-in was asked
+    /// for (so asking again makes it again).
+    pub fn forget(&mut self, slot: Slot) {
+        self.drop_queued(slot);
+        self.pending.remove(&slot);
+        self.requests.remove(&slot);
+        self.quick_tried.remove(&slot);
+        self.release(slot);
+    }
+
+    /// Drop `slot`'s job if it is still queued (a running one finishes). Returns whether one was.
+    pub fn drop_queued(&mut self, slot: Slot) -> bool {
+        let dropped = self.pool.reprioritize(|s, p| if *s == slot { None } else { Some(p) });
+        let before = self.queue.len();
+        self.queue.retain(|q| q.slot != slot);
+        let any = !dropped.is_empty() || self.queue.len() != before;
+        if any {
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+        }
+        any
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -1230,7 +1592,7 @@ impl Renderer {
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
         let dropped = self.pool.reprioritize(|s, p| match s {
-            Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && p <= 11 => None,
+            Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && (p <= 11 || p == crate::panels::grid::STAND_IN_ON_SCREEN) => None,
             _ => Some(p),
         });
         for s in dropped {
@@ -1296,6 +1658,48 @@ mod stage_budget_tests {
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle, Some((long_ago, true)), "trimmed once the window is gone");
+    }
+
+    /// A window texture of `key` claiming `size` (only its bookkeeping size matters here).
+    fn window_tex(ctx: &egui::Context, key: u64, size: [usize; 2]) -> Tex {
+        let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
+        Tex { look: None, key, photo: PhotoId(key), tex, size, histogram: None, ms: 0.0, quick: None, pixels: None }
+    }
+
+    // Given zoom windows leaving the loupe, at most KEPT_WINDOWS of them and KEPT_WINDOW_BYTES
+    // together are kept (the oldest go first), a window over the byte cap alone is never kept, and
+    // a draft is never kept
+    #[test]
+    fn kept_zoom_windows_stay_within_their_caps() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        for key in 1..=20 {
+            r.keep(window_tex(&ctx, key, [1000, 1000]));
+        }
+        assert_eq!(r.kept_windows().0, KEPT_WINDOWS);
+        assert!(!r.window_kept(12) && r.window_kept(13) && r.window_kept(20), "the newest kept");
+        // big ones (100 MB each): the byte cap wins
+        for key in 21..=24 {
+            r.keep(window_tex(&ctx, key, [5000, 5000]));
+        }
+        let (count, bytes) = r.kept_windows();
+        assert!(bytes <= KEPT_WINDOW_BYTES && count >= 1 && r.window_kept(24), "{count} windows, {bytes} bytes");
+        // one wider than the whole cap
+        r.keep(window_tex(&ctx, 25, [9000, 9000]));
+        assert!(!r.window_kept(25));
+        // a draft leaving the loupe is let go; a full-quality window is kept
+        r.forget_all();
+        r.textures.insert(Slot::Region, window_tex(&ctx, 30, [10, 10]));
+        r.release(Slot::Region);
+        assert!(!r.window_kept(30), "a draft (not marked full quality)");
+        r.textures.insert(Slot::Region, window_tex(&ctx, 31, [10, 10]));
+        r.region_full = Some(31);
+        r.release(Slot::Region);
+        assert!(r.window_kept(31));
+        // asked for again: shown at once, nothing rendered
+        let n = r.pending.len();
+        assert!(r.take_kept_window(31) && r.textures.get(&Slot::Region).is_some_and(|t| t.key == 31));
+        assert_eq!(r.pending.len(), n);
     }
 
     // Given stage caches within the budget, nothing is cleared
@@ -1431,4 +1835,14 @@ mod color_image_tests {
         let img = lightcraft_raster::Rgba8::new(0, 0);
         assert!(color_image(&img).pixels.is_empty());
     }
+}
+
+/// Which library `session` has open, for [`Renderer::thumbs_made`]: a hash of its folder (the same
+/// library opened again is the same), 0 with none.
+fn library_key(session: &Session) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(lib) = session.library.as_ref() else { return 0 };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lib.dir.hash(&mut h);
+    h.finish()
 }
