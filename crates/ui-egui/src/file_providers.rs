@@ -213,9 +213,8 @@ impl Host {
 
     pub fn disconnect(&self) -> Result<(), String> {
         let mut s = self.state();
-        let queued_terminal = s.events.iter().any(|event| {
-            matches!(event.metadata.get("type").and_then(Value::as_str), Some("opened" | "openFailed" | "saveFailed"))
-        });
+        let queued_terminal =
+            s.events.iter().any(|event| matches!(event.metadata.get("type").and_then(Value::as_str), Some("opened" | "openFailed" | "saveFailed")));
         if s.busy() || queued_terminal {
             return Err("finish or cancel pending operations and consume completion events before unregistering".into());
         }
@@ -478,11 +477,7 @@ impl Host {
     /// Dispatch must return recoverable platform exceptions as Err. A failed save is consumed as
     /// a correlated failed result, never a durable acknowledgement. Returns whether repaint is
     /// needed to let the application consume the failure without waiting for more host input.
-    pub fn publish_events_with<E>(
-        &self,
-        mut dispatch: impl FnMut(&Value, Option<Vec<u8>>) -> Result<(), E>,
-        mut on_error: impl FnMut(E),
-    ) -> bool {
+    pub fn publish_events_with<E>(&self, mut dispatch: impl FnMut(&Value, Option<Vec<u8>>) -> Result<(), E>, mut on_error: impl FnMut(E)) -> bool {
         let mut failed = false;
         // The first drain frees a full queue; the second delivers retained terminals in order.
         for _ in 0..2 {

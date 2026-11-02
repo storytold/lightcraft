@@ -363,18 +363,18 @@ fn failed_delivery_recovers_its_existing_capture_even_with_a_full_command_queue(
     }
     assert_eq!(host.state().commands.len(), super::MAX_PENDING);
     assert!(host.result(id.clone(), "saved".into(), "one".into()).unwrap_err().contains("queue is full"));
-    assert!(host.publish_events_with(
-        |metadata, _| if metadata["type"] == "save" { Err("delivery failed") } else { Ok(()) },
-        |_| {},
-    ));
+    assert!(host.publish_events_with(|metadata, _| if metadata["type"] == "save" { Err("delivery failed") } else { Ok(()) }, |_| {},));
     assert!(host.state().captures.is_empty());
     let commands = host.take_commands();
     assert_eq!(commands.len(), super::MAX_PENDING + 1);
     assert_eq!(commands.iter().filter(|command| matches!(command, Command::Open { .. })).count(), reads.len());
-    let failures: Vec<_> = commands.iter().filter_map(|command| match command {
-        Command::Result { capture, resource, status } => Some((capture.doc, capture.revision, resource.as_str(), status.as_str())),
-        _ => None,
-    }).collect();
+    let failures: Vec<_> = commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::Result { capture, resource, status } => Some((capture.doc, capture.revision, resource.as_str(), status.as_str())),
+            _ => None,
+        })
+        .collect();
     assert_eq!(failures, vec![(1, 23, "", "failed")]);
     assert!(!host.bound(1));
     assert!(host.result(id, "saved".into(), "late".into()).is_err());
