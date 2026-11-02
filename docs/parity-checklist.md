@@ -43,7 +43,7 @@ cited here still exists. Formerly docs/parity.md.
 | O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 2 | 3 | 0 | 0 | — | — |
-| R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
+| R. Video (VID) | 0 | 1 | 4 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 14 | 5 | 0 | 0 | 7/7 (100%) | 6/7 (86%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 420 | 66 | 57 | 35 | 195/203 (96%) | 146/161 (91%) |
+| **Total** | 420 | 67 | 56 | 35 | 195/203 (96%) | 146/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 543 in-scope rows — P0 98.0% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 543 in-scope rows — P0 98.0% of 203 · P1 94.7% of 161 · P2 56.7% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -378,7 +378,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-VID-PLAY | Video playback | P1 | ⬜ | `crates/catalog/src/model.rs` | videos can be catalogued (kind, duration); no player |
+| LR-VID-PLAY | Video playback | P1 | 🟡 | `crates/catalog/src/model.rs`, `crates/meta/src/video.rs`, `crates/engine/src/import.rs`, `crates/ui-egui/src/panels/grid.rs` | videos can be imported and catalogued (kind, duration, dimensions, captured); format and duration badges in grid, card in loupe, no player yet |
 | LR-VID-TRIM | Trim | P1 | ⬜ | | |
 | LR-VID-EDIT | Edits on video | P2 | ⬜ | | |
 | LR-VID-COVER | Cover frame | P2 | ⬜ | | |
