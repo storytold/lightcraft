@@ -33,7 +33,7 @@ const CURRENT_DIR: &str = "library-browser-draft-fixture";
 const DRAFT_ERROR: &str = "Finish or cancel the current text edit, gesture or preview before opening a provider library";
 
 // Only test code replaces Uint8Array.from. The real production catch binding is still called.
-// Restore both original property descriptors in JS finally, including an escaping Rust/JS error.
+// Restore all overwritten descriptors in JS finally, including an escaping Rust/JS error.
 #[wasm_bindgen(inline_js = r#"
 export function lightcraftProviderBrowserTurnForTest() {
     return new Promise(resolve => setTimeout(resolve, 0));
@@ -50,6 +50,8 @@ export function lightcraftProviderCopyFailureForTest(callback) {
     const originalFrom = Uint8Array.from;
     const errorDescriptor = Object.getOwnPropertyDescriptor(console, 'error');
     const originalError = console.error;
+    const warnDescriptor = Object.getOwnPropertyDescriptor(console, 'warn');
+    const originalWarn = console.warn;
     let calls = 0;
     const logged = [];
     try {
@@ -64,14 +66,24 @@ export function lightcraftProviderCopyFailureForTest(callback) {
                 return originalError.apply(console, args);
             }
         });
+        // The pinned eframe WebLogger emits Error records through console.warn with ERROR:.
+        Object.defineProperty(console, 'warn', {
+            configurable: true, writable: true,
+            value(...args) {
+                logged.push(args.map(value => String(value)).join(' '));
+                return originalWarn.apply(console, args);
+            }
+        });
         callback();
     } finally {
         if (fromDescriptor) Object.defineProperty(Uint8Array, 'from', fromDescriptor);
         else Reflect.deleteProperty(Uint8Array, 'from');
         if (errorDescriptor) Object.defineProperty(console, 'error', errorDescriptor);
         else Reflect.deleteProperty(console, 'error');
+        if (warnDescriptor) Object.defineProperty(console, 'warn', warnDescriptor);
+        else Reflect.deleteProperty(console, 'warn');
     }
-    return { calls, logged, restored: Uint8Array.from === originalFrom && console.error === originalError };
+    return { calls, logged, restored: Uint8Array.from === originalFrom && console.error === originalError && console.warn === originalWarn };
 }
 "#)]
 extern "C" {
@@ -465,7 +477,11 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     assert_eq!(Reflect::get(&injected, &"calls".into())?.as_f64(), Some(1.0));
     assert_eq!(Reflect::get(&injected, &"restored".into())?.as_bool(), Some(true));
     let logged = Reflect::get(&injected, &"logged".into())?.dyn_into::<Array>()?;
-    assert!(logged.iter().any(|value| { value.as_string().is_some_and(|line| line.contains("file-provider event delivery failed")) }));
+    assert!(
+        logged
+            .iter()
+            .any(|value| { value.as_string().is_some_and(|line| line.contains("ERROR:") && line.contains("file-provider event delivery failed")) })
+    );
     assert!(events.matching(since, "save", Some(&failed_request)).is_empty(), "copy failed before the window received bytes");
     let later_events = events.matching(since, "openFailed", Some(&later));
     assert_eq!(later_events.len(), 1);

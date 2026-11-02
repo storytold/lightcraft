@@ -82,8 +82,10 @@ must load and bind through the real asynchronous admission path.
 
 The same single fixture temporarily makes JavaScript Uint8Array.from throw a deterministic
 RangeError while calling the actual WASM catch binding and production publisher. JavaScript
-try/finally restores the original Uint8Array.from and console.error descriptors even on an
-escaping error. Assertions require the real error log, consumption of the exact failed capture,
+try/finally restores the original Uint8Array.from, console.error and console.warn descriptors even on an
+escaping error. The pinned eframe logger sends Error records through console.warn with an ERROR: prefix;
+the fixture observes both console channels without changing their forwarding behavior. Assertions
+require the real error log, consumption of the exact failed capture,
 continued terminal dispatch, unchanged provider checkpoint and actual application consumption
 of the correlated failure. A subsequent save must deliver its exact bytes normally and remain
 pending until the test host explicitly reports saved. This is an injected JavaScript exception,
