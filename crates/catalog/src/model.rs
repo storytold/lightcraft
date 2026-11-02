@@ -157,7 +157,10 @@ impl CopyrightStatus {
 pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
     let s = s.trim().trim_end_matches(['s', '"']).trim();
     match s.split_once('/') {
-        Some((n, d)) => Some(n.trim().parse::<f64>().ok()? / d.trim().parse::<f64>().ok()?),
+        Some((n, d)) => {
+            let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
+            if n > 0.0 && d > 0.0 { Some(n / d) } else { None }
+        }
         None => s.parse().ok(),
     }
     .filter(|v: &f64| v.is_finite() && *v > 0.0)
@@ -714,5 +717,18 @@ mod edited_tests {
             assert_eq!(p.camera_defaults().wb.mode, WbMode::AsShot);
             assert!(!p.is_edited());
         }
+    }
+}
+
+#[cfg(test)]
+mod shutter_tests {
+    use super::parse_shutter_seconds;
+
+    #[test]
+    fn a_fraction_needs_a_positive_numerator_and_denominator() {
+        for s in ["-1/-250", "1/-250", "-1/250", "0/250"] {
+            assert_eq!(parse_shutter_seconds(s), None, "{s}");
+        }
+        assert_eq!(parse_shutter_seconds("1/250"), Some(0.004));
     }
 }
