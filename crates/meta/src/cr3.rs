@@ -519,6 +519,86 @@ mod tests {
         file
     }
 
+    /// A synthetic CR3 with a Canon maker note (`CMT3`) holding an AFInfo2 record: Face +
+    /// Tracking, one 115-pixel frame 1087 right of and 911 above the centre of 8192 × 5464.
+    fn sample_with_af(model: &str) -> Vec<u8> {
+        use lightcraft_tiff::{Value, tags as t};
+        let cmt1 = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false)
+            .write(&[lightcraft_tiff::IfdBuilder::new().with(t::MAKE, Value::Ascii("Canon".into())).with(t::MODEL, Value::Ascii(model.into()))])
+            .unwrap();
+        sample_with_af_exif(cmt1)
+    }
+
+    /// [`sample_with_af`] with `cmt1` as its Exif (CMT1) block.
+    fn sample_with_af_exif(cmt1: Vec<u8>) -> Vec<u8> {
+        use lightcraft_tiff::{Value, tags as t};
+        let n = 1053usize;
+        let mut af = vec![0u16; 8 + 4 * n + n.div_ceil(16)];
+        af[..8].copy_from_slice(&[0, 6, n as u16, 1, 8192, 5464, 8192, 5464]);
+        af[8] = 115;
+        af[8 + n] = 115;
+        af[8 + 2 * n] = 1087;
+        af[8 + 3 * n] = 911;
+        af[8 + 4 * n] = 1;
+        let cmt2 = tiff_with(t::ISO_SPEED, Value::Short(vec![100]));
+        let cmt3 = tiff_with(0x26, Value::Short(af));
+        let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &cmt1), bx(b"CMT2", &cmt2), bx(b"CMT3", &cmt3)].concat());
+        let mut file = bx(b"ftyp", b"crx    crx isom");
+        file.extend(bx(b"moov", &canon));
+        file.extend(bx(b"mdat", &vec![0u8; 100_000]));
+        file
+    }
+
+    /// A CR3 whose Exif names no camera, but whose XMP names a checked Canon body: its AF point
+    /// is read with the camera the XMP gives (review of #3566).
+    #[test]
+    fn canon_af_point_from_cr3_with_the_camera_in_xmp() {
+        // an Exif block that names no camera
+        let mut file = sample_with_af_exif(tiff_with(lightcraft_tiff::tags::ISO_SPEED, lightcraft_tiff::Value::Short(vec![100])));
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Make="Canon" tiff:Model="Canon EOS R5 C"/></rdf:RDF></x:xmpmeta>"#;
+        // where Canon writes it: right after `moov`, before `mdat`
+        let moov_end = file.windows(4).position(|w| w == b"mdat").unwrap() - 4;
+        file.splice(moov_end..moov_end, uuid(&XMP_UUID, xmp));
+        let m = crate::extract(&file);
+        assert_eq!(m.model.as_deref(), Some("Canon EOS R5 C"), "the XMP names the camera");
+        assert!(m.focus.is_some(), "a point");
+        assert!(crate::try_extract(&file).unwrap().focus.is_some(), "try_extract too");
+        // and by the header alone, as the background scan reads it (review of #3566)
+        let h = crate::focus::read_header(file.len() as u64, &mut |off, buf| {
+            buf.copy_from_slice(&file[off as usize..off as usize + buf.len()]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(h.focus, m.focus, "the header read finds the XMP after moov");
+    }
+
+    /// Canon's AF point comes out of a CR3, read whole or by its header alone (the moov box).
+    #[test]
+    fn canon_af_point_from_cr3_whole_and_header() {
+        let file = sample_with_af("Canon EOS R5 C");
+        let p = crate::extract(&file).focus.expect("a point");
+        let (cx, cy) = p.center();
+        assert!((cx - 5183.0 / 8192.0).abs() < 1e-6 && (cy - 1821.0 / 5464.0).abs() < 1e-6, "{cx} {cy}");
+        let mut reads = 0;
+        let h = crate::focus::read_header(file.len() as u64, &mut |off, buf| {
+            reads += 1;
+            buf.copy_from_slice(&file[off as usize..off as usize + buf.len()]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(h.focus, Some(p));
+        assert!(h.bytes_read < 64 * 1024, "{}", h.bytes_read);
+        // a body whose files haven't been checked: no point
+        assert!(crate::extract(&sample_with_af("Canon EOS R6")).focus.is_none());
+        // truncated moov: no point, no panic
+        let cut = &file[..200];
+        assert!(crate::extract(cut).focus.is_none());
+        let _ = crate::focus::read_header(cut.len() as u64, &mut |off, buf| {
+            buf.copy_from_slice(&cut[off as usize..off as usize + buf.len()]);
+            Ok(())
+        });
+    }
+
     #[test]
     fn parses_canon_boxes_tracks_and_xmp() {
         let f = sample();

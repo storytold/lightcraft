@@ -19,4 +19,6 @@ chrono = { workspace = true }
 # Lossless synthetic HEIC files: the HEIF item reader is proved against a real container writer.
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 proptest = { workspace = true }
+# tests record why they skip (`cargo xtask ci` lists the skips)
+lightcraft-testkit = { workspace = true }
 serde_json = { workspace = true }

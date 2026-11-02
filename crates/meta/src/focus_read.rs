@@ -32,8 +32,9 @@ const MAX_SEGMENTS: usize = 1024;
 /// Entries read from one IFD (the TIFF reader's limit).
 const MAX_ENTRIES: u64 = 8192;
 
-/// The focus tags whose values [`crate::focus`] reads from a Sony maker note.
-const FOCUS_TAGS: [u16; 6] = [0x201b, 0x201c, 0x2021, 0x2027, 0x2037, 0x9402];
+/// The focus tags whose values [`crate::focus`] reads from a maker note: Sony's, then Canon's AFInfo2
+/// and AFInfo3 records (CR2s and Canon JPEGs).
+const FOCUS_TAGS: [u16; 8] = [0x201b, 0x201c, 0x2021, 0x2027, 0x2037, 0x9402, 0x0026, 0x003c];
 
 /// What [`read_header`] found, and what it cost.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +51,9 @@ pub struct HeaderRead {
 pub fn read_header(len: u64, read_at: &mut dyn FnMut(u64, &mut [u8]) -> io::Result<()>) -> io::Result<HeaderRead> {
     let mut reader = Reader { len, read_at, bytes: 0 };
     let head = reader.fetch(0, HEADER_PREFIX.min(len))?;
-    let focus = if head.starts_with(&[0xff, 0xd8]) {
+    let focus = if crate::cr3::is_cr3(&head) {
+        cr3(&mut reader, head)?
+    } else if head.starts_with(&[0xff, 0xd8]) {
         jpeg(&mut reader, &head)?
     } else if matches!(Tiff::sniff(&head), Some((_, false))) {
         tiff(&mut reader, head)?
@@ -81,6 +84,55 @@ impl Reader<'_> {
         self.bytes = self.bytes.saturating_add(n);
         Ok(buf)
     }
+}
+
+/// A CR3's point: its `moov` box (metadata, `CMT1`…`CMT4`, at the start of the file: about 35 KB
+/// on an R5 C) read whole and decoded as a whole-file read would.
+fn cr3(reader: &mut Reader<'_>, head: Vec<u8>) -> io::Result<Option<FocusPoint>> {
+    // the top-level boxes up to `moov`: 32-bit sizes (a 64-bit or zero size there is not a layout we know)
+    let mut at = 0u64;
+    let mut end = None;
+    for _ in 0..8 {
+        let Some(b) = usize::try_from(at).ok().and_then(|a| head.get(a..a.checked_add(8)?)).and_then(|s| <[u8; 8]>::try_from(s).ok()) else { break };
+        let size = u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+        if size < 8 {
+            break;
+        }
+        if b[4..] == *b"moov" {
+            end = Some(at.saturating_add(size));
+            break;
+        }
+        at = at.saturating_add(size);
+    }
+    let Some(end) = end.filter(|e| *e <= MAX_HEADER_BYTES && *e <= reader.len) else { return Ok(None) };
+    let mut bytes = if end <= head.len() as u64 {
+        head
+    } else {
+        let mut all = head;
+        let more = reader.fetch(all.len() as u64, end)?;
+        all.extend_from_slice(&more);
+        all
+    };
+    bytes.truncate(usize::try_from(end).unwrap_or(usize::MAX));
+    // the XMP box Canon writes right after `moov`: it may name the camera when the Exif doesn't
+    // (the whole-file read uses it too; review of #3566)
+    // (a read error or the budget there leaves the point to the moov box alone)
+    if end.saturating_add(24) <= reader.len
+        && let Ok(h) = reader.fetch(end, end.saturating_add(24))
+    {
+        let size = h.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map_or(0, |b| u64::from(u32::from_be_bytes(b)));
+        let is_xmp = h.get(4..8) == Some(b"uuid".as_slice()) && h.get(8..24) == Some(crate::cr3::XMP_UUID.as_slice());
+        let box_end = end.saturating_add(size);
+        if is_xmp
+            && size >= 24
+            && box_end <= reader.len
+            && let Ok(body) = reader.fetch(end.saturating_add(24), box_end)
+        {
+            bytes.extend_from_slice(&h);
+            bytes.extend_from_slice(&body);
+        }
+    }
+    Ok(crate::extract(&bytes).focus)
 }
 
 /// A file whose focus data would take more than [`MAX_HEADER_BYTES`] to read.
@@ -381,7 +433,7 @@ fn plan(buf: &[u8], loaded: &Loaded) -> Step {
     }
     let head = usize::try_from(note.start).ok().zip(usize::try_from(head_end).ok()).and_then(|(a, b)| buf.get(a..b)).unwrap_or(&[]);
     let sony = head.starts_with(b"SONY") || head.starts_with(b"VHAB     \0");
-    // another maker's header: `focus::read` only decodes Sony and header-less notes
+    // another maker's header: `focus::read` only decodes Sony and header-less (Canon) notes
     let foreign: [&[u8]; 13] = [
         b"Nikon\0",
         b"FUJIFILM",

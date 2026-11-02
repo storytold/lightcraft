@@ -196,11 +196,17 @@ fn sony_file(make: &str, model: &str, orientation: u16, note_entries: &[(u16, Va
 /// [`sony_file`], with the `0x9402` block's value placed `far` bytes past the end of the TIFF
 /// (the gap filled with "sample data") when `far` is given.
 fn sony_file_with(make: &str, model: &str, orientation: u16, note_entries: &[(u16, Value)], far: Option<usize>) -> Vec<u8> {
+    note_file(make, model, orientation, b"SONY DSC \0\0\0", note_entries, far)
+}
+
+/// A whole TIFF whose maker note is `header` and then an IFD of `note_entries` (as [`sony_file_with`];
+/// with `far`, Sony's `0x9402` or Canon's AFInfo2 value is the one placed past the end).
+fn note_file(make: &str, model: &str, orientation: u16, header: &[u8], note_entries: &[(u16, Value)], far: Option<usize>) -> Vec<u8> {
     let order = ByteOrder::Little;
-    // the note: 12-byte header, then an IFD whose out-of-line values are offset from the TIFF header,
+    // the note: its header, then an IFD whose out-of-line values are offset from the TIFF header,
     // which we only know after writing; write once to learn where the note lands, then rebuild
     let build = |note_at: u64, end: u64| -> (Vec<u8>, Vec<u8>) {
-        let mut note = b"SONY DSC \0\0\0".to_vec();
+        let mut note = header.to_vec();
         let ifd_len = 2 + note_entries.len() * 12 + 4;
         let mut tail: Vec<u8> = Vec::new();
         let mut outside: Vec<u8> = Vec::new();
@@ -214,11 +220,11 @@ fn sony_file_with(make: &str, model: &str, orientation: u16, note_entries: &[(u1
                 let mut r = raw.clone();
                 r.resize(4, 0);
                 note.extend(r);
-            } else if let (Some(gap), TAG_9402) = (far, *tag) {
+            } else if let (Some(gap), TAG_9402 | 0x0026) = (far, *tag) {
                 order.put_u32(&mut note, (end + gap as u64) as u32);
                 outside = raw;
             } else {
-                order.put_u32(&mut note, (note_at + 12 + ifd_len as u64 + tail.len() as u64) as u32);
+                order.put_u32(&mut note, (note_at + header.len() as u64 + ifd_len as u64 + tail.len() as u64) as u32);
                 tail.extend(raw);
                 if tail.len() % 2 == 1 {
                     tail.push(0);
@@ -394,10 +400,54 @@ fn the_synthetic_arw_is_laid_out_as_described() {
     assert!(crate::extract(&synthetic_arw(0, 0)).focus.is_none(), "manual focus");
 }
 
+/// A 6D's AFInfo2 record: 11 points, all valid, the top-centre one (index 4) in focus and selected.
+fn canon_6d_af() -> Value {
+    let xs: [i16; 11] = [-1143, -547, -547, -547, 0, 0, 0, 547, 547, 547, 1143];
+    let ys: [i16; 11] = [0, 350, 0, -350, 488, 0, -488, 350, 0, -350, 0];
+    let mut v = vec![112u16, 2, 11, 11, 5472, 3648, 5472, 3648];
+    v.extend([82u16; 11]);
+    v.extend([82u16; 11]);
+    v.extend(xs.map(|x| x as u16));
+    v.extend(ys.map(|y| y as u16));
+    v.extend([0x10, 0x10]);
+    Value::Short(v)
+}
+
+/// A CR2 or Canon JPEG: a header-less maker note with an AFInfo2 record. Read whole and by its
+/// header alone on a checked body; nothing on an unchecked one; damage never panics.
+#[test]
+fn canon_maker_note_in_a_tiff() {
+    let entries = [(0x0001u16, Value::Short(vec![0; 40])), (0x0026u16, canon_6d_af())];
+    // the record's value after 300 KB of "sample data", beyond the first block a header read takes
+    let file = note_file("Canon", "Canon EOS 6D", 1, b"", &entries, Some(300_000));
+    let f = crate::read_exif(&file).focus.expect("the 6D's point");
+    let (cx, cy) = f.center();
+    // the point at index 4 is 488 above the centre (y up)
+    assert!((cx - 0.5).abs() < 1e-9 && (cy - (1824.0 - 488.0) / 3648.0).abs() < 1e-9, "{cx} {cy}");
+    assert_eq!(f.area.as_deref(), Some("Single-point AF"));
+    let h = read_header(file.len() as u64, &mut |off, buf: &mut [u8]| {
+        buf.copy_from_slice(&file[off as usize..off as usize + buf.len()]);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(h.focus, Some(f), "the header read loads the AF record");
+    assert!(h.bytes_read < 64 * 1024, "{}", h.bytes_read);
+    // a Canon body whose files haven't been checked, or the record under another make
+    assert!(crate::read_exif(&note_file("Canon", "Canon EOS 6D Mark II", 1, b"", &entries, None)).focus.is_none());
+    assert!(crate::read_exif(&note_file("NIKON CORPORATION", "Canon EOS 6D", 1, b"", &entries, None)).focus.is_none());
+    let small = note_file("Canon", "Canon EOS 6D", 1, b"", &entries, None);
+    assert_eq!(crate::read_exif(&small).focus, h.focus);
+    for cut in (0..small.len()).step_by(5) {
+        let _ = crate::read_exif(&small[..cut]);
+    }
+}
+
 #[test]
 fn cameras_that_can_have_a_point() {
     assert!(camera_supported("SONY ILCE-1") && camera_supported("Sony ILCE-7SM3 "));
-    for c in ["SONY ILCE-7M4", "Canon EOS R5", "", "SONY", "ILCE-1", "SON"] {
+    assert!(camera_supported("Canon Canon EOS R5 C") && camera_supported("Canon EOS 5D Mark IV"), "checked Canon bodies");
+    assert!(camera_supported("CANON Canon EOS 6D "));
+    for c in ["SONY ILCE-7M4", "Canon EOS R5", "Canon Canon EOS 6D Mark II", "Canon Canon EOS R6", "", "SONY", "ILCE-1", "SON", "Cano"] {
         assert!(!camera_supported(c), "{c}");
     }
 }

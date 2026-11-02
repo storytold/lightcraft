@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Canon focus points
+- **Show Focus Point** and **Zoom to Focus Point** work with Canon EOS R5 C CR3s and EOS 5D Mark IV and 6D CR2s (and
+  those cameras' JPEGs): the box the camera focused with, including the face it tracked, and Z or Space zooms there.
+  Photos already in your library get it in the background. Other Canon cameras follow once their files are checked.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

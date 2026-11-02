@@ -96,7 +96,7 @@ fn fills_missing_points_and_remembers_photos_without_one() {
             photo(1, &af, "SONY ILCE-1"),
             photo(2, &manual, "SONY ILCE-1"),
             // another body's photo is not opened, even when its file would have a point
-            photo(3, &af, "Canon EOS R5"),
+            photo(3, &af, "NIKON Z 8"),
             with_point,
             photo(5, &dir.join("offline.ARW"), "SONY ILCE-7SM3"),
             photo(6, &garbage, "SONY ILCE-1"),

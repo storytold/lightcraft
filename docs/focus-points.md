@@ -33,8 +33,9 @@ from a supported body have no point and haven't been looked at, LightCraft reads
 (`photo.readFocusPoints`) starts the same job by hand. Photo ▸ Reload from Disk still fills a missing point too, but it
 re-reads and hashes whole files and runs while you wait, so it is for a few photos, not a library.
 
-- **What is opened**: only photos whose stored camera is a supported body (`SONY ILCE-1`, `SONY ILCE-7SM3`), whose
-  file is an ARW or JPEG, that are in the library and have no point yet. Nothing else is opened.
+- **What is opened**: only photos whose stored camera is a supported body (`SONY ILCE-1`, `SONY ILCE-7SM3`, `Canon EOS R5 C`,
+  `Canon EOS 5D Mark IV`, `Canon EOS 6D`), whose file is an ARW, CR3, CR2 or JPEG, that are in the library and have no point yet. Nothing else is
+  opened. A CR3's focus data is in its `moov` box at the start of the file (about 35 KB on an EOS R5 C).
 - **What is read**: the few kilobytes that hold the focus data, not the file
   (`lightcraft_meta::focus::read_header`). It walks the file's structure as the decoder does — the TIFF header and
   IFD0 (Make, Model), the Exif IFD (the MakerNote entry), the maker note's IFD and the values of the focus tags; in a
@@ -63,10 +64,33 @@ re-reads and hashes whole files and runs while you wait, so it is for a few phot
 
 ## Cameras
 
-Sony first, on bodies whose files have been checked: **ILCE-1 (α1)** and **ILCE-7SM3 (A7S III)**
+**Sony** on bodies whose files have been checked: **ILCE-1 (α1)** and **ILCE-7SM3 (A7S III)**
 (`lightcraft_meta::focus::SONY_MODELS`). Other Sony bodies store the same tags, but a body is added only after its
-files are checked, so an unchecked one shows nothing rather than a misleading box. Fujifilm, Canon, Nikon, OM System
-and Panasonic record similar data and are later steps.
+files are checked, so an unchecked one shows nothing rather than a misleading box.
+
+**Canon** (CR3, CR2, JPEG) from the AFInfo2 or AFInfo3 maker-note record (`crates/meta/src/focus_canon.rs`), on
+bodies whose files have been checked (`lightcraft_meta::focus::CANON_MODELS`): **EOS R5 C** (CR3s from two bodies),
+**EOS 5D Mark IV** and **EOS 6D** (CR2s). Other Canon bodies write the same record and are added once their files are
+checked, as for Sony. Fujifilm, Nikon, OM System and Panasonic record similar data and are later
+steps.
+
+### Canon layout and evidence
+
+Tag identities, layout and value names come from the public ExifTool tag-name documentation (Canon AFInfo2 table); no
+third-party code was read. A CR3 keeps its maker note in the `CMT3` block of the Canon `uuid` box; a CR2 or a Canon
+JPEG has a header-less maker-note IFD. The record is int16 values: size, AFAreaMode, NumAFPoints, ValidAFPoints, the
+Canon image size, the AF image size (the frame the positions are in), then four arrays of NumAFPoints values each (all
+points, not only the valid ones): the widths, heights, x and y positions from the frame's centre (x right, **y up**);
+after them a bit mask of the points in focus and one of the points selected, each NumAFPoints bits rounded up to whole
+int16 words. The box drawn covers the in-focus points among the first ValidAFPoints, else the selected ones, else the only valid
+point (never a DSLR's whole AF grid); AFAreaMode 0 (manual focus), ValidAFPoints 0 or no usable frame gives no point. On the 6D's
+11-point CR2s that is the selected point, whether it was confirmed in focus or not.
+
+On the R5 C files (1053 AF points, one valid): Face + Tracking frames (115 px) land on the tracked face (a guest's
+face in a candid, a bridesmaid in a group of five), Flexizone Single frames (576 × 480) on the couple or the middle
+of a group; with y read downwards they would land on chests and bouquets, which is how the sign was confirmed. The
+Info panel shows the AF area mode (`Face + Tracking`, `Zone AF`, `Flexizone Single`…; modes the documentation doesn't
+name plainly read `AF area <n>`).
 
 ### Sony layout and evidence
 

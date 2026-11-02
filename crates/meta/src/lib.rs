@@ -18,6 +18,7 @@ pub mod cr3;
 mod datetime;
 mod exif;
 pub mod focus;
+mod focus_canon;
 mod focus_read;
 mod gpx;
 pub mod heif;
@@ -297,7 +298,8 @@ pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
     let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
     let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok()).map(|xmp| xmp.metadata);
-    extract_embedded(e, exif, xmp)
+    // (after XMP has filled a camera make, model or orientation the Exif lacks)
+    cr3_focus(bytes, extract_embedded(e, exif, xmp))
 }
 
 /// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
@@ -315,7 +317,16 @@ pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
         Some(xmp) => parse_xmp(xmp).ok().map(|xmp| xmp.metadata),
         None => None,
     };
-    Ok(extract_embedded(e, exif, xmp))
+    Ok(cr3_focus(bytes, extract_embedded(e, exif, xmp)))
+}
+
+/// A CR3 keeps its maker note in a block of its own (`CMT3`), apart from the Exif read into `m`:
+/// its focus point is read from there.
+fn cr3_focus(bytes: &[u8], mut m: Metadata) -> Metadata {
+    if m.focus.is_none() && cr3::is_cr3(bytes) {
+        m.focus = focus::cr3_focus(bytes, m.make.as_deref(), m.model.as_deref(), m.orientation);
+    }
+    m
 }
 
 fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<Metadata>) -> Metadata {
