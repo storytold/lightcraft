@@ -183,7 +183,9 @@ fn matching_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list
         register(ui, "combo:settingsFacesTopFaces", r.response.rect);
     });
     if let Some(n) = pick {
-        match app.run("faces.matching", json!({"topFaces": n})) {
+        // the default entry is saved as no choice, so it follows the default if that changes
+        let top = if n == default { Value::Null } else { json!(n) };
+        match app.run("faces.matching", json!({"topFaces": top})) {
             Ok(_) => {
                 app.caches.faces_epoch += 1;
                 // a person's page asks again for the faces that look like them, and the photo shown for its names
