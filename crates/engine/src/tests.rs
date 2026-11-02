@@ -724,6 +724,74 @@ fn mixer_neutral_pick_with_the_section_off_switches_it_on() {
     assert!(!d.section_enabled("channelMixer"), "undo restores the section's off state");
 }
 
+/// Issue #2158 review: with a mixer that drives a channel negative at the picked spot, the render
+/// clamps that channel to zero (the colour step, CPU and GPU alike), so the pick's brightness
+/// target is the clamped output — what the spot rendered as — and the rendered luminance before and
+/// after the pick matches, Exposure raised with any scale-down as usual.
+#[test]
+fn mixer_neutral_pick_keeps_the_clamped_brightness_a_negative_channel_renders_as() {
+    use crate::media::SourceLevel;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // red takes −200 % of green: on a green-dominant spot the red output goes negative, and the
+    // render clamps it to zero
+    s.execute("develop.set", &json!({"control": "channelMixer.red.green", "value": -200.0})).unwrap();
+    let d = s.develop_of(id).unwrap_or_default();
+    let src = s.source_now(id, SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    let wb = lightcraft_pipeline::local::wb_matrix_for(&s.source_info(id), &d);
+    let spot = |x: f64, y: f64, wb: Option<[[f32; 3]; 3]>| {
+        let mut c = picked_sample(&o, x, y);
+        if let Some(m) = wb {
+            c = [
+                m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+                m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+                m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+            ];
+        }
+        c
+    };
+    // the green-dominant bright spot where the mixer's red output is most negative
+    let mut pick = None;
+    let mut best = 0.0f32;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let c = spot(x, y, wb);
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let negative = 2.0 * c[1] - c[0];
+            if lum > 0.05 && negative > best {
+                best = negative;
+                pick = Some((x, y, c));
+            }
+        }
+    }
+    let Some((x, y, c)) = pick else { panic!("no green-dominant bright spot") };
+    let lum = |c: [f32; 3]| 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+    let mixed = [c[0] - 2.0 * c[1], c[1], c[2]];
+    assert!(mixed[0] < 0.0, "sanity: the mixer drives red negative at the spot: {c:?}");
+    let clamped = [0.0, c[1], c[2]];
+    assert!(lum(clamped) - lum(mixed) > 0.05, "sanity: the clamp changes the target enough: {} vs {}", lum(clamped), lum(mixed));
+
+    let render_luma = |s: &mut Session| {
+        let r = s.render_now(id, o.width, o.height).unwrap();
+        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
+        let c = r.image.get(px, py);
+        let lin = |v: u8| {
+            let v = v as f32 / 255.0;
+            (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
+        };
+        0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+    };
+    let before = render_luma(&mut s);
+
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    assert!(r["scaled"].as_f64().is_some_and(|f| f <= 1.0), "{r}");
+    let after = render_luma(&mut s);
+    assert!((after - before).abs() <= 2.0, "the clamped brightness is kept: {before} -> {after}");
+}
+
 /// Issue #2158: the swap with the Channel Mixer section's eye off switches the section on in the
 /// same undo step — a swap the render ignores would look like a dead button — and one undo
 /// restores both the rows and the off state.

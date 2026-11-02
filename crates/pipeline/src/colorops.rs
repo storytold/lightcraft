@@ -330,12 +330,14 @@ fn luminance(c: [f64; 3]) -> f64 {
 /// the mixer's input (linear Rec.2020: the sample with the photo's current white balance already
 /// applied), the new mixer is `M · diag(g)` where `g` are input gains, so a mix already set (a
 /// red/blue swap) is kept: `M · diag(g) · c` is neutral when `g ⊙ c` is proportional to
-/// `M⁻¹ · [1,1,1]`, and the constant is the Rec.2020 luminance of `M · c`, so the point keeps its
-/// brightness. Returns the new nine values in per cent and how much the whole matrix was scaled
-/// down to fit the ±200 % sliders (1.0 when it already fitted; the point stays neutral at that
-/// lower luminance, and Exposure can compensate). `Err` ([`MIXER_NEUTRAL_ERROR`]) when `m` is
-/// singular, the sample has no usable signal (a component ≤ 1e-6, or not a number) or the gains
-/// come out non-finite or non-positive; nothing is changed then.
+/// `M⁻¹ · [1,1,1]`, and the constant is the Rec.2020 luminance of the mixer's output clamped at
+/// zero — what the spot rendered as before the pick, since the colour step clamps each output
+/// channel at zero ahead of the tone map ([`calibrate`], CPU and GPU alike) — so the point keeps
+/// the brightness it actually had. Returns the new nine values in per cent and how much the whole
+/// matrix was scaled down to fit the ±200 % sliders (1.0 when it already fitted; the point stays
+/// neutral at that lower luminance, and Exposure can compensate). `Err` ([`MIXER_NEUTRAL_ERROR`])
+/// when `m` is singular, the sample has no usable signal (a component ≤ 1e-6, or not a number) or
+/// the gains come out non-finite or non-positive; nothing is changed then.
 pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3]) -> Result<(ChannelMixer, f64), &'static str> {
     let rows = m.rows().map(|r| r.map(|v| v.clamp(-200.0, 200.0) / 100.0));
     if c.iter().any(|v| !(v.is_finite() && *v > 1e-6)) {
@@ -343,7 +345,7 @@ pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3]) -> Result<(ChannelMixer, f64
     }
     let mat = Mat3(rows);
     let u = mat.inverse().ok_or(MIXER_NEUTRAL_ERROR)?.apply([1.0, 1.0, 1.0]);
-    let q = luminance(mat.apply(c));
+    let q = luminance(mat.apply(c).map(|v| v.max(0.0)));
     let g = [q * u[0] / c[0], q * u[1] / c[1], q * u[2] / c[2]];
     if !(q.is_finite() && q > 0.0) || g.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
         return Err(MIXER_NEUTRAL_ERROR);
@@ -573,6 +575,39 @@ mod tests {
             blue: MixRow { blue: 100.0, ..MixRow::default() },
         };
         assert!(mixer_neutral(&flip, red_cast).is_err(), "a negative gain is refused");
+    }
+
+    /// Issue #2158 review: the render clamps each mixer output channel at zero before the tone map
+    /// ([`calibrate`], CPU and GPU alike), so the brightness the pick keeps is the clamped output's —
+    /// a mixer that drives a channel negative at the spot must not aim for the brighter unclamped
+    /// luminance.
+    #[test]
+    fn mixer_neutral_targets_the_clamped_luminance_the_render_shows() {
+        use lightcraft_develop::{ChannelMixer, MixRow};
+        let apply = |m: &ChannelMixer, c: [f64; 3]| Mat3(m.rows().map(|r| r.map(|v| v / 100.0))).apply(c);
+        // red takes −200 % of green: on a green-dominant spot the red output goes negative, and the
+        // render shows it as zero
+        let m = ChannelMixer {
+            red: MixRow { red: 100.0, green: -200.0, ..MixRow::default() },
+            green: MixRow { green: 100.0, ..MixRow::default() },
+            blue: MixRow { blue: 100.0, ..MixRow::default() },
+        };
+        let spot = [0.05, 0.4, 0.1];
+        let rendered_before = apply(&m, spot).map(|v| v.max(0.0));
+        assert!(apply(&m, spot)[0] < 0.0, "sanity: the mixer drives red negative: {:?}", apply(&m, spot));
+        let (picked, scaled) = mixer_neutral(&m, spot).unwrap();
+        let out = apply(&picked, spot);
+        assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "still neutral: {out:?}");
+        assert!(
+            (luminance(out) - scaled * luminance(rendered_before)).abs() < 1e-9,
+            "the clamped luminance is kept (scaled by the fit factor {scaled}): {} vs {}",
+            luminance(out),
+            luminance(rendered_before)
+        );
+        assert!(
+            (luminance(apply(&m, spot)) - luminance(rendered_before)).abs() > 0.02,
+            "the unclamped target differs (here it is darker: the negative red subtracted)"
+        );
     }
 
     #[test]
