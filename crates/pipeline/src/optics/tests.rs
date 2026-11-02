@@ -268,11 +268,28 @@ fn source_anchored_point_roundtrips_through_optical_warps() {
     });
     with_lens.lens_dist = 1.0;
     with_lens.k1 = -0.08;
-    warps.push(with_lens);
+    // Channel-specific correction must be inverted using the requested
+    // plane, not a hard-coded green-plane approximation.
+    with_lens.ca = [0.002, 0.0, -0.002];
+    let colour_probe = Point::new(100.0, 75.0);
+    assert!(with_lens.to_source(colour_probe, 0).dist(with_lens.to_source(colour_probe, 1)) > 0.1);
+    assert!(with_lens.to_source(colour_probe, 2).dist(with_lens.to_source(colour_probe, 1)) > 0.1);
+    warps.push(with_lens.clone());
+    // Also exercise multi-stage DNG lens correction (WarpRectilinear2).
+    let mut with_stages = chain(&[stage(&[(0, 1.0), (1, 0.05)], Point::new(0.5, 0.5), 0.6, false)]);
+    with_stages.w = 600.0;
+    with_stages.h = 400.0;
+    warps.push(with_stages);
     let mut with_perspective = Warp::identity(600.0, 400.0);
     with_perspective.persp_inv = Homography([1.0, 0.02, 0.04, 0.01, 1.0, -0.02, 0.001, 0.002, 1.0]);
     with_perspective.persp = with_perspective.persp_inv.inverse().expect("invertible synthetic perspective");
-    warps.push(with_perspective);
+    warps.push(with_perspective.clone());
+    // Catch regressions where applying perspective silently omits the lens
+    // correction or applies the two inverse maps in the wrong order.
+    let mut combined = with_lens;
+    combined.persp = with_perspective.persp;
+    combined.persp_inv = with_perspective.persp_inv;
+    warps.push(combined);
 
     for warp in &warps {
         for original in
@@ -296,8 +313,11 @@ fn source_to_transformed_rejects_non_finite_and_degenerate_mappings() {
     let mut warp = Warp::identity(600.0, 400.0);
     assert!(warp.from_source(Point::new(f64::NAN, 20.0), 1).is_none());
     assert!(warp.from_source(Point::new(10.0, 20.0), 3).is_none());
-    warp.ca[1] = -1.0; // every transformed green pixel would sample the same source point
+    warp.ca[1] = -1.0; // every transformed green pixel samples the image centre
     assert!(warp.from_source(Point::new(65.0, 55.0), 1).is_none());
+    // Regression: even a perfect residual cannot make a collapsed mapping
+    // invertible. The earlier implementation returned Some(centre) here.
+    assert!(warp.from_source(Point::new(300.0, 200.0), 1).is_none());
 }
 
 #[test]

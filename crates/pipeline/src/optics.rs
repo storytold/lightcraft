@@ -227,9 +227,9 @@ impl Warp {
             if !distance.is_finite() {
                 return None;
             }
-            if distance < 1e-5 {
-                return Some(p);
-            }
+            // Do not accept a zero-residual point until verifying local
+            // invertibility: a collapsed CA plane may map every point to the
+            // source centre, including a point with exactly zero residual.
             // Numerical Jacobian of transformed → source, in source px per
             // transformed px. Degenerate geometry cannot be inverted safely.
             let x = self.to_source(Point::new(p.x + h, p.y), ch);
@@ -239,6 +239,9 @@ impl Warp {
             let det = a * d - b * c;
             if !det.is_finite() || det.abs() < 1e-12 {
                 return None;
+            }
+            if distance < 1e-5 {
+                return Some(p);
             }
             let (dx, dy) = ((d * err.0 - b * err.1) / det, (-c * err.0 + a * err.1) / det);
             if !dx.is_finite() || !dy.is_finite() {
