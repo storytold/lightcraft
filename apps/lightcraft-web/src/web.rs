@@ -133,7 +133,8 @@ async fn store_file(originals: Originals, backend: Option<Backend>, name: &str, 
 
 /// Read a browser `File` into storage.
 async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
-    let head = match blob_range(&file, 0, file.size().min(16.0) as u64).await {
+    // As natively: the compatible brands (HEIF, audio) follow the major one in `ftyp`.
+    let head = match blob_range(&file, 0, file.size().min(4096.0) as u64).await {
         Ok(head) => head,
         Err(e) => {
             notice(format!("{} was not added: {e}", file.name()));
@@ -238,7 +239,11 @@ async fn store_video(originals: &Originals, backend: Option<&Backend>, file: &we
     }
     probe.content_hash = Some(hash.clone());
     probe.file_size = size;
-    let location_check = lightcraft_meta::verify_video_location_absent(&metadata);
+    // The copier trusts this result, so it must see fragment metadata too (as a reload does).
+    let location_check = match video_blob_metadata(file, true).await {
+        Ok(full) => lightcraft_meta::verify_video_location_absent(&full),
+        Err(e) => Err(format!("cannot verify video location: {e}")),
+    };
     VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob: file.clone().into(), location_check }));
     originals.added_video(&file.name(), &hash, probe);
     Ok(())

@@ -277,6 +277,9 @@ impl<'a> Placer<'a> {
             for sc in files.iter().skip(1) {
                 match std::fs::metadata(sc) {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => previous.push((sc.clone(), None)),
+                    // The browser has no filesystem to back up from (its writes are downloads): a
+                    // failed export then names the sidecar as not restored instead of refusing.
+                    Err(e) if e.kind() == std::io::ErrorKind::Unsupported => previous.push((sc.clone(), None)),
                     Err(e) => return Err(format!("{sc}: can't inspect the existing sidecar before export: {e}")),
                     Ok(m) if m.is_file() => {
                         if m.len() > MAX_SIDECAR_BACKUP {

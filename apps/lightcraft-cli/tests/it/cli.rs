@@ -188,6 +188,11 @@ fn render_refuses_video_without_claiming_an_output_but_original_still_copies_it(
     for extension in ["mp4", "jpg"] {
         let input = tmp(&format!("render-video-input.{extension}"));
         let output = tmp(&format!("render-video-{extension}-output.jpg"));
+        let original = tmp(&format!("render-video-{extension}-original.mp4"));
+        // `tmp` is keyed by PID and never cleaned: a reused PID must not leave these behind.
+        for stale in [&output, &original, &original.with_extension("xmp")] {
+            let _ = std::fs::remove_file(stale);
+        }
         std::fs::write(&input, &bytes).unwrap();
         let result = Command::new(binary()).args(["render"]).arg(&input).arg("-o").arg(&output).output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
@@ -201,7 +206,6 @@ fn render_refuses_video_without_claiming_an_output_but_original_still_copies_it(
         assert!(!result.status.success());
         assert_eq!(std::fs::read(&output).unwrap(), b"existing output");
 
-        let original = tmp(&format!("render-video-{extension}-original.mp4"));
         let result = Command::new(binary()).arg("render").arg(&input).arg("-o").arg(&original).args(["--opt", "format=original"]).output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert_eq!(std::fs::read(&original).unwrap(), bytes);
