@@ -558,7 +558,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Mixer Neutral",
             [],
             None,
-            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step",
+            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render)",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
@@ -587,24 +587,34 @@ pub fn specs() -> Vec<CommandSpec> {
                 // A mixer scaled down to fit the ±200 % sliders is a gain lost. Exposure is a linear
                 // gain the render applies before the mixer, so raising it by log2(1/scaled) in the
                 // same undo step keeps the photo's brightness exactly; at Exposure's maximum what's
-                // left of the darkening stays (exposureClamped).
+                // left of the darkening stays (exposureClamped). With the Light section's eye off
+                // the render ignores Exposure (`effective` resets it), so a raise would be stored
+                // but never show: Exposure stays unchanged (exposureAdded 0, lightOff true — the
+                // photo keeps the darkening) rather than switching Light on for it.
+                let light_off = !d.section_enabled("light");
                 let want = -scaled.log2();
                 let (lo, hi) = controls::find("light.exposure").map_or((-5.0, 5.0), |spec| (spec.min, spec.max));
                 let now = d.light.exposure;
-                let raised = if scaled < 1.0 { (now + want).clamp(lo, hi) } else { now };
+                let raised = if scaled < 1.0 && !light_off { (now + want).clamp(lo, hi) } else { now };
                 let exposure_added = raised - now;
-                let clamped = want > 0.0 && raised < now + want - 1e-9;
+                let clamped = want > 0.0 && !light_off && raised < now + want - 1e-9;
                 edit(s, "develop.mixerNeutralPick", "Channel Mixer Neutral", |d| {
                     if section_off {
                         d.set_section_enabled("channelMixer", true);
                     }
                     d.channel_mixer = mixer;
-                    if scaled < 1.0 {
+                    if scaled < 1.0 && !light_off {
                         d.light.exposure = raised;
                     }
                     Ok(())
                 })?;
-                Ok(json!({"scaled": scaled, "exposureAdded": exposure_added, "exposureClamped": clamped, "mixer": mixer}))
+                Ok(json!({
+                    "scaled": scaled,
+                    "exposureAdded": exposure_added,
+                    "exposureClamped": clamped,
+                    "lightOff": light_off && scaled < 1.0,
+                    "mixer": mixer,
+                }))
             }
         ),
         cmd!(

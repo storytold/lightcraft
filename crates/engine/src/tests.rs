@@ -724,6 +724,67 @@ fn mixer_neutral_pick_with_the_section_off_switches_it_on() {
     assert!(!d.section_enabled("channelMixer"), "undo restores the section's off state");
 }
 
+/// Issue #2158 review: a pick whose mixer scales down raises Exposure with it — but with the Light
+/// section's eye off the render ignores Exposure, so the raise is left out instead of stored
+/// unseen: `exposureAdded` is 0, `lightOff` says why, Exposure itself is untouched and Light stays
+/// off. With Light on, the raise works as before.
+#[test]
+fn mixer_neutral_pick_with_light_off_leaves_exposure_alone() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // the infrared situation: a warm white balance pushes a bright spot past the ±200 % sliders
+    s.execute("develop.wb", &json!({"mode": "custom", "temp": 2000.0, "tint": 0.0})).unwrap();
+    let d = s.develop_of(id).unwrap_or_default();
+    let src = s.source_now(id, crate::media::SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    let wb = lightcraft_pipeline::local::wb_matrix_for(&s.source_info(id), &d);
+    let mut pick = None;
+    let mut best_ratio = 0.0f32;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let mut c = picked_sample(&o, x, y);
+            if let Some(m) = wb {
+                c = [
+                    m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+                    m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+                    m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+                ];
+            }
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let ratio = c[0].max(c[1]).max(c[2]) / c[0].min(c[1]).min(c[2]).max(1e-6);
+            if lum > 0.05 && ratio > best_ratio {
+                best_ratio = ratio;
+                pick = Some((x, y));
+            }
+        }
+    }
+    let Some((x, y)) = pick else { panic!("no bright spot to pick") };
+
+    // with Light on, the raise works as before and lightOff is false
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    assert!(r["scaled"].as_f64().is_some_and(|f| f < 1.0), "this pick has to scale down: {r}");
+    assert!(r["exposureAdded"].as_f64().is_some_and(|v| v > 0.0), "{r}");
+    assert_eq!(r["lightOff"], json!(false), "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(active_dev(&s).channel_mixer.is_identity());
+
+    // with Light's eye off: no raise, lightOff says why, Exposure untouched, Light stays off
+    s.execute("develop.sectionEnabled", &json!({"section": "light", "enabled": false})).unwrap();
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    assert!(r["scaled"].as_f64().is_some_and(|f| f < 1.0), "this pick has to scale down: {r}");
+    assert_eq!(r["exposureAdded"], json!(0.0), "{r}");
+    assert_eq!(r["exposureClamped"], json!(false), "{r}");
+    assert_eq!(r["lightOff"], json!(true), "{r}");
+    assert_eq!(active_dev(&s).light.exposure, 0.0, "Exposure is untouched");
+    assert!(!active_dev(&s).section_enabled("light"), "Light stays off");
+    assert!(!active_dev(&s).channel_mixer.is_identity(), "the mixer was still set");
+    // one undo gives the mixer back and Light's off state with it
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(active_dev(&s).channel_mixer.is_identity());
+    assert!(!active_dev(&s).section_enabled("light"));
+}
+
 /// Issue #2158 review: with a mixer that drives a channel negative at the picked spot, the render
 /// clamps that channel to zero (the colour step, CPU and GPU alike), so the pick's brightness
 /// target is the clamped output — what the spot rendered as — and the rendered luminance before and
