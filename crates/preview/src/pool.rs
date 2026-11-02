@@ -25,6 +25,8 @@ struct Entry<S, R> {
     key: u64,
     priority: u32,
     seq: u64,
+    /// May start while a job of its slot that is not one of these runs ([`JobPool::submit_overtaking`]).
+    overtakes: bool,
     job: Job<R>,
 }
 
@@ -33,8 +35,9 @@ struct Shared<S, R> {
     /// Slots with a job running: their next job waits until it ends, so a slot never has two at
     /// once (a slider drag submits faster than renders finish; overlapping renders of one view
     /// were mostly thrown away, and took the GPU from the one that is shown). Locked inside
-    /// `queue`.
-    busy: Mutex<Vec<S>>,
+    /// `queue`. The flag marks an overtaking job ([`JobPool::submit_overtaking`]): one of those
+    /// waits only for another of its slot's overtaking jobs.
+    busy: Mutex<Vec<(S, bool)>>,
     cv: Condvar,
     shutdown: AtomicBool,
     /// The worker threads that have not ended yet, and the signal that one did.
@@ -129,7 +132,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                     while let Some(e) = take(&shared, true) {
                         let t0 = std::time::Instant::now();
                         // the slot is free again when the job ends, also if it panics
-                        let _free = Free(&shared, e.slot);
+                        let _free = Free(&shared, e.slot, e.overtakes);
                         let result = (e.job)();
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
                         if tx.send(done).is_err() {
@@ -180,6 +183,18 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
 
     /// Queue `job` for `slot`, replacing a queued (not yet running) job for the same slot.
     pub fn submit(&mut self, slot: S, key: u64, priority: u32, job: Job<R>) {
+        self.submit_lane(slot, key, priority, false, job);
+    }
+
+    /// [`Self::submit`] for a job that need not wait for the job of its slot already running (an
+    /// interactive draft of a view, which must not wait seconds behind the view's first full
+    /// render). It waits only for another overtaking job of its slot; a job submitted with
+    /// [`Self::submit`] still waits for every job of its slot, this one included.
+    pub fn submit_overtaking(&mut self, slot: S, key: u64, priority: u32, job: Job<R>) {
+        self.submit_lane(slot, key, priority, true, job);
+    }
+
+    fn submit_lane(&mut self, slot: S, key: u64, priority: u32, overtakes: bool, job: Job<R>) {
         if self.stopped {
             return; // nothing runs it any more
         }
@@ -188,7 +203,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let (lock, cv) = (&self.shared.queue, &self.shared.cv);
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
         q.retain(|e| e.slot != slot);
-        q.push(Entry { slot, key, priority, seq: self.seq, job });
+        q.push(Entry { slot, key, priority, seq: self.seq, overtakes, job });
         cv.notify_one();
     }
 
@@ -238,7 +253,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let mut ran = 0;
         while ran < n {
             let Some(e) = take(&self.shared, false) else { break };
-            let _free = Free(&self.shared, e.slot);
+            let _free = Free(&self.shared, e.slot, e.overtakes);
             let result = (e.job)();
             let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
             ran += 1;
@@ -258,11 +273,16 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
         // (a slot with a job running waits for it: see `Shared::busy`)
         let best = {
             let busy = shared.busy.lock().unwrap_or_else(|e| e.into_inner());
-            q.iter().enumerate().filter(|(_, e)| !busy.contains(&e.slot)).max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i)
+            // (an overtaking job waits only for another overtaking job of its slot)
+            q.iter()
+                .enumerate()
+                .filter(|(_, e)| !busy.iter().any(|(s, o)| *s == e.slot && (*o || !e.overtakes)))
+                .max_by_key(|(_, e)| (e.priority, e.seq))
+                .map(|(i, _)| i)
         };
         if let Some(i) = best {
             let e = q.swap_remove(i);
-            shared.busy.lock().unwrap_or_else(|e| e.into_inner()).push(e.slot);
+            shared.busy.lock().unwrap_or_else(|e| e.into_inner()).push((e.slot, e.overtakes));
             return Some(e);
         }
         if !wait {
@@ -272,13 +292,14 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
     }
 }
 
-/// The job for `slot` ended: a job queued for it may start.
-fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S) {
+/// The job for `slot` ended (`overtakes`: one submitted with [`JobPool::submit_overtaking`]): a job
+/// queued for it may start.
+fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S, overtakes: bool) {
     {
         // under the queue lock: a worker is either before its look at `busy` or waiting
         let _q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
         let mut busy = shared.busy.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(i) = busy.iter().position(|s| s == slot) {
+        if let Some(i) = busy.iter().position(|(s, o)| s == slot && *o == overtakes) {
             busy.swap_remove(i);
         }
     }
@@ -286,11 +307,11 @@ fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S) {
 }
 
 /// Frees a job's slot when the job ends (see [`finished`]).
-struct Free<'a, S: PartialEq, R>(&'a Shared<S, R>, S);
+struct Free<'a, S: PartialEq, R>(&'a Shared<S, R>, S, bool);
 
 impl<S: PartialEq, R> Drop for Free<'_, S, R> {
     fn drop(&mut self) {
-        finished(self.0, &self.1);
+        finished(self.0, &self.1, self.2);
     }
 }
 

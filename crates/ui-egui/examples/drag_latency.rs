@@ -8,6 +8,10 @@
 //! until its draft became the loupe texture, how many ticks were never shown, the UI thread's
 //! frame time, and after release the time until the full-quality render is the texture. (A window
 //! presents the texture one frame later: add ~16.7 ms for photons.)
+//!
+//! `LAND=1` (note 8 of 31 Oct): the drag starts 200 ms after the loupe first shows anything of the
+//! photo (its render, a stand-in or its grid thumbnail), without waiting for its full render; `gap_ms_max` is the longest time during the drag
+//! without a new picture on screen (from the first value change).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
@@ -117,7 +121,32 @@ fn main() {
     let t = Duration::from_secs(60);
     h.request("ui.set", json!({"view": "detail", "right": "edit", "filmstrip": true}), t);
     let t_open = Instant::now();
-    settle(&mut h, id);
+    let land = env("LAND", "0") != "0";
+    if land {
+        // anything the loupe can draw of the photo: its render, a stand-in or its grid thumbnail
+        // (what the loupe's `draw_slot` falls back on; review of PR #3569)
+        let shows = |h: &Headless| {
+            let r = &h.app.renderer;
+            [Slot::Main, Slot::Preview].iter().any(|s| r.textures.get(s).is_some_and(|t| t.photo == id)) || r.thumb(id).is_some()
+        };
+        while t_open.elapsed() < Duration::from_secs(120) && !shows(&h) {
+            h.step();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if !shows(&h) {
+            // the drag would start from no picture at all, and its numbers would mean nothing
+            eprintln!("no picture of the photo after {:.0} ms: not measured", t_open.elapsed().as_secs_f64() * 1e3);
+            std::process::exit(1);
+        }
+        eprintln!("first picture after {:.0} ms", t_open.elapsed().as_secs_f64() * 1e3);
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_millis(200) {
+            h.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    } else {
+        settle(&mut h, id);
+    }
     if let Ok(z) = std::env::var("ZOOM") {
         let pct: f64 = z.parse().unwrap();
         h.app.run("view.navigate", json!({"zoom": {"percent": pct}, "pan": [0.5, 0.5]})).unwrap();
@@ -132,7 +161,7 @@ fn main() {
     let tex = h.app.renderer.textures.get(&watch()).map(|t| t.size);
     eprintln!("opened in {:.0} ms, loupe texture {tex:?}, gpu {gpu}", t_open.elapsed().as_secs_f64() * 1e3);
 
-    println!("control,shown/ticks,lat_frames_med,lat_ms_med,lat_ms_p90,lat_ms_max,frame_ms_med,frame_ms_max,final_ms,draft_px,final_px");
+    println!("control,shown/ticks,lat_frames_med,lat_ms_med,lat_ms_p90,lat_ms_max,frame_ms_med,frame_ms_max,final_ms,draft_px,final_px,gap_ms_max");
     // the controls named (in that order, repeats allowed), else all of them
     let list: Vec<(&str, f64, f64)> =
         if only.is_empty() { CONTROLS.to_vec() } else { only.iter().filter_map(|n| CONTROLS.iter().find(|c| c.0 == *n).copied()).collect() };
@@ -143,6 +172,7 @@ fn main() {
         let mut frame_ms = Vec::new();
         let mut shown_key = h.app.renderer.textures.get(&watch()).map(|t| t.key);
         let mut draft_px = None;
+        let mut changes: Vec<Instant> = Vec::new();
         let t0 = Instant::now();
         let mut n = 0u32;
         h.app.run("develop.beginInteraction", json!({"label": control})).unwrap();
@@ -183,8 +213,18 @@ fn main() {
             if let Some(k) = h.app.renderer.wanted(watch()) {
                 asked.entry(k).or_insert((n, start));
             }
+            let before = shown_key;
             observe(&h, n, &asked, &mut shown_key, &mut lat_frames, &mut lat_ms, &mut draft_px);
+            // (the gap is timed from the first value change, before its frame: review of PR #3569)
+            if i == 1 {
+                changes.push(start);
+            }
+            if shown_key != before {
+                changes.push(Instant::now());
+            }
         }
+        changes.push(Instant::now());
+        let gap_max = changes.windows(2).map(|w| (w[1] - w[0]).as_secs_f64() * 1e3).fold(0.0, f64::max);
         // release
         let due = t0 + FRAME * (n + 1);
         if let Some(d) = due.checked_duration_since(Instant::now()) {
@@ -213,7 +253,7 @@ fn main() {
         let fmax = frame_ms.iter().cloned().fold(0.0, f64::max);
         let lmax = lat_ms.iter().cloned().fold(0.0, f64::max);
         println!(
-            "{control},{shown}/{ticks},{:.0},{:.1},{:.1},{lmax:.1},{:.1},{fmax:.1},{final_ms:.1},{:?},{:?}",
+            "{control},{shown}/{ticks},{:.0},{:.1},{:.1},{lmax:.1},{:.1},{fmax:.1},{final_ms:.1},{:?},{:?},{gap_max:.0}",
             pct(&mut lat_frames, 0.5),
             pct(&mut lat_ms, 0.5),
             pct(&mut lat_ms, 0.9),

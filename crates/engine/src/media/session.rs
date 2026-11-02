@@ -88,6 +88,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            superseded: None,
         })
     }
 
@@ -142,6 +143,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            superseded: None,
         })
     }
 
@@ -197,6 +199,7 @@ impl crate::Session {
             slide: None,
             preview_cut,
             display_fit: None,
+            superseded: None,
         })
     }
 
@@ -381,6 +384,28 @@ impl crate::Session {
             }
             self.media.insert_source(r.photo, r.level, src.clone());
         }
+    }
+
+    /// [`Self::accept`] for a render replaced before it finished ([`crate::media::SUPERSEDED`]): its source was
+    /// built before it ran, so it is taken only while it is still what the photo's renders load. A plain source of a
+    /// photo whose denoised picture became ready meanwhile is not (the readiness cleared the photo's sources;
+    /// keeping this one would show the photo without its noise reduction: review of PR #3569). Nor is one whose
+    /// denoised picture came from another product than the photo's current one (a denoise redone meanwhile), nor
+    /// one with a denoised picture once the photo has none.
+    pub fn accept_replaced(&mut self, r: &RenderResult) {
+        let current = self.media.denoise.get(r.photo).map(|(spec, _)| spec.key.as_str());
+        let stale = r.loaded.as_ref().is_some_and(|src| {
+            !src.from_proxy
+                && match (&src.denoised, current) {
+                    (None, None) => false,
+                    (None, Some(_)) | (Some(_), None) => true,
+                    (Some(t), Some(key)) => t.key.as_deref() != Some(key),
+                }
+        });
+        if stale {
+            return;
+        }
+        self.accept(r);
     }
 
     /// Record the as-shot white balance a decode of photo `id`'s file read (`info`) when the catalog has another:

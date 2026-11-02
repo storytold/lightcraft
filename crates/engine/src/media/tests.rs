@@ -640,3 +640,108 @@ fn an_export_develops_from_a_source_twice_its_size() {
     }
     assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }
+
+/// A replaced render's plain source is not kept once the photo's denoised picture is ready: the
+/// photo's next render must load the pair, not develop the plain picture (review of PR #3569).
+#[test]
+fn a_replaced_renders_plain_source_is_not_kept_once_the_denoised_picture_is_ready() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+    job.source = SourceRef::File {
+        path: "synthetic.arw".into(),
+        max_edge: 64,
+        loader: Some(Arc::new(|_, _| Ok((Rgb32f::new(64, 64), SourceInfo::default())))),
+        fallback: None,
+        denoise: None,
+        reduced: None,
+    };
+    let r = job.run();
+    assert!(r.loaded.as_ref().is_some_and(|src| src.denoised.is_none()));
+    // the denoised picture became ready while the render ran
+    let pair: PairLoader = Arc::new(|_, _, _| Err("not read in this test".into()));
+    s.media.denoise.loader = Some(pair);
+    s.media.denoise.set(id, DenoiseSpec { product: "denoised.bin".into(), key: "k".into(), make: None });
+    s.media.forget(id);
+    s.accept_replaced(&r);
+    assert!(!s.media.has_source(id, r.level), "the plain source is not kept");
+    // without a denoised picture it is kept, as before
+    s.media.denoise.remove(id);
+    s.accept_replaced(&r);
+    assert!(s.media.has_source(id, r.level));
+}
+
+/// A replaced render whose denoised picture came from an older product (the denoise was redone
+/// while it ran) is not kept: later renders would show the old picture (review of PR #3569). One
+/// from the current product is.
+#[test]
+fn a_replaced_renders_source_from_an_older_denoise_is_not_kept() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let pair: PairLoader = Arc::new(|_, _, _| Ok((Rgb32f::new(64, 64), Some(Rgb32f::new(64, 64)), SourceInfo::default())));
+    s.media.denoise.loader = Some(pair.clone());
+    let spec = |key: &str| DenoiseSpec { product: format!("{key}.bin").into(), key: key.into(), make: None };
+    let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+    job.source = SourceRef::File {
+        path: "synthetic-twin.arw".into(),
+        max_edge: 64,
+        loader: Some(Arc::new(|_, _| Ok((Rgb32f::new(64, 64), SourceInfo::default())))),
+        fallback: None,
+        denoise: Some((spec("old"), pair)),
+        reduced: None,
+    };
+    let r = job.run();
+    assert!(r.loaded.as_ref().is_some_and(|src| src.denoised.as_ref().is_some_and(|t| t.key.as_deref() == Some("old"))));
+    // the denoise was redone while the render ran
+    s.media.denoise.set(id, spec("new"));
+    s.media.forget(id);
+    s.accept_replaced(&r);
+    assert!(!s.media.has_source(id, r.level), "the old product's picture is not kept");
+    // the same product: kept
+    s.media.denoise.set(id, spec("old"));
+    s.accept_replaced(&r);
+    assert!(s.media.has_source(id, r.level));
+}
+
+/// A decode is shared only with jobs for the same file content: after the photo's file changed
+/// (a new content key), a decode of the old file that is still held is not taken (review of PR
+/// #3569).
+#[test]
+fn a_decode_is_shared_only_with_jobs_for_the_same_file_content() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let decodes = Arc::new(AtomicUsize::new(0));
+    let mut job = |content: u128| {
+        let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+        let d = decodes.clone();
+        job.source =
+            SourceRef::File { path: "synthetic-content-key.arw".into(), max_edge: 64, loader: None, fallback: None, denoise: None, reduced: None };
+        let loader: FileLoader = Arc::new(move |_, _| {
+            d.fetch_add(1, Ordering::SeqCst);
+            Ok((Rgb32f::new(64, 64), SourceInfo::default()))
+        });
+        if let SourceRef::File { loader: l, .. } = &mut job.source {
+            *l = Some(loader);
+        }
+        job.source_key = Some(Hash128(content));
+        job
+    };
+    let (a, same, changed) = (job(1), job(1), job(2));
+    // (one loader per job: shared by the share key's loader address only when it is the same one)
+    let SourceRef::File { loader: Some(shared), .. } = &a.source else { panic!("a file source") };
+    let shared = shared.clone();
+    let with = |mut j: RenderJob| {
+        if let SourceRef::File { loader, .. } = &mut j.source {
+            *loader = Some(shared.clone());
+        }
+        j
+    };
+    let first = a.run();
+    assert_eq!(decodes.load(Ordering::SeqCst), 1);
+    let again = with(same).run();
+    assert_eq!(decodes.load(Ordering::SeqCst), 1, "the same content takes the held decode");
+    let other = with(changed).run();
+    assert_eq!(decodes.load(Ordering::SeqCst), 2, "a changed file is decoded again");
+    drop((first, again, other));
+}

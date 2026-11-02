@@ -35,7 +35,7 @@ mod source;
 
 pub use cache::DenoiseIndex;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
-pub use render::{RenderJob, RenderResult, develop, develop_reporting, fit_for_display};
+pub use render::{RenderJob, RenderResult, SUPERSEDED, develop, develop_reporting, fit_for_display};
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;

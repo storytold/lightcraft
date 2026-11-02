@@ -1,4 +1,4 @@
-use super::{Arc, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
+use super::{Arc, Deserialize, DevelopSettings, Hash128, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
 pub const RENDER_CACHE_VERSION: u64 = 72;
@@ -108,13 +108,20 @@ pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, O
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
     pub image: Arc<Rgb32f>,
+    /// The denoised product it was read from ([`DenoiseSpec::key`]); `None` when not known.
+    pub key: Option<String>,
     /// The Amount (in thousandths) and the picture mixed for it, so dragging other sliders keeps one source picture.
     mix: std::sync::Mutex<Option<(u32, Arc<Rgb32f>)>>,
 }
 
 impl Twin {
     pub fn new(image: Arc<Rgb32f>) -> Twin {
-        Twin { image, mix: std::sync::Mutex::new(None) }
+        Twin { image, key: None, mix: std::sync::Mutex::new(None) }
+    }
+
+    /// A twin read from the denoised product with key `key`.
+    pub fn from_product(image: Arc<Rgb32f>, key: &str) -> Twin {
+        Twin { key: Some(key.to_string()), ..Twin::new(image) }
     }
 
     /// Bytes reserved for the twin and its lazy mix, before either cache cost can grow.
@@ -229,6 +236,14 @@ impl SourceRef {
     }
 
     pub fn load_source(&self) -> Result<DecodedSource, String> {
+        self.load_source_of(None)
+    }
+
+    /// [`Self::load_source`] for a job whose photo's file content is `content` (its
+    /// [`crate::media::RenderJob::source_key`]): a decode is shared only with jobs for the same content, so a photo
+    /// reloaded after its file changed never takes a decode of the old file that is still running or held (review
+    /// of PR #3569).
+    pub fn load_source_of(&self, content: Option<Hash128>) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Fit { from, max_edge } => {
@@ -242,50 +257,23 @@ impl SourceRef {
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
-                let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
-                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
-                    (None, None) => Err(format!("no decoder available for {path}")),
-                };
-                // the denoised picture comes with the plain one from a single decode; when it cannot be read the
-                // pair loader gives the plain picture alone (the cached file is never a reason to fail a render)
-                let r = match denoise {
-                    Some((spec, pair)) => {
-                        // a job that needs the denoised picture has it made first; if that fails the job fails (no smart
-                        // preview stands in: an export must not quietly come out without the denoise it was asked for)
-                        let made = match &spec.make {
-                            Some(make) => make()?,
-                            None => true,
-                        };
-                        if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
-                                if spec.make.is_some() && twin.is_none() {
-                                    return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
-                                }
-                                Ok(DecodedSource {
-                                    image: Arc::new(image),
-                                    info: Some(info),
-                                    camera_tone: None,
-                                    denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
-                                    from_proxy: false,
-                                    reduced: false,
-                                })
-                            })
-                        } else {
-                            plain()
+                // (a job that comes while another decodes the same pixels waits for that decode)
+                let decode = || Self::decode_file(path, *max_edge, loader.as_ref(), fallback.as_deref(), denoise.as_ref(), reduced.as_ref());
+                return match share_key(path, content, *max_edge, loader.as_ref(), fallback.as_deref(), denoise.as_ref(), reduced.as_ref()) {
+                    Some(key) => {
+                        let mut anchors: crate::decode_share::Anchors = Vec::new();
+                        if let Some(l) = loader {
+                            anchors.push(Box::new(Arc::downgrade(l)));
                         }
+                        if let Some(l) = reduced {
+                            anchors.push(Box::new(Arc::downgrade(l)));
+                        }
+                        if let Some((_, l)) = denoise {
+                            anchors.push(Box::new(Arc::downgrade(l)));
+                        }
+                        crate::decode_share::decode_once(&key, anchors, decode)
                     }
-                    None => plain(),
-                };
-                // An offline original renders from its smart preview (no decoder facts: header ones).
-                return match (r, fallback) {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
-                        crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
-                    }
-                    (r, _) => r,
+                    None => decode(),
                 };
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -295,6 +283,85 @@ impl SourceRef {
         };
         Ok(DecodedSource::new(image, None))
     }
+
+    /// Decode a [`SourceRef::File`] (its fields).
+    fn decode_file(
+        path: &str,
+        max_edge: usize,
+        loader: Option<&FileLoader>,
+        fallback: Option<&std::path::Path>,
+        denoise: Option<&(DenoiseSpec, PairLoader)>,
+        reduced: Option<&ReducedLoader>,
+    ) -> Result<DecodedSource, String> {
+        let plain = || match (reduced, loader) {
+            (Some(l), _) => {
+                l(path, max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
+            }
+            (None, Some(l)) => l(path, max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+            (None, None) => Err(format!("no decoder available for {path}")),
+        };
+        // the denoised picture comes with the plain one from a single decode; when it cannot be read the
+        // pair loader gives the plain picture alone (the cached file is never a reason to fail a render)
+        let r = match denoise {
+            Some((spec, pair)) => {
+                // a job that needs the denoised picture has it made first; if that fails the job fails (no smart
+                // preview stands in: an export must not quietly come out without the denoise it was asked for)
+                let made = match &spec.make {
+                    Some(make) => make()?,
+                    None => true,
+                };
+                if made {
+                    pair(path, max_edge, spec).and_then(|(image, twin, info)| {
+                        if spec.make.is_some() && twin.is_none() {
+                            return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
+                        }
+                        Ok(DecodedSource {
+                            image: Arc::new(image),
+                            info: Some(info),
+                            camera_tone: None,
+                            denoised: twin.map(|t| Arc::new(Twin::from_product(Arc::new(t), &spec.key))),
+                            from_proxy: false,
+                            reduced: false,
+                        })
+                    })
+                } else {
+                    plain()
+                }
+            }
+            None => plain(),
+        };
+        // An offline original renders from its smart preview (no decoder facts: header ones).
+        match (r, fallback) {
+            #[cfg(not(target_arch = "wasm32"))]
+            (Err(e), Some(sp)) if denoise.is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
+                crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
+            }
+            (r, _) => r,
+        }
+    }
+}
+
+/// What a [`SourceRef::File`] decode's pixels depend on, as a key for [`crate::decode_share`]
+/// (the loaders by identity: the session keeps one of each). `None`: not shared (a decode that
+/// makes the photo's denoised picture first, for an export).
+fn share_key(
+    path: &str,
+    content: Option<Hash128>,
+    max_edge: usize,
+    loader: Option<&FileLoader>,
+    fallback: Option<&std::path::Path>,
+    denoise: Option<&(DenoiseSpec, PairLoader)>,
+    reduced: Option<&ReducedLoader>,
+) -> Option<String> {
+    if denoise.is_some_and(|(spec, _)| spec.make.is_some()) {
+        return None;
+    }
+    let at = |p: Option<*const ()>| p.map_or(0, |p| p as usize);
+    let loader = at(loader.map(|l| Arc::as_ptr(l) as *const ()));
+    let reduced = at(reduced.map(|l| Arc::as_ptr(l) as *const ()));
+    let pair = at(denoise.map(|(_, l)| Arc::as_ptr(l) as *const ()));
+    let denoised = denoise.map(|(spec, _)| (spec.key.as_str(), spec.product.as_path()));
+    Some(format!("{path}|{content:?}|{max_edge}|{loader:x}|{reduced:x}|{pair:x}|{denoised:?}|{fallback:?}"))
 }
 
 /// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
