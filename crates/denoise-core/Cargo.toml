@@ -11,6 +11,8 @@ workspace = true
 [features]
 default = []
 rawnind-model = []
+# Offers LightCraft's own model for download (`known::LIGHTCRAFT_BAYER_URL`, then `known::LIGHTCRAFT_BAYER_FALLBACK_URL`).
+lightcraft-model = []
 
 [dependencies]
 lightcraft-raster = { workspace = true }

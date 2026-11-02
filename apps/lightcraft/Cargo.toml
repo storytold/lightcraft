@@ -10,9 +10,11 @@ default-run = "lightcraft"
 workspace = true
 
 [features]
-default = ["denoise"]
+# LightCraft's own AI Denoise model (MIT OR Apache-2.0) is offered as a download
+default = ["denoise", "lightcraft-model"]
 denoise = ["lightcraft-engine/denoise"]
 rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
+lightcraft-model = ["denoise", "lightcraft-engine/lightcraft-model"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
 heif = ["lightcraft-codecs/heif"]

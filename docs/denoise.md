@@ -16,12 +16,38 @@ An active slider gesture finishes before the pending action resumes.
 
 **No model weights are bundled.** Models live in the per-user `denoise-models` folder
 (override with `LIGHTCRAFT_DENOISE_MODELS`). Settings provides **Install from file…**
-for a user-supplied ONNX file with a `denoise-model.json` beside it. The default build
-offers no model downloads. The separate `rawnind-model` Cargo feature enables the
+for a user-supplied ONNX file with a `denoise-model.json` beside it. The default library build
+offers no model downloads (see LightCraft's own model below). The separate `rawnind-model` Cargo feature enables the
 pinned RawNIND offer only when a release's model policy permits it.
 Terms must be acknowledged before installation or
 download. Downloads use the shared pure-Rust `lightcraft-fetch` client, with resume,
 progress, cancellation, size limits and SHA-256 verification.
+
+### LightCraft's own model
+
+**LightCraft Denoise (Bayer) 0.1.0** is a U-Net (7.8 M weights, 31 MB `.onnx`) trained by LightCraft
+contributors with the open tools in `tools/denoise-train` on 705 clean low-ISO raws from raw.pixls.us, each
+CC0, with synthetic sensor noise whose read-noise relation was set by hand from a Canon EOS R5 C calibration
+(numbers only; `train.py --noise-cal` can now train on a calibration file directly, which 0.1.0 did not). Its weights are licensed
+**MIT OR Apache-2.0**, like LightCraft, so any use, commercial work included, is allowed. The `lightcraft-model`
+Cargo feature offers it as a download (Settings ▸ AI Denoise); the desktop app turns that feature on.
+
+It is downloaded from two sources, tried in order (a decision of 2026-10-25):
+
+1. the project's release asset,
+   `https://github.com/storytold/lightcraft/releases/download/denoise-model-0.1.0/lightcraft-bayer-0.1.0.onnx`
+   (a maintainer uploads the file there: until then this source fails and the next one is used);
+2. `https://radfilms.com.au/lightcraft/models/lightcraft-bayer-0.1.0.onnx`, the trainer's site, with the same file.
+
+A source that can't be reached, refuses, or sends a file of another size or SHA-256 is passed over for the next;
+a wrong file is never kept, whichever source sent it, and with both failing the message names each. The pinned
+size (31,091,398 bytes) and SHA-256 (`abd3c4cd…3247dea9`) are checked wherever the file comes from. There is no
+third source: `LIGHTCRAFT_DENOISE_MODEL_URL` (an `https://` address) replaces both with that one address, for
+maintainers who host the same file themselves.
+
+Measured on held-out pictures (PSNR in tone space): ISO 800 43.4 dB, ISO 3200 42.4 dB, ISO 12800 40.6 dB, a dark
+ISO 25600 36.4 dB (demosaicing without noise reduction: 38.1 / 36.9 / 33.1 / 22.8 dB). On a 45 MP EOS R5 C photo
+with added noise it beat the best manual noise reduction by 9–15 dB.
 
 RawNIND's optional ONNX weights are **GPL-3.0**, as recorded in the pinned model catalog.
 They are downloaded separately after consent and read by our own Rust executor.
