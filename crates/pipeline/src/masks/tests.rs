@@ -702,6 +702,15 @@ fn alpha_keys_change_with_every_input_of_the_alpha() {
         one(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: vec![], seg, detail: vec![], edge: 0.0 })
     };
     assert_ne!(key(&object(4.0)), key(&object(-4.0)));
+    // a stored segmentation follows the photo's edges (#3272): it reads the image, not the exposure
+    let seg = Some(SegMask::from_logits(4, &[4.0; 16]));
+    let prompt = one(MaskShape::Prompt { text: "sky".into(), seg, detail: vec![], edge: 0.0 });
+    for m in [&object(4.0), &prompt] {
+        assert_ne!(alpha_key(m, AlphaKeys { image: 4, ..keys }, 0.0), key(m), "{:?}", m.components[0].shape);
+        assert_eq!(alpha_key(m, keys, 1.0), key(m));
+    }
+    let empty = one(MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 });
+    assert_eq!(alpha_key(&empty, AlphaKeys { image: 4, ..keys }, 0.0), key(&empty), "nothing computed yet reads nothing");
     let edits: [fn(&mut Mask); 7] = [
         |m| m.refine = 10.0,
         |m| m.invert = true,

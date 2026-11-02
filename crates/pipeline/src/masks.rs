@@ -230,9 +230,10 @@ pub fn reads(m: &Mask) -> (bool, bool) {
     for c in &m.components {
         let (i, e) = match &c.shape {
             MaskShape::Linear { .. } | MaskShape::Radial { .. } | MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => (false, false),
-            MaskShape::Prompt { .. } => (false, false),
-            // a stored segmentation (or no clicks) reads nothing; clicks without one take the heuristic
-            MaskShape::Object { seg, detail, .. } => (seg.is_none() && detail.is_empty(), false),
+            // a stored segmentation is guided-filtered by the photo's log luminance (`sample_seg`,
+            // #3272); clicks without one take the heuristic; no clicks and no segmentation read nothing
+            MaskShape::Prompt { seg, detail, .. } => (seg.is_some() || !detail.is_empty(), false),
+            MaskShape::Object { hint, seg, detail, .. } => (!hint.is_empty() || seg.is_some() || !detail.is_empty(), false),
             MaskShape::Brush { strokes } => (strokes.iter().any(|s| s.auto_mask), false),
             // (with a source matte these read neither: counted as if they did)
             MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } | MaskShape::Sky => (true, true),
