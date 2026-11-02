@@ -28,9 +28,11 @@ pub(crate) fn synced_crop(new: &Crop, adims: (f64, f64), odims: (f64, f64)) -> C
         return *new;
     }
     let wide = or > 1.0;
-    // the shape turned to the photo's own orientation (a square stays a square)
-    let orient = |s: f64| if s != 1.0 && (s > 1.0) != wide { 1.0 / s } else { s };
-    let aspect = new.aspect.map(|(x, y)| if x != y && (x > y) != wide { (y, x) } else { (x, y) });
+    // the shape turned to the photo's own orientation (a square crop stays a square; on a square
+    // photo, which has no orientation, the crop keeps its own)
+    let square = (or - 1.0).abs() <= 0.005;
+    let orient = |s: f64| if !square && s != 1.0 && (s > 1.0) != wide { 1.0 / s } else { s };
+    let aspect = turned_aspect(new.aspect, odims);
     let angle = new.geometry.angle;
     let full = crop_fit_angle(aw, ah, angle, None).rect;
     let r = new.geometry.rect;
@@ -71,6 +73,15 @@ pub(crate) fn synced_crop(new: &Crop, adims: (f64, f64), odims: (f64, f64)) -> C
         at(want.lerp(mid, hi))
     };
     Crop { geometry, aspect, flip_h: new.flip_h, flip_v: new.flip_v }
+}
+
+/// A ratio lock `aspect` turned to the orientation of a photo with frame `odims` (oriented width,
+/// height): 3:2 on a landscape, 2:3 on a vertical. A square lock, and any lock on a square photo
+/// (which has no orientation), stay as they are.
+pub(crate) fn turned_aspect(aspect: Option<(u32, u32)>, odims: (f64, f64)) -> Option<(u32, u32)> {
+    let or = odims.0.max(1.0) / odims.1.max(1.0);
+    let (wide, square) = (or > 1.0, (or - 1.0).abs() <= 0.005);
+    aspect.map(|(x, y)| if !square && x != y && (x > y) != wide { (y, x) } else { (x, y) })
 }
 
 impl Session {

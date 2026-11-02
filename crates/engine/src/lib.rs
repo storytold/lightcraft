@@ -1000,7 +1000,9 @@ impl Session {
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);
-        let crop_changed = old.crop != new.crop;
+        // (a moved crop goes on as a whole; a ratio lock alone leaves each photo's rectangle)
+        let crop_moved = old.crop.geometry != new.crop.geometry;
+        let lock_changed = old.crop.aspect != new.crop.aspect;
         let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
@@ -1018,8 +1020,10 @@ impl Session {
             .filter_map(|(x, d)| {
                 let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
                 // a crop goes on as what it means on each photo's own frame (note 15)
-                if crop_changed {
+                if crop_moved {
                     self.fit_synced_crop(id, new, x, &mut synced);
+                } else if lock_changed {
+                    synced.crop.aspect = sync_crop::turned_aspect(new.crop.aspect, self.crop_frame(x, synced.orientation));
                 }
                 let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()

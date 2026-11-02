@@ -144,3 +144,47 @@ fn auto_sync_of_a_crop_reaches_a_photo_turned_the_other_way() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_ne!(s.develop_of(b).unwrap().crop, want);
 }
+
+/// A square photo has no orientation: a synced crop keeps its own there, lock and shape, as tight
+/// and placed as on the source (review of #3572: it was turned to a vertical).
+#[test]
+fn a_crop_synced_to_a_square_photo_keeps_its_own_orientation() {
+    let (l, sq) = ((6000.0, 4000.0), (4000.0, 4000.0));
+    let src = crop_on(l.0, l.1, 1.5, 0.7, (0.5, 0.5), 0.0, Some((3, 2)), (false, false));
+    let out = synced_crop(&src, l, sq);
+    assert_eq!(out.aspect, Some((3, 2)));
+    let r = out.geometry.rect_px(sq.0, sq.1);
+    assert!((r.width() / r.height() - 1.5).abs() < 1e-6, "{r:?}");
+    assert!(out.geometry.is_within_image(sq.0, sq.1));
+    let v = (4000.0, 6000.0);
+    let src = crop_on(v.0, v.1, 2.0 / 3.0, 0.7, (0.5, 0.5), 0.0, Some((2, 3)), (false, false));
+    assert_eq!(synced_crop(&src, v, sq).aspect, Some((2, 3)));
+}
+
+/// With Auto Sync on, a change of the ratio lock alone (no crop moved) leaves each other photo's
+/// own crop rectangle and turns the lock to its orientation (review of #3572: the whole crop was
+/// replaced by the active photo's).
+#[test]
+fn auto_sync_of_a_ratio_lock_alone_keeps_each_photos_crop() {
+    let mut s = Session::with_demo();
+    let ids: Vec<PhotoId> = s.visible_cloned().into_iter().take(2).collect();
+    let (a, b) = (ids[0], ids[1]);
+    if (frame(&s, b).0 > frame(&s, b).1) == (frame(&s, a).0 > frame(&s, a).1) {
+        s.execute("photo.rotateRight", &json!({"ids": [b.0]})).unwrap();
+    }
+    let ((aw, ah), (bw, bh)) = (frame(&s, a), frame(&s, b));
+    // b has a crop of its own, free
+    let mut db = (*s.develop_of(b).unwrap()).clone();
+    db.crop = crop_on(bw, bh, bw / bh, 0.5, (0.3, 0.4), 0.0, None, (false, false));
+    let own = db.crop.geometry;
+    s.set_develop(b, db, "Crop").unwrap();
+    s.execute("library.select", &json!({"ids": [a.0, b.0], "active": a.0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let lock = if aw > ah { (3, 2) } else { (2, 3) };
+    let mut d = (*s.develop_of(a).unwrap()).clone();
+    d.crop.aspect = Some(lock);
+    s.set_develop(a, d, "Aspect").unwrap();
+    let cb = s.develop_of(b).unwrap().crop;
+    assert_eq!(cb.geometry, own, "b keeps its own crop");
+    assert_eq!(cb.aspect, Some((lock.1, lock.0)), "the lock turned to b's orientation");
+}
