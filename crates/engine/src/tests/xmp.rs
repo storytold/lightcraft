@@ -736,6 +736,45 @@ fn write_jpeg_xmp(path: &Path, packet: &str) -> Vec<u8> {
     bytes
 }
 
+/// A JPEG's develop settings embedded as `crs:` XMP (#2993), packet `extra` attributes added.
+fn jpeg_develop_packet(extra: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        xmp:Rating="3" crs:HasSettings="True" crs:Contrast2012="+30" crs:Dehaze="+12" {extra}/>
+      </rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// #2993: a JPEG carrying its develop settings in embedded XMP, with no sidecar, imports with
+/// them, as Read Metadata from File reads them; settings marked as already applied to the pixels
+/// (an exported file) are not applied again, and a sidecar still wins over the embedded packet.
+#[test]
+fn embedded_jpeg_develop_settings_apply_on_import() {
+    let src = temp_dir("jpeg-xmp-import-develop");
+    write_jpeg_xmp(&src.join("edited.jpg"), &jpeg_develop_packet(""));
+    write_jpeg_xmp(&src.join("rendered.jpg"), &jpeg_develop_packet(r#"crs:AlreadyApplied="True""#));
+    // Distinct bytes, so the import doesn't skip it as a copy of `edited.jpg`.
+    write_jpeg_xmp(&src.join("both.jpg"), &jpeg_develop_packet(r#"xmp:Label="Red""#));
+    std::fs::write(src.join("both.xmp"), jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-20""#)).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 3, "{r}");
+    let by_name = |name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
+
+    let edited = by_name("edited.jpg");
+    assert_eq!(edited.kind, lightcraft_catalog::MediaKind::Image);
+    assert_eq!((edited.develop.light.contrast, edited.develop.effects.dehaze), (30.0, 12.0), "the embedded settings apply");
+    assert_eq!(edited.rating, 3);
+
+    let rendered = by_name("rendered.jpg");
+    assert_eq!((rendered.develop.light.contrast, rendered.develop.effects.dehaze), (0.0, 0.0), "already in the pixels");
+    assert_eq!(rendered.rating, 3, "its metadata still reads");
+
+    assert_eq!(by_name("both.jpg").develop.light.contrast, -20.0, "the sidecar wins over the embedded packet");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn embedded_jpeg_xmp_reread_refreshes_metadata_and_undoes_once() {
     let src = temp_dir("jpeg-xmp-refresh");

@@ -339,13 +339,13 @@ impl ImportJob {
             // same bytes as a library photo: skipped below, once its capture time is known
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
-            // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
-            // and names the copy when the file itself has none (a duplicate needs only that time)
-            let raw = info.kind == MediaKind::Raw;
+            // the XMP sidecar (or the XMP embedded in a raw or a JPEG, as the probe found it), read
+            // before copying: its capture time files and names the copy when the file itself has none
+            // (a duplicate needs only that time)
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone())
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
@@ -419,7 +419,7 @@ impl ImportJob {
                         How::Copy { name }
                     };
                     // Copy as DNG: the copied raw becomes a DNG (the copy is ours to replace)
-                    let dng = opts.convert_dng && mode == ImportMode::Copy && raw && !info.format.eq_ignore_ascii_case("DNG");
+                    let dng = opts.convert_dng && mode == ImportMode::Copy && info.kind == MediaKind::Raw && !info.format.eq_ignore_ascii_case("DNG");
                     plan.slots.push(Slot::Transfer);
                     plan.transfers.push(Transfer { path, info, sidecar, dir, how, dng, family });
                     continue;
