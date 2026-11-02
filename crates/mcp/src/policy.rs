@@ -49,6 +49,7 @@ pub struct Policy {
     pub export_root: Option<PathBuf>,
 }
 
+/// The comma-separated, trimmed, non-empty items of environment variable `var`.
 fn csv(var: &str) -> impl Iterator<Item = String> {
     std::env::var(var).unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().into_iter()
 }
@@ -100,11 +101,6 @@ impl Policy {
         })
     }
 
-    /// The `cmd_*` tool name of a command id (`a.b` → `cmd_a_b`), as `tools.rs` generates it.
-    fn tool_name_of(id: &str) -> String {
-        format!("{COMMAND_TOOL_PREFIX}{}", id.replace('.', "_"))
-    }
-
     /// Whether a tool may appear in `tools/list` and be called.
     pub fn tool_allowed(&self, name: &str) -> Result<(), String> {
         if let Some(allow) = &self.allow_tools
@@ -115,18 +111,11 @@ impl Policy {
         if self.deny_tools.contains(name) {
             return Err(format!("tool `{name}` is denied by policy"));
         }
-        if name.starts_with(COMMAND_TOOL_PREFIX) {
-            for d in &self.deny {
-                let hit = match d.strip_suffix(".*") {
-                    Some(prefix) => {
-                        let p = Self::tool_name_of(prefix);
-                        name == p || name.starts_with(&format!("{p}_"))
-                    }
-                    None => name == Self::tool_name_of(d),
-                };
-                if hit {
-                    return Err(format!("tool `{name}` runs command `{d}`, which is denied by policy"));
-                }
+        // `tools.rs` maps `cmd_a_b` back to the command `a.b` (ids never contain `_`), so the match is exact.
+        if let Some(rest) = name.strip_prefix(COMMAND_TOOL_PREFIX) {
+            let id = rest.replace('_', ".");
+            if self.command_denied(&id) {
+                return Err(format!("tool `{name}` runs command `{id}`, which is denied by policy"));
             }
         }
         Ok(())
@@ -140,103 +129,162 @@ impl Policy {
         tools.into_iter().filter(|t| t.get("name").and_then(Value::as_str).is_some_and(|n| self.tool_allowed(n).is_ok())).collect()
     }
 
-    /// The single enforcement point: called from `tools/call` before anything executes.
-    pub fn check_call(&self, name: &str, args: &Value) -> Result<(), String> {
+    /// Refuse `id` when the deny list names it.
+    fn deny_check(&self, id: &str) -> Result<(), String> {
+        if self.command_denied(id) { Err(format!("command `{id}` is denied by policy")) } else { Ok(()) }
+    }
+
+    /// The single enforcement point: called from `tools/call` before anything executes. It may also
+    /// rewrite `args` (safe mode pins `addToPhotos` to `false` on every export route, so a preset
+    /// cannot switch it on); the caller must run the tool with the rewritten arguments.
+    pub fn check_call(&self, name: &str, args: &mut Value) -> Result<(), String> {
         if !self.is_active() {
             return Ok(());
         }
         self.tool_allowed(name)?;
-
-        // (command id, its params) pairs this call would execute.
-        let mut invoked: Vec<(String, Value)> = Vec::new();
+        for id in helper_commands(name).unwrap_or(&[]) {
+            self.deny_check(id)?;
+        }
         match name {
-            "command_run" => push_id(&mut invoked, args.get("id"), args.get("params")),
-            "run_command" => push_id(&mut invoked, args.get("command"), args.get("params")),
+            "command_run" => self.check_slot(args, "id", "params"),
+            "run_command" => self.check_slot(args, "command", "params"),
             "command_batch" => {
-                for step in args.get("steps").and_then(Value::as_array).into_iter().flatten() {
-                    push_id(&mut invoked, step.get("id"), step.get("params"));
+                for step in args.get_mut("steps").and_then(Value::as_array_mut).into_iter().flatten() {
+                    self.check_slot(step, "id", "params")?;
                 }
+                Ok(())
             }
-            "import" => invoked.push(("library.import".into(), args.clone())),
-            "export" => invoked.push(("app.export".into(), args.clone())),
-            "clipboard" => invoked.push(("ui.clipboard".into(), args.clone())),
-            n if n.starts_with(COMMAND_TOOL_PREFIX) => {
-                // Exact id is not recoverable from the tool name (underscores); `tool_allowed`
-                // already matched it against the deny list. Keep the args for the checks below.
-                if n == "cmd_app_export" {
-                    invoked.push(("app.export".into(), args.clone()));
-                } else if n == "cmd_library_import" {
-                    invoked.push(("library.import".into(), args.clone()));
-                }
-            }
-            _ => {}
+            "import" => self.check_route("library.import", args),
+            "export" => self.check_route("app.export", args),
+            n => match n.strip_prefix(COMMAND_TOOL_PREFIX) {
+                Some(rest) => self.check_route(&rest.replace('_', "."), args),
+                None => Ok(()),
+            },
         }
-
-        for (id, params) in &invoked {
-            if self.command_denied(id) {
-                return Err(format!("command `{id}` is denied by policy"));
-            }
-            if self.safe {
-                match id.as_str() {
-                    "library.import" => self.check_import(params)?,
-                    "app.export" => self.check_export(params)?,
-                    _ => {}
-                }
-            } else if id == "app.export" && self.export_root.is_some() {
-                self.check_export(params)?;
-            }
-        }
-        Ok(())
     }
 
+    /// A call that names its command in `holder[id_key]` and carries its params in `holder[params_key]`
+    /// (`command_run`, `run_command`, one `command_batch` step).
+    fn check_slot(&self, holder: &mut Value, id_key: &str, params_key: &str) -> Result<(), String> {
+        let Some(id) = holder.get(id_key).and_then(Value::as_str).map(str::to_string) else { return Ok(()) };
+        self.deny_check(&id)?;
+        if !matches!(id.as_str(), "library.import" | "app.export") {
+            return Ok(());
+        }
+        let Some(obj) = holder.as_object_mut() else { return Ok(()) };
+        self.check_route(&id, obj.entry(params_key).or_insert(Value::Null))
+    }
+
+    /// Deny-list and argument checks for running `id` with `params` (rewritten in place where needed).
+    fn check_route(&self, id: &str, params: &mut Value) -> Result<(), String> {
+        self.deny_check(id)?;
+        match id {
+            "library.import" if self.safe => self.check_import(params),
+            "app.export" if self.safe || self.export_root.is_some() => self.check_export(params),
+            _ => Ok(()),
+        }
+    }
+
+    /// Safe mode: an import must not move (and so delete) the source files.
     fn check_import(&self, params: &Value) -> Result<(), String> {
-        if params.get("mode").and_then(Value::as_str) == Some("move") {
+        if params.get("mode").and_then(Value::as_str).map(|m| m.trim().to_ascii_lowercase()).as_deref() == Some("move") {
             return Err("import mode `move` deletes the source files and is refused under LIGHTCRAFT_MCP_SAFE; use `copy` or `add`".into());
         }
         Ok(())
     }
 
-    fn check_export(&self, params: &Value) -> Result<(), String> {
-        if self.safe && params.get("addToPhotos").and_then(Value::as_bool) == Some(true) {
-            return Err("`addToPhotos` is refused under LIGHTCRAFT_MCP_SAFE".into());
+    /// Export params: no Apple Photos hand-off in safe mode (pinned to `false`, which also overrides a
+    /// preset), `subfolder` stays inside `dir`, and with an export root every destination is inside it.
+    fn check_export(&self, params: &mut Value) -> Result<(), String> {
+        if params.is_null() {
+            *params = Value::Object(Default::default());
         }
-        // Upstream only replaces `\`, `:` and NUL in `subfolder`; `/` and `..` pass through
-        // (export/params.rs `from_json`), so `subfolder: "../../x"` climbs out of `dir`.
-        if let Some(sub) = params.get("subfolder").and_then(Value::as_str) {
+        let Some(obj) = params.as_object_mut() else { return Err("export params must be an object".into()) };
+        if self.safe {
+            if obj.get("addToPhotos").and_then(Value::as_bool) == Some(true) {
+                return Err("`addToPhotos` is refused under LIGHTCRAFT_MCP_SAFE".into());
+            }
+            // The call's own params override a preset's, so this beats a preset that sets it.
+            obj.insert("addToPhotos".into(), Value::Bool(false));
+        }
+        if self.export_root.is_some() && obj.contains_key("preset") {
+            // A preset may carry `destinationMode` / `subfolder`; pin them unless the call gives its own (checked below).
+            obj.entry("destinationMode").or_insert_with(|| Value::String("specificFolder".into()));
+            obj.entry("subfolder").or_insert_with(|| Value::String(String::new()));
+        }
+        // The engine trims `subfolder` and replaces `\`, `:` and NUL with `_` (export/params.rs
+        // `from_json`); judge the value it will actually use. `..` and absolute parts would climb out of `dir`.
+        let raw_subfolder = obj.get("subfolder").and_then(Value::as_str).map(str::to_string);
+        let subfolder = raw_subfolder.as_deref().map(normalise_subfolder);
+        if let (Some(raw), Some(sub)) = (&raw_subfolder, &subfolder) {
             let escapes = Path::new(sub).components().any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)));
-            if escapes || sub.contains('\\') {
-                return Err(format!("export `subfolder` {sub:?} must be a relative path without `..`"));
+            if escapes || raw.contains('\\') {
+                return Err(format!("export `subfolder` {raw:?} must be a relative path without `..`"));
             }
         }
         let Some(root) = &self.export_root else { return Ok(()) };
-        if params.get("destinationMode").and_then(Value::as_str) == Some("sameAsOriginal") {
+        let same_as_original = obj.get("destinationMode").and_then(Value::as_str).is_some_and(|m| m.trim().eq_ignore_ascii_case("sameAsOriginal"));
+        if same_as_original {
             return Err("`destinationMode: sameAsOriginal` writes next to the originals, outside LIGHTCRAFT_MCP_EXPORT_ROOT".into());
         }
-        let path = params.get("path").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-        let dir = params.get("dir").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-        match (path, dir) {
-            (None, None) => {
-                Err(format!("export needs an explicit `dir` or `path` inside {} (the app's remembered export folder is not allowed)", root.display()))
-            }
-            (p, d) => {
-                if let Some(p) = p {
-                    // `path` is a file: its parent must be inside the root.
-                    let parent = Path::new(p).parent().unwrap_or_else(|| Path::new(p));
-                    within(root, parent).map_err(|e| format!("export `path` {p}: {e}"))?;
-                }
-                if let Some(d) = d {
-                    within(root, Path::new(d)).map_err(|e| format!("export `dir` {d}: {e}"))?;
-                }
-                Ok(())
-            }
+        let path = obj.get("path").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+        let dir = obj.get("dir").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+        if path.is_none() && dir.is_none() {
+            return Err(format!(
+                "export needs an explicit `dir` or `path` inside {} (the app's remembered export folder is not allowed)",
+                root.display()
+            ));
         }
+        if let Some(p) = path {
+            // `path` is a file: its parent must be inside the root.
+            let parent = Path::new(p).parent().unwrap_or_else(|| Path::new(p));
+            within(root, parent).map_err(|e| format!("export `path` {p}: {e}"))?;
+        }
+        if let Some(d) = dir {
+            // Files land in `dir` joined with the subfolder, so that is the place to check.
+            let target = match subfolder.as_deref().filter(|s| !s.is_empty()) {
+                Some(sub) => Path::new(d).join(sub),
+                None => PathBuf::from(d),
+            };
+            within(root, &target).map_err(|e| format!("export `dir` {d}: {e}"))?;
+        }
+        Ok(())
     }
 }
 
-fn push_id(out: &mut Vec<(String, Value)>, id: Option<&Value>, params: Option<&Value>) {
-    if let Some(id) = id.and_then(Value::as_str) {
-        out.push((id.to_string(), params.cloned().unwrap_or(Value::Null)));
-    }
+/// `subfolder` as the engine reads it: trimmed, with `\`, `:` and NUL replaced by `_`.
+fn normalise_subfolder(sub: &str) -> String {
+    sub.trim().replace(['\\', ':', '\0'], "_")
+}
+
+/// The command ids a helper tool dispatches in `tools.rs` `call_tool`, incidental ones included (the
+/// `library.select` behind an `id`), so denying an id also denies the helper that runs it. `None`
+/// for tools that name their command in the arguments (`run_command`, `command_run`, ...) and for `cmd_*`.
+fn helper_commands(tool: &str) -> Option<&'static [&'static str]> {
+    Some(match tool {
+        "list_commands" | "command_list" => &["engine.commands"],
+        "doc_inspect" => &["library.state", "catalog.stats"],
+        "render_photo" | "render_preview" => &["export.checkTarget", "library.state", "ui.render"],
+        "import" => &["library.import"],
+        "query_photos" => &["catalog.query"],
+        "select_photos" => &["library.select"],
+        "list_controls" => &["develop.controls"],
+        "get_develop" => &["develop.get"],
+        "set_develop" => &["library.select", "develop.set", "develop.merge", "develop.controls"],
+        "apply_preset" => &["preset.apply"],
+        "crop" => &["library.select", "crop.reset", "crop.set"],
+        "export" => &["library.select", "app.export"],
+        "screenshot" | "ui_screenshot" => &["export.checkTarget", "ui.screenshot"],
+        "inspect_ui" | "ui_inspect" => &["ui.inspect"],
+        "set_ui" => &["ui.set"],
+        "list_widgets" => &["ui.widgets"],
+        "click" => &["ui.clickWidget", "ui.click"],
+        "press_key" => &["ui.key"],
+        "type_text" => &["ui.text"],
+        "clipboard" => &["ui.clipboard"],
+        "pointer_gesture" => &["ui.pointer"],
+        _ => return None,
+    })
 }
 
 /// Resolve `p` without following it blindly: the longest existing prefix is canonicalized
@@ -251,6 +299,8 @@ fn within(root: &Path, p: &Path) -> Result<(), String> {
     if resolved.starts_with(&root) { Ok(()) } else { Err(format!("is outside the export root {}", root.display())) }
 }
 
+/// `p` with its longest existing ancestor canonicalized and the not-yet-existing rest appended; `..` in
+/// that rest is an error.
 fn resolve_lexically(p: &Path) -> Result<PathBuf, String> {
     // Longest existing ancestor → canonicalize; append the remainder, refusing `..`.
     let mut existing = p.to_path_buf();
@@ -280,6 +330,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A policy as `LIGHTCRAFT_MCP_SAFE=1` builds it.
     fn safe() -> Policy {
         let mut p = Policy { safe: true, ..Policy::default() };
         p.deny.extend(SAFE_DENY.iter().map(|s| s.to_string()));
@@ -287,31 +338,46 @@ mod tests {
         p
     }
 
+    /// `check_call` on a copy of `args`: the verdict, with the arguments as the tool would receive them.
+    fn call(p: &Policy, name: &str, args: Value) -> Result<Value, String> {
+        let mut args = args;
+        p.check_call(name, &mut args).map(|()| args)
+    }
+
+    /// A fresh export root under the temp folder; `tag` keeps tests apart.
+    fn temp_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("lc-policy-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     #[test]
     fn permissive_policy_refuses_nothing() {
         let p = Policy::permissive();
-        assert!(p.check_call("clipboard", &json!({"action": "copy"})).is_ok());
-        assert!(p.check_call("import", &json!({"paths": ["/x"], "mode": "move"})).is_ok());
+        assert!(call(&p, "clipboard", json!({"action": "copy"})).is_ok());
+        assert!(call(&p, "import", json!({"paths": ["/x"], "mode": "move"})).is_ok());
     }
 
     #[test]
     fn safe_policy_blocks_every_route_to_a_denied_command() {
         let p = safe();
-        assert!(p.check_call("clipboard", &json!({"action": "copy"})).is_err());
-        assert!(p.check_call("cmd_ui_clipboard", &json!({})).is_err());
-        assert!(p.check_call("run_command", &json!({"command": "ui.clipboard"})).is_err());
-        assert!(p.check_call("command_run", &json!({"id": "export.addToPhotos"})).is_err());
-        assert!(p.check_call("command_batch", &json!({"steps": [{"id": "photo.rate"}, {"id": "app.quit"}]})).is_err());
-        assert!(p.check_call("command_batch", &json!({"steps": [{"id": "photo.rate"}]})).is_ok());
+        assert!(call(&p, "clipboard", json!({"action": "copy"})).is_err());
+        assert!(call(&p, "cmd_ui_clipboard", json!({})).is_err());
+        assert!(call(&p, "run_command", json!({"command": "ui.clipboard"})).is_err());
+        assert!(call(&p, "command_run", json!({"id": "export.addToPhotos"})).is_err());
+        assert!(call(&p, "command_batch", json!({"steps": [{"id": "photo.rate"}, {"id": "app.quit"}]})).is_err());
+        assert!(call(&p, "command_batch", json!({"steps": [{"id": "photo.rate"}]})).is_ok());
     }
 
     #[test]
     fn safe_policy_refuses_move_imports_and_apple_photos() {
         let p = safe();
-        assert!(p.check_call("import", &json!({"paths": ["/x"], "mode": "move"})).is_err());
-        assert!(p.check_call("import", &json!({"paths": ["/x"], "mode": "copy"})).is_ok());
-        assert!(p.check_call("run_command", &json!({"command": "library.import", "params": {"mode": "move"}})).is_err());
-        assert!(p.check_call("export", &json!({"dir": "/tmp", "addToPhotos": true})).is_err());
+        assert!(call(&p, "import", json!({"paths": ["/x"], "mode": "move"})).is_err());
+        assert!(call(&p, "import", json!({"paths": ["/x"], "mode": " Move "})).is_err());
+        assert!(call(&p, "import", json!({"paths": ["/x"], "mode": "copy"})).is_ok());
+        assert!(call(&p, "run_command", json!({"command": "library.import", "params": {"mode": "move"}})).is_err());
+        assert!(call(&p, "export", json!({"dir": "/tmp", "addToPhotos": true})).is_err());
     }
 
     #[test]
@@ -330,26 +396,128 @@ mod tests {
         let tools = vec![json!({"name": "render_photo"}), json!({"name": "export"})];
         let kept = p.filter_tools(tools);
         assert_eq!(kept.len(), 1);
-        assert!(p.check_call("export", &json!({})).is_err());
-        assert!(p.check_call("render_photo", &json!({})).is_ok());
+        assert!(call(&p, "export", json!({})).is_err());
+        assert!(call(&p, "render_photo", json!({})).is_ok());
+    }
+
+    #[test]
+    fn denying_a_command_id_also_denies_the_helper_tool_that_runs_it() {
+        let mut p = Policy::default();
+        p.deny.insert("catalog.query".into());
+        assert!(call(&p, "query_photos", json!({})).unwrap_err().contains("catalog.query"));
+        assert!(call(&p, "cmd_catalog_query", json!({})).is_err());
+        assert!(call(&p, "run_command", json!({"command": "catalog.query"})).is_err());
+        assert!(call(&p, "get_develop", json!({})).is_ok(), "other helpers stay usable");
+        // every helper maps to the ids it dispatches
+        for (tool, id) in [
+            ("select_photos", "library.select"),
+            ("list_controls", "develop.controls"),
+            ("get_develop", "develop.get"),
+            ("set_develop", "develop.set"),
+            ("apply_preset", "preset.apply"),
+            ("crop", "crop.set"),
+            ("render_photo", "ui.render"),
+            ("render_preview", "ui.render"),
+            ("doc_inspect", "catalog.stats"),
+            ("command_list", "engine.commands"),
+            ("screenshot", "ui.screenshot"),
+            ("inspect_ui", "ui.inspect"),
+            ("set_ui", "ui.set"),
+            ("list_widgets", "ui.widgets"),
+            ("click", "ui.click"),
+            ("press_key", "ui.key"),
+            ("type_text", "ui.text"),
+            ("pointer_gesture", "ui.pointer"),
+            ("export", "app.export"),
+            ("import", "library.import"),
+        ] {
+            let mut p = Policy::default();
+            p.deny.insert(id.into());
+            assert!(call(&p, tool, json!({})).is_err(), "{tool} should be refused when {id} is denied");
+        }
+    }
+
+    #[test]
+    fn safe_mode_pins_add_to_photos_false_on_every_export_route() {
+        let p = safe();
+        // a preset may carry addToPhotos: true; the call's own value overrides the preset's
+        let out = call(&p, "export", json!({"preset": "x", "dir": "/tmp"})).unwrap();
+        assert_eq!(out["addToPhotos"], false);
+        assert_eq!(out["preset"], "x");
+        assert_eq!(call(&p, "cmd_app_export", json!({"preset": "x"})).unwrap()["addToPhotos"], false);
+        assert_eq!(call(&p, "command_run", json!({"id": "app.export", "params": {"preset": "x"}})).unwrap()["params"]["addToPhotos"], false);
+        // no params at all
+        assert_eq!(call(&p, "run_command", json!({"command": "app.export"})).unwrap()["params"]["addToPhotos"], false);
+        let batch =
+            call(&p, "command_batch", json!({"steps": [{"id": "photo.rate", "params": {}}, {"id": "app.export", "params": {"preset": "x"}}]}))
+                .unwrap();
+        assert_eq!(batch["steps"][1]["params"]["addToPhotos"], false);
+        assert!(batch["steps"][0]["params"].get("addToPhotos").is_none(), "other steps are left alone");
+        // an explicit request is refused rather than quietly turned off
+        assert!(call(&p, "export", json!({"addToPhotos": true})).is_err());
+        // not in safe mode: arguments are untouched
+        let open = Policy { deny: ["folder.move".to_string()].into_iter().collect(), ..Policy::default() };
+        assert!(call(&open, "export", json!({"preset": "x"})).unwrap().get("addToPhotos").is_none());
     }
 
     #[test]
     fn export_root_confines_dir_and_path() {
-        let root = std::env::temp_dir().join(format!("lc-policy-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = temp_root("confine");
         let p = Policy { export_root: Some(root.clone()), ..Policy::default() };
         let inside = root.join("out").to_string_lossy().to_string();
         let file_inside = root.join("out").join("a.jpg").to_string_lossy().to_string();
         let escape = root.join("..").join("x").to_string_lossy().to_string();
-        assert!(p.check_call("export", &json!({"dir": inside})).is_ok());
-        assert!(p.check_call("export", &json!({"path": file_inside})).is_ok());
-        assert!(p.check_call("export", &json!({"dir": escape})).is_err());
-        assert!(p.check_call("export", &json!({"dir": "relative/dir"})).is_err());
-        assert!(p.check_call("export", &json!({})).is_err(), "no implicit remembered folder");
-        assert!(p.check_call("export", &json!({"dir": inside, "destinationMode": "sameAsOriginal"})).is_err());
-        assert!(p.check_call("export", &json!({"dir": inside, "subfolder": "../../escape"})).is_err());
-        assert!(p.check_call("export", &json!({"dir": inside, "subfolder": "2026/trip"})).is_ok());
+        assert!(call(&p, "export", json!({"dir": inside})).is_ok());
+        assert!(call(&p, "export", json!({"path": file_inside})).is_ok());
+        assert!(call(&p, "export", json!({"dir": escape})).is_err());
+        assert!(call(&p, "export", json!({"dir": "relative/dir"})).is_err());
+        assert!(call(&p, "export", json!({})).is_err(), "no implicit remembered folder");
+        assert!(call(&p, "export", json!({"dir": inside, "destinationMode": "sameAsOriginal"})).is_err());
+        assert!(call(&p, "export", json!({"dir": inside, "destinationMode": " SameAsOriginal "})).is_err(), "the engine reads it case-insensitively");
+        assert!(call(&p, "export", json!({"dir": inside, "subfolder": "../../escape"})).is_err());
+        assert!(call(&p, "export", json!({"dir": inside, "subfolder": "2026/trip"})).is_ok());
+        // the engine trims the subfolder first, so these are `..`
+        assert!(call(&p, "export", json!({"dir": inside, "subfolder": " .."})).is_err());
+        assert!(call(&p, "export", json!({"dir": inside, "subfolder": "..\t"})).is_err());
+        assert!(call(&p, "export", json!({"dir": inside, "subfolder": "..\\x"})).is_err());
+        // `:` becomes `_`, which is an ordinary name
+        assert!(call(&p, "export", json!({"dir": inside, "subfolder": "a:b"})).is_ok());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_preset_cannot_pick_another_destination_under_an_export_root() {
+        let root = temp_root("preset");
+        let p = Policy { export_root: Some(root.clone()), ..Policy::default() };
+        let dir = root.to_string_lossy().to_string();
+        let out = call(&p, "export", json!({"dir": dir, "preset": "web"})).unwrap();
+        assert_eq!(out["destinationMode"], "specificFolder");
+        assert_eq!(out["subfolder"], "");
+        // what the call sets itself is kept (and checked)
+        let out = call(&p, "export", json!({"dir": dir, "preset": "web", "subfolder": "trip"})).unwrap();
+        assert_eq!(out["subfolder"], "trip");
+        assert!(call(&p, "export", json!({"dir": dir, "preset": "web", "destinationMode": "sameAsOriginal"})).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_cannot_lead_out_of_the_export_root() {
+        use std::os::unix::fs::symlink;
+        let root = temp_root("symlink");
+        let outside = temp_root("symlink-outside");
+        let p = Policy { export_root: Some(root.clone()), ..Policy::default() };
+        // an in-root link that points outside
+        symlink(&outside, root.join("link")).unwrap();
+        let through_link = root.join("link").join("x").to_string_lossy().to_string();
+        assert!(call(&p, "export", json!({"dir": through_link})).is_err());
+        // `a:b` is written as `a_b`; if that is a link pointing outside, the joined path is outside
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        symlink(&outside, root.join("out").join("a_b")).unwrap();
+        let dir = root.join("out").to_string_lossy().to_string();
+        assert!(call(&p, "export", json!({"dir": dir, "subfolder": "a:b"})).is_err());
+        assert!(call(&p, "export", json!({"dir": dir, "subfolder": "fine"})).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

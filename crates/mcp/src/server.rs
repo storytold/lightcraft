@@ -192,11 +192,12 @@ impl Server {
             }
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
-                let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                let mut args = params.get("arguments").cloned().unwrap_or(Value::Null);
                 check_args(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
                 // Policy is the one gate every execution path goes through (helpers, run_command,
-                // command_batch and cmd_*). A refusal is a tool error so the model can read why.
-                if let Err(why) = self.policy.check_call(name, &args) {
+                // command_batch and cmd_*). A refusal is a tool error so the model can read why. The
+                // policy may rewrite `args` (safe mode pins `addToPhotos` to false), so run those.
+                if let Err(why) = self.policy.check_call(name, &mut args) {
                     return Ok(ToolResult::error(format!("refused by policy: {why}")).to_value());
                 }
                 let long = matches!(name, "export" | "cmd_app_export")
@@ -235,6 +236,10 @@ impl Server {
                     CONTROLS_URI => "develop.controls",
                     _ => return Err((RESOURCE_NOT_FOUND, format!("resource not found: {uri}"))),
                 };
+                // Reading a resource runs a command, so the deny list applies to it as it does to the tools.
+                if !cmd.is_empty() && self.policy.command_denied(cmd) {
+                    return Err((INVALID_PARAMS, format!("refused by policy: resource {uri} reads command `{cmd}`, which is denied by policy")));
+                }
                 let v = self
                     .guarded(|b| match uri {
                         DOCUMENT_URI => doc_inspect(b),
