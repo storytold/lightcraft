@@ -132,6 +132,10 @@ pub(crate) fn get(create: fn() -> Result<Gpu, String>) -> Option<Arc<Gpu>> {
         Ok(g) => {
             let g = Arc::new(g);
             s.state = State::Ready(g.clone());
+            drop(s);
+            if lost_while_made(g.generation) {
+                return None;
+            }
             Some(g)
         }
         Err(why) => {
@@ -140,6 +144,16 @@ pub(crate) fn get(create: fn() -> Result<Gpu, String>) -> Option<Arc<Gpu>> {
             None
         }
     }
+}
+
+/// A device lost between its callbacks being set and its being put in place (the loss found no
+/// device in use to mark) is marked lost now, so it isn't used (review of PR #3565). `true`: it was.
+fn lost_while_made(generation: u64) -> bool {
+    if !crate::ctx::is_lost(generation) {
+        return false;
+    }
+    lose(generation, "the device was lost while it was being made");
+    true
 }
 
 /// A replacement is being made ([`start_recovery`]).
@@ -171,16 +185,33 @@ fn start_recovery(create: fn() -> Result<Gpu, String>) {
 }
 
 /// Put a new device in place of the lost one, or count the failed attempt.
-fn replace(made: Result<Gpu, String>) {
+pub(crate) fn replace(made: Result<Gpu, String>) {
     let mut s = slot();
     match made {
         Ok(g) => {
+            let generation = g.generation;
             s.state = State::Ready(Arc::new(g));
-            if let Some(l) = s.lost.take() {
+            let was_lost = s.lost.take();
+            drop(s);
+            lost_while_made(generation);
+            // (the check and the notice are one step against `lose`, which takes this lock: a loss
+            // after it is told after the notice, never before it; review of PR #3499 / #3506 / #3511)
+            let mut s = slot();
+            let Some(l) = was_lost else { return };
+            let in_use = s.lost.is_none() && matches!(&s.state, State::Ready(g) if g.generation == generation);
+            if in_use {
                 s.recoveries += 1;
-                drop(s);
                 log::warn!("gpu: a new device replaces the lost one ({})", l.reason);
+                // (a replacement lost already says so, not that the card is back: review of PR #3532)
                 event(EventKind::Recovered, "LightCraft restarted the graphics card and uses it again.".into());
+                return;
+            }
+            // lost while it was made, or just after: one more failed attempt, not a recovery, and
+            // the attempts before it still count (review of PR #3565)
+            let tried = charge_attempt(&mut s, l.attempts);
+            drop(s);
+            if tried >= MAX_RECOVERIES {
+                event(EventKind::GaveUp, given_up_text());
             }
         }
         Err(why) => {
@@ -196,6 +227,22 @@ fn replace(made: Result<Gpu, String>) {
             }
         }
     }
+}
+
+/// The replacement made after `before` failed attempts is lost too: the loss `lose` recorded for
+/// it carries those attempts and this one. Returns recoveries and attempts together.
+fn charge_attempt(s: &mut Slot, before: u32) -> u32 {
+    if let Some(l) = s.lost.as_mut() {
+        l.attempts = before.saturating_add(1);
+        l.at = Instant::now();
+    }
+    s.recoveries.saturating_add(s.lost.as_ref().map_or(0, |l| l.attempts))
+}
+
+/// Failed attempts to replace the lost device so far (`None`: no device is lost).
+#[cfg(test)]
+pub(crate) fn lost_attempts() -> Option<u32> {
+    slot().lost.as_ref().map(|l| l.attempts)
 }
 
 /// Use `g` (the window's device, created elsewhere) unless a device exists already. `Err`: the
@@ -214,6 +261,10 @@ pub(crate) fn adopt(make: impl FnOnce() -> Result<Gpu, String>) -> Result<Arc<Gp
         Ok(g) => {
             let g = Arc::new(g);
             s.state = State::Ready(g.clone());
+            drop(s);
+            // (as `get` does: a device lost while it was made is recorded, so renders go to the
+            // CPU and it is replaced; review of PR #3511)
+            lost_while_made(g.generation);
             Ok(g)
         }
         Err(e) => {
@@ -354,6 +405,17 @@ mod tests {
         assert!(exhausted(&lost(MAX_RECOVERIES), 0), "every attempt failed");
         assert!(exhausted(&lost(2), MAX_RECOVERIES - 2), "recoveries and failed attempts count together");
         assert!(!due(&lost(MAX_RECOVERIES), 0), "no attempt is due once they are used up");
+    }
+
+    /// Review of PR #3565: a replacement lost while it was made is one more failed attempt, and
+    /// the attempts before it still count (the loss `lose` records for it starts at 0).
+    #[test]
+    fn a_replacement_lost_while_made_keeps_the_attempts_before_it() {
+        let mut s = Slot { state: State::NotTried, lost: Some(Lost { reason: "lost".into(), at: Instant::now(), attempts: 0 }), recoveries: 1 };
+        assert_eq!(charge_attempt(&mut s, 3), 5, "one recovery and four failed attempts");
+        assert_eq!(s.lost.as_ref().map(|l| l.attempts), Some(4));
+        assert_eq!(s.recoveries, 1, "not counted as a recovery");
+        assert!(s.lost.as_ref().is_some_and(|l| exhausted(l, s.recoveries)), "the limit holds");
     }
 
     #[test]

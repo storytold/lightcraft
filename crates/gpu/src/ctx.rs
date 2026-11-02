@@ -340,15 +340,23 @@ static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
 static LOST_DEVICES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 /// Device `generation` is lost (see [`LOST_DEVICES`]).
-fn mark_lost(generation: u64) {
+pub(crate) fn mark_lost(generation: u64) {
     let mut lost = LOST_DEVICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lost.contains(&generation) {
+        // (the latest ones only: a device that is gone isn't asked about again, and the list
+        // stays short however many losses there are: review of PR #3506)
+        if lost.len() >= MAX_LOST_KEPT {
+            lost.remove(0);
+        }
         lost.push(generation);
     }
 }
 
+/// Lost devices remembered ([`mark_lost`]).
+const MAX_LOST_KEPT: usize = 64;
+
 /// Whether device `generation` is lost (0, an unknown device: never).
-fn is_lost(generation: u64) -> bool {
+pub(crate) fn is_lost(generation: u64) -> bool {
     generation != 0 && LOST_DEVICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&generation)
 }
 /// Bytes in the free pool.
@@ -463,10 +471,8 @@ impl Gpu {
         // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
         desc.flags = crate::backend::instance_flags_from_env(desc.flags);
         let instance = wgpu::Instance::new(desc);
-        let adapter = pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?;
+        // the card LIGHTCRAFT_GPU_ADAPTER names, else the high-performance one
+        let adapter = crate::backend::pick_adapter(&instance, backends)?;
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::Cpu {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
@@ -1324,6 +1330,75 @@ mod tests {
             assert!(super::is_lost(g.generation), "the loss is recorded");
             assert!(!crate::gate::throttle(&g, submitted()), "a lost device is not polled again");
         });
+        println!("CHILD: survived");
+    }
+
+    /// Review of PR #3565: a device lost before it is put in place (its loss callback ran while
+    /// it was being made) isn't used: the loss is recorded and renders go to the CPU.
+    #[test]
+    fn a_device_lost_while_it_is_made_is_not_used() {
+        if run_child("lost_while_made_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_device_lost_while_it_is_made_is_not_used"]
+    fn lost_while_made_child() {
+        static NO_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn made_lost() -> Result<super::Gpu, String> {
+            let g = crate::new_device().inspect_err(|_| NO_GPU.store(true, std::sync::atomic::Ordering::Relaxed))?;
+            super::mark_lost(g.generation);
+            Ok(g)
+        }
+        let got = crate::slot::get(made_lost);
+        if NO_GPU.load(std::sync::atomic::Ordering::Relaxed) {
+            println!("CHILD: no GPU");
+            return;
+        }
+        assert!(got.is_none(), "the lost device is not handed out");
+        assert!(crate::slot::lost_reason().is_some(), "its loss is recorded");
+        assert_eq!(crate::slot::lost_attempts(), Some(0));
+        // a replacement lost while it was made doesn't say the card is back (review of PR #3532),
+        // and it is a failed attempt, not a recovery (review of PR #3565)
+        for attempt in 1..=2 {
+            let again = made_lost();
+            if NO_GPU.load(std::sync::atomic::Ordering::Relaxed) {
+                // (no replacement was made: the path this test is for didn't run; review of PR #3565)
+                println!("CHILD: no GPU");
+                return;
+            }
+            assert!(again.is_ok(), "the replacement was made");
+            crate::slot::replace(again);
+            assert!(crate::slot::lost_reason().is_some(), "the replacement's loss is recorded");
+            assert_eq!(crate::slot::lost_attempts(), Some(attempt), "the attempts before it still count");
+            assert_eq!(crate::slot::recoveries(), 0, "a lost replacement is no recovery");
+        }
+        let kinds: Vec<_> = crate::slot::events_after(0).into_iter().map(|e| e.kind).collect();
+        assert!(!kinds.contains(&crate::slot::EventKind::Recovered), "no Recovered notice: {kinds:?}");
+        println!("CHILD: survived");
+    }
+
+    /// Review of PR #3511: the window's device, adopted and lost while it was made, isn't used
+    /// for renders either: its loss is recorded as `get` records one.
+    #[test]
+    fn an_adopted_device_lost_while_it_is_made_is_not_used() {
+        if run_child("adopted_lost_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by an_adopted_device_lost_while_it_is_made_is_not_used"]
+    fn adopted_lost_child() {
+        let Ok(g) = crate::new_device() else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        super::mark_lost(g.generation);
+        assert!(crate::slot::adopt(|| Ok(g)).is_ok());
+        assert!(crate::slot::lost_reason().is_some(), "its loss is recorded");
+        assert!(crate::slot::current().is_none(), "renders don't use it");
         println!("CHILD: survived");
     }
 
