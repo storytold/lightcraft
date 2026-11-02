@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use lightcraft_tiff::{Ifd, ParseOptions, Tiff, TiffError, tags as t};
+use lightcraft_tiff::{FieldType, Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -27,6 +27,11 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     let data = strip_exif_header(bytes);
     let tiff = Tiff::parse_with(data, opts)?;
     let mut m = from_tiff(&tiff);
+    // Panasonic RW2's private ISO tags are meaningful only when the container magic confirms RW2.
+    // Keep this out of `from_tiff`: TIFF/DNG files can use the same tag numbers for unrelated data.
+    if m.iso.is_none() && data.starts_with(b"IIU\0") {
+        m.iso = tiff.ifds.first().and_then(|ifd| rw2_private_iso(ifd, 0x0017).or_else(|| rw2_private_iso(ifd, 0x0037)));
+    }
     // Panasonic (and some Canons) write no LensModel, only the name in their maker note
     if m.lens_model.is_none() {
         m.lens_model = panasonic_maker_note_lens(data, &tiff).or_else(|| canon_maker_note_lens(data, &tiff));
@@ -34,6 +39,24 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
     m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
     Ok(m)
+}
+
+fn rw2_private_iso(ifd: &Ifd, tag: u16) -> Option<u32> {
+    let value = ifd.value(tag)?;
+    if !matches!(
+        value.field_type(),
+        FieldType::Byte
+            | FieldType::Short
+            | FieldType::Long
+            | FieldType::SByte
+            | FieldType::SShort
+            | FieldType::SLong
+            | FieldType::Long8
+            | FieldType::SLong8
+    ) {
+        return None;
+    }
+    ifd.u32(tag).filter(|&value| value > 0)
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
@@ -287,6 +310,87 @@ pub(crate) mod tests {
         let without_fallback = capture_time_tiff(Some("2026:01:01 12:34:56:junk"), None, None, None);
         assert_eq!(crate::extract(&without_fallback).capture_time, None);
         assert!(crate::embedded(&without_fallback).exif.is_some(), "rejecting the projection must retain the embedded EXIF block");
+    }
+
+    fn rw2_iso_tiff(short: Option<Value>, long: Option<Value>, standard: Option<u16>, extended: Option<u32>) -> Vec<u8> {
+        let mut exif = IfdBuilder::new();
+        if let Some(value) = standard {
+            exif.set(t::ISO_SPEED, Value::Short(vec![value]));
+        }
+        if let Some(value) = extended {
+            exif.set(t::RECOMMENDED_EXPOSURE_INDEX, Value::Long(vec![value]));
+        }
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
+        ifd0.set(t::MODEL, Value::Ascii("DMC-GF6".into()));
+        ifd0.set(t::IMAGE_DESCRIPTION, Value::Ascii("unrelated metadata".into()));
+        if let Some(value) = short {
+            ifd0.set(0x0017, value);
+        }
+        if let Some(value) = long {
+            ifd0.set(0x0037, value);
+        }
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        // IIU\0 is the RW2 signature; ordinary TIFF starts with II*\0.
+        bytes[2] = b'U';
+        bytes
+    }
+
+    #[test]
+    fn rw2_iso_short_tag_fills_missing_standard_iso() {
+        let bytes = rw2_iso_tiff(Some(Value::Short(vec![160])), None, None, None);
+        let metadata = try_read_exif(&bytes).unwrap();
+        assert_eq!(metadata.iso, Some(160));
+        assert_eq!(metadata.make.as_deref(), Some("Panasonic"));
+        assert_eq!(metadata.model.as_deref(), Some("DMC-GF6"));
+        assert_eq!(metadata.caption.as_deref(), Some("unrelated metadata"));
+    }
+
+    #[test]
+    fn rw2_iso_long_tag_fills_missing_standard_iso() {
+        let bytes = rw2_iso_tiff(None, Some(Value::Long(vec![640])), None, None);
+        assert_eq!(try_read_exif(&bytes).unwrap().iso, Some(640));
+    }
+
+    #[test]
+    fn rw2_iso_standard_exif_retains_precedence() {
+        let standard = rw2_iso_tiff(Some(Value::Short(vec![160])), Some(Value::Long(vec![320])), Some(400), None);
+        assert_eq!(try_read_exif(&standard).unwrap().iso, Some(400));
+
+        // Extended EXIF ISO remains authoritative when the base tag uses its sentinel value.
+        let extended = rw2_iso_tiff(Some(Value::Short(vec![160])), None, Some(65535), Some(800));
+        assert_eq!(try_read_exif(&extended).unwrap().iso, Some(800));
+    }
+
+    #[test]
+    fn rw2_iso_zero_or_invalid_values_are_ignored() {
+        let long_fallback = rw2_iso_tiff(Some(Value::Short(vec![0])), Some(Value::Long(vec![320])), None, None);
+        assert_eq!(try_read_exif(&long_fallback).unwrap().iso, Some(320));
+
+        let malformed_short = rw2_iso_tiff(Some(Value::Ascii("bad".into())), Some(Value::Long(vec![250])), None, None);
+        assert_eq!(try_read_exif(&malformed_short).unwrap().iso, Some(250));
+
+        // Undefined contains bytes but is not an integer TIFF field type. It must not
+        // shadow a usable fallback value in the second Panasonic tag.
+        let undefined_short = rw2_iso_tiff(Some(Value::Undefined(vec![98])), Some(Value::Long(vec![250])), None, None);
+        assert_eq!(try_read_exif(&undefined_short).unwrap().iso, Some(250));
+
+        let undefined_long = rw2_iso_tiff(None, Some(Value::Undefined(vec![98])), None, None);
+        assert_eq!(try_read_exif(&undefined_long).unwrap().iso, None);
+
+        let negative_signed_short = rw2_iso_tiff(Some(Value::SLong(vec![-1])), None, None, None);
+        assert_eq!(try_read_exif(&negative_signed_short).unwrap().iso, None);
+
+        let malformed = rw2_iso_tiff(Some(Value::Short(vec![0])), Some(Value::Long(vec![0])), None, None);
+        assert_eq!(try_read_exif(&malformed).unwrap().iso, None);
+    }
+
+    #[test]
+    fn rw2_iso_private_tags_do_not_affect_ordinary_tiff() {
+        let mut bytes = rw2_iso_tiff(Some(Value::Short(vec![160])), Some(Value::Long(vec![320])), None, None);
+        bytes[2] = b'*';
+        assert_eq!(try_read_exif(&bytes).unwrap().iso, None);
     }
 
     /// An Exif block from a Panasonic body: no LensModel, the lens name in maker note tag 0x0051, whose value

@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### ISO is read from Panasonic RW2 metadata
+- Some Panasonic RW2 files store ISO in private IFD0 tags instead of the standard EXIF ISO field. LightCraft now reads those tags when the file has the RW2 signature and standard EXIF ISO is missing, so the ISO appears in the imported photo metadata. Standard EXIF values continue to take precedence; the same tag numbers in ordinary TIFF and DNG files are ignored.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
