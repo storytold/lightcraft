@@ -313,7 +313,8 @@ pub struct Photo {
 /// What assisted culling measured on a photo.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Analysis {
-    /// Focus: 0 (blurred) .. 100 (crisp), from the detail in the photo's sharpest area.
+    /// Focus: 0 (blurred) .. 100 (crisp): the score culling goes by — the subject's
+    /// ([`Analysis::subject`]) when one was measured, else the frame's.
     pub sharpness: f32,
     /// Exposure: share of clipped pixels, 0..1 (shadows + highlights).
     pub clipped: f32,
@@ -321,6 +322,44 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Focus on the subject (face and pet regions, else the camera's focus point), 0..100, when it
+    /// could be measured; `sharpness` is then this score. Left out of the catalog JSON when
+    /// absent, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<f32>,
+    /// What `sharpness` was measured on.
+    #[serde(default, skip_serializing_if = "FocusOn::is_frame")]
+    pub focus_on: FocusOn,
+    /// Focus of the whole frame, kept beside a subject score (`None` when `sharpness` is it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<f32>,
+}
+
+/// What assisted culling's focus score was measured on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FocusOn {
+    /// The whole frame (its sharpest areas): no subject was known or it was too small to judge.
+    #[default]
+    Frame,
+    /// The photo's face and pet regions.
+    Face,
+    /// The camera's autofocus point.
+    FocusPoint,
+}
+
+impl FocusOn {
+    pub fn is_frame(&self) -> bool {
+        *self == FocusOn::Frame
+    }
+    /// The word commands and rules use: `frame`, `face`, `focusPoint`.
+    pub fn id(self) -> &'static str {
+        match self {
+            FocusOn::Frame => "frame",
+            FocusOn::Face => "face",
+            FocusOn::FocusPoint => "focusPoint",
+        }
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting

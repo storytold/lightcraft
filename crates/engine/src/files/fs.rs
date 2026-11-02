@@ -66,6 +66,12 @@ pub fn fs_pair_loader() -> PairLoader {
     })
 }
 
+/// What decoding a file of `len` bytes to at most `max_edge` pixels counts for at the memory gate
+/// ([`crate::memory::work_gate`]): the file and what decoding it expands to.
+pub fn gate_weight(len: usize, max_edge: usize) -> usize {
+    len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 })
+}
+
 /// Filesystem-backed hooks (native). On the web the host installs bytes-based hooks instead.
 ///
 /// Their working memory is bounded by [`crate::memory::work_gate`]: background loads (grid
@@ -100,7 +106,7 @@ pub fn fs_reduced_loader() -> ReducedLoader {
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
 fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
-    let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
+    let weight = gate_weight(len, max_edge);
     let gate = crate::memory::work_gate();
     let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;

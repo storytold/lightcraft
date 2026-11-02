@@ -1,6 +1,8 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
+use super::source::{
+    DecodedSource, PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket,
+};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
 impl crate::Session {
@@ -480,13 +482,30 @@ impl crate::Session {
 
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
     pub fn source_now(&mut self, id: PhotoId, level: SourceLevel) -> Result<Arc<Rgb32f>, String> {
-        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
-        let r = self.media.source_ref(&p, level).load_source()?;
+        let r = self.source_load(id, level)?.load_source()?;
         let image = r.image.clone();
-        if let Some(info) = &r.info {
+        self.keep_source(id, level, r);
+        Ok(image)
+    }
+
+    /// [`Self::source_now`] in halves, for many photos decoded side by side off the session (Assisted Culling): how to
+    /// load photo `id` at `level` (from memory, else its file), loaded anywhere with [`SourceRef::load_source`] ...
+    pub fn source_load(&mut self, id: PhotoId, level: SourceLevel) -> Result<SourceRef, String> {
+        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        Ok(self.media.source_ref(&p, level))
+    }
+
+    /// ... and what was loaded, kept as [`Self::source_now`] keeps it: in memory, with the as-shot white balance its
+    /// decode read.
+    pub fn keep_source(&mut self, id: PhotoId, level: SourceLevel, r: DecodedSource) {
+        self.learn_source(id, r.info.as_ref());
+        self.media.insert_source(id, level, r);
+    }
+
+    /// What a decode of photo `id` read about its file (`info`), learned without keeping its pixels.
+    pub fn learn_source(&mut self, id: PhotoId, info: Option<&SourceInfo>) {
+        if let Some(info) = info {
             self.learn_as_shot_wb(id, info);
         }
-        self.media.insert_source(id, level, r);
-        Ok(image)
     }
 }
