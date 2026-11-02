@@ -757,6 +757,12 @@ fn enlarged_exports_must_fit_the_computers_memory() {
     assert_eq!(too_big_for_memory((6000, 4000), 24_000_000, 20 * gb, Some(gb)), None, "full size is never refused");
     assert_eq!(too_big_for_memory((3000, 2000), 24_000_000, 20 * gb, Some(gb)), None, "nor a smaller export");
     assert_eq!(too_big_for_memory((27713, 18475), 24_000_000, 20 * gb, None), None, "unknown memory");
+    // review of PR #3565: a gain map JPEG's own memory counts in the check (here it tips an
+    // enlarged export that fits without it past the computer's memory)
+    let hdr = with_gain_map(14 * gb, (27713, 18475), true);
+    assert!(hdr > 16 * gb && with_gain_map(14 * gb, (27713, 18475), false) == 14 * gb);
+    assert_eq!(too_big_for_memory((27713, 18475), 24_000_000, 14 * gb, Some(16 * gb)), None);
+    assert!(too_big_for_memory((27713, 18475), 24_000_000, hdr, Some(16 * gb)).is_some());
 }
 
 #[test]

@@ -245,6 +245,14 @@ pub fn resolve_card(entries: &[AdapterEntry], variable: Option<&str>, saved: Opt
     r
 }
 
+/// The key of the card [`resolve_card`] edits on with `saved` as the setting (a key in any case of
+/// backend and ids, or Automatic): for the settings, which name the second card's choices by it
+/// (review of PR #3506). `None`: wgpu picks.
+pub fn editing_key(entries: &[AdapterEntry], variable: Option<&str>, saved: &str) -> Option<AdapterKey> {
+    let saved = AdapterKey::parse(saved);
+    resolve_card(entries, variable, saved.as_ref()).index.and_then(|i| entries.get(i)).map(|e| e.key.clone())
+}
+
 /// [`resolve_card`] without the variable: the saved card, else the screen's, else wgpu's pick.
 fn resolve_unnamed(entries: &[AdapterEntry], saved: Option<&AdapterKey>) -> Resolution {
     let mut missing = None;
@@ -584,6 +592,21 @@ mod tests {
         assert_eq!(resolve_card(&e, None, Some(&e[2].key)).missing, Some(e[2].key.clone()));
         // a name both cards have: the first in wgpu's order (both dedicated)
         assert_eq!(resolve_card(&e, Some("070"), None), Resolution { index: Some(0), how: How::Variable, missing: None });
+    }
+
+    /// Review of PR #3506: the settings learn the editing card as it is picked: the variable over
+    /// the setting, a key written in another case, the same model under another number.
+    #[test]
+    fn the_settings_learn_the_editing_card_as_it_is_picked() {
+        let e = entries_from(&two_cards(), Some(&screen_5070()));
+        let (k5070, k4070) = (e[0].key.clone(), e[1].key.clone());
+        assert_eq!(editing_key(&e, None, ""), Some(k5070.clone()), "Automatic: the screen's");
+        assert_eq!(editing_key(&e, None, &k4070.to_string()), Some(k4070.clone()));
+        let shouted = format!("DX12:10DE:2783:{}#1", k4070.name);
+        assert_eq!(editing_key(&e, None, &shouted), Some(k4070.clone()), "a key in upper case");
+        assert_eq!(editing_key(&e, None, &format!("dx12:10de:2783:{}#2", k4070.name)), Some(k4070.clone()), "same model");
+        assert_eq!(editing_key(&e, Some("4070"), &k5070.to_string()), Some(k4070.clone()), "the variable wins");
+        assert_eq!(editing_key(&e, Some("5070"), &k4070.to_string()), Some(k5070));
     }
 
     /// A fake laptop list: the variable picks among several matches in the defined order (dedicated

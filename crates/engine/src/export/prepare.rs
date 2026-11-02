@@ -134,14 +134,13 @@ fn prepare_guarded(
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
+        // a gain map also holds the HDR rendition (float), the SDR one in linear light and the
+        // stages the two renders share (counted before the check below: review of PR #3565)
+        let weight = with_gain_map(render_weight(full_px, long, job.level, w.saturating_mul(h)), (w, h), gain_map);
         if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
             return Err(format!("{label}: {why}"));
         }
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
-        // a gain map also holds the HDR rendition (float), the SDR one in linear light and the
-        // stages the two renders share
-        let weight = if gain_map { weight.saturating_add(w.saturating_mul(h).saturating_mul(GAIN_MAP_BYTES_PER_PX)) } else { weight };
         let src_px = source_px(full_px, long, job.level);
         (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), src_px })), weight)
     } else {
@@ -199,6 +198,11 @@ pub(super) fn too_big_for_memory(out: (usize, usize), native_px: usize, weight: 
         gb(weight).ceil(),
         gb(ram)
     ))
+}
+
+/// `weight` with what a gain map JPEG of `out` pixels adds ([`GAIN_MAP_BYTES_PER_PX`]) when `gain_map`.
+pub(super) fn with_gain_map(weight: usize, out: (usize, usize), gain_map: bool) -> usize {
+    if gain_map { weight.saturating_add(out.0.saturating_mul(out.1).saturating_mul(GAIN_MAP_BYTES_PER_PX)) } else { weight }
 }
 
 /// Working memory a gain map JPEG adds per output pixel ([`encode_gain_map_jpeg`]): the float HDR

@@ -1429,7 +1429,8 @@
 - Grid, filmstrip, preset and profile thumbnails render on the GPU once it is ready (about a quarter faster on an RTX
   5070, and the CPU stays free for decoding raws).
 - While a slider is dragged, the loupe is drawn straight from the GPU: rendering and drawing share the window's
-  graphics device, so drafts are never copied to memory and back (`LIGHTCRAFT_GPU_WINDOW=0` turns this off).
+  graphics device, so drafts aren't copied to memory and back (`LIGHTCRAFT_GPU_WINDOW=0` turns this off). They still
+  are while a monitor profile is applied on the CPU, or until the GPU renderer is ready.
 
 ### Large preset collections
 - A library holding thousands of presets (a Lightroom collection imported whole: 11 000 presets, a 42 MB
