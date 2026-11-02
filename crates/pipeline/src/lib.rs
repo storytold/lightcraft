@@ -26,6 +26,7 @@
 pub mod auto;
 pub mod blemish;
 pub mod colorops;
+pub mod crystal;
 pub mod cull;
 pub mod curve;
 pub mod dust;
@@ -749,6 +750,8 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
 mod tests;
 #[cfg(test)]
 mod tests_geometry;
+#[cfg(test)]
+mod tests_grain;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]

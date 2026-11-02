@@ -367,6 +367,11 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    use lightcraft_pipeline::crystal::{TILE_PER_LONG, TORI};
+    s += &format!(
+        "const CRYSTAL_T0: u32 = {}u;\nconst CRYSTAL_T1: u32 = {}u;\nconst CRYSTAL_TPL: f32 = {:?};\n",
+        TORI[0], TORI[1], TILE_PER_LONG as f32
+    );
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }

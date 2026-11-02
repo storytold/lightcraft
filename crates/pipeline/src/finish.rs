@@ -85,6 +85,48 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
 
+/// The grain of processes V1 and V2: two octaves of value noise. Frozen: photos on those
+/// processes keep rendering with it (`docs/process-versions.md`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValueGrain {
+    /// Amplitude (display-encoded).
+    pub amt: f32,
+    /// Noise cell size (output pixels).
+    pub cell: f32,
+    /// Roughness 0..1: weight of the finer octave.
+    pub rough: f32,
+    pub seed: u32,
+}
+
+/// A render's film grain. The model follows the photo's process: changing it would change how
+/// existing photos look, so the crystal grain came with process V3.
+#[derive(Clone, Debug)]
+pub enum GrainModel {
+    /// V1 and V2: value noise.
+    Value(ValueGrain),
+    /// V3 and later: crystal layers ([`crate::crystal`]).
+    Crystal(crate::crystal::CrystalGrain),
+}
+
+impl GrainModel {
+    /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: none).
+    pub fn new(s: &DevelopSettings, px_per_long: f64) -> Option<GrainModel> {
+        let g = &s.grain;
+        match s.process.process() {
+            Process::V1 | Process::V2 => (g.amount > 0.0).then(|| {
+                let cell = (0.0006 + (g.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
+                GrainModel::Value(ValueGrain {
+                    amt: (g.amount / 100.0) as f32 * 0.13,
+                    cell: cell.max(0.6),
+                    rough: (g.roughness / 100.0) as f32,
+                    seed: g.seed,
+                })
+            }),
+            Process::V3 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+        }
+    }
+}
+
 #[inline]
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     // A degenerate frame (zero-width crop) maps pixels to NaN/inf coordinates: no grain there.
@@ -183,8 +225,8 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain: amount, cell size (px), roughness, seed.
-    pub grain: Option<(f32, f32, f32, u32)>,
+    /// Film grain: the model of the photo's process ([`GrainModel`]).
+    pub grain: Option<GrainModel>,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -229,10 +271,7 @@ impl FinishParams {
             && frame.oh.is_finite()
             && frame.ow.max(frame.oh) > 0.0
             && out_to_norm.0.iter().all(|v| v.is_finite());
-        let grain = (s.grain.amount > 0.0 && effects && finite_frame).then(|| {
-            let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
-            ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
-        });
+        let grain = if effects && finite_frame { GrainModel::new(s, px_per_long) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -292,7 +331,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -521,20 +560,28 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            if let Some((amt, cell, rough, seed)) = *grain {
-                let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = fp.px_per_long as f32 / cell;
-                let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55) * rough * 0.7;
-                let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                if hdr {
-                    lum = lum.clamp(0.0, 1.0);
+            match grain {
+                Some(GrainModel::Value(g)) => {
+                    // V1/V2 (frozen): exactly the arithmetic those processes always had
+                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
+                    let sc = fp.px_per_long as f32 / g.cell;
+                    let mut v = grain_noise(gx * sc, gy * sc, g.seed);
+                    v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
+                    let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+                    if hdr {
+                        lum = lum.clamp(0.0, 1.0);
+                    }
+                    let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
+                    if k.is_finite() {
+                        e = e.map(|v| v + k);
+                    }
                 }
-                let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                if k.is_finite() {
-                    e = e.map(|v| v + k);
+                Some(GrainModel::Crystal(g)) => {
+                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
                 }
+                None => {}
             }
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
