@@ -5,6 +5,7 @@ mod alt_preview;
 mod appearance;
 mod before_after;
 mod browse_active;
+mod bursts;
 mod button;
 mod canvas_keys;
 mod canvas_pan;

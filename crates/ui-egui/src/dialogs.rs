@@ -680,7 +680,7 @@ fn auto_stack_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: 
 
 /// The body of the Cull dialog.
 fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::Cull { reject_below, pick_best, burst_gap, similarity } = dlg else { return };
+    let Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity, reset_bursts } = dlg else { return };
     let n = app.session.selection.ids.len();
     let scope = if n > 1 {
         crate::i18n::tr_format!("the {n} selected photos", n = n)
@@ -707,6 +707,8 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     );
     let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
     crate::widgets::register(ui, "check:cullPick", r.rect);
+    let r = ui.checkbox(stack_groups, crate::i18n::tr("Stack each burst, best photo on top"));
+    crate::widgets::register(ui, "check:cullStack", r.rect);
     ui.add_space(6.0);
     // the sliders drag over the usual range; their value fields take whatever
     // `photo.analyze` accepts (a gap of 0 s to a day, a similarity of 0 to 1)
@@ -732,6 +734,14 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     crate::widgets::register(ui, "field:cullSimilar", r.rect);
     clamp_cull_burst(burst_gap, similarity);
     ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
+    let r = ui.checkbox(reset_bursts, crate::i18n::tr("Regroup bursts I arranged by hand"));
+    crate::widgets::register(ui, "check:cullResetBursts", r.rect);
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "Put bursts right by dragging in Window → Bursts: the first photo of a burst is its pick, and culling again keeps what you arranged.",
+        ))
+        .color(t.text_dim),
+    );
     ui.label(
         egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots."))
             .color(t.text_dim),

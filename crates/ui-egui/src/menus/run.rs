@@ -997,6 +997,10 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             panel(app, ctx, RightPanel::Activity, "History");
             Ok(Value::Null)
         }
+        "panel.bursts" => {
+            panel(app, ctx, RightPanel::Bursts, "Bursts");
+            Ok(Value::Null)
+        }
         "panel.presets" => {
             app.ui.presets = !app.ui.presets || !crate::docking::exposed(app, crate::docking::Panel::Presets);
             if app.ui.presets && app.ui.view != ViewMode::Detail {
@@ -1291,7 +1295,14 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull {
+                reject_below: 0.0,
+                pick_best: true,
+                stack_groups: app.ui.cull_stack,
+                burst_gap,
+                similarity,
+                reset_bursts: false,
+            });
             Ok(Value::Null)
         }
         "app.whatsNew" => {
