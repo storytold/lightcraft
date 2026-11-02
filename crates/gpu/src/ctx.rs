@@ -386,7 +386,8 @@ fn module_source(m: &Module, consts: &str) -> String {
 }
 
 impl Gpu {
-    /// Create a device on the best available adapter (no software fallback), or why there is none.
+    /// Create a device on the best available adapter (no software adapter unless
+    /// `LIGHTCRAFT_GPU_ALLOW_SOFTWARE`), or why there is none.
     pub fn new(backends: wgpu::Backends) -> Result<Gpu, String> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         // only these drivers are loaded (`crate::backend`: never Vulkan on Windows unless asked)
@@ -401,9 +402,12 @@ impl Gpu {
         )
         .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?;
         let info = adapter.get_info();
-        if info.device_type == wgpu::DeviceType::Cpu {
+        if refuse_adapter(info.device_type, software_allowed()) {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
             return Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name));
+        }
+        if info.device_type == wgpu::DeviceType::Cpu {
+            log::info!("gpu: LIGHTCRAFT_GPU_ALLOW_SOFTWARE: using the software adapter {}", info.name);
         }
         let mut limits = adapter.limits();
         if limits.max_storage_buffers_per_shader_stage < 10 {
@@ -747,6 +751,19 @@ impl Gpu {
 /// normally reset a hung GPU much sooner).
 const READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Whether to turn down an adapter of `device_type`: a software rasterizer (llvmpipe / lavapipe,
+/// WARP) is slower than the CPU pipeline, so it is refused unless `allow_software`.
+fn refuse_adapter(device_type: wgpu::DeviceType, allow_software: bool) -> bool {
+    device_type == wgpu::DeviceType::Cpu && !allow_software
+}
+
+/// `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter. For tests on machines without a
+/// GPU (Mesa lavapipe on Linux, WARP on Windows), so the CPU ↔ GPU equivalence tests run there
+/// instead of skipping; the app never sets it (software rendering is slower than the CPU pipeline).
+fn software_allowed() -> bool {
+    std::env::var("LIGHTCRAFT_GPU_ALLOW_SOFTWARE").is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
 /// `LIGHTCRAFT_GPU_LIMITS`: lower the device limits, e.g. to reproduce a smaller adapter.
 /// `webgpu` / `downlevel` = 128 MiB storage bindings and 256 MiB buffers (the WebGPU defaults),
 /// `<n>` = n MiB storage bindings and 2n MiB buffers. Returns (binding bytes, buffer bytes).
@@ -764,8 +781,8 @@ fn parse_limits(v: &str) -> Option<(u64, u64)> {
         }
         n => {
             let mb: u64 = n.trim_end_matches("mib").trim_end_matches("mb").trim().parse().ok()?;
-            let b = mb.max(1) << 20;
-            Some((b, 2 * b))
+            let b = mb.max(1).checked_mul(1 << 20)?;
+            Some((b, b.checked_mul(2)?))
         }
     }
 }
@@ -906,6 +923,8 @@ mod tests {
         assert_eq!(super::parse_limits("512MiB"), Some((512 << 20, 1024 << 20)));
         assert_eq!(super::parse_limits(""), None);
         assert_eq!(super::parse_limits("lots"), None);
+        assert_eq!(super::parse_limits("9223372036854775807"), None);
+        assert_eq!(super::parse_limits("17592186044416"), None);
     }
 
     /// Issue #2936: the kernels are built on several threads; every entry point of every module has one.
@@ -1149,6 +1168,17 @@ mod tests {
         assert!(e.contains("lost"), "{e}");
         drop(held);
         println!("CHILD: survived");
+    }
+
+    #[test]
+    fn software_adapters_need_the_opt_in() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, Other, VirtualGpu};
+        assert!(super::refuse_adapter(Cpu, false), "llvmpipe / WARP are refused by default");
+        assert!(!super::refuse_adapter(Cpu, true), "LIGHTCRAFT_GPU_ALLOW_SOFTWARE accepts them");
+        for t in [DiscreteGpu, IntegratedGpu, VirtualGpu, Other] {
+            assert!(!super::refuse_adapter(t, false), "{t:?}");
+            assert!(!super::refuse_adapter(t, true), "{t:?}");
+        }
     }
 
     #[test]
