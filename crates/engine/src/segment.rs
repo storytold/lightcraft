@@ -1,13 +1,18 @@
-//! AI masks: Object (clicks) and Describe (text) selections computed with SAM 3
-//! (`lightcraft-segment`, cargo feature `sam`; the desktop app enables it).
+//! AI masks (`lightcraft-segment`, cargo feature `sam`; the desktop app enables it):
+//! - **Object** (clicks): SAM 3 when it is installed, else SAM 2.1 (open, Apache-2.0);
+//! - **Describe** (text): SAM 3 only;
+//! - **Subject / Background**: BiRefNet-portrait (MIT), else the people EoMT finds, else a heuristic;
+//! - **Sky, People, Landscape**: EoMT-S COCO panoptic (MIT), else a heuristic (Sky) or nothing.
 //!
-//! **Nothing requires the model.** It is not part of LightCraft (SAM License); the user
-//! downloads it when they first use an AI mask and agree to (`segment.model.download`), or
-//! puts the files in the model folder themselves. Without it, AI mask requests fail with a
-//! clear "not installed" error; renders, exports and every other feature never touch it
-//! (stored segmentations are plain data in the develop settings).
+//! **Nothing requires a model.** None is part of LightCraft; the user downloads each when they
+//! first need it and agree to (`ai.models.download`, `segment.model.download` for SAM 3), or puts
+//! the files in its folder themselves ([`models`]). Without one, Object and Describe fail with a
+//! clear "not installed" error and the automatic masks fall back to a heuristic (and say so);
+//! renders, exports and every other feature never touch a model (stored segmentations are plain
+//! data in the develop settings).
 //!
-//! The model sees the photo as developed, uncropped and without masks, at 1008 px — the frame
+//! The models see the photo as developed, uncropped and without masks, at 1008 px (SAM 3) or
+//! 1024 px (the openly licensed models) — the frame
 //! mask coordinates live in — so a stored segmentation lines up with the photo at any size.
 //! Everything that touches the model (loading it, rendering and encoding the photo, clicks,
 //! descriptions, detail passes) runs on one worker thread ([`worker`]); the session talks to it
@@ -17,6 +22,7 @@
 
 #[cfg(feature = "sam")]
 mod download;
+pub mod models;
 #[cfg(feature = "sam")]
 mod worker;
 
@@ -42,6 +48,149 @@ pub const NOT_INSTALLED: &str = "The SAM 3 model is not installed";
 const WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 /// Most clicks one Object selection takes (the model's prompt grows with each).
 pub const MAX_CLICKS: usize = 64;
+/// Long edge of the image the openly licensed models (SAM 2.1, BiRefNet, EoMT) see.
+pub const AUTO_EDGE: usize = 1024;
+
+/// An automatic AI selection (no clicks, no words): what it selects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutoKind {
+    Subject,
+    /// Everything but the subject (stored as the subject's segmentation inverted).
+    Background,
+    Sky,
+    /// Everyone (`person` 0), or the `person`-th person found, counted from the left (by their
+    /// face); `parts` as Lightroom names them (none: the entire person).
+    People {
+        person: u32,
+        parts: Vec<String>,
+    },
+    /// A landscape class: `sky`, `water`, `vegetation`, `mountains`, `architecture`,
+    /// `naturalGround`, `artificialGround`.
+    Landscape {
+        class: String,
+    },
+}
+
+/// The People parts a model can select (Lightroom's names, lower case): the whole person, and what
+/// MediaPipe's Selfie Multiclass (skin, hair, clothes) and Face Landmarker (the rest) find.
+pub const PEOPLE_PARTS: &[&str] = &[
+    "person",
+    "entire person",
+    "entireperson",
+    "face skin",
+    "faceskin",
+    "body skin",
+    "bodyskin",
+    "skin",
+    "hair",
+    "clothes",
+    "clothing",
+    "eyebrows",
+    "brows",
+    "eye sclera",
+    "sclera",
+    "eyes",
+    "iris and pupil",
+    "iris",
+    "lips",
+    "teeth",
+];
+
+/// The People parts that are face features (from landmarks).
+const FACE_PARTS: &[&str] = &["eyebrows", "brows", "eye sclera", "sclera", "eyes", "iris and pupil", "iris", "lips", "teeth"];
+
+fn whole_person(parts: &[String]) -> bool {
+    parts.iter().all(|p| matches!(p.to_ascii_lowercase().as_str(), "person" | "entire person" | "entireperson"))
+}
+
+/// The landscape classes [`AutoKind::Landscape`] knows.
+pub const LANDSCAPE_CLASSES: &[&str] = &["sky", "water", "vegetation", "mountains", "architecture", "naturalGround", "artificialGround"];
+
+impl AutoKind {
+    /// What `shape` selects, when it is an automatic AI shape a model can compute (People parts
+    /// other than the whole person have no model).
+    pub fn of(shape: &MaskShape) -> Option<Self> {
+        match shape {
+            MaskShape::Subject { .. } => Some(AutoKind::Subject),
+            MaskShape::Background { .. } => Some(AutoKind::Background),
+            MaskShape::Sky { .. } => Some(AutoKind::Sky),
+            MaskShape::People { person, parts, .. }
+                if parts.len() <= 16 && parts.iter().all(|p| PEOPLE_PARTS.contains(&p.to_ascii_lowercase().as_str())) =>
+            {
+                Some(AutoKind::People { person: *person, parts: parts.clone() })
+            }
+            MaskShape::Landscape { class, .. } if LANDSCAPE_CLASSES.contains(&class.as_str()) => Some(AutoKind::Landscape { class: class.clone() }),
+            _ => None,
+        }
+    }
+
+    /// The segmentation `shape` holds, when it is of this kind.
+    pub fn seg_of<'a>(&self, shape: &'a MaskShape) -> Option<&'a Option<SegMask>> {
+        match (self, shape) {
+            (AutoKind::Subject, MaskShape::Subject { seg })
+            | (AutoKind::Background, MaskShape::Background { seg })
+            | (AutoKind::Sky, MaskShape::Sky { seg }) => Some(seg),
+            (AutoKind::People { .. } | AutoKind::Landscape { .. }, MaskShape::People { seg, .. } | MaskShape::Landscape { seg, .. })
+                if AutoKind::of(shape).as_ref() == Some(self) =>
+            {
+                Some(seg)
+            }
+            _ => None,
+        }
+    }
+
+    /// Store `seg` in `shape` (when it is of this kind).
+    pub fn set_seg(&self, shape: &mut MaskShape, seg: Option<SegMask>) -> bool {
+        if AutoKind::of(shape).as_ref() != Some(self) {
+            return false;
+        }
+        match shape {
+            MaskShape::Subject { seg: s }
+            | MaskShape::Background { seg: s }
+            | MaskShape::Sky { seg: s }
+            | MaskShape::People { seg: s, .. }
+            | MaskShape::Landscape { seg: s, .. } => {
+                *s = seg;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The openly licensed model that computes it best (its key in `ai.models.status`).
+    pub fn preferred_model(&self) -> &'static str {
+        match self {
+            AutoKind::Subject | AutoKind::Background => "subject",
+            AutoKind::People { parts, .. } if parts.iter().any(|p| FACE_PARTS.contains(&p.to_ascii_lowercase().as_str())) => "face",
+            AutoKind::People { .. } => "people",
+            _ => "scene",
+        }
+    }
+
+    /// The undo label of its result.
+    fn label(&self) -> &'static str {
+        match self {
+            AutoKind::Subject => "Subject Mask",
+            AutoKind::Background => "Background Mask",
+            AutoKind::Sky => "Sky Mask",
+            AutoKind::People { .. } => "People Mask",
+            AutoKind::Landscape { .. } => "Landscape Mask",
+        }
+    }
+}
+
+/// Which models compute an automatic selection, and where they are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutoModel {
+    /// BiRefNet-portrait (Subject, Background).
+    Subject(PathBuf),
+    /// EoMT-S COCO panoptic (Sky, Landscape; People and Subject without the MediaPipe models).
+    Scene(PathBuf),
+    /// MediaPipe: Selfie Multiclass for the person, skin, hair and clothes; Face Landmarker for face
+    /// parts and for telling people apart. A subject without BiRefNet: the people, else EoMT's most
+    /// confident thing (`scene`).
+    People { people: Option<PathBuf>, face: Option<PathBuf>, scene: Option<PathBuf> },
+}
 
 /// One click of an Object selection (normalized image coordinates).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +213,9 @@ pub(crate) enum Tag {
     NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
+    /// An automatic selection for component `comp` of mask `mask` (applied while the component is
+    /// still that kind without a segmentation).
+    Auto { photo: PhotoId, mask: u32, comp: usize, kind: AutoKind },
 }
 
 /// The model input: 8-bit RGB.
@@ -123,6 +275,9 @@ pub struct Segmenter {
     pub dir: Option<PathBuf>,
     /// The user's list of download mirrors (one base URL per line), if any.
     pub mirrors_file: Option<PathBuf>,
+    /// The models folder: each openly licensed AI mask model (SAM 2.1, EoMT, BiRefNet, Depth Anything) lives
+    /// in its own subfolder ([`lightcraft_segment::models`]); `None`: no openly licensed models.
+    pub models_root: Option<PathBuf>,
     /// Run requests in the background and apply them in [`Session::segment_poll`] (the
     /// desktop app); otherwise commands wait for their result (CLI, MCP, tests).
     pub background: bool,
@@ -132,6 +287,9 @@ pub struct Segmenter {
     worker: worker::Worker,
     #[cfg(feature = "sam")]
     download: download::Downloader,
+    /// Downloads of the openly licensed models, by model key.
+    #[cfg(feature = "sam")]
+    model_downloads: std::collections::HashMap<&'static str, download::Downloader>,
     #[cfg(feature = "sam")]
     results: (std::sync::mpsc::Sender<worker::Outcome>, std::sync::mpsc::Receiver<worker::Outcome>),
 }
@@ -143,6 +301,7 @@ impl Default for Segmenter {
         Segmenter {
             dir: None,
             mirrors_file: None,
+            models_root: None,
             background: false,
             pending: None,
             messages: Vec::new(),
@@ -150,6 +309,8 @@ impl Default for Segmenter {
             worker: worker::Worker::default(),
             #[cfg(feature = "sam")]
             download: download::Downloader::default(),
+            #[cfg(feature = "sam")]
+            model_downloads: std::collections::HashMap::new(),
             #[cfg(feature = "sam")]
             results: std::sync::mpsc::channel(),
         }
@@ -245,12 +406,12 @@ impl Segmenter {
 
     /// The model folder, if the model is there; otherwise an error that says what to do.
     pub fn model_dir(&self) -> Result<PathBuf, String> {
-        self.require_model().map_err(|e| e.to_string())
+        self.require_sam3().map_err(|e| e.to_string())
     }
 
     /// [`Segmenter::model_dir`] for commands: a model that is not installed (or still downloading) is
     /// [`crate::EngineError::ModelMissing`], so a frontend offers the download without reading the message.
-    pub fn require_model(&self) -> crate::Result<PathBuf> {
+    pub fn require_sam3(&self) -> crate::Result<PathBuf> {
         let other = |why: &str| crate::EngineError::Other(why.into());
         if !Self::AVAILABLE {
             return Err(other("AI masks are not available in this build"));
@@ -275,6 +436,70 @@ impl Segmenter {
             )
         };
         Err(crate::EngineError::ModelMissing { model: crate::AiModel::Sam3, msg })
+    }
+
+    /// The model for Object clicks: SAM 3 when it is installed (or a remote worker is set), else
+    /// SAM 2.1; `(folder, is SAM 2.1)`. Without either, an error offering SAM 2.1 (the open one).
+    pub fn object_model(&self) -> Result<(PathBuf, bool), String> {
+        if !Self::AVAILABLE {
+            return Err("AI masks are not available in this build".into());
+        }
+        // (no folder for the openly licensed models: only SAM 3 can be offered)
+        if self.installed() || self.remote_endpoint().is_some() || self.models_root.is_none() {
+            return self.model_dir().map(|d| (d, false));
+        }
+        self.require_model("sam2").map(|d| (d, true))
+    }
+
+    /// The models for an automatic selection; an error naming the model to get when they aren't
+    /// installed.
+    /// - Subject / Background: BiRefNet, else MediaPipe's people (EoMT for a non-person subject),
+    ///   else EoMT.
+    /// - Sky / Landscape: EoMT.
+    /// - People: MediaPipe (Selfie Multiclass for the body, Face Landmarker for face parts and to
+    ///   tell people apart); the entire person also from EoMT when MediaPipe isn't there.
+    pub fn auto_model(&self, kind: &AutoKind) -> Result<AutoModel, String> {
+        let ok = |key: &str| self.require_model(key).ok();
+        match kind {
+            AutoKind::Subject | AutoKind::Background => {
+                let e = match self.require_model("subject") {
+                    Ok(dir) => return Ok(AutoModel::Subject(dir)),
+                    Err(e) => e,
+                };
+                if let Some(people) = ok("people") {
+                    return Ok(AutoModel::People { people: Some(people), face: None, scene: ok("scene") });
+                }
+                ok("scene").map(AutoModel::Scene).ok_or(e)
+            }
+            AutoKind::Sky | AutoKind::Landscape { .. } => self.require_model("scene").map(AutoModel::Scene),
+            AutoKind::People { person, parts } => {
+                let face_parts = parts.iter().any(|p| FACE_PARTS.contains(&p.to_ascii_lowercase().as_str()));
+                let body = parts.is_empty() || parts.iter().any(|p| !FACE_PARTS.contains(&p.to_ascii_lowercase().as_str()));
+                let need_face = face_parts || *person > 0;
+                let people = if body { Some(self.require_model("people")) } else { None };
+                // skin leaves the face's features out when the face model is there to find them
+                let skin = parts.iter().any(|p| p.to_ascii_lowercase().contains("skin"));
+                let face = if need_face {
+                    Some(self.require_model("face"))
+                } else if skin {
+                    ok("face").map(Ok)
+                } else {
+                    None
+                };
+                match (people, face) {
+                    (Some(Err(e)), _) | (_, Some(Err(e))) => {
+                        // the entire person (everyone, or one of them) EoMT can do on its own
+                        if whole_person(parts)
+                            && let Some(scene) = ok("scene")
+                        {
+                            return Ok(AutoModel::Scene(scene));
+                        }
+                        Err(e)
+                    }
+                    (people, face) => Ok(AutoModel::People { people: people.and_then(Result::ok), face: face.and_then(Result::ok), scene: None }),
+                }
+            }
+        }
     }
 
     /// Start downloading the model (on a background thread; see `segment.model.download`).
@@ -409,29 +634,46 @@ impl Session {
         reply: std::sync::mpsc::Sender<worker::Outcome>,
         region: Option<[f64; 4]>,
     ) -> Result<worker::Job, String> {
-        let dir = self.segmenter.model_dir()?;
+        let (dir, sam2) = match &kind {
+            worker::Kind::Text(_) | worker::Kind::Detail { prompt: Prompt::Text(_), .. } => (self.segmenter.model_dir()?, false),
+            worker::Kind::Auto { .. } => (PathBuf::new(), false),
+            _ => self.segmenter.object_model()?,
+        };
+        // SAM 3 sees 1008 px, the openly licensed models 1024
+        let edge = if sam2 || matches!(kind, worker::Kind::Auto { .. }) { AUTO_EDGE } else { INPUT_EDGE };
         let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
+        let key = mix(key, edge as u64);
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let missing = match &p.source {
             lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
             _ => None,
         };
         let render = match region {
-            None => self.preview_job(id, INPUT_EDGE, INPUT_EDGE, false, &d).ok_or("no such photo")?,
+            None => self.preview_job(id, edge, edge, false, &d).ok_or("no such photo")?,
             Some(region) => {
                 d.crop.geometry =
                     lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(region[0], region[1], region[2], region[3]), angle: 0.0 };
                 d.crop.flip_h = false;
                 d.crop.flip_v = false;
                 d.geometry.constrain_crop = false;
-                let mut job = self.preview_job(id, INPUT_EDGE, INPUT_EDGE, true, &d).ok_or("no such photo")?;
+                let mut job = self.preview_job(id, edge, edge, true, &d).ok_or("no such photo")?;
                 let frac = (region[2] - region[0]).max(region[3] - region[1]).max(0.01);
-                job.level = crate::media::SourceLevel::for_size((INPUT_EDGE as f64 / frac) as usize);
+                job.level = crate::media::SourceLevel::for_size((edge as f64 / frac) as usize);
                 job.source = self.media.source_ref(&p, job.level);
                 job
             }
         };
-        Ok(worker::Job { dir, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
+        Ok(worker::Job {
+            dir,
+            sam2,
+            key: if region.is_some() { 0 } else { key },
+            render: Some(render),
+            missing,
+            kind,
+            tag,
+            reply,
+            activity: Some(self.activity.clone()),
+        })
     }
 
     /// Send a request and wait for its result (CLI, MCP, tests; or when not in background mode).
@@ -461,7 +703,7 @@ impl Session {
     /// Start preparing photo `id` for AI masks (load the model, encode the image), so the first
     /// click is fast. In background mode it returns at once.
     pub fn segment_prepare(&mut self, id: PhotoId) -> Result<(), String> {
-        self.segmenter.model_dir()?;
+        self.segmenter.object_model()?;
         #[cfg(feature = "sam")]
         {
             if self.segmenter.background {
@@ -476,7 +718,7 @@ impl Session {
 
     /// Segment the object `clicks` pick on photo `id`, waiting for the model.
     pub fn segment_clicks(&mut self, id: PhotoId, clicks: &[Click]) -> Result<SegMask, String> {
-        self.segmenter.model_dir()?;
+        self.segmenter.object_model()?;
         if !clicks.iter().any(|c| c.include) {
             return Err("click the object to include it first".into());
         }
@@ -513,7 +755,7 @@ impl Session {
     /// Background mode: queue Object clicks for component `comp` of mask `mask`; the result
     /// (clicks and segmentation, one undo step) is applied by [`Session::segment_poll`].
     pub(crate) fn segment_clicks_later(&mut self, id: PhotoId, mask: u32, comp: usize, hint: Vec<Point>, exclude: Vec<Point>) -> Result<(), String> {
-        self.segmenter.model_dir()?;
+        self.segmenter.object_model()?;
         if hint.is_empty() {
             return Err("click the object to include it first".into());
         }
@@ -558,7 +800,6 @@ impl Session {
     /// otherwise it is applied before this returns. `Ok(false)` when there is nothing to
     /// refine (no selection yet, or it is most of the photo) or a pass is running already.
     pub fn segment_detail(&mut self, id: PhotoId, mask: u32, comp: usize) -> Result<bool, String> {
-        self.segmenter.model_dir()?;
         let d = self.develop_of(id).ok_or("no such photo")?;
         let shape = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone()).ok_or("no such mask")?;
         let (seg, prompt) = match &shape {
@@ -572,6 +813,10 @@ impl Session {
         let p = self.catalog.photo(id).ok_or("no such photo")?;
         let (pw, ph) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
         let aspect = if d.orientation.swaps_axes() { ph / pw } else { pw / ph };
+        match &prompt {
+            Prompt::Text(_) => self.segmenter.model_dir()?,
+            Prompt::Clicks(_) => self.segmenter.object_model()?.0,
+        };
         let Some(region) = detail_region(&seg, aspect) else { return Ok(false) };
         #[cfg(feature = "sam")]
         {
@@ -584,7 +829,7 @@ impl Session {
                 self.segment_queue(id, kind, tag, Some(region))?;
             } else {
                 let patch = self.segment_wait(id, kind, Some(region))?;
-                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false, notice: None };
+                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false, note: None, notice: None };
                 let mut polled = Polled::default();
                 self.apply_outcome(outcome, &mut polled);
             }
@@ -594,6 +839,38 @@ impl Session {
         {
             let _ = (prompt, region, mask);
             Ok(false)
+        }
+    }
+
+    /// Compute automatic selection `kind` on photo `id`, waiting for the model (CLI, MCP, tests).
+    /// `Ok(None)`: nothing of the kind was found (e.g. no such person).
+    pub fn segment_auto(&mut self, id: PhotoId, kind: &AutoKind) -> Result<Option<SegMask>, String> {
+        let model = self.segmenter.auto_model(kind)?;
+        #[cfg(feature = "sam")]
+        {
+            self.segment_wait(id, worker::Kind::Auto { what: kind.clone(), model }, None)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, model);
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Background mode: compute automatic selection `kind` for component `comp` of mask `mask`;
+    /// [`Session::segment_poll`] stores it in the component (one undo step) if it is still that
+    /// kind without a segmentation.
+    pub(crate) fn segment_auto_later(&mut self, id: PhotoId, mask: u32, comp: usize, kind: AutoKind) -> Result<(), String> {
+        let model = self.segmenter.auto_model(&kind)?;
+        #[cfg(feature = "sam")]
+        {
+            let tag = Tag::Auto { photo: id, mask, comp, kind: kind.clone() };
+            self.segment_queue(id, worker::Kind::Auto { what: kind, model }, tag, None)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, mask, comp, kind, model);
+            Err("AI masks are not available in this build".into())
         }
     }
 
@@ -688,6 +965,36 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
+            Tag::Auto { photo, mask, comp, kind } => {
+                if let Some(note) = o.note {
+                    polled.messages.push(note);
+                }
+                let seg = match o.result {
+                    Ok(Some(seg)) => seg,
+                    Ok(None) => {
+                        return polled.messages.push(match &kind {
+                            AutoKind::People { person, .. } if *person > 0 => format!("Person {person} wasn't found in this photo."),
+                            AutoKind::People { parts, .. } if !parts.is_empty() && !whole_person(parts) => {
+                                "None of those parts were found in this photo (face parts need a face that isn't in profile).".to_string()
+                            }
+                            AutoKind::People { .. } => "No people were found in this photo.".to_string(),
+                            _ => "Nothing of that kind was found in this photo.".to_string(),
+                        });
+                    }
+                    Err(e) => return polled.messages.push(e),
+                };
+                let Some(d) = self.develop_of(photo) else { return };
+                let mut d = (*d).clone();
+                let Some(c) = d.masks.iter_mut().find(|m| m.id == mask).and_then(|m| m.components.get_mut(comp)) else { return };
+                // only into the selection it was computed for, if nobody gave it one meanwhile
+                if kind.seg_of(&c.shape).is_none_or(Option::is_some) || !kind.set_seg(&mut c.shape, Some(seg)) {
+                    return;
+                }
+                match self.set_develop(photo, d, kind.label()) {
+                    Ok(()) => polled.changed = true,
+                    Err(e) => polled.messages.push(e.to_string()),
+                }
+            }
             Tag::Detail { photo, mask, comp, shape } => {
                 let patch = match o.result {
                     Ok(Some(p)) => p,
@@ -723,7 +1030,7 @@ mod tests {
         // the job after which the model runs on the CPU (the GPU failed) says so
         let mut s = Session::with_demo();
         let notice = Some(worker::GPU_FAILED.to_string());
-        s.segmenter.results.0.send(worker::Outcome { tag: Tag::Prepare, result: Ok(None), superseded: false, notice }).unwrap();
+        s.segmenter.results.0.send(worker::Outcome { tag: Tag::Prepare, result: Ok(None), superseded: false, note: None, notice }).unwrap();
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");

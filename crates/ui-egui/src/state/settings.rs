@@ -136,6 +136,13 @@ pub struct AppSettings {
     pub import_dropped_directly: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
+    /// Graphics card for editing (`app.gpu {card}`): a card's key (`lightcraft_gpu::CardInfo::key`), "" = Automatic
+    /// (the card the screen is connected to). A card that isn't there is kept: Automatic renders meanwhile.
+    #[serde(deserialize_with = "lenient")]
+    pub gpu_card: String,
+    /// Second graphics card (`app.gpu {helper}`): "" = Automatic (another card, when there is one), "off", or a card's key.
+    #[serde(deserialize_with = "lenient_helper")]
+    pub gpu_helper: String,
     /// Use Windows DirectComposition to prevent VRR flicker; applies at next launch.
     pub compose_window: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
@@ -153,6 +160,22 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// Photos an export renders side by side (0 = automatic; `app.exportTuning`, "Test my machine").
+    #[serde(deserialize_with = "lenient")]
+    pub export_lanes: u32,
+    /// Exports render on the processor only (the GPU stays for the views); "Test my machine" sets
+    /// it when the processor alone was as fast.
+    #[serde(deserialize_with = "lenient")]
+    pub export_cpu_only: bool,
+    /// Device memory exports may use together on the GPU, MB (0 = automatic: 55 % of the card's).
+    #[serde(deserialize_with = "lenient")]
+    pub gpu_export_mb: u32,
+    /// Exports sharing the GPU at once (0 = automatic).
+    #[serde(deserialize_with = "lenient")]
+    pub gpu_export_jobs: u32,
+    /// The last "Test my machine" (Settings ▸ Performance): what it measured and chose.
+    #[serde(deserialize_with = "lenient")]
+    pub machine_test: Option<lightcraft_engine::machine_test::MachineReport>,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
@@ -222,6 +245,10 @@ impl Default for AppSettings {
             close_dialogs_outside: false,
             import_dropped_directly: false,
             gpu: true,
+            gpu_card: String::new(),
+            // no second card until the user turns one on (review of #3506); `""` in an older
+            // settings file still reads as Automatic
+            gpu_helper: "off".to_string(),
             compose_window: false,
             preview_limit: 0,
             external_editor: String::new(),
@@ -229,6 +256,11 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            export_lanes: 0,
+            export_cpu_only: false,
+            gpu_export_mb: 0,
+            gpu_export_jobs: 0,
+            machine_test: None,
             info_selected_photos: true,
             film_names: true,
             film_badges: true,
@@ -410,6 +442,13 @@ fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::Deserialize
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
+/// `gpuHelper`: a value that isn't text is the default, no second card (as text, "" would be
+/// Automatic; review of PR #3511).
+fn lenient_helper<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_str().map_or_else(|| "off".to_string(), str::to_string))
+}
+
 fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let values = Vec::<String>::deserialize(d)?;
     let mut seen = std::collections::BTreeSet::new();
@@ -449,6 +488,19 @@ mod loupe_info_tests {
             serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
         assert_eq!(newer.loupe_info, LoupeInfo::default());
         assert!(!newer.film_names, "the rest of the settings are still read");
+    }
+
+    /// A second-card choice that isn't text reads as no second card, never as Automatic.
+    #[test]
+    fn an_odd_second_card_choice_is_no_second_card() {
+        for odd in [serde_json::json!(5), serde_json::json!(null), serde_json::json!({"a": 1}), serde_json::json!(true)] {
+            let s: AppSettings = serde_json::from_value(serde_json::json!({"gpuHelper": odd})).unwrap();
+            assert_eq!(s.gpu_helper, "off", "{odd}");
+        }
+        let auto: AppSettings = serde_json::from_value(serde_json::json!({"gpuHelper": ""})).unwrap();
+        assert_eq!(auto.gpu_helper, "", "Automatic as saved");
+        let missing: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert_eq!(missing.gpu_helper, "off");
     }
 
     /// Show message when loading or rendering photos is on until it is turned off, and is saved

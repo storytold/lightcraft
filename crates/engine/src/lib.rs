@@ -53,6 +53,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod machine_test;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -85,7 +86,7 @@ pub mod walk;
 
 use std::sync::Arc;
 
-pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
+pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, gpu_batch_usage_json, gpu_helper_json};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
 use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};

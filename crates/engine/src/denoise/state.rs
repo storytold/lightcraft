@@ -97,6 +97,9 @@ pub(super) struct Running {
     pub(super) started: web_time::Instant,
 }
 
+/// Most photos made at once: one per graphics card (the card for editing and the second one).
+pub(super) const MAX_LANES: usize = 2;
+
 pub(crate) struct State {
     /// Where the models are kept (`None` where there is no file system).
     pub models_dir: Option<PathBuf>,
@@ -114,7 +117,8 @@ pub(crate) struct State {
     /// The catalog revision and time of the last index, to look again when photos changed.
     pub(super) reindexed: Option<(u64, web_time::Instant)>,
     pub(super) queue: VecDeque<PhotoId>,
-    pub(super) running: Option<Running>,
+    /// The photos being made, oldest first: one per graphics card that works ([`Model::lanes`]).
+    pub(super) running: Vec<Running>,
     pub(super) failed: HashMap<PhotoId, Failure>,
     /// Counts every change of what is ready, so the interface knows to draw again.
     pub generation: u64,
@@ -137,7 +141,7 @@ impl Default for State {
             dirty: true,
             reindexed: None,
             queue: VecDeque::new(),
-            running: None,
+            running: Vec::new(),
             failed: HashMap::new(),
             generation: 0,
             made: 0,
@@ -147,9 +151,9 @@ impl Default for State {
 }
 
 impl Drop for State {
-    /// Quitting stops the job instead of leaving it to finish a photo nobody will see.
+    /// Quitting stops the jobs instead of leaving them to finish photos nobody will see.
     fn drop(&mut self) {
-        if let Some(r) = &self.running {
+        for r in &self.running {
             r.progress.cancel_now();
         }
     }
@@ -158,7 +162,7 @@ impl Drop for State {
 impl State {
     /// The library was replaced: nothing carries over (photo ids are per library).
     pub fn library_changed(&mut self) {
-        if let Some(r) = self.running.take() {
+        for r in self.running.drain(..) {
             r.progress.cancel_now();
         }
         self.queue.clear();

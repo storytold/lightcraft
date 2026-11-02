@@ -989,10 +989,22 @@ pub enum MaskShape {
         hi: f64,
         feather: f64,
     },
-    /// AI / automatic selections, evaluated by a segmenter.
-    Subject,
-    Sky,
-    Background,
+    /// AI / automatic selections. `seg` is the segmentation an AI model computed for it when the
+    /// mask was made (BiRefNet for Subject, EoMT for Sky; Background stores the subject's
+    /// segmentation inverted), so rendering never needs the model; without one (no model when it
+    /// was made, or an older document) the shape is evaluated by a heuristic.
+    Subject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+    },
+    Sky {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+    },
+    Background {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+    },
     /// One object picked by clicks (SAM 3 point prompts): `hint` holds the clicks that include,
     /// `exclude` the ones that exclude; `seg` the segmentation computed from them.
     Object {
@@ -1021,12 +1033,20 @@ pub enum MaskShape {
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
     },
+    /// People (EoMT person instances): `person` 0 = everyone, n = the n-th person found (left to
+    /// right); `parts` as Lightroom names them; `seg` the segmentation computed for it.
     People {
         person: u32,
         parts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
     },
+    /// A landscape class (sky, water, vegetation, mountains, architecture, natural or artificial
+    /// ground); `seg` the segmentation computed for it.
     Landscape {
         class: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
     },
 }
 

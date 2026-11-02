@@ -132,6 +132,28 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// Subject, Sky and Background masks from before they could store a model's segmentation read
+    /// as before (no segmentation: the heuristic), and write the same JSON back.
+    #[test]
+    fn ai_shapes_without_a_segmentation_keep_their_old_form() {
+        use crate::MaskShape;
+        for (json, shape) in [
+            (r#"{"kind":"subject"}"#, MaskShape::Subject { seg: None }),
+            (r#"{"kind":"sky"}"#, MaskShape::Sky { seg: None }),
+            (r#"{"kind":"background"}"#, MaskShape::Background { seg: None }),
+            (r#"{"kind":"people","person":0,"parts":["Hair"]}"#, MaskShape::People { person: 0, parts: vec!["Hair".into()], seg: None }),
+        ] {
+            let read: MaskShape = serde_json::from_str(json).unwrap();
+            assert_eq!(read, shape);
+            assert_eq!(serde_json::to_string(&shape).unwrap(), json);
+        }
+        // with one, it round-trips
+        let seg = SegMask::from_logits(2, &[1.0, -1.0, 2.0, -2.0]);
+        let shape = MaskShape::Sky { seg: Some(seg) };
+        let back: MaskShape = serde_json::from_str(&serde_json::to_string(&shape).unwrap()).unwrap();
+        assert_eq!(back, shape);
+    }
+
     #[test]
     fn base64_round_trips() {
         for n in 0..10 {

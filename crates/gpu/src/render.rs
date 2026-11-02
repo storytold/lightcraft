@@ -4,7 +4,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
@@ -23,6 +22,8 @@ pub struct GpuStages {
     entries: Mutex<Vec<Entry>>,
     /// The uploaded source (a view renders one photo at several sizes).
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
+    /// The device generation the buffers belong to (0: none yet; see [`GpuStages::adopt_generation`]).
+    generation: std::sync::atomic::AtomicU64,
 }
 
 const CAPACITY: usize = 2;
@@ -113,6 +114,15 @@ impl GpuStages {
         total
     }
 
+    /// Use these stages on the device of `generation`: what was cached on another one (a device
+    /// that failed and was replaced) is dropped first.
+    pub(crate) fn adopt_generation(&self, generation: u64) {
+        use std::sync::atomic::Ordering;
+        if self.generation.swap(generation, Ordering::Relaxed) != generation {
+            self.clear();
+        }
+    }
+
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();
@@ -131,6 +141,8 @@ pub(crate) struct Cx<'a> {
     enc: Option<wgpu::CommandEncoder>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
+    /// The last submission (a batch render waits for it before the next: see `gate::throttle`).
+    last: Option<wgpu::SubmissionIndex>,
 }
 
 /// Kernel invocations recorded before a render submits them (under one full-size pass over a
@@ -142,7 +154,7 @@ const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), pending: 0, last: None }
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -170,7 +182,12 @@ impl<'a> Cx<'a> {
     pub fn flush(&mut self) {
         self.pending = 0;
         if let Some(enc) = self.enc.take() {
-            self.gpu.submit([enc.finish()]);
+            // an export keeps one submission queued at a time: the window's frames slot in between
+            if !crate::gate::throttle(self.gpu, self.last.take(), self.gpu.role) {
+                fail(FailKind::Busy, "the GPU did not finish an earlier step in time (busy)".into());
+                return;
+            }
+            self.last = Some(self.gpu.submit([enc.finish()]));
         }
     }
 
@@ -211,6 +228,20 @@ impl<'a> Cx<'a> {
     pub fn copy_into(&mut self, src: &Buf, dst: &Buf, offset: usize) {
         let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
         enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), (offset * 4) as u64, (src.len * 4) as u64);
+    }
+
+    /// Copy `w × h` texels from `b` (rows of `stride` 32-bit texels, a multiple of 64) into
+    /// `texture` (recorded).
+    pub fn copy_to_texture(&mut self, b: &Buf, stride: usize, texture: &wgpu::Texture, w: usize, h: usize) {
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        enc.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: b.raw(),
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some((stride * 4) as u32), rows_per_image: Some(h as u32) },
+            },
+            wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        );
     }
 
     pub fn read_rgb(&mut self, b: &Buf, w: usize, h: usize) -> Rgb32f {
@@ -454,10 +485,11 @@ static SOURCE_UPLOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 /// stages; it is released with the buffer pool when the app idles.
 static SHARED_SOURCE: std::sync::Mutex<Option<(std::sync::Weak<Rgb32f>, Arc<Buf>)>> = std::sync::Mutex::new(None);
 
-fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
+fn shared_source(src: &Arc<Rgb32f>, generation: u64, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
     let mut g = SHARED_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((weak, buf)) = &*g
         && weak.upgrade().is_some_and(|s| Arc::ptr_eq(&s, src))
+        && buf.generation() == generation
     {
         return buf.clone();
     }
@@ -579,17 +611,51 @@ pub(crate) fn profiling() -> bool {
     *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
 }
 
-/// Render on `gpu`, reusing `stages` (if given). `None` (or a result the caller discards) when the
-/// render failed: the reason is recorded with [`crate::ctx::fail`].
+/// A finished render on the window's device, ready to draw: an `Rgba8Unorm` texture (the 8-bit
+/// output, sRGB-curve encoded, as egui's own textures) that never went through host memory.
+#[derive(Clone, Debug)]
+pub struct DisplayFrame {
+    pub texture: wgpu::Texture,
+    pub width: usize,
+    pub height: usize,
+}
+
+/// What a render produced: pixels in host memory, or (asked for with `display` and possible) a
+/// texture on the window's device plus the histogram.
+pub enum Output {
+    Image(Rendered),
+    Display { frame: DisplayFrame, histogram: Histogram },
+}
+
+/// Whether a render of this plan can end in a texture instead of a readback: the device is the
+/// window's, nothing is drawn over the image on the CPU (overlays) or cut from it (a window that
+/// spots grew), and the texture fits the device.
+fn can_display(gpu: &Gpu, plan: &Plan<'_>, req: &RenderRequest) -> bool {
+    let max = gpu.device.limits().max_texture_dimension_2d as usize;
+    gpu.window
+        && req.depth == lightcraft_pipeline::OutputDepth::U8
+        && req.overlay == lightcraft_pipeline::Overlay::None
+        && plan.keep.is_none()
+        && plan.w <= max
+        && plan.h <= max
+        && plan.w * plan.h > 0
+}
+
+/// Render on `gpu`, reusing `stages` (if given); with `display`, into a texture when
+/// [`can_display`]. `None` (or a result the caller discards) when the render failed: the reason is
+/// recorded with [`crate::ctx::fail`].
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     gpu: &Gpu,
+    plan: Plan<'_>,
     src: &Arc<Rgb32f>,
     info: &SourceInfo,
-    s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&GpuStages>,
+    host_stages: Option<&lightcraft_pipeline::StageCache>,
     fault: Option<crate::Fault>,
-) -> Option<Rendered> {
+    display: bool,
+) -> Option<Output> {
     let mut t = profiling().then(std::time::Instant::now);
     // Each stage is submitted on its own; under `LIGHTCRAFT_PROFILE` also waited for, so the
     // timings are real.
@@ -601,7 +667,6 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan(src, info, s, req);
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));
@@ -634,7 +699,9 @@ pub fn render(
             // cut from the photo's own pixels, and what its stages keep is its own sampled pixels)
             let src_buf = match stages {
                 Some(c) if src.data.len() * 12 <= RETAIN_SOURCE_BYTES => c.source(src, upload),
-                Some(_) => shared_source(src, upload),
+                // (an export keeps its own: photos side by side would take the one copy from each other)
+                Some(_) if !crate::gate::is_batch() && gpu.role == crate::Role::Primary => shared_source(src, gpu.generation, upload),
+                Some(_) => Arc::new(upload()),
                 None => Arc::new(upload()),
             };
             sample(&mut cx, src, src_buf, &plan)
@@ -654,6 +721,21 @@ pub fn render(
         None => Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host)),
     };
     lap("wb/nr", &mut t, &mut cx);
+    // host copies for a CPU render of the same plan that follows (an export's HDR rendition)
+    if let Some(hc) = host_stages.filter(|c| c.keeps_host_stages()) {
+        let sampled_host = match host.sampled.take() {
+            Some(img) => Arc::new(img),
+            None => Arc::new(cx.read_rgb(&sampled, w, h)),
+        };
+        let lin_host = match &host.lin {
+            Some(l) => l.clone(),
+            None => Arc::new(cx.read_rgb(&lin, w, h)),
+        };
+        host.lin = Some(lin_host.clone());
+        if !crate::ctx::failed() {
+            hc.seed_linear(src, plan.geo, sampled_host, plan.lin_key, lin_host);
+        }
+    }
 
     // 3. spatial planes
     let mut planes = match cached.map(|e| e.planes) {
@@ -695,10 +777,23 @@ pub fn render(
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
-    let (p, aux) = finish_block(&fp, &terms, &present);
+    let (mut p, aux) = finish_block(&fp, &terms, &present);
+    // a float HDR render (`OutputDepth::F32Hdr`): 4 words a pixel out (see `finish.wgsl`)
+    let hdr_out = req.depth == lightcraft_pipeline::OutputDepth::F32Hdr;
+    if hdr_out && let Some(at) = crate::params::index("HDR_OUT") {
+        p[at] = 1;
+    }
+    if hdr_out && plan.keep.is_some() {
+        fail(FailKind::Limit, "a window of an HDR render that spots grew: the CPU cuts it".into());
+        return None;
+    }
+    if hdr_out && !gpu.fits(n * 4) {
+        fail(FailKind::Limit, format!("{w}×{h} HDR output needs {} MiB, over the device's buffer limit", (n * 16).div_ceil(1 << 20)));
+        return None;
+    }
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(n);
+    let out = cx.zeroed(if hdr_out { n * 4 } else { n });
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
@@ -706,7 +801,6 @@ pub fn render(
     // in bands of rows: each dispatch (and submission) stays short on a slow GPU
     let rows = (BAND_PIXELS / w.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
     let y0_at = crate::params::index("Y0").unwrap_or(0);
-    let mut p = p;
     for y0 in (0..h).step_by(rows).filter(|_| fault != Some(crate::Fault::DropWork)) {
         p[y0_at] = y0 as u32;
         cx.run(
@@ -725,6 +819,9 @@ pub fn render(
             ],
             groups2(w, rows.min(h - y0), [16, 16]),
         );
+    }
+    if display && can_display(gpu, &plan, req) {
+        return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
     }
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
@@ -755,6 +852,9 @@ pub fn render(
     } else {
         None
     };
+    if hdr_out {
+        return hdr_image(&mut cx, &out, w, h, req, &mut t);
+    }
     let data: Vec<[u8; 4]> = cx.read(&out, n);
     let image = Rgba8 { width: w, height: h, data };
     lap("finish + readback", &mut t, &mut cx);
@@ -769,10 +869,8 @@ pub fn render(
         fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({unwritten} of {n} pixels unwritten)"));
         return None;
     }
-    let histogram = match plan.keep {
-        Some(k) => Histogram::of_srgb8(&image.crop(k.x, k.y, k.w, k.h)),
-        None => Histogram::of_srgb8(&image),
-    };
+    let region = plan.keep.map_or((0, 0, w, h), |k| (k.x, k.y, k.w, k.h));
+    let histogram = histogram(&mut cx, &out, w, region);
     lap("histogram", &mut t, &mut cx);
     // An entirely black result (upstream work that did not run would give that too): redo it on
     // the CPU, which costs time only for the rare photo that really is black.
@@ -803,7 +901,84 @@ pub fn render(
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
     }
-    Some(Rendered { image, histogram, deep: None })
+    Some(Output::Image(Rendered { image, histogram, deep: None }))
+}
+
+/// The float HDR render's output (`out`: 4 words a pixel, see `finish.wgsl`) read back as the
+/// render's deep samples, with the 8-bit image and histogram the CPU's deep render gives too. Every
+/// pixel must have been written (its fourth word 1.0).
+fn hdr_image(cx: &mut Cx<'_>, out: &Buf, w: usize, h: usize, req: &RenderRequest, t: &mut Option<std::time::Instant>) -> Option<Output> {
+    let n = w * h;
+    let px: Vec<[f32; 4]> = cx.read(out, n * 4);
+    if let Some(t) = t {
+        eprintln!("  gpu finish (HDR) + readback: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        *t = std::time::Instant::now();
+    }
+    if crate::ctx::failed() || px.len() != n {
+        return None;
+    }
+    let unwritten = px.iter().filter(|p| p[3] != 1.0).count();
+    if unwritten > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete HDR image ({unwritten} of {n} pixels unwritten)"));
+        return None;
+    }
+    let mut v = vec![0f32; n * 3];
+    lightcraft_raster::par_rows(&mut v, (w * 3).max(1), |y, row| {
+        let src = px.get(y * w..(y + 1) * w).unwrap_or(&[]);
+        for (o, p) in row.as_chunks_mut::<3>().0.iter_mut().zip(src) {
+            *o = [p[0], p[1], p[2]];
+        }
+    });
+    let deep = lightcraft_pipeline::DeepImage { width: w, height: h, space: req.space, samples: lightcraft_pipeline::DeepSamples::F32(v) };
+    let image = deep.to_rgba8();
+    let histogram = Histogram::of_srgb8(&image);
+    Some(Output::Image(Rendered { image, histogram, deep: Some(deep) }))
+}
+
+/// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its
+/// histogram; the same checks as a readback (every pixel written, not entirely black), done on
+/// the device: only the histogram and a pixel count come back.
+fn to_texture(cx: &mut Cx<'_>, out: &Buf, w: usize, h: usize) -> Option<(DisplayFrame, Histogram)> {
+    let n = w * h;
+    let unwritten = cx.zeroed(1);
+    cx.run("unwritten", &[n as u32], &[Some(out), None, Some(&unwritten)], groups1(n));
+    let histogram = histogram(cx, out, w, (0, 0, w, h));
+    let left = cx.read::<u32>(&unwritten, 1).first().copied().unwrap_or(0);
+    if crate::ctx::failed() {
+        return None;
+    }
+    if left > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({left} of {n} pixels unwritten)"));
+        return None;
+    }
+    if n >= 4096 && [&histogram.r, &histogram.g, &histogram.b].iter().all(|c| c.first() == Some(&histogram.total)) {
+        fail(FailKind::Blank, "the GPU result is entirely black; rendering it on the CPU to be sure".into());
+        return None;
+    }
+    // texture copies take rows of a multiple of 256 bytes: pad them unless they already are
+    let stride = w.next_multiple_of(64);
+    let padded = (stride != w).then(|| {
+        let b = cx.gpu.buffer(stride * h);
+        cx.run("pad_rows", &[w as u32, h as u32, stride as u32], &[Some(out), Some(&b), None], groups2(w, h, [16, 16]));
+        b
+    });
+    let texture = cx.gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("lightcraft view"),
+        size: wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        // (COPY_SRC: a screenshot or a test can read it back)
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    cx.copy_to_texture(padded.as_ref().unwrap_or(out), stride, &texture, w, h);
+    cx.flush();
+    if crate::ctx::failed() {
+        return None;
+    }
+    Some((DisplayFrame { texture, width: w, height: h }, histogram))
 }
 
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).
@@ -816,8 +991,9 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::lin_needs_cpu(s, info) {
-        // defringe / spot removal / local tone mapping: CPU
+    let img = if lightcraft_pipeline::local_tone::enabled(info, s) {
+        // the camera's local tone mapping (ProRAW gain table, off by default): the whole
+        // scene-linear stage on the CPU
         let mut img = match host.sampled.take() {
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),
@@ -825,11 +1001,14 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
         lightcraft_pipeline::lin_cpu(&mut img, info, plan);
         cx.gpu.upload(rgb_words(&img))
     } else {
+        // `lin_cpu`'s order: white balance, defringe, spots, red eye
         let m = local::wb_matrix_for(info, s);
         let mut p = vec![m.is_some() as u32];
         p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
         let out = cx.gpu.buffer(n * 3);
         map(cx, "wb_k", n, &p, [Some(sampled), None, None], &out);
+        let out = defringe(cx, out, plan);
+        let out = spots(cx, out, plan);
         if plan.eyes.is_empty() {
             out
         } else {
@@ -841,6 +1020,96 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
         }
     };
     denoise(cx, img, plan)
+}
+
+/// Defringe (`optics::defringe`) of the white-balanced image.
+fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
+    use lightcraft_pipeline::optics;
+    let Some(dp) = optics::defringe_params(&plan.settings, plan.px_per_long / optics::DEFRINGE_REF_LONG) else { return img };
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let lab = cx.gpu.buffer(n * 3);
+    map(cx, "fringe_lab", n, &[], [Some(&img), None, None], &lab);
+    // the lightness channel, then its min and max around each pixel
+    let l = cx.gpu.buffer(n);
+    map(cx, "subsample", n, &[3], [Some(&lab), None, None], &l);
+    // (a radius past the image reads the same pixels as one at its size)
+    let r = dp.radius.min(w.max(h)) as u32;
+    let filtered = |cx: &mut Cx<'_>, max: u32| {
+        let tmp = cx.gpu.buffer(n);
+        cx.run("minmax", &[w as u32, h as u32, r, 0, max], &[Some(&l), Some(&tmp)], groups2(w, h, [16, 16]));
+        let out = cx.gpu.buffer(n);
+        cx.run("minmax", &[w as u32, h as u32, r, 1, max], &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
+        out
+    };
+    let (lo, hi) = (filtered(cx, 0), filtered(cx, 1));
+    // the kernel writes only the pixels it changes
+    let out = cx.copy(&img);
+    let p = [dp.purple.0, dp.purple.1, dp.green.0, dp.green.1, dp.purple_strength, dp.green_strength].map(f32::to_bits);
+    map(cx, "fringe_apply", n, &p, [Some(&lab), Some(&lo), Some(&hi)], &out);
+    out
+}
+
+/// Spot removal (`spots::apply`), spot by spot on `img` in place: each spot reads the image as
+/// the earlier ones left it.
+fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
+    use lightcraft_pipeline::spots;
+    let (w, h) = (plan.w, plan.h);
+    for spot in &plan.settings.spots {
+        let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { continue };
+        let Some(&first) = l.pts.first() else { continue };
+        let offset = match l.offset {
+            Some(o) => o,
+            None => auto_source(cx, &img, w, h, first, l.r),
+        };
+        let pts = cx.gpu.upload(&l.pts.iter().flat_map(|p| [p.0, p.1]).collect::<Vec<f32>>());
+        let nb = l.bw * l.bh;
+        let (al, sp, df, wt) = (cx.gpu.buffer(nb), cx.gpu.buffer(3 * nb), cx.gpu.buffer(3 * nb), cx.gpu.buffer(nb));
+        let mut p = vec![w as u32, h as u32, l.bx as u32, l.by as u32, l.bw as u32, l.bh as u32, l.pts.len() as u32];
+        p.extend([l.r, l.inner, l.opacity, offset.0, offset.1].map(f32::to_bits));
+        p.push(l.heal as u32);
+        let groups = groups2(l.bw, l.bh, [16, 16]);
+        cx.run("spot_prep", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(&df), Some(&wt)], groups);
+        // Heal: the tone correction is the masked difference's normalized blur
+        let blurred = l.heal.then(|| {
+            let sigma = (l.r * 0.6).max(1.0);
+            (gaussian(cx, &df, l.bw, l.bh, 3, sigma), gaussian(cx, &wt, l.bw, l.bh, 1, sigma))
+        });
+        let (bd, bm) = blurred.as_ref().map_or((&df, &wt), |(d, m)| (d, m));
+        cx.run("spot_apply", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(bd), Some(bm)], groups);
+    }
+    img
+}
+
+/// `spots::auto_source` on the device: every candidate scored at once, the 48 scores read back.
+fn auto_source(cx: &mut Cx<'_>, img: &Buf, w: usize, h: usize, target: (f32, f32), r: f32) -> (f32, f32) {
+    use lightcraft_pipeline::spots;
+    let cands = spots::candidates(r);
+    let mut data: Vec<f32> = cands.iter().flat_map(|d| [d.0, d.1]).collect();
+    data.extend(spots::ring_dirs().iter().flat_map(|d| [d.0, d.1]));
+    let pts = cx.gpu.upload(&data);
+    let [around, within] = spots::score_radii(r);
+    let mut p = vec![w as u32, h as u32];
+    p.extend([target.0, target.1].iter().chain(&around).chain(&within).map(|v| v.to_bits()));
+    let scores = cx.gpu.buffer(cands.len());
+    cx.run("spot_score", &p, &[Some(img), Some(&pts), Some(&scores), None, None, None], [cands.len().div_ceil(64) as u32, 1, 1]);
+    let scores: Vec<f32> = cx.read(&scores, cands.len());
+    spots::rank(&cands, &scores).first().copied().unwrap_or_else(|| spots::fallback_source(r))
+}
+
+/// The output's histogram (`Histogram::of_srgb8` of the `region` x, y, w, h of the `w`-wide
+/// packed RGBA8 `out`, on the same sampling grid), counted on the device.
+fn histogram(cx: &mut Cx<'_>, out: &Buf, w: usize, region: (usize, usize, usize, usize)) -> Histogram {
+    let (x0, y0, rw, rh) = region;
+    let step = (((rw * rh) as f64 / 1_000_000.0).sqrt().ceil() as usize).max(1);
+    let (nx, ny) = (rw.div_ceil(step), rh.div_ceil(step));
+    let bins = cx.zeroed(4 * Histogram::BINS + 1);
+    let p = [w, x0, y0, nx, ny, step].map(|v| v as u32);
+    cx.run("histogram", &p, &[Some(out), Some(&bins)], groups2(nx, ny, [16, 16]));
+    let v: Vec<u32> = cx.read(&bins, 4 * Histogram::BINS + 1);
+    let part = |k: usize| v.get(k * Histogram::BINS..(k + 1) * Histogram::BINS).map_or_else(|| vec![0; Histogram::BINS], <[u32]>::to_vec);
+    // (SDR bins: an HDR edit's histogram is made after the render, `media::develop`)
+    Histogram { r: part(0), g: part(1), b: part(2), luma: part(3), total: v.get(4 * Histogram::BINS).copied().unwrap_or(0), hdr: None }
 }
 
 /// Noise reduction (`local::denoise`).
@@ -958,8 +1227,18 @@ fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Ve
     aux
 }
 
-/// Cross guided filter (`masks::guided_cross`) of `p` steered by `guide`, max-combined with `p`.
-fn guided_cross_max(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) -> Buf {
+/// How [`guided_cross`] combines the filtered plane with its input.
+#[derive(Clone, Copy)]
+enum Combine {
+    /// The larger of the two (Auto Mask strokes).
+    Max,
+    /// The input moved towards the filtered plane by this much (Refine Edges).
+    Mix(f32),
+}
+
+/// Cross guided filter (`masks::guided_cross`) of `p` steered by `guide`, combined with `p`.
+#[allow(clippy::too_many_arguments)]
+fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32, how: Combine) -> Buf {
     let n = w * h;
     let (m0, m1) = (cx.gpu.buffer(2 * n), cx.gpu.buffer(2 * n));
     map(cx, "xguided_pre", n, &[0], [Some(guide), Some(p), None], &m0);
@@ -969,7 +1248,11 @@ fn guided_cross_max(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, s
     map(cx, "xguided_ab", n, &[eps.to_bits()], [Some(&b0), Some(&b1), None], &ab);
     let ab = gaussian(cx, &ab, w, h, 2, sigma);
     let q = cx.gpu.buffer(n);
-    map(cx, "xguided_apply", n, &[], [Some(guide), Some(&ab), Some(p)], &q);
+    let mode = match how {
+        Combine::Max => [0, 0],
+        Combine::Mix(k) => [1, k.to_bits()],
+    };
+    map(cx, "xguided_apply", n, &mode, [Some(guide), Some(&ab), Some(p)], &q);
     q
 }
 
@@ -1068,7 +1351,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                             cx.run("shape", &q, &[Some(lin), Some(&prep.log_l), Some(&aux), Some(&stroke), Some(&brush)], groups2(w, h, [16, 16]));
                             let refined = d.auto.then(|| {
                                 let (sigma, eps) = lightcraft_pipeline::masks::auto_refine(d.r);
-                                guided_cross_max(cx, &prep.log_l, &stroke, w, h, sigma, eps)
+                                guided_cross(cx, &prep.log_l, &stroke, w, h, sigma, eps, Combine::Max)
                             });
                             let op = if d.erase { 2 } else { 1 };
                             cx.run(
@@ -1114,6 +1397,15 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
             let k = [n as u32, 0, mi as u32, op];
             cx.run("combine", &k, &[None, None, None, Some(cbuf), Some(&alpha)], groups1(n));
         }
+        if m.refine > 0.0 {
+            // Refine Edges (`masks::evaluate_one`): the combined alpha follows the photo's edges,
+            // before the mask's invert and amount
+            let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
+            let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
+            let plane = cx.slice(&alpha, mi * n, n);
+            let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, Combine::Mix(k.sqrt()));
+            cx.copy_into(&refined, &alpha, mi * n);
+        }
         let amt = (m.adjust.amount / 100.0) as f32;
         cx.run(
             "finalize",
@@ -1129,6 +1421,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_develop::DevelopSettings;
 
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {
@@ -1202,9 +1495,11 @@ mod tests {
     /// workgroup, windows wider than the image, and 1, 2 (as two planes) and 3 channels.
     #[test]
     fn gaussian_matches_cpu() {
+        // (creating the device writes the crash sentinel another test swaps out)
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use lightcraft_raster::blur;
         let Some(gpu) = crate::device() else { return };
-        let _scope = crate::ctx::RenderScope::new(gpu);
+        let _scope = crate::ctx::RenderScope::new(&gpu);
         let v = |x: usize, y: usize, c: usize| ((x * 7 + y * 13 + c * 5) % 17) as f32 / 16.0 + if x % 61 < 3 { 2.0 } else { 0.0 };
         for (w, h) in [(1000, 5), (257, 3), (5, 4), (1, 9)] {
             for sigma in [0.8f32, 2.0, 4.5, 30.0, 250.0, 1000.0] {
@@ -1212,7 +1507,7 @@ mod tests {
                 let want: Vec<Plane> = planes.iter().map(|p| blur::gaussian(p, sigma)).collect();
                 for nc in [1, 2, 3] {
                     let words: Vec<f32> = (0..w * h).flat_map(|i| (0..nc).map(move |c| (i, c))).map(|(i, c)| planes[c].data[i]).collect();
-                    let mut cx = Cx::new(gpu);
+                    let mut cx = Cx::new(&gpu);
                     let src = gpu.upload(&words);
                     let out = gaussian(&mut cx, &src, w, h, nc, sigma);
                     let got: Vec<f32> = cx.read(&out, w * h * nc);
@@ -1229,15 +1524,17 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_kernels() {
+        // (creating the device writes the crash sentinel another test swaps out)
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(gpu) = crate::device() else { return };
-        let _scope = crate::ctx::RenderScope::new(gpu);
+        let _scope = crate::ctx::RenderScope::new(&gpu);
         let (w, h) = (6000, 4000);
         eprintln!("{} ({:?})", gpu.info.name, gpu.info.backend);
         let src = gpu.upload(&vec![0.5f32; w * h * 3]);
         let time = |name: &str, f: &mut dyn FnMut(&mut Cx<'_>)| {
             let mut best = f64::MAX;
             for _ in 0..5 {
-                let mut cx = Cx::new(gpu);
+                let mut cx = Cx::new(&gpu);
                 cx.sync();
                 let t = std::time::Instant::now();
                 f(&mut cx);
@@ -1264,6 +1561,31 @@ mod tests {
             map(cx, "log_lum_k", w * h, &[], [Some(&src), None, None], &o);
         });
         time("guided sigma=1.75", &mut |cx| drop(guided(cx, &src, w, h, 1.75, 0.01)));
+    }
+
+    /// The device scores Remove's candidate sources like the CPU and picks the same one.
+    #[test]
+    fn auto_source_picks_the_cpu_candidate() {
+        // (creating the device writes the crash sentinel another test swaps out)
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(gpu) = crate::device() else {
+            let why = crate::unavailable_reason().unwrap_or_default();
+            assert!(!why.contains("kernels failed to build"), "{why}");
+            return;
+        };
+        let _scope = crate::ctx::RenderScope::new(&gpu);
+        let img = lightcraft_scenes::demo_library()[3].render(640, 427);
+        let buf = gpu.upload(rgb_words(&img));
+        let mut differ = Vec::new();
+        for (tx, ty, r) in [(25.6, 213.0, 19.2), (320.0, 192.0, 19.2), (100.0, 50.0, 12.0), (600.0, 400.0, 25.0), (320.0, 213.0, 6.0)] {
+            let mut cx = Cx::new(&gpu);
+            let g = auto_source(&mut cx, &buf, img.width, img.height, (tx, ty), r);
+            let c = lightcraft_pipeline::spots::auto_source(&img, (tx, ty), r);
+            if g != c {
+                differ.push(((tx, ty, r), g, c));
+            }
+        }
+        assert!(differ.is_empty(), "(target, gpu, cpu): {differ:?}");
     }
 
     #[test]

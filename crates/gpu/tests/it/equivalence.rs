@@ -19,8 +19,14 @@ const MAX_LSB: u8 = 3;
 fn gpu() -> bool {
     let ok = lightcraft_gpu::available();
     if !ok {
+        let why = lightcraft_gpu::unavailable_reason().unwrap_or_default();
+        // no adapter (CI) skips; an adapter whose kernels don't build is a bug in them
+        assert!(!why.contains("kernels failed to build"), "{why}");
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
     }
+    // which card the comparisons ran on (`LIGHTCRAFT_GPU_ADAPTER` picks one on a machine with two)
+    static NAMED: std::sync::Once = std::sync::Once::new();
+    NAMED.call_once(|| eprintln!("GPU equivalence tests on {}", lightcraft_gpu::adapter_name().unwrap_or_default()));
     ok
 }
 
@@ -349,7 +355,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.masks = vec![
                 Mask {
                     components: vec![
-                        MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky },
+                        MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky { seg: None } },
                         MaskComponent {
                             name: None,
                             op: MaskOp::Subtract,
@@ -361,12 +367,12 @@ fn cases() -> Vec<(&'static str, Edit)> {
                     ..Default::default()
                 },
                 Mask {
-                    components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape: MaskShape::Subject }],
+                    components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape: MaskShape::Subject { seg: None } }],
                     adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, ..Default::default() },
                     ..Default::default()
                 },
                 Mask {
-                    components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: true, shape: MaskShape::Background }],
+                    components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: true, shape: MaskShape::Background { seg: None } }],
                     adjust: lightcraft_develop::LocalAdjustments { saturation: -60.0, ..Default::default() },
                     invert: true,
                     ..Default::default()
@@ -416,7 +422,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.calibration.blue_sat = 60.0;
             s.calibration.blue_hue = 25.0;
         }),
-        ("spots + defringe (cpu stage)", |s| {
+        ("spots + defringe", |s| {
             s.spots = vec![Spot { points: vec![Point::new(0.3, 0.3)], size: 0.03, source_offset: Some(Point::new(0.1, 0.0)), ..Default::default() }];
             s.optics.defringe_purple_amount = 5.0;
         }),
@@ -795,7 +801,7 @@ fn red_eye_matches() {
         spots: vec![Spot { points: vec![Point::new(0.1, 0.2)], size: 0.02, source_offset: Some(Point::new(0.05, 0.0)), ..Default::default() }],
         ..Default::default()
     };
-    check("red eye + spot (cpu stage)", &src, &info, &s, &RenderRequest::fit(600, 600));
+    check("red eye + spot", &src, &info, &s, &RenderRequest::fit(600, 600));
 }
 
 fn saturated(s: &mut DevelopSettings) {
@@ -947,6 +953,89 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     assert_eq!(lightcraft_gpu::source_uploads() - start, 2);
 }
 
+/// A non-trivial 3D LUT (cross-process look: lifted blacks, warm highlights, swapped-ish blues).
+fn look_lut(n: usize, domain_max: f32) -> lightcraft_pipeline::lut::Lut3d {
+    let mut data = Vec::with_capacity(n * n * n);
+    for b in 0..n {
+        for g in 0..n {
+            for r in 0..n {
+                let c = [r, g, b].map(|v| v as f32 / (n - 1) as f32 * domain_max);
+                data.push([
+                    (0.06 + 0.9 * c[0].powf(0.9) + 0.05 * c[2]).min(1.0),
+                    (0.04 + 0.92 * c[1] * (1.0 - 0.1 * c[2])).min(1.0),
+                    (0.1 + 0.6 * c[2] + 0.2 * c[0] * c[1]).min(1.0),
+                ]);
+            }
+        }
+    }
+    lightcraft_pipeline::lut::Lut3d { size: n, data, domain_min: [0.0; 3], domain_max: [domain_max; 3], title: None }
+}
+
+/// LUT profiles render on the GPU (the table is applied after grain, blended by the amount).
+#[test]
+fn lut_profiles_match() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 900, 600);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    lightcraft_pipeline::lut::register("lut:gpu-test-17", look_lut(17, 1.0));
+    lightcraft_pipeline::lut::register("lut:gpu-test-domain", look_lut(9, 1.2));
+    for (id, amount) in [("lut:gpu-test-17", 100.0), ("lut:gpu-test-17", 160.0), ("lut:gpu-test-domain", 60.0)] {
+        for (name, edit) in [("default", (|_| {}) as Edit), ("saturated + curves + grain", saturated as Edit)] {
+            let mut s = DevelopSettings::default();
+            edit(&mut s);
+            s.profile.id = id.into();
+            s.profile.amount = amount;
+            check(&format!("{id} {amount} {name}"), &src, &raw, &s, &RenderRequest::fit(640, 640));
+        }
+    }
+}
+
+/// Refine Edges on a mask is the cross guided filter on the device, blended by √refine.
+#[test]
+fn refine_edges_match() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 900, 600);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    for refine in [15.0, 60.0, 100.0] {
+        let mut s = DevelopSettings::default();
+        typical(&mut s);
+        s.masks = vec![
+            Mask {
+                components: vec![MaskComponent {
+                    name: None,
+                    op: MaskOp::Add,
+                    invert: false,
+                    shape: MaskShape::Radial { center: Point::new(0.45, 0.55), rx: 0.3, ry: 0.2, angle: 10.0, feather: 30.0, invert: false },
+                }],
+                adjust: lightcraft_develop::LocalAdjustments { exposure: 0.9, saturation: -30.0, ..Default::default() },
+                refine,
+                ..Default::default()
+            },
+            Mask {
+                components: vec![MaskComponent {
+                    name: None,
+                    op: MaskOp::Add,
+                    invert: false,
+                    shape: MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.5) },
+                }],
+                adjust: lightcraft_develop::LocalAdjustments { exposure: -0.7, amount: 70.0, ..Default::default() },
+                refine: refine / 2.0,
+                invert: true,
+                ..Default::default()
+            },
+        ];
+        check(&format!("refine edges {refine}"), &src, &raw, &s, &RenderRequest::fit(640, 640));
+        let gpu = |s: &DevelopSettings| lightcraft_gpu::render(&src, &raw, s, &RenderRequest::fit(640, 640), None).expect("gpu render").image;
+        let unrefined = DevelopSettings { masks: s.masks.iter().map(|m| Mask { refine: 0.0, ..m.clone() }).collect(), ..s.clone() };
+        // (a light refine barely moves a soft radial edge; a strong one visibly does)
+        assert!(refine < 50.0 || diff(&gpu(&s), &gpu(&unrefined)).1 > 3, "refine {refine} changes the mask");
+    }
+}
+
 #[test]
 fn soft_proofs_match() {
     if !gpu() {
@@ -996,4 +1085,97 @@ fn soft_proofs_match() {
         ..RenderRequest::fit(64, 64)
     };
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
+}
+
+/// Spot removal on the device: Clone, Heal and Remove (automatic source, scored on the device),
+/// brushed strokes, overlapping spots (each reads what the earlier ones left), feather 0 and
+/// spots cut by the image edge.
+#[test]
+fn spots_match() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_develop::SpotMode;
+    let src = scene(3, 900, 600);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let spot = |mode, pts: &[(f64, f64)], size, feather, off: Option<(f64, f64)>| Spot {
+        mode,
+        points: pts.iter().map(|p| Point::new(p.0, p.1)).collect(),
+        size,
+        feather,
+        opacity: 100.0,
+        source_offset: off.map(|o| Point::new(o.0, o.1)),
+    };
+    let sets: Vec<(&str, Vec<Spot>)> = vec![
+        ("clone", vec![spot(SpotMode::Clone, &[(0.3, 0.4)], 0.04, 40.0, Some((0.15, 0.05)))]),
+        ("heal", vec![spot(SpotMode::Heal, &[(0.6, 0.5)], 0.05, 60.0, Some((-0.12, 0.1)))]),
+        ("remove (auto source)", vec![spot(SpotMode::Remove, &[(0.5, 0.45)], 0.03, 50.0, None)]),
+        ("remove near the edge (auto)", vec![spot(SpotMode::Remove, &[(0.04, 0.5)], 0.03, 50.0, None)]),
+        ("brushed heal stroke", vec![spot(SpotMode::Heal, &[(0.2, 0.7), (0.3, 0.72), (0.4, 0.69)], 0.02, 30.0, Some((0.0, -0.15)))]),
+        ("feather 0, half opacity", vec![Spot { opacity: 50.0, ..spot(SpotMode::Clone, &[(0.7, 0.3)], 0.04, 0.0, Some((-0.2, 0.0))) }]),
+        ("cut by the edge", vec![spot(SpotMode::Heal, &[(0.99, 0.02)], 0.05, 50.0, Some((-0.2, 0.2)))]),
+        (
+            "overlapping, auto after manual",
+            vec![
+                spot(SpotMode::Clone, &[(0.45, 0.5)], 0.04, 50.0, Some((0.1, 0.0))),
+                spot(SpotMode::Remove, &[(0.47, 0.52)], 0.04, 50.0, None),
+                spot(SpotMode::Heal, &[(0.5, 0.5)], 0.03, 70.0, Some((0.0, 0.12))),
+            ],
+        ),
+    ];
+    for (name, spots) in sets {
+        let mut s = DevelopSettings::default();
+        typical(&mut s);
+        s.spots = spots;
+        check(&format!("spots: {name}"), &src, &raw, &s, &RenderRequest::fit(640, 640));
+    }
+}
+
+/// Defringe on the device: purple and green at several amounts and hue ranges, at preview and
+/// full size (its filter radius follows the output size).
+#[test]
+fn defringe_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 1800, 1200);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    for (purple, green, hue) in [(4.0, 0.0, (30.0, 70.0)), (0.0, 10.0, (20.0, 80.0)), (20.0, 15.0, (0.0, 100.0))] {
+        let mut s = DevelopSettings::default();
+        typical(&mut s);
+        s.color.saturation = 40.0;
+        s.optics.defringe_purple_amount = purple;
+        s.optics.defringe_green_amount = green;
+        s.optics.defringe_purple_hue_lo = hue.0;
+        s.optics.defringe_purple_hue_hi = hue.1;
+        s.optics.defringe_green_hue_lo = hue.0;
+        s.optics.defringe_green_hue_hi = hue.1;
+        for edge in [640, 1800] {
+            check(&format!("defringe {purple}/{green} {hue:?} @{edge}"), &src, &raw, &s, &RenderRequest::fit(edge, edge));
+        }
+    }
+}
+
+/// The histogram counted on the device is exactly the CPU's count of the image the GPU returned,
+/// for whole frames (small and over 1 MP, where it samples) and for windows cut back after spots.
+#[test]
+fn device_histogram_is_exact() {
+    if !gpu() {
+        return;
+    }
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    typical(&mut s);
+    for (w, h) in [(640, 427), (2400, 1600)] {
+        let src = scene(0, w, h);
+        let r = lightcraft_gpu::render(&src, &raw, &s, &RenderRequest::fit(w, h), None).expect("gpu render");
+        assert_eq!(r.histogram, lightcraft_raster::Histogram::of_srgb8(&r.image), "{w}x{h}");
+    }
+    // a window with a spot reading from outside it: the render grows, the histogram is of the cut
+    let src = scene(0, 3000, 2000);
+    s.spots = vec![Spot { points: vec![Point::new(0.5, 0.5)], size: 0.02, source_offset: Some(Point::new(0.15, 0.0)), ..Default::default() }];
+    let req = RenderRequest { window: Some(lightcraft_pipeline::PixelWindow { x: 1200, y: 800, w: 500, h: 400 }), ..RenderRequest::fit(3000, 2000) };
+    let r = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render");
+    assert_eq!((r.image.width, r.image.height), (500, 400));
+    assert_eq!(r.histogram, lightcraft_raster::Histogram::of_srgb8(&r.image), "window");
 }

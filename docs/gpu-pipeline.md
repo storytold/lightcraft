@@ -49,6 +49,121 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
+- `LIGHTCRAFT_GPU_ADAPTER=<part of a card's name>` (any case, e.g. `4070`, `radeon`, `"rtx 4070 super"`):
+  the graphics card for editing renders, AI Denoise and the face and mask models, on a machine with more
+  than one; it wins over the card chosen in Settings (below). Of the usable cards whose name contains it,
+  the one whose whole name it is wins, then dedicated before built-in before virtual cards, then wgpu's
+  order (`backend::choose_named_adapter`, `cards::resolve_card`); the log says which when several match
+  (`… matches 2 graphics cards (…): using …`). Software renderers (WARP, llvmpipe) never: a name that
+  matches only one is logged as such. A name that matches no card is logged
+  (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using …`) and the card is
+  chosen as without it: the one chosen in Settings, else the screen's, else the default choice; the
+  line says which. Each line is logged once, though every device asks. Each device makes its own
+  wgpu instance and device, so devices on different cards share no buffer, pipeline or queue. While it is
+  set, Automatic uses no second card (agents and test runs stay on the one card they name;
+  `LIGHTCRAFT_GPU_HELPER` still names one outright). Handy to keep test runs or a long export off the card
+  the screens hang on.
+
+### Choosing the graphics card (two or more cards)
+
+Settings ▸ Performance ▸ **Graphics card for editing** (`gpuCard` in `ui.json`, `app.gpu {card}`) lists
+Automatic and every card that can render (`lightcraft_gpu::adapters`; `app.gpu` → `adapters`). A card is
+saved by its key, `dx12:10de:2f04:NVIDIA GeForce RTX 5070#1` (backend, PCI vendor and device ids, the
+driver's name, and `#n` for identical cards: `device_pci_bus_id` isn't unique on DX12), parsed leniently
+(text that isn't a key means Automatic). The editing card is, in order (`cards::resolve_card`):
+`LIGHTCRAFT_GPU_ADAPTER`, the saved card (exactly, else the same model under another `#n`), the card the
+screen is connected to (Automatic), wgpu's high-performance pick.
+
+- **Automatic and the screen's card** render on the window's own device: finished views are drawn without a
+  copy (*Drawing renders straight from the GPU*). **Another card** renders on a device of its own and the
+  loupe's renders come back as pixels and are uploaded to the screen's card (a few ms per draft). The
+  window itself always stays on the card that drives the display: drawing it on another card would make
+  Windows copy every frame.
+- **Changing it applies at once** (`lightcraft_gpu::set_card`): a thread builds the device and kernels on
+  the new card (FXC can take up to ~30 s) while renders keep using the current one; then they move over
+  (stages cached on the old device are dropped by generation) and a notice says "Photos now render on the
+  …". Switching back to Automatic renders on the window's device again. A switch that fails leaves
+  renders where they were, with a notice.
+- **A saved card that isn't there** (taken out, driver missing): Automatic renders, the choice is kept, and
+  a notice says so once per session ("The graphics card chosen in Settings (…) isn't available, so
+  LightCraft uses Automatic (…)"); Settings lists it as "(not found)". A chosen card that can't render
+  (device or kernels fail) falls back to Automatic the same way, then to the CPU as before.
+- **A crash while starting a chosen card** (the process dies in the driver): the crash marker names each
+  device being started (`[card=<key>; role=editing|helper]`, one line per driver-work scope running), so
+  the next launch drops only that choice — the editing card back to Automatic, or the second card off —
+  and keeps the GPU on (`apps/lightcraft/src/gpu_crash.rs` `gpu_crash_from`). A crash in any other driver work
+  (Automatic's card, listing the cards, the editing card's AI kernels) turns GPU rendering off as before; a crash
+  in the second card's AI work turns only that card off (below).
+
+
+### The second graphics card (batch work on another card)
+
+Settings ▸ Performance ▸ **Second graphics card** (`gpuHelper` in `ui.json`, `app.gpu {helper}`,
+`LIGHTCRAFT_GPU_HELPER` overrides it) gives batch work — exports, previews, AI — a device of its own on
+another card, so the editing card stays free for the photo being edited. **Off** is the default: no
+second card is used until the user picks one (a new settings file, and the engine without the app, say
+`off`; an older settings file's `""` still means Automatic). Automatic uses another card that can render,
+a dedicated one first (`cards::resolve_helper`); `off` uses none; a key or
+part of a name picks one; `same` makes a second device on the editing card (tests and benchmarks of the
+two-device logic on one card). While `LIGHTCRAFT_GPU_ADAPTER` is set, Automatic means no second card, so
+an agent testing on one card never touches the other.
+
+- **Two devices, one per role** (`lightcraft_gpu::Role`: `Primary` = the editing card, `Helper`). Each
+  has its own slot (`slot.rs`: recovery, back-off, generations), its own batch gate (`gate.rs`: the second
+  card's share is 80 % of its memory, the editing card's 55 %) and its own memory counters
+  (`memory_of(role)`; `memory()` is both). The second card's device is made only by its warm-up, on the
+  `lc-gpu-helper` thread after the editing card's (never by a render), under the crash marker
+  (`role=helper`). Its renders always come back as pixels; views and display textures stay on the
+  editing card.
+- **Routing is per thread**, like `on_cpu`: `with_role(role, f)` sends that thread's renders to `role`'s
+  device (the CPU when it has none); `on_helper(f)` uses the second card when it is ready. Batch work
+  takes `batch_turn_any(src_px, out_px)` (or `wait_batch_turn_any`) inside `as_batch`: a turn on the
+  card with room that would finish the photo soonest — its photos running now plus this one, at its
+  measured batch speed (`batch_rate_of(role)`: bytes of finished turns per busy second, the last
+  minutes counting most; both cards alike until each finished some; ties to the second card) — else
+  `None` (render on the CPU). So both cards work in proportion to their speed, and a build of two
+  photos at a time puts one on each (before, the second card took every photo while it had room: a
+  2-lane 1:1 build of 24 raws took 69 s on both cards vs 52 s on the RTX 5070 alone). In the desktop
+  app the second card still takes a photo first whenever it has none (§8). `batch_cards()` counts the
+  cards taking batch work and `batch_lanes_hint(per_card)` sizes a caller's lanes for them. While the
+  turn is held the thread's renders go to its card, so a photo's SDR and HDR renditions stay on one
+  card. In the desktop app `app.gpu {helper}` never waits for the card's set-up (its commands run on
+  the UI thread): it answers with `helper.state` `starting`; poll `app.gpu` until `ready`.
+- **The editing card yields to the interface** (`track_interaction(true)`, the desktop app only): batch
+  turns there start only after about 1 s without input (`note_interaction`, every frame with input) and
+  without a view render; while the second card works, the editing card takes one batch render at a
+  time; a batch render already running pauses between its submissions as soon as the interface is used
+  again (`batch_usage_of(Primary).pauses`). The second card never waits for the interface.
+- **The second card stops responding**: its renders are redone on the CPU, batch work moves to the
+  editing card, a notice names it ("work continues on the other graphics card"), and it is restarted
+  after the pause like the editing card. Turning it off releases its device and memory.
+- **Status**: `helper_status()` (`off`, `none`, `notStarted`, `starting`, `ready`, `lost`, `failed`, with
+  the name and why); `app.gpu` → `helper`, `batchUsage {editing, helper}`; `ui.inspect` →
+  `perf.gpuHelper`, `perf.batchUsage`. Measured: the same render on the RTX 4070 SUPER and the RTX 5070
+  differs by at most 2 levels (`crates/gpu/tests/devices.rs` asserts at most 2; one measured pair showed 2).
+
+### AI on the second graphics card (dual-GPU PR 5)
+
+The AI models keep devices of their own, one on each card they use (`lightcraft_gpu::ai`, per `Role`: `Primary`
+the editing card, `Helper` the second graphics card as above; turned off there, AI work stays on the editing card). Background AI work goes to the helper first, so the card for editing stays
+free for the photo being edited (decision §8 of 31 Oct 2026):
+
+- **AI Denoise** sets up every card for the model (each checked against the CPU on the check tile and timed), and a
+  batch makes one photo on each card that works at once, the helper first (`Model::lanes`; one photo at a light pace,
+  when the user is working). One photo's tiles stay on its card (decision 7: no tile split yet). `denoise.status` →
+  `device.cards` lists each card's state, times and photos. A card that errs, is lost or gets three tiles wrong is
+  given up on alone: its tiles run on the CPU, later photos go to the other card, then the CPU.
+- **Faces** (the face scan's models) and **AI mask matrix products** (`LIGHTCRAFT_AI_GPU=1`) create their device on
+  the helper when there is one (one copy of the weights, on one card), else on the editing card; a helper device that
+  fails falls back to the editing card's. The face scan's GPU pace only holds the editing card back (the helper draws
+  no window).
+- Each background submission (a denoise tile, a face model run) calls `ai::background_turn(role)`: on the editing card
+  it waits while `interface_busy()` (the §8 gate above), on the second card it never waits. Interactive AI mask
+  requests don't wait.
+- A crash creating an AI device or compiling its kernels on the helper names the helper in the crash marker, so the
+  next launch turns only the helper off.
+- Not in this base: SAM 3 on wgpu (upstream #2533–#2537); its device should follow the same `ai::Card` choice when it
+  lands. AI devices don't move when the card choice changes in Settings until the next launch.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -149,7 +264,30 @@ walks the drive.
 ## Where it is used
 - `lightcraft_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
   `render_now` (CLI, MCP, control channel renders) and exports render on the GPU when one is
-  available; grid/filmstrip thumbnails (many small jobs in parallel) stay on the CPU.
+  available. Thumbnails (grid, filmstrip, preset and profile previews, faces) render on the GPU
+  once the device is ready (`lightcraft_gpu::ready()`) and on the CPU until then, so they never
+  wait for device creation at startup. Six workers rendering 256 px thumbnails: 3.6 ms each on an
+  RTX 5070 vs 4.3–5.2 ms on 32 CPU threads (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay
+  free for raw decoding.
+- **Exports on two cards** (`export.rs`): with a second card ready (`helper_ready`), each photo of a
+  batch takes a turn on whichever card has room first, the second card first (`wait_batch_turn_any`;
+  in `mix` mode `batch_turn_any`, the processor when both are busy), and keeps that card for both of a
+  gain map's renditions; the editing card takes batch photos only while the interface is idle (§8 gate).
+  Photos are split between cards, never one render across them. The automatic export lanes grow by the
+  photos the second card renders at once (still within the export memory gate). Each file of the
+  result names its card (`gpuDevice`). The second card lost mid-batch: the photo on it renders on the
+  processor (`gpuFallback`), the rest on the editing card; no file is lost
+  (`crates/engine/tests/export_two_cards.rs`). One card: exports run exactly as before.
+  `export::set_export_cards(Both | Editing | Helper)` and `export_bench --helper on|off|only` compare
+  them; Test my machine measures a run on both cards and keeps the second card unless it was > 3 % slower.
+- 8-bit renders take the GPU path with LUT profiles (the `.cube` table rides in the kernel's
+  `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
+  guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
+  proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
+  space or a display). These render on the CPU: 16-bit and linear-float exports and Visualize HDR
+  (the float outputs the GPU doesn't make; a gain map export's HDR rendition, `OutputDepth::F32Hdr`, renders
+  on the GPU, below), soft proofs to an output device's profile (a printer or paper profile), and
+  photos with a content-aware Fill spot (no GPU kernel for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
@@ -175,10 +313,17 @@ walks the drive.
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
+- Defringe (`fringe_lab`, a separable lightness `minmax` filter, `fringe_apply`; parameters from
+  `optics::defringe_params`) and spot removal (`spot` module, spot by spot in place: `spot_prep`,
+  the Heal tone correction as two device Gaussians, `spot_apply`; Remove's 48 candidate sources are
+  scored by `spot_score` and only the scores are read back; layout and candidates from
+  `spots::{layout, candidates, ring_dirs, score_radii, rank}`) run on the device in `lin_cpu`'s
+  order. The histogram is counted on the device (`hist`, atomics, the same sampling grid as
+  `Histogram::of_srgb8`, so it is exact).
 - Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
   warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.
-- Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
-  run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
+- Per-stage hybrid: the camera's local tone mapping (ProRAW gain tables, off by default) runs the
+  scene-linear stage on the CPU and uploads; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
@@ -229,7 +374,36 @@ cannot vouch for:
 | buffer over the device limit | CPU | GPU |
 | out of device memory | CPU (buffer pool emptied) | GPU |
 | entirely black result | CPU | GPU |
-| validation / internal error, device lost, readback failure or timeout, incomplete image, panic | CPU | CPU (whole process) |
+| the GPU busy past the readback timeout (60 s for this render's own work) | CPU | GPU |
+| validation / internal error, device lost, readback failure, incomplete image, panic | CPU | CPU while a new device is made (on its own thread, after 3 s, 6 s, 12 s … ; at most 5 times a session), then GPU |
+
+**Getting the GPU back** (`crates/gpu/src/slot.rs`). A failure no longer
+turns the GPU off for the session: the render is redone on the CPU, the device is marked lost, and
+after a short pause a new device (with its kernels: ~30 s with DX12's FXC) is made on a thread of
+its own while renders go to the CPU. Buffers and cached stages of the old device are never used on
+the new one (each device has a generation number). Each step is told in plain words
+(`lightcraft_gpu::events_after`: "The graphics card stopped responding …", "LightCraft restarted the
+graphics card and uses it again."), shown by the app as a notice. Errors outside a render's error
+scopes on the window's device are the window's (a surface reconfigured while the GPU was busy):
+logged, not a reason to stop rendering.
+
+**Exports share the GPU** (`crates/gpu/src/gate.rs`). An export's photos render with
+`lightcraft_gpu::as_batch`: each takes a turn sized by the device memory it needs (~12 B per source
+pixel + 72 B per output pixel) against a budget of 55 % of the card's memory (read from the registry
+on Windows, sysfs / `nvidia-smi` on Linux, else assumed; `LIGHTCRAFT_GPU_MEMORY_MB` overrides) and at
+most 4 at once (`lightcraft_gpu::set_batch_limits`). Views never wait and hold batch work back
+while they render; `lightcraft_gpu::hold_batch` (window resizes) pauses new batch work; and a batch
+render keeps one submission queued at a time, so the window's frames slot in between. Before this,
+14–16 export lanes queued so much work that the window drew no frame for 5 s and its resize failed
+("Failed to wait for GPU to come idle"), and readbacks that waited for the whole queue timed out
+and turned the GPU off. A gain map export renders its float HDR rendition on the GPU too
+(`OutputDepth::F32Hdr`: `finish.wgsl` keeps colour up to the peak, continues curves above SDR
+white with slope 1 and writes 4 floats a pixel; `crates/gpu/tests/hdr_gpu.rs`: linear max 0.02 %,
+8-bit max 1 LSB from `finish_deep`), from the stages the SDR render left on the device, with both
+renditions in one turn at the GPU (`lightcraft_gpu::in_one_turn`), so another export can't take
+the memory those stages hold in between. When the export renders on the CPU, the SDR render
+leaves host copies of its framed and linear images in the shared stage cache
+(`StageCache::keep_host_stages`) and the CPU's HDR rendition starts from them.
 
 **Diagnosing.** `ui.inspect` → `perf.gpu` (adapter in use), `perf.gpuReason` (why renders don't use
 the GPU, e.g. `"disabled by LIGHTCRAFT_GPU=0"`, `"software adapter (llvmpipe (LLVM 21.1.8, 256 bits))
@@ -244,12 +418,13 @@ thread. A render's *own* reason comes from `lightcraft_gpu::try_render` (`Err(Fa
 passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gpu_fallback`, and
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
-with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
+with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB;
+the window's device, when adopted, is capped the same way.
 Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
-real failure still stops the whole process. Such a test asserts on its own render's reason, not on
+real failure stops the GPU for the whole process until a new device replaces it (`crates/gpu/tests/recovery.rs`). Such a test asserts on its own render's reason, not on
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
 
 ## Correctness: CPU oracle and equivalence tests
@@ -319,6 +494,38 @@ most likely the largest kernel (`finish.wgsl`) alone (not timed per kernel). wgp
 opens its own; a refused kernel still means no GPU. The `gpu:` info log line gives the kernel count
 and build time.
 
+## Drawing renders straight from the GPU
+The desktop app creates the window's wgpu device with the adapter's limits and hands it to the GPU
+renderer (`lightcraft_gpu::adopt_window_device`, on a background thread at startup: the kernels
+build there; the crash sentinel covers it), so rendering and drawing share one device. A slider
+drag's drafts of the views (Detail, Before, the zoomed window, hover, Compare, the second window)
+are then marked `RenderJob::on_screen`: the render ends in an `Rgba8Unorm` texture
+(`lightcraft_gpu::render_display` → `Output::Display`) that egui-wgpu draws as a native texture
+(`ScreenTextures` in `ui-egui`, implemented by the app) - no readback, no conversion to egui's
+pixels, no re-upload. The per-render checks run on the device instead: every pixel written (an
+atomic count), not entirely black (the device histogram). Rows are re-laid at a 256-byte stride
+for the texture copy when the width needs it.
+
+Renders that need pixels keep the readback: the settled full-quality render after a drag (the cached
+view preview, overlays, screenshots), thumbnails, exports, overlays (Visualize Spots, mask
+overlays), windows that spots grew (cut on the CPU), a monitor profile (corrected on the CPU), and
+anything the GPU path declines. A device that doesn't suit (software adapter, too few storage
+buffers, kernels that don't build there) makes the renderer create a device of its own, as before.
+A headless `ui.screenshot` (the control channel keeps CPU copies of what is drawn) taken while a
+view shows a GPU-resident draft reads that texture back for the picture (`ScreenTextures::read`,
+`lightcraft_gpu::read_texture`); drawing never does.
+
+- `LIGHTCRAFT_GPU_WINDOW=0`: never adopt the window's device (a device of its own, renders read
+  back) - to compare, or for a driver that misbehaves with compute and drawing on one device.
+- `ui.inspect` → `perf.gpuWindowDevice` (renders run on the window's device), `perf.screenTextures`
+  (the UI can draw GPU-resident renders), `perf.mainOnGpu` (the loupe shows one now).
+- Measured (RTX 5070, DX12, a 45 MP CR3, 90 exposure steps of a drag at 30 Hz): the loupe's draft
+  render 1.69 ms median from the texture vs 2.05 ms with the readback; the UI thread unchanged
+  within noise (~1 ms). The difference grows with the loupe's size (4K/5K displays, zoom).
+- With the renderer on the window's device, errors the device raises outside a render (the window's
+  own included) are logged and counted instead of wgpu's default panic; the renders, which check
+  their own error scopes, go on. A lost device is still replaced (*Getting the GPU back*).
+
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its
   current settings, else (raws with their import look) the embedded camera JPEG, else a
@@ -360,10 +567,8 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   2.5–2.6 GB → 0.91–0.96 GB, heap peak 930 → ~600 MB; stepping median ~13 ms (unchanged).
 
 ## Open items
-- Keep the loupe texture on the GPU (render into an `egui-wgpu` texture on eframe's device instead of
-  reading back); share the device with eframe.
 - WebGPU in the browser build (async init, single device per canvas).
-- Defringe and spot removal kernels; Sky/Subject heuristics (replaced by the segmenter in M12).
+- Sky/Subject heuristics (replaced by the segmenter in M12); the ProRAW local tone map.
 - Tiling for sources / outputs beyond the buffer limit (24 MP+ on WebGPU-default limits, 60 MP+
   on most desktop adapters; these render on the CPU now): tile with overlap equal to the largest
   filter radius, with global values (airlight) from a first pass.
@@ -371,4 +576,3 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area
   table or a downsampled dark channel would cut them further.
-- GPU histogram (atomics) to skip the CPU pass over the readback.

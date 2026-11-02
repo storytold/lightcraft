@@ -197,6 +197,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
     let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
     let (runner, parallel) = model.runner(spec.run_on, parallel);
+    let runner = &*runner;
     let params = Params {
         tile: spec.manifest.tile as usize,
         overlap: spec.manifest.overlap as usize,

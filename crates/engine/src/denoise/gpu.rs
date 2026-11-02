@@ -1,5 +1,5 @@
 #[cfg(feature = "denoise")]
-use super::model::{GpuSide, STACK};
+use super::model::{GpuSide, STACK, setup_marker};
 #[cfg(feature = "denoise")]
 use super::{Arc, Duration, Mutex, Path, PathBuf, PoisonError, SystemTime, TileRunner};
 
@@ -9,7 +9,7 @@ pub(super) const GPU_PARALLEL: usize = 4;
 
 /// How far the GPU's answer on the check tile may be from the CPU's (of the answer's largest value) before it is not used.
 #[cfg(feature = "denoise")]
-const GPU_AGREE: f32 = 1e-3;
+pub(super) const GPU_AGREE: f32 = 1e-3;
 
 /// Longest the card may take to set up (build its kernels, run the check tile, time it) before the processor does the
 /// work instead.
@@ -22,6 +22,8 @@ pub(super) const GPU_MAX_FALLBACKS: usize = 3;
 
 /// The file beside a model while the graphics card is set up for it (see [`set_up_card`]).
 pub(crate) const GPU_SETUP_MARKER: &str = "gpu-setup.marker";
+/// The same while the second graphics card is set up.
+pub(crate) const GPU_SETUP_MARKER_HELPER: &str = "gpu-setup-helper.marker";
 
 /// Why the card is not tried when a set-up marker is found.
 #[cfg(feature = "denoise")]
@@ -126,13 +128,21 @@ fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
     best
 }
 
-/// Set the card up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
+/// Set `card` up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
 #[cfg(feature = "denoise")]
-pub(super) fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
+pub(super) fn make_gpu(
+    cpu: &lightcraft_denoise::runtime::CpuRunner,
+    path: &Path,
+    tile: usize,
+    card: lightcraft_gpu::Role,
+) -> Result<GpuSide, String> {
+    if card == lightcraft_gpu::Role::Helper && lightcraft_gpu::ai::helper_name().is_none() {
+        return Err(lightcraft_gpu::ai::NO_HELPER.into());
+    }
     let input = Arc::new(lightcraft_denoise::runtime::check_tile(tile));
     let (on_card, net) = (input.clone(), cpu.net().clone());
-    let card = move || -> Result<_, String> {
-        let runner = lightcraft_gpu::nn::runner(&net, tile)?;
+    let card_work = move || -> Result<_, String> {
+        let runner = lightcraft_gpu::nn::runner_on(card, &net, tile)?;
         let got = runner.run(&on_card).map_err(|e| format!("the GPU could not run the check tile: {e}"))?;
         let card_ms = card_tile_ms(&runner, &on_card);
         Ok((runner, got, card_ms))
@@ -141,12 +151,17 @@ pub(super) fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path
         let started = web_time::Instant::now();
         (cpu.run(&input), started.elapsed().as_secs_f64() * 1000.0)
     };
-    let ((runner, got, card_ms), (want, cpu_ms)) = set_up_card(&path.with_file_name(GPU_SETUP_MARKER), GPU_SETUP_LIMIT, card, on_cpu)?;
+    let ((runner, got, card_ms), (want, cpu_ms)) = set_up_card(&path.with_file_name(setup_marker(card)), GPU_SETUP_LIMIT, card_work, on_cpu)?;
     let want = want.map_err(|e| format!("the CPU could not check the GPU: {e}"))?;
-    let scale = want.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-12);
-    let worst = want.iter().zip(&got).fold(0f32, |m, (a, b)| m.max((a - b).abs())) / scale;
+    let worst = disagreement(&want, &got);
     if got.len() != want.len() || !got.iter().all(|v| v.is_finite()) || worst > GPU_AGREE {
         return Err(format!("its answer on the check tile is not the CPU's (off by {worst:.1e} of the largest value): not used"));
     }
     Ok(GpuSide { adapter: runner.adapter(), runner: Box::new(runner), card_ms, cpu_ms })
+}
+/// How far `got` is from `want`, as a share of `want`'s largest value (the check tile's measure, [`GPU_AGREE`]).
+#[cfg(feature = "denoise")]
+pub(super) fn disagreement(want: &[f32], got: &[f32]) -> f32 {
+    let scale = want.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-12);
+    want.iter().zip(got).fold(0f32, |m, (a, b)| m.max((a - b).abs())) / scale
 }

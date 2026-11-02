@@ -46,12 +46,14 @@ mod state;
 #[cfg(test)]
 pub(crate) use gpu::GPU_SETUP_MARKER;
 #[cfg(all(feature = "denoise", test))]
-use gpu::{GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, SETTING_UP, card_is_faster, set_up_card};
+use gpu::{GPU_AGREE, GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, SETTING_UP, card_is_faster, disagreement, make_gpu, set_up_card};
+#[cfg(test)]
+pub(crate) use model::Lent;
 pub use model::RunOn;
 #[cfg(all(feature = "denoise", test))]
 pub(crate) use model::default_loader;
 #[cfg(all(feature = "denoise", test))]
-use model::{GpuSide, Network, RemoteSide, network, worth_retrying};
+use model::{CardSide, GpuSide, Network, RemoteSide, network, setup_marker, worth_retrying};
 pub(crate) use model::{Loader, Model};
 #[cfg(feature = "denoise")]
 pub use model::{Serving, serving};

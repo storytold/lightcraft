@@ -36,6 +36,22 @@ fn ai_mask_errors_offer_the_model_by_kind() {
     assert_eq!(h.app.ui.dialog, None);
 }
 
+/// An openly licensed model missing is offered by its kind, whatever the words; when another dialog
+/// is open the offer waits and the error shows instead of nothing.
+#[test]
+fn a_missing_open_model_is_offered_by_kind_or_said_when_a_dialog_is_open() {
+    let mut h = demo();
+    let ctx = h.view.ctx.clone();
+    let open = || CommandError { message: "Das Modell fehlt".into(), kind: ErrorKind::ModelMissing(AiModel::Open("scene")) };
+    h.app.ai_error(&ctx, open(), None);
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::AiModel { model, .. }) if model == "scene"), "{:?}", h.app.ui.dialog);
+    h.app.ui.dialog = Some(Dialog::About);
+    h.app.ui.toast = None;
+    h.app.ai_error(&ctx, open(), None);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::About), "the open dialog stays");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "Das Modell fehlt"), "and the error is said: {:?}", h.app.ui.toast);
+}
+
 /// `run_typed` keeps the engine's kind for the code that decides, and `run` the same message.
 #[test]
 fn run_typed_keeps_the_kind_and_run_the_message() {

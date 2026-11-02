@@ -6,8 +6,12 @@
 //! everything ever decoded. `malloc_zone_pressure_relief` (libSystem) returns those pages now.
 //! Elsewhere (glibc, Windows) blocks this large are unmapped when freed: nothing to do.
 //!
-//! This is LightCraft's only crate allowed `unsafe` (one FFI call, in `macos`). Its API is safe,
-//! and on failure or on other platforms it simply releases nothing.
+//! It also reads the computer's memory where only a system call tells it ([`total_physical_memory`],
+//! Windows' `GlobalMemoryStatusEx`).
+//!
+//! This is LightCraft's only crate allowed `unsafe` (two FFI calls: `malloc_zone_pressure_relief`
+//! in `macos`, `GlobalMemoryStatusEx` in `windows`). Its API is safe, and on failure or on other
+//! platforms it simply does nothing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 /// Return free allocator pages to the system. Returns the number of bytes released (always 0 on
@@ -21,6 +25,65 @@ pub fn release_free_memory() -> usize {
     #[cfg(not(target_os = "macos"))]
     {
         0
+    }
+}
+
+/// The computer's physical memory (bytes), where the platform needs a system call to tell it
+/// (Windows' `GlobalMemoryStatusEx`); `None` elsewhere (the engine reads Linux's and macOS's itself)
+/// and on failure. Safe to call from any thread.
+pub fn total_physical_memory() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        windows::total_physical()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows {
+    /// `MEMORYSTATUSEX` (sysinfoapi.h).
+    #[repr(C)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page_file: u64,
+        avail_page_file: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended_virtual: u64,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        /// Nonzero on success; `buffer.length` must be the struct's size.
+        fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
+    }
+
+    pub fn total_physical() -> Option<u64> {
+        let mut s = MemoryStatusEx {
+            length: std::mem::size_of::<MemoryStatusEx>() as u32,
+            memory_load: 0,
+            total_phys: 0,
+            avail_phys: 0,
+            total_page_file: 0,
+            avail_page_file: 0,
+            total_virtual: 0,
+            avail_virtual: 0,
+            avail_extended_virtual: 0,
+        };
+        // SAFETY: `GlobalMemoryStatusEx` is a documented, thread-safe kernel32 function that fills
+        // the `MEMORYSTATUSEX` it is given, whose `dwLength` is set to the struct's size as
+        // required. `s` is a live, properly aligned `repr(C)` struct with the documented layout
+        // (two DWORDs then seven DWORDLONGs), owned by this frame for the whole call; nothing is
+        // kept after it returns.
+        let ok = unsafe { GlobalMemoryStatusEx(&mut s) } != 0;
+        (ok && s.total_phys > 0).then_some(s.total_phys)
     }
 }
 
@@ -68,6 +131,17 @@ mod tests {
         // The allocator must still work normally afterwards.
         let again = vec![7u8; 16 << 20];
         assert_eq!(again[again.len() - 1], 7);
+    }
+
+    #[test]
+    fn the_physical_memory_is_known_on_windows() {
+        let ram = super::total_physical_memory();
+        if cfg!(windows) {
+            let ram = ram.expect("GlobalMemoryStatusEx");
+            assert!((512 << 20..1 << 50).contains(&ram), "{ram} bytes");
+        } else {
+            assert_eq!(ram, None);
+        }
     }
 
     #[test]

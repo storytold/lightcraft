@@ -87,6 +87,9 @@ Setup has a time limit and a crash marker. Automatic selection estimates through
 from a check tile; this estimate can choose imperfectly on unmeasured hardware.
 Settings offers Automatic, Graphics card and Processor. GPU tests cover supported
 synthetic networks against the scalar executor; a real-model test compares CPU/GPU.
+On a computer with two graphics cards each card is set up and checked on its own, and a batch makes a photo on each at
+once, the second graphics card first; one photo's tiles stay on one card (`docs/gpu-pipeline.md` → AI on the second
+graphics card).
 
 The convolution kernel stores its shared input tile as scalar elements, each with
 one writer, and gathers vectors after a workgroup barrier. Writing separate lanes

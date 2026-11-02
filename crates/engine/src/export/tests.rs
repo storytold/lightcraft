@@ -1,3 +1,4 @@
+use super::batch::{auto_lanes, both_cards_lanes};
 use super::*;
 use serde_json::json;
 
@@ -756,6 +757,12 @@ fn enlarged_exports_must_fit_the_computers_memory() {
     assert_eq!(too_big_for_memory((6000, 4000), 24_000_000, 20 * gb, Some(gb)), None, "full size is never refused");
     assert_eq!(too_big_for_memory((3000, 2000), 24_000_000, 20 * gb, Some(gb)), None, "nor a smaller export");
     assert_eq!(too_big_for_memory((27713, 18475), 24_000_000, 20 * gb, None), None, "unknown memory");
+    // review of PR #3565: a gain map JPEG's own memory counts in the check (here it tips an
+    // enlarged export that fits without it past the computer's memory)
+    let hdr = with_gain_map(14 * gb, (27713, 18475), true);
+    assert!(hdr > 16 * gb && with_gain_map(14 * gb, (27713, 18475), false) == 14 * gb);
+    assert_eq!(too_big_for_memory((27713, 18475), 24_000_000, 14 * gb, Some(16 * gb)), None);
+    assert!(too_big_for_memory((27713, 18475), 24_000_000, hdr, Some(16 * gb)).is_some());
 }
 
 #[test]
@@ -1381,7 +1388,7 @@ fn lanes_batch(
         seen.push((i, name.to_string()));
         i < cancel_at
     };
-    let files = run_batch_with(items, &mut Placer::new(o, &to, &mut write, &|_| false, stop_on_error), &mut progress, lanes);
+    let files = run_batch_with(items, &mut Placer::new(o, &to, &mut write, &|_| false, stop_on_error), &mut progress, lanes, None);
     (files, written, seen)
 }
 
@@ -1476,8 +1483,9 @@ fn a_panic_in_progress_does_not_hang_the_lanes() {
             assert!(calls < 2, "progress panics on its second call");
             true
         };
-        let r =
-            crate::guard::catch("test batch", || run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2));
+        let r = crate::guard::catch("test batch", || {
+            run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2, None)
+        });
         tx.send(r.and_then(|r| r)).ok();
     });
     let r = rx.recv_timeout(std::time::Duration::from_secs(60));
@@ -1522,4 +1530,184 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
+}
+
+/// Review of PR #3499: the export share's sizing and the gate's waiting, together. Twelve full-size
+/// 45 MP photos (~2 GB of working memory each, [`render_weight`]) acquire a `WorkGate` sized like
+/// [`crate::memory::export_gate`] on a 16 GB machine: at most three hold memory at once, the others
+/// wait their turn, and all of them finish. (It uses its own gate, not the shared one, which other
+/// tests running at the same time also use; `run_gated` is the one place that acquires that.)
+#[test]
+fn twelve_large_photos_wait_for_a_gate_sized_like_the_export_share() {
+    use crate::media::SourceLevel;
+    use std::sync::{Arc, Mutex};
+    let gb = 1usize << 30;
+    let share = crate::memory::export_share_of(3 * gb / 2, Some(16 * gb));
+    let each = render_weight(8256 * 5504, 8256, SourceLevel::Full, 8256 * 5504);
+    let fit = share / each;
+    assert_eq!(fit, 3, "{share} / {each}");
+    let gate = Arc::new(crate::memory::WorkGate::new(share));
+    let seen = Arc::new(Mutex::new((0usize, 0usize, 0usize))); // running, most at once, most bytes held
+    let lanes: Vec<_> = (0..12)
+        .map(|_| {
+            let (gate, seen) = (gate.clone(), seen.clone());
+            std::thread::spawn(move || {
+                let _held = gate.acquire(each);
+                {
+                    let mut s = seen.lock().unwrap();
+                    s.0 += 1;
+                    s.1 = s.1.max(s.0);
+                    s.2 = s.2.max(gate.usage().0);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                seen.lock().unwrap().0 -= 1;
+            })
+        })
+        .collect();
+    for l in lanes {
+        l.join().unwrap();
+    }
+    let (running, most, bytes) = *seen.lock().unwrap();
+    assert_eq!(running, 0, "all twelve finished");
+    assert!((1..=fit).contains(&most), "at most {fit} at once, saw {most}");
+    assert!(bytes <= share, "{bytes} held > {share}");
+    assert_eq!(gate.usage().0, 0);
+}
+
+/// The gain map's linear SDR (a table of the 256 levels) is each sample decoded on its own.
+#[test]
+fn the_linear_sdr_table_is_exact() {
+    let img = test_image();
+    for space in [OutputSpace::Srgb, OutputSpace::AdobeRgb, OutputSpace::ProPhoto, OutputSpace::Rec2020] {
+        let trc = space.trc();
+        let lin = linear_of_8bit(&img, trc);
+        assert_eq!(lin.len(), img.data.len());
+        for (p, l) in img.data.iter().zip(&lin) {
+            for c in 0..3 {
+                assert_eq!(l[c].to_bits(), trc.decode(p[c] as f32 / 255.0).to_bits(), "{space:?}");
+            }
+        }
+    }
+}
+
+/// A batch's lanes come from the setting, the environment's `LIGHTCRAFT_EXPORT_LANES` aside,
+/// never more than the batch has photos.
+#[test]
+fn a_helper_card_adds_its_renders_to_the_automatic_lanes() {
+    assert_eq!(auto_lanes(16, 0), 8);
+    assert_eq!(auto_lanes(32, 0), 12);
+    assert_eq!(auto_lanes(32, 4), 16);
+    assert_eq!(auto_lanes(1, 0), 1);
+    assert_eq!(auto_lanes(usize::MAX, usize::MAX), MAX_EXPORT_LANES);
+    // a lanes setting from one card still feeds both: 4 + 4 turns and one beside them
+    assert_eq!(both_cards_lanes(4, 4), 9);
+    assert_eq!(both_cards_lanes(0, 4), 6);
+    assert_eq!(both_cards_lanes(usize::MAX, usize::MAX), MAX_EXPORT_LANES);
+}
+
+#[test]
+fn export_lanes_follow_the_setting() {
+    if std::env::var_os("LIGHTCRAFT_EXPORT_LANES").is_some() {
+        return;
+    }
+    let _serial = crate::export::TUNING_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // (the editing card only: a second card made ready by another test adds its jobs)
+    let cards = crate::export::export_cards();
+    crate::export::set_export_cards(crate::export::ExportCards::Editing);
+    set_export_lanes(Some(3));
+    assert_eq!(export_lanes_override(), Some(3));
+    assert_eq!(export_parallelism(10), 3);
+    assert_eq!(export_parallelism(2), 2);
+    set_export_lanes(Some(10_000));
+    assert_eq!(export_parallelism(1000), MAX_EXPORT_LANES);
+    set_export_lanes(None);
+    crate::export::set_export_cards(cards);
+    assert_eq!(export_lanes_override(), None);
+    assert!(export_parallelism(1000) >= 1);
+}
+
+/// A detailed photo-like image (gradients, texture, edges) of `w × h`.
+fn detailed(w: usize, h: usize) -> Rgba8 {
+    let mut img = Rgba8::new(w, h);
+    let mut seed = 12345u32;
+    for y in 0..h {
+        for x in 0..w {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let n = (seed >> 24) as i32 - 128;
+            let base = ((x * 255 / w) as i32 + ((y / 40) % 2) as i32 * 60 + (((x as f32 / 9.0).sin() * 30.0) as i32)).clamp(0, 255);
+            let c = |o: i32| (base + o + n / 3).clamp(0, 255) as u8;
+            img.data[y * w + x] = [c(0), c(-20), c(25), 255];
+        }
+    }
+    img
+}
+
+/// Note 28: "Limit file size" made a full encode per step of a binary search (7-8 of a 6000 px
+/// photo). Now at most two: the quality is predicted from the first encode's size.
+#[test]
+fn a_file_size_limit_takes_at_most_two_encodes() {
+    let img = detailed(1600, 1100);
+    let full = encode_image(&img, &ExportOptions { quality: 90, limit_kb: None, ..Default::default() }).unwrap();
+    for share in [0.8, 0.5, 0.3, 0.15] {
+        let kb = ((full.len() as f64 * share) / 1024.0) as u32;
+        FIT_ENCODES.with(|c| c.set(0));
+        let b = encode_image(&img, &ExportOptions { quality: 90, limit_kb: Some(kb), ..Default::default() }).unwrap();
+        let n = FIT_ENCODES.with(|c| c.get());
+        assert!(b.len() <= kb as usize * 1024, "{} bytes over {kb} KB", b.len());
+        assert!(n <= 2, "{n} encodes for {share} of the size");
+        // and not much smaller than it may be: the quality is close to the best that fits
+        assert!(b.len() as f64 >= kb as f64 * 1024.0 * 0.6, "{} bytes for {kb} KB", b.len());
+    }
+    // one encode when it fits already
+    FIT_ENCODES.with(|c| c.set(0));
+    encode_image(&img, &ExportOptions { quality: 90, limit_kb: Some(100_000), ..Default::default() }).unwrap();
+    assert_eq!(FIT_ENCODES.with(|c| c.get()), 1);
+}
+
+/// Review of PR #3499: a size the photo can't reach even at quality 1 ends with an error that says
+/// so (that photo is not written), after a bounded number of
+/// encodes: each retry is at a lower quality than the last, and the error comes only after
+/// quality 1 was tried (CodeRabbit on PR #3506).
+#[test]
+fn an_unreachable_file_size_fails_after_a_few_encodes() {
+    let img = detailed(1600, 1100);
+    FIT_ENCODES.with(|c| c.set(0));
+    FIT_QUALITIES.with(|v| v.borrow_mut().clear());
+    let e = encode_image(&img, &ExportOptions { quality: 90, limit_kb: Some(1), ..Default::default() }).unwrap_err();
+    let n = FIT_ENCODES.with(|c| c.get());
+    let q = FIT_QUALITIES.with(|v| v.borrow().clone());
+    assert!(e.contains("cannot fit within 1 KB"), "{e}");
+    assert!((2..=8).contains(&n), "{n} encodes");
+    assert_eq!((q.len(), q.first(), q.last()), (n, Some(&90), Some(&1)), "{q:?}");
+    assert!(q.windows(2).all(|w| w[1] < w[0]), "each retry lower: {q:?}");
+}
+
+/// The limit holds for a gain map JPEG too (it used to only switch to 4:2:0), in at most two
+/// encodes of the primary image and one of the gain map.
+#[test]
+fn a_gain_map_jpeg_fits_the_file_size_limit() {
+    let sdr = detailed(1200, 800);
+    let hdr = DeepImage {
+        width: 1200,
+        height: 800,
+        space: OutputSpace::Srgb,
+        samples: DeepSamples::F32(
+            sdr.data
+                .iter()
+                .flat_map(|p| {
+                    let l = |v: u8| lightcraft_pipeline::OutputTrc::Srgb.decode(v as f32 / 255.0);
+                    let g = if p[0] > 200 { 3.0 } else { 1.0 };
+                    [l(p[0]) * g, l(p[1]) * g, l(p[2]) * g]
+                })
+                .collect(),
+        ),
+    };
+    let o = ExportOptions { quality: 90, hdr: true, ..Default::default() };
+    let free = encode_gain_map_jpeg(&sdr, &hdr, &o, None).unwrap();
+    let kb = (free.len() as f64 * 0.5 / 1024.0) as u32;
+    FIT_ENCODES.with(|c| c.set(0));
+    let b = encode_gain_map_jpeg(&sdr, &hdr, &ExportOptions { limit_kb: Some(kb), ..o }, None).unwrap();
+    assert!(b.len() <= kb as usize * 1024, "{} bytes over {kb} KB", b.len());
+    assert!(FIT_ENCODES.with(|c| c.get()) <= 2);
+    assert!(lightcraft_codecs::gainmap::read_jpeg(&b).is_some(), "still a gain map JPEG");
 }
