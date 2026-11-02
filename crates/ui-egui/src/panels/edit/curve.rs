@@ -165,7 +165,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
 pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     // channel selector
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             for (ch, c) in [
                 ("parametric", Color32::from_gray(200)),
@@ -396,7 +396,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
 fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     use lightcraft_engine::cmd::curves::{all_presets, matching_preset};
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(2, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::i18n::tr("Point Curve")).font(t.font(12.0)).color(t.text_label));
             let current = matching_preset(&app.session, &d.curve);

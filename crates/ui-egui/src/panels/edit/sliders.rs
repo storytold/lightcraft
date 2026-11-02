@@ -1,6 +1,6 @@
 use super::{
-    Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
-    pos2, register, section_header, slider, vec2,
+    ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json, pos2,
+    register, section_header, vec2,
 };
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
@@ -26,8 +26,37 @@ pub fn apply_slider_out(
 pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool) {
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
-    let out = slider(ui, spec, v, enabled, None);
+    // (the short name is for the eye; screen readers announce the full one)
+    let out = crate::widgets::slider_named(ui, spec, v, enabled, short_name(id), None);
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+}
+
+/// The short name a slider shows under its group's caption (Grain ▸ Amount, Red Primary ▸ Hue,
+/// as Lightroom Classic labels them), so a section's name column stays narrow and its tracks
+/// long. The control keeps its full name everywhere else (commands, the console, menus, and what
+/// screen readers announce).
+pub(crate) fn short_name(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "vignette.amount" | "grain.amount" | "detail.sharpenAmount" | "optics.defringePurple" | "optics.defringeGreen" => "Amount",
+        "detail.nrLuminance" => "Luminance",
+        "detail.nrColor" => "Color",
+        "optics.profileDistortion" => "Distortion",
+        "optics.profileVignetting" => "Vignetting",
+        "optics.defringePurpleHueLo" | "optics.defringeGreenHueLo" => "Hue Low",
+        "optics.defringePurpleHueHi" | "optics.defringeGreenHueHi" => "Hue High",
+        "optics.caRed" => "Red/Cyan",
+        "optics.caBlue" => "Blue/Yellow",
+        "calibration.shadowsTint" => "Tint",
+        "calibration.redHue" | "calibration.greenHue" | "calibration.blueHue" => "Hue",
+        "calibration.redSat" | "calibration.greenSat" | "calibration.blueSat" => "Saturation",
+        "hdr.sdrBrightness" => "Brightness",
+        "hdr.sdrContrast" => "Contrast",
+        "hdr.sdrHighlights" => "Highlights",
+        "hdr.sdrShadows" => "Shadows",
+        "hdr.sdrWhites" => "Whites",
+        "hdr.sdrClarity" => "Clarity",
+        _ => return None,
+    })
 }
 
 /// Relative temperature scale for rendered (non-raw) files: −100..100 ↔ Kelvin via mired shift.
@@ -172,8 +201,16 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
 
 pub fn sub_title(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 4.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.0), t.text_label);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+    let left = r.left() + crate::widgets::PAD_L;
+    let right = r.right() - crate::widgets::PAD_R;
+    let g = crate::widgets::one_line(ui.painter(), crate::i18n::tr(title), t.semibold(11.0), t.text_dim, (right - left).max(1.0));
+    let y = r.center().y + 2.0;
+    let text_right = left + g.size().x;
+    ui.painter().galley(pos2(left, y - g.size().y / 2.0), g, t.text_dim);
+    if right > text_right + 12.0 {
+        ui.painter().hline((text_right + 6.0)..=right, y.round() + 0.5, egui::Stroke::new(1.0, t.divider.gamma_multiply(0.75)));
+    }
 }
 
 pub(super) fn section(
@@ -221,7 +258,7 @@ pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     if !d.hdr.enabled {
         return;
     }
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, |ui| {
         let mut v = app.ui.hdr_visualize;
         let r = ui.checkbox(&mut v, "Visualize HDR");
         register(ui, "check:hdrVisualize", r.rect);
@@ -236,7 +273,7 @@ pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
 /// photo from its own value.
 pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(0, 4)).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("Quick Develop · {n} photos", n = n)).color(t.text_label).size(12.5));
         ui.add_space(4.0);
         let rows: [(&str, &str, f64, f64); 9] = [
@@ -309,7 +346,7 @@ pub(super) struct HeaderClicks {
 /// row starts the next one (long translations in a narrow panel, such as German *Zurücksetzen* beside HDR), so none
 /// covers another; Reset stays right-aligned on whichever row it lands.
 pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: &str) -> HeaderClicks {
-    const GAP: f32 = 8.0;
+    const GAP: f32 = 4.0;
     let mut clicks = HeaderClicks::default();
     let avail = ui.available_width();
     let left = [("auto", "Auto", false), ("bw", "B&W", bw), ("hdr", "HDR", hdr)];
@@ -378,6 +415,28 @@ pub(super) fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String 
 mod tests {
     use super::*;
 
+    /// Every short slider name has a translation in every catalog: a missing one would show the
+    /// English name under a translated caption.
+    #[test]
+    fn every_short_name_is_translated() {
+        let names: std::collections::BTreeSet<&str> = lightcraft_develop::CONTROLS.iter().filter_map(|c| super::short_name(c.id)).collect();
+        assert!(names.contains("Hue Low") && names.contains("Brightness"), "{names:?}");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        let mut catalogs = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.ends_with(".json") || name.ends_with("-formats.json") {
+                continue;
+            }
+            catalogs += 1;
+            let catalog: std::collections::BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let missing: Vec<&&str> = names.iter().filter(|n| !catalog.contains_key(**n)).collect();
+            assert!(missing.is_empty(), "{name} lacks {missing:?}");
+        }
+        assert!(catalogs > 0);
+    }
+
     /// The Edit header's buttons never cover each other or run past the panel, in any language: a button that doesn't
     /// fit starts the next row, and Reset stays right-aligned. Before, Reset covered HDR in 11 of the 18 languages at
     /// the default 222 pt (German *Zurücksetzen* among them) and in all but the two Chinese ones at some width. 200 pt
@@ -419,7 +478,8 @@ mod tests {
             }
         }
         crate::i18n::set_language(Locale::En);
-        assert!(wrapped.contains(&(Locale::De, 222.0)), "German wraps in the default panel: {wrapped:?}");
+        // (the dense buttons fit German's Zurücksetzen in one row at 222 pt; at the narrowest panel it wraps)
+        assert!(wrapped.contains(&(Locale::De, 200.0)), "German wraps in the narrowest panel: {wrapped:?}");
         // English keeps its single row from the default width up
         assert!(!wrapped.iter().any(|&(l, w)| l == Locale::En && w >= 222.0), "{wrapped:?}");
     }

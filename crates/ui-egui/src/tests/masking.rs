@@ -143,14 +143,16 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     // Changing the shape needs the overlay; changing the image needs an unobscured preview.
     exec(&mut h, "mask.refine", json!({"value": 10.0}));
     assert!(h.app.ui.mask_overlay);
-    // The dock header pushes this adjustment below the initial viewport. Exercise the
-    // actual visible slider rather than sending a synthetic click outside its clipped body.
+    // The dock header can push this adjustment below the initial viewport (the dense rows may
+    // already show it). Exercise the actual visible slider rather than sending a synthetic click
+    // outside its clipped body.
     let panel = h.app.widgets.iter().find(|(id, _)| id == "panel:right_panel").unwrap().1;
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
-    assert!(!panel.contains_rect(slider), "exposure initially needs scrolling: {slider:?} in {panel:?}");
-    h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
-    h.request("ui.scroll", json!({"dy": -160.0}), T);
-    h.settle(SETTLE);
+    if !panel.contains_rect(slider) {
+        h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
+        h.request("ui.scroll", json!({"dy": -160.0}), T);
+        h.settle(SETTLE);
+    }
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
     assert!(panel.contains_rect(slider), "exposure is visible before clicking: {slider:?} in {panel:?}");
     let r = h.request("ui.clickWidget", json!({"id": "slider:exposure", "fx": 0.7}), T);
@@ -2154,4 +2156,41 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let a = develop(&h).masks.last().expect("a mask").adjust;
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
+}
+
+/// The mask's sliders sit in sections like the Edit panel's, in Lightroom Classic's order: Tone
+/// (Exposure … Blacks), Color (Temp, Tint, Hue, Saturation), Effects (Texture, Clarity, Dehaze),
+/// Details (Sharpness … Defringe); Refine Edges above the effect (a setting of the mask's shape)
+/// and Amount above the sections. Every mask slider is in one section, and a folded section hides
+/// its rows.
+#[test]
+fn the_mask_sliders_sit_in_sections() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
+    h.request("ui.resize", json!({"width": 1400, "height": 2400}), T);
+    h.settle(SETTLE);
+    let at = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("{id} drawn"));
+    assert!(at(&h, "slider:refine").bottom() <= at(&h, "slider:amount").top(), "Refine Edges above the effect's sliders");
+    let mut last = at(&h, "slider:amount").bottom() - 1.0;
+    let mut seen = Vec::new();
+    for (section, _, keys) in crate::panels::masking::MASK_GROUPS {
+        let head = at(&h, &format!("section:{section}"));
+        assert!(head.top() >= last, "{section} in order");
+        last = head.bottom() - 1.0;
+        for key in *keys {
+            let row = at(&h, &format!("slider:{key}"));
+            assert!(row.top() >= last, "{key} under {section}");
+            last = row.bottom() - 1.0;
+            seen.push(*key);
+        }
+    }
+    let mut all: Vec<_> = crate::panels::masking::LOCAL.iter().map(|s| s.id).collect();
+    all.sort_unstable();
+    seen.sort_unstable();
+    assert_eq!(seen, all, "every mask slider in exactly one section");
+    // folding Tone hides its sliders, and the others stay
+    click(&mut h, "section:maskTone");
+    h.settle(SETTLE);
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "slider:exposure"));
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "slider:temp"));
 }

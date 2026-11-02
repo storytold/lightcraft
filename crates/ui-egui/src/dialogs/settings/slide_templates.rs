@@ -135,7 +135,7 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
     }
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect, 3.0, t.hover);
+        p.rect_filled(rect, crate::theme::RADIUS, t.hover);
     }
     if current {
         p.rect_stroke(rect.shrink(0.5), 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
