@@ -34,7 +34,7 @@ A failed openRequest or saveDialog delivery releases only its still-owned read o
 be retried. A synchronous listener that has already supplied bytes or resolved the destination
 keeps that admitted operation; delivery recovery does not cancel the accepted callback.
 
-snapshot() describes the active library, generation, dirty/pending/loading state and separate provider resources. Library metadata refreshes only while a provider is registered and enabled. Disconnect clears the cached document snapshot; disconnected frames cannot repopulate it, and pausing stops refresh until re-enabled. Library IDs are session-local and change on replacement even if catalog photo IDs or generations repeat. Before-unload protection applies to pending provider work and unsaved provider revisions only after explicit registration; publishing the API alone does not change the default page behavior. Pausing with setEnabled(false) retains this protection, including revisions edited while paused. A clean acknowledged revision does not add a prompt, and unregistering restores ordinary unload behavior.
+snapshot() describes the active library, generation, dirty/pending/loading state and separate provider resources. Library metadata refreshes only while a provider is registered and enabled. Disconnect clears the cached document snapshot; disconnected frames cannot repopulate it, and pausing stops refresh until re-enabled. Library IDs are session-local and change on replacement even if catalog photo IDs or generations repeat. Before-unload protection applies to pending provider work and unsaved provider revisions only after explicit registration; publishing the API alone does not change the default page behavior. Each new connection is conservatively protected immediately, before its first library publication. Published dirty/clean state belongs to that exact connection ID: disconnect/reconnect cannot inherit an earlier connection's clean state, even without an intervening publication. Re-registering the same connected identity is idempotent and retains its acknowledged clean state. Pausing with setEnabled(false) retains this protection, including revisions edited while paused. A clean acknowledged revision does not add a prompt, and unregistering restores ordinary unload behavior.
 
 ## Account boundaries and limits
 
@@ -102,8 +102,10 @@ result for an older library after another becomes active remains outside this br
 the closed-document Host test continues to claim only Host correlation/state coverage.
 
 The same browser fixture dispatches synthetic cancelable beforeunload events through the actual
-registered window listener. It checks default-off, registered dirty, paused dirty, acknowledged
-clean, edits made while paused and disconnected states without navigating away from the page.
+registered window listener. It calls the actual public registerProvider callback and checks unload
+immediately before the first library publication, clean idempotent registration and disconnect/reconnect
+without an intervening publication. It retains default-off, registered dirty, paused dirty, acknowledged
+clean, edits made while paused and disconnected controls without navigating away from the page.
 This proves listener cancellation, not the browser's user-activation-dependent navigation dialog.
 
 ## Native UI preview

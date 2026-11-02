@@ -377,7 +377,15 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     lightcraft_ui_egui::theme::install_fonts(&ctx);
     let host = Host::default();
     crate::file_providers::install(host.clone(), ctx.clone())?;
-    let _installed = InstalledApi { window: window.clone(), value: Reflect::get(&window, &API.into())?, host: host.clone() };
+    let installed = InstalledApi { window: window.clone(), value: Reflect::get(&window, &API.into())?, host: host.clone() };
+    let register_provider = Reflect::get(&installed.value, &"registerProvider".into())?.dyn_into::<Function>()?;
+    let unregister_provider = Reflect::get(&installed.value, &"unregisterProvider".into())?.dyn_into::<Function>()?;
+    let register = || {
+        register_provider
+            .call3(&installed.value, &"fixture".into(), &"Fixture files".into(), &"fixture-account".into())?
+            .as_string()
+            .ok_or_else(|| error("registerProvider did not return a connection ID"))
+    };
     assert!(!host.enabled() && !host.connected());
     let events = PublishedEvents::listen(&window)?;
     let current = tiny_library(&backend, CURRENT_DIR, "current.png", 4).await?;
@@ -386,7 +394,10 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     settle_writes(&mut app).await?;
     app.provider_publish(&ctx);
     assert!(!unload_prompted()?, "publishing the API alone must not change unload behavior");
-    let connection = host.connect("fixture".into(), "Fixture files".into(), "fixture-account".into()).map_err(error)?;
+    let connection = register()?;
+    assert_eq!(host.connection_id().as_deref(), Some(connection.as_str()));
+    assert!(!host.busy());
+    assert!(unload_prompted()?, "a new connection must protect unload before its first publication");
     host.set_resources(&connection, vec![Resource { id: "incoming".into(), name: "Incoming.zip".into(), updated_at: String::new() }])
         .map_err(error)?;
     app.provider_publish(&ctx);
@@ -525,11 +536,32 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     assert_eq!(app.provider.as_ref().unwrap().saved, saved_before, "delivery alone is not persistence");
     host.result(retry, "saved".into(), "retry-resource".into()).map_err(error)?;
     app.provider_tick(&ctx);
-    assert_eq!(app.provider.as_ref().unwrap().saved, Some((connection, retry_capture.revision)));
+    assert_eq!(app.provider.as_ref().unwrap().saved, Some((connection.clone(), retry_capture.revision)));
     assert_eq!(host.filename(retry_capture.doc).as_deref(), Some("Retry.zip"));
     app.provider_publish(&ctx);
     assert!(!host.busy());
     assert!(!unload_prompted()?, "a durably acknowledged unchanged revision is clean");
+    assert_eq!(register()?, connection, "idempotent registration must retain its connection");
+    assert!(!host.busy());
+    assert!(!unload_prompted()?, "idempotent clean registration must retain its published clean state");
+    assert_eq!(unregister_provider.call0(&installed.value)?.as_bool(), Some(true));
+    assert!(!unload_prompted()?, "disconnect must immediately restore ordinary unload behavior");
+    // No provider publication occurs between this clean connection's disconnect and reconnect.
+    let reconnected = register()?;
+    assert_ne!(reconnected, connection);
+    assert!(!host.busy());
+    assert!(unload_prompted()?, "a reconnected provider must not inherit the previous connection's clean publication");
+    app.provider_publish(&ctx);
+    assert!(unload_prompted()?, "the previous connection's acknowledgement cannot clean the new connection");
+    let (reconnect_request, reconnect_capture) = capture_for_dispatch(&app, &host, &ctx, &events, captured.clone())?;
+    let since = events.len();
+    crate::file_providers::publish(&host, &ctx);
+    assert_eq!(events.matching(since, "save", Some(&reconnect_request)).len(), 1);
+    host.result(reconnect_request, "saved".into(), "reconnected-resource".into()).map_err(error)?;
+    app.provider_tick(&ctx);
+    assert_eq!(app.provider.as_ref().unwrap().saved, Some((reconnected, reconnect_capture.revision)));
+    assert!(!host.busy());
+    assert!(!unload_prompted()?, "only the new connection's acknowledged unchanged revision is clean");
     host.set_enabled(false).map_err(error)?;
     app.provider_publish(&ctx);
     assert!(!unload_prompted()?, "a paused clean provider must not add an unload prompt");

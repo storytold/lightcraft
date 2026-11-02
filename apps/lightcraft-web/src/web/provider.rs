@@ -35,16 +35,20 @@ pub(super) struct Bridge {
     loading: bool,
     waiting: Option<PendingOpen>,
     completed: Rc<RefCell<Vec<Completion>>>,
-    leave: Rc<Cell<bool>>,
+    leave: Rc<RefCell<Option<(String, bool)>>>,
 }
 
 impl Bridge {
     pub(super) fn new(host: Host) -> Self {
-        let leave = Rc::new(Cell::new(false));
+        let leave = Rc::new(RefCell::new(None::<(String, bool)>));
         let flag = leave.clone();
         let provider = host.clone();
         let before = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
-            if provider.connected() && (flag.get() || provider.busy()) {
+            let Some(connection) = provider.connection_id() else { return };
+            // Until this connection publishes, its library cannot be assumed clean. A new
+            // connection must not inherit an earlier account's published checkpoint.
+            let dirty = flag.borrow().as_ref().is_none_or(|(published, dirty)| published != &connection || *dirty);
+            if dirty || provider.busy() {
                 event.prevent_default();
                 let _ = js_sys::Reflect::set(event.as_ref(), &"returnValue".into(), &"".into());
             }
@@ -405,7 +409,7 @@ impl WebApp {
             );
         }
         // Pausing new provider work does not remove an existing connection's unsaved revision.
-        bridge.leave.set(bridge.host.connected() && dirty);
+        *bridge.leave.borrow_mut() = bridge.host.connection_id().map(|connection| (connection, dirty));
         crate::file_providers::publish(&bridge.host, ctx);
     }
 }
