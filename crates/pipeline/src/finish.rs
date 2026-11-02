@@ -149,6 +149,21 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     a + (b - a) * v
 }
 
+/// The crystal grain of output row `y` (`w` pixels) when its pixels are axis-aligned; empty
+/// otherwise (and without crystal grain): the pixels then take it one by one.
+fn crystal_row(fp: &FinishParams, y: usize, w: usize) -> Vec<f32> {
+    let Some(GrainModel::Crystal(g)) = &fp.grain else { return Vec::new() };
+    let long = fp.ow.max(fp.oh);
+    let (a, b) = (fp.out_to_norm.apply(Point::new(0.5, y as f64 + 0.5)), fp.out_to_norm.apply(Point::new(1.5, y as f64 + 0.5)));
+    let (gx, gy) = (a.x * fp.ow / long, a.y * fp.oh / long);
+    let (dx, dy) = ((b.x - a.x) * fp.ow / long, (b.y - a.y) * fp.oh / long);
+    let mut out = vec![0.0; w];
+    if !g.row(gx, gy, dx, dy, &mut out) {
+        out.clear();
+    }
+    out
+}
+
 /// Number of per-mask terms in [`mask_terms`].
 pub const MASK_TERMS: usize = 21;
 
@@ -429,6 +444,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
     for_rows(&mut out, w, |y, row| {
+        // the crystal grain of the whole row at once when its pixels are axis-aligned
+        let crystal_row = crystal_row(fp, y, row.len());
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
             let raw = p.img.data[i];
@@ -577,10 +594,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                         e = e.map(|v| v + k);
                     }
                 }
-                Some(GrainModel::Crystal(g)) => {
-                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
-                }
+                Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
+                    Some(&f) => e = g.apply_field(e, f),
+                    None => {
+                        let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                        e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
+                    }
+                },
                 None => {}
             }
             let e = match &p_lut {

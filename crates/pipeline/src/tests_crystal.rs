@@ -259,3 +259,64 @@ fn texture_report() {
         );
     }
 }
+
+/// A row computed with shared box edges equals the per-pixel boxes: any size, mirrored rows, rows
+/// across the tori's seams and far from the origin.
+#[test]
+fn row_field_matches_per_pixel_field() {
+    let t = tile_of(25.0, 50.0);
+    for (w, sign, x, y) in [
+        (2.0f32, 1.0f32, 3.3f32, 7.9f32),
+        (2.0, -1.0, 9000.2, 1275.0),
+        (8.0, 1.0, 11990.0, 2260.5),
+        (0.7, 1.0, 1279.6, 0.1),
+        (31.0, -1.0, 400.0, 1133.9),
+    ] {
+        for along_x in [true, false] {
+            let mut row = vec![0.0f32; 700];
+            t.row_field(x, y, w, sign * w, along_x, &mut row);
+            for (k, &v) in row.iter().enumerate() {
+                let d = sign * w * k as f32;
+                let want = if along_x { t.field(x + d, y, w) } else { t.field(x, y + d, w) };
+                assert!((v - want).abs() < 2e-3, "w {w} sign {sign} x {along_x} from ({x}, {y}), pixel {k}: {v} vs {want}");
+            }
+        }
+    }
+}
+
+/// Per-pixel cost of the grain on one thread (`--ignored --nocapture`).
+#[test]
+#[ignore]
+fn pixel_cost_report() {
+    let g = CrystalGrain::new(&Grain { amount: 50.0, size: 25.0, roughness: 50.0, seed: 1 }, REF_LONG).expect("grain");
+    let (w, h) = (4000usize, 600usize);
+    let mut sink = 0.0f32;
+    let t0 = std::time::Instant::now();
+    for y in 0..h {
+        for x in 0..w {
+            sink += g.tile.field((x as f32 + 0.5) * 2.0, (y as f32 + 0.5) * 2.0, 2.0);
+        }
+    }
+    let per_pixel = t0.elapsed().as_secs_f64() / (w * h) as f64 * 1e9;
+    let mut row = vec![0.0; w];
+    let t1 = std::time::Instant::now();
+    for y in 0..h {
+        g.tile.row_field(1.0, (y as f32 + 0.5) * 2.0, 2.0, 2.0, true, &mut row);
+        sink += row[7];
+    }
+    let per_row = t1.elapsed().as_secs_f64() / (w * h) as f64 * 1e9;
+    let t3 = std::time::Instant::now();
+    for y in 0..h {
+        g.tile.row_field((y as f32 + 0.5) * 2.0, 1.0, 2.0, 2.0, false, &mut row);
+        sink += row[7];
+    }
+    eprintln!("column {:.1} ns/px", t3.elapsed().as_secs_f64() / (w * h) as f64 * 1e9);
+    let t2 = std::time::Instant::now();
+    for y in 0..h {
+        for x in 0..w {
+            sink += g.apply_field([0.4, 0.5, 0.6], (x + y) as f32 * 1e-4)[1];
+        }
+    }
+    let tone = t2.elapsed().as_secs_f64() / (w * h) as f64 * 1e9;
+    eprintln!("field {per_pixel:.1} ns/px, row {per_row:.1} ns/px, tone {tone:.1} ns/px ({sink})");
+}

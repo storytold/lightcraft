@@ -662,6 +662,75 @@ fn integral(sat: &[f32], t: usize, x: f32, y: f32) -> f32 {
     v
 }
 
+/// The integral of torus `sat` (side `t`) over `[0, i) × [0, across)` (`along_x`) or
+/// `[0, across) × [0, i)`, for `i` in `0..=t`: the table cut along a line, with the periodic part
+/// of `across` folded in (`across` in `0..2t`).
+fn line(sat: &[f32], t: usize, along_x: bool, across: f32, out: &mut Vec<f64>) {
+    let (tf, n) = (t as f32, t + 1);
+    let wrap = across >= tf;
+    let a = (if wrap { across - tf } else { across }).clamp(0.0, tf);
+    let j = (a as usize).min(t.saturating_sub(1));
+    let f = (a - j as f32) as f64;
+    out.clear();
+    out.resize(n, 0.0);
+    // entry `i` of table line `k` (a row when cutting along x, a column when along y)
+    let at = |k: usize, i: usize| if along_x { sat.get(k * n + i) } else { sat.get(i * n + k) }.copied().unwrap_or(0.0) as f64;
+    for (i, o) in out.iter_mut().enumerate() {
+        let (p, q) = (at(j, i), at(j + 1, i));
+        *o = p + (q - p) * f + if wrap { at(t, i) } else { 0.0 };
+    }
+}
+
+/// [`line`] interpolated at `x ≥ 0` (any number of periods along).
+#[inline]
+fn along(line: &[f64], t: usize, inv_t: f64, x: f64) -> f64 {
+    let tf = t as f64;
+    let q = (x * inv_t).floor().max(0.0);
+    let r = (x - q * tf).clamp(0.0, tf);
+    let i = (r as usize).min(t.saturating_sub(1));
+    let f = r - i as f64;
+    let (Some(&a), Some(&b), Some(&end)) = (line.get(i), line.get(i + 1), line.get(t)) else { return 0.0 };
+    a + (b - a) * f + q * end
+}
+
+impl CrystalTile {
+    /// The grain of a line of `out.len()` output pixels side by side, each a square of side `w`
+    /// (tile pixels), the first centred on (`x`, `y`), the next `step` (`±w`) along x (`along_x`)
+    /// or y. The table is cut once along the line's two box edges; each pixel then costs one
+    /// interpolation per torus instead of [`Self::field`]'s eight table lookups.
+    pub fn row_field(&self, x: f32, y: f32, w: f32, step: f32, along_x: bool, out: &mut [f32]) {
+        out.fill(0.0);
+        let n = out.len();
+        let (pos, across) = if along_x { (x, y) } else { (y, x) };
+        let sign = if step < 0.0 { -1.0 } else { 1.0 };
+        let first = pos as f64 - 0.5 * step as f64;
+        let lowest = first.min(first + n as f64 * step as f64);
+        let (mut near, mut far) = (Vec::new(), Vec::new());
+        for (which, &t) in TORI.iter().enumerate() {
+            let Some(sat) = self.sats.get(which) else { continue };
+            let tf = t as f32;
+            let lo = across - 0.5 * w;
+            let lo = lo - (lo / tf).floor() * tf;
+            line(sat, t, along_x, lo, &mut near);
+            line(sat, t, along_x, lo + w, &mut far);
+            let shift = (lowest / t as f64).floor() * t as f64;
+            let inv_t = 1.0 / t as f64;
+            let edge = |k: usize| {
+                let e = first + k as f64 * step as f64 - shift;
+                along(&far, t, inv_t, e) - along(&near, t, inv_t, e)
+            };
+            let mut prev = edge(0);
+            for (k, o) in out.iter_mut().enumerate() {
+                let next = edge(k + 1);
+                *o += (sign * (next - prev)) as f32;
+                prev = next;
+            }
+        }
+        let area = w * w;
+        out.iter_mut().for_each(|v| *v /= area);
+    }
+}
+
 // ---- the render's grain
 
 /// The crystal grain of one render.
@@ -732,7 +801,33 @@ impl CrystalGrain {
             return e;
         }
         let tpl = TILE_PER_LONG as f32;
-        let g = self.tile.field(gx * tpl, gy * tpl, self.foot);
+        self.apply_field(e, self.tile.field(gx * tpl, gy * tpl, self.foot))
+    }
+
+    /// The grain field of a row of `out.len()` pixels whose first centre is at (`gx`, `gy`) and
+    /// which step (`dx`, `dy`) (fractions of the long edge), when the step is along x or y (an
+    /// unrotated frame in any orientation) and the pixels are squares of the render's size
+    /// (`false` otherwise: use [`Self::apply`] per pixel).
+    pub fn row(&self, gx: f64, gy: f64, dx: f64, dy: f64, out: &mut [f32]) -> bool {
+        let tpl = TILE_PER_LONG;
+        let ((sx, sy), w) = ((dx * tpl, dy * tpl), self.foot as f64);
+        let (step, along_x) = if sy.abs() <= 1e-6 {
+            (sx, true)
+        } else if sx.abs() <= 1e-6 {
+            (sy, false)
+        } else {
+            return false;
+        };
+        if !(gx.is_finite() && gy.is_finite() && step.is_finite()) || (step.abs() - w).abs() > 1e-4 * w {
+            return false;
+        }
+        self.tile.row_field((gx * tpl) as f32, (gy * tpl) as f32, self.foot, step as f32, along_x, out);
+        true
+    }
+
+    /// Display-encoded colour `e` with grain field value `g` (see [`CrystalTile::field`]).
+    #[inline]
+    pub fn apply_field(&self, e: [f32; 3], g: f32) -> [f32; 3] {
         let lum = (0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]).clamp(0.0, 1.0);
         let k = self.k * g * (1.0 - srgb_to_linear(lum));
         if !k.is_finite() {
