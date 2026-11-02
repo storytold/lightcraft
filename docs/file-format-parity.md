@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (lossy DNG export; Render to DNG as an export format) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (LR-PROF-IMPORT: the user's own `.dcp` camera profiles import; Render to DNG as an export format) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Every format Lightroom reads or writes, with our support, fidelity and tests. Camera raw formats are
 deep enough to have their own document: [raw-parity.md](raw-parity.md).
@@ -48,7 +48,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | EXIF / IPTC / XMP embedded on export | ✅ | ✅ with metadata filters | `crates/meta` |
 | Develop presets `.xmp` | ✅ | ✅ import (mapping of supported settings) | |
 | Legacy presets `.lrtemplate` | ✅ (converted) | ✅ import | |
-| Camera / creative profiles (`.dcp`, `.xmp` profiles) | ✅ | ⬜ deliberately (Adobe profile formats are never used); `.cube` LUT profiles ✅ | |
+| Camera / creative profiles (`.dcp`, `.xmp` profiles) | ✅ | 🟡 the user's own `.dcp` camera profiles import (`profile.import`) and replace a raw file's colour model; none ship with the app; `.xmp` profiles ⬜; `.cube` LUT profiles ✅ | |
 | Lens profiles `.lcp` | ✅ | ⬜ deliberately | |
 | Other apps' presets | — | ✅ Luminar `.lmp` / `.mplumpack`, `.zip` bundles | beyond target |
 | Lightroom Classic catalog `.lrcat` | native | 🟡 import (ratings, flags, labels, keywords, collections, virtual copies, supported develop settings; read-only pure-Rust SQLite incl. WAL) | [lightroom-catalog-import.md](lightroom-catalog-import.md) |
@@ -75,6 +75,7 @@ Remaining: **26–47 h** (AVIF decode 8–15 h if a permissive decoder is writte
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | LR-PROF-IMPORT: the user's own DNG camera profiles (`.dcp`) import as camera profiles; none ship |
 | 2026-10-10 | major | Created from the code and the installed Lightroom's document types |
 | 2026-10-10 | minor | JPEG XL export (#247): JXL write ✅ (native only), PQ JPEG XL HDR |
 | 2026-10-12 | minor | Render to DNG: "Rendered DNG" export format (linear 16-bit float DNG of the rendered photo) |

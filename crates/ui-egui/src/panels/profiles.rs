@@ -62,12 +62,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             PROFILES.iter().filter(|p| p.group == g).map(|p| (p.id.to_string(), p.name.to_string(), p.group.to_string())).collect(),
         ));
     }
-    // imported LUT profile groups
-    let mut lut_groups: Vec<String> = app.session.lut_profiles.iter().map(|p| p.group.clone()).collect();
-    lut_groups.sort_unstable();
-    lut_groups.dedup();
+    // imported profile groups: LUT folders, then camera profiles
+    let imported = app.session.imported_profiles();
+    let mut lut_groups: Vec<String> = Vec::new();
+    for (_, _, g) in &imported {
+        if !lut_groups.contains(g) {
+            lut_groups.push(g.clone());
+        }
+    }
     for g in &lut_groups {
-        let profiles = app.session.lut_profiles.iter().filter(|p| &p.group == g).map(|p| (p.id.clone(), p.name.clone(), p.group.clone())).collect();
+        let profiles = imported.iter().filter(|p| &p.2 == g).cloned().collect();
         sections.push((g.as_str(), "", true, profiles));
     }
     for (title, tag, imported, list) in sections {

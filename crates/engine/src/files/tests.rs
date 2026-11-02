@@ -556,7 +556,7 @@ fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_r
     product::write(&path, &camera_rgb, key).unwrap();
     let spec = DenoiseSpec { product: path, key: key.into(), make: None };
     let (ordinary, _) = load_bytes(&bytes, 2048).unwrap();
-    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec).unwrap();
+    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec, None).unwrap();
     assert_eq!(plain.data, ordinary.data, "requesting a twin must not change the ordinary path");
     let cached = cached.unwrap();
     assert_eq!((plain.width, plain.height), (24, 32));
@@ -1220,10 +1220,10 @@ fn exports_never_develop_a_dngs_reduced_copy() {
     let mean = |img: &lightcraft_raster::Rgba8| img.data.iter().map(|p| p[1] as f64).sum::<f64>() / img.data.len().max(1) as f64;
 
     // the loaders: only the thumbnail's develops the copy, and only when it covers the size
-    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512).unwrap();
+    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512, None).unwrap();
     assert!(used, "a thumbnail develops the copy");
-    assert!(!load_vec_reduced(bytes.clone(), 1024).unwrap().2, "no copy covers 1024 px");
-    let (full, _) = load_vec(bytes.clone(), 512).unwrap();
+    assert!(!load_vec_reduced(bytes.clone(), 1024, None).unwrap().2, "no copy covers 1024 px");
+    let (full, _) = load_vec(bytes.clone(), 512, None).unwrap();
     assert!(g(&copy) > 4.0 * g(&full), "the fixture's copy is much brighter: {} vs {}", g(&copy), g(&full));
 
     let dir = std::env::temp_dir().join(format!("lc-reduced-export-{}", std::process::id()));
