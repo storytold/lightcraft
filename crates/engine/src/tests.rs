@@ -786,6 +786,34 @@ fn mixer_swap_rb_and_the_singular_pick_error() {
     assert_eq!(active_dev(&s).channel_mixer, singular, "the refused pick changes nothing");
 }
 
+/// Issue #2158 review: `preset.update` without `groups` keeps the preset's `channel_mixer` key even
+/// when the active photo's mixer is the identity (`to_json` leaves it out, and the key — and with it
+/// the preset's power to reset a mixed target — was dropped); applying the updated preset then
+/// resets a mixed photo to the identity.
+#[test]
+fn preset_update_without_groups_keeps_a_stored_channel_mixer() {
+    let mut s = demo();
+    // a preset created from a mixed photo names the mixer in its keys
+    s.execute("develop.set", &json!({"control": "channelMixer.red.red", "value": 0.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.red.blue", "value": 100.0})).unwrap();
+    let r = s.execute("preset.create", &json!({"name": "swapped"})).unwrap();
+    let pid = r["id"].as_str().unwrap().to_string();
+
+    // back to the identity on the active photo, then update the preset without `groups`
+    s.execute("develop.set", &json!({"control": "channelMixer.red.red", "value": 100.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.red.blue", "value": 0.0})).unwrap();
+    assert!(active_dev(&s).channel_mixer.is_identity());
+    s.execute("preset.update", &json!({"id": pid})).unwrap();
+
+    // applying the preset to a mixed target resets its mixer to the identity
+    let vis: Vec<_> = s.visible().to_vec();
+    s.execute("library.select", &json!({"ids": [vis[1]], "active": vis[1]})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.green.green", "value": 40.0})).unwrap();
+    assert!(!active_dev(&s).channel_mixer.is_identity());
+    s.execute("preset.apply", &json!({"id": pid})).unwrap();
+    assert!(active_dev(&s).channel_mixer.is_identity(), "the updated preset resets the mixer: {:?}", active_dev(&s).channel_mixer);
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();

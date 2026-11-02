@@ -1238,7 +1238,9 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json();
+                // the mixer materialized even as the identity: a preset whose keys name it then keeps
+                // the key, and updating from an untouched photo resets a mixed target as it should
+                let current = s.develop_of(id).unwrap_or_default().to_json_with_mixer();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {
