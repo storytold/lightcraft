@@ -4689,6 +4689,7 @@ fn trackpad_navigation_keeps_the_image_cursor_between_events() {
     for (tool, expected) in [
         ("", egui::CursorIcon::Grab),
         ("wbPicker", egui::CursorIcon::Crosshair),
+        ("mixerPicker", egui::CursorIcon::Crosshair),
         ("colorRange", egui::CursorIcon::Crosshair),
         ("pointColor", egui::CursorIcon::Crosshair),
         ("tat:curve", egui::CursorIcon::ResizeVertical),
