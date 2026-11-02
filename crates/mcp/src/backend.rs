@@ -758,6 +758,7 @@ mod tests {
         Some(CURRENT_TOKEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
     }
 
+    /// Change what [`current_token`] returns, as a restarted app writing a new token file would.
     fn set_current_token(t: &str) {
         *CURRENT_TOKEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = t.to_string();
     }

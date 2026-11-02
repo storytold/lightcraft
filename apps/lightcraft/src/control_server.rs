@@ -23,25 +23,58 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
-/// `token`: when `Some`, the first line of every connection must be
-/// `{"method":"auth","params":{"token":"…"}}` or the connection is closed. See
-/// [`token_file`] / [`random_token`] for how the app and `lightcraft-cli` share it.
-pub fn start(port: u16, ctx: egui::Context, token: Option<String>) -> Receiver<ControlRequest> {
+/// Bind the control port on loopback. Bind first, then write the token file ([`prepare_token`]):
+/// a port that is already taken by another run must not have that run's token file replaced.
+pub fn bind(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(("127.0.0.1", port))
+}
+
+/// Serve the control channel on `listener` (from [`bind`]). `token`: when `Some`, the first line of
+/// every connection must be `{"method":"auth","params":{"token":"…"}}` or the connection is closed.
+/// See [`token_file`] / [`random_token`] for how the app and `lightcraft-cli` share it.
+pub fn start(listener: TcpListener, ctx: egui::Context, token: Option<String>) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let token: Option<Arc<str>> = token.map(Arc::from);
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
-            return rx;
-        }
-    };
     let auth = if token.is_some() { "token required" } else { "NO AUTHENTICATION" };
-    log::info!("control server listening on 127.0.0.1:{port} ({auth})");
+    match listener.local_addr() {
+        Ok(addr) => log::info!("control server listening on {addr} ({auth})"),
+        Err(_) => log::info!("control server listening on 127.0.0.1 ({auth})"),
+    }
     std::thread::spawn(move || accept_loop(listener, tx, ctx, token));
     rx
 }
 
+/// A token given by `--control-token` / `LIGHTCRAFT_CONTROL_TOKEN`, trimmed; empty after trimming is
+/// absent. `lightcraft-cli` trims what it reads the same way, so the two sides compare equal.
+pub fn clean_token(token: Option<String>) -> Option<String> {
+    token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// The token the control channel on `port` will require (`None`: authentication is off, and the
+/// token file of an earlier run is removed). Without `explicit` a random one is generated. It is
+/// also written to the token file for `lightcraft-cli`; call this only after [`bind`] succeeded.
+pub fn prepare_token(port: u16, explicit: Option<String>, no_auth: bool) -> Option<String> {
+    if no_auth {
+        log::warn!("control channel started WITHOUT authentication (LIGHTCRAFT_CONTROL_NO_AUTH)");
+        remove_token_file(port);
+        return None;
+    }
+    let generated = explicit.is_none();
+    let token = explicit.unwrap_or_else(random_token);
+    match write_token_file(port, &token) {
+        Ok(path) => log::info!("control token written to {} (lightcraft-cli reads it from there)", path.display()),
+        Err(e) if generated => log::warn!(
+            "could not write the control token file: {e}. This app generated its own token, so no client can learn it: \
+             restart the app with --control-token (or LIGHTCRAFT_CONTROL_TOKEN) set to the same value for the app and for lightcraft-cli"
+        ),
+        Err(e) => log::warn!(
+            "could not write the control token file: {e}. Give lightcraft-cli the same value, in LIGHTCRAFT_CONTROL_TOKEN, as the one this app was started with"
+        ),
+    }
+    Some(token)
+}
+
+/// Accept connections until the listener fails, serving each on its own thread.
 fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context, token: Option<Arc<str>>) {
     let open = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming().flatten() {
@@ -110,6 +143,13 @@ pub fn random_token() -> String {
 /// Write `token` to [`token_file`] with owner-only permissions; returns the path.
 pub fn write_token_file(port: u16, token: &str) -> std::io::Result<std::path::PathBuf> {
     let path = token_file(port).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory"))?;
+    write_token_at(&path, token)?;
+    Ok(path)
+}
+
+/// Write `token` to `path` (creating its folder), readable by the owner only on Unix, whether or not
+/// the file already existed.
+fn write_token_at(path: &std::path::Path, token: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -120,9 +160,14 @@ pub fn write_token_file(port: u16, token: &str) -> std::io::Result<std::path::Pa
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(&path)?;
-    f.write_all(token.as_bytes())?;
-    Ok(path)
+    let mut f = opts.open(path)?;
+    // `mode` above applies only when the file is created: restrict one that already existed too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(token.as_bytes())
 }
 
 /// Compare without leaking where the strings differ.
@@ -543,6 +588,7 @@ mod tests {
         worker.join().unwrap();
     }
 
+    /// [`serve_lines`] on `input` without a token: the replies and the methods that ran.
     fn run(input: &[u8]) -> (Vec<Value>, Vec<String>) {
         let mut out = Vec::new();
         let mut calls = Vec::new();
@@ -554,6 +600,7 @@ mod tests {
         (replies, calls)
     }
 
+    /// [`serve_lines`] on `input` with `token` required: the replies and the methods that ran.
     fn run_with_token(token: &str, input: &[u8]) -> (Vec<Value>, Vec<String>) {
         let mut out = Vec::new();
         let mut calls = Vec::new();
@@ -563,6 +610,51 @@ mod tests {
         });
         let replies = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
         (replies, calls)
+    }
+
+    #[test]
+    fn a_token_from_the_command_line_or_environment_is_trimmed_and_may_be_absent() {
+        assert_eq!(
+            clean_token(Some(
+                "  abc
+"
+                .into()
+            ))
+            .as_deref(),
+            Some("abc")
+        );
+        assert_eq!(clean_token(Some(" 	 ".into())), None);
+        assert_eq!(clean_token(Some(String::new())), None);
+        assert_eq!(clean_token(None), None);
+    }
+
+    #[test]
+    fn the_token_file_is_replaced_and_owner_only_even_when_it_already_existed() {
+        let dir = std::env::temp_dir().join(format!("lc-token-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("nested").join("control-1.token");
+        write_token_at(&file, "first-and-longer").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // a file left by something else, readable by everyone
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_token_at(&file, "second").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "second");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_taken_port_is_reported_before_any_token_is_written() {
+        let held = bind(0).unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(bind(port).is_err(), "the second bind fails, so main writes no token file");
     }
 
     #[test]
