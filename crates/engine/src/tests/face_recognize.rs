@@ -737,6 +737,11 @@ fn a_face_that_looks_more_like_someone_else_is_offered_to_them_only() {
         s.faces.index.insert(id.0, &region(x, None).rect, v);
     }
     assert_eq!(more(&mut s, "Paul"), vec![1, 3], "Zed's mean is far below Paul's score");
+    // with one face per match, Zed is judged by that close face alone, and both faces like Paul's look more like Zed's
+    s.execute("faces.matching", &json!({"topFaces": 1})).unwrap();
+    assert_eq!(more(&mut s, "Paul"), Vec::<u64>::new(), "the count chosen in Settings judges someone else too");
+    s.execute("faces.matching", &json!({"topFaces": null})).unwrap();
+    assert_eq!(more(&mut s, "Paul"), vec![1, 3]);
     let _ = std::fs::remove_dir_all(&d);
 }
 
