@@ -48,8 +48,15 @@ pub mod sparse;
 pub mod spectral;
 mod tiffraw;
 mod unpack;
+mod vc5;
 mod vendor;
 mod wb_estimate;
+
+/// Synthetic inputs for other crates' tests.
+#[cfg(feature = "testdata")]
+pub mod testdata {
+    pub use crate::vc5::synthetic_stream as vc5_stream;
+}
 
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};

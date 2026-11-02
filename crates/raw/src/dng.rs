@@ -19,6 +19,49 @@ pub(crate) fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
         .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
 }
 
+/// The mosaic of a GoPro GPR: one tile holding the whole image as a VC-5 stream, laid out by the 2×2 `CFAPattern`.
+fn vc5_image(bytes: &[u8], ifd: &Ifd, info: &lightcraft_tiff::image::ImageInfo) -> Result<Vec<u16>> {
+    let (w, h) = (info.width as usize, info.height as usize);
+    let stored_pattern = ifd.bytes(t::CFA_PATTERN_EP).unwrap_or_default();
+    let planes = ifd.bytes(t::CFA_PLANE_COLOR).map(|b| b.to_vec()).unwrap_or_else(|| vec![0, 1, 2]);
+    let pattern: Vec<u8> = stored_pattern
+        .iter()
+        .map(|c| planes.iter().position(|p| p == c).map(|i| i as u8).filter(|&i| i < 3))
+        .collect::<Option<_>>()
+        .ok_or_else(|| RawError::Unsupported(format!("GoPro VC-5 raw with CFA pattern {stored_pattern:?}")))?;
+    if pattern.len() != 4 {
+        return Err(RawError::Corrupt("bad GoPro VC-5 CFAPattern".into()));
+    }
+    let active = ifd.u64s(t::ACTIVE_AREA);
+    let (top, left) = match active.as_deref() {
+        Some([top, left, bottom, right]) if bottom > top && right > left && (*bottom as usize) <= h && (*right as usize) <= w => {
+            (*top as usize, *left as usize)
+        }
+        _ => (0, 0),
+    };
+    let legacy_writer = ifd.string(t::SOFTWARE).as_deref().map(str::trim) == Some("LightCraft");
+    let cfa = Cfa { width: 2, height: 2, pattern };
+    let cfa = if legacy_writer { cfa } else { cfa.shifted(2 - left % 2, 2 - top % 2) };
+    let layout = crate::vc5::Layout::from_cfa(&cfa.pattern)
+        .ok_or_else(|| RawError::Unsupported(format!("GoPro VC-5 raw with CFA pattern {:?}", cfa.pattern)))?;
+    let chunks = info.chunks(bytes.len() as u64);
+    let [chunk] = chunks.as_slice() else {
+        return Err(RawError::Unsupported(format!("GoPro VC-5 raw in {} tiles", chunks.len())));
+    };
+    if chunk.x != 0 || chunk.y != 0 || chunk.plane != 0 || (chunk.width as usize) < w || (chunk.height as usize) < h {
+        return Err(RawError::Unsupported("GoPro VC-5 tile smaller than the image".into()));
+    }
+    let end = chunk
+        .offset
+        .checked_add(chunk.len)
+        .filter(|&end| end <= bytes.len() as u64)
+        .ok_or_else(|| RawError::Corrupt("VC-5 tile range outside the file".into()))?;
+    let start = usize::try_from(chunk.offset).map_err(|_| RawError::Corrupt("VC-5 tile offset is too large".into()))?;
+    let end = usize::try_from(end).map_err(|_| RawError::Corrupt("VC-5 tile end is too large".into()))?;
+    let src = bytes.get(start..end).ok_or_else(|| RawError::Corrupt("VC-5 tile outside the file".into()))?;
+    crate::vc5::decode(src, w, h, layout)
+}
+
 /// Undo the DNG 1.7 row/column interleave, which reorders the stored raster without changing its
 /// size: with `RowInterleaveFactor = n` the rows are stored as `n` consecutive fields, field `g`
 /// holding rows `g, g+n, g+2n, …` of the image (and likewise for columns).
@@ -252,22 +295,18 @@ pub(crate) fn decode_reduced(bytes: &[u8], min_long: usize) -> Result<Option<Raw
 fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, format: RawFormat) -> Result<RawImage> {
     let ifd0 = &tiff.ifds[0];
     let raw = main;
-    // GoPro's GPR: a DNG whose raw data is VC-5 coded, which is not decoded (yet). Named here, before
-    // the generic "TIFF compression 9" of the chunk decoder. Header mode still describes the file
-    // (a GPR has no embedded preview, and a library keeps the photo with this reason shown, as it
-    // does for any file whose pixels fail to decode, rather than refusing to import it).
-    if mode == Mode::Full
-        && let Some(c) = pixels.u16(t::COMPRESSION).filter(|&c| c == t::compression::VC5)
-    {
-        return Err(RawError::Unsupported(format!("DNG compression {c} (GoPro VC-5) is not decoded yet")));
-    }
     let info = pixels.image()?;
     let (w, h, cpp) = (info.width as usize, info.height as usize, info.samples_per_pixel as usize);
     // one sample (CFA or monochrome), RGB or four colours; two are neither and can't be developed (issue #1511)
     if !matches!(cpp, 1 | 3 | 4) {
         return Err(RawError::Unsupported(format!("{cpp} samples per pixel")));
     }
-    let mut data = read_image_in(mode, bytes, &info, tiff.order, Packing::Msb)?;
+    // GoPro's GPR: the raw image is one VC-5 coded tile (`crate::vc5`)
+    let mut data = if mode == Mode::Full && info.compression == t::compression::VC5 {
+        RawData::U16(vc5_image(bytes, pixels, &info)?)
+    } else {
+        read_image_in(mode, bytes, &info, tiff.order, Packing::Msb)?
+    };
     let bits = info.bits() as u32;
 
     // DNG 1.7 interleaved storage: the raster is a permutation of the mosaic, so undo it before

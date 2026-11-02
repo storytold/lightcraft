@@ -27,6 +27,8 @@ jxl-oxide = { workspace = true, optional = true }
 default = ["jxl"]
 ## JPEG XL compressed DNGs (DNG 1.7, compression 52546) via jxl-oxide (pure Rust, MIT OR Apache-2.0).
 jxl = ["dep:jxl-oxide"]
+## `lightcraft_raw::testdata`: synthetic VC-5 (GoPro GPR) streams for other crates' tests.
+testdata = []
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
