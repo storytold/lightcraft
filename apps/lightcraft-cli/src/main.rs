@@ -425,7 +425,7 @@ fn merge(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = file_session();
     let paths = expand_paths(&files);
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
     let mut ids: Vec<u64> = r["imported"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
@@ -703,6 +703,12 @@ fn read_settings(p: &str) -> Result<SettingsFile, String> {
     }
 }
 
+/// The session `render` and `merge` develop files in: with the lens database the desktop app downloaded, when it is
+/// there (never fetched from here: scripts and tests stay offline).
+fn file_session() -> Session {
+    Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_lens_database()
+}
+
 fn render(args: &[String]) -> Result<(), String> {
     let mut input = None;
     let mut output = None;
@@ -741,7 +747,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = file_session();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -836,15 +842,30 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let t0 = Instant::now();
     let mut session = match &library {
         Some(dir) => {
-            let mut s =
-                Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_slide_templates();
+            let mut s = Session::new()
+                .with_fs()
+                .with_default_denoise_models()
+                .with_system_clock()
+                .with_default_face_models()
+                .with_default_lens_database()
+                .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
         }
-        None if files.is_empty() => {
-            Session::with_demo().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_slide_templates()
-        }
-        None => Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_slide_templates(),
+        None if files.is_empty() => Session::with_demo()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_slide_templates(),
+        None => Session::new()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_slide_templates(),
     };
     // Apply compute policy before imports or the first scripted query can discover an adapter.
     session.execute("app.gpu", &json!({"enabled": false})).map_err(|e| e.to_string())?;
@@ -1067,6 +1088,18 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
 #[cfg(not(feature = "denoise"))]
 fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
+}
+
+#[cfg(test)]
+mod tests {
+    /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
+    /// gets the same profile everywhere), but never fetch it.
+    #[test]
+    fn render_reads_the_downloaded_lens_database() {
+        let s = super::file_session();
+        assert_eq!(lightcraft_engine::lens_profiles::host_dir(), lightcraft_engine::lensfun_download::default_dir());
+        assert!(!s.lens_auto_download, "selecting it is not permission to download it");
+    }
 }
 
 #[cfg(test)]

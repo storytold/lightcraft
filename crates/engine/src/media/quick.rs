@@ -1,6 +1,6 @@
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, SourceLevel};
-use super::{Arc, Deserialize, Hash128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
+use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
 
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,11 +99,40 @@ impl QuickJob {
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.
+/// Which decode of a photo a loaded source is: its file's content and, when it has one, its database lens profile
+/// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
+/// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
+/// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
+pub fn source_identity(p: &Photo) -> Hash128 {
+    let mut k = Hasher128::new();
+    k.str(&content_key(p));
+    let lens = lens_key(p);
+    if lens != 0 {
+        k.u64(lens);
+    }
+    k.finish()
+}
+
 pub fn content_key(p: &Photo) -> String {
     match (&p.content_hash, &p.source) {
         (Some(h), _) => h.clone(),
         (None, Source::Demo { scene }) => format!("demo:{scene}"),
         (None, Source::File { path }) => format!("file:{path}:{}", p.file_size),
+    }
+}
+
+/// What a photo's lens profile adds to its render and thumbnail keys: a database profile (0 without one), with the
+/// correction on or off: a raw's starting colour is fitted through the profile's vignetting either way
+/// (`camera_preview::starting_colour`), so the decoded picture depends on it. When a database update gives the
+/// photo another profile, its cached renders and thumbnails no longer match. (The file's own correction changes only with the file, which the content
+/// key covers, so it adds nothing and existing thumbnails stay valid.)
+pub fn lens_key(p: &Photo) -> u64 {
+    match &p.embedded_lens {
+        Some(l) if l.source == lightcraft_develop::LensSource::Database => {
+            let k = Hasher128::new().str("lens").str(&format!("{l:?}")).finish();
+            (k.0 as u64) ^ ((k.0 >> 64) as u64) | 1
+        }
+        _ => 0,
     }
 }
 

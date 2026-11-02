@@ -238,6 +238,9 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             app.run("file.importLightroom", catalog.as_ref().map_or_else(|| json!({}), |c| json!({"path": c})))
         }
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::confirm(app, d),
+        Dialog::LensDatabase { dir, mirrors } => {
+            crate::lens_db::download(app, std::path::Path::new(dir), mirrors.clone()).map(|()| json!({"downloading": true}))
+        }
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }
