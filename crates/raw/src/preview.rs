@@ -269,12 +269,14 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         // a Canon CR3 keeps its full-size JPEG beside a 1620 px `PRVW` (and a 160 px `THMB`): a
         // thumbnail decodes the small copy, not 45 MP of JPEG (about 150 ms a photo, the grid's
         // "popcorn" on a folder of R5 / R5 C raws)
-        if let Some(min) = min_edge
-            && let Some(full) = cr3_full_jpeg(bytes)
-        {
+        // (without a JPEG track, the largest box is the picture's shape: the boxes alone may hold several)
+        if let Some(min) = min_edge {
             let mut found = cr3_preview_box_list(bytes);
-            found.push(full);
-            if let Some(j) = smallest_covering(&found, full, min) {
+            let full = cr3_full_jpeg(bytes);
+            found.extend(full);
+            if let Some(largest) = full.or_else(|| found.iter().copied().max_by_key(|j| j.len()))
+                && let Some(j) = smallest_covering(&found, largest, min)
+            {
                 return Some(trim_eoi(j).to_vec());
             }
         }

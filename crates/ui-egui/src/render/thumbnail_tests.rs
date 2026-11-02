@@ -1418,6 +1418,22 @@ fn the_look_ahead_prepares_only_what_the_preparation_settings_allow() {
     assert_eq!(queued, vec![k3], "only the rated photo is made ahead");
 }
 
+/// A renderer reset (`forget_all`: a library switch, a colour-management change) drops the stand-ins asked
+/// for ahead; the same photo asks for them again (CodeRabbit on #3577: the look-ahead took them for made).
+#[test]
+fn the_look_ahead_asks_again_after_a_renderer_reset() {
+    use crate::panels::detail::look_ahead;
+    let (mut app, _ctx) = raw_loupe(4);
+    let ahead = |r: &Renderer| r.quick_tried.keys().filter(|s| matches!(s, Slot::QuickAhead(_))).count();
+    look_ahead(&mut app, PhotoId(1), 64, true, ALL);
+    let asked = ahead(&app.renderer);
+    assert!(asked > 0);
+    app.renderer.forget_all();
+    assert_eq!(ahead(&app.renderer), 0);
+    look_ahead(&mut app, PhotoId(1), 64, true, ALL);
+    assert_eq!(ahead(&app.renderer), asked, "asked for again");
+}
+
 /// A stand-in still queued ahead whose photo moves up in the order (the user stepped) is
 /// queued at its new place, not left behind photos now further away (CodeRabbit on #3055).
 #[test]

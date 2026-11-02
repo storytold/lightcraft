@@ -210,7 +210,8 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
 /// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
-fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
+/// `force`: the grid thumbnail is rendered too, not taken from the cache it is written to.
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, force: bool) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
@@ -230,7 +231,16 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
         // A preview that isn't kept fails the photo: it is not built (a full or unwritable cache folder, or the
         // cache discarded while the photo rendered).
         let keep = j.view_cache.take().map(|v| (v, j.cache_generation));
+        // forced: the thumbnail job's cache is only written to, after the render (a job reads its cache first;
+        // CodeRabbit on #3577)
+        let rewrite = if force { j.cache.take().map(|c| (c, j.cache_generation)) } else { None };
         let r = j.run();
+        if let (Some(((cache, key), generation)), Ok(img)) = (rewrite, r.rendered.as_ref())
+            && !cache.put_at(generation, key, Arc::new(img.image.clone()))
+        {
+            log::warn!("building previews: the grid thumbnail could not be kept");
+            ok = false;
+        }
         if let (Some(((cache, key), generation)), Ok(img)) = (keep, r.rendered.as_ref())
             && !cache.put_at(generation, key, Arc::new(img.image.clone()))
         {
@@ -252,7 +262,7 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
 /// [`run_photo_cancellable`] for callers that render a photo without a cancel flag.
 #[cfg(test)]
 pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
-    run_photo_cancellable(jobs, None) == Some(true)
+    run_photo_cancellable(jobs, None, false) == Some(true)
 }
 
 /// How many photos render side by side: as many as an export batch for standard previews (each
@@ -431,7 +441,7 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
                     gate.enter();
                 }
                 let outcome =
-                    crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel))).unwrap_or(Some(false));
+                    crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel), force)).unwrap_or(Some(false));
                 let Some(ok) = outcome else { break };
                 if !ok {
                     state.failed.fetch_add(1, Ordering::Relaxed);
@@ -723,6 +733,9 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = s.media.smart_dir.clone().ok_or_else(|| bad(C, "smart previews need a library on disk"))?;
     let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
+    // (as Build Previews: the photos named, or the selected ones when more than one is, else
+    // everything in view; read first, so a request with bad ids stops nothing: CodeRabbit on #3577)
+    let ids = if p.get("ids").is_some() || p.get("id").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
     if background && let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
         // (the background preparation gives way, as to Build Previews)
         if b.background {
@@ -731,9 +744,6 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(C, "a preview build is already running"));
         }
     }
-    // (as Build Previews: the photos named, or the selected ones when more than one is, else
-    // everything in view)
-    let ids = if p.get("ids").is_some() || p.get("id").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
     let mut jobs: Vec<SmartJob> = Vec::new();
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };

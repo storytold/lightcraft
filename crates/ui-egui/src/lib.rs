@@ -326,7 +326,7 @@ pub struct LightcraftApp {
     pub scan: Option<import::ScanTask>,
     /// Scans stopped without waiting for their workers: each channel is kept until its worker ends, so
     /// the probes it took from the session come back.
-    pub(crate) scans_stopping: Vec<std::sync::mpsc::Receiver<import::ScanEnd>>,
+    pub(crate) scans_stopping: import::StoppingScans,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
     /// A Synchronize Folder scan in progress (feeds its dialog).

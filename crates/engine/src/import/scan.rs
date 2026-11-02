@@ -192,12 +192,11 @@ fn normalized(path: &Path, resolve_links: bool) -> std::io::Result<PathBuf> {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
+                // a link before `..` is left through where it points; a broken one is an error, not
+                // its parent folder by name (CodeRabbit on #3577)
                 #[cfg(not(windows))]
-                if resolve_links
-                    && std::fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_symlink())
-                    && let Ok(real) = std::fs::canonicalize(&out)
-                {
-                    out = real;
+                if resolve_links && std::fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_symlink()) {
+                    out = std::fs::canonicalize(&out)?;
                 }
                 #[cfg(windows)]
                 let _ = resolve_links;

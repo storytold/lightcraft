@@ -111,7 +111,7 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
-            scans_stopping: Vec::new(),
+            scans_stopping: Default::default(),
             waiting_import: Default::default(),
             sync: None,
             sync_owns_changes: false,
