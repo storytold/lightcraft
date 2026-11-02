@@ -99,8 +99,24 @@ impl Options {
     }
 }
 
+thread_local! { static IMPORT_READS: Cell<usize> = const { Cell::new(0) }; }
+
+struct ImportRead;
+impl ImportRead {
+    fn new() -> Self {
+        IMPORT_READS.with(|n| n.set(n.get().saturating_add(1)));
+        Self
+    }
+}
+impl Drop for ImportRead {
+    fn drop(&mut self) {
+        IMPORT_READS.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
 /// Store a picked/dropped file (bytes into browser storage, then queue its import).
 async fn store_file(originals: Originals, backend: Option<Backend>, name: String, bytes: Vec<u8>, ctx: egui::Context) {
+    let _reading = ImportRead::new();
     let hash = content_hash(&bytes);
     if let Some(b) = &backend
         && let Err(e) = b.write(&storage_key(&hash), &bytes).await
@@ -115,6 +131,7 @@ async fn store_file(originals: Originals, backend: Option<Backend>, name: String
 
 /// Read a browser `File` into storage.
 async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
+    let _reading = ImportRead::new();
     match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
         Ok(buf) => store_file(originals, backend, file.name(), js_sys::Uint8Array::new(&buf).to_vec(), ctx).await,
         Err(e) => log::warn!("reading {}: {e:?}", file.name()),
@@ -144,7 +161,7 @@ fn open_picker(originals: Originals, backend: Option<Backend>, ctx: egui::Contex
 }
 
 /// Offer `bytes` as a download named after `path`.
-fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     let e = |e: JsValue| format!("download failed: {e:?}");
     let arr = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let opts = web_sys::BlobPropertyBag::new();
@@ -210,8 +227,21 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         restore_library: Some(Box::new(move |_session: &mut Session| {
             let Some(b) = restore_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             let frozen = frozen.clone();
-            // once the backup is in place, stop saving the old library (the page reloads)
-            safety::pick_and_restore(b, move || frozen.set(true));
+            safety::pick_and_restore(b, move || {
+                // Pause the old library only until the reload is handled. A beforeunload
+                // confirmation can be cancelled, so a surviving page must resume its previous
+                // saving policy (including a freeze caused by an earlier storage read failure).
+                let previous = frozen.replace(true);
+                let thaw = frozen.clone();
+                let resume = Closure::once_into_js(move || {
+                    thaw.set(previous);
+                    request_repaint();
+                });
+                if window().is_none_or(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(resume.unchecked_ref(), 0).is_err()) {
+                    frozen.set(previous);
+                    request_repaint();
+                }
+            });
             Ok(json!({"started": true}))
         })),
         pick_files: Some(Box::new(move || {
@@ -403,7 +433,10 @@ async fn boot(opts: Options) -> Boot {
     Boot { opts, backend, files, index, lib_dir, load_error }
 }
 
+mod provider;
+
 struct WebApp {
+    provider: Option<provider::Bridge>,
     app: LightcraftApp,
     originals: Originals,
     files: Files,
@@ -508,6 +541,18 @@ impl WebApp {
         let frozen = Rc::new(Cell::new(read_failed));
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
+        let provider_host = lightcraft_ui_egui::file_providers::Host::default();
+        let provider = match crate::file_providers::install(provider_host.clone(), cc.egui_ctx.clone()) {
+            Ok(()) => {
+                app.file_provider = Some(provider_host.clone());
+                Some(provider::Bridge::new(provider_host))
+            }
+            Err(error) => {
+                log::warn!("file provider API unavailable: {error:?}");
+                None
+            }
+        };
+        app.file_provider_document = 1;
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
@@ -542,6 +587,7 @@ impl WebApp {
         CTX.with(|c| *c.borrow_mut() = Some(cc.egui_ctx.clone()));
         let origin = lightcraft_ui_egui::monotonic_ms();
         WebApp {
+            provider,
             app,
             originals,
             files,
@@ -677,6 +723,7 @@ type Reply = (js_sys::Function, js_sys::Function);
 thread_local! {
     /// Commands from JavaScript ([`command`]), run on the next frame.
     static INBOX: std::cell::RefCell<Vec<(String, String, Reply)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static LIBRARY_SWITCHING: Cell<bool> = const { Cell::new(false) };
     static CTX: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -686,6 +733,10 @@ thread_local! {
 #[wasm_bindgen]
 pub fn command(id: String, params: String) -> js_sys::Promise {
     js_sys::Promise::new(&mut |resolve, reject| {
+        if LIBRARY_SWITCHING.with(Cell::get) {
+            let _ = reject.call1(&JsValue::NULL, &"A library is being replaced; retry after it has opened".into());
+            return;
+        }
         INBOX.with(|q| q.borrow_mut().push((id.clone(), params.clone(), (resolve, reject))));
         CTX.with(|c| c.borrow().as_ref().map(|c| c.request_repaint()));
     })
@@ -734,6 +785,10 @@ impl eframe::App for WebApp {
             let now = self.app.tick_now();
             self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
         }
+        self.provider_tick(ctx);
+        if self.provider.as_ref().is_some_and(provider::Bridge::loading) {
+            return;
+        }
         self.run_inbox();
         self.load_originals(ctx);
         if let Some(w) = &self.workers {
@@ -743,12 +798,18 @@ impl eframe::App for WebApp {
         }
         self.app.logic(ctx);
         self.save();
+        self.provider_publish(ctx);
     }
 
     /// Pass the browser's raw input to the app hook before egui processes it, so prompt barriers
     /// and synthetic or dropped input are applied consistently with the desktop host.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.app.raw_input_hook(ctx, raw);
+        if self.provider.as_ref().is_some_and(provider::Bridge::loading) {
+            raw.events.clear();
+            raw.dropped_files.clear();
+        } else {
+            self.app.raw_input_hook(ctx, raw);
+        }
     }
 
     /// eframe's UI pass: import queued drops unless a prompt blocks input, draw the app, update the
@@ -758,8 +819,17 @@ impl eframe::App for WebApp {
         // `import_dropped` itself takes both queues only through the gate, so a prompt or the
         // blocking library window (over an already open library) keeps a stored drop queued.
         let ctx = ui.ctx().clone();
-        self.import_dropped(&ctx);
-        self.app.ui(ui);
+        if self.provider.as_ref().is_some_and(provider::Bridge::loading) {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+                ui.label("Restoring the provider library and its original photos…");
+            });
+            self.provider_publish(&ctx);
+            return;
+        } else {
+            self.import_dropped(&ctx);
+            self.app.ui(ui);
+        }
         // eframe's web runner ignores `ViewportCommand::Title`: name the open photo in the page title
         let title = self.app.page_title(self.files.is_dirty() || self.flushing.get());
         if title != self.title

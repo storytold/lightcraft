@@ -4,7 +4,7 @@
 //! ([`crate::backup`]).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use js_sys::{Reflect, Uint8Array};
 use wasm_bindgen::JsCast;
@@ -13,15 +13,16 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::backend::Backend;
 use crate::backup::{
-    ACTIVE_LIBRARY, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, restored_dir_name, tail_len,
-    valid_hash, verify, verify_original,
+    ACTIVE_LIBRARY, ProviderZip, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, tail_len, valid_hash,
+    verify, verify_original, verify_original_bytes,
 };
-use crate::files::{Files, LIBRARY_FILES};
+use crate::files::{Files, LIBRARY_FILES, Snapshot};
 use crate::store::storage_key;
 
 thread_local! {
     /// Messages for the user, shown by the app on its next frame.
     static NOTICES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static RESTORE_SERIAL: RefCell<u64> = const { RefCell::new(0) };
 }
 
 /// Queue a message for the user (shown for several seconds; also logged).
@@ -194,44 +195,170 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
     Ok((originals, bytes + tail.len() as f64))
 }
 
+/// A complete native project capture. Only originals referenced by the captured catalog's
+/// `names` are read; unrelated originals left in browser storage are never uploaded.
+pub async fn provider_backup(snapshot: Snapshot, backend: Backend, names: HashMap<String, String>) -> Result<Vec<u8>, String> {
+    let mut zip = ProviderZip::default();
+    let mut seen = HashSet::new();
+    if !snapshot.entries.iter().any(|(name, _)| matches!(name.as_str(), "catalog.snap" | "catalog.log")) {
+        return Err("the captured library has no catalog file".into());
+    }
+    if names.len() > usize::from(u16::MAX) {
+        return Err("too many referenced originals for one library backup".into());
+    }
+    for (hash, name) in &names {
+        if !valid_hash(hash) || name.len().saturating_add("originals/".len() + hash.len() + 1) > usize::from(u16::MAX) {
+            return Err("invalid referenced original hash or filename".into());
+        }
+    }
+    zip.entry("README.txt", README.as_bytes())?;
+    for (name, bytes) in snapshot.entries {
+        if !LIBRARY_FILES.contains(&name.as_str()) || !seen.insert(name.clone()) {
+            return Err("invalid or duplicate captured library file".into());
+        }
+        zip.entry(&format!("library/{name}"), &bytes)?;
+    }
+    let mut originals: Vec<_> = names.into_iter().collect();
+    originals.sort_by(|a, b| a.0.cmp(&b.0));
+    for (hash, name) in originals {
+        let name = original_entry(&hash, &name);
+        let remaining = zip.remaining_for(&name)?;
+        let bytes = backend
+            .read_capped(&storage_key(&hash), remaining)
+            .await?
+            .ok_or_else(|| format!("{name}: the referenced original is missing from browser storage"))?;
+        verify_original_bytes(&name, &hash, &bytes)?;
+        zip.entry(&name, &bytes)?;
+    }
+    zip.finish()
+}
+
 /// Bytes `start..end` of a picked file.
 async fn read_range(file: &web_sys::File, start: u64, end: u64) -> Result<Vec<u8>, String> {
+    let size = file.size();
+    if !size.is_finite() || size < 0.0 || start > end || end as f64 > size {
+        return Err("damaged backup: file range is outside the ZIP".into());
+    }
     let blob = file.slice_with_f64_and_f64(start as f64, end as f64).map_err(|e| format!("{e:?}"))?;
     let buf = JsFuture::from(blob.array_buffer()).await.map_err(|e| format!("{e:?}"))?;
     Ok(Uint8Array::new(&buf).to_vec())
 }
 
-/// Restore a backup into a new library folder (nothing in storage is deleted or overwritten),
-/// then point [`ACTIVE_LIBRARY`] at it. Returns the folder's name; the caller reloads the page.
-pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, String> {
+/// Restore into a new folder, without changing ACTIVE_LIBRARY or admitting a catalog. The
+/// caller can validate the staged catalog before activating it; current work stays in use.
+pub async fn restore_staged(file: web_sys::File, backend: Backend) -> Result<String, String> {
     let len = file.size() as u64;
     let tail = read_range(&file, len - tail_len(len), len).await?;
     let (cd_offset, cd_size) = find_central(&tail)?;
-    let cd = read_range(&file, cd_offset, cd_offset + cd_size).await?;
+    let cd_end = cd_offset.checked_add(cd_size).ok_or("damaged ZIP directory size")?;
+    let cd = read_range(&file, cd_offset, cd_end).await?;
     let entries = parse_central(&cd)?;
     if !entries.iter().any(|e| e.name == "library/catalog.snap" || e.name == "library/catalog.log") {
         return Err("this isn't a LightCraft library backup (no library/catalog files)".into());
     }
-    let dir = restored_dir_name(js_sys::Date::now());
+    let dir = new_restore_dir(&backend).await?;
+    let mut targets = HashSet::new();
+    for entry in &entries {
+        if let Some(key) = restore_key(&entry.name, &dir)
+            && !targets.insert(key)
+        {
+            return Err("backup contains duplicate restored files".into());
+        }
+    }
     let mut written = 0usize;
-    for e in &entries {
-        let Some(key) = restore_key(&e.name, &dir) else { continue };
-        // originals are named by their content: one already stored is the same file
-        if key.starts_with("originals/") && backend.exists(&key).await? {
+    for entry in &entries {
+        match restore_entry(&file, &backend, &dir, entry, cd_offset).await {
+            Ok(true) => written += 1,
+            Ok(false) => {}
+            Err(error) => return Err(failed_staged_restore(&backend, &dir, error).await),
+        }
+    }
+    log::info!("lightcraft: restored {written} files into {dir}");
+    Ok(dir)
+}
+
+/// A failed validation must not leave the new library's private files occupying browser quota.
+/// The pointer check also preserves a library whose activation committed before an I/O error.
+pub(crate) async fn cleanup_staged(backend: &Backend, dir: &str) -> Result<(), String> {
+    let active = backend.read_capped(ACTIVE_LIBRARY, 128).await?;
+    crate::backup::discard_staged_library(dir, active.as_deref(), |key| {
+        let backend = backend.clone();
+        async move { backend.remove(&key).await }
+    })
+    .await
+}
+
+pub(crate) async fn failed_staged_restore(backend: &Backend, dir: &str, error: String) -> String {
+    match cleanup_staged(backend, dir).await {
+        Ok(()) => error,
+        Err(cleanup) => format!("{error}; could not remove staged library files: {cleanup}"),
+    }
+}
+
+async fn restore_entry(file: &web_sys::File, backend: &Backend, dir: &str, entry: &crate::backup::ZipEntry, cd_offset: u64) -> Result<bool, String> {
+    let Some(key) = restore_key(&entry.name, dir) else { return Ok(false) };
+    let header_end = entry.header.checked_add(30).ok_or("damaged ZIP entry offset")?;
+    let local = read_range(file, entry.header, header_end).await?;
+    let start = data_offset(entry, &local)?;
+    let end = start.checked_add(entry.size).filter(|end| *end <= cd_offset).ok_or("damaged ZIP entry range")?;
+    let data = read_range(file, start, end).await?;
+    verify(entry, &data)?;
+    if let Some(hash) = key.strip_prefix("originals/") {
+        verify_original(entry, hash, &data)?;
+        // Existing content-addressed bytes are not overwritten. Verify both the archive
+        // and stored copy rather than silently trusting a corrupted existing original.
+        let max = usize::try_from(entry.size).map_err(|_| "original is too large for this browser")?;
+        if let Some(existing) = backend.read_capped(&key, max).await? {
+            verify_original_bytes(&entry.name, hash, &existing)?;
+            return Ok(false);
+        }
+    }
+    backend.write(&key, &data).await.map_err(|error| format!("storing {}: {error}", entry.name))?;
+    Ok(true)
+}
+
+async fn new_restore_dir(backend: &Backend) -> Result<String, String> {
+    let active = backend.read_capped(ACTIVE_LIBRARY, 128).await?;
+    for _ in 0..64 {
+        let serial = RESTORE_SERIAL.with(|counter| {
+            let mut value = counter.borrow_mut();
+            *value = value.checked_add(1).ok_or("restore folder counter exhausted")?;
+            Ok::<_, String>(*value)
+        })?;
+        // A nonce avoids sharing a staging folder with another tab/restoration realm even
+        // when clocks and counters coincide. The counter also prevents same-realm reuse.
+        let crypto = Reflect::get(&js_sys::global(), &"crypto".into()).map_err(|error| format!("restore nonce: {error:?}"))?;
+        let random = Reflect::get(&crypto, &"getRandomValues".into())
+            .map_err(|error| format!("restore nonce: {error:?}"))?
+            .dyn_into::<js_sys::Function>()
+            .map_err(|_| "secure randomness is unavailable for staging a restore")?;
+        let nonce = Uint8Array::new_with_length(16);
+        random.call1(&crypto, &nonce).map_err(|error| format!("restore nonce: {error:?}"))?;
+        let nonce: String = nonce.to_vec().iter().map(|byte| format!("{byte:02x}")).collect();
+        let dir = format!("library-restored-{nonce}-{serial}");
+        if active.as_deref() == Some(dir.as_bytes()) {
             continue;
         }
-        let local = read_range(&file, e.header, e.header + 30).await?;
-        let start = data_offset(e, &local)?;
-        let data = read_range(&file, start, start + e.size).await?;
-        verify(e, &data)?;
-        if let Some(hash) = key.strip_prefix("originals/") {
-            verify_original(e, hash, &data)?;
+        let mut exists = false;
+        for name in LIBRARY_FILES {
+            if backend.exists(&format!("{dir}/{name}")).await? {
+                exists = true;
+                break;
+            }
         }
-        backend.write(&key, &data).await.map_err(|err| format!("storing {}: {err}", e.name))?;
-        written += 1;
+        if !exists {
+            return Ok(dir);
+        }
     }
-    backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await?;
-    log::info!("lightcraft: restored {written} files into {dir}");
+    Err("could not choose an unused restored-library folder".into())
+}
+
+/// Official Restore keeps its activation behavior, after the verified staging succeeds.
+pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, String> {
+    let dir = restore_staged(file, backend.clone()).await?;
+    if let Err(error) = backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await {
+        return Err(failed_staged_restore(&backend, &dir, error).await);
+    }
     Ok(dir)
 }
 

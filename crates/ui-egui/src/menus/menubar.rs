@@ -49,6 +49,7 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
         || (id == "app.recentLibraries" && params.get("remove").is_some())
+        || id == "file.providerRecent"
     {
         label
     } else {
@@ -725,6 +726,20 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 let forget = recent.iter().map(|r| item("app.recentLibraries", json!({"remove": r}), label(r), None, true, None)).collect();
                 v.push(MenuNode::Submenu { label: "Remove from List".into(), children: forget });
                 v.push(item("app.clearRecentLibraries", Value::Null, "Clear Recent Libraries", None, true, None));
+            }
+            if let Some(host) = app.file_provider.as_ref().filter(|h| h.enabled()) {
+                let snapshot = host.snapshot();
+                let label = snapshot["label"].as_str().unwrap_or("Provider");
+                let external = snapshot["resources"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| Some(item("file.providerRecent", json!({"resourceId":r["id"].as_str()?}), r["name"].as_str()?, None, can, None)))
+                    .collect();
+                return Some(vec![
+                    MenuNode::Submenu { label: format!("Recent — {label}"), children: external },
+                    MenuNode::Submenu { label: "Recent on this device".into(), children: v },
+                ]);
             }
             v
         }
