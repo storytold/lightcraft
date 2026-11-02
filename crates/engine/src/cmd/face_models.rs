@@ -581,6 +581,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),
-        cmd!(query "faces.matching", "Face Matching", [], None, "{topFaces?: 1..8 | null} → {topFaces, default, max} — how many of a person's best matching faces a suggestion's score is the mean of (Settings ▸ Faces; null goes back to the default). More faces make two odd photos of someone (blurred, in profile) less able to carry a stranger, at the cost of fewer suggestions for people with few photos", always, matching),
+        cmd!(query "faces.matching", "Face Matching", [], None, "{topFaces?: 1..8 | null} → {topFaces, default, max} — how many of a person's best matching faces a suggestion's score is the mean of (Settings ▸ Faces; null goes back to the default). More faces make two odd photos of someone (blurred, in profile) less able to carry a stranger. Only the scores of people with more faces than the count before can fall: a person with fewer faces is scored on the ones they have", always, matching),
     ]
 }
