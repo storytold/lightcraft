@@ -386,15 +386,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let add: Vec<String> = paths.iter().take(n).cloned().collect();
     let mut s = library(&fresh_dir(&work, "lib-add")?)?;
     let t = Instant::now();
+    let submitted = add.len();
     let r = s.execute("library.import", &json!({"paths": add, "mode": "add"})).map_err(|e| e.to_string())?;
     let add_ms = ms_since(t);
-    all_imported("import in place", &r)?;
+    all_imported("import in place", submitted, &r)?;
     let added = r["imported"].as_array().map(Vec::len).unwrap_or(0);
     println!("import {added} photos in place: {add_ms:.1} ms wall");
     out["importAdd"] = json!({"ms": round(add_ms), "photos": added, "perPhotoMs": round(add_ms / added.max(1) as f64)});
     drop(s);
     if copy > 0 {
         let some: Vec<String> = paths.iter().take(copy).cloned().collect();
+        let submitted = some.len();
         let lib = fresh_dir(&work, "lib-copy")?;
         let mut s = library(&lib)?;
         let t = Instant::now();
@@ -402,7 +404,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .execute("library.import", &json!({"paths": some, "mode": "copy", "destination": lib.join("Originals").display().to_string()}))
             .map_err(|e| e.to_string())?;
         let copy_ms = ms_since(t);
-        all_imported("import by copying", &r)?;
+        all_imported("import by copying", submitted, &r)?;
         let copied = r["imported"].as_array().map(Vec::len).unwrap_or(0);
         println!("import {copied} photos by copying: {copy_ms:.1} ms wall");
         out["importCopy"] = json!({"ms": round(copy_ms), "photos": copied, "perPhotoMs": round(copy_ms / copied.max(1) as f64)});
@@ -412,14 +414,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     finish(out, json_out)
 }
 
-/// An import stage's photos all came in: a time over fewer photos than asked is not that stage's time
-/// (CodeRabbit on #3577).
-fn all_imported(stage: &str, r: &Value) -> Result<(), String> {
+/// An import stage's photos all came in, the `submitted` paths each once: a time over fewer photos
+/// than asked is not that stage's time (CodeRabbit on #3577; one skipped or left out without a
+/// failure counts too, CodeRabbit on #3080).
+fn all_imported(stage: &str, submitted: usize, r: &Value) -> Result<(), String> {
     let failed = r["failed"].as_array().map(Vec::as_slice).unwrap_or_default();
-    match failed.first() {
-        None => Ok(()),
-        Some(first) => Err(format!("{stage}: {} photos failed to import (the first: {first})", failed.len())),
+    if let Some(first) = failed.first() {
+        return Err(format!("{stage}: {} photos failed to import (the first: {first})", failed.len()));
     }
+    let imported = r["imported"].as_array().map(Vec::len).unwrap_or(0);
+    if imported != submitted {
+        return Err(format!("{stage}: {imported} of {submitted} photos imported"));
+    }
+    Ok(())
 }
 
 fn finish(out: Value, json_out: Option<PathBuf>) -> Result<(), String> {
@@ -509,10 +516,13 @@ mod tests {
     /// An import stage with a failed photo is an error, not a time over fewer photos (CodeRabbit on #3577).
     #[test]
     fn an_import_stage_with_failures_is_an_error() {
-        assert!(all_imported("add", &json!({"imported": [1, 2], "failed": []})).is_ok());
-        assert!(all_imported("add", &json!({"imported": [1, 2]})).is_ok());
-        let e = all_imported("add", &json!({"imported": [1], "failed": [{"path": "b.jpg", "error": "unreadable"}]})).unwrap_err();
+        assert!(all_imported("add", 2, &json!({"imported": [1, 2], "failed": []})).is_ok());
+        assert!(all_imported("add", 2, &json!({"imported": [1, 2]})).is_ok());
+        let e = all_imported("add", 2, &json!({"imported": [1], "failed": [{"path": "b.jpg", "error": "unreadable"}]})).unwrap_err();
         assert!(e.contains("add: 1 photos failed") && e.contains("b.jpg"), "{e}");
+        // fewer than asked with no failure listed (skipped as already in the library, say)
+        let e = all_imported("add", 3, &json!({"imported": [1, 2], "failed": []})).unwrap_err();
+        assert!(e.contains("add: 2 of 3 photos imported"), "{e}");
     }
 
     /// Previews that didn't load are counted apart, not timed (CodeRabbit on #3080).

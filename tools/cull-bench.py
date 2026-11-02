@@ -197,8 +197,11 @@ if not SKIP_BROWSE:
     out["browse_first_thumb_s"] = thumb1
     out["browse_12_thumbs_s"] = thumbs12
     out["browse_all_s"] = allp
-    # the thumbnail times are a cold browse's: none when every one was already in memory
-    out["browse_thumbs_were_in_memory"] = thumb1 is None and allp is not None
+    # the thumbnail times are a cold browse's: none when every one was already in memory, which cells
+    # still without a picture (thumbnails that failed, never counted as made) rule out
+    waiting = (inspect().get("thumbFirst") or {}).get("waiting") or 0
+    out["browse_thumbs_waiting"] = waiting
+    out["browse_thumbs_were_in_memory"] = thumb1 is None and allp is not None and not waiting
     out["photos"] = shown
 
 # --- loupe on the first photo ----------------------------------------------------------------------
