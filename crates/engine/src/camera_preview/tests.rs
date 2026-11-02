@@ -2676,6 +2676,20 @@ fn profile_geometry_target(sensor: &Rgb32f, lens: &lightcraft_develop::EmbeddedL
     })
 }
 
+/// Check the full known valid crop, so the RMS cannot hide lost samples behind NaNs.
+fn assert_profile_geometry_mask(aligned: &Rgb32f, aligned_mask: &Rgb32f, expected_mask: &Rgb32f) {
+    assert_eq!((aligned.width, aligned.height), (expected_mask.width, expected_mask.height));
+    assert_eq!((aligned_mask.width, aligned_mask.height), (expected_mask.width, expected_mask.height));
+    assert_eq!(aligned.data.len(), expected_mask.data.len());
+    assert_eq!(aligned_mask.data.len(), expected_mask.data.len());
+    for (i, ((pixel, mask), expected)) in aligned.data.iter().zip(&aligned_mask.data).zip(&expected_mask.data).enumerate() {
+        // The barrel warp and inward framing used below keep the entire crop valid.
+        assert_eq!(*expected, [0.0; 3], "ground-truth crop must be valid and unclipped at {i}");
+        assert!(pixel.iter().all(|v| v.is_finite()), "alignment lost a valid ground-truth sample at {i}");
+        assert_eq!(*mask, *expected, "valid aligned pixels must retain the zero clip mask at {i}");
+    }
+}
+
 /// Measure RMS colour error over finite, mutually valid proxy samples.
 fn geometry_rms(a: &Rgb32f, b: &Rgb32f) -> f64 {
     let mut error = 0.0;
@@ -2701,8 +2715,10 @@ fn external_profile_geometry_aligns_lens_and_framing_before_colour() {
     let mut jpeg = expected.clone();
     jpeg.map_in_place(|p| p.map(|v| v.powf(0.7)));
     let mask = Rgb32f::new(sensor.width, sensor.height);
-    let (aligned, _) = align_profile_geometry(&sensor, &mask, &jpeg, &lens, lightcraft_geom::Orientation::Normal)
+    let expected_mask = profile_geometry_target(&mask, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    let (aligned, aligned_mask) = align_profile_geometry(&sensor, &mask, &jpeg, &lens, lightcraft_geom::Orientation::Normal)
         .expect("lens and bounded framing pass independent geometry gates");
+    assert_profile_geometry_mask(&aligned, &aligned_mask, &expected_mask);
     assert!(geometry_rms(&aligned, &expected) < 0.008, "the training sensor is correctly registered despite a nonlinear camera tone");
     assert!(geometry_rms(&sensor, &expected) > 0.05, "synthetic mismatch is material");
 }
@@ -2714,8 +2730,10 @@ fn external_profile_geometry_accepts_lens_only_and_rejects_unrelated_or_already_
     let lens = synthetic_profile_lens();
     let expected = profile_geometry_target(&sensor, &lens, Cr3Framing::IDENTITY);
     let mask = Rgb32f::new(sensor.width, sensor.height);
-    let (aligned, _) = align_profile_geometry(&sensor, &mask, &expected, &lens, lightcraft_geom::Orientation::Normal)
+    let expected_mask = profile_geometry_target(&mask, &lens, Cr3Framing::IDENTITY);
+    let (aligned, aligned_mask) = align_profile_geometry(&sensor, &mask, &expected, &lens, lightcraft_geom::Orientation::Normal)
         .expect("lens alone aligns; no improvement over its own framing is required");
+    assert_profile_geometry_mask(&aligned, &aligned_mask, &expected_mask);
     assert!(geometry_rms(&aligned, &expected) < 0.001);
     assert!(
         align_profile_geometry(&sensor, &mask, &sensor, &lens, lightcraft_geom::Orientation::Normal).is_none(),
@@ -3092,14 +3110,13 @@ fn corpus_cr3_profile_geometry_diagnostics() {
         let plain = proxies(&raw, &bytes, &transform, PROXY, 0.0, lens.as_ref(), plain_correction.as_ref());
         let chosen = proxies(&raw, &bytes, &transform, PROXY, 0.0, lens.as_ref(), correction.as_ref());
         let name = path.file_name().unwrap().to_string_lossy();
-        let Some((plain, chosen)) =
-            diagnostic_proxies_or_report(&name, &raw, correction.as_ref().is_some_and(|l| l.warp.is_some()), plain, chosen, &mut report)
-        else {
+        let profile_warp = correction.as_ref().is_some_and(|l| l.warp.is_some());
+        let Some((plain, chosen)) = diagnostic_proxies_or_report(&name, &raw, profile_warp, plain, chosen, &mut report) else {
             std::fs::write(output.join("geometry.tsv"), &report).unwrap();
             continue;
         };
         let framed_scores = super::proxy::geometry_framed_scores();
-        let original_scores = super::proxy::geometry_gate_scores();
+        let original_scores = if profile_warp { super::proxy::geometry_gate_scores() } else { None };
         let accepted = plain.0.data.iter().flatten().zip(chosen.0.data.iter().flatten()).any(|(a, b)| a.to_bits() != b.to_bits());
         let pairs = |v: &(Rgb32f, Rgb32f, Vec<bool>)| {
             let sensor = without_clipped(&v.0, &v.2).unwrap_or_else(|| v.0.clone());
@@ -3111,7 +3128,7 @@ fn corpus_cr3_profile_geometry_diagnostics() {
             "{name}\t{}\t{:?}\t{}\t{accepted}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{before}\t{after}\t{framed_scores:?}\t{original_scores:?}\tmeasured\t\n",
             raw.metadata.model.as_deref().unwrap_or(""),
             raw.orientation,
-            correction.as_ref().is_some_and(|l| l.warp.is_some()),
+            profile_warp,
             alignment(&plain.0, &plain.1),
             alignment(&chosen.0, &chosen.1),
             structure_agrees(&plain.0, &plain.1),
