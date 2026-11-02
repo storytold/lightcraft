@@ -347,3 +347,46 @@ fn a_proxy_from_an_older_encode_is_stale() {
     assert!(!look_checked(&dir), "a look-only marker is not enough to skip the rebuild");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A lens database changes the geometry used to align the fitted camera look, although the fit
+/// algorithm version stays the same. Keep these checks independent of process-global environment.
+#[test]
+fn lens_database_changes_rebuild_fitted_smart_previews_and_scan_markers() {
+    let fit = u64::from(crate::camera_preview::LOOK_VERSION);
+    let mut head = serde_json::json!({LOOK_FIELD: fit, ENC_FIELD: ENCODE_VERSION, LENS_FIELD: 123});
+    assert!(!header_is_stale(&head, true, 123));
+    for next_db in [0, 456] {
+        assert!(header_is_stale(&head, true, next_db), "removing or replacing the database rebuilds fitted pixels");
+        assert!(!header_is_stale(&head, false, next_db), "non-fitted photos do not depend on lens alignment");
+        assert!(!marker_is_current(&format!("{fit} {ENCODE_VERSION} 123"), next_db), "the folder must be scanned again");
+    }
+    assert!(marker_is_current(&format!("{fit} {ENCODE_VERSION} 123"), 123));
+    head.as_object_mut().unwrap().remove(LENS_FIELD);
+    assert!(header_is_stale(&head, true, 123), "adding a database rebuilds legacy fits");
+    assert!(header_is_stale(&head, true, 0), "a legacy fit may have used a database that is no longer installed");
+    head[LENS_FIELD] = serde_json::json!(0);
+    assert!(!header_is_stale(&head, true, 0), "an explicit no-database identity remains valid");
+    assert!(!marker_is_current(&format!("{fit} {ENCODE_VERSION}"), 123), "old markers require a new scan");
+    for field in [LOOK_FIELD, ENC_FIELD] {
+        let mut newer = head.clone();
+        newer[field] = serde_json::json!(newer[field].as_u64().unwrap() + 1);
+        assert!(!header_is_stale(&newer, true, 123), "a different database does not downgrade newer proxies");
+    }
+    assert!(marker_is_current(&format!("{} {ENCODE_VERSION} 456", fit + 1), 123));
+    assert!(marker_is_current(&format!("{fit} {} 456", ENCODE_VERSION + 1), 123));
+}
+
+#[test]
+fn smart_preview_from_another_database_stays_decodable_offline() {
+    let image = lightcraft_scenes::demo_library()[0].render(64, 40);
+    let bytes = encode(&image, None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    head[LENS_FIELD] = serde_json::json!(123);
+    assert!(header_is_stale(&head, true, 456));
+    let mut changed = MAGIC.to_vec();
+    changed.extend_from_slice(head.to_string().as_bytes());
+    changed.extend_from_slice(&bytes[nl..]);
+    let (decoded, _, _) = decode(&changed).unwrap();
+    assert_eq!((decoded.width, decoded.height), (image.width, image.height));
+}

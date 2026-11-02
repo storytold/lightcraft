@@ -1,4 +1,3 @@
-use super::colour::starting_colour_tags_with_correction;
 use super::proxy::{align_profile_geometry, resample_correspondence};
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
@@ -991,21 +990,23 @@ fn external_profile_geometry_cannot_improve_by_dropping_disagreeing_borders() {
     // At the scoring resolution, about 14% of side-strip edges disagree. A candidate
     // that merely discards those strips has no improvement on their common support.
     let reference = profile_geometry_scene(96, 64);
-    let mut original = reference.clone();
-    let mut candidate = reference.clone();
-    for y in 0..reference.height {
-        for x in 0..reference.width {
-            if !(7..89).contains(&x) {
-                let i = y * reference.width + x;
-                original.data[i] = reference.data[i].map(|v| 0.8 - v);
-                candidate.data[i] = [f32::NAN; 3];
+    for border in [f32::NAN, 0.0] {
+        let mut original = reference.clone();
+        let mut candidate = reference.clone();
+        for y in 0..reference.height {
+            for x in 0..reference.width {
+                if !(7..89).contains(&x) {
+                    let i = y * reference.width + x;
+                    original.data[i] = reference.data[i].map(|v| 0.8 - v);
+                    candidate.data[i] = [border; 3];
+                }
             }
         }
+        assert!(
+            super::proxy::estimate_profile_framing(&candidate, &reference, &original).is_none(),
+            "discarding mismatched edges must not manufacture the required 0.04 improvement (border {border})"
+        );
     }
-    assert!(
-        super::proxy::estimate_profile_framing(&candidate, &reference, &original).is_none(),
-        "discarding mismatched edges must not manufacture the required 0.04 improvement"
-    );
 }
 
 fn synthetic_profile_lens() -> lightcraft_develop::EmbeddedLens {
@@ -1041,7 +1042,8 @@ fn geometry_rms(a: &Rgb32f, b: &Rgb32f) -> f64 {
             }
         }
     }
-    assert!(n > 256);
+    let expected = b.data.iter().flatten().filter(|v| v.is_finite()).count();
+    assert!(n > 256 && n as usize * 100 >= expected * 95, "finite overlap {n}/{expected}");
     (error / f64::from(n)).sqrt()
 }
 
@@ -1106,6 +1108,33 @@ fn external_profile_geometry_preserves_oriented_default_crop_and_resolution() {
 
 #[test]
 fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
+    const DB: &str = r#"<lensdatabase>
+      <camera><maker>Synthetic</maker><model>Uncalibrated</model><mount>T</mount><cropfactor>1.5</cropfactor></camera>
+      <lens><maker>Synthetic</maker><model>Synthetic 18mm</model><mount>T</mount><cropfactor>1.5</cropfactor>
+        <calibration><distortion model="poly5" focal="18" k1="-0.24" k2="0.08" /></calibration>
+      </lens></lensdatabase>"#;
+    const CHILD: &str = "LIGHTCRAFT_TEST_COLOUR_TAG_LOOKUP_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Set the database only for a fresh process: no mutation of the test runner's environment
+        // or races with other tests initializing the process-wide lens database.
+        let dir = std::env::temp_dir().join(format!("lightcraft-colour-tags-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("synthetic.xml"), DB).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "camera_preview::tests::external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop", "--nocapture"])
+            .env(CHILD, "1")
+            .env(crate::lens_profiles::ENV, &dir)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            output.status.success(),
+            "child regression: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     use lightcraft_raw::{BlackLevel, RawData, Rect};
     let (w, h) = (416, 288);
     let scene = profile_geometry_scene(w, h);
@@ -1125,7 +1154,15 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
     assert_eq!((sensor.width, sensor.height), (384, 256));
     sensor.map_in_place(|p| transform.matrix.apply_f32(p));
-    let lens = synthetic_profile_lens();
+    let db = lightcraft_lensdb::LensDb::parse(DB).unwrap();
+    let metadata = lightcraft_meta::Metadata {
+        make: Some("Synthetic".into()),
+        model: Some("Uncalibrated".into()),
+        lens_model: Some("Synthetic 18mm".into()),
+        focal_length: Some(18.0),
+        ..Default::default()
+    };
+    let lens = crate::lens_profiles::lookup(&db, &metadata, 384.0, 256.0, raw.orientation).unwrap();
     let mut target = profile_geometry_target(&sensor, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
     target.map_in_place(|p| p.map(|v| v.powf(0.7)));
     let to_srgb = lightcraft_color::SRGB.from_xyz().mul(&REC2020.to_xyz());
@@ -1133,14 +1170,20 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     let pixels: Vec<u8> = target.data.iter().flat_map(|p| to_srgb.apply_f32(*p).map(|v| (srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
     let image = lightcraft_codecs::EncodeImage::new(384, 256, 3, lightcraft_codecs::Samples::U8(&pixels));
     let jpeg = lightcraft_codecs::encode_jpeg(&image, 98, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
-    let mut file = b"II*\0\x08\0\0\0\x02\0".to_vec();
-    for (tag, value) in [(0x0201u16, 38u32), (0x0202, jpeg.len() as u32)] {
-        file.extend(tag.to_le_bytes());
-        file.extend(4u16.to_le_bytes());
-        file.extend(1u32.to_le_bytes());
-        file.extend(value.to_le_bytes());
-    }
-    file.extend(0u32.to_le_bytes());
+    use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags};
+    let mut ifd = IfdBuilder::new();
+    ifd.set(tags::MAKE, Value::Ascii("Synthetic".into()));
+    ifd.set(tags::MODEL, Value::Ascii("Uncalibrated".into()));
+    let mut exif = IfdBuilder::new();
+    exif.set(tags::FOCAL_LENGTH, Value::Rational(vec![(18, 1)]));
+    exif.set(tags::LENS_MODEL, Value::Ascii("Synthetic 18mm".into()));
+    ifd.set_child(tags::EXIF_IFD, exif);
+    ifd.set(0x0201, Value::Long(vec![0]));
+    ifd.set(0x0202, Value::Long(vec![jpeg.len() as u32]));
+    let offset = TiffWriter::default().write(&[ifd.clone()]).unwrap().len();
+    ifd.set(0x0201, Value::Long(vec![offset as u32]));
+    let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+    assert_eq!(file.len(), offset);
     file.extend(jpeg);
     let (plain, reference, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
     let (mut aligned, _, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
@@ -1165,8 +1208,30 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(&raw));
     let expected_tags = dng_colour(&raw.color, &white, &t, look.as_ref()).unwrap();
-    let tags = starting_colour_tags_with_correction(&mut raw, &file, Some(&lens)).unwrap();
-    assert_eq!(tags, expected_tags, "DNG tags use the resolved correspondence geometry too");
+    assert_eq!(lightcraft_meta::extract(&file).focal_length, Some(18.0));
+    assert_eq!(crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(&file)), Some(lens));
+    let tags = starting_colour_tags(&mut raw.clone(), &file).unwrap();
+    assert_eq!(tags, expected_tags, "production DNG tags resolve the database geometry too");
+    let mut converted = raw.clone();
+    with_starting_colour(&mut converted, &file);
+    assert_eq!(converted.color, expected_tags);
+
+    // A file's own (identity) warp must suppress the unrelated database proposal. This also
+    // checks that colour fitting temporarily strips, then restores, the original opcodes.
+    raw.opcodes.list3.push(lightcraft_raw::Opcode::WarpRectilinear { planes: vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] });
+    let ops = raw.opcodes.list3.clone();
+    let own = crate::files::embedded_lens(&raw.info()).unwrap();
+    assert_ne!(own, lens);
+    let mut opened = raw.clone();
+    let geometry = lens_geometry(&opened.opcodes.list3);
+    opened.opcodes.list3.clear();
+    let (_, t, look) = starting_colour(&mut opened, &file, geometry.as_ref(), Some(&own));
+    let expected = dng_colour(&raw.color, &white, &t, look.as_ref()).unwrap();
+    assert_ne!(expected, expected_tags, "fixture distinguishes own warp from database geometry");
+    assert_eq!(starting_colour_tags(&mut raw.clone(), &file), Some(expected.clone()));
+    with_starting_colour(&mut raw, &file);
+    assert_eq!(raw.color, expected, "standalone DNG colour agrees with opening the RAW");
+    assert_eq!(raw.opcodes.list3, ops, "DNG retains its file corrections");
 }
 
 #[test]
@@ -1180,7 +1245,7 @@ fn correspondence_mask_keeps_every_contributing_clipped_sample_and_invalid_borde
     assert!(result.data[7][0].is_nan() && result.data[5 * 8][0].is_nan());
     // The final box reduction retains fractional positive masks as clipped too.
     let reduced = resize(&result, 4, 3, Filter::Box);
-    assert!(reduced.data.iter().any(|p| p[0] > 0.0));
+    assert!(reduced.data[1][0] > 0.0 && reduced.data[5][0] > 0.0);
 }
 
 /// The guarded fit is assessed on real sensor data, never on the JPEG fallback. A corpus

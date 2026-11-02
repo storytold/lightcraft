@@ -304,8 +304,11 @@ fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Optio
     let before = score(&original_gradients, Cr3Framing::IDENTITY, false, None)?;
     let training = |framing| -> Option<(f64, f64)> {
         let after = score(&gradients, framing, false, proposal.then_some((&original_gradients, Cr3Framing::IDENTITY)))?;
+        if proposal && after < 0.9 {
+            return None;
+        }
         let before = if proposal { score(&original_gradients, Cr3Framing::IDENTITY, false, Some((&gradients, framing)))? } else { before };
-        (!proposal || (after >= 0.9 && after >= before + 0.04)).then_some((before, after))
+        (!proposal || after >= before + 0.04).then_some((before, after))
     };
     let initial = training(Cr3Framing::IDENTITY);
     let mut best = (initial.map_or(-1.0, |v| v.1), Cr3Framing::IDENTITY, initial.map_or(before, |v| v.0));

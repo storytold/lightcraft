@@ -2362,6 +2362,7 @@ fn smart_preview_look_marker_is_read_safely() {
     assert!(!crate::smart::look_checked(&dir), "no marker");
     let cur = crate::camera_preview::LOOK_VERSION;
     let enc = crate::smart::ENCODE_VERSION;
+    let lens = crate::lens_profiles::cache_key();
     for (text, checked) in [
         (String::new(), false),
         ("banana".into(), false),
@@ -2373,7 +2374,9 @@ fn smart_preview_look_marker_is_read_safely() {
         (format!("{cur}\n"), false),
         (format!("{cur} {}\n", enc.saturating_sub(1)), false),
         (format!("{cur} banana\n"), false),
-        (format!("{cur} {enc}\n"), true),
+        (format!("{cur} {enc}\n"), false),
+        (format!("{cur} {enc} {lens}\n"), true),
+        (format!("{cur} {enc} {}\n", lens.wrapping_add(1)), false),
         (format!(" {} {}\n", cur + 1, enc + 1), true),
     ] {
         std::fs::write(dir.join("look-version"), &text).unwrap();

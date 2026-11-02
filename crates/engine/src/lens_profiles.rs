@@ -35,6 +35,70 @@ pub fn database() -> Option<&'static LensDb> {
     .as_ref()
 }
 
+/// Identity of exactly the database this process uses, not files that may have changed since it
+/// was loaded. The loader bounds file count/size and sorts paths; vector order is significant
+/// because equally good matches use the first profile. No directory path or timestamps enter it.
+pub(crate) fn cache_key() -> u64 {
+    static KEY: OnceLock<u64> = OnceLock::new();
+    *KEY.get_or_init(|| cache_key_for(database()))
+}
+
+fn cache_key_for(db: Option<&LensDb>) -> u64 {
+    use lightcraft_lensdb::{Distortion, Tca};
+    let Some(db) = db else { return 0 };
+    let mut h = lightcraft_preview::Hasher128::new();
+    h.str("lens-db-v1").u64(db.cameras.len() as u64);
+    for c in &db.cameras {
+        h.str(&c.maker).str(&c.model).str(&c.mount).u64(c.crop_factor.to_bits());
+    }
+    h.u64(db.lenses.len() as u64);
+    for p in &db.lenses {
+        h.str(&p.maker).u64(p.models.len() as u64);
+        for name in &p.models {
+            h.str(name);
+        }
+        h.u64(p.mounts.len() as u64);
+        for mount in &p.mounts {
+            h.str(mount);
+        }
+        h.u64(p.crop_factor.to_bits()).u64(p.aspect_ratio.to_bits()).u64(u64::from(p.rectilinear));
+        h.u64(p.distortion.len() as u64);
+        for (focal, model) in &p.distortion {
+            h.u64(focal.to_bits());
+            match *model {
+                Distortion::Poly3 { k1 } => {
+                    h.u64(0).u64(k1.to_bits());
+                }
+                Distortion::Poly5 { k1, k2 } => {
+                    h.u64(1).u64(k1.to_bits()).u64(k2.to_bits());
+                }
+                Distortion::PtLens { a, b, c } => {
+                    h.u64(2).u64(a.to_bits()).u64(b.to_bits()).u64(c.to_bits());
+                }
+            }
+        }
+        h.u64(p.tca.len() as u64);
+        for (focal, model) in &p.tca {
+            h.u64(focal.to_bits());
+            match *model {
+                Tca::Linear { kr, kb } => {
+                    h.u64(0).u64(kr.to_bits()).u64(kb.to_bits());
+                }
+                Tca::Poly3 { vr, vb, cr, cb, br, bb } => {
+                    h.u64(1).u64(vr.to_bits()).u64(vb.to_bits()).u64(cr.to_bits()).u64(cb.to_bits()).u64(br.to_bits()).u64(bb.to_bits());
+                }
+            }
+        }
+        h.u64(p.vignetting.len() as u64);
+        for v in &p.vignetting {
+            h.u64(v.focal.to_bits()).u64(v.aperture.to_bits()).u64(v.distance.to_bits());
+            h.u64(v.model.k1.to_bits()).u64(v.model.k2.to_bits()).u64(v.model.k3.to_bits());
+        }
+    }
+    // Reserve zero for a process with no usable database.
+    (h.finish().0 as u64).max(1)
+}
+
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
 /// re-expressed after `orientation`. Without a lens name/specification, a unique fixed-mount profile may identify it.
 /// `None` without a database, focal length or unambiguous matching profile.
@@ -108,6 +172,46 @@ mod tests {
           <vignetting model="pa" focal="18" aperture="3.5" distance="1000" k1="-0.4" k2="0" k3="0" />
         </calibration>
       </lens></lensdatabase>"#;
+
+    #[test]
+    fn database_identity_tracks_loaded_geometry_not_xml_formatting() {
+        let db = LensDb::parse(DB).unwrap();
+        let key = cache_key_for(Some(&db));
+        assert_ne!(key, cache_key_for(None), "installing a database invalidates no-database fits");
+        assert_eq!(key, cache_key_for(Some(&LensDb::parse(&DB.replace("<camera>", "\n  <camera> ")).unwrap())));
+        let changed = LensDb::parse(&DB.replace("-0.03", "-0.05")).unwrap();
+        assert_ne!(key, cache_key_for(Some(&changed)), "equal-length calibration changes matter");
+        assert_eq!(key, cache_key_for(Some(&db)), "an already-loaded snapshot stays unchanged");
+        let mut changed = db.clone();
+        changed.cameras[0].mount = "other-fixed-mount".into();
+        assert_ne!(key, cache_key_for(Some(&changed)), "camera matching affects the fit too");
+        changed = db.clone();
+        changed.lenses[0].aspect_ratio = 2.0;
+        assert_ne!(key, cache_key_for(Some(&changed)), "calibration frame changes matter");
+        changed = db.clone();
+        changed.lenses[0].vignetting[0].model.k1 = -0.8;
+        assert_ne!(key, cache_key_for(Some(&changed)), "vignetting is a fit dependency");
+    }
+
+    #[test]
+    fn database_identity_uses_the_loaders_sorted_file_order() {
+        let dir = std::env::temp_dir().join(format!("lc-lens-identity-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let changed = DB.replace("-0.03", "-0.05");
+        std::fs::write(dir.join("b.xml"), &changed).unwrap();
+        std::fs::write(dir.join("a.xml"), DB).unwrap();
+        let first = LensDb::load_dir(&dir).unwrap().0;
+        std::fs::remove_file(dir.join("a.xml")).unwrap();
+        std::fs::remove_file(dir.join("b.xml")).unwrap();
+        std::fs::write(dir.join("a.xml"), DB).unwrap();
+        std::fs::write(dir.join("b.xml"), &changed).unwrap();
+        let second = LensDb::load_dir(&dir).unwrap().0;
+        assert_eq!(cache_key_for(Some(&first)), cache_key_for(Some(&second)), "directory enumeration order is irrelevant");
+        let mut reversed = first.clone();
+        reversed.lenses.reverse();
+        assert_ne!(cache_key_for(Some(&first)), cache_key_for(Some(&reversed)), "tie-breaking profile order matters");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn meta() -> lightcraft_meta::Metadata {
         lightcraft_meta::Metadata {

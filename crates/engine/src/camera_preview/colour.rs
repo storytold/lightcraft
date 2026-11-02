@@ -143,8 +143,13 @@ pub(super) fn starting_colour_tags_with_correction(
     // the white the source shows, decided before `starting_colour` may fill in measured matrices
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
-    // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, correction);
+    // Resolve the file warp before removing lens opcodes, just as opening the RAW does.
+    // The fit needs uncorrected sensor samples; the caller still owns the original opcodes.
+    let lens = super::lens_geometry(&raw.opcodes.list3);
+    let list3 = std::mem::take(&mut raw.opcodes.list3);
+    raw.opcodes.list3 = list3.iter().filter(|op| !op.is_lens_correction()).cloned().collect();
+    let (_, t, look) = starting_colour(raw, bytes, lens.as_ref(), correction);
+    raw.opcodes.list3 = list3;
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 
@@ -156,10 +161,7 @@ pub(crate) fn with_starting_colour(raw: &mut RawImage, bytes: &[u8]) {
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return;
     }
-    let list3 = raw.opcodes.list3.clone();
-    raw.opcodes.list3.retain(|op| !op.is_lens_correction());
     let tags = starting_colour_tags(raw, bytes);
-    raw.opcodes.list3 = list3;
     if let Some(tags) = tags {
         raw.color = tags;
     }

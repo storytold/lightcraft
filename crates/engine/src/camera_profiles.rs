@@ -157,13 +157,19 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
 }
 
 /// Changes when the profiles folder's contents change (per process): part of the render cache
-/// keys, so thumbnails rendered before a profile existed are not reused after.
+/// keys, so thumbnails rendered before a profile existed are not reused after. Includes the
+/// loaded lens database: its geometry determines which sensor/JPEG samples fit the camera look.
 pub fn cache_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+    *KEY.get_or_init(|| cache_key_with_lens(dir().as_deref(), crate::lens_profiles::cache_key()))
 }
 
+#[cfg(test)]
 fn cache_key_for(directory: Option<&Path>) -> u64 {
+    cache_key_with_lens(directory, 0)
+}
+
+fn cache_key_with_lens(directory: Option<&Path>, lens_key: u64) -> u64 {
     let entries = directory.and_then(|d| std::fs::read_dir(d).ok());
     let mut files: Vec<(String, u64, std::time::Duration)> = entries
         .into_iter()
@@ -178,6 +184,7 @@ fn cache_key_for(directory: Option<&Path>) -> u64 {
         .collect();
     files.sort();
     let mut h = lightcraft_preview::Hasher128::new();
+    h.str("camera-profiles-with-lens-v1").u64(lens_key);
     for (name, len, modified) in &files {
         h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
     }
@@ -296,6 +303,13 @@ mod tests {
             assert_eq!(bundled(model), Some(p));
         }
         assert!(bundled("No Such Camera").is_none());
+    }
+
+    #[test]
+    fn lens_database_identity_invalidates_camera_render_cache() {
+        assert_ne!(cache_key_with_lens(None, 0), cache_key_with_lens(None, 123));
+        assert_ne!(cache_key_with_lens(None, 123), cache_key_with_lens(None, 456));
+        assert_eq!(cache_key_with_lens(None, 123), cache_key_with_lens(None, 123));
     }
 
     #[test]

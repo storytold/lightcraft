@@ -340,3 +340,17 @@ the neutral fallback): E-1 0.126 → 0.014, E-400 0.087 → 0.022, XZ-2 0.061 �
 still open from their embedded JPEG. Against Lightroom Classic's render of a CC0 E-1 photo (2000 px, ΔE00 of the
 unedited render) the starting look moved from 11.25 to 8.30. Lightroom frames that E-1 file about 4 × 11 sensor pixels
 differently from the crop the file records (`CropLeft`/`CropTop` 36, 34); the file's own crop is kept.
+
+### Database identity and DNG colour tags (PR #2675 review)
+
+The loaded lens database is immutable for a process. Its matching and calibration values, including profile order,
+form a semantic identity in camera-look render/view cache keys and smart-preview headers and scan markers.
+Changing, adding or removing the database takes effect after restarting; fitted smart previews then rebuild when
+their originals are available. Existing offline proxies remain readable. Missing legacy identities require one
+new check; proxies from newer fit/encoding versions retain the existing downgrade protection.
+
+DNG conversion and merge resolve the file's own lens warp and correction before removing lens opcodes from the
+colour-only sensor fit. The opcodes remain in standalone DNGs and in merge reference corrections. Synthetic tests
+exercise the production database lookup in a fresh child process, file-warp precedence and merge callback ordering;
+they add no real-photo validation beyond the historical evidence above. Profile proposals below 0.90 training
+agreement now skip the unnecessary original-side scan; thresholds are unchanged and no timing improvement is claimed.
