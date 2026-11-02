@@ -269,6 +269,7 @@
   "Effect: {name}": "ეფექტი: {name}",
   "Exported to {path}": "ექსპორტირებულია: {path}",
   "Exported {} effect preset{}": "ექსპორტირებულია ეფექტის პრესეტი: {}{:.0}",
+  "Exposure raised by {ev:+.1} to keep brightness": "სიკაშკაშის შესანარჩუნებლად ექსპოზიცია გაიზარდა {ev:+.1}-ით",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "იმპორტირებულია ნიღბის ეფექტი: {e}{:.0} (ნიღბვა → ეფექტი)",
   "Imported {name}": "იმპორტირებულია: {name}",
   "Keywords of {n} selected photos": "მონიშნული ფოტოების ({n}) საკვანძო სიტყვები",

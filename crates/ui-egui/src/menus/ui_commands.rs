@@ -164,12 +164,15 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("section.detail", "Detail", Some("Cmd+4"), "Window>Edit Sections"),
     ("section.optics", "Optics", Some("Cmd+5"), "Window>Edit Sections"),
     ("section.calibration", "Calibration", None, ""),
+    ("section.channelMixer", "Channel Mixer", None, ""),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
     ("tool.wbPicker", "White Balance Selector", Some("W"), "Window>Tools"),
+    // the Channel Mixer's eyedropper (its button is in the section itself)
+    ("tool.mixerPicker", "Channel Mixer Neutral", None, "Window>Tools"),
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
     ("brush.smaller", "Decrease Brush Size", Some("["), "Window>Tools"),

@@ -416,6 +416,16 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.calibration.blue_sat = 60.0;
             s.calibration.blue_hue = 25.0;
         }),
+        ("channel mixer + calibration", |s| {
+            // an infrared-style swap with a pulled-down channel, composed with calibration (issue #2158)
+            s.channel_mixer.red.red = 0.0;
+            s.channel_mixer.red.blue = 100.0;
+            s.channel_mixer.blue.blue = 0.0;
+            s.channel_mixer.blue.red = 100.0;
+            s.channel_mixer.green.green = 70.0;
+            s.channel_mixer.green.red = -30.0;
+            s.calibration.red_hue = 30.0;
+        }),
         ("spots + defringe (cpu stage)", |s| {
             s.spots = vec![Spot { points: vec![Point::new(0.3, 0.3)], size: 0.03, source_offset: Some(Point::new(0.1, 0.0)), ..Default::default() }];
             s.optics.defringe_purple_amount = 5.0;

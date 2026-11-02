@@ -229,6 +229,31 @@ mod tests {
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
     }
 
+    /// Issue #2158: an untouched channel mixer adds nothing to the settings (so every saved edit and cached preview
+    /// keeps its JSON and hash), a touched one round-trips, and the section resets to the identity.
+    #[test]
+    fn channel_mixer_is_invisible_until_used() {
+        let s = DevelopSettings::default();
+        assert!(s.to_json().get("channel_mixer").is_none());
+        let mut m = s.clone();
+        assert!(controls::set(&mut m, "channelMixer.red.blue", 100.0));
+        assert!(controls::set(&mut m, "channelMixer.red.red", 0.0));
+        assert_eq!(controls::get(&m, "channelMixer.red.blue"), Some(100.0));
+        assert_eq!(m.to_json()["channel_mixer"]["red"], json!({"red": 0.0, "green": 0.0, "blue": 100.0}));
+        assert_eq!(DevelopSettings::from_json(&m.to_json()).unwrap(), m);
+        assert_ne!(m.hash64(), s.hash64());
+        assert!(!m.is_unedited());
+        // out of range clamps through the control spec
+        assert!(controls::set(&mut m, "channelMixer.green.red", 900.0));
+        assert_eq!(m.channel_mixer.green.red, 200.0);
+        m.reset_section(Section::ChannelMixer);
+        assert!(m.channel_mixer.is_identity());
+        assert_eq!(m.hash64(), s.hash64());
+        // settings saved before the mixer existed read as the identity
+        let old = json!({"version": SCHEMA_VERSION, "light": {"exposure": 0.5}});
+        assert!(DevelopSettings::from_json(&old).unwrap().channel_mixer.is_identity());
+    }
+
     #[test]
     fn white_balance_scale_reads_absent_as_legacy_and_writes_only_kelvin() {
         // settings from before the scale existed: no field, `Legacy`, and written back without it

@@ -24,9 +24,23 @@ pub fn apply_slider_out(
 }
 
 pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool) {
+    control_override(app, ui, d, id, enabled, None);
+}
+
+/// [`control`] with the slider's `label_override`: the Channel Mixer's rows say just "Red", "Green" or
+/// "Blue" under their output's sub-title, while the control's own label ("Red from Blue") stays for
+/// menus, history and scripting.
+pub(crate) fn control_override(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    d: &DevelopSettings,
+    id: &str,
+    enabled: bool,
+    label_override: Option<&str>,
+) {
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
-    let out = slider(ui, spec, v, enabled, None);
+    let out = slider(ui, spec, v, enabled, label_override);
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
 }
 

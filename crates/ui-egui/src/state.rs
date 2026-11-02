@@ -246,7 +246,7 @@ pub struct UiState {
     /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
-    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
+    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "mixerPicker", "straighten", "remove".
     pub tool: String,
     /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.

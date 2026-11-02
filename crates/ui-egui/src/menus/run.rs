@@ -2,6 +2,12 @@ use super::files::{edit_in, open_log_folder, open_original_in, show_in_finder, s
 use super::ui_commands::{UI_COMMANDS, language_from_command};
 use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
+/// A picker tool armed from the Edit panel that outlives panel switches (one click on the photo, then
+/// it ends): closing or switching a panel must not end it.
+fn picker_alive(tool: &str) -> bool {
+    matches!(tool, "wbPicker" | "mixerPicker")
+}
+
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
         app.ui.right = RightPanel::None;
@@ -13,7 +19,7 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
             app.ui.view = ViewMode::Detail;
         }
     }
-    if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
+    if p != RightPanel::Masking && !picker_alive(&app.ui.tool) {
         app.ui.tool.clear();
     }
     let _ = app.session.end_interaction();
@@ -239,7 +245,7 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 }
                 if k.is_empty() {
                     app.ui.right = RightPanel::Keywords;
-                    if app.ui.tool != "wbPicker" {
+                    if !picker_alive(&app.ui.tool) {
                         app.ui.tool.clear();
                     }
                     let _ = app.session.end_interaction();
@@ -599,7 +605,7 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             if app.ui.right != RightPanel::None && crate::docking::exposed(app, crate::docking::Panel::Tools) {
                 app.ui.right_hidden = app.ui.right;
                 app.ui.right = RightPanel::None;
-                if app.ui.tool != "wbPicker" {
+                if !picker_alive(&app.ui.tool) {
                     app.ui.tool.clear();
                 }
                 let _ = app.session.end_interaction();
@@ -1093,6 +1099,11 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.right = RightPanel::Edit;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = "wbPicker".into();
+                }
+                "mixerPicker" => {
+                    app.ui.right = RightPanel::Edit;
+                    app.ui.view = ViewMode::Detail;
+                    app.ui.tool = "mixerPicker".into();
                 }
                 other => return Some(Err(format!("unknown tool `{other}`"))),
             }

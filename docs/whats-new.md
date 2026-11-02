@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### A Channel Mixer in the Edit panel
+- The Edit panel has a new Channel Mixer section, above Calibration: three output rows — Red, Green and Blue — each with
+  three sliders saying in per cent how much of each colour goes into it (−200 to +200). It starts neutral, each row taking
+  only its own colour, so existing photos render exactly as before until you move a slider. It is mainly for infrared
+  photography: swap red and blue, or pull down a channel that white balance can't reach (issue #2158). For the usual
+  infrared workflow, click the section's eyedropper and then click foliage — the photo turns neutral there — and press
+  Swap Red and Blue beside it for the classic false-colour look. Lightroom has no
+  channel mixer, so these settings travel only with LightCraft.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

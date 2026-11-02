@@ -491,6 +491,301 @@ fn masks_crop_and_render() {
     s.execute("develop.wbPick", &json!({"x": 0.5, "y": 0.5})).unwrap();
 }
 
+/// The 5×5 mean at normalized `(x, y)` of the oriented source, as `develop.wbPick` and
+/// `develop.mixerNeutralPick` sample a point (the command's own helper, mirrored here).
+fn picked_sample(o: &lightcraft_raster::Rgb32f, x: f64, y: f64) -> [f32; 3] {
+    let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
+    let mut acc = [0.0f32; 3];
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let c = o.get_clamped(cx + dx, cy + dy);
+            for i in 0..3 {
+                acc[i] += c[i] / 25.0;
+            }
+        }
+    }
+    acc
+}
+
+/// Issue #2158: `develop.mixerNeutralPick` makes the picked spot render neutral (white balance at
+/// the mixer's input), composes over a mix already set, and each pick is one undo step.
+#[test]
+fn mixer_neutral_pick_neutralizes_and_composes_as_one_undo_step() {
+    use crate::media::SourceLevel;
+    use lightcraft_develop::ChannelMixer;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let d = s.develop_of(id).unwrap_or_default();
+    let src = s.source_now(id, SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    // spots to pick on the demo photo: a mildly coloured one (within the ±200 % sliders) and the
+    // most saturated bright one (another colour, so the second pick composes over the first)
+    let (mut mild, mut strong) = (None, None);
+    let mut best_chroma = 0.0f32;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let c = picked_sample(&o, x, y);
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let chroma = (c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])) / (c[0].max(c[1]).max(c[2]) + 1e-6);
+            if lum > 0.05 && (0.1..0.3).contains(&chroma) && mild.is_none() {
+                mild = Some((x, y, chroma));
+            }
+            if lum > 0.05 && chroma > best_chroma {
+                best_chroma = chroma;
+                strong = Some((x, y, chroma));
+            }
+        }
+    }
+    let (Some((mx, my, mc)), Some((sx, sy, sc))) = (mild, strong) else { panic!("the demo photo has no mild and saturated bright spots") };
+    assert!(sc > mc + 0.1, "the second spot is more saturated: {mc} vs {sc}");
+    // the render at the thumb's own size: its pixel at (x, y) is the spot the pick sampled
+    let render_at = |s: &mut Session, x: f64, y: f64| {
+        let r = s.render_now(id, o.width, o.height).unwrap();
+        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
+        r.image.get(px, py)
+    };
+    let before = render_at(&mut s, mx, my);
+    assert!(
+        before[0].abs_diff(before[1]).max(before[1].abs_diff(before[2])) > 4,
+        "the mild spot starts coloured, or the test says nothing: {before:?}"
+    );
+
+    // the mild pick: nothing has to scale, no Exposure is added, and the spot renders neutral
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": mx, "y": my})).unwrap();
+    assert_eq!(r["scaled"], json!(1.0), "{r}");
+    assert_eq!(r["exposureAdded"], json!(0.0), "{r}");
+    assert_eq!(r["exposureClamped"], json!(false), "{r}");
+    let first = active_dev(&s).channel_mixer;
+    assert!(!first.is_identity(), "the pick set the mixer: {first:?}");
+    assert_eq!(active_dev(&s).light.exposure, 0.0);
+    let after = render_at(&mut s, mx, my);
+    assert!(after[0].abs_diff(after[1]).max(after[1].abs_diff(after[2])) <= 3, "the picked spot renders neutral: {after:?}");
+
+    // the saturated spot on top of that: still neutral, the entries stay in the sliders' range
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": sx, "y": sy})).unwrap();
+    assert!(r["scaled"].as_f64().is_some_and(|f| f <= 1.0), "{r}");
+    let second = active_dev(&s).channel_mixer;
+    assert!(second.rows().iter().flatten().all(|v| (-200.0..=200.0).contains(v)), "{second:?}");
+    let after = render_at(&mut s, sx, sy);
+    assert!(
+        after[0].abs_diff(after[1]).max(after[1].abs_diff(after[2])) <= 3,
+        "the second spot renders neutral through the composed mixer: {after:?}"
+    );
+
+    // each pick is one undo step (the mixer and any Exposure it added)
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s).channel_mixer, first);
+    assert_eq!(active_dev(&s).light.exposure, 0.0, "undo restores Exposure with the mixer");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s).channel_mixer, ChannelMixer::default());
+    assert_eq!(active_dev(&s).light.exposure, 0.0);
+}
+
+/// Issue #2158: when the pick's mixer has to scale down to fit the ±200 % sliders, the Exposure
+/// raised with it (a linear gain applied before the mixer) keeps the picked point's rendered
+/// brightness: within 2/255 of what it was, neutral grey instead of colour.
+#[test]
+fn mixer_neutral_pick_keeps_brightness_when_it_scales_down() {
+    use crate::media::SourceLevel;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // a warm white balance on the raw demo photo pushes its bright spots far enough apart in the
+    // channels that a pick cannot stay inside ±200 % — the infrared situation
+    s.execute("develop.wb", &json!({"mode": "custom", "temp": 2000.0, "tint": 0.0})).unwrap();
+    let d = s.develop_of(id).unwrap_or_default();
+    let src = s.source_now(id, SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    let wb = lightcraft_pipeline::local::wb_matrix_for(&s.source_info(id), &d);
+    let spot = |x: f64, y: f64, wb: Option<[[f32; 3]; 3]>| {
+        let mut c = picked_sample(&o, x, y);
+        if let Some(m) = wb {
+            c = [
+                m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+                m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+                m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+            ];
+        }
+        c
+    };
+    // the bright spot whose channels lie farthest apart after the white balance
+    let mut pick = None;
+    let mut best_ratio = 0.0f32;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let c = spot(x, y, wb);
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let ratio = c[0].max(c[1]).max(c[2]) / c[0].min(c[1]).min(c[2]).max(1e-6);
+            if lum > 0.05 && ratio > best_ratio {
+                best_ratio = ratio;
+                pick = Some((x, y));
+            }
+        }
+    }
+    let Some((x, y)) = pick else { panic!("no bright spot to pick") };
+
+    // the render's 8-bit pixel, decoded back to linear and read as Rec.709 luminance on the 0..255
+    // scale: the scale that "brightness kept" is true in (an sRGB-encoded colour of the same linear
+    // luminance as a grey encodes to a lower encoded luma, so the encoded luma would misreport)
+    let render_luma = |s: &mut Session| {
+        let r = s.render_now(id, o.width, o.height).unwrap();
+        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
+        let c = r.image.get(px, py);
+        let lin = |v: u8| {
+            let v = v as f32 / 255.0;
+            (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
+        };
+        0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+    };
+    let before = render_luma(&mut s);
+
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    let scaled = r["scaled"].as_f64().unwrap_or(1.0);
+    assert!(scaled < 1.0, "this pick has to scale down: {r}");
+    let added = r["exposureAdded"].as_f64().unwrap_or(0.0);
+    assert_eq!(r["exposureClamped"], json!(false), "{r}");
+    assert!((added - -scaled.log2()).abs() < 1e-9, "{added} vs log2(1/{scaled})");
+    assert_eq!(active_dev(&s).light.exposure, added);
+
+    // the picked point keeps its rendered brightness (a neutral grey of it now)
+    let after = render_luma(&mut s);
+    assert!((after - before).abs() <= 2.0, "brightness kept within 2/255: {before} -> {after}");
+    let r2 = s.render_now(id, o.width, o.height).unwrap();
+    let (px, py) = ((x * r2.image.width as f64) as usize, (y * r2.image.height as f64) as usize);
+    let c = r2.image.get(px, py);
+    assert!(c[0].abs_diff(c[1]).max(c[1].abs_diff(c[2])) <= 3, "and it is neutral: {c:?}");
+
+    // one undo gives the mixer and the Exposure back
+    s.execute("edit.undo", &json!({})).unwrap();
+    let d = active_dev(&s);
+    assert_eq!(d.channel_mixer, lightcraft_develop::ChannelMixer::default());
+    assert_eq!(d.light.exposure, 0.0, "undo restores the Exposure the pick added");
+    let undone = render_luma(&mut s);
+    assert!((undone - before).abs() <= 1.0, "the render is back to where it was: {before} -> {undone}");
+}
+
+/// Issue #2158: a pick with the Channel Mixer section's eye off switches the section on in the same
+/// undo step and computes from the stored mixer (the one that will render once it is on), so the
+/// picked spot really comes out neutral; one undo restores both the mixer and the section's off state.
+#[test]
+fn mixer_neutral_pick_with_the_section_off_switches_it_on() {
+    use crate::media::SourceLevel;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // a stored mix the render ignores while the eye is off — and that would keep the spot coloured
+    // if the pick computed from the identity: its red output takes 20 % of green (M·[1,1,1] is not
+    // neutral), so a neutral render proves the pick composed over the stored mixer
+    s.execute("develop.set", &json!({"control": "channelMixer.red.green", "value": 20.0})).unwrap();
+    let stored = active_dev(&s).channel_mixer;
+    assert!(!stored.is_identity());
+    s.execute("develop.sectionEnabled", &json!({"section": "channelMixer", "enabled": false})).unwrap();
+    assert!(!active_dev(&s).section_enabled("channelMixer"));
+
+    // a mildly coloured bright spot, as the composing test picks
+    let d = s.develop_of(id).unwrap_or_default();
+    let src = s.source_now(id, SourceLevel::Thumb).unwrap();
+    let o = src.oriented(d.orientation);
+    let mut pick = None;
+    for yi in 2..14 {
+        for xi in 2..22 {
+            let (x, y) = (xi as f64 / 24.0, yi as f64 / 16.0);
+            let c = picked_sample(&o, x, y);
+            let lum = 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
+            let chroma = (c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])) / (c[0].max(c[1]).max(c[2]) + 1e-6);
+            if lum > 0.05 && (0.1..0.3).contains(&chroma) {
+                pick = Some((x, y));
+                break;
+            }
+        }
+        if pick.is_some() {
+            break;
+        }
+    }
+    let Some((x, y)) = pick else { panic!("the demo photo has no mildly coloured bright spot") };
+
+    let r = s.execute("develop.mixerNeutralPick", &json!({"x": x, "y": y})).unwrap();
+    assert_eq!(r["scaled"], json!(1.0), "{r}");
+    let d = active_dev(&s);
+    assert!(d.section_enabled("channelMixer"), "the pick switched the section on");
+    assert!(!d.channel_mixer.is_identity(), "the pick composed over the stored mixer: {:?}", d.channel_mixer);
+    let render = s.render_now(id, o.width, o.height).unwrap();
+    let (px, py) = ((x * render.image.width as f64) as usize, (y * render.image.height as f64) as usize);
+    let c = render.image.get(px, py);
+    assert!(c[0].abs_diff(c[1]).max(c[1].abs_diff(c[2])) <= 3, "the picked spot renders neutral: {c:?}");
+
+    // one undo step gives the stored mixer and the eye's off state back
+    s.execute("edit.undo", &json!({})).unwrap();
+    let d = active_dev(&s);
+    assert_eq!(d.channel_mixer, stored, "undo restores the mixer");
+    assert!(!d.section_enabled("channelMixer"), "undo restores the section's off state");
+}
+
+/// Issue #2158: the swap with the Channel Mixer section's eye off switches the section on in the
+/// same undo step — a swap the render ignores would look like a dead button — and one undo
+/// restores both the rows and the off state.
+#[test]
+fn mixer_swap_rb_with_the_section_off_switches_it_on() {
+    let mut s = demo();
+    s.execute("develop.set", &json!({"control": "channelMixer.red.red", "value": 60.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.blue.blue", "value": 40.0})).unwrap();
+    let stored = active_dev(&s).channel_mixer;
+    assert!(!stored.is_identity());
+    s.execute("develop.sectionEnabled", &json!({"section": "channelMixer", "enabled": false})).unwrap();
+    assert!(!active_dev(&s).section_enabled("channelMixer"));
+
+    s.execute("develop.mixerSwapRB", &json!({})).unwrap();
+    let d = active_dev(&s);
+    assert!(d.section_enabled("channelMixer"), "the swap switched the section on");
+    assert_eq!((d.channel_mixer.red, d.channel_mixer.green, d.channel_mixer.blue), (stored.blue, stored.green, stored.red), "the output rows swap");
+
+    // one undo step gives the stored rows and the eye's off state back
+    s.execute("edit.undo", &json!({})).unwrap();
+    let d = active_dev(&s);
+    assert_eq!(d.channel_mixer, stored, "undo restores the rows");
+    assert!(!d.section_enabled("channelMixer"), "undo restores the section's off state");
+}
+
+/// Issue #2158: `develop.mixerSwapRB` swaps the red and blue output rows in one undo step, twice is
+/// the identity, and `develop.mixerNeutralPick` refuses a singular mixer without changing anything.
+#[test]
+fn mixer_swap_rb_and_the_singular_pick_error() {
+    let mut s = demo();
+    s.execute("develop.set", &json!({"control": "channelMixer.red.red", "value": 120.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.blue.green", "value": -40.0})).unwrap();
+    let before = active_dev(&s).channel_mixer;
+    assert!(!before.is_identity());
+    s.execute("develop.mixerSwapRB", &json!({})).unwrap();
+    let swapped = active_dev(&s).channel_mixer;
+    assert_eq!((swapped.red, swapped.green, swapped.blue), (before.blue, before.green, before.red));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s).channel_mixer, before, "the swap is one undo step");
+    s.execute("develop.mixerSwapRB", &json!({})).unwrap();
+    s.execute("develop.mixerSwapRB", &json!({})).unwrap();
+    assert_eq!(active_dev(&s).channel_mixer, before, "swapping twice restores it");
+
+    // three identical rows: the mixer is singular, and the pick says so instead of panicking
+    for (control, value) in [
+        ("channelMixer.red.red", 100.0),
+        ("channelMixer.green.red", 100.0),
+        ("channelMixer.green.green", 0.0),
+        ("channelMixer.blue.red", 100.0),
+        ("channelMixer.blue.green", 0.0),
+        ("channelMixer.blue.blue", 0.0),
+    ] {
+        s.execute("develop.set", &json!({"control": control, "value": value})).unwrap();
+    }
+    let singular = active_dev(&s).channel_mixer;
+    assert_eq!(singular.red, singular.green, "sanity: the rows really are identical");
+    assert_eq!(singular.green, singular.blue);
+    let err = s.execute("develop.mixerNeutralPick", &json!({"x": 0.5, "y": 0.5})).unwrap_err();
+    assert!(err.to_string().contains("can't be made neutral"), "{err}");
+    assert_eq!(active_dev(&s).channel_mixer, singular, "the refused pick changes nothing");
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();

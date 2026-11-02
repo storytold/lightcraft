@@ -33,7 +33,7 @@ use histogram::soft_proofing;
 use mixer::{mixer, point_color};
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
-pub(crate) use sliders::{control, reload_preview_only};
+pub(crate) use sliders::{control, control_override, reload_preview_only};
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
@@ -353,6 +353,45 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             sub_title(ui, crate::i18n::tr("Lateral Chromatic Aberration"));
             control(app, ui, d, "optics.caRed", true);
             control(app, ui, d, "optics.caBlue", true);
+        }
+        ui.add_space(8.0);
+    });
+    // A mixer Lightroom hasn't got, mainly for infrared: swap red and blue, or pull down a channel
+    // white balance can't reach (issue #2158).
+    section(app, ui, &d, "channelMixer", "Channel Mixer", |app, ui, d| {
+        // the infrared workflow in two clicks: pick foliage to neutralize, then swap red and blue
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 6 }).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let active = app.ui.tool == "mixerPicker";
+                if crate::widgets::icon_button(
+                    ui,
+                    "mixerPicker",
+                    Icon::Picker,
+                    vec2(28.0, 28.0),
+                    active,
+                    true,
+                    "Click a spot that should be neutral (for infrared: foliage)",
+                )
+                .clicked()
+                {
+                    if active {
+                        app.ui.tool.clear();
+                    } else if let Err(e) = app.run("tool.mixerPicker", json!({})) {
+                        app.toast(ui.ctx(), e);
+                    }
+                }
+                if crate::widgets::text_button(ui, "mixerSwapRB", "Swap Red and Blue", false).clicked()
+                    && let Err(e) = app.run("develop.mixerSwapRB", json!({}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            });
+        });
+        for (title, k) in [("Red Output", "red"), ("Green Output", "green"), ("Blue Output", "blue")] {
+            sub_title(ui, title);
+            for (name, src) in [("Red", "red"), ("Green", "green"), ("Blue", "blue")] {
+                control_override(app, ui, d, &format!("channelMixer.{k}.{src}"), true, Some(name));
+            }
         }
         ui.add_space(8.0);
     });

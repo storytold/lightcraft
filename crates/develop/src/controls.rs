@@ -26,6 +26,7 @@ pub enum Section {
     Geometry,
     Profile,
     Calibration,
+    ChannelMixer,
     PointColor,
     RedEye,
 }
@@ -47,6 +48,7 @@ impl Section {
             Section::Geometry => "Geometry",
             Section::Profile => "Profile",
             Section::Calibration => "Calibration",
+            Section::ChannelMixer => "Channel Mixer",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
         }
@@ -293,6 +295,15 @@ controls! {
     "calibration.greenSat" => calibration.green_sat, "Green Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#40b050" };
     "calibration.blueHue" => calibration.blue_hue, "Blue Hue", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#30a0d0", to: "#8040d0" };
     "calibration.blueSat" => calibration.blue_sat, "Blue Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#3a60e0" };
+    "channelMixer.red.red" => channel_mixer.red.red, "Red from Red", ChannelMixer, -200, 200, 100, 1, 0, Centered;
+    "channelMixer.red.green" => channel_mixer.red.green, "Red from Green", ChannelMixer, -200, 200, 0, 1, 0, Centered;
+    "channelMixer.red.blue" => channel_mixer.red.blue, "Red from Blue", ChannelMixer, -200, 200, 0, 1, 0, Centered;
+    "channelMixer.green.red" => channel_mixer.green.red, "Green from Red", ChannelMixer, -200, 200, 0, 1, 0, Centered;
+    "channelMixer.green.green" => channel_mixer.green.green, "Green from Green", ChannelMixer, -200, 200, 100, 1, 0, Centered;
+    "channelMixer.green.blue" => channel_mixer.green.blue, "Green from Blue", ChannelMixer, -200, 200, 0, 1, 0, Centered;
+    "channelMixer.blue.red" => channel_mixer.blue.red, "Blue from Red", ChannelMixer, -200, 200, 0, 1, 0, Centered;
+    "channelMixer.blue.green" => channel_mixer.blue.green, "Blue from Green", ChannelMixer, -200, 200, 0, 1, 0, Centered;
+    "channelMixer.blue.blue" => channel_mixer.blue.blue, "Blue from Blue", ChannelMixer, -200, 200, 100, 1, 0, Centered;
     "crop.angle" => crop.geometry.angle, "Straighten", Geometry, -45, 45, 0, 0.01, 2, Centered;
 }
 

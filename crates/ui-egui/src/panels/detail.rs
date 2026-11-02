@@ -986,7 +986,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "mixerPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -1019,6 +1019,30 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         {
             let n = map.norm(q);
             let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
+            app.ui.tool.clear();
+        }
+        return;
+    }
+    if app.ui.tool == "mixerPicker" {
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            // a spot the maths refuses (too dark, too saturated) says why; a mixer scaled down to
+            // fit the sliders had Exposure raised with it, and says by how much
+            match app.run("develop.mixerNeutralPick", json!({"x": n.x, "y": n.y})) {
+                Ok(r) => {
+                    let raised = r["exposureAdded"].as_f64().unwrap_or(0.0);
+                    if r["exposureClamped"] == true {
+                        app.toast(ui.ctx(), crate::i18n::tr("Still darker: Exposure is at its maximum"));
+                    } else if raised > 0.0 {
+                        app.toast(ui.ctx(), crate::i18n::tr_format!("Exposure raised by {ev:+.1} to keep brightness", ev = raised));
+                    }
+                }
+                Err(_) => {
+                    app.toast_error(ui.ctx(), crate::i18n::tr("This spot can't be made neutral: pick a brighter, less saturated area"));
+                }
+            }
             app.ui.tool.clear();
         }
         return;
