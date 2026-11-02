@@ -183,3 +183,23 @@ fn the_negative_group_copies_off_and_unlocked_too() {
     let look = extract_groups(&DevelopSettings::default(), &SettingsGroup::default_copy());
     assert!(apply_partial(&target, &look, 0.4).negative.converts());
 }
+
+/// A preset holding the Negative group applies below 50 % too: the amount is interpolated against a base with the
+/// group spelled out, where it used to find nothing, turn the group into null and drop the whole preset.
+#[test]
+fn a_preset_with_the_negative_group_applies_below_half_strength() {
+    use crate::{FilmType, Preset, SettingsGroup};
+    let mut source = DevelopSettings::default();
+    source.light.exposure = 1.0;
+    source.negative.film = FilmType::ColorNegative;
+    source.negative.contrast = 40.0;
+    let p = Preset::from_settings("p", "P", "User", &source, &[SettingsGroup::Light, SettingsGroup::Negative]);
+    let target = DevelopSettings::default();
+    for amount in [0.3, 0.49] {
+        let out = p.apply(&target, amount);
+        assert!((out.light.exposure - amount).abs() < 1e-9, "{amount}: the preset applied (exposure {})", out.light.exposure);
+        assert!((out.negative.contrast - 40.0 * amount).abs() < 1e-9, "{amount}: the group's numbers interpolate");
+        assert_eq!(out.negative.film, FilmType::Off, "{amount}: below half, the choice stays the photo's");
+    }
+    assert_eq!(p.apply(&target, 0.6).negative.film, FilmType::ColorNegative);
+}
