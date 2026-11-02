@@ -94,6 +94,14 @@ fn unreadable_settings_are_not_overwritten() {
     assert!(e.is_err(), "saving preferences is refused, not done over the unread file");
     assert_eq!(files.files.get("presets.json").unwrap(), presets);
     assert_eq!(files.files.get("prefs.json").unwrap(), prefs);
+
+    // the app-wide background settings aren't kept in prefs.json: changing them is not refused (CodeRabbit on #3080)
+    let r = s.execute("prefs.setBackgroundPrep", &json!({"settings": {"culling": {"ahead": 1}}}));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(s.prep_settings().culling.ahead, 1);
+    // this library's own are, and are refused over the unread file
+    assert!(s.execute("prefs.setBackgroundPrep", &json!({"library": true, "settings": {"culling": {"ahead": 2}}})).is_err());
+    assert_eq!(files.files.get("prefs.json").unwrap(), prefs);
 }
 
 /// Issue #171: a library whose `catalog.lock` can't be locked (stood in for here by a directory

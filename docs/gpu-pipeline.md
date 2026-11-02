@@ -357,6 +357,11 @@ and build time.
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.
+- Culling (PERF-CULL): the stand-ins of the next five photos in the direction of travel and the one
+  behind are made ahead (`render::Slot::QuickAhead`) and taken over at the step, so a step shows
+  the camera JPEG at once; while an arrow key is held (a photo left within 0.25 s) the raw render
+  of a photo waits until it has stayed 0.12 s, and a render queued for a photo already left is
+  dropped. `ui.inspect` → `perf.loupeSteps` times each step on the frames drawn.
 
 ## Memory (M5.6)
 A view's stages keep an uploaded source only up to 96 MB (a Preview-level source); a bigger one (the original a zoom window is cut from) is kept once, outside the views' stages, for all views of the photo (the Before and After windows and every pan share it; the Before window of a Before/After waits at first open until the After's job has handed the original over, or each would decode and upload its own copy) and given back when the app idles with no zoom window on screen (a zoomed view keeps it for its next pan: a 64 MP original is 800 MB to upload again; issue #323: kept per view it counted against the stage budget on every tick of a drag, and not kept every new window uploaded 288 MB again).
