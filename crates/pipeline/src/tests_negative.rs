@@ -202,3 +202,82 @@ fn a_raw_rebate_above_one_is_film_and_clipped_light_is_not() {
     let want = [0, 1, 2].map(|i| f64::from(BASE[i] * gain[i]));
     assert!(a.base.iter().zip(&want).all(|(b, w)| (b - w).abs() < 1e-3), "base {:?}, want {want:?}", a.base);
 }
+
+/// An analysis keeps the film type it was measured for: switching a converted colour negative to Slide (a preset, a
+/// paste) measures again instead of reading the negative's densities as a slide's, which turned the picture black.
+#[test]
+fn switching_the_film_type_measures_again() {
+    let img = negative();
+    let mut s = converted();
+    let a = crate::negative::analyze(&img, &s.negative, s.negative_region(), None).unwrap();
+    assert_eq!(a.film, Some(FilmType::ColorNegative));
+    s.negative.analysis = Some(a);
+    s.negative.locked = true;
+    s.negative.film = FilmType::Slide;
+    assert!(!a.fits(FilmType::Slide) && a.fits(FilmType::ColorNegative));
+    let stale = crate::negative::film_for(&s.negative, &a);
+    let fresh = crate::negative::resolve(&img, &s).unwrap();
+    assert_ne!(fresh, stale, "the slide is measured as a slide");
+    let luma = |p: [f32; 3]| 0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2];
+    let mid = img.data[img.width * img.height / 2 + img.width / 4];
+    assert!(luma(fresh.convert(mid)) > 1e-3, "not black: {:?}", fresh.convert(mid));
+    // an analysis from before the type was recorded still fits
+    assert!(lightcraft_develop::FilmAnalysis { film: None, ..a }.fits(FilmType::Slide));
+}
+
+/// Film has grain, clipped light is flat: a raw rebate that is itself the brightest thing in the scan (lifted above 1
+/// by white balance gains, no holder gap) is film, not clipping.
+#[test]
+fn an_unclipped_raw_rebate_that_is_the_brightest_thing_is_still_film() {
+    let gain = [2.0f32, 1.0, 1.6];
+    let mut img = negative();
+    // a little grain everywhere, as real film has
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let g = 1.0 + 0.01 * (((i * 2_654_435_761) % 1000) as f32 / 1000.0 - 0.5);
+        *p = [0, 1, 2].map(|k| p[k] * gain[k] * g);
+    }
+    let s = converted();
+    let a = crate::negative::analyze(&img, &s.negative, s.negative_region(), None).unwrap();
+    assert_eq!(a.base_source, BaseSource::Detected, "{a:?}");
+    let want = [0, 1, 2].map(|i| f64::from(BASE[i] * gain[i]));
+    assert!(a.base.iter().zip(&want).all(|(b, w)| (b - w).abs() < 0.02 * w), "base {:?}, want {want:?}", a.base);
+}
+
+/// The densest film there is converts to the brightest white, never to black: the conversion's exponent is capped
+/// before `exp2` overflows.
+#[test]
+fn the_densest_film_clips_to_white_not_black() {
+    let f = crate::negative::resolve(&negative(), &converted()).unwrap();
+    let luma = |p: [f32; 3]| 0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2];
+    let dense = f.convert([1e-30; 3]);
+    assert!(dense.iter().all(|c| c.is_finite()) && luma(dense) > luma(f.convert(on_film([1.3; 3]))), "{dense:?}");
+}
+
+/// A conversion that can't be measured (one flat colour) renders the scan exactly as with the conversion off: no
+/// positive-only white balance or tone on an image that wasn't inverted.
+#[test]
+fn an_unmeasurable_conversion_renders_as_the_scan() {
+    let flat = lightcraft_raster::Rgb32f::filled(120, 80, [0.4, 0.3, 0.2]);
+    let on = shot(&flat, &raw_info(), &raw_settings(converted()));
+    let off = shot(&flat, &raw_info(), &raw_settings(DevelopSettings::default()));
+    assert_eq!(max_diff(&on, &off), 0);
+}
+
+/// A small crop of a large scan is sampled on its own grid: with the whole scan's stride (one sample every 4 px on
+/// a 2048 px scan) a 31 × 20 px crop gave 40 samples, too few to measure.
+#[test]
+fn a_small_crop_is_measured_on_its_own_grid() {
+    let small = negative();
+    let (w, h) = (small.width * 8, small.height * 8);
+    let mut img = lightcraft_raster::Rgb32f::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            img.data[y * w + x] = small.data[(y / 8) * small.width + x / 8];
+        }
+    }
+    let s = converted();
+    // (across the boundary of two colour bands, so it has tones to measure)
+    let tiny = lightcraft_geom::Rect::new(0.2, 0.325, 0.2 + 31.0 / w as f64, 0.325 + 20.0 / h as f64);
+    let r = crate::negative::analyze(&img, &s.negative, tiny, None);
+    assert!(r.is_ok(), "{r:?}");
+}

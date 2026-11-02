@@ -429,6 +429,13 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             sp.source_offset = o;
         }
     }
+    // the film conversion, resolved once: the scene-linear stage and the airlight proxy both convert with it. One that
+    // can't be measured (nothing usable in the picture) renders the scan as it is in every stage, white balance and
+    // tone included, not as a positive that wasn't made
+    let film = negative::resolve(src, &settings);
+    if film.is_none() && settings.negative_active() {
+        settings.to_mut().negative.film = lightcraft_develop::FilmType::Off;
+    }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
@@ -442,7 +449,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
                 let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
-                fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
+                fixed_air = Some(local::frame_airlight(src, info, s, film.as_ref(), &frame, pw, ph));
             }
             // (spots grow the rendered window; only 8-bit renders are cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
@@ -459,7 +466,6 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
-    let film = negative::resolve(src, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
     let d = &s.detail;
     let pre_nr_key = hash_of((

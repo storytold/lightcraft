@@ -28,7 +28,11 @@ Built against this plan (milestones N0–N3, N5 and N6 in full or in part; N4 an
   base if any frame has one, else the median of the bases found on film edges, else the clearest estimate; range and
   balance from every frame's pixels together) and writes it to every frame, locked, as one undo step. Re-analyze and
   Convert leave a locked frame's numbers alone until `negative.unlock`; picking a base on a frame unlocks it. Frames
-  whose film bases differ by more than 15 % look scanned differently, and the sync says so.
+  whose film bases differ by more than 15 % look scanned differently, and the sync says so; a frame edited while the
+  roll is read keeps its edit and is left out. An analysis records its film type and is measured again for another.
+- **Copy, paste and presets:** the Negative Conversion group is not in the default copy set (a preset or copy made from
+  an ordinary photo would otherwise switch a scan back to its negative); ticked, it carries the conversion whole,
+  "off" and "unlocked" included.
 - **Commands (N3):** `negative.convert`, `negative.conflicts`, `negative.analyze`, `negative.sampleBase`,
   `negative.set`, `negative.syncRoll`, `negative.unlock`, `negative.reset`; CLI and MCP get them as usual.
 - **UI (N5):** the Negative section (at the top for converted photos, last otherwise), Film Base Selector
@@ -87,17 +91,20 @@ Conversion has to run on **linear** data, **before white balance**: the orange m
 transmittance, and inverting after the tone curve (today's workaround with an inverted point curve) gives muddy
 colour and backwards sliders.
 
-The renderer receives a linear Rec.2020 source that was developed for its as-shot white. The film stage first
-undoes that as-shot white balance so it sees what the sensor saw through the film:
+**v1 (built):** the film stage works on the source as the renderer receives it: linear Rec.2020, developed for its
+as-shot white, raw and rendered scans alike. It doesn't undo the as-shot white balance or go through the camera's
+matrix: dividing by the film base (measured in the same space) removes the orange mask and the light's colour
+together, and each channel's range is then matched.
+
+**Planned (not built):** two working spaces behind one function so tests can compare them:
 
 - **Raw camera scans** with a colour model (`SourceInfo::camera_color`): convert to **camera-native RGB** (inverse
   of the camera→Rec.2020 matrix) for the density maths, then back. Dye transmittance doesn't behave like scene
   colour, and the camera's own channels separate the dyes better than a matrix fitted for daylight scenes.
-- **Rendered scans** (TIFF and JPEG from film scanners) and raws without a matrix: work in linear Rec.2020 with the
-  as-shot white undone.
+- **Rendered scans** (TIFF and JPEG from film scanners) and raws without a matrix: linear Rec.2020 with the as-shot
+  white undone.
 
-Which space is the default is an [open question](#open-questions). Both paths are kept behind one function so
-tests can compare them.
+Which space should be the default is an [open question](#open-questions).
 
 ### The conversion maths (per pixel, per channel c)
 
@@ -130,8 +137,12 @@ so the per-pixel cost is three LUT lookups plus two 3×3 matrices.
 
 ### Automatic analysis (sensible defaults)
 
-Analysis runs **once**, on an analysis proxy (long edge ≤ 1024 px, built from the geometry-corrected image),
-and writes its results into the settings. It never runs inside the render, which keeps renders deterministic.
+Analysis runs **once**, on a fixed grid of samples (at most 512 along the measured region's long edge) of the
+source's Preview level, and `negative.convert`, `negative.analyze`, `negative.set`, `negative.sampleBase` and
+`negative.syncRoll` write its results into the settings, so preview and export convert with the same numbers. A
+converted photo with no stored analysis (or one measured for another film type), such as settings merged in by
+hand or by an agent, is measured inside every render instead: deterministic for a given source, but a cost on each
+render and a little different between the preview and full-size sources. The panel then asks for Re-analyze.
 
 - **Film border detection:** find the unexposed rebate or the holder/sprocket area along the frame edges: bright,
   low-variance and roughly uniform in hue. That gives the **film base** (median of the rebate's pixels) and an
@@ -219,13 +230,16 @@ Everything is a command (`crates/engine`). New module `crates/engine/src/cmd/neg
 | `negative.syncRoll` | `ids`, `reference?` | pool or copy base and range across frames, set `locked` |
 | `negative.unlock` / `negative.reset` | `ids?` | allow re-analysis / turn conversion off |
 
-Controls (`crates/develop/src/controls.rs`, new section `Negative`; each slider is a `ControlSpec`):
-`negative.stops`, `negative.blackClip`, `negative.whiteClip`, `negative.saturation`, `negative.shadowTemp`,
-`negative.shadowTint`, `negative.highlightTemp`, `negative.highlightTint`, `negative.border`.
-Film type, tone profile and colour model are choice parameters of `develop.set`, like Treatment.
+Controls (`crates/develop/src/controls.rs`, section `Negative`; each slider is a `ControlSpec`):
+`negative.contrast`, `negative.brightness`, `negative.whitePoint`, `negative.blackPoint`, `negative.temp`,
+`negative.tint`, `negative.saturation`, `negative.balance`, `negative.shadowTemp`, `negative.shadowTint`,
+`negative.highlightTemp`, `negative.highlightTint`, `negative.border`. Film type, tone profile and colour model are
+parameters of `negative.set` (and `negative.convert`), not controls.
 
-All of these reach the CLI (`lightcraft-cli render scan.dng --set negative.film=colorNegative …` and
-`lightcraft-cli commands`) and MCP (one tool per command) with no extra code.
+All of these reach the CLI and MCP (one tool per command) with no extra code: `lightcraft-cli run --import scan.dng
+negative.convert film=colorNegative develop.set control=negative.contrast value=10 app.export path=out.jpg`, or
+`lightcraft-cli render scan.dng -o out.jpg --settings conversion.json` with a partial such as
+`{"negative": {"film": "colorNegative"}}` (`render --set` takes numbers only).
 
 ## UI
 

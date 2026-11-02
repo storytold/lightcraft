@@ -32,6 +32,7 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
     let library = app.session.library_generation();
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
+    let stopped = cancel.clone();
     let work = move |task: lightcraft_engine::activity::TaskHandle| {
         let total = plan.frames.len() as u64;
         task.progress(0, total);
@@ -39,7 +40,8 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
         (plan, measured)
     };
     let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (plan, measured): (negative::RollPlan, Measured)| {
-        if app.session.library_generation() != library {
+        // (stopped while the last frame was read or the roll pooled: nothing is written)
+        if app.session.library_generation() != library || stopped.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         let measured = match measured {

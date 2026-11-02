@@ -81,3 +81,20 @@ fn sync_roll_asks_then_measures_the_frames_in_the_background() {
     }
     assert_eq!(h.app.session.develop_of(lightcraft_engine::catalog::PhotoId(ids[1])).unwrap().light.exposure, 0.0, "edits on the negative reset");
 }
+
+#[test]
+fn convert_confirms_on_the_photo_it_warned_about() {
+    let mut h = edit_panel();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    req(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0]], "active": ids[0]}}));
+    req(&mut h, "engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.0}}));
+    req(&mut h, "engine.execute", json!({"command": "dialog.convertNegative", "params": {}}));
+    h.step();
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::ConvertNegative { photo: Some(p), .. }) if *p == ids[0]));
+    // the active photo changes while the dialog is open
+    h.app.session.execute("library.select", &json!({"ids": [ids[1]], "active": ids[1]})).unwrap();
+    req(&mut h, "ui.dialog.confirm", json!({}));
+    let of = |h: &Headless, id: u64| h.app.session.develop_of(lightcraft_engine::catalog::PhotoId(id)).unwrap();
+    assert!(of(&h, ids[0]).negative.converts(), "the photo the warning named");
+    assert!(!of(&h, ids[1]).negative.converts(), "not the one active at confirmation");
+}

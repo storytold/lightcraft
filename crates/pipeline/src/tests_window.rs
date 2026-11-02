@@ -460,3 +460,12 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
 }
+
+// Given a converted film scan with Dehaze, a window's airlight comes from the positive, as the full render's does
+#[test]
+fn a_converted_negative_with_dehaze_windows_like_the_full_render() {
+    let mut s = DevelopSettings::default();
+    s.negative.film = lightcraft_develop::FilmType::ColorNegative;
+    controls::set(&mut s, "effects.dehaze", 40.0);
+    check("negative + dehaze", &s, MID, 6, 0.8);
+}

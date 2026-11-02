@@ -1115,12 +1115,9 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             if reset.is_empty() {
                 return Some(app.run("negative.syncRoll", json!({"ids": ids})));
             }
-            let film = app.session.active().and_then(|id| app.session.develop_of(id)).map(|d| d.negative.film).filter(|f| f.label() != "Off");
-            let film = film
-                .and_then(|f| serde_json::to_value(f).ok())
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_else(|| "colorNegative".into());
-            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: ids });
+            // (no film type chosen here: confirming lets negative.syncRoll infer it from the selection, as it does without
+            // the dialog)
+            app.ui.dialog = Some(Dialog::ConvertNegative { film: String::new(), reset, roll: ids, photo: None });
             Ok(Value::Null)
         }
         "dialog.convertNegative" => {
@@ -1133,7 +1130,8 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Some(app.run("negative.convert", json!({"film": film})));
             }
             let film = film.as_str().unwrap_or("colorNegative").to_string();
-            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: Vec::new() });
+            let photo = app.session.active().map(|id| id.0);
+            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: Vec::new(), photo });
             Ok(Value::Null)
         }
         "dialog.newFolder" => {

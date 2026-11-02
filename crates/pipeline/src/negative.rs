@@ -33,6 +33,8 @@ const Y: [f32; 3] = [0.2627, 0.6780, 0.0593];
 /// Fitted on a maintainer-supplied 6×6 colour negative, as a Fuji RAF camera scan and as a JPEG scan, against a
 /// reference positive the maintainer made with another converter: mean L* of both within 1 of the reference's 57.8.
 const MID_GREY: f32 = 0.25;
+/// Largest exponent (stops from mid grey) the conversion evaluates: far past white, far short of `exp2`'s overflow.
+const MAX_STOPS: f32 = 40.0;
 /// Normalised density offset per 100 of Temp / Tint (and toning).
 const SHIFT: f32 = 0.08;
 /// Part of the density range Black Point / White Point move at ±100.
@@ -111,12 +113,14 @@ const EDGE_CLEARER: f32 = 1.08;
 /// base, so the film edge may be several times brighter than the picture's clearest part; bare light through a holder
 /// gap or a leak is told apart by clipping ([`CLIPPED`]) in a scan exposed for the film.
 const EDGE_MAX: f32 = 8.0;
-/// A channel at this fraction of the scan's own white level is clipped: bare light, not film. The white level is
-/// each channel's largest value in the scan, when that reaches [`WHITE`]: a raw's channels clip at their white
-/// balance gains (above 1, unequal), a rendered file's at 1; a scan that never reaches it has nothing clipped.
-const CLIPPED: f32 = 0.98;
-/// Smallest channel maximum that counts as the scan's white level (clipped light): below it the brightest thing in
-/// the scan is film.
+/// Clipped light is a plateau: a tile is clipped when at least [`PLATEAU`] of its pixels sit within this fraction of a
+/// channel's largest value in the scan. Film never does that (it has grain), even when it is itself the brightest
+/// thing in the scan, as an unclipped rebate lifted above 1 by a raw's white balance gains is; light at the sensor's
+/// (or a rendered file's) white level does, whatever that level is per channel.
+const CLIPPED: f32 = 0.9995;
+/// The part of a tile's pixels at the plateau that makes it clipped.
+const PLATEAU: f32 = 0.5;
+/// Smallest channel maximum that can be a white level: below it nothing in the scan clipped.
 const WHITE: f32 = 0.98;
 
 fn luma(p: [f32; 3]) -> f32 {
@@ -134,7 +138,8 @@ fn samples(src: &Rgb32f, r: Rect) -> Vec<[f32; 3]> {
     let y0 = ((r.y0 * h as f64) as usize).min(h - 1);
     let x1 = ((r.x1 * w as f64).ceil() as usize).clamp(x0 + 1, w);
     let y1 = ((r.y1 * h as f64).ceil() as usize).clamp(y0 + 1, h);
-    let step = w.max(h).div_ceil(ANALYSIS_EDGE).max(1);
+    // on the region's own grid, so a small crop is sampled as finely as the whole scan
+    let step = (x1 - x0).max(y1 - y0).div_ceil(ANALYSIS_EDGE).max(1);
     let mut out = Vec::with_capacity((x1 - x0).div_ceil(step) * (y1 - y0).div_ceil(step));
     for y in (y0..y1).step_by(step) {
         for x in (x0..x1).step_by(step) {
@@ -193,7 +198,12 @@ pub fn detect_base(src: &Rgb32f, clear: [f32; 3], interior: Rect, one_strip: boo
     let (sx, sy) = ((tw / 2.0).max(1.0 / TILE_GRID as f64), (th / 2.0).max(1.0 / TILE_GRID as f64));
     // each channel's white level, where the scan reaches one (see CLIPPED)
     let peak = samples(src, Rect::UNIT).iter().fold([0.0f32; 3], |m, p| [0, 1, 2].map(|i| m[i].max(p[i])));
-    let clipped = |m: &[f32; 3]| (0..3).any(|i| peak[i] >= WHITE && m[i] >= CLIPPED * peak[i]);
+    let clipped = |px: &[[f32; 3]]| {
+        (0..3).any(|i| {
+            let at = px.iter().filter(|p| p[i] >= CLIPPED * peak[i]).count();
+            peak[i] >= WHITE && at as f32 >= PLATEAU * px.len() as f32
+        })
+    };
     let mut found: Vec<([f32; 3], Rect, f32)> = Vec::new();
     let mut ys: Vec<f32> = Vec::with_capacity(64);
     let mut px: Vec<[f32; 3]> = Vec::with_capacity(64);
@@ -218,7 +228,7 @@ pub fn detect_base(src: &Rgb32f, clear: [f32; 3], interior: Rect, one_strip: boo
             }
             let m = median(&px);
             let y = luma(m);
-            if clipped(&m) || m.iter().zip(&clear).any(|(c, k)| *c < EDGE_MIN * k) || y < EDGE_CLEARER * clear_y || y > EDGE_MAX * clear_y {
+            if clipped(&px) || m.iter().zip(&clear).any(|(c, k)| *c < EDGE_MIN * k) || y < EDGE_CLEARER * clear_y || y > EDGE_MAX * clear_y {
                 continue;
             }
             found.push((m, r, y));
@@ -228,14 +238,35 @@ pub fn detect_base(src: &Rgb32f, clear: [f32; 3], interior: Rect, one_strip: boo
     if found.len() < MIN_TILES {
         return None;
     }
-    // the brightest cluster: from the top, the first tile with at least MIN_TILES tiles (itself included) of its colour
-    // (every channel within SAME_EDGE); a few stray bright tiles can't form one, a film edge always does
+    // the brightest cluster: from the top, each tile not yet in a cluster starts one with the unclaimed tiles of its
+    // colour (every channel within SAME_EDGE); the first with at least MIN_TILES tiles that looks like a film edge
+    // wins. A few stray bright tiles can't form one, a film edge always does; each tile is weighed in one cluster only,
+    // so a large clear patch that isn't an edge costs one rejection, not one per tile.
     found.sort_by(|a, b| b.2.total_cmp(&a.2));
     let same = |a: &[f32; 3], b: &[f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= SAME_EDGE * y);
-    let group: Vec<&([f32; 3], Rect, f32)> = found.iter().map(|t| t.0).find_map(|anchor| {
-        let g: Vec<&([f32; 3], Rect, f32)> = found.iter().filter(|t| same(&t.0, &anchor)).collect();
-        (g.len() >= MIN_TILES && looks_like_edge(&g, (sx, sy), one_strip)).then_some(g)
-    })?;
+    let mut claimed = vec![false; found.len()];
+    let mut group: Option<Vec<&([f32; 3], Rect, f32)>> = None;
+    for i in 0..found.len() {
+        if claimed.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        let anchor = found.get(i)?.0;
+        let mut g = Vec::new();
+        for (j, t) in found.iter().enumerate().skip(i) {
+            if let Some(c) = claimed.get_mut(j)
+                && !*c
+                && same(&t.0, &anchor)
+            {
+                *c = true;
+                g.push(t);
+            }
+        }
+        if g.len() >= MIN_TILES && looks_like_edge(&g, (sx, sy), one_strip) {
+            group = Some(g);
+            break;
+        }
+    }
+    let group = group?;
     let colours: Vec<[f32; 3]> = group.iter().map(|t| t.0).collect();
     let rect = group.iter().map(|t| t.1).reduce(|a, b| a.union(&b))?;
     Some((median(&colours), rect))
@@ -456,6 +487,7 @@ fn range_of(film: FilmType, px: &[[f32; 3]], base: [f32; 3], base_source: BaseSo
         base_source,
         base_rect,
         region: None,
+        film: Some(film),
     })
 }
 
@@ -466,7 +498,8 @@ pub fn resolve(src: &Rgb32f, s: &DevelopSettings) -> Option<Film> {
         return None;
     }
     let n = &s.negative;
-    let a = match n.analysis.filter(FilmAnalysis::is_valid) {
+    // (one measured for another film type is measured again: a negative's densities don't fit a slide)
+    let a = match n.analysis.filter(|a| a.fits(n.film)) {
         Some(a) => a,
         None => analyze(src, n, s.negative_region(), None).ok()?,
     };
@@ -608,7 +641,9 @@ impl Film {
             let n = balance(&self.curves[i], self.gamma[i], n);
             let w = n.clamp(0.0, 1.0);
             let n = n + self.offset[i] + (1.0 - w) * (1.0 - w) * self.shadow[i] + w * w * self.highlight[i];
-            let l = self.mid * (((n - self.center) * self.stops).exp2() - self.floor) / (1.0 - self.floor).max(EPS);
+            // (the exponent capped well below f32's overflow: an extreme highlight clips to white, never to 0)
+            let e = ((n - self.center) * self.stops).clamp(-MAX_STOPS, MAX_STOPS);
+            let l = self.mid * (e.exp2() - self.floor) / (1.0 - self.floor).max(EPS);
             out[i] = if l.is_finite() { l.max(0.0) } else { 0.0 };
         }
         let m = &self.matrix;

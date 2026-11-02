@@ -160,3 +160,26 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
 
 /// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
 const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+
+/// Copy / paste / sync carry the Negative group whole: from an unconverted photo it turns the target's conversion
+/// off, from an unlocked one it unlocks the target (the saved JSON leaves both out, as defaults).
+#[test]
+fn the_negative_group_copies_off_and_unlocked_too() {
+    use crate::{FilmType, SettingsGroup, apply_partial, extract_groups};
+    let mut target = DevelopSettings::default();
+    target.negative.film = FilmType::ColorNegative;
+    target.negative.locked = true;
+    let off = extract_groups(&DevelopSettings::default(), &[SettingsGroup::Negative]);
+    assert_eq!(apply_partial(&target, &off, 1.0).negative.film, FilmType::Off, "pasting an unconverted photo's group");
+    let mut unlocked = DevelopSettings::default();
+    unlocked.negative.film = FilmType::ColorNegative;
+    let partial = extract_groups(&unlocked, &[SettingsGroup::Negative]);
+    let pasted = apply_partial(&target, &partial, 1.0);
+    assert!(!pasted.negative.locked && pasted.negative.film == FilmType::ColorNegative);
+    // other groups don't drag the Negative group along, and the default copy (presets too) leaves it out, so a preset
+    // made from an ordinary photo never switches a converted scan back to its negative
+    assert!(extract_groups(&DevelopSettings::default(), &[SettingsGroup::Light]).get("negative").is_none());
+    assert!(!SettingsGroup::default_copy().contains(&SettingsGroup::Negative));
+    let look = extract_groups(&DevelopSettings::default(), &SettingsGroup::default_copy());
+    assert!(apply_partial(&target, &look, 0.4).negative.converts());
+}

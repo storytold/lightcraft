@@ -43,7 +43,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // (a converted film scan too: its white balance is relative to the positive)
     let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb()) && !d.negative_active();
     let mut d = d;
-    if d.wb.mode == WbMode::AsShot && app.session.catalog.photo(id).is_some_and(|p| p.relative_wb()) {
+    // (a converted film scan too: As Shot is its positive's neutral, as the render reads it)
+    if d.wb.mode == WbMode::AsShot && (d.negative_active() || app.session.catalog.photo(id).is_some_and(|p| p.relative_wb())) {
         let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
         wb.temp = 6500.0;
         wb.tint = 0.0;

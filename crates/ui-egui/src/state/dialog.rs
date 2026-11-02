@@ -296,12 +296,14 @@ pub enum Dialog {
     },
     /// Confirm converting a film scan whose edits made on the negative will be reset (`negative.conflicts`).
     ConvertNegative {
-        /// The film type to convert as (`negative.convert`'s `film`).
+        /// The film type to convert as (`negative.convert`'s `film`); unused by Sync Roll, which infers it.
         film: String,
         /// The panels whose edits are reset.
         reset: Vec<String>,
-        /// Sync Roll's frames (`negative.syncRoll`'s `ids`); empty: Convert on the active photo.
+        /// Sync Roll's frames (`negative.syncRoll`'s `ids`); empty: Convert on `photo`.
         roll: Vec<u64>,
+        /// The photo Convert warned about: the one converted, whatever is active when the dialog is confirmed.
+        photo: Option<u64>,
     },
     /// Confirm deleting mask effect presets.
     DeleteEffects {

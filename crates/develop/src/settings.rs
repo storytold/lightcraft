@@ -1354,6 +1354,10 @@ pub struct FilmAnalysis {
     /// source coordinates): a different crop now means the analysis is out of date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<lightcraft_geom::Rect>,
+    /// The film type the densities were measured for: a negative's statistics don't fit a slide's, nor the reverse,
+    /// so an analysis of another type is measured again ([`FilmAnalysis::fits`]). `None`: written before it existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub film: Option<FilmType>,
 }
 
 /// The fractions of a frame's pixels below each of [`FilmAnalysis::tones`]' densities.
@@ -1392,12 +1396,18 @@ impl Default for FilmAnalysis {
             base_source: BaseSource::Estimated,
             base_rect: None,
             region: None,
+            film: None,
         }
     }
 }
 
 impl FilmAnalysis {
     /// Every number finite, the base positive and each range ordered: anything else renders unconverted.
+    /// Valid ([`Self::is_valid`]) and measured for `film` (or of unknown type, from before the type was recorded).
+    pub fn fits(&self, film: FilmType) -> bool {
+        self.is_valid() && self.film.is_none_or(|f| f == film)
+    }
+
     pub fn is_valid(&self) -> bool {
         let fin = |a: &[f64; 3]| a.iter().all(|v| v.is_finite());
         fin(&self.base)

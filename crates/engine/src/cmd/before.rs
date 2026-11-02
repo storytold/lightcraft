@@ -62,7 +62,10 @@ fn before_to_after(s: &mut Session, swap: bool) -> Result<Value> {
     let id = active(s, c)?;
     let photo = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
     let after = photo.develop.clone();
-    let before = s.before.get(&id).map(|b| (**b).clone()).unwrap_or_else(|| photo.import_defaults());
+    let mut before = s.before.get(&id).map(|b| (**b).clone()).unwrap_or_else(|| photo.import_defaults());
+    // the film conversion stays, as the Before side shows it (`Session::before_settings`): the After side must not turn
+    // back into the negative
+    before.negative = photo.develop.negative;
     s.set_develop(id, before, if swap { "Swap Before and After" } else { "Copy Before to After" })?;
     if swap {
         s.before.insert(id, after);

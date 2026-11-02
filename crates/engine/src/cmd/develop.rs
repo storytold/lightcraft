@@ -65,6 +65,8 @@ fn wb_mode_ignores_its_numbers(mode: WbMode, info: &lightcraft_pipeline::SourceI
 /// numbers, neither, or a mode of its own. [`merge_settings_for_photo`] and `preset.apply` both start here, and
 /// both finish with `normalize_wb` so the photo ends on the scale it is edited on.
 pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value, info: &lightcraft_pipeline::SourceInfo) -> Option<DevelopSettings> {
+    // (a converted film scan's white balance is relative to its positive, whatever its source)
+    let info = &*lightcraft_pipeline::local::wb_source(info, d);
     let mut d = (*d).clone();
     let wb = partial.get("wb").and_then(Value::as_object);
     // the partial names one of the two numbers, and not both or neither
@@ -115,6 +117,7 @@ pub(crate) fn merge_settings_for_photo(
     partial: &Value,
     info: &lightcraft_pipeline::SourceInfo,
 ) -> std::result::Result<DevelopSettings, serde_json::Error> {
+    let info = &*lightcraft_pipeline::local::wb_source(info, d);
     let prepared = prepare_photo_for_wb_partial(d, partial, info);
     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
     let mut out = prepared.as_ref().unwrap_or(d).merged(partial)?;
@@ -1021,7 +1024,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         let mut nd = (*d).clone();
                         if ctl == "wb.temp" || ctl == "wb.tint" {
                             // each photo on its own scale: Kelvin (an old relative value converted first) or relative
+                            // (a converted film scan: relative to its positive)
                             let info = s.source_info(id);
+                            let info = lightcraft_pipeline::local::wb_source(&info, &nd).into_owned();
                             lightcraft_pipeline::local::normalize_wb(&mut nd, &info);
                             if nd.wb.mode == WbMode::AsShot {
                                 nd.wb.temp = info.as_shot_temp;
@@ -1112,6 +1117,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
                     // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
                     let info = s.source_info(id);
+                    // (a converted film scan: relative to its positive)
+                    let info = lightcraft_pipeline::local::wb_source(&info, &d).into_owned();
                     let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
                     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
                     let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);

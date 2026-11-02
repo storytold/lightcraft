@@ -96,17 +96,20 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
                 d.reset_negative_conflicts();
             }
         }
+        // (before the preset: a film preset makes the photo read as converted, and its white balance would then be
+        // kept as if it were set on the positive)
+        let was_converted = d.negative.converts();
         if let Some(pr) = &preset {
             *d = lightcraft_develop::apply_partial(d, &pr.settings, 1.0);
         }
-        let was_converted = d.negative.converts();
         if !was_converted || p.get("film").is_some() {
             d.negative.film = film;
         }
         d.set_section_enabled("negative", true);
         // a roll-synced frame keeps the roll's analysis; otherwise keep a base sampled from the film edge and measure
         // everything else again
-        if !(d.negative.locked && d.negative.analysis.is_some_and(|a| a.is_valid())) {
+        if !(d.negative.locked && d.negative.analysis.is_some_and(|a| a.fits(d.negative.film))) {
+            d.negative.locked = false;
             let sampled = d.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
             d.negative.analysis = Some(analysis_of(s, id, d, sampled, C)?);
         }
@@ -147,10 +150,12 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
         if !d.negative.converts() {
             return Err(bad(C, format!("photo {} is not converted (negative.convert first)", id.0)));
         }
-        // a roll-synced frame keeps the roll's numbers (negative.unlock first)
-        if d.negative.locked {
+        // a roll-synced frame keeps the roll's numbers (negative.unlock first), unless they were measured for another
+        // film type
+        if d.negative.locked && d.negative.analysis.is_some_and(|a| a.fits(d.negative.film)) {
             return Ok(());
         }
+        d.negative.locked = false;
         let sampled =
             d.negative.analysis.filter(|a| keep_sampled && a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
         d.negative.analysis = Some(analysis_of(s, id, d, sampled, C)?);
@@ -181,9 +186,9 @@ fn sample_base(s: &mut Session, p: &Value) -> Result<Value> {
         let r = d.orientation.inverse().map_norm_rect(shown);
         let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad(C, e))?;
         let base = lightcraft_pipeline::negative::sample_mean(&src, r).ok_or_else(|| bad(C, "no usable pixels in `rect`"))?;
+        // (an unconverted photo is converted first, where its edits made on the negative are dealt with)
         if !d.negative.converts() {
-            d.negative.film = FilmType::ColorNegative;
-            reset_wb(d);
+            return Err(bad(C, format!("photo {} is not converted (negative.convert first)", id.0)));
         }
         d.negative.analysis =
             Some(lightcraft_pipeline::negative::analyze(&src, &d.negative, d.negative_region(), Some((base, r))).map_err(|e| bad(C, e))?);
@@ -206,18 +211,39 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if film == Some(FilmType::Unknown) {
         return Err(bad(C, "`film` must be off, colorNegative, bwNegative or slide"));
     }
-    let done = commit_each(s, &ids, C, "Negative Conversion", |_, _, d| {
-        if let Some(f) = film {
-            if f != d.negative.film {
-                // a range measured for another film type doesn't fit this one: measured again at render time
-                // (negative.analyze stores it)
-                d.negative.analysis = d.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled && f == FilmType::ColorNegative);
-                d.negative.locked = false;
-                if !d.negative.converts() {
+    let keep = p.get("keepEdits").and_then(Value::as_bool).unwrap_or(false);
+    let mut reset: Vec<&'static str> = Vec::new();
+    let done = commit_each(s, &ids, C, "Negative Conversion", |s, id, d| {
+        if let Some(f) = film
+            && f != d.negative.film
+        {
+            let was_converted = d.negative.converts();
+            if !was_converted && !keep {
+                // switched on here: the edits made on the negative go, as with negative.convert
+                for name in d.negative_conflicts() {
+                    if !reset.contains(&name) {
+                        reset.push(name);
+                    }
+                }
+                d.reset_negative_conflicts();
+            }
+            // a range measured for another film type doesn't fit this one: measured again now and stored, keeping a
+            // base picked on the film edge where it still applies
+            let sampled = d
+                .negative
+                .analysis
+                .filter(|a| a.base_source == BaseSource::Sampled && f == FilmType::ColorNegative)
+                .and_then(|a| a.base_rect.map(|r| (a.base, r)));
+            d.negative.film = f;
+            d.negative.locked = false;
+            d.negative.analysis = None;
+            if d.negative.converts() {
+                d.set_section_enabled("negative", true);
+                d.negative.analysis = Some(analysis_of(s, id, d, sampled, C)?);
+                if !was_converted {
                     reset_wb(d);
                 }
             }
-            d.negative.film = f;
         }
         if let Some(t) = tone {
             d.negative.tone = t;
@@ -227,7 +253,11 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })?;
-    Ok(report(&done))
+    let mut out = report(&done);
+    if let Some(o) = out.as_object_mut() {
+        o.insert("reset".into(), json!(reset));
+    }
+    Ok(out)
 }
 
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
@@ -264,8 +294,12 @@ pub struct RollPlan {
 /// One frame of a [`RollPlan`].
 pub struct RollFrame {
     pub id: PhotoId,
-    /// The frame's settings when the sync was planned (its crop, border and any sampled base are measured).
+    /// The frame's settings as measured: as planned, with the roll's film type (its crop, border and any sampled base
+    /// are measured).
     pub settings: DevelopSettings,
+    /// The frame's settings as they were when the sync was planned, untouched: what [`roll_apply`] checks the frame
+    /// against, so an edit made while the roll was read is never overwritten.
+    pub original: DevelopSettings,
     pub source: crate::media::SourceRef,
 }
 
@@ -288,9 +322,11 @@ pub fn roll_plan(s: &mut Session, p: &Value) -> Result<RollPlan> {
         None => None,
         Some(_) => return Err(bad(C, "`film` must be colorNegative, bwNegative or slide")),
     };
-    // the film type: asked for, else the active frame's (or the first converted frame's), else colour negative
+    // the film type: asked for, else the active frame's when it is one of the roll's (or the first converted frame's),
+    // else colour negative
     let from_frames = s
         .active()
+        .filter(|a| ids.contains(a))
         .into_iter()
         .chain(ids.iter().copied())
         .filter_map(|id| s.develop_of(id))
@@ -300,10 +336,11 @@ pub fn roll_plan(s: &mut Session, p: &Value) -> Result<RollPlan> {
     let mut frames = Vec::with_capacity(ids.len());
     for id in ids {
         let photo = s.catalog.photo(id).cloned().ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
-        let mut settings = (*s.develop_of(id).unwrap_or_default()).clone();
+        let original = (*s.develop_of(id).unwrap_or_default()).clone();
+        let mut settings = original.clone();
         settings.negative.film = film;
         let source = s.media.source_ref(&photo, SourceLevel::Preview);
-        frames.push(RollFrame { id, settings, source });
+        frames.push(RollFrame { id, settings, original, source });
     }
     Ok(RollPlan { frames, film, reset_edits: !p.get("keepEdits").and_then(Value::as_bool).unwrap_or(false) })
 }
@@ -355,8 +392,19 @@ pub struct RollMeasured {
 /// step; frames not yet converted are converted (their edits made on the negative reset unless the plan keeps them).
 pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Result<Value> {
     const C: &str = "negative.syncRoll";
-    let RollMeasured { analysis: roll, skipped, mixed } = measured;
+    let RollMeasured { analysis: roll, mut skipped, mixed } = measured;
+    // a frame whose measured inputs changed while the roll was read (another crop, border, picked base or film type)
+    // keeps its newer edit: the roll's numbers would describe a picture it no longer shows
+    for f in &plan.frames {
+        let now = s.develop_of(f.id);
+        if !skipped.iter().any(|(k, _)| *k == f.id) && now.is_none_or(|d| roll_inputs(&d) != roll_inputs(&f.original)) {
+            skipped.push((f.id, "changed while the roll was read".into()));
+        }
+    }
     let ids: Vec<PhotoId> = plan.frames.iter().map(|f| f.id).filter(|id| !skipped.iter().any(|(k, _)| k == id)).collect();
+    if ids.len() < 2 {
+        return Err(bad(C, "fewer than two frames are left to sync (the others changed while the roll was read, or couldn't be read)"));
+    }
     let mut reset: Vec<&'static str> = Vec::new();
     let done = commit_each(s, &ids, C, "Sync Roll", |_, _, d| {
         if !d.negative.converts() {
@@ -385,6 +433,17 @@ pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Re
         }
     }
     Ok(out)
+}
+
+/// What a roll's measurement of a frame depends on: the part of the source measured, the border left out, a base picked
+/// on the frame, and its film type.
+fn roll_inputs(d: &DevelopSettings) -> (lightcraft_geom::Rect, u64, Option<([u64; 3], [u64; 4])>, FilmType) {
+    let sampled = d
+        .negative
+        .analysis
+        .filter(|a| a.base_source == BaseSource::Sampled)
+        .and_then(|a| a.base_rect.map(|r| (a.base.map(f64::to_bits), [r.x0, r.y0, r.x1, r.y1].map(f64::to_bits))));
+    (d.negative_region(), d.negative.border.to_bits(), sampled, d.negative.film)
 }
 
 /// `negative.syncRoll` in place (the app reads the frames in the background unless `wait`).
@@ -441,7 +500,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "Sample Film Base",
                 [],
                 None,
-                "{rect: {x0, y0, x1, y1} (0..1 of the photo as shown, uncropped), ids?: [photo]} — set the film base from unexposed film (the rebate between frames) and re-measure the range",
+                "{rect: {x0, y0, x1, y1} (0..1 of the photo as shown, uncropped), ids?: [photo]} — set the film base of a converted photo from unexposed film (the rebate between frames) and re-measure the range",
                 has_active,
                 sample_base
             )
@@ -453,7 +512,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "Negative Conversion Options",
                 [],
                 None,
-                "{film?: off|colorNegative|bwNegative|slide, tone?: linear|soft|standard|hard, colorModel?: none|neutral|warm|cool, ids?: [photo]} — sliders are negative.* controls (develop.set)",
+                "{film?: off|colorNegative|bwNegative|slide, tone?: linear|soft|standard|hard, colorModel?: none|neutral|warm|cool, keepEdits?: bool, ids?: [photo]} — a new film type is measured again and stored; switching an unconverted photo on resets its edits made on the negative unless keepEdits (listed in `reset`); sliders are negative.* controls (develop.set)",
                 has_active,
                 set
             )

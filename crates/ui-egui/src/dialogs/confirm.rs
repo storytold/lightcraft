@@ -242,8 +242,11 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
-        Dialog::ConvertNegative { film, roll, .. } if roll.is_empty() => app.run("negative.convert", json!({"film": film})),
-        Dialog::ConvertNegative { film, roll, .. } => app.run("negative.syncRoll", json!({"ids": roll, "film": film})),
+        // the photo the dialog warned about, whatever is active now
+        Dialog::ConvertNegative { film, roll, photo, .. } if roll.is_empty() => {
+            app.run("negative.convert", json!({"film": film, "ids": photo.map(|p| vec![p])}))
+        }
+        Dialog::ConvertNegative { roll, .. } => app.run("negative.syncRoll", json!({"ids": roll})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } | Dialog::ViewOptions => {

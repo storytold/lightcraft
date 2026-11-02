@@ -123,13 +123,17 @@ pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
         }
         // the analysis measured another part of the photo than the crop shows now
         let region = d.negative_region();
-        let stale = n.analysis.map(|a| match a.region {
-            Some(r) => [r.x0 - region.x0, r.y0 - region.y0, r.x1 - region.x1, r.y1 - region.y1].iter().any(|v| v.abs() > 1e-3),
-            // measured by an older LightCraft (whole scan, medians only)
-            None => true,
+        // (measured for another film type: always out of date)
+        let stale = n.analysis.map(|a| {
+            !a.fits(n.film)
+                || match a.region {
+                    Some(r) => [r.x0 - region.x0, r.y0 - region.y0, r.x1 - region.x1, r.y1 - region.y1].iter().any(|v| v.abs() > 1e-3),
+                    // measured by an older LightCraft (whole scan, medians only)
+                    None => true,
+                }
         });
         // (a roll-synced frame keeps the roll's numbers whatever its crop)
-        if stale == Some(true) && !n.locked {
+        if stale == Some(true) && (!n.locked || n.analysis.is_some_and(|a| !a.fits(n.film))) {
             row(ui, |ui| {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr("The analysis is out of date (crop changed, or an older version): Re-analyze"))

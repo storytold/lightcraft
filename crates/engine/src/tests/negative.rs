@@ -226,3 +226,107 @@ fn mixed_scans_still_sync_but_warn() {
     let r = s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
     assert!(r.get("warning").is_none(), "{r}");
 }
+
+#[test]
+fn copy_before_to_after_keeps_the_conversion() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.4})).unwrap();
+    s.execute("beforeAfter.copyBeforeToAfter", &json!({})).unwrap();
+    let d = s.develop_of(s.active().unwrap()).unwrap();
+    assert!(d.negative.converts() && d.light.exposure == 0.0, "the before state, still converted");
+    s.execute("beforeAfter.swap", &json!({})).unwrap();
+    assert!(neg(&s).converts());
+}
+
+#[test]
+fn a_frame_edited_while_the_roll_is_read_keeps_its_edit() {
+    use crate::cmd::negative::{roll_apply, roll_measure, roll_plan};
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    let plan = roll_plan(&mut s, &json!({"ids": ids})).unwrap();
+    let measured = roll_measure(&plan, &std::sync::atomic::AtomicBool::new(false), &|_| ()).unwrap();
+    // meanwhile frame 2 is cropped
+    let edited = lightcraft_catalog::PhotoId(ids[1]);
+    s.execute(
+        "develop.merge",
+        &json!({"ids": [ids[1]], "settings": {"crop": {"geometry": {"angle": 0.0, "rect": {"x0": 0.2, "y0": 0.2, "x1": 0.8, "y1": 0.8}}}}}),
+    )
+    .ok();
+    if s.develop_of(edited).unwrap().crop.geometry.rect.x0 < 0.1 {
+        let mut d = (*s.develop_of(edited).unwrap()).clone();
+        d.crop.geometry.rect = lightcraft_geom::Rect::new(0.2, 0.2, 0.8, 0.8);
+        s.set_develop(edited, d, "crop").unwrap();
+    }
+    let r = roll_apply(&mut s, plan, measured).unwrap();
+    assert!(r["skipped"].as_array().unwrap().iter().any(|v| v["id"] == ids[1]), "{r}");
+    assert!(!s.develop_of(edited).unwrap().negative.locked, "the edited frame isn't overwritten");
+    assert!(s.develop_of(lightcraft_catalog::PhotoId(ids[0])).unwrap().negative.locked);
+}
+
+#[test]
+fn a_locked_frame_switched_to_another_film_type_is_measured_again() {
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[0]], "active": ids[0]})).unwrap();
+    // a preset switches the type without going through negative.set
+    s.execute("develop.merge", &json!({"settings": {"negative": {"film": "slide"}}})).unwrap();
+    s.execute("negative.analyze", &json!({})).unwrap();
+    let n = neg(&s);
+    assert_eq!(n.analysis.unwrap().film, Some(FilmType::Slide));
+    assert!(!n.locked, "its own analysis now, not the roll's");
+}
+
+#[test]
+fn a_new_film_type_from_negative_set_is_measured_and_stored() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.execute("negative.set", &json!({"film": "slide"})).unwrap();
+    let a = neg(&s).analysis.expect("stored, not left to the render");
+    assert_eq!(a.film, Some(FilmType::Slide));
+}
+
+#[test]
+fn switching_an_unconverted_photo_on_resets_its_negative_edits_and_picking_a_base_needs_a_conversion() {
+    let mut s = Session::with_demo();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.9})).unwrap();
+    assert!(s.execute("negative.sampleBase", &json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 0.1, "y1": 0.1}})).is_err(), "convert first");
+    let r = s.execute("negative.set", &json!({"film": "colorNegative"})).unwrap();
+    assert!(r["reset"].as_array().unwrap().contains(&json!("Light")), "{r}");
+    assert_eq!(s.develop_of(s.active().unwrap()).unwrap().light.exposure, 0.0);
+}
+
+#[test]
+fn convert_with_a_film_preset_and_kept_edits_still_starts_the_white_balance_as_converted() {
+    let mut s = Session::with_demo();
+    s.execute("develop.wb", &json!({"mode": "custom", "temp": 4100, "tint": 15})).unwrap();
+    s.execute("negative.convert", &json!({"preset": "lc.neg-standard", "keepEdits": true})).unwrap();
+    let wb = s.develop_of(s.active().unwrap()).unwrap().wb;
+    assert_eq!((wb.mode, wb.temp, wb.tint), (lightcraft_develop::WbMode::AsShot, 6500.0, 0.0));
+}
+
+#[test]
+fn a_roll_takes_its_film_type_from_its_own_frames() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(4).map(|p| p.id.0).collect();
+    // frames 1 and 2 are B&W negatives; the active photo (frame 3) is an unrelated colour negative outside the roll
+    s.execute("negative.set", &json!({"ids": [ids[0], ids[1]], "film": "bwNegative"})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[3]], "active": ids[3]})).unwrap();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.execute("negative.syncRoll", &json!({"ids": [ids[0], ids[1]], "wait": true})).unwrap();
+    for id in [ids[0], ids[1]] {
+        assert_eq!(s.develop_of(lightcraft_catalog::PhotoId(id)).unwrap().negative.film, FilmType::BwNegative);
+    }
+}
+
+#[test]
+fn a_preset_made_from_a_converted_photo_carries_no_film_base_or_lock() {
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
+    let d = s.develop_of(lightcraft_catalog::PhotoId(ids[0])).unwrap();
+    let p = lightcraft_develop::Preset::from_settings("x", "X", "User", &d, &[lightcraft_develop::SettingsGroup::Negative]);
+    let n = &p.settings["negative"];
+    assert!(n.get("analysis").is_none() && n.get("locked").is_none() && n["film"] == "colorNegative", "{n}");
+}
