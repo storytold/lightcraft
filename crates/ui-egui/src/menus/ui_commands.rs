@@ -99,6 +99,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
     // Library grids only (Photo Grid, Square Grid, People): the bottom-bar slider's step by key
     ("view.thumbSizeUp", "Increase Grid Thumbnail Size", Some("="), "View"),
+    ("view.importThumbSize", "Import Thumbnail Size", None, ""),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
     ("view.clipping", "Clipping", Some("J"), "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
@@ -152,6 +153,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // the Keywords panel with the cursor in its Add keyword box
     ("panel.addKeywords", "Add Keywords", Some("Cmd+K"), ""),
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
+    // Edit Keyword Tag for the keyword picked in the Keyword List
+    ("panel.editKeywords", "Edit Keywords", Some("Cmd+Shift+K"), ""),
     ("panel.activity", "History", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
@@ -191,6 +194,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("slideshow.end", "End Slideshow", None, ""),
     ("view.secondWindow", "Second Window", Some("Cmd+F11"), "Window"),
     ("tool.keywordPainter", "Keyword Painter", None, ""),
+    ("tool.enablePainting", "Enable Painting", Some("Cmd+Alt+K"), "Photo"),
     ("view.gridInfo", "Grid Info", None, ""),
     // {mode?: auto | light | dark}: Appearance Mode (cycles Auto, Light, Dark when omitted; the
     // top bar's appearance button). View ▸ Appearance lists the modes.
@@ -232,6 +236,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
+    // the keywords ⇧K adds or removes, typed with commas between them
+    ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), ""),
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
