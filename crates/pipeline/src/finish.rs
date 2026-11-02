@@ -20,6 +20,15 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
+/// detail `det` (log luminance minus its texture blur): 1 everywhere at 0, only stronger edges
+/// as it rises. The GPU kernel (`finish.wgsl`) computes the same; Alt-drag on Masking shows it
+/// ([`crate::Overlay::SharpenMask`]).
+#[inline]
+pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
+    if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -78,6 +87,10 @@ pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_
 
 #[inline]
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
+    // A degenerate frame (zero-width crop) maps pixels to NaN/inf coordinates: no grain there.
+    if !x.is_finite() || !y.is_finite() {
+        return 0.0;
+    }
     let (x0, y0) = (x.floor(), y.floor());
     let (fx, fy) = (x - x0, y - y0);
     let h = |i: i32, j: i32| {
@@ -208,7 +221,15 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
-        let grain = (s.grain.amount > 0.0 && effects).then(|| {
+        // A degenerate frame (zero-width crop, zero scale) has no finite grain mapping: skip grain (CPU and GPU).
+        let out_to_norm = frame.out_to_norm(w, h);
+        let finite_frame = px_per_long.is_finite()
+            && px_per_long > 0.0
+            && frame.ow.is_finite()
+            && frame.oh.is_finite()
+            && frame.ow.max(frame.oh) > 0.0
+            && out_to_norm.0.iter().all(|v| v.is_finite());
+        let grain = (s.grain.amount > 0.0 && effects && finite_frame).then(|| {
             let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
         });
@@ -240,7 +261,7 @@ impl FinishParams {
             gain,
             ev,
             grain,
-            out_to_norm: frame.out_to_norm(w, h),
+            out_to_norm,
             ow: frame.ow,
             oh: frame.oh,
             w,
@@ -511,7 +532,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     lum = lum.clamp(0.0, 1.0);
                 }
                 let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                e = e.map(|v| v + k);
+                if k.is_finite() {
+                    e = e.map(|v| v + k);
+                }
             }
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
@@ -647,7 +670,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
         if sharpen != 0.0 {
-            let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
+            let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
             delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
         }
     }
@@ -763,6 +786,13 @@ fn enc(v: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grain_noise_is_finite_for_degenerate_coordinates() {
+        for (x, y) in [(f32::NAN, 1.0), (1.0, f32::INFINITY), (f32::NEG_INFINITY, f32::NAN)] {
+            assert_eq!(grain_noise(x, y, 7), 0.0);
+        }
+    }
 
     #[test]
     fn refine_saturation_restores_the_pre_curve_saturation() {
