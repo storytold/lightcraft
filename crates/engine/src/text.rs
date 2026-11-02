@@ -315,6 +315,14 @@ mod tests {
     }
 
     #[test]
+    fn already_composed_text_stays_as_it_is() {
+        for text in ["", "plain.jpg", "제주도 바다 여행.jpg", "HỌC ĐỂ ỨNG DỤNG"] {
+            assert!(unicode_normalization::is_nfc(text), "{text}");
+            assert_eq!(compose(text), text);
+        }
+    }
+
+    #[test]
     fn bundled_thai_uses_its_glyphs() {
         assert_script_glyphs("Thai", "สวัสดีครับ");
     }
