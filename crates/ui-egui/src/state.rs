@@ -601,6 +601,7 @@ impl UiState {
             StartupView::Last => {}
             StartupView::Grid => self.view = ViewMode::PhotoGrid,
             StartupView::Detail => self.view = ViewMode::Detail,
+            StartupView::Home => self.view = ViewMode::Home,
         }
         self
     }

@@ -12,6 +12,8 @@ pub enum StartupView {
     Last,
     Grid,
     Detail,
+    /// The Home screen.
+    Home,
 }
 
 /// What the desktop app opens at launch (Settings ▸ General ▸ At launch; issue #1290). `--library`

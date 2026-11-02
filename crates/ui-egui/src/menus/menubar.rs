@@ -184,6 +184,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
     (
         "View",
         &[
+            "view.home",
+            "---",
             "view.photoGrid",
             "view.squareGrid",
             "@Grid Info",
@@ -397,6 +399,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "develop.autoSync" => Some(app.session.auto_sync),
         "view.photoCounts" => Some(u.show_counts),
         "view.secondWindow" => Some(u.second_window),
+        "view.home" => Some(u.view == ViewMode::Home),
         "view.photoGrid" => Some(u.view == ViewMode::PhotoGrid),
         "view.squareGrid" => Some(u.view == ViewMode::SquareGrid),
         "view.detail" => Some(u.view == ViewMode::Detail),

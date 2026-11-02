@@ -11,6 +11,7 @@ use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
+    ("home", Icon::Home, ViewMode::Home, "Home Screen"),
     ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
     ("squareGrid", Icon::GridSquare, ViewMode::SquareGrid, "Square Grid (G toggles)"),
     ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
@@ -379,6 +380,7 @@ mod visual_regressions {
                 ViewMode::Survey,
                 ViewMode::Reference,
                 ViewMode::People,
+                ViewMode::Home,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
                     let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
@@ -434,6 +436,7 @@ mod visual_regressions {
                 ViewMode::Survey,
                 ViewMode::Reference,
                 ViewMode::People,
+                ViewMode::Home,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
                     let ctx = egui::Context::default();

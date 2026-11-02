@@ -22,12 +22,12 @@ pub fn shown(session: &lightcraft_engine::Session) -> bool {
 }
 
 /// At launch, an empty library opens on a grid with the sidebar, where the way in is (Detail had
-/// only "Choose a photo in the grid" to say). Square Grid stays as it is; a library with photos
+/// only "Choose a photo in the grid" to say). Square Grid and Home stay as they are; a library with photos
 /// opens as left. The desktop host calls this before it notes what its settings file holds, so
 /// the switch isn't saved for its own sake.
 pub fn open_on_empty_library(app: &mut LightcraftApp) {
     if is_empty(&app.session) {
-        if app.ui.view != ViewMode::SquareGrid {
+        if !matches!(app.ui.view, ViewMode::SquareGrid | ViewMode::Home) {
             app.ui.view = ViewMode::PhotoGrid;
         }
         app.ui.left_panel = true;

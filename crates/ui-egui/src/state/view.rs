@@ -16,6 +16,8 @@ pub enum ViewMode {
     Reference,
     /// A card per person named on faces (close-up, name, photo count).
     People,
+    /// The welcome screen: the ways into a library, recent libraries, help.
+    Home,
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
