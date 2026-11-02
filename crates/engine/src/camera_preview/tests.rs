@@ -1764,6 +1764,44 @@ fn mean_error(scene: &Rgb32f, target: impl Fn([f32; 3]) -> [f32; 3], render: imp
 #[test]
 fn partial_look_when_a_lens_corrected_jpeg_misses_the_gates() {
     let (w, h) = (96usize, 64usize);
+    let (sensor, reference) = lens_corrected_foliage();
+    assert!(fit_pairs(&sensor, &reference).is_none(), "the full look misses the gates");
+    let look = fit_look(&sensor, &reference, &vec![false; w * h], None).expect("a partial look instead of the neutral fallback");
+    assert!(look.hue_sat.is_none());
+    assert_ne!(look.matrix, Mat3::IDENTITY, "a colourful scene gets the damped matrix");
+    // on the registered scene, against what the camera renders
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let neutral = ToneMap::new(0.0, 0.0, 0.0);
+    let partial = mean_error(&sensor, bright_camera, |x| displayed(look.matrix.apply(x), &tone));
+    let fallback = mean_error(&sensor, bright_camera, |x| displayed(x, &neutral));
+    assert!(partial < fallback * 0.25, "partial {partial:.5}, neutral fallback {fallback:.5}");
+    assert!(tone.apply(0.05) < tone.apply(0.2) && tone.apply(0.2) < tone.apply(0.8));
+}
+
+/// The same scene from a camera model with measured spectral matrices: its partial look takes their colour (here the
+/// camera's own, [`bright_camera`]'s matrix) instead of the generic colour damped toward the photo's own matrix, with
+/// a tone and chroma curve fitted on top, and lands closer to what the camera renders.
+#[test]
+fn partial_look_takes_the_measured_colour() {
+    let (w, h) = (96usize, 64usize);
+    let (sensor, reference) = lens_corrected_foliage();
+    let measured = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    let none = vec![false; w * h];
+    let generic = fit_look(&sensor, &reference, &none, None).expect("a partial look");
+    let look = fit_look_with(&sensor, &reference, &none, None, false, Some(measured)).expect("a partial look in the measured colour");
+    assert_eq!(look.matrix, measured);
+    assert!(look.hue_sat.is_none());
+    let error = |look: &CameraLook| {
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        mean_error(&sensor, bright_camera, |x| displayed(look.matrix.apply(x), &tone))
+    };
+    let (with, without) = (error(&look), error(&generic));
+    assert!(with < without * 0.5, "measured colour {with:.5}, generic {without:.5}");
+}
+
+/// A colourful scene with fine detail (foliage) and its camera JPEG ([`bright_camera`]) with barrel distortion.
+fn lens_corrected_foliage() -> (Rgb32f, Rgb32f) {
+    let (w, h) = (96usize, 64usize);
     let scene = |u: f32, v: f32| -> [f32; 3] {
         let base = 0.1 * (1.0 + 0.6 * (0.05 * u + 0.04 * v).sin());
         let detail = 1.0 + 0.8 * (1.7 * u).sin() * (1.3 * v).sin();
@@ -1781,17 +1819,7 @@ fn partial_look_when_a_lens_corrected_jpeg_misses_the_gates() {
             reference.data[y * w + x] = bright_camera(scene(cx + dx * k, cy + dy * k));
         }
     }
-    assert!(fit_pairs(&sensor, &reference).is_none(), "the full look misses the gates");
-    let look = fit_look(&sensor, &reference, &vec![false; w * h], None).expect("a partial look instead of the neutral fallback");
-    assert!(look.hue_sat.is_none());
-    assert_ne!(look.matrix, Mat3::IDENTITY, "a colourful scene gets the damped matrix");
-    // on the registered scene, against what the camera renders
-    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
-    let neutral = ToneMap::new(0.0, 0.0, 0.0);
-    let partial = mean_error(&sensor, bright_camera, |x| displayed(look.matrix.apply(x), &tone));
-    let fallback = mean_error(&sensor, bright_camera, |x| displayed(x, &neutral));
-    assert!(partial < fallback * 0.25, "partial {partial:.5}, neutral fallback {fallback:.5}");
-    assert!(tone.apply(0.05) < tone.apply(0.2) && tone.apply(0.2) < tone.apply(0.8));
+    (sensor, reference)
 }
 
 fn near_black_scene() -> (Rgb32f, Rgb32f) {
@@ -1938,7 +1966,7 @@ fn partial_look_only_when_clearly_better_than_the_neutral_fallback() {
     let mut reference = sensor.clone();
     reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
     let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
-    assert!(fit_partial(&sensor, &reference, &check).is_none(), "no clear gain over the fallback");
+    assert!(fit_partial(&sensor, &reference, &check, None).is_none(), "no clear gain over the fallback");
     // an unrelated picture
     for (i, p) in reference.data.iter_mut().enumerate() {
         *p = [0.05 + (i % 7) as f32 * 0.07, 0.05 + (i % 19) as f32 * 0.02, 0.05 + (i % 29) as f32 * 0.01];
@@ -2554,7 +2582,7 @@ fn a_narrow_curve_is_checked_as_lowered_for_dro() {
         *dst = p.map(|v| v * (0.6 + (y - 0.07) * 0.25) / y);
     }
     let neutral = luma(displayed([0.9; 3], &ToneMap::new(0.0, 0.0, 0.0)));
-    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, true) {
+    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, true, None) {
         let look = with_dro_off_tone(look);
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
         let correction = look.hue_sat.as_ref().and_then(HueSat::new);
@@ -2605,4 +2633,29 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         let sky = luma(displayed(look.matrix.apply([0.9; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
+}
+
+/// The measured colour a partial look takes ([`measured_colour`]) develops the sensor proxy as the model's spectral
+/// matrices develop the raw, keeps white white, and is absent for a model without them or a file with its own.
+#[test]
+fn measured_colour_is_the_spectral_matrices_in_the_proxy_space() {
+    use lightcraft_raw::color::{as_shot_white_xy, camera_transform};
+    let raw = raw_of(RawFormat::Cr3, "Canon", "Canon EOS R50", Default::default());
+    let generic = camera_transform(&raw, as_shot_white_xy(&raw));
+    assert!(generic.matrix_is_fallback);
+    let colour = measured_colour(&raw, &generic).expect("the EOS R50 shares the EOS R10's matrices");
+    let mut filled = raw.clone();
+    assert!(lightcraft_raw::spectral::find(Some("Canon"), "Canon EOS R10").unwrap().fill(&mut filled.color));
+    let spectral = camera_transform(&filled, as_shot_white_xy(&filled));
+    for balanced in [[1.0, 1.0, 1.0], [0.8, 0.3, 0.1], [0.05, 0.2, 0.9]] {
+        let (via_proxy, direct) = (colour.apply(generic.matrix.apply(balanced)), spectral.matrix.apply(balanced));
+        assert!((0..3).all(|c| (via_proxy[c] - direct[c]).abs() < 1e-9), "{via_proxy:?} vs {direct:?}");
+    }
+    let white = colour.apply([1.0; 3]);
+    assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-4), "{white:?}");
+    assert!(colour != Mat3::IDENTITY);
+
+    let unknown = raw_of(RawFormat::Cr3, "Canon", "Canon EOS Unknown", Default::default());
+    assert!(measured_colour(&unknown, &camera_transform(&unknown, as_shot_white_xy(&unknown))).is_none());
+    assert!(measured_colour(&filled, &spectral).is_none(), "a file with matrices of its own");
 }
