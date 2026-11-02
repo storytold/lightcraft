@@ -163,3 +163,27 @@ fn sources_for_auto_come_back_in_order_and_per_photo() {
     }
     assert_eq!(got[0].1.as_ref().unwrap().1.as_shot_temp, 3300.0, "b's own");
 }
+
+/// Review of #3585: a light preset given a tint of its own on a JPEG (where the stored numbers are
+/// what renders) carries that tint to the other photos, as a Custom white balance would, not the
+/// preset's tint.
+#[test]
+fn a_preset_with_its_own_tint_on_a_jpeg_carries_that_tint() {
+    let mut s = Session::with_demo();
+    let ids: Vec<PhotoId> = s.visible_cloned().into_iter().take(2).collect();
+    let (a, b) = (ids[0], ids[1]);
+    let img = std::sync::Arc::new(lightcraft_raster::Rgb32f::filled(48, 32, [0.4, 0.4, 0.4]));
+    let info = lightcraft_pipeline::SourceInfo { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, ..Default::default() };
+    for id in [a, b] {
+        s.media.insert_with_info(id, crate::media::SourceLevel::Thumb, img.clone(), info.clone());
+        s.media.insert_with_info(id, crate::media::SourceLevel::Preview, img.clone(), info.clone());
+    }
+    s.execute("library.select", &json!({"ids": [a.0, b.0], "active": a.0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("develop.wb", &json!({"mode": "daylight", "tint": 30.0})).unwrap();
+    assert!(close(wb(&s, a), (6500.0, 30.0)), "a: {:?}", wb(&s, a));
+    assert!(close(wb(&s, b), wb(&s, a)), "b renders a's numbers: {:?}", wb(&s, b));
+    // a plain preset still gives the preset's numbers
+    s.execute("develop.wb", &json!({"mode": "shade"})).unwrap();
+    assert!(close(wb(&s, b), (6500.0 * 7500.0 / 5500.0, 10.0)), "b: {:?}", wb(&s, b));
+}

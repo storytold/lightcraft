@@ -52,7 +52,15 @@ pub(crate) fn synced_wb(
     use lightcraft_pipeline::local::{effective_wb, normalize_wb};
     let mut d = own.clone();
     normalize_wb(&mut d, oinfo);
-    let mode = new.wb.mode;
+    // A light preset with numbers of its own (`develop.wb {mode, tint}` on a photo on the
+    // relative scale, where the stored numbers are what renders): those numbers travel, as a
+    // Custom white balance does (review of #3585)
+    let overridden = new.wb.mode.preset().is_some()
+        && wb_of_mode(ainfo, new.wb.mode).is_some_and(|(t, ti)| {
+            let (at, ati) = effective_wb(ainfo, new);
+            (at - t).abs() > 1e-6 || (ati - ti).abs() > 1e-6
+        });
+    let mode = if overridden { WbMode::Custom } else { new.wb.mode };
     let resolved = match mode {
         WbMode::Auto => auto,
         WbMode::Custom => None,
