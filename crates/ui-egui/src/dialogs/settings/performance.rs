@@ -58,12 +58,15 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             let _ = app.run("library.preferences", json!({"cacheMb": v}));
         }
     });
-    let used = app.session.media.rendered.disk().map(|d| d.size());
+    // (never counted here: the first count walks the whole folder, on a thread of its own, and a
+    // write in progress holds the size; this dialog draws it every frame)
+    let rendered = &app.session.media.rendered;
+    let used = rendered.disk().map(|_| rendered.disk_size_now());
+    if matches!(used, Some(None)) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
     row(ui, t, crate::i18n::tr("In use"), |ui| {
-        ui.label(
-            RichText::new(used.map(|b| format!("{:.1} MB", b as f64 / 1048576.0)).unwrap_or_else(|| crate::i18n::tr("memory only").to_string()))
-                .color(t.text),
-        );
+        ui.label(RichText::new(in_use_text(used)).color(t.text));
         let r = ui.button(crate::i18n::tr("Clear Cache"));
         register(ui, "button:settingsClearCache", r.rect);
         if r.clicked() {
@@ -87,6 +90,17 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     );
     #[cfg(not(target_arch = "wasm32"))]
     smart_previews(app, ui, t);
+}
+
+/// The disk cache's "In use": its size once counted, "counting…" while the first count of the
+/// folder runs on a thread of its own (`PreviewCache::disk_size_now` is `Some(None)` meanwhile),
+/// "memory only" without a disk cache.
+fn in_use_text(used: Option<Option<u64>>) -> String {
+    match used {
+        Some(Some(b)) => format!("{:.1} MB", b as f64 / 1048576.0),
+        Some(None) => crate::i18n::tr("counting…").to_string(),
+        None => crate::i18n::tr("memory only").to_string(),
+    }
 }
 
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
@@ -192,4 +206,16 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_use_text;
+
+    #[test]
+    fn in_use_reads_counting_until_the_size_is_known() {
+        assert_eq!(in_use_text(Some(None)), "counting…");
+        assert_eq!(in_use_text(Some(Some(3 * 1048576 / 2))), "1.5 MB");
+        assert_eq!(in_use_text(None), "memory only");
+    }
 }

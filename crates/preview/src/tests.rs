@@ -792,3 +792,103 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Settings ▸ Performance showed the disk cache's size with `size()` every frame,
+/// which waits for a write in progress (and the first write's walk of the whole folder) and walks the
+/// folder itself when the size is not known yet. `disk_size_now` never waits and never walks the folder
+/// on the caller's thread.
+#[test]
+fn the_disk_caches_size_is_read_without_waiting_for_a_write_or_a_scan() {
+    let dir = temp_dir("size-now");
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    cache.put(hash_bytes(b"one"), Arc::new(gradient(16, 16, 9)));
+    let d = cache.disk().unwrap();
+    let on_disk = d.size();
+    assert!(on_disk > 0);
+    // a writer holds the size's lock (as a write does during its first scan of the folder)
+    let held = cache.clone();
+    let (locked, wait) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let _g = held.disk().unwrap().hold_count();
+        locked.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    });
+    wait.recv().unwrap();
+    let t = std::time::Instant::now();
+    assert_eq!(d.known_size(), Some(on_disk));
+    assert_eq!(cache.disk_size_now(), Some(on_disk));
+    let took = t.elapsed();
+    writer.join().unwrap();
+    assert!(took < std::time::Duration::from_millis(400), "the size waited {took:?} for the write");
+
+    // not known yet (a cache opened on a full folder): counted on a thread of its own
+    let reopened = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    assert_eq!(reopened.disk().unwrap().known_size(), None);
+    assert_eq!(reopened.disk_size_now(), None, "not counted on this thread");
+    let t = std::time::Instant::now();
+    while reopened.disk_size_now().is_none() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "counted in the background");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(reopened.disk_size_now(), Some(on_disk));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The size Settings reads ([`DiskCache::known_size`]) is the cache's own count after writes and prunes
+/// that run side by side (render workers and the deferred writer): each count is published under the
+/// lock that guards it, so an older one never overtakes a newer.
+#[test]
+fn the_known_size_matches_the_count_after_writes_and_prunes_side_by_side() {
+    let dir = temp_dir("size-race");
+    // a budget a few pictures big: most writes prune
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 24 * 1024));
+    let workers: Vec<_> = (0..4u8)
+        .map(|t| {
+            let c = cache.clone();
+            std::thread::spawn(move || {
+                for i in 0..40u8 {
+                    c.put(hash_bytes(&[t, i]), Arc::new(gradient(32, 32, t.wrapping_mul(41).wrapping_add(i))));
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join().unwrap();
+    }
+    let d = cache.disk().unwrap();
+    let counted = *d.hold_count();
+    assert_eq!(d.known_size(), counted, "the size shown is the cache's count");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cache opened on a full folder doesn't know its size until it has walked the folder, and that
+/// walk can be slow (a network share, a big library). While it is held up, the size Settings reads
+/// comes back at once as not known yet (the dialog shows "counting…"); one count runs, not one per
+/// frame, and its result shows once it is done.
+#[test]
+fn a_slow_first_count_never_holds_up_the_size_shown() {
+    let dir = temp_dir("size-slow");
+    let first = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    first.put(hash_bytes(b"one"), Arc::new(gradient(16, 16, 3)));
+    let on_disk = first.disk().unwrap().size();
+    drop(first);
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 1 << 30));
+    let d = cache.disk().unwrap();
+    // the background count waits here, as behind a slow walk of the folder
+    let slow = d.hold_count();
+    let t = std::time::Instant::now();
+    for _ in 0..50 {
+        assert_eq!(cache.disk_size_now(), None, "not known while the count is held up");
+    }
+    let took = t.elapsed();
+    assert!(took < std::time::Duration::from_millis(500), "50 reads of the size took {took:?}");
+    assert!(!d.claim_count(), "one count is under way, not one per read");
+    drop(slow);
+    let t = std::time::Instant::now();
+    while cache.disk_size_now().is_none() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "the held-up count finishes");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(cache.disk_size_now(), Some(on_disk));
+    let _ = std::fs::remove_dir_all(&dir);
+}

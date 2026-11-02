@@ -1232,6 +1232,7 @@
   "Memory budget": "Minnesbudget",
   "Memory for caches": "Minne för cacheminnen",
   "memory only": "endast minne",
+  "counting…": "räknar…",
   "Memory Usage": "Minnesanvändning",
   "memory, exceeds the GPU's buffer limits, hits a driver error or reset, or comes back": "minne, överskrider GPU:ns buffertgränser, råkar ut för ett drivrutinsfel eller en återställning, eller kommer tillbaka",
   "Menu": "Meny",

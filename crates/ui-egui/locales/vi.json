@@ -2127,6 +2127,7 @@
   "lost everything at quit; a temporary session shows a banner the whole time and never writes to your library.": "mất hết khi thoát; phiên tạm hiện banner suốt và không ghi vào thư viện.",
   "makes AI Denoise available": "cho phép dùng AI Khử nhiễu",
   "memory only": "chỉ bộ nhớ",
+  "counting…": "đang đếm…",
   "memory, exceeds the GPU's buffer limits, hits a driver error or reset, or comes back": "bộ nhớ, vượt giới hạn buffer GPU, gặp lỗi driver hoặc reset, hoặc trả về",
   "message, and the original is left byte for byte. Ordinary earlier exports are still overwritten when asked.": "thông báo, và bản gốc giữ nguyên byte for byte. Các lần xuất trước vẫn bị ghi đè khi được yêu cầu.",
   "mid-batch: the error lists them (old → new) and the library points at their new names (an undoable partial rename),": "giữa đợt: lỗi liệt kê chúng (cũ → mới) và thư viện trỏ tên mới (đổi tên một phần có thể hoàn tác),",

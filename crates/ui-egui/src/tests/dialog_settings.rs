@@ -390,3 +390,36 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
     show(&mut h, "import");
     assert!((rect(&h, "check:settings.perCamera").top() - scrolled).abs() < 0.5, "Import is where it was left after a reopen");
 }
+
+/// Performance's "In use" is the disk cache's size, counted off the interface's thread: the dialog
+/// shows it once counted ("counting…" until then, `in_use_text`), and drawing it never walks the folder.
+#[test]
+fn performance_shows_the_disk_caches_size_once_counted() {
+    let folder = TempFolder::new("cache-size");
+    let filled = lightcraft_preview::PreviewCache::with_disk(1 << 20, &folder.0, 1 << 30);
+    filled.put(
+        lightcraft_preview::hash_bytes(b"one"),
+        std::sync::Arc::new(lightcraft_raster::Rgba8::from_fn(16, 16, |x, y| [(x * 9) as u8, (y * 9) as u8, 40, 255])),
+    );
+    let on_disk = filled.disk().map(|d| d.size()).unwrap_or(0);
+    assert!(on_disk > 0);
+    drop(filled);
+    let mut session = lightcraft_engine::Session::with_demo();
+    // a cache opened on that full folder: its size is not known until counted
+    session.media.rendered = std::sync::Arc::new(lightcraft_preview::PreviewCache::with_disk(1 << 20, &folder.0, 1 << 30));
+    let mut h = headless(session, [1600.0, 1000.0]);
+    show(&mut h, "performance");
+    // (the demo's own renders write to the cache too: the size shown is the cache's own count)
+    let shown = |h: &Headless| {
+        let known = h.app.session.media.rendered.disk().and_then(|d| d.known_size())?;
+        let want = format!("{:.1} MB", known as f64 / 1048576.0);
+        (known >= on_disk && h.painted_text().contains(&want)).then_some(want)
+    };
+    let counted = h.step_until(T, |h| shown(h).is_some());
+    assert!(
+        counted,
+        "In use shows the counted size: {:?}",
+        h.painted_text().iter().filter(|s| s.contains("MB") || s.contains("count")).collect::<Vec<_>>()
+    );
+    assert!(!h.painted_text().iter().any(|s| s == "counting…"), "no longer counting");
+}
