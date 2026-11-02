@@ -79,6 +79,7 @@ pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
+mod sync_same;
 pub mod text;
 mod view;
 pub mod walk;
@@ -938,8 +939,9 @@ impl Session {
             i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
+        let own_auto = self.own_auto_wb(id, &requested, label);
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label));
+        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
@@ -980,13 +982,12 @@ impl Session {
     /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
     /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
     /// photo's own crop: the active photo's fitted crop is never copied over another's.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
-        if !self.auto_sync
-            || self.active() != Some(id)
-            || self.selection.ids.len() < 2
-            || label.starts_with("History:")
-            || label.starts_with("Restore ")
-        {
+    ///
+    /// White balance goes on each photo as the active photo's mode or value on the photo's own
+    /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
+    /// its pixels), a Temp or Tint the same number, only the slider that moved.
+    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+        if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
@@ -1008,16 +1009,33 @@ impl Session {
                 return Vec::new();
             }
         }
+        let ainfo = self.source_info(id);
+        let wb_changed = old.wb != new.wb;
         self.selection
             .ids
             .iter()
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                if wb_changed {
+                    sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+                }
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
+    }
+
+    /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is
+    /// on, `id` is the active photo of a selection of two or more, and the edit is not a History or
+    /// snapshot restore.
+    fn auto_sync_applies(&self, id: PhotoId, label: &str) -> bool {
+        self.auto_sync
+            && self.active() == Some(id)
+            && self.selection.ids.len() >= 2
+            && !label.starts_with("History:")
+            && !label.starts_with("Restore ")
     }
 
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
