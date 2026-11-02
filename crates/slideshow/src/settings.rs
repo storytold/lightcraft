@@ -218,8 +218,8 @@ impl SlideSettings {
 
     /// These settings with the keys `p` names changed (the others kept), validated and clamped.
     /// A wrong type, an unknown key or a non-finite number is an error, and nothing changes.
-    /// With `linkMargins` on (already, or set in `p`), a margin given sets all four (unless all four are given); `margins`
-    /// sets all four in any case.
+    /// With `linkMargins` on (already, or set in `p`), a margin given sets all four (unless all four are given);
+    /// `margins` sets all four in any case.
     pub fn merged(&self, p: &Value) -> Result<Self, String> {
         let Some(obj) = p.as_object() else { return Err("parameters must be an object".into()) };
         let mut s = self.clone();
@@ -339,6 +339,14 @@ mod tests {
         let d = SlideSettings::default();
         let st = SlideSettings { link_margins: true, margin_left: 0.1, margin_right: 0.0, margin_top: 0.3, margin_bottom: 0.0, ..d.clone() };
         assert_eq!(d.merged(&st.to_json()).unwrap(), st);
+    }
+
+    #[test]
+    fn merge_copies_last_of_three_linked_margins() {
+        let d = SlideSettings::default();
+        // keys are visited in key order (bottom, left, top): the last one, `marginTop`, wins
+        let s = d.merged(&json!({"marginLeft": 0.1, "marginTop": 0.3, "marginBottom": 0.2})).unwrap();
+        assert_eq!((s.margin_left, s.margin_right, s.margin_top, s.margin_bottom), (0.3, 0.3, 0.3, 0.3));
     }
 
     #[test]
