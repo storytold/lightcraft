@@ -33,7 +33,11 @@ pub(crate) fn decode_raw_preview(
     opts: lightcraft_codecs::DecodeOptions,
     covering: Option<usize>,
 ) -> Option<lightcraft_codecs::Decoded> {
-    let jpeg = stand_in_image(bytes, covering)?;
+    decode_stand_in(bytes, &stand_in_image(bytes, covering)?, opts)
+}
+
+/// [`decode_raw_preview`] of the stand-in `jpeg` already found in the raw file `bytes` (by [`stand_in_image`]).
+fn decode_stand_in(bytes: &[u8], jpeg: &[u8], opts: lightcraft_codecs::DecodeOptions) -> Option<lightcraft_codecs::Decoded> {
     // the colour space is a property of the JPEG; a TIFF stand-in (the file itself, or a Hasselblad RGB preview
     // wrapped as a TIFF) and a JPEG XL preview are read by their own decoders
     let is_jpeg = jpeg.starts_with(&[0xff, 0xd8]);
@@ -43,9 +47,9 @@ pub(crate) fn decode_raw_preview(
                 lightcraft_raw::PreviewColorSpace::Srgb => lightcraft_codecs::NamedSpace::Srgb,
                 lightcraft_raw::PreviewColorSpace::AdobeRgb => lightcraft_codecs::NamedSpace::AdobeRgb,
             };
-            lightcraft_codecs::decode_jpeg_with_fallback(&jpeg, opts, space).ok()
+            lightcraft_codecs::decode_jpeg_with_fallback(jpeg, opts, space).ok()
         }
-        None => lightcraft_codecs::decode(&jpeg, opts).ok(),
+        None => lightcraft_codecs::decode(jpeg, opts).ok(),
     }
 }
 
@@ -80,7 +84,18 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
 /// loupe and grid show it until the raw itself has been developed ([`crate::media::QuickJob`]). The smallest
 /// embedded JPEG that covers `max_edge` is decoded, not the largest.
 pub fn embedded_preview_srgb(bytes: &[u8], max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
-    let mut d = decode_raw_preview(bytes, fit_box(max_edge), Some(max_edge))?;
+    // a plain sRGB camera JPEG straight to 8-bit, as the quick path decodes it (PERF-CULL-3), so
+    // both paths give the same picture; anything else takes the general decode
+    let edge = u32::try_from(max_edge).unwrap_or(u32::MAX);
+    // (found once: the general decode below takes the same stand-in when the fast path declines)
+    let jpeg = stand_in_image(bytes, Some(max_edge))?;
+    if lightcraft_raw::embedded_preview_color_space(bytes) != Some(lightcraft_raw::PreviewColorSpace::AdobeRgb)
+        && matches!(jpeg, std::borrow::Cow::Owned(_))
+        && let Ok(Some((image, orientation))) = lightcraft_codecs::decode_jpeg_srgb8_fit(&jpeg, edge, edge)
+    {
+        return Some(image.oriented(preview_orientation(bytes, orientation)));
+    }
+    let mut d = decode_stand_in(bytes, &jpeg, fit_box(max_edge))?;
     if d.image.width.max(d.image.height) > max_edge {
         d.image = fit(&d.image, max_edge, max_edge, Filter::Box);
         d.alpha = None;

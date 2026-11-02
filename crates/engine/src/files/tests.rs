@@ -1672,12 +1672,29 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     assert_eq!((q.quick, q.key), (Some(QuickSource::Embedded), job.key));
     drop(job.clone().run());
     assert_eq!(s.quick_thumb_job(&job).unwrap().run().quick, Some(QuickSource::Cached));
-    // an edited raw: no embedded stand-in (it wouldn't show the edit)
+    // an edited raw never shows its camera JPEG (unedited, uncropped; notes 3, 11 and 31 of
+    // 2026-10-24): its first picture is its latest render, made with the settings before the edit
     s.execute("library.select", &serde_json::json!({"ids": [id.0]})).unwrap();
     s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 1.0})).unwrap();
     let job = s.thumb_job(id, 128).unwrap();
-    assert!(s.quick_thumb_job(&job).is_none());
-    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Small));
+    assert_eq!(s.quick_thumb_job(&job).unwrap().run().quick, Some(QuickSource::Last));
+    assert!(!s.embedded_thumb_is_final(s.catalog.photo(id).unwrap()));
+    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    assert_eq!(q.quick, Some(QuickSource::Last));
+    assert_eq!(q.rendered.unwrap().image.width, 48, "the loupe's last render");
+    // a raw edited before anything of it was rendered: a fast draft with its settings from the
+    // camera JPEG, in the grid and the loupe (cropped as edited, never the camera JPEG itself)
+    s.media.rendered.clear();
+    let q = s.quick_thumb_job(&job).unwrap().run();
+    assert_eq!((q.quick, q.key), (Some(QuickSource::Draft), job.key));
+    assert!(q.rendered.is_ok());
+    let mut d = (*s.catalog.photo(id).unwrap().develop).clone();
+    d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 1.0 };
+    s.set_develop(id, d, "Crop").unwrap();
+    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    assert_eq!(q.quick, Some(QuickSource::Draft));
+    let img = q.rendered.unwrap().image;
+    assert!(img.width * 2 < img.height * 2 && img.width > 0, "the crop applied: {}x{}", img.width, img.height);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

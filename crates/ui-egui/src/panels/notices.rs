@@ -1,6 +1,7 @@
 //! Things the user must not miss (issue #103): settings files that were damaged or unreadable when
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
-//! are only in memory or while tasks that would be cut short are running (issue #345).
+//! are only in memory or while tasks that would be cut short are running (issue #345). Also, once
+//! per session, that the drive holding the preview cache is running low ([`disk_space_notice`]).
 
 use egui::{Align2, RichText, vec2};
 
@@ -8,17 +9,52 @@ use crate::theme::Tokens;
 use crate::widgets::WidgetHit;
 use crate::{LightcraftApp, QuitPrompt};
 
-/// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
-/// been tried.
-pub fn logic(app: &mut LightcraftApp) {
+/// Collect the library's settings-file warnings (each is shown once), the no-GPU notice once the GPU device has
+/// been tried, and the low-disk notice (once per session).
+pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
+    // a low-disk notice still queued from the library that was open before is not this one's
+    if let Some((generation, text)) = app.disk_notice.as_ref()
+        && *generation != app.session.library_generation()
+    {
+        let text = text.clone();
+        app.notices.retain(|n| *n != text);
+        app.disk_notice = None;
+    }
+    if app.disk_space_notice {
+        // the cache grows with every thumbnail and preview, not only while previews are built: the
+        // engine reads the free space at most every few minutes (a clock check otherwise)
+        app.session.check_disk_space(false);
+        // an idle window still takes the read's answer and makes the next check: a pass soon while
+        // the read runs, and one when the next check is due
+        if !app.session.disk_space_alert_raised() {
+            ctx.request_repaint_after(disk_check_wait(app.session.disk_space_read_running_for()));
+        }
+        if let Some(alert) = app.session.take_disk_space_alert() {
+            let text = disk_space_notice(&alert);
+            app.disk_notice = Some((app.session.library_generation(), text.clone()));
+            app.notices.push(text);
+        }
+    }
     use lightcraft_engine::gpu;
     if app.gpu_notice && app.gpu_applied == Some(true) && gpu::ready() {
         app.gpu_notice = false;
         if !gpu::available() {
             app.notices.extend(gpu_notice(gpu::unavailable_reason().as_deref(), app.ui.settings.gpu));
         }
+    }
+}
+
+/// How soon the notice logic looks again for the free-space read: soon while a read runs, less often once it has
+/// run for a while (a drive that hangs must not keep an idle window drawing four times a second for good), and
+/// when the next check is due when none runs.
+fn disk_check_wait(running_for: Option<std::time::Duration>) -> std::time::Duration {
+    use std::time::Duration;
+    match running_for {
+        Some(d) if d < Duration::from_secs(5) => Duration::from_millis(250),
+        Some(_) => Duration::from_secs(5),
+        None => lightcraft_engine::disk_space::CHECK_EVERY,
     }
 }
 
@@ -38,6 +74,34 @@ pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
         text.push_str(crate::i18n::tr("On NixOS, start it from `nix develop`."));
     }
     Some(text)
+}
+
+/// Bytes in plain words: "12.3 GB", "850 MB" (binary units, as the cache size choices).
+fn size_words(bytes: u64) -> String {
+    const GB: f64 = (1u64 << 30) as f64;
+    const MB: f64 = (1u64 << 20) as f64;
+    let b = bytes as f64;
+    if b >= 100.0 * GB {
+        format!("{:.0} GB", b / GB)
+    } else if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else {
+        format!("{:.0} MB", b / MB)
+    }
+}
+
+/// What to tell the user when the drive holding the preview cache runs low: its free space, the
+/// cache's size, and where a limit can be set (the notice's button opens Settings ▸ Performance).
+pub fn disk_space_notice(alert: &lightcraft_engine::disk_space::LowDiskAlert) -> String {
+    let free = size_words(alert.space.available);
+    let total = size_words(alert.space.total);
+    let cache = size_words(alert.cache_bytes);
+    crate::i18n::tr_format!(
+        "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.",
+        free = free,
+        total = total,
+        cache = cache
+    )
 }
 
 /// The quit prompt's text while `count` cancellable tasks run (`names` lists them).
@@ -100,6 +164,7 @@ enum Choice {
     QuitAnyway,
     Cancel,
     Ok,
+    Settings,
 }
 
 /// The prompt (quit or settings notice) that owns input this frame, if any.
@@ -584,11 +649,27 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.quit_confirmed = true;
                 app.ui.quit = true;
             }
-            Some(Choice::Cancel | Choice::Ok) | None => app.quit_prompt = None,
+            Some(Choice::Cancel | Choice::Ok | Choice::Settings) | None => app.quit_prompt = None,
         }
         return;
     }
     if let Some(text) = app.notices.first().cloned() {
+        let disk = app.disk_notice.as_ref().filter(|(_, t)| *t == text).map(|(generation, _)| *generation);
+        if let Some(generation) = disk {
+            // another library opened since `logic` ran this frame: the notice is the previous library's,
+            // and the next `logic` takes it away
+            if generation != app.session.library_generation() {
+                return;
+            }
+            let buttons = [("noticeSettings", "Open Performance Settings", Choice::Settings), ("noticeOk", "OK", Choice::Ok)];
+            let Some(i) = window(ctx, "settings-notice", "Drive almost full", &text, &buttons, &mut app.notice_input) else { return };
+            app.notices.remove(0);
+            app.disk_notice = None;
+            if buttons.get(i).is_some_and(|(_, _, choice)| *choice == Choice::Settings) {
+                app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "performance".into() });
+            }
+            return;
+        }
         let buttons = [("noticeOk", "OK", Choice::Ok)];
         if window(ctx, "settings-notice", "Settings file problem", &text, &buttons, &mut app.notice_input).is_some() {
             app.notices.remove(0);
@@ -599,6 +680,39 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::{PromptKey, gpu_notice, prepare_ui_pass, prompt_allows_event, prompt_key};
+
+    /// A library switch between `logic` and drawing leaves the previous library's low-disk notice queued for
+    /// that frame: it is not drawn, nor answered (CodeRabbit on #3577).
+    #[test]
+    fn a_low_disk_notice_of_the_library_before_is_not_drawn() {
+        let ctx = egui::Context::default();
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let text = "Drive almost full".to_string();
+        app.notices.push(text.clone());
+        app.disk_notice = Some((app.session.library_generation().wrapping_add(1), text));
+        // the prompt's first button pressed, as Enter would
+        app.notice_input.activate = Some(0);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert_eq!(app.notices.len(), 1, "not answered");
+        assert!(app.ui.dialog.is_none(), "Settings didn't open");
+        // the current library's: drawn and answered
+        app.disk_notice = app.disk_notice.take().map(|(_, t)| (app.session.library_generation(), t));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert!(app.notices.is_empty(), "answered");
+    }
+
+    /// The window wakes four times a second while a free-space read runs, then every few seconds once it hangs
+    /// (CodeRabbit on #3577: it asked for 250 ms passes for as long as the drive hung).
+    #[test]
+    fn a_hanging_free_space_read_is_looked_at_less_often() {
+        use std::time::Duration;
+        assert_eq!(super::disk_check_wait(Some(Duration::ZERO)), Duration::from_millis(250));
+        assert_eq!(super::disk_check_wait(Some(Duration::from_secs(60))), Duration::from_secs(5));
+        assert_eq!(super::disk_check_wait(Some(Duration::MAX)), Duration::from_secs(5));
+        assert_eq!(super::disk_check_wait(None), lightcraft_engine::disk_space::CHECK_EVERY);
+    }
 
     /// The prompt barrier keeps its own keys and pointer input, drops text/wheel input, and drops
     /// the start/move half of a new touch gesture while keeping End/Cancel to clear egui's private

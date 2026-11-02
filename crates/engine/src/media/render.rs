@@ -1,5 +1,5 @@
 use super::quick::QuickSource;
-use super::source::{DecodedSource, SourceLevel, SourceRef};
+use super::source::{DecodedSource, SourceLevel, SourceRef, VIEW_REUSE_SLACK};
 use super::{
     Arc, DevelopSettings, Hash128, Histogram, PhotoId, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo, StageCache,
 };
@@ -30,6 +30,12 @@ pub struct RenderJob {
     pub stages: Option<Arc<StageCache>>,
     /// Keep a full-quality result here as the photo's view preview ([`crate::Session::loupe_job`]).
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// Keep a full-quality result also as the photo's latest picture of its kind, whatever its
+    /// settings ([`PreviewCache::put_latest`]; the alias, [`latest_view_key`] or [`latest_thumb_key`]):
+    /// what an edited photo shows while the render for its current settings is on its way.
+    /// Native only: a render the web build hands to its worker doesn't carry it, so web renders
+    /// don't update the latest picture.
+    pub latest: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
@@ -105,6 +111,7 @@ impl RenderJob {
         // a diagnostic view (visualized range / spots) must never become the photo's cached preview
         if overlay != lightcraft_pipeline::Overlay::None {
             self.view_cache = None;
+            self.latest = None;
         }
         self
     }
@@ -119,6 +126,7 @@ impl RenderJob {
         }
         if proof.is_some() {
             self.view_cache = None;
+            self.latest = None;
         }
         self
     }
@@ -142,6 +150,7 @@ impl RenderJob {
         self.settings = Arc::new(s);
         self.cache = None;
         self.view_cache = None;
+        self.latest = None;
         self.preview_cut = None;
         self
     }
@@ -214,8 +223,65 @@ impl RenderJob {
         r
     }
 
+    /// The view render kept for this job's photo and settings ([`Self::view_cache`]), fitted to the
+    /// size asked for, when it is at least that big, or unchanged when it covers the job's display
+    /// fit (else `None`: render). Only for what the cached
+    /// view is: a full-quality, 8-bit, whole-frame SDR render (the cache holds sRGB; a display
+    /// profile is applied to it like to any cached picture, [`crate::display::present`]).
+    pub fn cached_view(&self) -> Option<Rgba8> {
+        let (cache, key) = self.view_cache.as_ref()?;
+        if self.request.quality != Quality::Full
+            || self.request.depth != lightcraft_pipeline::OutputDepth::U8
+            || self.request.window.is_some()
+            || self.settings.hdr.enabled
+            || self.slide.is_some()
+        {
+            return None;
+        }
+        let img = cache.get_at(self.cache_generation, *key)?;
+        fit_cached(&img, self.request.max_w, self.request.max_h).or_else(|| {
+            // the loupe at rest asks for at least the preview level and shows the render shrunk to
+            // the drawn size (the display fit): a cached view that covers the drawn size is enough
+            let (fw, fh) = self.display_fit?;
+            let (w, h) = (img.width, img.height);
+            let s = (fw as f64 / w.max(1) as f64).min(fh as f64 / h.max(1) as f64);
+            (w > 0 && h > 0 && fw > 0 && fh > 0 && s <= 1.0 + VIEW_REUSE_SLACK).then(|| Arc::unwrap_or_clone(img))
+        })
+    }
+
     /// The photo's render (without slide composition).
     fn run_photo(self) -> RenderResult {
+        // the loupe: a cached view render of these settings at least this big is the render (built
+        // previews and the photos prepared ahead are used, not rendered again; PERF-PREVIEW-REUSE)
+        if let Some(mut image) = self.cached_view() {
+            // the cached view is the photo's latest view too (a view built before the aliases
+            // existed, or in an earlier session: what the photo shows once its settings change)
+            if let (Some((latest, alias)), Some((cache, key))) = (&self.latest, &self.view_cache)
+                && !latest.latest_is(*alias, *key)
+                && let Some(full) = cache.get_memory(*key)
+            {
+                latest.put_latest(self.cache_generation, *alias, *key, full, false);
+            }
+            // as for a render: the histogram of the full picture, then the display fit
+            let histogram = Histogram::of_srgb8(&image);
+            if let Some((fw, fh)) = self.display_fit
+                && (image.width > fw.max(1) || image.height > fh.max(1))
+            {
+                image = fit_for_display(&image, fw, fh);
+            }
+            return RenderResult {
+                request_id: self.request_id,
+                source_key: self.source_key,
+                photo: self.photo,
+                level: self.level,
+                key: self.key,
+                rendered: Ok(Rendered { image, histogram, deep: None }),
+                gpu_fallback: None,
+                loaded: None,
+                quick: Some(QuickSource::Cached),
+                display: None,
+            };
+        }
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
         {
@@ -289,7 +355,9 @@ impl RenderJob {
                         Some(d.id())
                     }
                     (Some(d), Some(_)) => {
-                        let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
+                        // (an sRGB copy for the view preview, or for the latest view when the job
+                        // keeps no view preview: the loupe while editing)
+                        let keep = (self.view_cache.is_some() || self.latest.is_some()) && self.request.quality == Quality::Full;
                         let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
                         // (an HDR edit's HDR histogram stays)
                         if let Some(h) = h.filter(|_| rendered.histogram.hdr.is_none()) {
@@ -300,14 +368,32 @@ impl RenderJob {
                     }
                     _ => None,
                 };
+                let full = self.request.quality == Quality::Full;
                 if let Some((cache, key)) = &self.cache {
-                    cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
+                    let img = Arc::new(rendered.image.clone());
+                    cache.put_at(self.cache_generation, *key, img.clone());
+                    if let Some((latest, alias)) = self.latest.as_ref().filter(|_| full && self.view_cache.is_none()) {
+                        latest.put_latest(self.cache_generation, *alias, *key, img, false);
+                    }
                 }
                 if let Some((cache, key)) = &self.view_cache
-                    && self.request.quality == Quality::Full
+                    && full
                     && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
+                    let img = Arc::new(srgb.unwrap_or_else(|| rendered.image.clone()));
+                    cache.put_deferred_at(self.cache_generation, *key, img.clone());
+                    if let Some((latest, alias)) = &self.latest {
+                        latest.put_latest(self.cache_generation, *alias, *key, img, false);
+                    }
+                } else if let Some((latest, alias)) = &self.latest
+                    && self.view_cache.is_none()
+                    && self.cache.is_none()
+                    && full
+                    && (display.is_none() || srgb.is_some())
+                {
+                    // the loupe while editing keeps no view preview (it renders from the source, kept
+                    // decoded for the next slider draft), but its render is the photo's latest view
+                    latest.put_latest_own(self.cache_generation, *alias, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
                 }
                 // the display fit, after the caches have the full render
                 if let Some((fw, fh)) = self.display_fit
@@ -334,6 +420,61 @@ impl RenderJob {
             Err(e) => self.failed(e),
         }
     }
+}
+
+/// `img` fitted into `max_w × max_h` (its aspect kept), when it is big enough to need no
+/// enlarging (within [`VIEW_REUSE_SLACK`]): as it is, or shrunk by averaging.
+pub fn fit_cached(img: &Rgba8, max_w: usize, max_h: usize) -> Option<Rgba8> {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 || max_w == 0 || max_h == 0 {
+        return None;
+    }
+    let s = (max_w as f64 / w as f64).min(max_h as f64 / h as f64);
+    if !s.is_finite() || s > 1.0 + VIEW_REUSE_SLACK {
+        return None;
+    }
+    let (nw, nh) = (((w as f64 * s).round() as usize).clamp(1, w), ((h as f64 * s).round() as usize).clamp(1, h));
+    if nw == w && nh == h {
+        return Some(img.clone());
+    }
+    Some(shrink_rgba(img, nw, nh))
+}
+
+/// `img` shrunk to `nw × nh` (no larger than it), each pixel the average of the ones it covers.
+fn shrink_rgba(img: &Rgba8, nw: usize, nh: usize) -> Rgba8 {
+    let (w, h) = (img.width, img.height);
+    let (nw, nh) = (nw.clamp(1, w.max(1)), nh.clamp(1, h.max(1)));
+    // the source columns / rows each output column / row covers: [start, end)
+    let spans = |n: usize, of: usize| -> Vec<(usize, usize)> {
+        (0..n)
+            .map(|i| {
+                let a = i.saturating_mul(of) / n;
+                let b = (i.saturating_add(1).saturating_mul(of) / n).max(a.saturating_add(1)).min(of);
+                (a, b)
+            })
+            .collect()
+    };
+    let (xs, ys) = (spans(nw, w), spans(nh, h));
+    let mut data = Vec::with_capacity(nw.saturating_mul(nh));
+    let mut row = vec![[0u32; 4]; nw];
+    for &(y0, y1) in &ys {
+        row.iter_mut().for_each(|r| *r = [0; 4]);
+        for y in y0..y1 {
+            let Some(line) = img.data.get(y * w..(y + 1) * w) else { continue };
+            for (acc, &(x0, x1)) in row.iter_mut().zip(&xs) {
+                for px in line.get(x0..x1).unwrap_or(&[]) {
+                    for (a, v) in acc.iter_mut().zip(px) {
+                        *a += u32::from(*v);
+                    }
+                }
+            }
+        }
+        for (acc, &(x0, x1)) in row.iter().zip(&xs) {
+            let n = (x1.saturating_sub(x0).saturating_mul(y1.saturating_sub(y0))).max(1) as u32;
+            data.push(acc.map(|a| ((a + n / 2) / n).min(255) as u8));
+        }
+    }
+    Rgba8 { width: nw, height: nh, data }
 }
 
 /// Render `src`: on the GPU when `gpu` is set and a GPU is available (`lightcraft_gpu`), else on

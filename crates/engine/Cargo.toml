@@ -48,6 +48,8 @@ lightcraft-segment = { workspace = true, optional = true }
 lightcraft-fetch = { workspace = true }
 # capture-time parsing for face recognition (native only)
 chrono = { workspace = true }
+# free space of the drive holding the preview cache (the low-disk alert; pure Rust: rustix / windows-sys)
+fs4 = { workspace = true }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
