@@ -301,9 +301,13 @@ Only changed settings propagate; spot removal, red eye and the rendering process
 During an interaction, propagation occurs when it ends. Re-read affected photos after the edit.
 `develop.autoSync {}` toggles the mode; it is not a state query.
 
-For example, send these requests one at a time and read each reply before sending the next:
+For example, send these requests one at a time and read each reply before sending the next. The first line
+of every connection is the `auth` request (see [Authentication](#authentication)); it is answered with
+`{"id":0,"ok":true,"result":"authenticated"}`. Without a token (the app and the controller both started with
+`LIGHTCRAFT_CONTROL_NO_AUTH=1`) leave that line out:
 
 ```json
+{"id":0,"method":"auth","params":{"token":"<the token>"}}
 {"id":1,"method":"engine.commands"}
 {"id":2,"method":"engine.execute","params":{"command":"photo.inspect"}}
 {"id":3,"method":"engine.execute","params":{"command":"develop.controls","params":{"section":"light"}}}
