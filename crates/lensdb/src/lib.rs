@@ -245,7 +245,7 @@ impl LensDb {
                 continue;
             }
             let score = focals.iter().filter(|f| (lo..=hi).contains(*f)).count() as f64 / focals.len() as f64;
-            if score > 0.0 && best.is_none_or(|(s, _)| score > s) {
+            if score > 0.0 && best.is_none_or(|(s, b)| score > s || (score == s && b.crop_factor.is_none() && p.crop_factor.is_some())) {
                 best = Some((score, p));
             }
         }

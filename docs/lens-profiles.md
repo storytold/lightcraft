@@ -48,6 +48,8 @@ the image centre (lensfun's `<center>` offsets are not read). Missing or invalid
 only finite values from 0.05 through 20 are accepted. A calibration inherits the lens's crop factor only when its
 `cropfactor` attribute is omitted; an explicit invalid override remains unknown. Profiles with an unknown
 calibration crop factor are not applied. An explicit crop factor of 1 still means full frame.
+On exact lookup-score ties, both named and built-in fixed-lens matching prefer a known calibration crop; a higher
+match score still wins even when its crop is unknown.
 
 ## Limits
 

@@ -455,6 +455,42 @@ fn built_in_lens_matches_by_camera_mount_and_focal_range() {
     assert_eq!(exif_focal_range(&tokens(&huge)), Some((6.0, 6.0)));
 }
 
+#[test]
+fn tied_built_in_lens_matches_prefer_a_known_calibration_crop() {
+    let mut db = db();
+    let cam = db.cameras[0].clone();
+    let mut unknown = db.lenses[0].clone();
+    unknown.models = vec!["Testcam Compact".into()];
+    unknown.crop_factor = None;
+    let mut known = unknown.clone();
+    known.crop_factor = Some(1.5);
+    for lenses in [vec![unknown.clone(), known.clone()], vec![known, unknown]] {
+        db.lenses = lenses;
+        let lens = db.find_lens(None, "24-70 mm f/2.8", Some(&cam)).unwrap();
+        assert_eq!(lens.crop_factor, Some(1.5), "an exact focal-range score tie prefers the known crop in either order");
+        assert!(lens.correction(&shot(24.0)).is_some());
+    }
+}
+
+#[test]
+fn a_higher_built_in_lens_score_still_wins_with_unknown_crop() {
+    let mut db = db();
+    let cam = db.cameras[0].clone();
+    let mut unknown = db.lenses[0].clone();
+    unknown.models = vec!["Testcam Compact".into()];
+    unknown.crop_factor = None;
+    unknown.tca.clear();
+    unknown.vignetting.clear();
+    let mut known = unknown.clone();
+    known.crop_factor = Some(1.5);
+    known.distortion[1].0 = 100.0;
+    for lenses in [vec![unknown.clone(), known.clone()], vec![known, unknown]] {
+        db.lenses = lenses;
+        let lens = db.find_lens(None, "24-70 mm f/2.8", Some(&cam)).unwrap();
+        assert_eq!(lens.crop_factor, None, "the higher focal-range score remains the primary criterion in either order");
+    }
+}
+
 /// A hand-edited or corrupt database may carry any number: infinities, NaN, enormous or negative
 /// coefficients, absurd crop factors and aspect ratios. Whatever loads must give corrections that
 /// are `None` or entirely finite, for any shot including nonsense ones; names of any shape find
