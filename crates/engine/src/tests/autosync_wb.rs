@@ -156,6 +156,10 @@ fn sources_for_auto_come_back_in_order_and_per_photo() {
     assert_eq!(got.iter().map(|(x, _)| *x).collect::<Vec<_>>(), vec![b, PhotoId(u64::MAX), c, a]);
     assert!(got[1].1.is_err());
     for (i, k) in [0, 2, 3].into_iter().enumerate() {
-        assert!(std::sync::Arc::ptr_eq(got[k].1.as_ref().unwrap(), &want[i]), "photo {k}");
+        let (img, info) = got[k].1.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(img, &want[i]), "photo {k}");
+        // the facts its decoder gave (the as-shot whites differ per photo here)
+        assert_eq!(info.as_shot_temp, s.source_info(got[k].0).as_shot_temp, "photo {k}");
     }
+    assert_eq!(got[0].1.as_ref().unwrap().1.as_shot_temp, 3300.0, "b's own");
 }

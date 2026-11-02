@@ -490,10 +490,12 @@ impl crate::Session {
         Ok(image)
     }
 
-    /// [`Session::source_now`] for several photos at once: the ones not in memory are decoded in
-    /// parallel (one per core), so a selection costs about one decode per core, not one after
-    /// another. In the order of `ids`.
-    pub(crate) fn sources_now(&mut self, ids: &[PhotoId], level: SourceLevel) -> Vec<(PhotoId, Result<Arc<Rgb32f>, String>)> {
+    /// [`Session::source_now`] for several photos at once, each with the facts its decoder gave
+    /// ([`Session::source_info`], read before another photo can push it out of the cache): the
+    /// ones not in memory are decoded in parallel, so a selection costs about one decode per core,
+    /// not one after another. In the order of `ids`. Callers pass a few at a time (all of them are
+    /// held decoded until this returns).
+    pub(crate) fn sources_now(&mut self, ids: &[PhotoId], level: SourceLevel) -> Vec<(PhotoId, Result<(Arc<Rgb32f>, SourceInfo), String>)> {
         use rayon::prelude::*;
         let refs: Vec<(PhotoId, Option<SourceRef>)> =
             ids.iter().map(|&id| (id, self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, level)))).collect();
@@ -508,7 +510,7 @@ impl crate::Session {
                         self.learn_as_shot_wb(id, info);
                     }
                     self.media.insert_source(id, level, r);
-                    image
+                    (image, self.source_info(id))
                 });
                 (id, r)
             })

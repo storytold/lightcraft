@@ -105,14 +105,18 @@ impl Session {
             return own;
         }
         let others: Vec<PhotoId> = self.selection.ids.iter().copied().filter(|x| *x != id).collect();
-        // (decoded in parallel: a selection costs about one thumbnail decode per core)
-        for (x, src) in self.sources_now(&others, crate::media::SourceLevel::Thumb) {
-            match src {
-                Ok(src) => {
-                    let info = self.source_info(x);
-                    own.insert(x, lightcraft_pipeline::auto::auto_wb(&src, &info));
+        // decoded in parallel, a core's worth at a time: a big selection never holds more
+        // decoded thumbnails at once than that, whatever the cache keeps
+        let batch = rayon::current_num_threads().clamp(1, 16);
+        for chunk in others.chunks(batch) {
+            for (x, src) in self.sources_now(chunk, crate::media::SourceLevel::Thumb) {
+                match src {
+                    // with the facts its own decoder gave
+                    Ok((src, info)) => {
+                        own.insert(x, lightcraft_pipeline::auto::auto_wb(&src, &info));
+                    }
+                    Err(e) => log::warn!("Auto Sync: Auto white balance on photo {}: {e}", x.0),
                 }
-                Err(e) => log::warn!("Auto Sync: Auto white balance on photo {}: {e}", x.0),
             }
         }
         own
