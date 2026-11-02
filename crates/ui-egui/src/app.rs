@@ -212,7 +212,25 @@ impl LightcraftApp {
         } else {
             params
         };
-        let r = self.session.execute(id, &params).map_err(CommandError::from);
+        // an edit of the crop on an untouched photo keeps the lock the tool shows
+        let commits = self.session.commits();
+        let stored_lock = touches_crop(id, &params, self.session.active()) && self.store_shown_crop_lock();
+        // the photo's settings with the lock stored: an edit that leaves them so changed nothing
+        let develop_of_active = |s: &lightcraft_engine::Session| s.active().and_then(|p| s.develop_of(p));
+        let locked = stored_lock.then(|| develop_of_active(&self.session)).flatten();
+        let edit_from = self.session.commits();
+        let mut r = self.session.execute(id, &params).map_err(CommandError::from);
+        if stored_lock {
+            let active_changed = r.is_ok() && develop_of_active(&self.session) != locked;
+            if !active_changed && r.is_ok() && self.session.interaction.is_none() && self.others_changed_since(edit_from) {
+                // other photos the edit named changed, the active one didn't: take the lock (and the
+                // edit) back, then make the edit again without it, so those photos keep theirs
+                self.settle_stored_crop_lock(commits, false);
+                r = self.session.execute(id, &params).map_err(CommandError::from);
+            } else {
+                self.settle_stored_crop_lock(commits, active_changed);
+            }
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -352,20 +370,86 @@ impl LightcraftApp {
 
     /// Called only after a crop gesture begins, inside its undo transaction.
     pub(crate) fn begin_crop(&mut self) -> Result<(), String> {
-        // nothing chosen yet: the photo's own shape, as `crop_tool_aspect` shows it
-        let aspect = self.ui.crop_default_aspect.clone().unwrap_or_else(|| serde_json::json!("original"));
-        if self.session.interaction.is_some()
-            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default())
-            && aspect != serde_json::json!("free")
-            // the remembered ratio, turned like the new photo's crop (as a named ratio is)
-            && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect, "orientation": "crop"}))
-        {
-            // A remembered value the command refuses (a hand-edited settings file) would refuse
-            // every crop drag on an untouched photo: forget it and let this drag go ahead.
-            self.ui.crop_default_aspect = None;
-            self.ui.status = e.to_string();
+        if self.session.interaction.is_some() {
+            self.store_shown_crop_lock();
         }
         Ok(())
+    }
+
+    /// After an edit that stored the shown crop lock first ([`Self::store_shown_crop_lock`]),
+    /// `commits` undo steps ago: an edit that changed the photo becomes one undo step with the
+    /// lock, named after the edit; one that was refused or changed nothing (a merge can commit a
+    /// no-op) takes the lock back off as well, with no Redo step left behind. Inside an
+    /// interaction the steps are merged when it ends.
+    fn settle_stored_crop_lock(&mut self, commits: u64, changed: bool) {
+        if self.session.interaction.is_some() {
+            return;
+        }
+        let steps = usize::try_from(self.session.commits().wrapping_sub(commits)).unwrap_or(0);
+        if changed && steps >= 2 {
+            let label = self.session.undo.last().map(|e| e.label.clone()).unwrap_or_default();
+            self.session.merge_undo(steps, &label);
+        } else if !changed {
+            for _ in 0..steps {
+                if self.session.undo_step().is_err() {
+                    break;
+                }
+                self.session.redo.pop();
+            }
+        }
+    }
+
+    /// Whether the undo steps committed since `commits` changed the settings of a photo other than
+    /// the active one (a `develop.set` naming other photos, Auto Sync). Outside an interaction only.
+    fn others_changed_since(&self, commits: u64) -> bool {
+        let s = &self.session;
+        let steps = usize::try_from(s.commits().wrapping_sub(commits)).unwrap_or(0).min(s.undo.len());
+        let active = s.active();
+        let mut pending: Vec<(&lightcraft_catalog::Op, usize)> = s.undo.iter().rev().take(steps).map(|e| (&e.op, 0)).collect();
+        while let Some((op, depth)) = pending.pop() {
+            match op {
+                // an undo step holds what it replaced: a photo changed when that differs from what it has now
+                lightcraft_catalog::Op::SetDevelop { id, settings, .. } => {
+                    if Some(*id) != active && s.develop_of(*id).is_some_and(|now| now != *settings) {
+                        return true;
+                    }
+                }
+                lightcraft_catalog::Op::Batch { ops } if depth < 8 => pending.extend(ops.iter().map(|o| (o, depth + 1))),
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Before an edit of an untouched photo's crop (a drag, the angle, Straighten, Auto, a flip):
+    /// store the ratio the tool shows locked into the crop itself. Until then the lock is only
+    /// shown ([`Self::crop_tool_aspect`]), and the edit would leave the crop touched with no lock,
+    /// which reads as unlocked: straightening unlocked the crop. Nothing but the lock button (and
+    /// A) unlocks it. Returns whether it stored one (one undo step of its own outside an
+    /// interaction, which the caller merges with the edit). Only this photo: Auto Sync carries the
+    /// edit, not a ratio fitted to this photo's shape.
+    pub(crate) fn store_shown_crop_lock(&mut self) -> bool {
+        // nothing chosen yet: the photo's own shape, as `crop_tool_aspect` shows it
+        let aspect = self.ui.crop_default_aspect.clone().unwrap_or_else(|| serde_json::json!("original"));
+        let untouched =
+            self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default());
+        if !untouched || aspect == serde_json::json!("free") {
+            return false;
+        }
+        let sync = std::mem::replace(&mut self.session.auto_sync, false);
+        // the remembered ratio, turned like the new photo's crop (as a named ratio is)
+        let r = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect, "orientation": "crop"}));
+        self.session.auto_sync = sync;
+        match r {
+            Ok(_) => true,
+            Err(e) => {
+                // A remembered value the command refuses (a hand-edited settings file) would refuse
+                // every crop edit on an untouched photo: forget it and let this edit go ahead.
+                self.ui.crop_default_aspect = None;
+                self.ui.status = e.to_string();
+                false
+            }
+        }
     }
 
     /// Advance a running slideshow, but not while the window is hidden: in 0.36 `i.time` froze
@@ -666,5 +750,35 @@ pub(crate) fn sam_download_ended(download: &lightcraft_engine::segment::Download
         Some(e) => Some((crate::i18n::tr_format!("The SAM 3 download failed: {e}", e = e), true)),
         None if download.finished => Some((crate::i18n::tr("The SAM 3 model is installed: Object and Describe masks are ready.").to_string(), true)),
         None => None,
+    }
+}
+
+/// Whether command `id` edits the active photo's crop other than through its lock: the angle
+/// (slider, Straighten tool, pointer rotation, Auto, its Reset), a crop drag, a flip. Such an edit
+/// first stores the lock the tool shows ([`LightcraftApp::store_shown_crop_lock`]).
+fn touches_crop(id: &str, params: &Value, active: Option<lightcraft_catalog::PhotoId>) -> bool {
+    match id {
+        "crop.straighten" | "crop.autoStraighten" | "crop.drag" => true,
+        // a rect given outright is the shape asked for (no lock is honoured there); an angle alone turns the crop
+        "crop.set" => params.get("rect").is_none_or(Value::is_null),
+        // a flip of other photos leaves the active one alone
+        "photo.flipHorizontal" | "photo.flipVertical" => match params.get("ids").and_then(Value::as_array) {
+            Some(ids) => active.is_some_and(|a| ids.iter().any(|v| v.as_u64() == Some(a.0))),
+            None => true,
+        },
+        _ if id.starts_with("develop.") => {
+            let crop_control = |c: &str| c.starts_with("crop.");
+            // a partial of settings (develop.merge) that turns or flips the crop; one that gives the rect or the
+            // ratio outright is the shape asked for, as for crop.set (Constrain Crop is Geometry, not the crop)
+            let settings_crop = params
+                .get("settings")
+                .and_then(|v| v.get("crop"))
+                .and_then(Value::as_object)
+                .is_some_and(|c| c.get("aspect").is_none() && c.get("geometry").and_then(|g| g.get("rect")).is_none_or(Value::is_null));
+            params.get("control").and_then(Value::as_str).is_some_and(crop_control)
+                || params.get("values").and_then(Value::as_object).is_some_and(|o| o.keys().any(|k| crop_control(k)))
+                || settings_crop
+        }
+        _ => false,
     }
 }

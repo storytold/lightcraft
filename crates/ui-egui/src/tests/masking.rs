@@ -826,7 +826,11 @@ fn a_bad_remembered_ratio_is_dropped_and_the_drag_still_crops() {
     }
     assert_eq!(h.app.ui.crop_default_aspect, None, "the bad value is forgotten");
     assert_ne!(develop(&h).crop, before.crop, "the drag cropped");
-    assert_eq!(develop(&h).crop.aspect, None);
+    // forgotten, the tool shows the default lock (the photo's own shape), and the crop keeps the
+    // lock it shows (nothing but the lock button unlocks it)
+    let shown = h.app.crop_tool_aspect().expect("shown locked");
+    let lock = develop(&h).crop.aspect.expect("the crop carries it");
+    assert_eq!(lock.0 as u64 * shown.1 as u64, lock.1 as u64 * shown.0 as u64, "{lock:?} is the ratio shown, {shown:?}");
 }
 
 #[test]
