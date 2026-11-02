@@ -868,6 +868,8 @@ mod tests {
 /// float image the general path builds (for a 45 MP camera preview fitted to 2560 px that float
 /// image and its conversions were half the time). `Ok(None)` for anything else.
 pub(crate) fn srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
+    // (a Samsung SEF trailer read as the file it stands for, as the general decode does: CodeRabbit on #3583)
+    let bytes = &*without_sef_trailer(bytes);
     let Some(m) = parse_markers(bytes) else { return Ok(None) };
     let plain = matches!(m.components, 1 | 3)
         && m.precision == 8

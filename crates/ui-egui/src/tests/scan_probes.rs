@@ -179,3 +179,26 @@ fn a_browse_through_a_link_and_dot_dot_reads_the_folder_the_system_names() {
     assert_eq!(shown, Some(want), "the folder the system names, not photos/select");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Browsing a folder that is being read again keeps its progress, but not through `..` (CodeRabbit on #3583): past
+/// a link, `x/link/../y` can be another folder than the `x/y` it is spelled as, so the worker reads it again.
+#[test]
+fn a_browse_through_dot_dot_reads_again_while_its_spelling_is_being_read() {
+    let mut h = demo();
+    let dir = std::env::temp_dir().join(format!("lc-ui-browse-dotdot-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let plain = dir.to_string_lossy().to_string();
+    crate::import::HELD_RESOLVES.lock().unwrap().push(plain.clone());
+    let row = |h: &Headless| h.app.session.activity.list().iter().find(|t| t.kind == "scan").map(|t| t.id);
+    crate::import::browse(&mut h.app, &plain, None).unwrap();
+    let first = row(&h);
+    assert!(first.is_some(), "the browse's row");
+    crate::import::browse(&mut h.app, &plain, None).unwrap();
+    assert_eq!(row(&h), first, "the same folder again: the same read");
+    let given = dir.join("sub").join("..").to_string_lossy().to_string();
+    crate::import::browse(&mut h.app, &given, None).unwrap();
+    assert_ne!(row(&h), first, "through `..`: read again");
+    crate::import::HELD_RESOLVES.lock().unwrap().retain(|p| *p != plain);
+    assert!(h.step_until(T, |h| h.app.scan.is_none()), "the browse ended");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -69,13 +69,15 @@ pub struct LoupeTiming {
     stepped_from: Option<f64>,
 }
 
-/// Sources that show the photo at full size: the camera's JPEG, a cached or a fresh render.
+/// Sources that show the photo at full size: the camera's JPEG, an edited photo's draft of its edit
+/// (from that JPEG), a cached or a fresh render.
 pub fn is_full_size(source: &str) -> bool {
     full_size(source)
 }
 
+/// (not `last`: the latest picture of an edited photo can be its grid thumbnail, shrunk; CodeRabbit on #3583)
 fn full_size(source: &str) -> bool {
-    matches!(source, "embedded" | "cached" | "render" | "preview" | "last" | "draft")
+    matches!(source, "embedded" | "cached" | "render" | "preview" | "draft")
 }
 
 impl LoupeTiming {
@@ -188,6 +190,14 @@ mod tests {
         assert!((t.full_ms.unwrap() - 40.0).abs() < 0.01);
         assert!((t.sharp_ms.unwrap() - 1000.0).abs() < 0.01);
         assert!((t.dwell_ms - 2000.0).abs() < 0.01);
+        // an edited photo's latest picture (perhaps a thumbnail) is not full size; its draft is
+        let mut e = LoupeTiming::default();
+        e.observe(PhotoId(3), "last", 0.0);
+        e.observe(PhotoId(3), "draft", 0.05);
+        e.observe(PhotoId(4), "thumb", 1.0);
+        let t = e.steps()[0];
+        assert_eq!((t.any_source, t.full_source), ("last", "draft"));
+        assert!((t.full_ms.unwrap() - 50.0).abs() < 0.01);
         assert_eq!(l.to_json()["current"]["photo"], 2);
     }
 
