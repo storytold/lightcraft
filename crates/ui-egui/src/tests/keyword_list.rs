@@ -276,6 +276,88 @@ fn a_keywords_menu_offers_its_actions() {
     assert_eq!(h.app.session.catalog.default_keyword_parent(), None, "gone with it");
 }
 
+/// ⌘⌥⇧K (Ctrl+Alt+Shift+K) is Set Keyword Shortcut: it asks for keywords with commas between
+/// them, showing the ones set before; ⇧K then adds them to the selected photos, and takes them off
+/// when every selected photo has them.
+#[test]
+fn cmd_alt_shift_k_sets_the_keyword_shortcut_and_shift_k_toggles_it() {
+    let (mut h, ids) = keywords_panel();
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "alt": true, "shift": true}));
+    let Some(crate::state::Dialog::TextPrompt { command, value, .. }) = h.app.ui.dialog.clone() else { panic!("{:?}", h.app.ui.dialog) };
+    assert_eq!((command.as_str(), value.as_str()), ("keyword.setShortcut", ""));
+    ask(&mut h, "ui.text", json!({"text": "Weddings, beach"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(h.app.ui.dialog, None);
+    let shortcut = h.app.session.catalog.keyword_shortcut();
+    assert!(shortcut.len() == 2 && shortcut[0].eq_ignore_ascii_case("beach") && shortcut[1] == "Weddings", "{shortcut:?}");
+    ask(&mut h, "ui.key", json!({"key": "K", "shift": true}));
+    for id in &ids {
+        let k = keywords_of(&h, *id);
+        assert!(k.contains(&"Weddings".to_string()) && k.iter().any(|x| x.eq_ignore_ascii_case("beach")), "{k:?}");
+    }
+    ask(&mut h, "ui.key", json!({"key": "K", "shift": true}));
+    for id in &ids {
+        let k = keywords_of(&h, *id);
+        assert!(!k.contains(&"Weddings".to_string()) && !k.iter().any(|x| x.eq_ignore_ascii_case("beach")), "taken off again: {k:?}");
+    }
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "alt": true, "shift": true}));
+    assert!(
+        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::TextPrompt { value, .. }) if value.eq_ignore_ascii_case("beach, Weddings")),
+        "{:?}",
+        h.app.ui.dialog
+    );
+}
+
+/// A keyword's Use This as Keyword Shortcut makes it the keyword shortcut, and the list marks the
+/// keywords of the keyword shortcut with a +.
+#[test]
+fn the_keyword_list_sets_and_marks_the_keyword_shortcut() {
+    let (mut h, _) = keywords_panel();
+    run(&mut h, "keyword.create", json!({"name": "Weddings"}));
+    find(&mut h, "wedd");
+    assert!(!has(&h, "keywordShortcut:Weddings"));
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordRow:Weddings", "button": "right"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordMenu:useAsShortcut"}));
+    assert_eq!(h.app.session.catalog.keyword_shortcut(), ["Weddings"]);
+    assert!(has(&h, "keywordShortcut:Weddings"), "the + after the name");
+    run(&mut h, "keyword.setShortcut", json!({"keywords": "harbor"}));
+    assert!(!has(&h, "keywordShortcut:Weddings"), "no longer in the keyword shortcut");
+}
+
+/// A name too long for its row is cut short before the dot and the +, so both stay clear of the
+/// Show photos arrow.
+#[test]
+fn a_long_keyword_name_leaves_room_for_its_marks() {
+    let (mut h, _) = keywords_panel();
+    let name = "Weddings and receptions at the harbor in the summer of the year before last";
+    run(&mut h, "keyword.create", json!({"name": name}));
+    run(&mut h, "keyword.setDefaultParent", json!({"keyword": name}));
+    run(&mut h, "keyword.setShortcut", json!({"keywords": [name]}));
+    find(&mut h, "receptions");
+    let arrow = rect(&h, &format!("keywordShow:{name}"));
+    for mark in ["keywordDefault", "keywordShortcut"] {
+        let r = rect(&h, &format!("{mark}:{name}"));
+        assert!(r.right() <= arrow.left(), "{mark} {r:?} runs into the arrow {arrow:?}");
+    }
+}
+
+/// With a keyword shortcut set, a photo's context menu offers Add Keyword with its keywords, which
+/// gives them to the selected photos; with none it offers nothing.
+#[test]
+fn a_photos_menu_adds_the_keyword_shortcut() {
+    let (mut h, ids) = keywords_panel();
+    ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", ids[0]), "button": "right"}));
+    assert!(!has(&h, "button:contextAddKeywordShortcut"), "no keyword shortcut");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    run(&mut h, "keyword.setShortcut", json!({"keywords": "Weddings, Events|Ceremony"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", ids[0]), "button": "right"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "button:contextAddKeywordShortcut"}));
+    for id in &ids {
+        let k = keywords_of(&h, *id);
+        assert!(k.contains(&"Weddings".to_string()) && k.contains(&"Events|Ceremony".to_string()), "{k:?}");
+    }
+}
+
 fn center(h: &Headless, id: &str) -> egui::Pos2 {
     h.app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| r.center()).unwrap_or_else(|| panic!("no {id} on screen"))
 }

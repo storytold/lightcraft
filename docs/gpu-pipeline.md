@@ -49,6 +49,9 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
+- `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
+  otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
+  without a GPU (below); the app never sets it.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -112,6 +115,15 @@ leaves `window-init.marker`, and the next start (relaunched automatically, at mo
 renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
+
+**The window's surface: one frame in flight.** The window's wgpu options start from eframe's defaults
+(`NativeOptions::default().wgpu_options`, `window_gpu::base_options`), whose surface is egui-wgpu's
+`SurfaceConfig::LOW_LATENCY`: vsync, at most one frame queued ahead of the display (two drawables on
+Metal). egui-wgpu's bare `WgpuConfiguration::default()` is `HIGH_THROUGHPUT` (two frames queued, three
+drawables), and the window used it from #136 until this change, so a drag reached the screen one frame
+(8.3 ms at 120 Hz, 16.7 ms at 60 Hz) later. The window's own GPU work is small (egui's meshes and
+texture uploads; renders run on the compute device), which is what `LOW_LATENCY` is meant for.
+During a live window resize egui-wgpu still uses three drawables on macOS.
 
 **Troubleshooting a crash at startup (Windows).** Start LightCraft from a `.cmd` file or a terminal
 with `set LIGHTCRAFT_GPU_BACKEND=dx12` (the default since #136), or `=off` to keep the GPU out of
@@ -263,6 +275,32 @@ bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002%
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
 (`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
 
+**Running them without a GPU (issue #1050).** `Gpu::new` turns down software adapters, so on a
+machine without a hardware GPU (a VM, a container) every GPU test skips.
+`LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` lets them through for one run (tests only: the app never sets it):
+
+```sh
+log="$(mktemp -d)/gpu-skips.jsonl"   # a new private directory; an absolute path, as tests run in crates/gpu
+LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG="$log" cargo test -p lightcraft-gpu --tests
+grep '"need":"gpu"' "$log" | grep -v -e 'lost on purpose' -e 'memory never ran out'   # no output: only the two below skipped
+```
+
+- **Linux:** Mesa's lavapipe (Vulkan; `mesa-vulkan-drivers` on Debian and Ubuntu). Its storage
+  bindings stop at 128 MiB (the WebGPU default), so the two big-source tests use a 117 MiB source:
+  above what a view keeps with its stages (96 MiB) and small enough to be uploaded there.
+- **Windows:** WARP, the DX12 software rasterizer that ships with Windows (shaders through FXC, as
+  above).
+- **macOS:** Metal is a hardware adapter, so the tests run without the variable.
+
+A machine with a hardware GPU picks it over the software adapter, variable or not. Each test that
+skips prints `skipped (gpu): …` and appends a line to the `LIGHTCRAFT_SKIP_LOG` file; with a software
+adapter the only ones left should be the device-loss test (`no GPU device, or one that can't be lost on
+purpose here`) and the device-memory test (`no GPU device, or its memory never ran out`: on lavapipe its
+allocations never fail, seen 2026-10-31). Measured 2026-10-11 on lavapipe and WARP, and again 2026-10-30 on lavapipe (Mesa's
+llvmpipe on LLVM 20, 143 compared renders), every compared render stayed within **max 1 LSB, mean ≤
+0.0003 LSB**, as on the M4 Pro. The equivalence binary takes about 20 s on lavapipe and several
+minutes on WARP.
+
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
 
@@ -301,6 +339,14 @@ GPU timings include the readback of the 8-bit result and the histogram. Device c
 compilation: ~0.4 s once per process — the desktop app starts it on a background thread at launch
 (`lightcraft_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
 the device on their first GPU render. `lightcraft_gpu::ready()` asks without blocking.
+
+On Windows / DX12 the kernels cost more: FXC compiles each pipeline single-threaded inside
+`create_compute_pipeline` (issue #471). Built one after another, the 27 took ~2.2 s on an Intel Core
+Ultra 7 165U iGPU (`app.gpu` 2.4 s median, up to 7 s on the first run after an install), so
+`ctx::build_kernels` shares them out to worker threads (issue #2936): ~1.05 s there (`app.gpu` 1.2 s),
+most likely the largest kernel (`finish.wgsl`) alone (not timed per kernel). wgpu's error scopes are per thread, so every worker
+opens its own; a refused kernel still means no GPU. The `gpu:` info log line gives the kernel count
+and build time.
 
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its

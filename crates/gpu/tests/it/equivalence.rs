@@ -2,7 +2,8 @@
 //! `lightcraft_gpu::render`, compared in 8-bit sRGB.
 //!
 //! Bounds (documented in `docs/gpu-pipeline.md`): mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB per
-//! channel for every case. Skips (passes with a note) when no GPU adapter exists, e.g. on CI.
+//! channel for every case. Skips (passes with a note) when no GPU adapter exists;
+//! `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` runs them on a software adapter (lavapipe, WARP) instead.
 
 use std::sync::Arc;
 
@@ -494,6 +495,34 @@ fn clipped_highlights_stay_neutral_on_both() {
     }
 }
 
+/// Black pixels have no hue. The GPU's `atan2(0, 0)` is undefined (NaN on some GPUs), which made
+/// every exactly black pixel NaN once a colour tool ran, and a lightening vignette then showed it:
+/// the CPU lifted the black corners, the GPU left them black.
+#[test]
+fn black_pixels_match_under_colour_tools_and_a_light_vignette() {
+    if !gpu() {
+        return;
+    }
+    let base = scene(0, 320, 240);
+    // black bars across the frame, reaching into the corners the vignette lightens
+    let src = Arc::new(Rgb32f::from_fn(320, 240, |x, y| if y % 40 < 8 || x % 64 < 6 { [0.0; 3] } else { base.get(x, y) }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(320, 240);
+    for (name, f) in [
+        ("black, light vignette + saturation", (|s: &mut DevelopSettings| s.color.saturation = 40.0) as fn(&mut DevelopSettings)),
+        ("black, light vignette + vibrance", |s| s.color.vibrance = 30.0),
+        ("black, light vignette + mixer", |s| s.mixer.yellow.hue = 30.0),
+    ] {
+        let mut s = DevelopSettings::default();
+        s.vignette.amount = 25.0;
+        s.vignette.style = VignetteStyle::HighlightPriority;
+        f(&mut s);
+        check(name, &src, &info, &s, &req);
+        let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
+        assert!(gpu.get(0, 0)[1] > 0, "{name}: the black corner is not lightened on the GPU");
+    }
+}
+
 #[test]
 fn rendered_sources_and_other_scenes() {
     if !gpu() {
@@ -693,6 +722,34 @@ fn overlays_match() {
         let req = RenderRequest { overlay: Overlay::Mask { id, view, color: [230, 30, 40], opacity: 50 }, ..RenderRequest::fit(640, 640) };
         check(&format!("mask {id} overlay {}", view.name()), &src, &raw, &s, &req);
     }
+    // Alt-drag previews: clipping and greyscale on the finished image; the sharpening views from
+    // each renderer's own detail planes (with sharpening on, and off: no texture plane then).
+    let mut s = DevelopSettings::default();
+    (s.light.whites, s.light.blacks, s.detail.sharpen_masking) = (80.0, -80.0, 40.0);
+    for amount in [50.0, 0.0] {
+        s.detail.sharpen_amount = amount;
+        for o in [Overlay::ClipHighlights, Overlay::ClipShadows, Overlay::Grayscale, Overlay::SharpenDetail, Overlay::SharpenMask] {
+            let req = RenderRequest { overlay: o, ..RenderRequest::fit(640, 640) };
+            if matches!(o, Overlay::ClipHighlights | Overlay::ClipShadows) {
+                // a binary view: a 1-LSB difference at 0 / 255 flips a channel, so compare shares
+                let cpu = render(&src, &raw, &s, &req).image;
+                let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu").image;
+                let differ = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| a != b).count() as f64 / cpu.data.len() as f64;
+                assert!(differ < 0.002, "{o:?} sharpen {amount}: {differ}");
+            } else if o == Overlay::Grayscale {
+                check(&format!("{o:?} preview"), &src, &raw, &s, &req);
+            } else {
+                // the sharpening views amplify the detail planes (the mask through a steep
+                // smoothstep): allow a few larger differences where the planes differ slightly
+                let cpu = render(&src, &raw, &s, &req).image;
+                let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu").image;
+                let (mean, max, _) = diff(&cpu, &gpu);
+                let far = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| a[0].abs_diff(b[0]) > 8).count() as f64 / cpu.data.len() as f64;
+                eprintln!("{o:?} sharpen {amount:<4}  mean {mean:.4}  max {max}  >8: {:.4}%", far * 100.0);
+                assert!(mean < 1.0 && far < 0.005, "{o:?} sharpen {amount}: mean {mean:.4}, >8 LSB {far}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -833,12 +890,19 @@ fn windows_match() {
     check("window: vignette corner", &src, &info, &s, &corner);
 }
 
-/// Issue #323: a window of a 24 MP photo is cut from a source of 288 MB on the device. Keeping that
-/// upload with the view's stages counted it against the stage budget on every tick of a drag and
-/// got the stages cleared, and the upload and resampling redone: the window's stages are its own
-/// pixels, not the photo's.
+/// Issue #323: a window of a big photo is cut from the whole source on the device (288 MB for 24 MP).
+/// Keeping that upload with the view's stages counted it against the stage budget on every tick of
+/// a drag and got the stages cleared, and the upload and resampling redone: the window's stages are
+/// its own pixels, not the photo's.
 // (these two share the process's one big source: a test lock keeps them from replacing each other's)
 static BIG_SOURCE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The big photo of these tests: 10.24 MP, a 117 MiB source. That is over what a view keeps with its
+/// stages (96 MiB, so it is shared) and within a 128 MiB storage binding (the WebGPU default, and
+/// the limit of Mesa's lavapipe), so the source goes to the device on every adapter. A source
+/// over the device's limit is resampled on the CPU instead and never uploaded, which would leave
+/// these tests nothing to check.
+const BIG: usize = 3200;
 
 #[test]
 fn a_window_does_not_keep_the_whole_source_on_the_device() {
@@ -847,11 +911,11 @@ fn a_window_does_not_keep_the_whole_source_on_the_device() {
         return;
     }
     use lightcraft_pipeline::PixelWindow;
-    let src = scene(1, 6000, 4000);
+    let src = scene(1, BIG, BIG);
     let info = SourceInfo { raw: true, ..Default::default() };
     let stages = StageCache::default();
     let s = DevelopSettings::default();
-    let req = RenderRequest { window: Some(PixelWindow { x: 2000, y: 1500, w: 640, h: 480 }), ..RenderRequest::fit(6000, 4000) };
+    let req = RenderRequest { window: Some(PixelWindow { x: 2000, y: 1500, w: 640, h: 480 }), ..RenderRequest::fit(BIG, BIG) };
     let _ = lightcraft_gpu::render(&src, &info, &s, &req, Some(&stages)).expect("gpu render");
     let held = lightcraft_gpu::stage_bytes(&stages);
     assert!(held < 100 << 20, "the view's GPU stages hold {} MiB for a 640×480 window", held >> 20);
@@ -863,7 +927,7 @@ fn a_window_does_not_keep_the_whole_source_on_the_device() {
     assert!(lightcraft_gpu::stage_bytes(&stages) < 100 << 20);
 }
 
-/// …but the 288 MB is uploaded once for every window of every view of the photo, not once per
+/// …but the source is uploaded once for every window of every view of the photo, not once per
 /// window: panning at 1:1, and the Before and After windows, share one device copy of it, which
 /// goes when the app idles (`trim_pool(0)`).
 #[test]
@@ -873,17 +937,17 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
         return;
     }
     use lightcraft_pipeline::PixelWindow;
-    let src = scene(1, 6000, 4000);
+    let src = scene(1, BIG, BIG);
     let info = SourceInfo { raw: true, ..Default::default() };
     let s = DevelopSettings::default();
     let (after, before) = (StageCache::default(), StageCache::default());
-    let at = |x: usize| RenderRequest { window: Some(PixelWindow { x, y: 1500, w: 640, h: 480 }), ..RenderRequest::fit(6000, 4000) };
+    let at = |x: usize| RenderRequest { window: Some(PixelWindow { x, y: 1500, w: 640, h: 480 }), ..RenderRequest::fit(BIG, BIG) };
     let start = lightcraft_gpu::source_uploads();
     for (cache, x) in [(&after, 1000), (&after, 1256), (&after, 1512), (&before, 1512), (&before, 1768)] {
         lightcraft_gpu::render(&src, &info, &s, &at(x), Some(cache)).expect("gpu render");
     }
     assert_eq!(lightcraft_gpu::source_uploads() - start, 1, "one upload for five windows of two views");
-    assert!(lightcraft_gpu::shared_source_bytes() >= 280_000_000, "{}", lightcraft_gpu::shared_source_bytes());
+    assert!(lightcraft_gpu::shared_source_bytes() >= BIG * BIG * 12, "{}", lightcraft_gpu::shared_source_bytes());
     assert!(lightcraft_gpu::stage_bytes(&after) < 100 << 20, "and it is not in the views' stages");
     lightcraft_gpu::trim_pool(0);
     assert_eq!(lightcraft_gpu::shared_source_bytes(), 0, "an idle app gives it back");

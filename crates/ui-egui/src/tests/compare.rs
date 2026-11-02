@@ -318,3 +318,101 @@ fn info_panel_label_in_compare_labels_the_active_photo_and_shows_it() {
     assert_eq!(photo(&h, cand).rating, 3);
     assert_eq!(photo(&h, sel).rating, 0, "the select is not rated with it");
 }
+
+/// Survey frames its active tile in the theme's active ring, which must not be the white that
+/// vanishes on a light theme's canvas.
+#[test]
+fn survey_rings_the_active_tile_in_the_theme_colour() {
+    use egui::epaint::Shape;
+    let mut h = demo();
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    assert_ne!(t.ring_active, egui::Color32::WHITE);
+    // the filmstrip below rings its active cell the same way: only the tile counts here
+    let films: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("film:")).map(|(_, r)| *r).collect();
+    let rings: Vec<(f32, egui::Color32)> = h
+        .view
+        .painted_shapes()
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Rect(rs)
+                if rs.stroke_kind == egui::StrokeKind::Outside
+                    && rs.stroke.color == t.ring_active
+                    && !films.iter().any(|f| f.intersects(rs.rect)) =>
+            {
+                Some((rs.stroke.width, rs.stroke.color))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rings, vec![(3.0, t.ring_active)], "one active tile, ringed once");
+    let white = h
+        .view
+        .painted_shapes()
+        .iter()
+        .filter(|s| matches!(s, Shape::Rect(rs) if rs.stroke.width == 2.0 && rs.stroke.color == egui::Color32::WHITE))
+        .count();
+    assert_eq!(white, 0, "no white 2 pt frame");
+}
+
+/// Survey with three photos selected and the second active; returns the three ids.
+fn survey_of_three(h: &mut Headless) -> [u64; 3] {
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    let ids = [vis[0], vis[1], vis[2]];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids, "active": ids[1]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    ids
+}
+
+/// Move the pointer to `pos` and press and release the primary button there, with `modifiers`.
+fn click_with(h: &mut Headless, pos: egui::Pos2, modifiers: egui::Modifiers) {
+    h.app.synthetic.push(egui::Event::PointerMoved(pos));
+    h.settle(SETTLE);
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.settle(SETTLE);
+}
+
+/// Click the centre of photo `id`'s survey tile with `modifiers`.
+fn click_tile(h: &mut Headless, id: u64, modifiers: egui::Modifiers) {
+    let name = format!("cull:{id}");
+    let pos = h.app.widgets.iter().find(|(w, _)| *w == name).map(|(_, r)| r.center()).expect("the tile is laid out");
+    click_with(h, pos, modifiers);
+}
+
+/// ⌘/Ctrl-click on a survey tile takes that photo out of the survey, as in Lightroom Classic,
+/// whether or not it is the active one; a plain click only makes it active, and the last photo stays.
+#[test]
+fn survey_command_click_takes_the_photo_out() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let sel = |h: &Headless| h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<u64>>();
+    let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
+    click_tile(&mut h, a, egui::Modifiers::NONE);
+    assert_eq!((sel(&h), active(&h)), (vec![a, b, c], Some(a)), "a plain click keeps the photo and makes it active");
+    click_tile(&mut h, c, egui::Modifiers::COMMAND);
+    assert_eq!((sel(&h), active(&h)), (vec![a, b], Some(a)), "the ⌘/Ctrl-clicked photo (not the active one) left");
+    click_tile(&mut h, b, egui::Modifiers::COMMAND);
+    assert_eq!(sel(&h), vec![a]);
+    click_tile(&mut h, a, egui::Modifiers::COMMAND);
+    assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
+}
+
+/// ⌘/Ctrl-click on the active survey photo while others remain: it leaves, and the last
+/// remaining photo becomes active, so the keys still act on a photo on screen.
+#[test]
+fn survey_command_click_on_the_active_photo_activates_the_last_one() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    click_tile(&mut h, a, egui::Modifiers::NONE);
+    click_tile(&mut h, a, egui::Modifiers::COMMAND);
+    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
+    assert_eq!((sel, h.app.session.selection.active.map(|p| p.0)), (vec![b, c], Some(c)));
+}
