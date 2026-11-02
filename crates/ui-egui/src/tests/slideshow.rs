@@ -154,6 +154,21 @@ fn full_screen_preview_requests_native_fullscreen() {
 }
 
 #[test]
+fn full_screen_preview_keyboard_without_active_photo_does_not_enter_fullscreen() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+    h.step();
+    assert_eq!(h.app.session.active(), None);
+    assert!(!crate::menus::ui_enabled(&h.app, "view.fullScreenPreview"));
+
+    let result = h.request("ui.key", json!({"key": "F"}), T);
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(!h.app.ui.fullscreen, "the disabled preview shortcut is a no-op without an active photo");
+    assert_eq!(h.app.ui.full_screen_preview_window_was_fullscreen, None);
+    assert!(h.window_commands.is_empty(), "no native fullscreen request is queued");
+}
+
+#[test]
 fn full_screen_preview_restores_windowed_state() {
     let mut h = grid();
     h.window_commands.clear();
@@ -170,6 +185,26 @@ fn full_screen_preview_restores_windowed_state() {
     h.step();
     assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(false)]);
     assert!(!h.app.window_is_fullscreen, "the originally windowed state is restored");
+}
+
+#[test]
+fn full_screen_preview_ui_set_preserves_window_restoration_state() {
+    let mut h = grid();
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert_eq!(h.app.ui.full_screen_preview_window_was_fullscreen, Some(false));
+    assert!(h.app.window_is_fullscreen);
+    h.window_commands.clear();
+
+    let result = h.request("ui.set", json!({"zoom": "fit"}), T);
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(h.app.ui.full_screen_preview_window_was_fullscreen, Some(false));
+
+    run(&mut h, "view.fullScreenPreview", json!({}));
+    h.step();
+    assert!(!h.app.ui.fullscreen);
+    assert_eq!(h.window_commands, [egui::ViewportCommand::Fullscreen(false)]);
+    assert!(!h.app.window_is_fullscreen, "the pre-preview windowed state is restored after ui.set");
 }
 
 #[test]

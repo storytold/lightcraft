@@ -418,6 +418,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     u.toast = app.ui.toast.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
+                    u.full_screen_preview_window_was_fullscreen = app.ui.full_screen_preview_window_was_fullscreen;
                     crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());
                     app.ui = u;
                     crate::i18n::set_language(app.ui.language);
