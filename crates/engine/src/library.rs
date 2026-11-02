@@ -134,6 +134,9 @@ pub struct Library {
     /// Why the last write of presets.json failed; `None` once it is written. While set, the preset
     /// changes exist only in memory and count as unsaved ([`Session::unsaved`], issue #2266).
     presets_error: Option<String>,
+    /// Why the last write of people.json failed; `None` once it is written. While set, the chosen pictures exist only
+    /// in memory: retried like presets.json, and counted as unsaved.
+    people_error: Option<String>,
     /// When the frame loop may retry a failed append ([`Session::persist_if_dirty`] backs off).
     retry_at: Option<web_time::Instant>,
     /// What forgetting untouched Local records did when the library opened.
@@ -248,6 +251,18 @@ impl Library {
     pub fn originals_dir(&self) -> PathBuf {
         self.dir.join("Originals")
     }
+}
+
+/// people.json: what the user chose for the people named on faces. Kept beside the catalog rather than in it, so a
+/// library stays readable by builds that don't know about it.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct PeopleFile {
+    /// The face that shows each person in the People view (lower-cased name → face).
+    covers: std::collections::BTreeMap<String, lightcraft_catalog::PersonCover>,
+    /// The faces set aside as "not this person" for each person (lower-cased name → faces).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    dismissed: std::collections::BTreeMap<String, Vec<lightcraft_catalog::FaceRef>>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -571,6 +586,10 @@ impl Session {
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        // the people's chosen pictures
+        let people = settings.read::<PeopleFile>(files.as_mut(), "people.json").unwrap_or_default();
+        (self.person_covers, self.person_dismissed) = (people.covers, people.dismissed);
+        self.people_gen = self.people_gen.wrapping_add(1);
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -631,6 +650,7 @@ impl Session {
             last_error: None,
             unsaved_error: None,
             presets_error: None,
+            people_error: None,
             retry_at: None,
             forgot_local: None,
             presets_saved,
@@ -695,6 +715,10 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // a people.json that could not be written (during a rename, say) is tried again
+        if self.library.as_ref().is_some_and(|l| l.people_error.is_some() && !l.blocked.contains(&"people.json")) {
+            self.save_people_or_keep_unsaved();
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -725,7 +749,9 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
+        // a people.json that couldn't be read at opening is never written this session: nothing to retry
+        let presets_unsaved =
+            self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || (l.people_error.is_some() && !l.blocked.contains(&"people.json")));
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
@@ -740,8 +766,9 @@ impl Session {
         let lib = self.library.as_ref()?;
         let ops = lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty());
         let presets = lib.presets_error.as_deref();
-        let n = ops.map_or(0, |_| self.pending_log.len()) + usize::from(presets.is_some());
-        ops.or(presets).map(|why| (n, why))
+        let people = lib.people_error.as_deref();
+        let n = ops.map_or(0, |_| self.pending_log.len()) + usize::from(presets.is_some()) + usize::from(people.is_some());
+        ops.or(presets).or(people).map(|why| (n, why))
     }
 
     /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
@@ -773,6 +800,13 @@ impl Session {
             // neither the log nor the snapshot took the queued ops
             (Err(EngineError::NotSaved(e)), Err(s)) if lib.journal.seq() == before => Err(EngineError::NotSaved(format!("{e}; snapshot: {s}"))),
             (_, Err(s)) => Err(s.into()),
+        };
+        // a people.json write that still fails keeps the library open (switching would drop the change); one that can
+        // never be written this session (unreadable at opening) does not hold the library hostage
+        let people = lib.people_error.clone().filter(|_| !lib.blocked.contains(&"people.json"));
+        let result = match (result, people) {
+            (Ok(()), Some(why)) => Err(EngineError::Other(why)),
+            (r, _) => r,
         };
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
@@ -816,6 +850,48 @@ impl Session {
                 Ok(()) => lib.view_written = v,
                 Err(e) => log::error!("library: view: {e}"),
             }
+        }
+    }
+
+    /// Save the people's chosen pictures (no-op for in-memory sessions). A failure changes nothing: a change that is
+    /// undone when it can't be saved leaves nothing unsaved behind; one that stands goes through
+    /// [`Session::save_people_or_keep_unsaved`].
+    pub fn save_people(&mut self) -> Result<()> {
+        let people = PeopleFile { covers: self.person_covers.clone(), dismissed: self.person_dismissed.clone() };
+        let v = serde_json::to_vec_pretty(&people).unwrap_or_default();
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&"people.json") {
+            return Err(EngineError::Other(
+                "people: people.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save the change".into(),
+            ));
+        }
+        match lib.files.write_atomic("people.json", &v) {
+            Ok(()) => {
+                if lib.people_error.take().is_some() {
+                    log::info!("library: people.json written to disk");
+                }
+                Ok(())
+            }
+            Err(e) => Err(EngineError::Other(format!("people: {e}"))),
+        }
+    }
+
+    /// Save people.json for a change that stands even when the file can't take it (a rename carrying a person's
+    /// picture): a failed write is tried again by [`Session::persist`]; a file that couldn't be read when the library
+    /// opened is never overwritten, so the change counts as unsaved (see [`Session::unsaved`]) until the library closes.
+    pub(crate) fn save_people_or_keep_unsaved(&mut self) {
+        let Err(e) = self.save_people() else { return };
+        log::warn!("faces: {e}");
+        let Some(lib) = self.library.as_mut() else { return };
+        if lib.blocked.contains(&"people.json") {
+            lib.people_error.get_or_insert_with(|| {
+                "people: people.json couldn't be read when the library opened, so it isn't overwritten; the change is kept until the library closes"
+                    .into()
+            });
+        } else {
+            // retried by the next command and the frame loop (backing off), and counted as unsaved meanwhile
+            lib.people_error = Some(e.to_string());
+            lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
         }
     }
 
