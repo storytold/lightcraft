@@ -108,19 +108,24 @@ fn spot_to_out(frame: &Frame, anchor: SpotAnchor, p: Point, to_out: &Affine) -> 
     (q.x.is_finite() && q.y.is_finite()).then_some(q)
 }
 
-/// A stored source delta must follow the optical warp along with its target.
-fn spot_offset_out(frame: &Frame, spot: &Spot, to_out: &Affine) -> Option<(f32, f32)> {
-    let offset = spot.source_offset?;
-    let (a, b) = match spot.anchor {
+/// A source delta in sensor space varies with the dab position under a
+/// non-linear lens/perspective warp. Image-space offsets retain their original
+/// constant behavior.
+fn spot_offset_out_at(frame: &Frame, anchor: SpotAnchor, target: Point, offset: Point, to_out: &Affine) -> Option<(f32, f32)> {
+    let (a, b) = match anchor {
         SpotAnchor::Image => (to_out.apply(Point::new(0.0, 0.0)), to_out.apply(offset)),
         SpotAnchor::Sensor => {
-            let target = *spot.points.first()?;
             let source = Point::new(target.x + offset.x, target.y + offset.y);
-            (spot_to_out(frame, spot.anchor, target, to_out)?, spot_to_out(frame, spot.anchor, source, to_out)?)
+            (spot_to_out(frame, anchor, target, to_out)?, spot_to_out(frame, anchor, source, to_out)?)
         }
     };
     let delta = (b.x - a.x, b.y - a.y);
     (delta.0.is_finite() && delta.1.is_finite()).then_some((delta.0 as f32, delta.1 as f32))
+}
+
+/// The first dab is the anchor for interactive source picking and refresh.
+fn spot_offset_out(frame: &Frame, spot: &Spot, to_out: &Affine) -> Option<(f32, f32)> {
+    spot_offset_out_at(frame, spot.anchor, *spot.points.first()?, spot.source_offset?, to_out)
 }
 
 /// Transform displayed coordinates back into the spot's stored coordinate space.
@@ -224,6 +229,17 @@ pub fn window_for_reads_checked(
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
             let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
             let s = match spot.source_offset {
+                Some(offset) if spot.anchor == SpotAnchor::Sensor => {
+                    // Each dab has its own mapped source. Include every source
+                    // disc in the read window, not just the first dab's delta.
+                    let mut source = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+                    for (target, out) in spot.points.iter().zip(&pts) {
+                        let (dx, dy) = spot_offset_out_at(frame, spot.anchor, *target, offset, &to_out)?;
+                        let (x, y) = (out.x + dx as f64, out.y + dy as f64);
+                        source = [source[0].min(x - 2.0 * r), source[1].min(y - 2.0 * r), source[2].max(x + 2.0 * r), source[3].max(y + 2.0 * r)];
+                    }
+                    source
+                }
                 Some(_) => {
                     let (dx, dy) = spot_offset_out(frame, spot, &to_out)?;
                     [t[0] + dx as f64, t[1] + dy as f64, t[2] + dx as f64, t[3] + dy as f64]
@@ -327,6 +343,20 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             },
             None => auto_source(img, first, r),
         };
+        // Source-anchored strokes must sample each dab at its own warped
+        // source position, rather than moving the whole stroke by the first
+        // dab's output-space delta.
+        let dab_offsets: Option<Vec<(f32, f32)>> = match (spot.anchor, spot.source_offset) {
+            (SpotAnchor::Sensor, Some(source)) if !fill => {
+                let Some(mapped) =
+                    spot.points.iter().map(|&target| spot_offset_out_at(frame, spot.anchor, target, source, &to_out)).collect::<Option<Vec<_>>>()
+                else {
+                    continue;
+                };
+                Some(mapped)
+            }
+            _ => None,
+        };
         // Bounding box of the stroke.
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for p in &pts {
@@ -352,10 +382,16 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         for y in 0..bh {
             for x in 0..bw {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
-                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+                let (dab, d2) = pts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, (px - p.0).powi(2) + (py - p.1).powi(2)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .unwrap_or((0, f32::MAX));
                 let inner = r * (1.0 - feather * 0.8);
-                alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
-                src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
+                alpha[y * bw + x] = (1.0 - smooth(inner, r, d2.sqrt())) * opacity;
+                let delta = dab_offsets.as_ref().map_or(offset, |d| d[dab]);
+                src[y * bw + x] = img.sample_bilinear(px + delta.0, py + delta.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
             }
         }
@@ -662,6 +698,45 @@ mod tests {
             apply(&mut fixed, std::slice::from_ref(&spot), &frame, frame.px_per_long(w));
             assert!(fixed.get(px, py)[0] < 0.5, "{exif:?}: sensor-anchored preset did not follow EXIF rotation");
         }
+    }
+
+    /// A two-dab sensor clone needs distinct output offsets for each dab
+    /// under non-linear distortion, including in the source read window.
+    #[test]
+    fn sensor_clone_stroke_samples_each_dab_at_its_own_warped_source() {
+        use crate::PixelWindow;
+        let (w, h) = (600usize, 400usize);
+        let mut settings = DevelopSettings::default();
+        settings.optics.distortion = 100.0;
+        let frame = Frame::new(w, h, &settings, true);
+        let targets = [Point::new(0.16, 0.2), Point::new(0.68, 0.72)];
+        let spot = Spot {
+            mode: SpotMode::Clone,
+            anchor: SpotAnchor::Sensor,
+            points: targets.to_vec(),
+            source_offset: Some(Point::new(0.12, 0.02)),
+            size: 0.025,
+            feather: 0.0,
+            ..Default::default()
+        };
+        let to_out = frame.norm_to_out(w, h);
+        let delta = targets.map(|p| spot_offset_out_at(&frame, spot.anchor, p, spot.source_offset.unwrap(), &to_out).unwrap());
+        assert!((delta[0].0 - delta[1].0).hypot(delta[0].1 - delta[1].1) > 1.0, "nonlinear warp must vary the source displacement");
+        let img = Rgb32f::from_fn(w, h, |x, _| [x as f32 / w as f32, 0.3, 0.2]);
+        let mut output = img.clone();
+        apply(&mut output, std::slice::from_ref(&spot), &frame, frame.px_per_long(w));
+        let second = spot_to_out(&frame, spot.anchor, targets[1], &to_out).unwrap();
+        let (x, y) = (second.x.floor() as usize, second.y.floor() as usize);
+        let expected = img.sample_bilinear(x as f32 + 0.5 + delta[1].0, y as f32 + 0.5 + delta[1].1)[0];
+        assert!((output.get(x, y)[0] - expected).abs() < 0.001, "second dab must sample its own transformed source");
+        let win = PixelWindow { x, y, w: 3, h: 3 };
+        let grown = window_for_reads_checked(&with_spots(vec![spot]), &frame, w, h, frame.px_per_long(w), win).unwrap();
+        let sx = second.x + delta[1].0 as f64;
+        let sy = second.y + delta[1].1 as f64;
+        assert!(
+            sx >= grown.x as f64 && sx < (grown.x + grown.w) as f64 && sy >= grown.y as f64 && sy < (grown.y + grown.h) as f64,
+            "the second dab's source must be inside the expanded read window: {grown:?} vs ({sx}, {sy})"
+        );
     }
 
     /// Issue #3590: the retouch must follow a fixed sensor blemish after optics

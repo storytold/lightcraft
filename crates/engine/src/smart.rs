@@ -91,8 +91,9 @@ pub(crate) const ENCODE_VERSION: u64 = 4;
 /// budget (up to 12 336 gains).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SmartFacts {
+    // None marks a version-3 proxy whose facts predate this field.
     #[serde(default)]
-    sensor_orientation: lightcraft_geom::Orientation,
+    sensor_orientation: Option<lightcraft_geom::Orientation>,
     raw: bool,
     as_shot_temp: f64,
     as_shot_tint: f64,
@@ -193,7 +194,7 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             .map(|m| m.iter().map(|(kind, a)| StoredMatte { kind: kind.code(), w: a.width, h: a.height, len: a.data.len() }).collect())
             .unwrap_or_default();
         let facts = SmartFacts {
-            sensor_orientation: i.sensor_orientation,
+            sensor_orientation: Some(i.sensor_orientation),
             raw: i.raw,
             as_shot_temp: i.as_shot_temp,
             as_shot_tint: i.as_shot_tint,
@@ -241,7 +242,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
     let info = stored_facts(&head, bytes).map(|(f, mattes)| SourceInfo {
-        sensor_orientation: f.sensor_orientation,
+        sensor_orientation: f.sensor_orientation.unwrap_or_default(),
+        sensor_orientation_missing: f.sensor_orientation.is_none(),
         raw: f.raw,
         as_shot_temp: f.as_shot_temp,
         as_shot_tint: f.as_shot_tint,

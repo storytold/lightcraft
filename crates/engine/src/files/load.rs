@@ -191,6 +191,7 @@ fn load_bytes_now(
             twin,
             SourceInfo {
                 sensor_orientation: raw.orientation,
+                sensor_orientation_missing: false,
                 raw: true,
                 as_shot_temp: temp,
                 as_shot_tint: tint,

@@ -76,6 +76,10 @@ pub struct SourceInfo {
     /// EXIF orientation already applied to decoded pixels. Sensor-fixed spots
     /// use the inverse to find their original location in camera-native space.
     pub sensor_orientation: lightcraft_geom::Orientation,
+    /// True only for an old offline smart preview whose decoder facts were
+    /// written before the original sensor orientation was stored.
+    /// The catalog's probed orientation then takes precedence.
+    pub sensor_orientation_missing: bool,
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
     /// Raw sources use absolute Kelvin white balance; rendered sources use a relative scale around
@@ -109,6 +113,7 @@ impl Default for SourceInfo {
     fn default() -> Self {
         Self {
             sensor_orientation: lightcraft_geom::Orientation::Normal,
+            sensor_orientation_missing: false,
             raw: false,
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
