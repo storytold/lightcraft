@@ -13,6 +13,8 @@
 //! `?bench` in the URL runs a scripted first-paint / slider-latency measurement and logs it to the
 //! console (see [`bench`]); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
 //! persistence and `?workers=0` renders on the main thread.
+//! `?host=parent` speaks to a same-origin page framing LightCraft (see [`host`]): it hands
+//! photos in, receives what would be downloaded and hears about unsaved changes.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -24,6 +26,7 @@ pub mod bench;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod drop_gate;
 pub mod files;
+pub mod host;
 pub mod store;
 pub mod wire;
 
