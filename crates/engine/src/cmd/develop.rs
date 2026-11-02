@@ -558,7 +558,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Mixer Neutral",
             [],
             None,
-            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); the white balance is read as the render does (Color's eye off means its defaults; a mask's local temperature/tint is not modelled: the mixer is global)",
+            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); the white balance is read as the render does (Color's eye off means its defaults; a mask's local temperature/tint is not modelled: the mixer is global); the brightness kept is what the spot rendered before the pick (without the mixer when its eye was off), before the calibration's shadow tint",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
@@ -592,13 +592,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 let section_off = !d.section_enabled("channelMixer");
                 let current = d.channel_mixer;
                 // the calibration the render will apply after the mixer (the pick keeps the mixer
-                // neutral through it: it is white-preserving), gated by its own section's eye
+                // neutral through it: it is white-preserving), gated by its own section's eye; the
+                // brightness kept is what the spot rendered BEFORE the pick, so with the mixer's own
+                // eye off (the render skipped it) the target is the calibration over the mixer's
+                // input, not over the stored mixer. The calibration's shadow tint comes after the
+                // colour matrix and touches only dark tones; it is not modelled, so a dark spot with
+                // a shadow tint set may keep a little of it.
                 let calib = if d.section_enabled("calibration") {
                     lightcraft_pipeline::colorops::calibration_matrix(&d.calibration).map(|m| m.map(|r| r.map(f64::from)))
                 } else {
                     None
                 };
-                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib)
+                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib, !section_off)
                     .map_err(|e| bad("develop.mixerNeutralPick", e))?;
                 // A mixer scaled down to fit the ±200 % sliders is a gain lost. Exposure is a linear
                 // gain the render applies before the mixer, so raising it by log2(1/scaled) in the
