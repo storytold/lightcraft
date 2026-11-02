@@ -4197,6 +4197,114 @@ fn import_rename_tags_insert_at_the_cursor() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn open_import_modes(h: &mut Headless, cmd: &str, params: serde_json::Value) -> (bool, bool) {
+    let r = h.request("engine.execute", json!({"command": cmd, "params": params}), Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import dialog") };
+    (opts.copy, opts.move_files)
+}
+
+fn confirm_import(h: &mut Headless, click_button: Option<&str>) {
+    let t = Duration::from_secs(10);
+    if let Some(id) = click_button {
+        assert_eq!(h.request("ui.clickWidget", json!({"id": id}), t)["ok"], true);
+    }
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
+    h.settle(SETTLE);
+}
+
+fn assert_import_copy_settings_and_unavailable(src: &std::path::Path) {
+    // 1. A settings object without `importCopy` loads as false, and `import_copy` round-trips through `ui.json`.
+    let old: crate::state::AppSettings = serde_json::from_value(json!({"filmNames": false})).unwrap();
+    assert!(!old.import_copy);
+    let mut ui = crate::UiState::default();
+    assert!(!ui.settings.import_copy);
+    ui.settings.import_copy = true;
+    let saved = serde_json::to_string(&ui).unwrap();
+    assert!(saved.contains(r#""importCopy":true"#), "{saved}");
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert!(restored.settings.import_copy);
+
+    // 2. When copying is unavailable (in-memory library, no folder picker), `import_copy = true`
+    //    opens with `copy = false`, and confirming does not overwrite `import_copy`.
+    let mut mem_app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), crate::Services { png: None, ..Default::default() });
+    mem_app.ui.settings.import_copy = true;
+    let mut mem_h = Headless::new(mem_app, [1300.0, 900.0], 1.0);
+    assert_eq!(open_import_modes(&mut mem_h, "file.addPhotos", json!({"paths": [src.join("img0.png").to_string_lossy()]})), (false, false));
+    confirm_import(&mut mem_h, None);
+    assert!(mem_h.app.ui.settings.import_copy, "stored setting is untouched when copying is unavailable");
+}
+
+/// The import review remembers whether Add in place or Copy was confirmed last (issue #3589):
+/// Move is never remembered, an in-memory session where copying is unavailable neither opens in
+/// Copy nor overwrites the stored setting, and `importCopy` round-trips through `ui.json`
+/// (defaulting to `false` when absent).
+#[test]
+fn import_review_remembers_copy_or_add_mode() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-import-mode-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (src, card) = (dir.join("src"), dir.join("card"));
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&card).unwrap();
+    for (folder, prefix, offset) in [(&src, "img", 20u8), (&card, "card", 140u8)] {
+        for i in 0..4u8 {
+            let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[offset + i * 30, 50, 90, 255]; 64] };
+            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+            std::fs::write(folder.join(format!("{prefix}{i}.png")), png).unwrap();
+        }
+    }
+
+    assert_import_copy_settings_and_unavailable(&src);
+
+    // 3. With a library on disk: opening with `import_copy = true` starts with `copy = true`;
+    //    switching buttons alone does not write `import_copy` until confirmed; confirming Move
+    //    leaves `import_copy` untouched; and `file.addFromDevice` forces `copy = true` and records
+    //    `import_copy = true` when confirmed as Copy.
+    let lib = dir.join("lib");
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(&lib, false).unwrap();
+    let mut app = LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+    app.ui.view = crate::state::ViewMode::PhotoGrid;
+    app.ui.settings.import_copy = true;
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+
+    assert_eq!(open_import_modes(&mut h, "file.addPhotos", json!({"paths": [src.join("img0.png").to_string_lossy()]})), (true, false));
+
+    // Clicking "Add in place" in the body does not change `import_copy` until confirmed.
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:importAdd"}), t)["ok"], true);
+    assert!(h.app.ui.settings.import_copy, "button click alone does not write import_copy");
+    confirm_import(&mut h, None);
+    assert!(!h.app.ui.settings.import_copy, "confirming Add in place stores false");
+
+    // Confirming a Move import leaves `import_copy` untouched (still false), and the next dialog opens with Add.
+    assert_eq!(open_import_modes(&mut h, "file.addPhotos", json!({"paths": [src.join("img1.png").to_string_lossy()]})), (false, false));
+    confirm_import(&mut h, Some("button:importMove"));
+    assert!(!h.app.ui.settings.import_copy, "Move leaves import_copy untouched (false)");
+
+    // Confirming Copy sets `import_copy = true`, and a subsequent Move import leaves `import_copy` untouched (still true).
+    assert_eq!(open_import_modes(&mut h, "file.addPhotos", json!({"paths": [src.join("img2.png").to_string_lossy()]})), (false, false));
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:importCopy"}), t)["ok"], true);
+    assert!(!h.app.ui.settings.import_copy, "not updated until confirmed");
+    confirm_import(&mut h, None);
+    assert!(h.app.ui.settings.import_copy, "confirming Copy stores true");
+
+    assert_eq!(open_import_modes(&mut h, "file.addPhotos", json!({"paths": [src.join("img3.png").to_string_lossy()]})), (true, false));
+    confirm_import(&mut h, Some("button:importMove"));
+    assert!(h.app.ui.settings.import_copy, "Move leaves import_copy untouched (true)");
+
+    // `file.addFromDevice` forces `copy = true` even when `import_copy` was false, and confirming it
+    // as Copy updates `import_copy` to true.
+    h.app.ui.settings.import_copy = false;
+    assert_eq!(open_import_modes(&mut h, "file.addFromDevice", json!({"path": card.to_string_lossy()})), (true, false));
+    assert!(!h.app.ui.settings.import_copy, "opening device import does not change import_copy");
+    confirm_import(&mut h, None);
+    assert!(h.app.ui.settings.import_copy, "confirming device import in Copy mode remembers Copy");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Help ▸ About: the About, Contributors and Models tabs switch and paint (credits are
 /// compiled in).
 #[test]

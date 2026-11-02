@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Import remembers whether you chose Add in place or Copy
+- The Import Photos window now opens with whichever of **Add in place** or **Copy** you confirmed last, saved with the app's UI state (`importCopy` in `ui.json`; issue #3589). New profiles and existing settings files without `importCopy` still start on **Add in place**, and **Move** (which deletes the source files after copying) is never remembered as the default for the next import.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
