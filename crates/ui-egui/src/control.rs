@@ -133,7 +133,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
         "widgetCount": app.widgets.len(),
-        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "thumbsMade": app.renderer.thumbs_made, "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback(), "loupeSteps": app.loupe_timing.to_json(), "previewCache": preview_cache_json(app)},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
@@ -886,4 +886,21 @@ pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target
             None => json!({"ok": false, "error": "no writer configured"}),
         }
     }
+}
+
+/// The preview cache's numbers for `ui.inspect` → `perf.previewCache`: what memory holds, and the
+/// disk cache's hits, misses and writes this session (notes 47 and 48: are built previews used?).
+fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
+    use std::sync::atomic::Ordering;
+    let (entries, bytes) = app.session.media.rendered.mem_usage();
+    let disk = app.session.media.rendered.disk();
+    serde_json::json!({
+        "memEntries": entries,
+        "memBytes": bytes,
+        "diskHits": disk.map(|d| d.hits.load(Ordering::Relaxed)),
+        "diskMisses": disk.map(|d| d.misses.load(Ordering::Relaxed)),
+        "diskWrites": disk.map(|d| d.writes.load(Ordering::Relaxed)),
+        "diskBudget": disk.map(|d| d.budget()),
+        "loupeEdge": app.session.loupe_edge,
+    })
 }

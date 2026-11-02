@@ -862,3 +862,208 @@ mod tests {
         }
     }
 }
+
+/// [`crate::decode_jpeg_srgb8_fit`]: a plain 8-bit sRGB JPEG decoded (DCT-scaled when that still
+/// covers the box) and area-averaged in linear light straight into 8-bit sRGB, without the
+/// float image the general path builds (for a 45 MP camera preview fitted to 2560 px that float
+/// image and its conversions were half the time). `Ok(None)` for anything else.
+pub(crate) fn srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
+    let Some(m) = parse_markers(bytes) else { return Ok(None) };
+    let plain = matches!(m.components, 1 | 3)
+        && m.precision == 8
+        && matches!(m.sof, 0xC0..=0xC2)
+        && m.icc.is_none()
+        && !m.icc_invalid
+        && m.adobe_transform.is_none();
+    let summary = m.exif.as_deref().map(exif::summarize).unwrap_or_default();
+    if !plain || summary.adobe_rgb_hint || max_w == 0 || max_h == 0 {
+        return Ok(None);
+    }
+    let budget = DecodeOptions::default();
+    check_size(F, m.width as u64, m.height as u64, &budget)?;
+    // as in the general decode: the decoders below walk every APP1 again
+    if m.app1 > MAX_APP1 {
+        return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
+    let scale_to = (m.width >= max_w.saturating_mul(2) || m.height >= max_h.saturating_mul(2)).then_some((max_w, max_h));
+    let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
+    let raw =
+        if scale_to.is_some() || non_interleaved { decode_jpeg_decoder(bytes, &m, scale_to, &budget)? } else { decode_zune(bytes, &m, &budget)? };
+    let Buf::U8(px) = &raw.buf else { return Ok(None) };
+    let ch = match raw.model {
+        Model::Rgb => 3,
+        Model::Gray => 1,
+        Model::Cmyk => return Ok(None),
+    };
+    let (w, h) = (raw.width, raw.height);
+    if w == 0 || h == 0 || px.len() < w.saturating_mul(h).saturating_mul(ch) {
+        return Err(Error::Malformed(F, "short output".into()));
+    }
+    // the size `lightcraft_raster::resample::fit` gives: within the box, aspect kept, never larger
+    let s = (max_w as f64 / w as f64).min(max_h as f64 / h as f64).min(1.0);
+    let tw = ((w as f64 * s).round() as usize).clamp(1, w);
+    let th = ((h as f64 * s).round() as usize).clamp(1, h);
+    let orientation = summary.orientation.filter(|o| (1..=8).contains(o)).unwrap_or(1);
+    Ok(Some((area_average_srgb8(px, w, h, ch, tw, th), orientation)))
+}
+
+/// Source pixels and weights each output pixel along one axis covers: a box of the scale's width
+/// (`n` source pixels onto `out`), partly covered pixels at its ends weighted by their share.
+fn box_taps(n: usize, out: usize) -> Vec<(usize, Vec<f32>)> {
+    let scale = n as f64 / out as f64;
+    (0..out)
+        .map(|o| {
+            let (a, b) = (o as f64 * scale, ((o + 1) as f64 * scale).min(n as f64));
+            let first = (a.floor() as usize).min(n - 1);
+            let last = ((b.ceil() as usize).max(first + 1)).min(n);
+            let ws: Vec<f32> =
+                (first..last).map(|j| ((b.min(j as f64 + 1.0) - a.max(j as f64)).max(0.0) / (b - a).max(f64::MIN_POSITIVE)) as f32).collect();
+            (first, ws)
+        })
+        .collect()
+}
+
+/// `px` (`w × h`, `ch` = 1 or 3 interleaved 8-bit sRGB samples) averaged over boxes in linear
+/// light into `tw × th` opaque 8-bit sRGB pixels. A copy when the size doesn't change.
+fn area_average_srgb8(px: &[u8], w: usize, h: usize, ch: usize, tw: usize, th: usize) -> lightcraft_raster::Rgba8 {
+    use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
+    let mut out = lightcraft_raster::Rgba8::new(tw, th);
+    let sample = |x: usize, y: usize, c: usize| px.get((y * w + x) * ch + if ch == 3 { c } else { 0 }).copied().unwrap_or(0);
+    if (tw, th) == (w, h) {
+        lightcraft_raster::par_rows(&mut out.data, tw, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                *o = [sample(x, y, 0), sample(x, y, 1), sample(x, y, 2), 255];
+            }
+        });
+        return out;
+    }
+    let lut: [f32; 256] = std::array::from_fn(|i| decode_srgb8(i as u8));
+    let xs = box_taps(w, tw);
+    let ys = box_taps(h, th);
+    // one source row filtered across into linear RGB at the output width
+    let across = |sy: usize, buf: &mut Vec<[f32; 3]>| {
+        buf.clear();
+        let Some(src) = px.get(sy * w * ch..(sy + 1) * w * ch) else {
+            buf.resize(tw, [0.0; 3]);
+            return;
+        };
+        for (x0, wx) in &xs {
+            let mut a = [0f32; 3];
+            if let Some(span) = src.get(x0 * ch..(x0 + wx.len()) * ch) {
+                for (p, &k) in span.chunks_exact(ch).zip(wx) {
+                    match p {
+                        [r, g, b] => {
+                            a[0] += lut[*r as usize] * k;
+                            a[1] += lut[*g as usize] * k;
+                            a[2] += lut[*b as usize] * k;
+                        }
+                        [v] => {
+                            let l = lut[*v as usize] * k;
+                            a = [a[0] + l, a[1] + l, a[2] + l];
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            buf.push(a);
+        }
+    };
+    lightcraft_raster::par_rows(&mut out.data, tw, |y, row| {
+        let Some((y0, wy)) = ys.get(y) else { return };
+        let mut acc = vec![[0f32; 3]; tw];
+        let mut line = Vec::with_capacity(tw);
+        for (dy, &k) in wy.iter().enumerate() {
+            across(y0 + dy, &mut line);
+            for (a, l) in acc.iter_mut().zip(&line) {
+                a[0] += l[0] * k;
+                a[1] += l[1] * k;
+                a[2] += l[2] * k;
+            }
+        }
+        for (o, a) in row.iter_mut().zip(&acc) {
+            *o = [encode_srgb8(a[0]), encode_srgb8(a[1]), encode_srgb8(a[2]), 255];
+        }
+    });
+    out
+}
+
+#[cfg(test)]
+mod srgb8_fit_tests {
+    use super::*;
+
+    fn jpeg(w: usize, h: usize, f: impl Fn(usize, usize) -> [u8; 3]) -> Vec<u8> {
+        let data: Vec<[u8; 4]> = (0..w * h)
+            .map(|i| {
+                let [r, g, b] = f(i % w, i / w);
+                [r, g, b, 255]
+            })
+            .collect();
+        let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+        crate::encode_jpeg(&crate::EncodeImage::rgba8(&img), 95, crate::ChromaSubsampling::S420, &crate::EncodeMeta::default()).unwrap()
+    }
+
+    /// The fast path shows what the general decode shows for a plain sRGB JPEG, at the same size.
+    #[test]
+    fn matches_the_general_decode_within_a_few_levels() {
+        let b = jpeg(1203, 801, |x, y| [((x * 7) ^ (y * 3)) as u8, (x / 5 + y / 3) as u8, ((x * y) % 251) as u8]);
+        for (mw, mh) in [(300u32, 300u32), (640, 640), (1203, 801), (5000, 5000), (500, 120)] {
+            let (fast, o) = srgb8_fit(&b, mw, mh).unwrap().unwrap();
+            let slow = crate::decode(&b, DecodeOptions::fit(mw, mh)).unwrap().to_srgb8();
+            assert_eq!((fast.width, fast.height), (slow.width, slow.height), "box {mw}×{mh}");
+            assert_eq!(o, 1);
+            let diff: Vec<u32> =
+                fast.data.iter().zip(&slow.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).unsigned_abs())).collect();
+            let mean = diff.iter().sum::<u32>() as f64 / diff.len() as f64;
+            assert!(mean < 3.0, "box {mw}×{mh}: mean difference {mean}");
+        }
+    }
+
+    /// Anything but plain 8-bit sRGB goes the general way; junk is an error or `None`, never a panic.
+    #[test]
+    fn declines_what_it_does_not_cover_and_never_panics() {
+        let b = jpeg(64, 48, |x, _| [x as u8, 0, 0]);
+        assert!(srgb8_fit(&b, 0, 10).unwrap().is_none());
+        assert!(srgb8_fit(b"not a jpeg", 10, 10).unwrap().is_none());
+        for cut in [0, 2, 20, b.len() / 2, b.len() - 3] {
+            let _ = srgb8_fit(&b[..cut], 32, 32);
+        }
+        // a 1-pixel-wide image into a box much smaller in one axis
+        let thin = jpeg(1, 300, |_, y| [y as u8, y as u8, y as u8]);
+        let (img, _) = srgb8_fit(&thin, 10, 10).unwrap().unwrap();
+        assert_eq!((img.width, img.height), (1, 10));
+    }
+
+    /// An incomplete ICC_PROFILE sequence (chunk 1 of 2) is "has a profile we can't read", not
+    /// "plain sRGB": the general decode handles it, as the doc says (CodeRabbit on #3577).
+    #[test]
+    fn an_incomplete_icc_sequence_goes_the_general_way() {
+        let b = jpeg(16, 16, |x, y| [x as u8, y as u8, 0]);
+        let mut seg = vec![0xFF, 0xE2, 0, 0];
+        seg.extend_from_slice(b"ICC_PROFILE ");
+        seg.extend_from_slice(&[1, 2]);
+        seg.extend_from_slice(&[0u8; 64]);
+        let len = u16::try_from(seg.len() - 2).unwrap();
+        seg[2..4].copy_from_slice(&len.to_be_bytes());
+        let mut with = b[..2].to_vec();
+        with.extend_from_slice(&seg);
+        with.extend_from_slice(&b[2..]);
+        assert!(parse_markers(&with).unwrap().icc_invalid);
+        assert!(srgb8_fit(&b, 8, 8).unwrap().is_some());
+        assert!(srgb8_fit(&with, 8, 8).unwrap().is_none());
+    }
+
+    /// The 8-bit path refuses an APP1 flood before its decoders walk it again, as the general one does.
+    #[test]
+    fn an_app1_flood_is_refused_by_the_8_bit_path_too() {
+        let b = jpeg(16, 16, |x, y| [x as u8, y as u8, 0]);
+        let mut flood = b[..2].to_vec();
+        for _ in 0..200 {
+            flood.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x02]);
+        }
+        flood.extend_from_slice(&b[2..]);
+        match srgb8_fit(&flood, 8, 8) {
+            Err(Error::Malformed(_, m)) => assert!(m.contains("APP1"), "{m}"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}

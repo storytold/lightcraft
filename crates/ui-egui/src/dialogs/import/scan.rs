@@ -5,7 +5,7 @@ use super::{ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanPr
 /// window must keep answering meanwhile).
 pub struct ScanTask {
     progress: std::sync::Arc<ScanProgress>,
-    rx: std::sync::mpsc::Receiver<ScanOutput>,
+    rx: std::sync::mpsc::Receiver<ScanEnd>,
     /// Open the review with "copy into the library" checked (a camera / card).
     pub copy: bool,
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
@@ -16,6 +16,91 @@ pub struct ScanTask {
     sources: Vec<String>,
     /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
     guard: lightcraft_engine::activity::TaskGuard,
+    /// Browsing: the folder as the worker resolved it, once it has. The view shows it as given until then
+    /// (resolving reads the disk, which a stalled network mount can block: never on this thread).
+    resolved: Option<std::sync::mpsc::Receiver<String>>,
+}
+
+/// What a scan's worker sends back. Every way it ends sends one, so the probes of earlier scans that
+/// [`ScanInput::new`] took from the session always go back to it (a later import doesn't read those files again).
+pub(crate) enum ScanEnd {
+    /// The scan finished.
+    Done(ScanOutput),
+    /// Browsing stopped without a listing: the folder couldn't be listed (`failed`), or another folder was
+    /// chosen. Never an empty listing, which the browse bookkeeping would take for every file gone.
+    Stopped { probes: std::collections::HashMap<String, lightcraft_engine::media::ProbeInfo>, failed: bool },
+}
+
+impl ScanEnd {
+    /// The probes this end hands back to the session.
+    fn into_probes(self) -> std::collections::HashMap<String, lightcraft_engine::media::ProbeInfo> {
+        match self {
+            ScanEnd::Done(out) => out.probes,
+            ScanEnd::Stopped { probes, .. } => probes,
+        }
+    }
+}
+
+/// Scans stopped without waiting for their workers ([`stop_scan`]), in the order they were stopped, which is
+/// the order they started (one scan runs at a time), and which of their probes went back to the session.
+#[derive(Default)]
+pub(crate) struct StoppingScans {
+    /// How many scans were stopped: each one's number.
+    stopped: u64,
+    /// Each stopped scan's number and channel, kept until its worker ends.
+    pending: Vec<(u64, std::sync::mpsc::Receiver<ScanEnd>)>,
+    /// The probes a stopped scan put back: by whom, and what they said (to tell they are still the ones there).
+    from: std::collections::HashMap<String, (u64, ProbeMark)>,
+}
+
+/// What tells two probes of one file apart: a file that changed but kept its size has another content hash.
+type ProbeMark = (u64, Option<String>, Option<String>);
+
+fn mark(p: &lightcraft_engine::media::ProbeInfo) -> ProbeMark {
+    (p.file_size, p.content_hash.clone(), p.file_modified.clone())
+}
+
+/// Stop the running scan (if any) without waiting for its worker: the scan is closed at once, and its
+/// channel is kept until the worker ends, so the probes it holds still come back ([`collect_stopped`]).
+fn stop_scan(app: &mut LightcraftApp) {
+    if let Some(t) = app.scan.take() {
+        t.progress.cancel.store(true, Ordering::Relaxed);
+        let s = &mut app.scans_stopping;
+        s.stopped = s.stopped.saturating_add(1);
+        s.pending.push((s.stopped, t.rx));
+    }
+}
+
+/// The probes of stopped scans whose workers have ended go back to the session (called every frame). A probe
+/// the session got since a scan started is newer than that scan's and stays, except one that a scan stopped
+/// before it put back: a later scan read that file again, so its probe wins, whichever worker ends first
+/// (an older probe of a file changed at the same size would hand the copy check a stale content hash).
+fn collect_stopped(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let probes = &mut app.session.import_probes;
+    let StoppingScans { pending, from, .. } = &mut app.scans_stopping;
+    pending.retain(|(seq, rx)| match rx.try_recv() {
+        Ok(end) => {
+            for (k, v) in end.into_probes() {
+                let replace = match probes.get(&k) {
+                    None => true,
+                    Some(have) => from.get(&k).is_some_and(|(by, m)| by < seq && *m == mark(have)),
+                };
+                if replace {
+                    from.insert(k.clone(), (*seq, mark(&v)));
+                    probes.insert(k, v);
+                }
+            }
+            false
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => true,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+    });
+    if pending.is_empty() {
+        // no stopped scan left to compare with
+        from.clear();
+    } else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
 }
 
 /// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
@@ -66,14 +151,14 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let job = move || {
-        let _ = tx.send(scan_with(input, &paths, &p));
+        let _ = tx.send(ScanEnd::Done(scan_with(input, &paths, &p)));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard, resolved: None });
     Ok(json!({"scanning": true}))
 }
 
@@ -82,10 +167,10 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
 /// and the photos then join the view in small batches under a progress window. A browse already
 /// running is replaced; the import review's scan is not.
 pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> Result<Value, String> {
-    let dir = std::path::absolute(std::path::Path::new(path)).map_err(|e| e.to_string())?;
-    if !dir.is_dir() {
-        return Err(format!("{path}: not a folder"));
-    }
+    // one spelling for the view, the listing and the catalog's records: `a/lib/../outside` is `a/outside`. Taken out
+    // by name here, without reading the disk (a link on a stalled network mount would freeze the window): the worker
+    // resolves the folder, checks it is one, and the view takes its spelling when it says (see `poll_scan`)
+    let dir = lightcraft_engine::import::browse_spelling(std::path::Path::new(path)).map_err(|e| e.to_string())?;
     if app.scan.as_ref().is_some_and(|t| !t.browse) || app.import.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
     }
@@ -98,59 +183,120 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         app.session.keep_active_in_view();
         return Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}));
     }
-    if let Some(t) = app.scan.take() {
-        t.progress.cancel.store(true, Ordering::Relaxed);
-    }
+    stop_scan(app);
     app.import = None;
     app.session.browse = Some(lightcraft_engine::Browse { path: dir_s.clone(), subfolders });
     app.session.source = lightcraft_engine::LibrarySource::Folder;
     // the photos the library already knows from this folder show at once: keep or pick the active one
     app.session.keep_active_in_view();
-    let (input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
+    let (mut input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
-    let root = dir_s.clone();
+    // the worker resolves the path as given: on Unix `link/..` is the folder above where the link points, which the
+    // spelling (`..` taken out by name) can't tell
+    let given = path.to_owned();
+    let sort = app.session.sort;
+    let (resolved_tx, resolved) = std::sync::mpsc::channel();
     let job = move || {
-        let files: Vec<String> = if subfolders {
-            lightcraft_engine::import::expand(&[root], None)
-        } else {
-            let mut v: Vec<String> = std::fs::read_dir(&root)
-                .map(|rd| {
-                    rd.flatten()
-                        .filter(|e| !lightcraft_engine::walk::is_hidden_entry(e))
-                        .map(|e| e.path())
-                        .filter(|f| f.is_file() && lightcraft_engine::import::is_supported(f))
-                        .map(|f| f.to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            v.sort();
-            v
+        let root = match resolve_browse_root(&given) {
+            Ok(root) => root,
+            Err(e) => {
+                log::warn!("browse: can't read {given}: {e}");
+                let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: true });
+                return;
+            }
         };
-        let _ = tx.send(scan_with(input, &files, &p));
+        let _ = resolved_tx.send(root.clone());
+        // (never the library's own folder, which the import would otherwise read as photos)
+        let files = match lightcraft_engine::import::browse_files(&input, &root, subfolders) {
+            Ok(files) => files,
+            Err(e) => {
+                // no listing is sent: the scan ends as failed, and no record is taken for a file gone
+                log::warn!("browse: can't list {root}: {e}");
+                let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: true });
+                return;
+            }
+        };
+        // Nothing is read here: the import that follows reads the files and adds them batch by
+        // batch, first screen first, so the view fills while the rest is read (PERF-CULL-1).
+        // Another folder chosen meanwhile (`p.cancel`) stops the ordering, and no listing is sent.
+        let Some(queue) = lightcraft_engine::import::browse_queue_until(&input, files.clone(), &sort, &p.cancel) else {
+            let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: false });
+            return;
+        };
+        p.total.store(queue.len(), Ordering::Relaxed);
+        p.done.store(queue.len(), Ordering::Relaxed);
+        // the files the library knows come too, marked as such: the folder bookkeeping (browse
+        // times, records of files gone) needs the whole listing; only the queue is imported
+        let queued: std::collections::HashSet<&String> = queue.iter().collect();
+        let known: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
+        let known =
+            known.into_iter().map(|path| lightcraft_engine::import::ImportCandidate { path, duplicate: Some("path".into()), ..Default::default() });
+        let candidates =
+            queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
+        // the probes of earlier scans go back to the session with the result, for the import that follows
+        let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput { candidates, probes: input.take_probes() }));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(job);
+    // the job takes the probes back out of `input`, so it is an FnMut where it runs in place
     #[cfg(target_arch = "wasm32")]
-    job();
+    {
+        let mut job = job;
+        job();
+    }
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard, resolved: Some(resolved) });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
+}
+
+/// The browsed folder `given` (the path as `browse` received it, not its [`lightcraft_engine::import::browse_spelling`])
+/// as [`lightcraft_engine::import::browse_path`] resolves it, checked to be a folder: on the browse worker, as it reads the disk.
+fn resolve_browse_root(given: &str) -> Result<String, String> {
+    #[cfg(test)]
+    held_resolve(given);
+    let dir = lightcraft_engine::import::browse_path(std::path::Path::new(given)).map_err(|e| e.to_string())?;
+    if !dir.is_dir() {
+        return Err(format!("{given}: not a folder"));
+    }
+    Ok(dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
+}
+
+/// Tests: browsed folders whose resolution waits (as on a stalled network mount) while they are listed here.
+#[cfg(test)]
+pub(crate) static HELD_RESOLVES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn held_resolve(given: &str) {
+    let held = || HELD_RESOLVES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|p| p == given);
+    let start = std::time::Instant::now();
+    while held() && start.elapsed() < std::time::Duration::from_secs(30) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 /// Collect a finished scan and open the review (called every frame).
 pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     show_pending_review(app, ctx);
+    collect_stopped(app, ctx);
     let Some(task) = app.scan.as_ref() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    let out = match task.rx.try_recv() {
+    // the worker resolved the browsed folder: the view takes its spelling (before its listing, sent after it)
+    if let Some(root) = task.resolved.as_ref().and_then(|r| r.try_recv().ok())
+        && let Some(b) = app.session.browse.as_mut().filter(|b| b.path != root)
+    {
+        b.path = root;
+        app.session.keep_active_in_view();
+    }
+    let Some(task) = app.scan.as_ref() else { return };
+    let end = match task.rx.try_recv() {
         Ok(o) => o,
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             if task.guard.is_cancelled() {
                 // ✕: the worker stops at its next file; don't wait for it (a NAS read can take a while)
-                app.scan = None;
+                stop_scan(app);
                 return;
             }
             let (total, done) = (task.progress.total.load(Ordering::Relaxed), task.progress.done.load(Ordering::Relaxed));
@@ -160,16 +306,32 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         Err(_) => {
+            // a cancelled scan whose worker ended without a result was not a failure
+            let cancelled = task.guard.is_cancelled() || task.progress.cancel.load(Ordering::Relaxed);
             app.scan = None;
-            app.toast(ctx, crate::i18n::tr("Scan failed"));
+            if !cancelled {
+                app.toast(ctx, crate::i18n::tr("Scan failed"));
+            }
             return;
         }
     };
     let Some(task) = app.scan.take() else { return };
-    if task.progress.cancel.load(Ordering::Relaxed) {
+    let cancelled = task.progress.cancel.load(Ordering::Relaxed);
+    let out = match end {
+        ScanEnd::Done(out) => out,
+        ScanEnd::Stopped { probes, failed } => {
+            app.session.import_probes.extend(probes);
+            if failed && !cancelled {
+                app.toast(ctx, crate::i18n::tr("Scan failed"));
+            }
+            return;
+        }
+    };
+    // the probes go back to the session however the scan ended (the ones of a scan stopped earlier may be there)
+    app.session.import_probes.extend(out.probes);
+    if cancelled {
         return;
     }
-    app.session.import_probes = out.probes;
     if task.browse {
         // the folder and the ones its photos are in count as browsed now, as `library.browse` records them, so
         // their untouched Local photos aren't forgotten while the folder is in use
@@ -247,11 +409,17 @@ pub(crate) fn stall_scan(app: &mut LightcraftApp) -> Box<dyn std::any::Any> {
 /// Tests: the same, for a Local folder browse scan (`browse`) instead of the review's scan.
 #[cfg(test)]
 pub(crate) fn stall_scan_of(app: &mut LightcraftApp, browse: bool) -> Box<dyn std::any::Any> {
+    Box::new(scan_by_hand(app, browse))
+}
+
+/// Tests: a scan whose worker is the test: what it sends through the returned channel is the scan's end.
+#[cfg(test)]
+pub(crate) fn scan_by_hand(app: &mut LightcraftApp, browse: bool) -> std::sync::mpsc::Sender<ScanEnd> {
     let progress = std::sync::Arc::new(ScanProgress::default());
-    let (tx, rx) = std::sync::mpsc::channel::<ScanOutput>();
+    let (tx, rx) = std::sync::mpsc::channel::<ScanEnd>();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse, sources: Vec::new(), guard });
-    Box::new(tx)
+    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse, sources: Vec::new(), guard, resolved: None });
+    tx
 }
 
 /// Whether an import or any scan (the review's, or a Local folder browse) is running, or a finished scan's

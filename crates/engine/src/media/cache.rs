@@ -74,9 +74,11 @@ impl Default for MediaCache {
     }
 }
 
-/// Memory for rendered previews out of the cache share.
-fn rendered_budget(share: usize) -> usize {
-    RENDERED_MEM_BYTES.min(share / 4)
+/// Memory for rendered previews out of the cache share: a quarter of it, so a big budget keeps
+/// a whole shoot's previews (a 20 GB budget holds about 230 standard previews, or 1 500 loupe
+/// renders at 1 200 px), and at least [`RENDERED_MEM_BYTES`] where the share allows.
+pub(crate) fn rendered_budget(share: usize) -> usize {
+    (share / 4).max(RENDERED_MEM_BYTES.min(share / 2))
 }
 
 impl MediaCache {
