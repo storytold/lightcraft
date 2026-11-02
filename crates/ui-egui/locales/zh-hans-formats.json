@@ -287,6 +287,7 @@
   "Delete “{name}”?": "删除“{name}”？",
   "Updated {name}": "已更新 {name}",
   "Exported to {path}": "已导出到 {path}",
+  "Exposure raised by {ev:+.1} to keep brightness": "已提高曝光 {ev:+.1} 以保持亮度",
   "Saved template {name}": "已保存模板 {name}",
   "Imported {name}": "已导入 {name}",
   "Skipped {problem}": "已跳过：{problem}",

@@ -284,6 +284,7 @@
   "Create the keyword “{name}”": "Crea la parola chiave “{name}”",
   "{n} JPEG files": "File JPEG: {n}",
   "Exported {} effect preset{}": "Preset effetto esportati: {}{:.0}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Esposizione aumentata di {ev:+.1} per mantenere la luminosità",
   "Imported {name}": "{name} importato",
   "{n} pages": "Pagine: {n}",
   " · kept, not applied: {}": " · conservato, non applicato: {}",
