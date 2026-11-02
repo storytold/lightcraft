@@ -277,7 +277,8 @@
   like someone already named, so when two people look alike, one's page offered the other's faces. And poor faces
   (tiny, blurred, from behind), which look a little like everybody, filled the pages of people with many photos.
   A face is now offered only when it looks clearly more like this person than like anyone else already named, by the
-  same margin as name suggestions.
+  same margin as name suggestions. The check covers the page's best few hundred faces, so the window does not wait on
+  a pass over the whole library, and while the scan runs it knows only the faces already scanned.
 - Settings ▸ Faces ▸ Matching ▸ Ignore a person's odd faces (from behind, misnamed), off by default: a person's faces
   far from their average face (a head from behind, a dark profile, someone else named by mistake) no longer count
   when their page looks for faces like theirs, nor when it checks a face is clearly more like them than like anyone

@@ -727,6 +727,16 @@ fn a_face_that_looks_more_like_someone_else_is_offered_to_them_only() {
     s.faces.index.insert(b.0, &region(0.7, None).rect, unit(&[(0, 1.0), (1, 0.97)]));
     assert_eq!(more(&mut s, "Paul"), vec![1]);
     assert_eq!(more(&mut s, "Paul Jr"), vec![0]);
+    // someone else is judged like anyone, by the mean of their closest faces: Zed has one face even more like this one
+    // than Paul's and one nothing like it, so the face is still Paul's (judged by Zed's best face alone, it would be Zed's)
+    let near = unit(&[(0, 1.0), (1, 0.6), (2, 0.3)]);
+    let (zed_close, zed_far) = (unit(&[(0, 1.0), (1, 0.6), (2, 0.35)]), unit(&[(3, 1.0)]));
+    set_regions(&mut s, a, vec![region(0.1, Some("Paul")), region(0.5, Some("Paul Jr")), region(0.7, Some("Zed")), region(0.75, Some("Zed"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None), region(0.7, None), region(0.3, None)]);
+    for (id, x, v) in [(a, 0.7, zed_close), (a, 0.75, zed_far), (b, 0.3, near)] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    assert_eq!(more(&mut s, "Paul"), vec![1, 3], "Zed's mean is far below Paul's score");
     let _ = std::fs::remove_dir_all(&d);
 }
 
