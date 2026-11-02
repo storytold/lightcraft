@@ -270,7 +270,7 @@ fn a_failed_thumbnail_is_retried_only_when_its_photo_changes() {
 #[test]
 fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     let mut s = Session::new();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
     s.catalog.apply(Op::AddPhoto { photo: Box::new((*photo()).clone()) }).unwrap();
     let mut r = Renderer::with_worker_threads(1);
     let ctx = egui::Context::default();
@@ -317,7 +317,7 @@ fn raw_quick_fixture() -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<
     fixture_with(s, raw)
 }
 fn fixture_with(mut s: Session, photo: Photo) -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
-    s.media.file_loader = Some(Arc::new(|_, _| {
+    s.media.file_loader = Some(Arc::new(|_, _, _| {
         let mut image = lightcraft_raster::Rgb32f::new(8, 8);
         image.data.fill([0.3, 0.2, 0.1]);
         Ok((image, Default::default()))
@@ -355,7 +355,7 @@ fn completed_failure_keeps_requested_source_after_relink() {
     let replacement = relink_destination();
     for slot in [Slot::Thumb(PhotoId(1)), Slot::Main, Slot::Before, Slot::Compare(1), Slot::Region] {
         let (mut app, work, ctx) = fixture();
-        app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+        app.session.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
         let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
         app.renderer.request(slot, job, 100);
         let (submitted, job) = take_job(&work);
@@ -381,7 +381,7 @@ fn completed_failure_keeps_requested_source_after_relink() {
 fn superseded_failure_does_not_take_the_new_requests_source() {
     let replacement = relink_destination();
     let (mut app, work, ctx) = fixture();
-    app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
     let slot = Slot::Main;
     let old_job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
     app.renderer.request(slot, old_job, 100);
@@ -564,7 +564,7 @@ fn resizing_the_disk_cache_keeps_textures_and_skips_rebuilds() {
 #[test]
 fn a_panicking_render_is_a_failure_not_a_dead_worker() {
     let (mut app, _, ctx) = fixture_with(Session::new(), (*photo()).clone());
-    app.session.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
     app.renderer.offload = None; // the real job pool
     let slot = Slot::Thumb(PhotoId(1));
     let ask = |app: &mut crate::LightcraftApp| {
@@ -800,7 +800,7 @@ fn library_reset_rejects_old_job_even_when_photo_id_and_key_are_reused() {
     let photo = app.session.catalog.photo(PhotoId(1)).unwrap().as_ref().clone();
     app.session = lightcraft_engine::Session::new();
     app.session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-    app.session.media.file_loader = Some(Arc::new(|_, _| {
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| {
         let mut image = lightcraft_raster::Rgb32f::new(8, 8);
         image.data.fill([0.1, 0.2, 0.9]);
         Ok((image, Default::default()))

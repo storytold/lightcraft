@@ -247,6 +247,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         mattes: (!mattes.is_empty()).then(|| Arc::new(mattes)),
         local_tone: f.local_tone.map(Arc::new),
         native_long: None,
+        // (the starting colour is baked into a smart preview's pixels: the Camera colour option can't change them)
+        colorimetric: false,
     });
     Ok((img, tone, info))
 }
@@ -496,6 +498,7 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         denoised: None,
         from_proxy: true,
         reduced: false,
+        options: Default::default(),
     })
 }
 

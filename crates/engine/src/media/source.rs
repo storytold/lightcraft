@@ -75,12 +75,27 @@ pub(super) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_cr
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+pub type FileLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+
+/// The photo's settings a decode depends on: decoded sources are cached with them ([`DecodedSource::options`]) and
+/// decoded again when they change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadOptions {
+    /// Where a raw without colour matrices takes its starting colour from (`Profile::camera_colour`).
+    pub colour: lightcraft_develop::CameraColour,
+}
+
+impl LoadOptions {
+    /// The options `s` asks the decode for.
+    pub fn of(s: &DevelopSettings) -> LoadOptions {
+        LoadOptions { colour: s.profile.camera_colour }
+    }
+}
 
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
 /// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -103,7 +118,7 @@ pub struct DenoiseSpec {
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
 /// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec, LoadOptions) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -139,11 +154,19 @@ pub struct DecodedSource {
     /// Developed from a smaller copy of the raw image that the file keeps ([`ReducedLoader`]), not from the image
     /// itself: good for a thumbnail, never for an export.
     pub reduced: bool,
+    /// The settings the file was decoded with.
+    pub options: LoadOptions,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false }
+        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false, options: LoadOptions::default() }
+    }
+
+    /// Whether these pixels are what decoding with `options` gives: decoded with them, or from a source the options
+    /// don't change (no measured colour to start from, a smart preview, a demo scene).
+    pub fn serves(&self, options: LoadOptions) -> bool {
+        self.options == options || !self.info.as_ref().is_some_and(|i| i.colorimetric)
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -216,6 +239,8 @@ pub enum SourceRef {
         denoise: Option<(DenoiseSpec, PairLoader)>,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
+        /// The photo's settings the decode depends on.
+        options: LoadOptions,
     },
     /// A smart preview standing in for a missing original.
     Smart {
@@ -241,12 +266,15 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced, options } => {
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
-                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    (Some(l), _) => l(path, *max_edge, *options).map(|(image, info, reduced)| DecodedSource {
+                        reduced,
+                        options: *options,
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
+                    (None, Some(l)) => l(path, *max_edge, *options)
+                        .map(|(image, info)| DecodedSource { options: *options, ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -260,7 +288,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, *options).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -271,6 +299,7 @@ impl SourceRef {
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
                                     from_proxy: false,
                                     reduced: false,
+                                    options: *options,
                                 })
                             })
                         } else {
