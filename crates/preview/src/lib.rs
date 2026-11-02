@@ -227,6 +227,8 @@ impl PreviewCache {
             }
             a.insert(alias, real);
         }
+        // (an earlier picture read back from the alias's file is no longer the latest one)
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).remove(&alias);
         if let Some(d) = &self.disk {
             // (the photo's only picture of its edit, until its next render: pruned last)
             d.keep_last_one(alias);
@@ -239,15 +241,39 @@ impl PreviewCache {
         }
     }
 
-    /// The latest picture kept under `alias` ([`Self::put_latest`]): from memory when the picture it
-    /// points at is still there, else from its own file on disk (then kept in memory under the alias).
+    /// [`Self::put_latest`] for a picture kept nowhere else (a render that keeps no preview of its
+    /// own): kept under `alias` itself, in memory and (by the writer thread) on disk.
+    pub fn put_latest_own(self: &Arc<Self>, generation: u64, alias: Hash128, img: Arc<Rgba8>) {
+        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *current != Some(generation) {
+            return;
+        }
+        self.aliases.lock().unwrap_or_else(|e| e.into_inner()).remove(&alias);
+        let c = cost(&img);
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(alias, img.clone(), c);
+        drop(current);
+        if let Some(d) = &self.disk {
+            d.keep_last_one(alias);
+        }
+        self.write_deferred(generation, alias, img, c);
+    }
+
+    /// Whether `alias` points at the picture kept under `real` in this session ([`Self::put_latest`]).
+    pub fn latest_is(&self, alias: Hash128, real: Hash128) -> bool {
+        self.aliases.lock().unwrap_or_else(|e| e.into_inner()).get(&alias) == Some(&real)
+    }
+
+    /// The latest picture kept under `alias` ([`Self::put_latest`]): the picture it points at, from
+    /// memory or its file, else the alias's own file (the next session; then kept in memory under
+    /// the alias). The picture it points at comes first: the alias's file may still hold an earlier
+    /// picture when its write was skipped (the writer behind) or is still queued.
     pub fn get_latest(&self, alias: Hash128) -> Option<Arc<Rgba8>> {
         let generation = self.generation();
         if generation == u64::MAX {
             return None;
         }
         let real = self.aliases.lock().unwrap_or_else(|e| e.into_inner()).get(&alias).copied();
-        if let Some(img) = real.and_then(|k| self.get_memory(k)) {
+        if let Some(img) = real.and_then(|k| self.get_at(generation, k)) {
             return Some(img);
         }
         self.get_at(generation, alias)

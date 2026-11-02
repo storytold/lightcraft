@@ -640,3 +640,57 @@ fn an_export_develops_from_a_source_twice_its_size() {
     }
     assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }
+
+/// CodeRabbit on #3577: virtual copies share their file, so an alias made from the file alone
+/// would show one copy's last render as another's. Each photo has its own latest-picture aliases.
+#[test]
+fn virtual_copies_have_their_own_latest_picture_aliases() {
+    let p = Photo::new(PhotoId(1), Source::File { path: "shoot/a.cr3".into() }, "a.cr3", "CR3", 6000, 4000, "2026-11-02");
+    let mut copy = p.clone();
+    copy.id = PhotoId(2);
+    assert_eq!(content_key(&p), content_key(&copy), "the same file");
+    assert_ne!(latest_view_key(&p, true), latest_view_key(&copy, true));
+    assert_ne!(latest_thumb_key(&p), latest_thumb_key(&copy));
+    assert_eq!(latest_view_key(&p, true), latest_view_key(&p.clone(), true), "stable for one photo");
+}
+
+/// CodeRabbit on #3577: a loupe view served from the cache (a view built before the aliases
+/// existed, or by an earlier session) becomes the photo's latest view too, so the photo shows it,
+/// not a draft, once its settings change.
+#[test]
+fn a_cached_view_serving_the_loupe_becomes_the_latest_view() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    // a view kept without its alias (as an older build kept it)
+    let mut job = s.loupe_job(id, 640, 640, true).unwrap();
+    job.latest = None;
+    assert!(job.run().rendered.is_ok());
+    let alias = latest_view_key(s.catalog.photo(id).unwrap(), true);
+    assert!(!s.media.rendered.has(alias), "no alias yet");
+    let r = s.loupe_job(id, 640, 640, true).unwrap().run();
+    assert_eq!(r.quick, Some(QuickSource::Cached), "served from the cached view");
+    assert!(s.media.rendered.has(alias), "the cached view is the latest view now");
+    assert!(s.media.rendered.get_latest(alias).is_some());
+}
+
+/// CodeRabbit on #3577: the loupe while editing keeps no view preview (it renders from the source),
+/// but its full render must still be the photo's latest view: coming back after the next change
+/// shows the edit just seen, not an older one or a draft.
+#[test]
+fn a_loupe_render_that_keeps_no_view_preview_is_still_the_latest_view() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let alias = latest_view_key(s.catalog.photo(id).unwrap(), true);
+    let mut job = s.loupe_job(id, 640, 640, true).unwrap();
+    job.view_cache = None;
+    let r = job.run();
+    let shown = r.rendered.unwrap().image;
+    let latest = s.media.rendered.get_latest(alias).expect("the latest view");
+    assert_eq!((latest.width, latest.height), (shown.width, shown.height));
+    // a draft (a slider drag) never becomes it
+    let before = s.media.rendered.get_latest(alias).unwrap();
+    let mut d = s.loupe_job(id, 320, 320, true).unwrap().draft();
+    d.view_cache = None;
+    drop(d.run());
+    assert!(Arc::ptr_eq(&before, &s.media.rendered.get_latest(alias).unwrap()), "a draft is not the latest view");
+}

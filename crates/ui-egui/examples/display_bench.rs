@@ -6,6 +6,9 @@
 //! where it came from, frames that showed the unedited camera JPEG, render jobs per pass, and the
 //! grid's empty cells.
 //! `cargo run --release -p lightcraft-ui-egui --example display_bench -- FOLDER LIBRARY_DIR [N] [START]`
+//! (N photos from the START-th, defaults 20 and 100). Environment: `BENCH_SYNC_WAIT_MS` (the wait
+//! after the off-screen sync, default 30 000), `BENCH_ZOOM_N` (photos in the 100 % passes, default 11,
+//! 0 skips them), `BENCH_ZOOM_DWELL_MS` (time on each photo going forward at 100 %, default 3 000).
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::Session;
 use lightcraft_ui_egui::render::Slot;
@@ -131,9 +134,13 @@ fn main() {
         return;
     }
     let r = s.execute("library.browse", &json!({"path": folder}));
-    eprintln!("browse: {}", r.map(|v| v["count"].to_string()).unwrap_or_else(|e| e.to_string()));
+    eprintln!("browse: {}", r.map(|v| v["photos"].to_string()).unwrap_or_else(|e| e.to_string()));
     let all = s.visible_cloned();
     let ids: Vec<PhotoId> = all.iter().skip(start).take(n).copied().collect();
+    if ids.is_empty() {
+        eprintln!("no photos to measure: {} in the folder, START {start}, N {n}", all.len());
+        std::process::exit(1);
+    }
     // an edited gallery: exposure and a crop on each
     for id in &ids {
         let Some(p) = s.catalog.photo(*id) else { continue };
@@ -150,12 +157,12 @@ fn main() {
 
     let r0 = full_renders(&h, "main");
     let p = pass(&mut h, &ids, 2500.0, None);
-    report("first pass, 2.5 s a photo", &p, full_renders(&h, "main") - r0);
+    report("first pass, 2.5 s a photo", &p, full_renders(&h, "main").saturating_sub(r0));
 
     let back: Vec<PhotoId> = ids.iter().rev().copied().collect();
     let r0 = full_renders(&h, "main");
     let p = pass(&mut h, &back, 600.0, None);
-    report("revisit, 0.6 s a photo", &p, full_renders(&h, "main") - r0);
+    report("revisit, 0.6 s a photo", &p, full_renders(&h, "main").saturating_sub(r0));
 
     // a sync while the user is on the first photo: every other photo changes off screen
     let on = ids[0];
@@ -174,23 +181,26 @@ fn main() {
     );
     let r0 = full_renders(&h, "main");
     let p = pass(&mut h, &ids, 600.0, None);
-    report(&format!("after a sync, waited {:.0} s, 0.6 s a photo", wait / 1000.0), &p, full_renders(&h, "main") - r0);
+    report(&format!("after a sync, waited {:.0} s, 0.6 s a photo", wait / 1000.0), &p, full_renders(&h, "main").saturating_sub(r0));
 
     // 100 %: forward (windows made ahead), then back (kept windows)
     let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-    let zoom: Vec<PhotoId> = ids.iter().take(env("BENCH_ZOOM_N", 11.0) as usize).copied().collect();
+    let zoom: Vec<PhotoId> = ids.iter().take(env("BENCH_ZOOM_N", 11.0).max(0.0) as usize).copied().collect();
     let zoom_dwell = env("BENCH_ZOOM_DWELL_MS", 3000.0);
-    req(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [zoom[0].0]}}));
-    req(&mut h, "engine.execute", json!({"command": "view.zoom100"}));
-    run(&mut h, 4000.0, &mut |_, _| {});
-    eprintln!("zoomed: {:?} window {:?}", h.app.ui.zoom, h.app.region_view.map(|v| (v.photo, v.full, v.window)));
-    let r0 = full_renders(&h, "region");
-    let p = pass(&mut h, &zoom, zoom_dwell, Some("library.next"));
-    report(&format!("100 %, forward, {:.1} s a photo", zoom_dwell / 1000.0), &p, full_renders(&h, "region") - r0);
-    let back: Vec<PhotoId> = zoom.iter().rev().copied().collect();
-    let r0 = full_renders(&h, "region");
-    let p = pass(&mut h, &back, 800.0, Some("library.previous"));
-    report("100 %, back, 0.8 s a photo", &p, full_renders(&h, "region") - r0);
+    // (BENCH_ZOOM_N=0: no 100 % passes)
+    if let Some(first) = zoom.first() {
+        req(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [first.0]}}));
+        req(&mut h, "engine.execute", json!({"command": "view.zoom100"}));
+        run(&mut h, 4000.0, &mut |_, _| {});
+        eprintln!("zoomed: {:?} window {:?}", h.app.ui.zoom, h.app.region_view.map(|v| (v.photo, v.full, v.window)));
+        let r0 = full_renders(&h, "region");
+        let p = pass(&mut h, &zoom, zoom_dwell, Some("library.next"));
+        report(&format!("100 %, forward, {:.1} s a photo", zoom_dwell / 1000.0), &p, full_renders(&h, "region").saturating_sub(r0));
+        let back: Vec<PhotoId> = zoom.iter().rev().copied().collect();
+        let r0 = full_renders(&h, "region");
+        let p = pass(&mut h, &back, 800.0, Some("library.previous"));
+        report("100 %, back, 0.8 s a photo", &p, full_renders(&h, "region").saturating_sub(r0));
+    }
 
     // the grid over the edited photos
     req(&mut h, "engine.execute", json!({"command": "view.photoGrid"}));
