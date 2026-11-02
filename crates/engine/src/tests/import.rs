@@ -847,11 +847,23 @@ fn auto_import_lists_no_hidden_files() {
     assert!(std::process::Command::new("attrib").arg("+h").arg(dir.join("hidden.jpg")).status().unwrap().success());
     #[cfg(target_os = "macos")]
     assert!(std::process::Command::new("chflags").arg("hidden").arg(dir.join("hidden.jpg")).status().unwrap().success());
+    // a link to a file is listed as that file; a link to a folder is not a file; an entry whose
+    // metadata can't be read (a dangling link) is left out without failing the listing
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(dir.join("shown.jpg"), dir.join("link.jpg")).unwrap();
+        symlink(dir.join("folder"), dir.join("folder-link")).unwrap();
+        symlink(dir.join("missing.jpg"), dir.join("dangling.jpg")).unwrap();
+    }
     let mut listed: Vec<String> = crate::cmd::library::list_auto_import_folder(&dir.to_string_lossy()).unwrap().into_iter().map(|(p, _)| p).collect();
     listed.sort();
     let mut expected = vec![dir.join("shown.jpg").to_string_lossy().to_string()];
     if !cfg!(any(windows, target_os = "macos")) {
         expected.push(dir.join("hidden.jpg").to_string_lossy().to_string());
+    }
+    if cfg!(unix) {
+        expected.push(dir.join("link.jpg").to_string_lossy().to_string());
     }
     expected.sort();
     assert_eq!(listed, expected);
