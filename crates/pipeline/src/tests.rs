@@ -856,3 +856,59 @@ fn zero_width_crop_with_grain_renders_finite_pixels() {
         assert!(v.iter().all(|x| x.is_finite()), "non-finite sample in a zero-width crop with grain");
     }
 }
+
+/// While a slider moved or a brush stroke rendered, the draft on screen had other large-scale tone
+/// than the final render (shadows lifted ~6/255 and lower contrast at 100 %, ~1/255 at fit), which
+/// then snapped in: drafts capped the Highlights / Shadows base at 24 px. A draft and a full render
+/// of the same frame, whole or a 1:1 window of a zoomed view, are now the same pixels.
+#[test]
+fn a_draft_has_the_large_scale_tone_of_the_full_render() {
+    use crate::{PixelWindow, Quality};
+    let src = lightcraft_scenes::demo_library()[0].render(960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    // a slider drag (Highlights / Shadows) and a mask stroke (a local Shadows / Exposure change)
+    let mut slider = typical_edits();
+    slider.light.shadows = 60.0;
+    slider.light.highlights = -60.0;
+    let mut stroke = typical_edits();
+    stroke.masks.push(lightcraft_develop::Mask {
+        components: vec![lightcraft_develop::MaskComponent {
+            name: None,
+            op: lightcraft_develop::MaskOp::Add,
+            invert: false,
+            shape: lightcraft_develop::MaskShape::Radial {
+                center: lightcraft_geom::Point::new(0.3, 0.3),
+                rx: 0.1,
+                ry: 0.1,
+                angle: 0.0,
+                feather: 50.0,
+                invert: false,
+            },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, shadows: 50.0, ..Default::default() },
+        ..Default::default()
+    });
+    // how many pixels differ, and by how much at most (8-bit levels, any channel)
+    let differ = |a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8| {
+        assert_eq!((a.width, a.height), (b.width, b.height));
+        a.data.iter().zip(&b.data).fold((0usize, 0u8), |(n, worst), (p, q)| {
+            let d = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0);
+            (n + usize::from(d > 0), worst.max(d))
+        })
+    };
+    // a zoomed view's window at 100 % of a 6000 px frame, and a whole frame drawn 2000 px wide
+    let cases = [
+        RenderRequest { window: Some(PixelWindow { x: 2400, y: 1500, w: 384, h: 256 }), ..RenderRequest::fit(6000, 4000) },
+        RenderRequest::fit(2000, 2000),
+    ];
+    for (name, s) in [("slider", &slider), ("stroke", &stroke)] {
+        for req in cases {
+            let full = render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }).image;
+            let draft = render(&src, &info, s, &RenderRequest { quality: Quality::Draft, ..req }).image;
+            // no cache to reuse: a draft runs the full render's code, so the two are the same picture
+            // (a draft's one shortcut left is a cached base from before a noise reduction change)
+            let (n, worst) = differ(&full, &draft);
+            assert_eq!(n, 0, "{name} {:?}: {n} pixels of the draft differ from the full render, by up to {worst}/255", req.window);
+        }
+    }
+}

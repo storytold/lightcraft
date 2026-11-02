@@ -1005,3 +1005,77 @@ fn soft_proofs_match() {
     };
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
+
+/// A slider draft on the GPU has the large-scale tone of the full render (the
+/// Highlights / Shadows base was narrower in drafts), for a slider drag and a mask stroke, in a
+/// 1:1 window of a 6000 px frame and in a whole frame drawn 2000 px wide: the same pixels as the GPU's
+/// full render, and within 0.5/255 (16 px block means, each channel) of the CPU's.
+#[test]
+fn a_gpu_draft_has_the_large_scale_tone_of_the_full_render() {
+    use lightcraft_pipeline::PixelWindow;
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut slider = DevelopSettings::default();
+    typical(&mut slider);
+    slider.light.shadows = 60.0;
+    slider.light.highlights = -60.0;
+    let mut stroke = DevelopSettings::default();
+    typical(&mut stroke);
+    stroke.masks.push(Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Radial { center: Point::new(0.3, 0.3), rx: 0.1, ry: 0.1, angle: 0.0, feather: 50.0, invert: false },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, shadows: 50.0, ..Default::default() },
+        ..Default::default()
+    });
+    // the worst 16 px block mean difference of any channel, in 8-bit levels
+    let block_diff = |a: &Rgba8, b: &Rgba8| {
+        assert_eq!((a.width, a.height), (b.width, b.height));
+        let mut worst = 0f64;
+        for by in 0..a.height / 16 {
+            for bx in 0..a.width / 16 {
+                // each channel on its own: a shift of one channel against another (warmer) must show
+                let (mut da, mut db) = ([0f64; 3], [0f64; 3]);
+                for y in by * 16..by * 16 + 16 {
+                    for x in bx * 16..bx * 16 + 16 {
+                        let (p, q) = (a.get(x, y), b.get(x, y));
+                        for c in 0..3 {
+                            da[c] += f64::from(p[c]);
+                            db[c] += f64::from(q[c]);
+                        }
+                    }
+                }
+                for c in 0..3 {
+                    worst = worst.max((da[c] - db[c]).abs() / 256.0);
+                }
+            }
+        }
+        worst
+    };
+    let cases = [
+        RenderRequest { window: Some(PixelWindow { x: 2400, y: 1500, w: 384, h: 256 }), ..RenderRequest::fit(6000, 4000) },
+        RenderRequest::fit(2000, 2000),
+    ];
+    for (name, s) in [("slider", &slider), ("stroke", &stroke)] {
+        for req in cases {
+            let full = lightcraft_gpu::render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }, None).expect("gpu full").image;
+            let draft = lightcraft_gpu::render(&src, &info, s, &RenderRequest { quality: Quality::Draft, ..req }, None).expect("gpu draft").image;
+            let cpu = render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }).image;
+            // the GPU's draft and full renders run the same kernels on the same base: the same pixels
+            let same = full.data.iter().zip(&draft.data).filter(|(p, q)| p != q).count();
+            // against the CPU, the per-pixel float differences of two devices remain (max 1 level in
+            // the other equivalence cases); 16 px block means average them out, so 0.5/255 is far
+            // above them and far below the 24 px cap's error this fixes (~6/255 at 100 %, ~1/255 at fit)
+            let c = block_diff(&cpu, &draft);
+            eprintln!("{name} {:?}: gpu draft vs gpu full: {same} pixels differ; vs cpu full {c:.3}/255", req.window);
+            assert_eq!(same, 0, "{name} {:?}: the GPU draft differs from the GPU full render in {same} pixels", req.window);
+            assert!(c <= 0.5, "{name} {:?}: the GPU draft's large-scale tone is {c:.2}/255 off the CPU's full render", req.window);
+        }
+    }
+}
