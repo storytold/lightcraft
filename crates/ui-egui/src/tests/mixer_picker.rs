@@ -154,7 +154,7 @@ fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     let toast = h.app.ui.toast.clone().expect("a toast").0;
-    assert!(toast.contains("gone.png") || toast.contains("could not"), "the load failure itself: {toast}");
+    assert!(toast.contains("gone.png"), "the load failure names the file: {toast}");
     assert!(!toast.contains("can't be made neutral"), "not the refusal: {toast}");
 
     // the refusal branch still shows localized advice (not the raw error message): the flip mixer's
