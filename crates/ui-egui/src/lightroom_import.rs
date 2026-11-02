@@ -380,9 +380,14 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
     }
     let not_supported = count("notSupported");
     if not_supported > 0 {
-        // the file types, as the files name them (MP4, MOV); one without an extension isn't named
-        let types: Vec<String> =
+        // the file types, as the files name them (MP4, MOV); one without an extension isn't named,
+        // and past eight the rest are an ellipsis (a crafted catalog can name thousands)
+        let mut types: Vec<String> =
             report["notSupportedTypes"].as_object().into_iter().flatten().map(|(ext, _)| ext.to_uppercase()).filter(|ext| !ext.is_empty()).collect();
+        if types.len() > 8 {
+            types.truncate(8);
+            types.push("…".into());
+        }
         details.push(if types.is_empty() {
             crate::i18n::tr_format!(
                 "{not_supported} catalog photos were not imported: LightCraft doesn't read their file types.",
@@ -857,6 +862,31 @@ mod tests {
         };
         assert_eq!(details.len(), 2, "{details:?}");
         assert!(details[1].starts_with("3 catalog photos were already in this library"), "{details:?}");
+    }
+
+    /// However many photos and file types a catalog has, the result window has a line per outcome:
+    /// the file types LightCraft doesn't read are named up to eight, and per-photo lists (missing
+    /// originals, failures, warnings) are counted or cut short (#2589).
+    #[test]
+    fn a_catalog_of_100000_photos_gets_a_bounded_result() {
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let types: serde_json::Map<String, Value> = (0..1000).map(|i| (format!("x{i:04}"), json!(100))).collect();
+        let missing: Vec<_> = (0..1000).map(|i| format!("/gone/{i}.ARW")).collect();
+        let failed: Vec<_> = (0..1000).map(|i| json!([format!("/bad/{i}.ARW"), "unreadable"])).collect();
+        let warnings: Vec<_> = (0..100_000).map(|i| format!("image {i}: not imported")).collect();
+        let value = json!({"report": {"inCatalog": 100_000, "collections": 0, "added": 0, "notSupported": 100_000, "notSupportedTypes": types,
+            "missing": missing, "failed": failed, "warnings": warnings}});
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
+            panic!("not a Lightroom result")
+        };
+        // the catalog, the unsupported types, the missing originals, 4 failures, 8 warnings and the rest counted
+        assert_eq!(details.len(), 1 + 1 + 1 + 4 + 8 + 1, "{details:?}");
+        assert_eq!(
+            details[1],
+            "100000 catalog photos were not imported: LightCraft doesn't read their file types (X0000, X0001, X0002, X0003, X0004, X0005, X0006, X0007, …)."
+        );
+        assert_eq!(details[2], "1000 originals are missing. Their catalog records are available; use Find Missing Photos to relink them.");
+        assert_eq!(details.last().map(String::as_str), Some("99992 more warnings."));
     }
 
     /// The toast counts the catalog's photos and names each outcome besides the photos added only
