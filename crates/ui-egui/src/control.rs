@@ -12,6 +12,7 @@
 //!   image coordinates (brush strokes, crop handles…) — mapped to screen and injected as real input
 //! - `ui.key {key, shift?, alt?, cmd?}` / `ui.text {text}` / `ui.scroll {dx, dy, source?, unit?, phase?}`
 //! - `ui.set {view?, panel?, filmstrip?, leftPanel?, zoom?, …}` / `ui.dialog.confirm|cancel`
+//! - `surface.*`: control surfaces (pairing, subscribe, input, layout, icons; `crate::surface`)
 //! - `ui.screenshot {path?, headless?}` (headless: CPU-rendered, no compositor needed), `ui.resize {width, height}`, `ui.render {id?, size?, path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
@@ -29,6 +30,10 @@ pub struct ControlRequest {
     /// Who has the request: [`PENDING`], [`TAKEN`] (the app runs it) or [`ABANDONED`] (the
     /// sender gave up on it, so the app must not run it late: issue #718).
     pub state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// The connection it came on (0 = in process: headless scripts and tests, trusted).
+    pub conn: u64,
+    /// Where events for that connection go, for `surface.subscribe` (none in process).
+    pub sink: Option<crate::surface::EventSink>,
 }
 
 /// Queued, not yet run.
@@ -41,7 +46,14 @@ pub const ABANDONED: u8 = 2;
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx, state: Default::default() }, rx)
+        (Self { method: method.into(), params, reply: tx, state: Default::default(), conn: 0, sink: None }, rx)
+    }
+
+    /// The request came on connection `conn` (numbered from 1), whose pushed events go to `sink`.
+    pub fn on_connection(mut self, conn: u64, sink: crate::surface::EventSink) -> Self {
+        self.conn = conn;
+        self.sink = Some(sink);
+        self
     }
 
     /// Claim the request for running; false when its sender already gave up on it.
@@ -332,6 +344,9 @@ pub(crate) fn widget_target_visible(ctx: &egui::Context, hit: Option<crate::widg
 /// file drops and synthetic input, capture screenshots, or return an error for an unknown or
 /// invalid request. Requests that need fresh widget geometry are queued as `Outcome` values.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    if let Some(o) = crate::surface::handle(app, req) {
+        return o;
+    }
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64);
@@ -427,35 +442,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Err(e) => err(e),
             }
         }
-        "ui.dialog.confirm" => match app.ui.dialog.take() {
-            Some(d) => {
-                let r = crate::panels::dialogs::confirm_dialog(app, &d);
-                // a refused one-line prompt says why on screen, as with its button; a folder made says where
-                match (&r, &d) {
-                    (Err(e), crate::state::Dialog::TextPrompt { .. }) => app.toast_error(ctx, e.clone()),
-                    (Ok(made), crate::state::Dialog::TextPrompt { .. }) => crate::dialogs::toast_created_folder(app, ctx, &d, made),
-                    _ => {}
-                }
-                // the import review, the rule editor and the one-line prompts stay open on an error, as with their buttons
-                if (r.is_err()
-                    && matches!(
-                        d,
-                        crate::state::Dialog::Import { .. }
-                            | crate::state::Dialog::SamModel { .. }
-                            | crate::state::Dialog::SmartRules { .. }
-                            | crate::state::Dialog::SaveEffect { .. }
-                            | crate::state::Dialog::CaptureTime { .. }
-                            | crate::state::Dialog::TextPrompt { .. }
-                    ))
-                    || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
-                    || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))
-                {
-                    app.ui.dialog = Some(d);
-                }
-                wrap(r)
-            }
-            None => err("no dialog open"),
-        },
+        "ui.dialog.confirm" => wrap(confirm_dialog(app, Some(ctx))),
         "ui.dialog.cancel" => {
             if matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. })) {
                 app.renderer.forget_imports();
@@ -534,6 +521,37 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         other => err(format!("unknown method `{other}`")),
     }
+}
+
+/// OK on the open dialog (`ui.dialog.confirm`, a surface's OK key).
+pub(crate) fn confirm_dialog(app: &mut LightcraftApp, ctx: Option<&egui::Context>) -> Result<Value, String> {
+    let Some(d) = app.ui.dialog.take() else { return Err("no dialog open".into()) };
+    let r = crate::panels::dialogs::confirm_dialog(app, &d);
+    // a refused one-line prompt says why on screen, as with its button; a folder made says where
+    if let Some(ctx) = ctx {
+        match (&r, &d) {
+            (Err(e), crate::state::Dialog::TextPrompt { .. }) => app.toast_error(ctx, e.clone()),
+            (Ok(made), crate::state::Dialog::TextPrompt { .. }) => crate::dialogs::toast_created_folder(app, ctx, &d, made),
+            _ => {}
+        }
+    }
+    // the import review, the rule editor and the one-line prompts stay open on an error, as with their buttons
+    if (r.is_err()
+        && matches!(
+            d,
+            crate::state::Dialog::Import { .. }
+                | crate::state::Dialog::SamModel { .. }
+                | crate::state::Dialog::SmartRules { .. }
+                | crate::state::Dialog::SaveEffect { .. }
+                | crate::state::Dialog::CaptureTime { .. }
+                | crate::state::Dialog::TextPrompt { .. }
+        ))
+        || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
+        || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))
+    {
+        app.ui.dialog = Some(d);
+    }
+    r
 }
 
 /// Shown when an export has nowhere to go (no folder typed or chosen, and no home folder to default to).

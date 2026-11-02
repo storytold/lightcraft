@@ -51,6 +51,10 @@ impl LightcraftApp {
         }
         let now = self.tick_now();
         self.drain_control(ctx);
+        // (once a frame: a second layout pass has no input of its own)
+        if ctx.current_pass_index() == 0 {
+            crate::surface::tick(self, ctx);
+        }
         self.apply_settings(ctx);
         if self.queued_input_needs_repaint() {
             ctx.request_repaint();
@@ -427,8 +431,10 @@ impl LightcraftApp {
                 panels::notices::hide_background_pointer(&ctx);
             }
             panels::dialogs::show(self, &ctx, notice_blocks);
+            panels::controls::editor_window(self, &ctx, notice_blocks);
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
+            panels::surface_osd::show(self, &ctx);
             panels::toast(self, &ctx);
             drop_overlay::show(self, &ctx);
             if notice_blocks {
@@ -458,6 +464,7 @@ impl LightcraftApp {
             panels::notices::hide_background_pointer(&ctx);
         }
         panels::dialogs::show(self, &ctx, notice_blocks);
+        panels::controls::editor_window(self, &ctx, notice_blocks);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
@@ -469,6 +476,7 @@ impl LightcraftApp {
         panels::left::album_drag_feedback(self, &ctx);
         panels::left::section_drag_feedback(self, &ctx);
         panels::keyword_list::drag_feedback(self, &ctx);
+        panels::surface_osd::show(self, &ctx);
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         // AppKit moves the window on a drag anywhere in the title-bar band unless the window isn't

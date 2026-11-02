@@ -154,6 +154,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id.starts_with("surface.")
+        && let Some(r) = crate::surface::command(app, id, p)
+    {
+        return Some(r);
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
@@ -808,6 +813,17 @@ fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             }
             let [r, g, b] = app.ui.mask_overlay_color;
             Ok(json!({"color": format!("#{r:02x}{g:02x}{b:02x}"), "opacity": app.ui.mask_overlay_opacity}))
+        }
+        "brush.erase" => {
+            let on = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.brush_erase);
+            if on && app.ui.tool != "brush" {
+                // erasing needs the brush: pick it up on the selected mask
+                if let Err(e) = app.run("tool.brush", json!({})) {
+                    return Some(Err(e));
+                }
+            }
+            app.ui.brush_erase = on;
+            Ok(json!({"on": on}))
         }
         "brush.smaller" | "brush.larger" | "brush.featherLess" | "brush.featherMore" => {
             let (k, df) = match id {

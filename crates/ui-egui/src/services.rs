@@ -43,6 +43,9 @@ pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 
+/// Start or stop the control-surface listener (see [`Services::surface_listener`]).
+pub type SurfaceListenerFn = Box<dyn FnMut(Option<u16>) -> Result<(), String>>;
+
 /// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
@@ -129,4 +132,16 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// Where control-surface settings are kept (`control-surfaces.json`; none: in memory).
+    pub surface_store: Option<Box<dyn crate::surface::SurfaceStore>>,
+    /// Open dialog for control-surface files (TactileBridge `settings.json`, `.lp5`, `.lcsurface`).
+    pub pick_surface_file: Option<PickFiles>,
+    /// Save dialog for an exported `.lcsurface` layout file.
+    pub save_surface_file: Option<SaveFile>,
+    /// Start (`Some(port)`) or stop (`None`) the loopback listener control surfaces connect to
+    /// (desktop only); it serves `surface.*` methods only.
+    pub surface_listener: Option<SurfaceListenerFn>,
+    /// Installs a surface's plugin into its maker's app (the LightCraft plugin for Logi
+    /// Options+; desktop only): Settings ▸ Controls, `surface.installPlugin`.
+    pub surface_plugin: Option<std::sync::Arc<dyn crate::surface_plugin::PluginInstaller>>,
 }

@@ -1,0 +1,33 @@
+MIT License
+
+Copyright (c) 2026 RAD Films - Roman Alurkoff
+
+Covers every icon in this folder:
+
+- 335 icons are original hand-drawn work from TactileBridge, contributed to LightCraft by their
+  author under the MIT licence (the copyright notice above).
+- 15 icons were drawn for LightCraft in the same style, by an AI agent (Claude) working for the
+  same author, and are released under the same licence: mask-invert, brush-erase, brush-new,
+  mask-previous, mask-next, mask-visible, zoom-fit-view, zoom-actual-size, select-all-photos,
+  select-no-photos, rotate-photo-left, rotate-photo-right, reset-develop, preset-apply and
+  preset-apply-ai.
+
+assets/ATTRIBUTION.md lists both groups.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

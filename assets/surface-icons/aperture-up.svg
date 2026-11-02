@@ -1,0 +1,9 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g data-normalized="1" transform="translate(16.000 11.875) scale(1.0000) translate(-18.750 -11.875)">
+  <g transform="translate(16 13) scale(1.12) translate(-16 -16)">
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M16 8L22 11.4V18.6L16 22L10 18.6V11.4L16 8ZM16 10.5L12.2 12.7V17.1L16 19.3L19.8 17.1V12.7L16 10.5Z" fill="#9A7E63"/>
+  <path d="M16 12.4L18.4 13.8V16.2L16 17.6L13.6 16.2V13.8L16 12.4Z" fill="#FF7801" fill-opacity="0.55"/>
+  <path d="M22.8 9.2H24.8V11.2H26.8V13.2H24.8V15.2H22.8V13.2H20.8V11.2H22.8V9.2Z" fill="#FF7801"/>
+  </g>
+</g>
+</svg>

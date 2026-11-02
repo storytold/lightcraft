@@ -1,0 +1,11 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(16 12.9) scale(1.18) translate(-16 -16)">
+  <path d="M7.5 9H24.5L18.5 15.4V22.1L13.5 24.6V15.4L7.5 9Z" fill="none" stroke="#927F6F" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M9.7 10.7H22.3L17 16.2V20.8L15 21.8V16.2L9.7 10.7Z" fill="#FF7801" fill-opacity="0.18"/>
+  <path d="M0 -4.2L1.55 -1.45L4.65 -1.05L2.35 1.1L2.9 4.2L0 2.7L-2.9 4.2L-2.35 1.1L-4.65 -1.05L-1.55 -1.45L0 -4.2Z" transform="translate(7.8 22.5) scale(0.34)" fill="#FF7801"/>
+  <path d="M0 -4.2L1.55 -1.45L4.65 -1.05L2.35 1.1L2.9 4.2L0 2.7L-2.9 4.2L-2.35 1.1L-4.65 -1.05L-1.55 -1.45L0 -4.2Z" transform="translate(11.9 22.5) scale(0.34)" fill="#FF7801"/>
+  <path d="M0 -4.2L1.55 -1.45L4.65 -1.05L2.35 1.1L2.9 4.2L0 2.7L-2.9 4.2L-2.35 1.1L-4.65 -1.05L-1.55 -1.45L0 -4.2Z" transform="translate(16 22.5) scale(0.34)" fill="#927F6F" fill-opacity="0.22"/>
+  <path d="M0 -4.2L1.55 -1.45L4.65 -1.05L2.35 1.1L2.9 4.2L0 2.7L-2.9 4.2L-2.35 1.1L-4.65 -1.05L-1.55 -1.45L0 -4.2Z" transform="translate(20.1 22.5) scale(0.34)" fill="#927F6F" fill-opacity="0.22"/>
+  <path d="M0 -4.2L1.55 -1.45L4.65 -1.05L2.35 1.1L2.9 4.2L0 2.7L-2.9 4.2L-2.35 1.1L-4.65 -1.05L-1.55 -1.45L0 -4.2Z" transform="translate(24.2 22.5) scale(0.34)" fill="#927F6F" fill-opacity="0.22"/>
+  </g>
+</svg>

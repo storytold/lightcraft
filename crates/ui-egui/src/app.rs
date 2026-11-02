@@ -133,6 +133,7 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
+            surface: Default::default(),
             model_setup: Default::default(),
         }
     }
@@ -142,6 +143,13 @@ impl LightcraftApp {
         if !bytes.is_empty() {
             self.chinese_font = Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)));
         }
+        self
+    }
+
+    /// Take requests from `rx` (the desktop app's control-surface listener) without the extra
+    /// screenshot support of [`Self::with_control`].
+    pub fn with_requests(mut self, rx: Receiver<ControlRequest>) -> Self {
+        self.control_rx = Some(rx);
         self
     }
 

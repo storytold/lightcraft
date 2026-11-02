@@ -1,0 +1,8 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g data-normalized="1" transform="translate(16.000 13.375) scale(1.3125) translate(-16.000 -13.000)">
+  <g transform="translate(16 13) scale(1.12) translate(-16 -16)">
+  <path d="M9 9H13V11H11V13H9V9ZM19 9H23V13H21V11H19V9ZM9 19H11V21H13V23H9V19ZM21 19H23V23H19V21H21V19Z" fill="#7E828A"/>
+  <path d="M13 13H19V19H13V13Z" fill="#8FA3C2"/>
+  </g>
+</g>
+</svg>

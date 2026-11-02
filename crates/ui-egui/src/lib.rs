@@ -45,6 +45,9 @@ pub mod sidebar;
 pub mod softpaint;
 pub mod space_hand;
 pub mod state;
+pub mod surface;
+pub mod surface_icons;
+pub mod surface_plugin;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
@@ -99,7 +102,7 @@ pub use clock::{monotonic_ms, now_ms};
 pub use services::OpenModelFolderFn;
 pub use services::{
     CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    SharedWrite, SurfaceListenerFn, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 
@@ -371,6 +374,8 @@ pub struct LightcraftApp {
     pub recent_checks: panels::library_problem::RecentChecks,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// Control surfaces: their engine, pairing and subscribers (`surface`).
+    pub surface: surface::SurfaceHost,
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the

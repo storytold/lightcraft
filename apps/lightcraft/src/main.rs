@@ -33,6 +33,7 @@ mod dialog_filter;
 mod editors;
 mod hdr_display;
 mod logging;
+mod logi_plugin;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(target_os = "macos")]
@@ -64,6 +65,8 @@ use platform::{explorer_select_arg, explorer_select_command, windows_open_url_co
 use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
 #[cfg(test)]
 use prefs::{load_prefs_at, write_atomic};
+#[cfg(test)]
+use session::surface_store;
 use session::{open_session, services};
 
 /// Reverse-DNS app id: Wayland app id, `.desktop` file and hicolor icon name.
@@ -288,7 +291,7 @@ fn main() -> eframe::Result {
                 session = session.with_default_sam3_model();
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
-                let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref(), in_memory));
                 app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
                     app.ui = ui;
@@ -336,10 +339,25 @@ fn main() -> eframe::Result {
                     app.ui.settings.gpu = false;
                     app.notices.push(notice);
                 }
+                // requests from --control and from the control-surface listener
+                let (control_tx, control_rx) = std::sync::mpsc::channel();
                 if let Some(port) = control_port {
-                    let rx = control_server::start(port, cc.egui_ctx.clone());
-                    app = app.with_control(rx);
+                    control_server::start(port, control_tx.clone(), cc.egui_ctx.clone());
+                    app = app.with_control(control_rx);
+                } else {
+                    app = app.with_requests(control_rx);
                 }
+                let listener_ctx = cc.egui_ctx.clone();
+                let mut running: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
+                app.services.surface_listener = Some(Box::new(move |port: Option<u16>| {
+                    if let Some(stop) = running.take() {
+                        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if let Some(port) = port {
+                        running = Some(control_server::start_surfaces(port, control_tx.clone(), listener_ctx.clone())?.0);
+                    }
+                    Ok(())
+                }));
                 if let Some(mut p) = problem {
                     // imported once the user has chosen where (into the library, or the temporary session)
                     p.pending_import = files;
