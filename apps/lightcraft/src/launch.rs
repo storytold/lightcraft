@@ -15,7 +15,8 @@ OPTIONS:
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
   --no-update-check
-                   don't look for a newer release at start (Help > Check for Updates… still works)
+                   don't look for a newer release at start, whatever Settings > General > Startup says, for this run
+                   (Help > Check for Updates… still works)
   --version, --help
 
 ENVIRONMENT:

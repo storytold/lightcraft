@@ -683,9 +683,11 @@ fn no_update_check_turns_the_startup_update_check_off() {
     assert_eq!(lib.library_dir, Some(std::path::PathBuf::from("--no-update-check")));
 }
 
-/// The flag is a known option (an unknown one exits with a usage error) and `--help` lists it.
+/// The flag is a known option that takes no value (an unknown one exits with a usage error) and
+/// `--help` lists it.
 #[test]
 fn no_update_check_is_a_known_option_and_listed_in_the_help() {
     assert_eq!(parse_args(["--no-update-chek".to_string()], None), Parsed::Unknown("--no-update-chek".into()));
+    assert_eq!(parse_args(["--no-update-check=false".to_string()], None), Parsed::Unknown("--no-update-check=false".into()));
     assert!(HELP.contains("--no-update-check"));
 }
