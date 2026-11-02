@@ -86,7 +86,9 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: the conditional-median tone fallback is refused when its pooling holds more than half a stop of the scene at
 /// one level (`tone::MAX_POOLED_STOPS`).
-pub const LOOK_VERSION: u32 = 14;
+/// 15: a quantile tone curve (full or partial look) is refused when it is flat where the camera JPEG keeps texture or
+/// runs against the scene (`tone::MAX_FLATTENED_SEGMENTS`).
+pub const LOOK_VERSION: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

@@ -1,3 +1,5 @@
+use std::ops::RangeInclusive;
+
 use super::look_fit::dro_off;
 use super::pairs::{Pairs, displayed, luma};
 use super::{CameraTone, Rgb32f, ToneMap, luminance_2020};
@@ -101,6 +103,105 @@ pub(super) fn highlights_hold(tone: &CameraTone, check: &HighlightCheck, colour:
         eprintln!("[profile] camera look: narrow tone curve renders the bright areas worse than the fallback ({look:.3} > {fallback:.3})");
     }
     hold
+}
+
+/// Scene luminance ratios (natural log) between neighbouring proxy pixels that [`flattened_segments`] compares. Closer
+/// neighbours differ by little more than the JPEG's 8-bit steps; farther ones sit on an edge, where a small geometric
+/// mismatch between the raw and its lens-corrected JPEG pairs unrelated pixels.
+const LOCAL_STEP: RangeInclusive<f64> = 0.02..=0.5;
+
+/// A tone curve segment with a log-log slope under this compresses the scene range it covers (a camera's highlight
+/// shoulder, or a curve that learned something other than tone).
+const FLAT_SLOPE: f64 = 0.5;
+
+/// A flat segment ([`FLAT_SLOPE`]) is checked against the camera JPEG's local slope there (between neighbouring proxy
+/// pixels). Over this multiple of the curve's slope, the JPEG keeps texture the curve flattens; under
+/// [`AGAINST_SCENE`], the JPEG gets darker where the scene gets brighter. Either way the curve learned a local or
+/// spatial operator of the camera (DRO, shading), not its tone curve.
+const KEPT_TEXTURE: f64 = 2.5;
+
+/// See [`KEPT_TEXTURE`].
+const AGAINST_SCENE: f64 = 0.25;
+
+/// Fewest neighbouring pairs a segment needs before its local slope counts.
+const MIN_NEIGHBOURS: usize = 40;
+
+/// A tone curve with this many flattened segments ([`flattened_segments`]), each 1/31 of the pairs it was fitted to, is
+/// refused ([`keeps_local_contrast`]). Seven frames of an ILCE-7M3 burst (FE 55 mm F1.8 at f/1.8, DRO on, a white
+/// sheet filling the frame under tungsten light; issue #3631) have 4–7: the camera JPEG is about 1.4 EV darker at the
+/// frame's long edges than in its middle relative to the raw, the quantile curve absorbs that as a slope of 0.17–0.4
+/// over the sheet while the JPEG keeps the sheet's folds at 1.1–1.4, and above the sheet's middle the JPEG falls as the
+/// scene rises (local slope down to −0.5). The sheet rendered with 13–16 grey levels in a 400 px patch, against 23–27
+/// with the model's spectral matrices. 18 well-exposed frames of the same body (highlight shoulders at slope 0.11–0.43)
+/// have 0–1.
+pub(super) const MAX_FLATTENED_SEGMENTS: usize = 3;
+
+/// How many segments of `tone` are flat ([`FLAT_SLOPE`]) where the camera JPEG is not ([`KEPT_TEXTURE`],
+/// [`AGAINST_SCENE`]). The JPEG's local slope in a segment is the least-squares slope through the origin of the log
+/// JPEG luminance step against the log scene luminance step ([`LOCAL_STEP`]) between horizontally and vertically
+/// neighbouring proxy pixels whose geometric-mean scene luminance falls in that segment. `colour` takes a sensor value
+/// to the finish stage's input, as the look will.
+pub(super) fn flattened_segments(tone: &CameraTone, sensor: &Rgb32f, reference: &Rgb32f, colour: impl Fn([f64; 3]) -> [f64; 3]) -> usize {
+    let (w, h) = (sensor.width, sensor.height);
+    if w == 0 || (w, h) != (reference.width, reference.height) {
+        return 0;
+    }
+    let knots = tone.knots();
+    let level = |i: usize| -> Option<(f64, f64)> {
+        let (x, y) = (sensor.data.get(i)?, reference.data.get(i)?);
+        if !x.iter().all(|v| v.is_finite() && *v > 0.0001 && *v < 1.5) || !y.iter().all(|v| v.is_finite() && *v >= 0.0) {
+            return None;
+        }
+        let jpeg = f64::from(luminance_2020(*y));
+        let scene = luma(colour(x.map(f64::from)).map(|v| v.max(0.0)));
+        ((0.0003..0.85).contains(&jpeg) && scene.is_finite() && scene > 0.0).then_some((scene, jpeg))
+    };
+    // per segment: Σ du·dv, Σ du², neighbouring pairs
+    let mut sums = [(0.0, 0.0, 0usize); 31];
+    for i in 0..sensor.data.len().min(w * h) {
+        let Some((s0, j0)) = level(i) else { continue };
+        let right = (i % w + 1 < w).then_some(i + 1);
+        let below = (i / w + 1 < h).then_some(i + w);
+        for j in [right, below].into_iter().flatten() {
+            let Some((s1, j1)) = level(j) else { continue };
+            let du = (s1 / s0).ln();
+            if !LOCAL_STEP.contains(&du.abs()) {
+                continue;
+            }
+            let dv = ((j1 + ELASTICITY_BLACK) / (j0 + ELASTICITY_BLACK)).ln();
+            let mid = (s0 * s1).sqrt();
+            if mid < f64::from(knots[0][0]) {
+                continue;
+            }
+            let Some(sum) = (0..31).find(|&k| mid < f64::from(knots[k + 1][0])).and_then(|k| sums.get_mut(k)) else { continue };
+            sum.0 += du * dv;
+            sum.1 += du * du;
+            sum.2 += 1;
+        }
+    }
+    let mut flattened = 0;
+    for (k, (cross, square, count)) in sums.into_iter().enumerate() {
+        let (a, b) = (knots[k], knots[k + 1]);
+        let run = (f64::from(b[0]) / f64::from(a[0])).ln();
+        if count < MIN_NEIGHBOURS || square <= 0.0 || !run.is_finite() || run <= 0.0 {
+            continue;
+        }
+        let curve = ((f64::from(b[1]) + ELASTICITY_BLACK) / (f64::from(a[1]) + ELASTICITY_BLACK)).ln() / run;
+        let local = cross / square;
+        if curve < FLAT_SLOPE && (local < AGAINST_SCENE || local > KEPT_TEXTURE * curve) {
+            flattened += 1;
+        }
+    }
+    flattened
+}
+
+/// Whether `tone` has fewer than [`MAX_FLATTENED_SEGMENTS`] [`flattened_segments`].
+pub(super) fn keeps_local_contrast(tone: &CameraTone, sensor: &Rgb32f, reference: &Rgb32f, colour: impl Fn([f64; 3]) -> [f64; 3]) -> bool {
+    let flattened = flattened_segments(tone, sensor, reference, colour);
+    if flattened >= MAX_FLATTENED_SEGMENTS && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera tone: {flattened} segments flat where the camera JPEG is not, refused");
+    }
+    flattened < MAX_FLATTENED_SEGMENTS
 }
 
 /// The camera's tone curve from scene/JPEG luminance pairs, by quantile matching: knot `i` pairs

@@ -1740,6 +1740,12 @@ fn tone_fit_order_quantile_first_conditional_median_as_fallback() {
 /// brightest scene pixels are then the ones the JPEG renders darker than the sheet's middle. Returns the sensor proxy
 /// and the camera JPEG proxy.
 fn edge_brightened_sheet() -> (Rgb32f, Rgb32f) {
+    edge_brightened_sheet_with(1.2, 2.3)
+}
+
+/// [`edge_brightened_sheet`] with the sheet `rise` stops brighter toward the corners in the raw and the camera JPEG `fall`
+/// stops darker there.
+fn edge_brightened_sheet_with(rise: f32, fall: f32) -> (Rgb32f, Rgb32f) {
     let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
     let (w, h) = (96usize, 64usize);
     let mut sensor = Rgb32f::new(w, h);
@@ -1758,12 +1764,12 @@ fn edge_brightened_sheet() -> (Rgb32f, Rgb32f) {
             (0.04 + 0.08 * next(), [1.0 + 0.5 * next(), 0.8, 0.55 + 0.3 * next()])
         } else {
             // the sheet, brighter toward the edges in the raw, with a little colour from the room
-            (0.18 * 2f32.powf(1.2 * r2) * (0.95 + 0.1 * next()), [0.85 + 0.3 * next(), 1.0, 0.85 + 0.3 * next()])
+            (0.18 * 2f32.powf(rise * r2) * (0.95 + 0.1 * next()), [0.85 + 0.3 * next(), 1.0, 0.85 + 0.3 * next()])
         };
         *src = tint.map(|v| v * y / luminance_2020(tint));
         let p = known.apply_f32(*src);
         let l = luminance_2020(p);
-        let edges = 2f32.powf(-2.3 * r2);
+        let edges = 2f32.powf(-fall * r2);
         *dst = p.map(|v| v * (1.0 - (-2.5 * l).exp()) / l * edges);
     }
     (sensor, reference)
@@ -2667,4 +2673,28 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         let sky = luma(displayed(look.matrix.apply([0.9; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
+}
+
+/// A tone curve is refused when it is flat where the camera JPEG is not (issue #3631). On a frame whose camera JPEG is
+/// darker toward the edges, where the raw is brightest, the quantile curve absorbs that as a low slope over the sheet
+/// and passes the gates, while the JPEG keeps the sheet's texture; the same sheet without the darker edges keeps its
+/// look. Neither the full look nor the partial look takes such a curve.
+#[test]
+fn a_tone_curve_flat_where_the_camera_jpeg_keeps_texture_is_refused() {
+    use super::tone::{MAX_FLATTENED_SEGMENTS, fit_tone, flattened_segments};
+    let luminances = |sensor: &Rgb32f, reference: &Rgb32f| -> Vec<(f64, f64)> {
+        sensor.data.iter().zip(&reference.data).map(|(x, y)| (f64::from(luminance_2020(*x)), f64::from(luminance_2020(*y)))).collect()
+    };
+    let (sensor, reference) = edge_brightened_sheet_with(1.6, 0.0);
+    let look = fit_pairs_ordered(&sensor, &reference, None, &[ToneFit::Quantile]).expect("an even camera JPEG keeps its look");
+    assert_eq!(flattened_segments(&look.tone, &sensor, &reference, |x| look.matrix.apply(x)), 0);
+
+    let (sensor, reference) = edge_brightened_sheet_with(1.6, 2.0);
+    let tone = fit_tone(luminances(&sensor, &reference)).expect("a quantile curve");
+    let flattened = flattened_segments(&tone, &sensor, &reference, |x| x);
+    assert!(flattened >= MAX_FLATTENED_SEGMENTS, "{flattened} flattened segments");
+    let look = fit_pairs(&sensor, &reference);
+    assert!(look.is_none(), "no full look from a flattening curve: {:?}", look.map(|l| *l.tone.knots()));
+    let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+    assert!(fit_partial(&sensor, &reference, &check).is_none(), "nor a partial one");
 }

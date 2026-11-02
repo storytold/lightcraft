@@ -11,6 +11,13 @@
   or a neutral starting colour for a camera without one. The ILCE-7M3 frames that showed it now render smooth, though
   darker and cooler than their camera JPEG. Thumbnails and smart previews of affected raws are redrawn.
 
+### Unedited raws keep the texture their camera JPEG keeps
+- When the camera brightens or darkens parts of the frame on its own (Sony's DRO, shading compensation), the starting
+  look could learn that as a tone curve that flattened a large bright area, such as a white sheet filling half the
+  frame, into a few grey levels while the camera JPEG kept its folds. Such a curve is no longer used: those frames
+  start with the camera's measured colour instead, smoother though darker and cooler than the camera JPEG. Other
+  frames keep their look. Thumbnails and smart previews of affected raws are redrawn.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

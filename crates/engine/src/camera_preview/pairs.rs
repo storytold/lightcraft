@@ -2,7 +2,7 @@ use super::hue_sat::{HueSat, fit_chroma, fit_hue_sat};
 use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
-use super::tone::{HighlightCheck, ToneFit, highlights_hold};
+use super::tone::{HighlightCheck, ToneFit, highlights_hold, keeps_local_contrast};
 use super::{CameraLook, CameraTone, HsvTable, Mat3, Rgb32f, ToneMap, luminance_2020};
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
@@ -361,6 +361,16 @@ fn fit_pairs_on(
     if samples == 0 || after >= before * MIN_IMPROVEMENT || after / samples as f64 > MAX_HOLDOUT_RMS.powi(2) {
         return None;
     }
+    // a quantile curve that learned the camera's local or spatial processing instead of its tone (the conditional-median
+    // fallback's flat runs are bounded by its pooling limit instead)
+    let correction = look.hue_sat.as_ref().and_then(HueSat::new);
+    let colour = |x: [f64; 3]| {
+        let p = look.matrix.apply(x);
+        correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
+    };
+    if tone_fit == ToneFit::Quantile && !keeps_local_contrast(&look.tone, sensor, reference, colour) {
+        return None;
+    }
     Some(look)
 }
 
@@ -495,5 +505,5 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, 
     }
     let better =
         after.is_finite() && after_encoded.is_finite() && after < before * MIN_IMPROVEMENT && after_encoded < before_encoded * MIN_IMPROVEMENT;
-    (samples > 0 && better).then_some(look)
+    (samples > 0 && better && keeps_local_contrast(&look.tone, sensor, reference, |x| matrix.apply(x))).then_some(look)
 }
