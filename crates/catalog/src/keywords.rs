@@ -43,6 +43,33 @@ pub fn reparent(k: &str, from: &str, to: &str) -> String {
     std::iter::once(to).filter(|t| !t.is_empty()).chain(rest).collect::<Vec<_>>().join("|")
 }
 
+/// A photo's keywords as a sidecar writes them: the two lists [`to_file`] fills.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileKeywords {
+    /// For `dc:subject`: every level of every keyword, each once.
+    pub flat: Vec<String>,
+    /// For `lr:hierarchicalSubject`: every keyword as its path, when any keyword has levels;
+    /// empty otherwise, so a library without hierarchy doesn't gain the property.
+    pub hierarchical: Vec<String>,
+}
+
+/// A photo's keywords as a sidecar writes them, the inverse of [`from_file`]. `dc:subject` is the
+/// flat list other applications search, so it gets names (`travel`, `Italy`, `Rome`), never paths,
+/// as Lightroom Classic and darktable write it; the paths go to `lr:hierarchicalSubject`. Unlike
+/// [`Catalog::export_keywords`] it applies no export options (a sidecar is the photo's own record,
+/// not an export): no keyword is left out and no synonym added, so [`from_file`] reads the pair
+/// back as the same keywords. When any keyword has levels, every keyword is listed in
+/// `hierarchical`, the flat ones too: a flat `Rome` beside `travel|Italy|Rome` would otherwise be
+/// taken for a level of the path on the way back.
+pub fn to_file(keywords: &[String]) -> FileKeywords {
+    let mut paths: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+    dedupe(&mut paths);
+    let mut flat: Vec<String> = paths.iter().flat_map(|p| p.split(SEP).map(str::to_string)).collect();
+    dedupe(&mut flat);
+    let hierarchical = if paths.iter().any(|p| p.contains(SEP)) { paths } else { Vec::new() };
+    FileKeywords { flat, hierarchical }
+}
+
 /// A file's keywords as a photo carries them: the paths of `lr:hierarchicalSubject`, then the
 /// names of `dc:subject` that aren't levels of those paths (Lightroom Classic writes each keyword's
 /// name, its parents' and synonyms flat besides its path). Each once, cleaned.
@@ -192,6 +219,10 @@ pub struct KeywordInfo {
     /// most, see [`Catalog::default_keyword_parent`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub new_keywords_inside: bool,
+    /// Part of the keyword shortcut (Set Keyword Shortcut), which ⇧K adds to or removes from the
+    /// selected photos: see [`Catalog::keyword_shortcut`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keyword_shortcut: bool,
 }
 
 fn yes() -> bool {
@@ -207,6 +238,7 @@ impl Default for KeywordInfo {
             export_synonyms: true,
             person: false,
             new_keywords_inside: false,
+            keyword_shortcut: false,
         }
     }
 }
@@ -369,6 +401,7 @@ impl Catalog {
                 match list.get_mut(&path.to_lowercase()) {
                     Some(there) => {
                         there.info.new_keywords_inside |= l.info.new_keywords_inside;
+                        there.info.keyword_shortcut |= l.info.keyword_shortcut;
                         for s in l.info.synonyms {
                             if !there.info.synonyms.iter().any(|x| same(x, &s)) {
                                 there.info.synonyms.push(s);
@@ -580,7 +613,13 @@ impl Catalog {
                     continue;
                 }
                 if !known.contains_key(&key) {
-                    list.insert(key.clone(), ListedKeyword { path: path.clone(), info: KeywordInfo { new_keywords_inside: false, ..info.clone() } });
+                    list.insert(
+                        key.clone(),
+                        ListedKeyword {
+                            path: path.clone(),
+                            info: KeywordInfo { new_keywords_inside: false, keyword_shortcut: false, ..info.clone() },
+                        },
+                    );
                     // it and its parents are the library's now: what follows spells them so
                     let levels: Vec<&str> = path.split(SEP).collect();
                     for i in 0..levels.len() {
@@ -664,6 +703,29 @@ impl Catalog {
                 }
             }),
         })
+    }
+
+    /// The keyword shortcut's keywords (Set Keyword Shortcut), in the keyword list's order.
+    pub fn keyword_shortcut(&self) -> Vec<String> {
+        self.keyword_list.values().filter(|l| l.info.keyword_shortcut).map(|l| l.path.clone()).collect()
+    }
+
+    /// Make `keywords` the keyword shortcut, in one batch. A keyword the library doesn't have yet is
+    /// listed, and the others keep the attributes they have.
+    pub fn set_keyword_shortcut_ops(&self, keywords: &[String]) -> Op {
+        let paths: Vec<String> =
+            keywords.iter().map(|k| self.keyword_path(k).unwrap_or_else(|| self.spelled(&clean(k)))).filter(|k| !k.is_empty()).collect();
+        Op::Batch {
+            ops: self.list_ops(|list| {
+                for l in list.values_mut() {
+                    l.info.keyword_shortcut = false;
+                }
+                for path in paths {
+                    let l = list.entry(path.to_lowercase()).or_insert_with(|| ListedKeyword { path, info: KeywordInfo::default() });
+                    l.info.keyword_shortcut = true;
+                }
+            }),
+        }
     }
 
     /// The keyword as written in the library (whatever the case of `path`): its listing, or the

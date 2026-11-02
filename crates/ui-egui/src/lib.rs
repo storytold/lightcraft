@@ -6,10 +6,20 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// LightCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.lightcraft.png")),
+    accent: Some([0xf2, 0xa5, 0x16]),
+    ..craft_update::suite::LIGHTCRAFT
+};
+
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
+pub mod destination;
 pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
@@ -22,6 +32,7 @@ pub mod icons;
 pub mod lightroom_import;
 pub mod links;
 pub mod menus;
+mod missing_sweep;
 mod model_setup;
 pub mod panels;
 pub mod pick;
@@ -32,6 +43,7 @@ pub mod render;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod softpaint;
+pub mod space_hand;
 pub mod state;
 pub mod sync;
 pub mod tasks;
@@ -39,6 +51,8 @@ pub mod theme;
 pub mod widgets;
 pub mod window_place;
 
+#[cfg(test)]
+mod test_budget;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -207,6 +221,10 @@ pub struct LightcraftApp {
     /// effects (which the global shortcut guard also hides).
     #[cfg(test)]
     pub(crate) library_passes: Vec<panels::library_problem::LibraryPass>,
+    /// Test-only: a delay for the sidebar's Missing Photos count worker (a slow disk). Kept here,
+    /// not in `ui`, because `ui.set` rebuilds `ui` and would drop it.
+    #[cfg(test)]
+    pub(crate) missing_count_test_delay: Option<std::time::Duration>,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
     /// Synthetic input events (from the control channel) injected one step per frame.
@@ -225,6 +243,9 @@ pub struct LightcraftApp {
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
+    /// `library.missing` requests from the control channel and the check that answers them on a
+    /// worker thread ([`missing_sweep`]).
+    pub(crate) missing: missing_sweep::State,
     /// Modifiers announced for synthetic input (held from a button down to its release). This is
     /// only the app's synthetic ownership; the real host state is tracked separately in
     /// `host_mods`, so a canceled synthetic gesture never clears a physically held key.
@@ -259,6 +280,8 @@ pub struct LightcraftApp {
     next_widget_hits: Vec<(String, widgets::WidgetHit)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
+    /// Space is held over a tool on the photo: the view's hand has the pointer ([`space_hand`]).
+    pub space_hand: Option<space_hand::SpaceHand>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
     pub brush_live: Option<brush_live::LiveStroke>,
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
@@ -289,6 +312,8 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// Files that waited for a library and wait for the running import or Synchronize Folder too.
+    pub waiting_import: panels::library_problem::WaitingImport,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).

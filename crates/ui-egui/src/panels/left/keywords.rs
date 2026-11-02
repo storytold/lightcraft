@@ -25,7 +25,7 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
     let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
     let resp = Row::new(id, Icon::Tag, &n.name).count(Some(n.count)).selected(sel).indent(indent).show(app, ui);
     if let Some(k) = open_id {
-        tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path));
+        tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path), &n.name);
     }
     let resp = resp.on_hover_text(if n.children.is_empty() { n.path.clone() } else { format!("{} (includes the keywords below it)", n.path) });
     if resp.clicked() {

@@ -77,7 +77,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
-/// `Cmd+Shift+Z` as menus show it (`⌘⇧Z` on macOS).
+/// `Cmd+Shift+Z` as menus show it (`⇧⌘Z` on macOS).
 fn menu_text(sc: &str, mac: bool) -> String {
     crate::menubar::shortcut_text(sc, mac)
 }
