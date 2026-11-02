@@ -1160,6 +1160,31 @@ mod imp {
             assert!(similar(&mut s, "nobody", 10).items.is_empty());
             let _ = std::fs::remove_dir_all(&d);
         }
+
+        #[test]
+        fn a_page_whose_first_faces_all_look_more_like_someone_else_checks_further() {
+            let (mut s, d) = loaded("similar-further");
+            let (a, b) = two_photos(&s);
+            let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+            set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Bob"))]);
+            // a full first window of faces like Ann but more like Bob, then ten a little less like her and nothing like him
+            let (limit, window) = (64, 64 * RIVAL_CHECKS);
+            set_regions(&mut s, b, (0..window).map(|i| region(i as f64 * 0.001, None)).collect());
+            set_regions(&mut s, c, (0..10).map(|i| region(i as f64 * 0.01, None)).collect());
+            let put = |s: &mut Session, id: PhotoId, x: f64, v: Vec<f32>| s.faces.index.insert(id.0, &region(x, None).rect, v);
+            put(&mut s, a, 0.1, unit(&[(0, 1.0)])); // Ann
+            put(&mut s, a, 0.5, unit(&[(0, 0.6), (1, 0.8)])); // Bob
+            for i in 0..window {
+                put(&mut s, b, i as f64 * 0.001, unit(&[(0, 0.75), (1, 0.66)]));
+            }
+            for i in 0..10 {
+                put(&mut s, c, i as f64 * 0.01, unit(&[(0, 0.7), (2, 0.714)]));
+            }
+            let r = similar(&mut s, "ann", limit);
+            let photos: Vec<u64> = r.items.iter().map(|i| i["photo"].as_u64().unwrap()).collect();
+            assert_eq!(photos, vec![c.0; 10], "the faces past the first window are found, the ones like Bob are not");
+            let _ = std::fs::remove_dir_all(&d);
+        }
     }
 }
 
