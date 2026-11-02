@@ -54,7 +54,7 @@ pub(crate) use look_ahead::{Prepare, look_ahead};
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
 use retouch::{eye_overlay, remove_overlay};
 pub(crate) use window::overlay_supports_window;
-use window::{WindowCtx, WindowView, draw_window, request_window};
+use window::{WindowCtx, WindowView, draw_window, prefetch_next_window, request_window};
 
 /// An in-progress on-canvas gesture.
 #[derive(Clone, Debug)]
@@ -283,6 +283,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
+    // zoomed in: the next photo's window at the same place, made ahead (culling at 100 %)
+    prefetch_next_window(app, &window_ctx, &windows, hover_key.is_some());
     let single = hover_key.is_none() && !split && !show_before && !split_view && !interacting;
     let camera_full = request_camera_full(app, &photo, single && !windows.is_empty(), native_long.min(texture_side));
     let p = ui.painter_at(canvas);

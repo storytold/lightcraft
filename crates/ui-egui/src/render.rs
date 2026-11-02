@@ -71,7 +71,21 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// The loupe zoomed in: the window of the photo the user is likely to step to next, at the same
+    /// place and scale, made ahead into the kept windows ([`Renderer::prefetch_window`]), so the
+    /// step shows it at once. No texture of its own: it goes straight to the kept windows.
+    RegionAhead,
 }
+
+/// Full-quality zoom windows ([`Slot::Region`]) kept after the loupe moved on, newest last: going
+/// back to a photo at the same zoom and place shows its window at once instead of rendering it
+/// again. At most this many, and at most [`KEPT_WINDOW_BYTES`] together.
+pub const KEPT_WINDOWS: usize = 8;
+
+/// The most the kept windows ([`KEPT_WINDOWS`]) hold together, textures and their CPU copies
+/// (headless) counted: a 1:1 window of a 2560 x 1440 screen is about 15 MB, so about eight fit;
+/// one of the widest windows ([`crate::region::MAX_SPAN`]) evicts the others.
+pub const KEPT_WINDOW_BYTES: usize = 256 << 20;
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
 /// hidden grading wheels, must not discard a decoded RAW's actual aspect ratio.
@@ -282,6 +296,15 @@ pub struct Renderer {
     catalog_rev: u64,
     /// Prefetch slot → key of the last job submitted (each runs once).
     prefetched: HashMap<Slot, u64>,
+    /// Recent full-quality zoom windows ([`KEPT_WINDOWS`], least recently shown first).
+    kept_windows: std::collections::VecDeque<Tex>,
+    /// Request id of the [`Slot::Region`] request in flight when it is a full-quality one (a drag's
+    /// drafts are never kept).
+    region_full_request: Option<u64>,
+    /// Key of the [`Slot::Region`] texture when it is a full-quality window (kept when it leaves).
+    region_full: Option<u64>,
+    /// The zoom window (key) whose neighbours' windows are all made ahead and kept.
+    pub windows_ahead_done: Option<u64>,
     /// Variant key → frame it was last asked for (LRU of [`Slot::Variant`] textures).
     variant_used: HashMap<u64, u64>,
     /// How many variants the last frame's views showed at once (see [`Self::want_variants`]).
@@ -408,6 +431,10 @@ impl Renderer {
             failed: HashMap::new(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
+            kept_windows: std::collections::VecDeque::new(),
+            region_full_request: None,
+            region_full: None,
+            windows_ahead_done: None,
             variant_used: HashMap::new(),
             variant_want: 0,
             frame: 0,
@@ -623,7 +650,12 @@ impl Renderer {
     }
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {
-        self.textures.remove(&slot);
+        // (a full-quality zoom window is kept for a return to it, [`KEPT_WINDOWS`])
+        if let Some(t) = self.textures.remove(&slot)
+            && slot == Slot::Region
+        {
+            self.keep_window(t);
+        }
         self.stages.remove(&slot);
     }
 
@@ -652,11 +684,18 @@ impl Renderer {
             self.slides_live = true;
         }
         let mut job = self.job_for(slot, job);
+        // a zoom window shown before (kept): up at once, nothing rendered
+        if slot == Slot::Region && self.textures.get(&slot).is_none_or(|t| t.key != job.key) && self.take_kept_window(job.key) {
+            return;
+        }
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
+        if slot == Slot::Region {
+            self.region_full_request = (job.request.quality != lightcraft_pipeline::Quality::Draft).then_some(job.request_id);
+        }
         self.requests.insert(
             slot,
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
@@ -671,7 +710,7 @@ impl Renderer {
             return;
         }
         let key = job.key;
-        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_) | Slot::RegionAhead);
         let display = self.display.clone();
         self.pool.submit(
             slot,
@@ -683,6 +722,113 @@ impl Renderer {
                 Finished { look, ..Self::run_for(run, &display) }
             }),
         );
+    }
+
+    /// Show the kept window made for `key` ([`KEPT_WINDOWS`]) in [`Slot::Region`], keeping the one
+    /// shown there now. Whether there was one.
+    fn take_kept_window(&mut self, key: u64) -> bool {
+        let Some(i) = self.kept_windows.iter().position(|t| t.key == key) else { return false };
+        let Some(found) = self.kept_windows.remove(i) else { return false };
+        self.drop_queued(Slot::Region);
+        self.pending.remove(&Slot::Region);
+        self.requests.remove(&Slot::Region);
+        self.failed.remove(&Slot::Region);
+        self.region_full_request = None;
+        // (a render of the window asked for before, still running, is not drawn over it)
+        self.shown_ids.insert(Slot::Region, lightcraft_preview::next_tick());
+        if let Some(old) = self.textures.insert(Slot::Region, found) {
+            self.keep_window(old);
+        }
+        self.region_full = Some(key);
+        true
+    }
+
+    /// A zoom window rendered for `slot` ([`Slot::Region`] or [`Slot::RegionAhead`]; any other slot
+    /// is returned as it is), with `key`, for request `request_id`: the slot its texture goes to.
+    /// The full-quality window shown so far is kept for a return to it and the new one gets a
+    /// texture of its own; a window made ahead for the photo the loupe has stepped to before it was
+    /// done is the loupe's window (the loupe's own render of it, if one started, is dropped).
+    fn window_arrived(&mut self, slot: Slot, key: u64, request_id: u64) -> Slot {
+        let full = match slot {
+            Slot::Region => self.region_full_request.is_some_and(|id| id == request_id),
+            Slot::RegionAhead if self.pending.get(&Slot::Region).is_some_and(|p| p.0 == key) => {
+                self.drop_queued(Slot::Region);
+                self.pending.remove(&Slot::Region);
+                self.requests.remove(&Slot::Region);
+                self.region_full_request = None;
+                self.shown_ids.insert(Slot::Region, lightcraft_preview::next_tick());
+                true
+            }
+            _ => return slot,
+        };
+        if self.textures.get(&Slot::Region).is_some_and(|t| t.key != key)
+            && let Some(t) = self.textures.remove(&Slot::Region)
+        {
+            self.keep_window(t);
+        }
+        self.region_full = full.then_some(key);
+        Slot::Region
+    }
+
+    /// Move the window just made ahead (the texture of [`Slot::RegionAhead`]) to the kept windows,
+    /// when `slot` is that one.
+    fn keep_made_ahead(&mut self, slot: Slot) {
+        if slot == Slot::RegionAhead
+            && let Some(t) = self.textures.remove(&Slot::RegionAhead)
+        {
+            self.keep(t);
+        }
+    }
+
+    /// Keep `t`, a window that leaves [`Slot::Region`], if it is a full-quality one (a draft is let go).
+    fn keep_window(&mut self, t: Tex) {
+        if self.region_full.take() == Some(t.key) {
+            self.keep(t);
+        }
+    }
+
+    /// Bytes a texture holds (on the GPU, and its CPU copy if it has one).
+    fn tex_bytes(t: &Tex) -> usize {
+        let gpu = t.size[0].saturating_mul(t.size[1]).saturating_mul(4);
+        gpu.saturating_add(t.pixels.as_ref().map_or(0, |p| p.pixels.len().saturating_mul(4)))
+    }
+
+    /// Add `t` to the kept windows (the newest), dropping the oldest past [`KEPT_WINDOWS`] or
+    /// [`KEPT_WINDOW_BYTES`]. A window bigger than that alone isn't kept.
+    fn keep(&mut self, t: Tex) {
+        self.kept_windows.retain(|k| k.key != t.key);
+        if Self::tex_bytes(&t) > KEPT_WINDOW_BYTES {
+            return;
+        }
+        self.kept_windows.push_back(t);
+        while self.kept_windows.len() > KEPT_WINDOWS || self.kept_windows().1 > KEPT_WINDOW_BYTES {
+            if self.kept_windows.pop_front().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Make the window `job` (already keyed for [`Slot::Region`], see [`Self::job_for`]) ahead, at
+    /// `priority`, into the kept windows: the loupe zoomed in, for the photo the user steps to next.
+    /// Nothing when it is kept already or on screen. Whether it is being made (not when it failed
+    /// before: a photo that can't be read isn't asked for again until the catalog changes it).
+    pub fn prefetch_window(&mut self, job: RenderJob, priority: u32) -> bool {
+        let key = job.key;
+        if self.window_kept(key) || self.textures.get(&Slot::Region).is_some_and(|t| t.key == key) {
+            return false;
+        }
+        self.request(Slot::RegionAhead, job, priority);
+        self.pending.get(&Slot::RegionAhead).is_some_and(|p| p.0 == key)
+    }
+
+    /// Whether the window made for `key` is kept ([`KEPT_WINDOWS`]).
+    pub fn window_kept(&self, key: u64) -> bool {
+        self.kept_windows.iter().any(|t| t.key == key)
+    }
+
+    /// How many zoom windows are kept, and the bytes they hold ([`KEPT_WINDOW_BYTES`]).
+    pub fn kept_windows(&self) -> (usize, usize) {
+        (self.kept_windows.len(), self.kept_windows.iter().map(Self::tex_bytes).fold(0, usize::saturating_add))
     }
 
     /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
@@ -907,6 +1053,10 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.kept_windows.clear();
+        self.region_full_request = None;
+        self.region_full = None;
+        self.windows_ahead_done = None;
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1284,6 +1434,7 @@ impl Renderer {
             if let Slot::Thumb(id) = slot {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
+            let slot = self.window_arrived(slot, r.key, r.request_id);
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
@@ -1321,6 +1472,8 @@ impl Renderer {
             if first_thumb {
                 self.thumbs_made += 1;
             }
+            // a window made ahead: kept for the step to its photo
+            self.keep_made_ahead(slot);
             // (a preview taken from the cache says nothing about how long a render takes)
             if slot == Slot::Main && r.quick.is_none() {
                 self.last_main_ms = ms;
@@ -1384,6 +1537,7 @@ impl Renderer {
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
             "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "keptWindows": {"count": self.kept_windows.len(), "bytes": self.kept_windows().1, "budgetBytes": KEPT_WINDOW_BYTES},
         })
     }
 
@@ -1504,6 +1658,48 @@ mod stage_budget_tests {
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle, Some((long_ago, true)), "trimmed once the window is gone");
+    }
+
+    /// A window texture of `key` claiming `size` (only its bookkeeping size matters here).
+    fn window_tex(ctx: &egui::Context, key: u64, size: [usize; 2]) -> Tex {
+        let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
+        Tex { look: None, key, photo: PhotoId(key), tex, size, histogram: None, ms: 0.0, quick: None, pixels: None }
+    }
+
+    // Given zoom windows leaving the loupe, at most KEPT_WINDOWS of them and KEPT_WINDOW_BYTES
+    // together are kept (the oldest go first), a window over the byte cap alone is never kept, and
+    // a draft is never kept
+    #[test]
+    fn kept_zoom_windows_stay_within_their_caps() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        for key in 1..=20 {
+            r.keep(window_tex(&ctx, key, [1000, 1000]));
+        }
+        assert_eq!(r.kept_windows().0, KEPT_WINDOWS);
+        assert!(!r.window_kept(12) && r.window_kept(13) && r.window_kept(20), "the newest kept");
+        // big ones (100 MB each): the byte cap wins
+        for key in 21..=24 {
+            r.keep(window_tex(&ctx, key, [5000, 5000]));
+        }
+        let (count, bytes) = r.kept_windows();
+        assert!(bytes <= KEPT_WINDOW_BYTES && count >= 1 && r.window_kept(24), "{count} windows, {bytes} bytes");
+        // one wider than the whole cap
+        r.keep(window_tex(&ctx, 25, [9000, 9000]));
+        assert!(!r.window_kept(25));
+        // a draft leaving the loupe is let go; a full-quality window is kept
+        r.forget_all();
+        r.textures.insert(Slot::Region, window_tex(&ctx, 30, [10, 10]));
+        r.release(Slot::Region);
+        assert!(!r.window_kept(30), "a draft (not marked full quality)");
+        r.textures.insert(Slot::Region, window_tex(&ctx, 31, [10, 10]));
+        r.region_full = Some(31);
+        r.release(Slot::Region);
+        assert!(r.window_kept(31));
+        // asked for again: shown at once, nothing rendered
+        let n = r.pending.len();
+        assert!(r.take_kept_window(31) && r.textures.get(&Slot::Region).is_some_and(|t| t.key == 31));
+        assert_eq!(r.pending.len(), n);
     }
 
     // Given stage caches within the budget, nothing is cleared

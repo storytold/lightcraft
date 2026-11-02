@@ -184,3 +184,53 @@ fn an_edited_raw_never_rendered_shows_a_draft_of_its_edit_at_once() {
         }
     }
 }
+
+/// Whether the loupe's zoom window on screen is the one it wants for photo `id`.
+fn window_shown(h: &Headless, id: PhotoId) -> bool {
+    h.app.region_view.is_some_and(|v| v.photo == id && h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == v.key && t.photo == id))
+}
+
+/// Step frames until photo `id`'s zoom window is up (at most `T`): whether a render of a window
+/// was asked for meanwhile (one kept or made ahead is shown without one).
+fn rendered_to_window(h: &mut Headless, id: PhotoId) -> bool {
+    let t0 = Instant::now();
+    let mut rendered = h.app.renderer.is_pending(Slot::Region);
+    while !window_shown(h, id) && t0.elapsed() < T {
+        h.step();
+        rendered |= h.app.renderer.is_pending(Slot::Region);
+    }
+    assert!(window_shown(h, id), "photo {id:?}'s window: {:?}", h.app.region_view);
+    rendered
+}
+
+/// Culling at 100 %: stepping to the next photo and back rendered every window again, each time
+/// "Rendering…" for as long as a raw takes to decode. The next photo's window at the same place is
+/// made ahead while the user looks at this one, and the windows shown before are kept: each step
+/// shows its window without rendering one.
+#[test]
+fn zoomed_in_stepping_on_and_back_shows_each_window_at_once() {
+    let mut h = raws(4, Duration::from_millis(300));
+    exec(&mut h, "library.select", json!({"ids": [2]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "view.zoom100", json!({}));
+    let mut seen = Vec::new();
+    assert!(frames(&mut h, T, &mut seen, |h| window_shown(h, PhotoId(2))), "photo 2's window: {:?}", h.app.region_view);
+    // while photo 2 is looked at, the windows of the photos after and before it are made
+    // (until the renderer says they all are)
+    let quiet = frames(&mut h, T, &mut seen, |h| h.app.renderer.windows_ahead_done.is_some_and(|k| h.app.region_view.is_some_and(|v| v.key == k)));
+    assert!(quiet, "the windows ahead made: {:?}", h.app.renderer.kept_windows());
+    assert!(h.app.renderer.kept_windows().0 >= 2, "the photos on either side kept: {:?}", h.app.renderer.kept_windows());
+    // (in the library's order: the photos on either side of photo 2)
+    let order = h.app.session.visible_cloned();
+    let at = order.iter().position(|p| *p == PhotoId(2)).unwrap();
+    let (next, prev) = (order[at + 1], order[at - 1]);
+    exec(&mut h, "library.next", json!({}));
+    assert!(!rendered_to_window(&mut h, next), "the step to the next photo shows the window made ahead");
+    exec(&mut h, "library.previous", json!({}));
+    assert!(!rendered_to_window(&mut h, PhotoId(2)), "back to photo 2: its kept window");
+    exec(&mut h, "library.previous", json!({}));
+    assert!(!rendered_to_window(&mut h, prev), "on to the photo before it: made ahead from photo 2");
+    let (count, bytes) = h.app.renderer.kept_windows();
+    assert!(count <= crate::render::KEPT_WINDOWS && bytes <= crate::render::KEPT_WINDOW_BYTES, "{count} windows, {bytes} bytes");
+}

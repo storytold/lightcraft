@@ -108,6 +108,52 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     Some(view)
 }
 
+/// Zoomed in, with the After window sharp on screen (no drag, no preset or profile `hovered`,
+/// nothing else rendering for it, no cell waiting for its first picture): make the window it shows, at the same place and scale, of
+/// the photos the user is likely to step to next (the next one in the direction of travel, then the
+/// one behind) into the renderer's kept windows, one at a time ([`crate::render::KEPT_WINDOWS`]):
+/// photos of the same pixel size and frame shape only (a shoot's, from one camera), where the same
+/// place means the same part of the frame.
+pub(super) fn prefetch_next_window(app: &mut LightcraftApp, c: &WindowCtx, windows: &[(WindowView, crate::region::RegionView)], hovered: bool) {
+    let Some((_, view)) = windows.iter().find(|(v, _)| !v.before) else { return };
+    if c.interacting
+        || hovered
+        || app.renderer.is_pending(Slot::Region)
+        || app.renderer.textures.get(&Slot::Region).is_none_or(|t| t.key != view.key)
+        || app.pictures_busy(app.renderer.frame())
+        || app.renderer.windows_ahead_done == Some(view.key)
+        || app.renderer.is_pending(Slot::RegionAhead)
+    {
+        return;
+    }
+    let ids = app.session.visible_cloned();
+    let Some(i) = ids.iter().position(|p| *p == c.id) else { return };
+    let Some(size) = app.session.catalog.photo(c.id).map(|p| (p.width, p.height)) else { return };
+    let proof = app.ui.soft_proof.then_some(app.ui.proof);
+    for next in app.look_ahead.targets_n(&ids, i, 1, 1) {
+        // (another pixel size zooms to another frame: its window would not be the one asked for)
+        let Some(np) = app.session.catalog.photo(next).filter(|p| (p.width, p.height) == size).cloned() else { continue };
+        let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+            np.width.max(1) as usize,
+            np.height.max(1) as usize,
+            &np.develop,
+            !c.crop_tool,
+            np.embedded_lens.as_ref(),
+        );
+        if (frame.aspect() as f32 - c.aspect).abs() > 1e-3 {
+            continue;
+        }
+        let Some(job) = app.session.region_job(next, view.full.0, view.full.1, view.window, !c.crop_tool) else { continue };
+        let job = job.with_hidden_grading(app.ui.grading_hidden_for(next)).with_overlay(c.overlay).with_proof(proof);
+        let job = app.renderer.job_for(Slot::Region, job);
+        // (one that can't be made, an unreadable file, is passed over)
+        if !app.renderer.window_kept(job.key) && app.renderer.prefetch_window(job, super::PREFETCH_PRIORITY) {
+            return;
+        }
+    }
+    app.renderer.windows_ahead_done = Some(view.key);
+}
+
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
 /// drag, an earlier draft of it).
 pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) -> bool {
