@@ -4,17 +4,53 @@ This integration is disabled by default. The web app publishes window.lightcraft
 
 LightCraft edits a library rather than individual project documents. Its provider resource is a complete native library ZIP backup: catalog snapshot/journal, presets, view state, preferences and the original photographs referenced by that captured catalog. It is the same archive layout as File > Back Up Library, not a new private document format.
 
+## Window event payload
+
+The page dispatches a `CustomEvent` named `lightcraft-file-provider` on `window`. Its payload is
+`event.detail`, an object; `event.type` is always the event name. Hosts select the operation using
+`event.detail.type`, and read captured save data from `event.detail.bytes`, a `Uint8Array` containing
+the complete native library ZIP. Those bytes are not a JSON string, Blob, URL or live document view.
+They are present only on `save`; metadata-only events omit `bytes`.
+
+| `event.detail.type` | Payload fields |
+|---|---|
+| `ready` | `protocolVersion: 1`; the API is installed, with no provider registered automatically. |
+| `saveDialog` | `requestId`, `documentId`, numeric `revision`, `name`, boolean `saveAs`, and `resourceId` (string or null). |
+| `save` | `requestId`, `documentId`, numeric `revision`, `name`, `resourceId` (string or null), `destination: "provider"`, numeric `bytesLength`, and typed `bytes`. |
+| `openRequest` | `requestId` and `resourceId`; answer through the matching `openResource` or `cancelOpen` callback. |
+| `opened` | `requestId`, `resourceId`, string `documentId` and numeric `revision` of the admitted library. |
+| `openFailed` / `saveFailed` | `requestId` and `error`; read failures also carry `resourceId`. |
+
+Provider-owned events also include string `providerId`, `namespace` and `connectionId`. Request,
+document and resource IDs are opaque strings. Correlate responses with the exact request and
+connection; the presence of save bytes or successful event dispatch is never a durable-save ACK.
+The API and ready event retain protocol version 1; this describes the existing payload.
+
 ## Registration and Recent libraries
 
 A trusted same-origin host explicitly calls registerProvider(id, label, namespace) and receives a new connectionId. The opaque namespace identifies the signed-in account; it is not a credential. setResources(connectionId, [{id,name,updatedAt}]) supplies up to 100 external libraries. File > Open Recent Library separates Recent — provider label from Recent on this device. Provider IDs are opaque and never become local filesystem paths.
 
-requestOpen(resourceId) emits openRequest. The host replies using openResource(requestId, filename, Uint8Array), or cancelOpen(requestId,error). ZIPs restore into a fresh browser-storage folder; the old library is retained. CRCs, original content hashes and required catalog originals are checked. The new catalog must load through the engine before its browser pointer changes.
+requestOpen(resourceId) emits openRequest. The host replies using openResource(requestId, filename, Uint8Array), or cancelOpen(requestId,error). The supplied open filename must end in .zip (case insensitive, so .ZIP is accepted). A valid name without that suffix can pass the callback checks but is rejected later during library admission. ZIPs restore into a fresh browser-storage folder; the old library is retained. CRCs, original content hashes and required catalog originals are checked. The new catalog must load through the engine before its browser pointer changes.
 
 A read may be requested while the editor is idle and finish after editing starts. Both the Recent command and byte-delivery admission recheck real text-edit/slider drafts, interactions, photo/control drags, hover previews and the existing dialog/import/export/storage-error guards. Delivery additionally refuses queued or unconsumed editing input and held presses before a UI pass, without treating idle pointer movement, raw mouse motion, idle pointer leave or its own provider read as editing. Motion or pointer leave while a button is held still blocks admission until release or actual focus loss/pointer cancellation. Numeric draft tracking references the widgets' actual resident buffers, including hidden controls. Refusal does not commit/cancel text or gestures, capture UI files, decode bytes, create staging data or change the active-library pointer. The user can commit/cancel the edit and request the library again.
 
 An open waits for the current library's local writes. Imports, unsaved storage failures, exports, dialogs and pending provider saves prevent a replacement. While the new library is restored, editor input and automation processing pause so edits cannot land in the wrong library. Only then is the new library admitted, assigned a fresh instance ID and acknowledged with opened. No page reload or second click is required. Invalid archives keep the old library active.
 
 Library replacement clears the previous People page and its navigation history before restoring saved UI state. A missing or unusable ui.json cannot retain the former library's person navigation.
+
+## Browser-local Restore and reload
+
+File > Restore Library from Backup stages and verifies the ZIP before selecting its new browser
+library folder. Once activation starts, saving in the previous live session stays paused. If the
+browser asks about leaving and you stay, or if reloading fails, reload the page to open the selected
+library; do not continue editing the previous page expecting its autosave to resume. No timer
+re-enables that old writer. The previous library and shared originals are not deleted.
+
+A staging failure leaves the previous saving policy unchanged, including an existing pause caused
+by a storage-read failure. An activation-write error can leave its commit uncertain, so saving
+remains paused and the page asks for a reload instead of claiming the old pointer is still active.
+Provider ZIP admission remains an in-page operation with its existing draft, byte and revision
+ownership guards; it does not use this reload-based browser-local Restore flow.
 
 ## Save and acknowledgement
 

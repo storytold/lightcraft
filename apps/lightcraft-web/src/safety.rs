@@ -3,8 +3,9 @@
 //! instead of a dead page after a panic, and backup / restore of the whole library
 //! ([`crate::backup`]).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use js_sys::{Reflect, Uint8Array};
 use wasm_bindgen::JsCast;
@@ -353,17 +354,30 @@ async fn new_restore_dir(backend: &Backend) -> Result<String, String> {
     Err("could not choose an unused restored-library folder".into())
 }
 
-/// Official Restore keeps its activation behavior, after the verified staging succeeds.
-pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, String> {
-    let dir = restore_staged(file, backend.clone()).await?;
-    if let Err(error) = backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await {
-        return Err(failed_staged_restore(&backend, &dir, error).await);
-    }
-    Ok(dir)
+/// Official Restore activates the verified staging folder and requests a page reload. Once
+/// activation starts the old session stays frozen, even if navigation is cancelled or fails.
+pub async fn restore(file: web_sys::File, backend: Backend, frozen: &Cell<bool>) -> Result<String, String> {
+    let activation_backend = backend.clone();
+    crate::backup::restore_for_reload(
+        frozen,
+        restore_staged(file, backend),
+        move |dir| async move {
+            if let Err(error) = activation_backend.write(ACTIVE_LIBRARY, dir.as_bytes()).await {
+                return Err(failed_staged_restore(&activation_backend, &dir, error).await);
+            }
+            Ok(())
+        },
+        || {
+            notice("Library restored. Reload this page to open it. Saving in the previous library is paused until you reload.");
+            let window = web_sys::window().ok_or("The browser window is unavailable; reload the page to open the restored library")?;
+            window.location().reload().map_err(|error| format!("The browser could not reload the page: {error:?}"))
+        },
+    )
+    .await
 }
 
 /// File ▸ Restore Library from Backup…: confirm, pick the zip, restore, reload.
-pub fn pick_and_restore(backend: Backend, before_reload: impl FnOnce() + 'static) {
+pub fn pick_and_restore(backend: Backend, frozen: Rc<Cell<bool>>) {
     let ok = confirm(
         "Restore a LightCraft library backup?\n\nThe backup becomes the library in this browser and the page reloads. \
          The current library is not deleted: it stays in browser storage.",
@@ -376,23 +390,20 @@ pub fn pick_and_restore(backend: Backend, before_reload: impl FnOnce() + 'static
     input.set_type("file");
     input.set_accept(".zip,application/zip");
     let inp = input.clone();
-    let mut before_reload = Some(before_reload);
     let on_change = Closure::<dyn FnMut()>::new(move || {
         let Some(file) = inp.files().and_then(|f| f.get(0)) else { return };
         let backend = backend.clone();
-        let before = before_reload.take();
+        let frozen = frozen.clone();
         notice(format!("Restoring {}…", file.name()));
         wasm_bindgen_futures::spawn_local(async move {
-            match restore(file, backend).await {
-                Ok(_) => {
-                    if let Some(f) = before {
-                        f();
-                    }
-                    if let Some(w) = web_sys::window() {
-                        let _ = w.location().reload();
-                    }
+            if let Err(error) = restore(file, backend, &frozen).await {
+                if frozen.get() {
+                    // A pointer write may have committed before reporting an I/O error. Do not
+                    // claim the old pointer is still selected or restart the previous writer.
+                    notice(format!("Restore could not finish: {error}. Saving is paused; reload the page before continuing."));
+                } else {
+                    notice(format!("Restore failed: {error}. The current library is still in use."));
                 }
-                Err(e) => notice(format!("Restore failed: {e}. Nothing was changed: the current library is still in use.")),
             }
         });
     });

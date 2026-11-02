@@ -85,6 +85,30 @@ pub fn restore_key(entry: &str, dir: &str) -> Option<String> {
     valid_hash(hash).then(|| format!("originals/{hash}"))
 }
 
+/// Stage first, then permanently stop the previous session before changing ACTIVE_LIBRARY.
+/// Reload can be blocked, cancelled or accepted without immediately replacing the page. None
+/// permits the old session to resume saving. An activation error can also mean an uncertain
+/// pointer commit, so only staging failure leaves the previous saving policy untouched.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) async fn restore_for_reload<Stage, Activate, Commit, Reload>(
+    frozen: &std::cell::Cell<bool>,
+    stage: Stage,
+    activate: Activate,
+    reload: Reload,
+) -> Result<String, String>
+where
+    Stage: std::future::Future<Output = Result<String, String>>,
+    Activate: FnOnce(String) -> Commit,
+    Commit: std::future::Future<Output = Result<(), String>>,
+    Reload: FnOnce() -> Result<(), String>,
+{
+    let dir = stage.await?;
+    frozen.set(true);
+    activate(dir.clone()).await?;
+    reload()?;
+    Ok(dir)
+}
+
 /// Remove only a failed restore's private metadata. Content-addressed originals remain shared.
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) async fn discard_staged_library<F, Fut>(dir: &str, active: Option<&[u8]>, mut remove: F) -> Result<(), String>
@@ -411,6 +435,179 @@ mod tests {
         match future.as_mut().poll(&mut context) {
             std::task::Poll::Ready(result) => result,
             std::task::Poll::Pending => panic!("the synthetic storage callback must finish synchronously"),
+        }
+    }
+
+    // Original synthetic ZIP/storage fixtures use the real ZIP reader/CRC/key mapping and
+    // Files snapshots. Browser File I/O and actual navigation remain WASM integration concerns.
+    fn stage_restore_fixture(
+        zip: &[u8],
+        disk: &std::cell::RefCell<std::collections::BTreeMap<String, Vec<u8>>>,
+        dir: &str,
+    ) -> Result<String, String> {
+        let (offset, size) = find_central(zip)?;
+        let entries = parse_central(&zip[offset as usize..(offset + size) as usize])?;
+        for entry in entries {
+            let start = data_offset(&entry, &zip[entry.header as usize..entry.header as usize + 30])? as usize;
+            let bytes = &zip[start..start + entry.size as usize];
+            verify(&entry, bytes)?;
+            if let Some(key) = restore_key(&entry.name, dir) {
+                disk.borrow_mut().insert(key, bytes.to_vec());
+            }
+        }
+        Ok(dir.into())
+    }
+
+    #[test]
+    fn restore_reload_holds_previous_writer_after_activation_until_page_replacement() {
+        for reload_accepted in [false, true] {
+            let frozen = std::cell::Cell::new(false);
+            let source = crate::files::Files::default();
+            source.preload("catalog.snap", b"previous catalog".to_vec());
+            source.write("catalog.log", b"captured previous edit");
+            let captured = source.snapshot().unwrap();
+            let disk = std::cell::RefCell::new(std::collections::BTreeMap::from([
+                (ACTIVE_LIBRARY.to_string(), b"library".to_vec()),
+                ("library/catalog.snap".into(), b"previous catalog".to_vec()),
+                ("library/catalog.log".into(), b"stored previous checkpoint".to_vec()),
+                ("originals/shared123".into(), vec![0, 20, 255]),
+            ]));
+            let zip = build(&[("library/catalog.snap", b"restored catalog"), ("library/catalog.log", b"restored checkpoint")]);
+            let activations = std::cell::Cell::new(0);
+            let reloads = std::cell::Cell::new(0);
+            let result = run_ready(restore_for_reload(
+                &frozen,
+                async {
+                    assert!(!frozen.get(), "staging must not stop the still-selected previous library");
+                    stage_restore_fixture(&zip, &disk, "library-restored-freeze-1")
+                },
+                |dir| {
+                    let (frozen, activations, disk) = (&frozen, &activations, &disk);
+                    async move {
+                        assert!(frozen.get(), "the old writer must stop before changing the active pointer");
+                        activations.set(activations.get() + 1);
+                        disk.borrow_mut().insert(ACTIVE_LIBRARY.into(), dir.into_bytes());
+                        Ok(())
+                    }
+                },
+                || {
+                    reloads.set(reloads.get() + 1);
+                    assert!(frozen.get());
+                    assert_eq!(disk.borrow().get(ACTIVE_LIBRARY).map(Vec::as_slice), Some(b"library-restored-freeze-1".as_slice()));
+                    // A synchronous callback can edit the still-live old mirror. It must not
+                    // alter the immutable capture, retarget it or grant permission to autosave.
+                    source.append("catalog.log", b"; later previous-library edit");
+                    if reload_accepted { Ok(()) } else { Err("synthetic reload request failure".into()) }
+                },
+            ));
+            if reload_accepted {
+                assert_eq!(result.unwrap(), "library-restored-freeze-1");
+            } else {
+                assert_eq!(result.unwrap_err(), "synthetic reload request failure");
+            }
+            assert_eq!((activations.get(), reloads.get()), (1, 1));
+            assert!(frozen.get(), "an accepted reload may still be cancelled before replacing this page");
+            assert!(source.is_dirty(), "pausing must not drain or mark previous edits saved");
+            let later = source.snapshot().unwrap();
+            assert!(later.generation > captured.generation);
+            assert!(captured.entries.iter().any(|(name, bytes)| name == "catalog.log" && bytes == b"captured previous edit"));
+            assert!(
+                later.entries.iter().any(|(name, bytes)| name == "catalog.log" && bytes == b"captured previous edit; later previous-library edit")
+            );
+            assert_eq!(disk.borrow().get("library/catalog.log").map(Vec::as_slice), Some(b"stored previous checkpoint".as_slice()));
+            assert_eq!(disk.borrow().get("library-restored-freeze-1/catalog.snap").map(Vec::as_slice), Some(b"restored catalog".as_slice()));
+            assert_eq!(disk.borrow().get("library-restored-freeze-1/catalog.log").map(Vec::as_slice), Some(b"restored checkpoint".as_slice()));
+            assert_eq!(disk.borrow().get("originals/shared123"), Some(&vec![0, 20, 255]));
+        }
+    }
+
+    #[test]
+    fn restore_staging_failure_preserves_previous_freeze_and_storage() {
+        for previous in [false, true] {
+            let frozen = std::cell::Cell::new(previous);
+            let source = crate::files::Files::default();
+            source.write("catalog.snap", b"unsaved previous catalog");
+            let captured = source.snapshot().unwrap();
+            let disk = std::cell::RefCell::new(std::collections::BTreeMap::from([
+                (ACTIVE_LIBRARY.to_string(), b"library".to_vec()),
+                ("library/catalog.snap".into(), b"stored previous catalog".to_vec()),
+            ]));
+            let before = disk.borrow().clone();
+            let activated = std::cell::Cell::new(false);
+            let reloaded = std::cell::Cell::new(false);
+            assert!(
+                run_ready(restore_for_reload(
+                    &frozen,
+                    async { stage_restore_fixture(b"not a backup ZIP", &disk, "library-restored-invalid") },
+                    |_| {
+                        activated.set(true);
+                        std::future::ready(Ok(()))
+                    },
+                    || {
+                        reloaded.set(true);
+                        Ok(())
+                    },
+                ))
+                .is_err()
+            );
+            assert!(!activated.get() && !reloaded.get());
+            assert_eq!(frozen.get(), previous, "a prior storage-read freeze must not be cleared");
+            assert_eq!(*disk.borrow(), before);
+            assert_eq!(source.snapshot().unwrap(), captured);
+            assert!(source.is_dirty());
+        }
+    }
+
+    #[test]
+    fn restore_activation_error_keeps_previous_writer_frozen_with_uncertain_commit() {
+        for previous in [false, true] {
+            for committed_before_error in [false, true] {
+                let frozen = std::cell::Cell::new(previous);
+                let disk = std::cell::RefCell::new(std::collections::BTreeMap::from([
+                    (ACTIVE_LIBRARY.to_string(), b"library".to_vec()),
+                    ("library/catalog.snap".into(), b"previous catalog".to_vec()),
+                    ("originals/shared123".into(), vec![7, 8, 9]),
+                ]));
+                let zip = build(&[("library/catalog.snap", b"restored catalog")]);
+                let reloaded = std::cell::Cell::new(false);
+                let result = run_ready(restore_for_reload(
+                    &frozen,
+                    async { stage_restore_fixture(&zip, &disk, "library-restored-uncertain-1") },
+                    |dir| {
+                        let (frozen, disk) = (&frozen, &disk);
+                        async move {
+                            assert!(frozen.get());
+                            if committed_before_error {
+                                disk.borrow_mut().insert(ACTIVE_LIBRARY.into(), dir.as_bytes().to_vec());
+                            }
+                            let active = disk.borrow().get(ACTIVE_LIBRARY).cloned();
+                            let cleanup = discard_staged_library(&dir, active.as_deref(), |key| {
+                                disk.borrow_mut().remove(&key);
+                                std::future::ready(Ok(()))
+                            })
+                            .await;
+                            if committed_before_error {
+                                assert!(cleanup.is_err(), "cleanup must preserve a folder whose activation may have committed");
+                            } else {
+                                cleanup.unwrap();
+                            }
+                            Err("synthetic pointer write error".into())
+                        }
+                    },
+                    || {
+                        reloaded.set(true);
+                        Ok(())
+                    },
+                ));
+                assert_eq!(result.unwrap_err(), "synthetic pointer write error");
+                assert!(!reloaded.get());
+                assert!(frozen.get(), "an error is not proof that the active pointer stayed unchanged");
+                assert_eq!(disk.borrow().get("library/catalog.snap").map(Vec::as_slice), Some(b"previous catalog".as_slice()));
+                assert_eq!(disk.borrow().get("originals/shared123"), Some(&vec![7, 8, 9]));
+                assert_eq!(disk.borrow().contains_key("library-restored-uncertain-1/catalog.snap"), committed_before_error);
+                let expected = if committed_before_error { b"library-restored-uncertain-1".as_slice() } else { b"library".as_slice() };
+                assert_eq!(disk.borrow().get(ACTIVE_LIBRARY).map(Vec::as_slice), Some(expected));
+            }
         }
     }
 
