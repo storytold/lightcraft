@@ -158,8 +158,17 @@ struct LinearRec2020Transform {
 }
 
 enum DenoiseInput {
-    Bayer { mosaic: lightcraft_raw::Normalized, layout: Layout },
-    LinearRgb { camera_rgb: lightcraft_raster::Rgb32f, color_transform: Option<LinearRec2020Transform> },
+    Bayer {
+        mosaic: lightcraft_raw::Normalized,
+        layout: Layout,
+    },
+    LinearRgb {
+        camera_rgb: lightcraft_raster::Rgb32f,
+        color_transform: Option<LinearRec2020Transform>,
+        /// `max(R, G, B)` per pixel in the camera's own domain, taken before the colour transform: which pixels the
+        /// sensor clipped is not readable from the converted values the model sees.
+        clip_from: Option<Vec<f32>>,
+    },
 }
 
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
@@ -227,12 +236,18 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                 drop(raw);
                 drop(_held);
                 let pixels = (n.width as usize).saturating_mul(n.height as usize);
-                let _demosaic_permit = crate::memory::work_gate().acquire(pixels.saturating_mul(16).saturating_add(16 * 1024 * 1024));
+                // three-sample data (already demosaiced or an HDR merge) keeps its 12 B/px mosaic and the 12 B/px RGB
+                // result alive together; a one-sample mosaic adds only 4 B/px
+                let demosaic_bytes = if n.cpp == 3 { 24 } else { 16 };
+                let _demosaic_permit = crate::memory::work_gate().acquire(pixels.saturating_mul(demosaic_bytes).saturating_add(16 * 1024 * 1024));
                 let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
                 drop(n);
-                let color_transform = match color_transform_info {
-                    None => None,
+                let (color_transform, clip_from) = match color_transform_info {
+                    None => (None, None),
                     Some((matrix, inv_matrix, wb)) => {
+                        // Clipping is a property of the sensor, so measure it before the white balance and the colour
+                        // matrix move the values into Rec.2020, where "at white" no longer means the camera clipped.
+                        let clip_from: Vec<f32> = camera_rgb.data.iter().map(|px| px[0].max(px[1]).max(px[2])).collect();
                         let m = matrix.to_f32();
                         camera_rgb.data.par_iter_mut().for_each(|px| {
                             let balanced = [px[0] * wb[0], px[1] * wb[1], px[2] * wb[2]];
@@ -241,10 +256,10 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                             let b = m[2][0] * balanced[0] + m[2][1] * balanced[1] + m[2][2] * balanced[2];
                             *px = [r, g, b];
                         });
-                        Some(LinearRec2020Transform { inv_matrix, wb })
+                        (Some(LinearRec2020Transform { inv_matrix, wb }), Some(clip_from))
                     }
                 };
-                DenoiseInput::LinearRgb { camera_rgb, color_transform }
+                DenoiseInput::LinearRgb { camera_rgb, color_transform, clip_from }
             }
         }
     };
@@ -260,7 +275,9 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
     let (pixel_count, byte_multiplier) = match &input {
         DenoiseInput::Bayer { mosaic, .. } => (mosaic.data.len(), 20),
-        DenoiseInput::LinearRgb { camera_rgb, .. } => (camera_rgb.data.len(), 24),
+        // the model input (12 B/px), the result accumulator (12 B/px), its weights (4 B/px) and, for a converted
+        // input, the camera-domain clip map (4 B/px) all live through tiling
+        DenoiseInput::LinearRgb { camera_rgb, clip_from, .. } => (camera_rgb.data.len(), if clip_from.is_some() { 32 } else { 28 }),
     };
     let _held = crate::memory::work_gate().acquire(pixel_count.saturating_mul(byte_multiplier).saturating_add(scratch.saturating_mul(parallel)));
     // the built-in denoiser measures the whole photo's noise once, from its mosaic; a linear-RGB model has no mosaic to measure
@@ -296,8 +313,8 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         DenoiseInput::Bayer { mosaic, layout } => {
             (pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?, None)
         }
-        DenoiseInput::LinearRgb { camera_rgb, color_transform } => {
-            (pool.install(|| denoise_linear_rgb(&camera_rgb, runner, &params, &ctl))?, color_transform)
+        DenoiseInput::LinearRgb { camera_rgb, color_transform, clip_from } => {
+            (pool.install(|| denoise_linear_rgb(&camera_rgb, clip_from.as_deref(), runner, &params, &ctl))?, color_transform)
         }
     };
     if let Some(transform) = color_transform {

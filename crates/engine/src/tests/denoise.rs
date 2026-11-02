@@ -142,6 +142,94 @@ fn failed_model_replacement_preserves_the_installed_model() {
     let _ = std::fs::remove_dir_all(x.dir);
 }
 
+/// A zip with the given stored entries, written by hand: the shape a finished download is staged in.
+fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (i, t) in table.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *t = c;
+        }
+        !bytes.iter().fold(!0u32, |c, &b| table[((c ^ u32::from(b)) & 0xff) as usize] ^ (c >> 8))
+    }
+    let mut out = Vec::new();
+    let mut dir = Vec::new();
+    for (name, data) in files {
+        let offset = out.len() as u32;
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend_from_slice(&crc32(data).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        dir.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        dir.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+        dir.extend_from_slice(&[0, 0]);
+        dir.extend_from_slice(&[0, 0, 0, 0]);
+        dir.extend_from_slice(&crc32(data).to_le_bytes());
+        dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        dir.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        dir.extend_from_slice(&[0; 12]);
+        dir.extend_from_slice(&offset.to_le_bytes());
+        dir.extend_from_slice(name.as_bytes());
+    }
+    let at = out.len() as u32;
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out.extend_from_slice(&(files.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(files.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(dir.len() as u32).to_le_bytes());
+    out.extend_from_slice(&at.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// The RawNIND archive holds a Bayer and a linear model under the same hash. A finished download must install the
+/// one it was started for, so the id has to reach `identify` along with the hash the transfer verified: the stand-in
+/// archive here holds only the linear entry, so taking the Bayer one fails to find its file.
+#[test]
+fn a_finished_linear_download_installs_the_linear_model_of_the_archive() {
+    use crate::model_download::{STAGING, State};
+    let Some(known) = lightcraft_denoise::known::find("rawnind-linear") else {
+        panic!("the test build needs the pinned model catalog (lightcraft-denoise-core/rawnind-model)");
+    };
+    let download = known.download.expect("rawnind-linear has a download");
+    let dir = temp_dir("download-linear");
+    let models = dir.join("models");
+    let staging = models.join(STAGING);
+    std::fs::create_dir_all(&staging).unwrap();
+    let archive = staging.join(&download.file_name);
+    std::fs::write(&archive, stored_zip(&[("model_linear.onnx", b"stand-in weights")])).unwrap();
+    let mut s = Session::new().with_fs();
+    s.set_denoise_models_dir(Some(models));
+    s.denoise.downloads.set_outcome("rawnind-linear", State::Done { path: archive, sha256: download.sha256 });
+    let mut why = String::new();
+    for _ in 0..600 {
+        let v = s.execute("denoise.models.downloads", &json!({})).unwrap();
+        let row = v["downloads"].as_array().and_then(|a| a.iter().find(|d| d["id"] == "rawnind-linear")).cloned();
+        match row.as_ref().and_then(|d| d["state"].as_str()) {
+            Some("failed") => {
+                why = row.as_ref().and_then(|d| d["error"].as_str()).unwrap_or_default().to_string();
+                break;
+            }
+            Some("installed") => panic!("the stand-in weights cannot pass the model's own hash"),
+            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    // it got as far as hashing the extracted linear model: the archive entry was found, and the id was not dropped
+    assert!(why.contains("SHA-256 differs"), "the linear entry was not taken: {why:?}");
+    assert!(!why.contains("could not take the model out of the archive"), "the Bayer entry was taken: {why:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A Bayer DNG that is a smooth ramp, big enough for a 64-cell tile and a second one.
 fn ramp_dng(w: usize, h: usize, cfa: &str) -> Vec<u8> {
     let data: Vec<u16> = (0..w * h).map(|i| 600 + ((i % w) * 30 + (i / w) * 35) as u16).collect();
@@ -1078,7 +1166,19 @@ fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_clean
     let dir = temp_dir("xtrans-rec2020-denoise");
     let originals = dir.join("originals");
     std::fs::create_dir_all(&originals).unwrap();
-    let data: Vec<u16> = (0..192 * 160).map(|i| 600 + ((i % 192) * 30 + (i / 192) * 35) as u16).collect();
+    // a different level per colour filter, so a swapped channel or a missing white-balance division cannot pass
+    let cfa = lightcraft_raw::Cfa::xtrans();
+    let data: Vec<u16> = (0..192 * 160)
+        .map(|i| {
+            let (x, y) = (i % 192, i / 192);
+            let tint = match cfa.color_at(x, y) {
+                0 => 4000,
+                1 => 6500,
+                _ => 5200,
+            };
+            600 + (x * 4 + y * 5) as u16 + tint
+        })
+        .collect();
     let xtrans_path = originals.join("xtrans.dng");
     std::fs::write(&xtrans_path, synthetic_xtrans_dng_of(192, 160, data)).unwrap();
 
@@ -1115,6 +1215,22 @@ fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_clean
     set_amount(&mut s, 100.0);
     let denoised = rendered_mean(&mut s, id);
     assert!(denoised < plain - 3.0, "denoised {denoised} vs plain {plain}");
+
+    // The stand-in model halves every Rec.2020 sample, so the product is half the demosaiced camera RGB: compare each
+    // channel against the values the sensor recorded, which a wrong inverse matrix or a missing white-balance step fails.
+    let spec = s.media.denoise.spec(id).unwrap().clone();
+    let product = lightcraft_denoise::product::read(&spec.product, &spec.key, 1).unwrap();
+    let decoded = lightcraft_raw::decode(&std::fs::read(&xtrans_path).unwrap()).unwrap();
+    let normalized = decoded.normalized().unwrap();
+    let expected = lightcraft_raw::demosaic(&normalized, lightcraft_raw::Method::Ahd);
+    assert_eq!((product.width, product.height), (expected.width, expected.height));
+    let channel_mean =
+        |img: &lightcraft_raster::Rgb32f, c: usize| -> f64 { img.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / img.data.len() as f64 };
+    for c in 0..3 {
+        let got = channel_mean(&product, c);
+        let want = 0.5 * channel_mean(&expected, c);
+        assert!((got - want).abs() <= 0.01 * want, "channel {c}: {got} vs {want}");
+    }
 
     let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
     let export_res = export_photo(&mut s, id, &o, 1).unwrap();

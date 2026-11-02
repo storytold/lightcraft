@@ -52,7 +52,8 @@ pub struct Params {
     /// Cells neighbouring tiles share.
     pub overlap: usize,
     pub gain: Gain,
-    /// White is 1; samples at or above this (minus a little) are clipped and keep their value.
+    /// White is 1; samples at or above this (minus a little) are clipped and keep their value. For a converted linear
+    /// picture the test is made on the camera-domain field passed to [`denoise_linear_rgb`], not on the converted one.
     pub clip: Option<f32>,
     /// Tiles run at once (each model call may itself be single-threaded).
     pub parallel: usize,
@@ -240,7 +241,18 @@ pub fn denoise_bayer(
 
 /// Denoise a linear camera RGB image `image` of `width × height` pixels using a tile model.
 /// Gives camera RGB at the image's original resolution. Sensor-agnostic (works for X-Trans, Bayer, HDR merges, etc.).
-pub fn denoise_linear_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<'_>) -> Result<Rgb32f, Error> {
+///
+/// `clip_from` is one `max(R, G, B)` per pixel in the sensor's own domain, for an `image` that was white-balanced
+/// and converted to another colour space before the model ran: an image channel at the clip threshold then no
+/// longer means the sensor clipped, so the highlight protector must decide on these values instead. `None` reads
+/// the clipping straight from `image`.
+pub fn denoise_linear_rgb(
+    image: &Rgb32f,
+    clip_from: Option<&[f32]>,
+    runner: &dyn TileRunner,
+    p: &Params,
+    ctl: &Control<'_>,
+) -> Result<Rgb32f, Error> {
     let (width, height) = (image.width, image.height);
     let pixels = width
         .checked_mul(height)
@@ -251,6 +263,11 @@ pub fn denoise_linear_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, c
     }
     if image.data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(Error::Input("the image has samples that are not finite".into()));
+    }
+    if let Some(field) = clip_from
+        && (field.len() != pixels || field.iter().any(|v| !v.is_finite()))
+    {
+        return Err(Error::Input("the clip map does not have one finite value per pixel".into()));
     }
     if !(16..=2048).contains(&p.tile) || p.overlap >= p.tile.div_ceil(2) {
         return Err(Error::Input("the tile size and overlap do not fit".into()));
@@ -291,6 +308,16 @@ pub fn denoise_linear_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, c
                 if !pack_tile_linear_rgb(image, x0 as isize, y0 as isize, p.tile, &mut input) {
                     return Err(Error::Input("a tile could not be packed".into()));
                 }
+                let clip_tile = match clip_from {
+                    Some(field) => {
+                        let mut map = allocate(p.tile.saturating_mul(p.tile), 0f32)?;
+                        if !pack_tile_field(field, width, height, x0 as isize, y0 as isize, p.tile, &mut map) {
+                            return Err(Error::Input("a tile of the clip map could not be packed".into()));
+                        }
+                        Some(map)
+                    }
+                    None => None,
+                };
                 let mut out = runner.run(&input)?;
                 let side = p.tile;
                 if out.len() != 3 * side * side {
@@ -299,7 +326,7 @@ pub fn denoise_linear_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, c
                 if out.iter().any(|v| !v.is_finite()) {
                     return Err(Error::Model("numbers that are not finite".into()));
                 }
-                finish_tile_linear_rgb(&input, &mut out, p, (bx, ax, by, ay));
+                finish_tile_linear_rgb(&input, clip_tile.as_deref(), &mut out, p, (bx, ax, by, ay));
                 if out.iter().any(|v| !v.is_finite()) {
                     return Err(Error::Model("numbers that are not finite after scale matching or highlight protection".into()));
                 }
@@ -541,6 +568,33 @@ pub fn pack_tile_linear_rgb(image: &Rgb32f, x0: isize, y0: isize, tile: usize, o
     true
 }
 
+/// Pack the `tile × tile` window of one plane of per-pixel values whose top-left pixel is `(x0, y0)` into `out`
+/// (`tile²` values). Pixels outside the picture are mirrored ping-pong exactly as [`pack_tile_linear_rgb`] does.
+/// Returns `false` (and writes nothing) when the sizes do not fit.
+fn pack_tile_field(field: &[f32], width: usize, height: usize, x0: isize, y0: isize, tile: usize, out: &mut [f32]) -> bool {
+    let Some(plane) = tile.checked_mul(tile) else { return false };
+    if width == 0 || height == 0 || tile == 0 || width.checked_mul(height) != Some(field.len()) || out.len() != plane {
+        return false;
+    }
+    let Ok(last) = isize::try_from(tile.saturating_sub(1)) else { return false };
+    if x0.checked_add(last).is_none() || y0.checked_add(last).is_none() {
+        return false;
+    }
+    for j in 0..tile {
+        let y = crate::bayer::reflect(y0.saturating_add(j as isize), height);
+        let Some(row) = field.get(y * width..(y + 1) * width) else { return false };
+        let Some(out_row) = out.get_mut(j * tile..(j + 1) * tile) else { return false };
+        for i in 0..tile {
+            let x = crate::bayer::reflect(x0.saturating_add(i as isize), width);
+            match (row.get(x), out_row.get_mut(i)) {
+                (Some(&v), Some(dst)) => *dst = v,
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
 /// Bring a linear RGB tile's output to the input's scale, one gain per colour plane, and keep clipped highlights as they were
 /// (in place).
 ///
@@ -548,7 +602,7 @@ pub fn pack_tile_linear_rgb(image: &Rgb32f, x0: isize, y0: isize, tile: usize, o
 /// planes turns that drift into a colour cast (on X-Trans night shots, 8-bit red came out 7–9 levels down and green 3 up).
 /// Each plane is matched on its own, as the Bayer path does; a model that scales the planes equally still gets three equal
 /// gains.
-fn finish_tile_linear_rgb(input: &[f32], out: &mut [f32], p: &Params, edges: (bool, bool, bool, bool)) {
+fn finish_tile_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mut [f32], p: &Params, edges: (bool, bool, bool, bool)) {
     let t = p.tile;
     if let Gain::MatchMean { nominal, max_deviation } = p.gain {
         let m = p.overlap / 2;
@@ -583,25 +637,31 @@ fn finish_tile_linear_rgb(input: &[f32], out: &mut [f32], p: &Params, edges: (bo
         }
     }
     if let Some(clip) = p.clip {
-        protect_clipped_linear_rgb(input, out, t, clip);
+        protect_clipped_linear_rgb(input, clip_from, out, t, clip);
     }
 }
 
 /// Where the linear RGB picture is at (or within a pixel of) white, the output becomes the plain pixel values again, so a clipped
 /// area stays exactly as clipped as the camera recorded it (highlight recovery later depends on that).
-fn protect_clipped_linear_rgb(input: &[f32], out: &mut [f32], t: usize, clip: f32) {
+///
+/// The "is it clipped" test uses `clip_from` (the sensor's own values) when given, and the values in `input` otherwise;
+/// the values blended back always come from `input`, which is the model's colour space.
+fn protect_clipped_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mut [f32], t: usize, clip: f32) {
     let plane = t * t;
     let (Some(r), Some(g), Some(b)) = (input.get(0..plane), input.get(plane..2 * plane), input.get(2 * plane..3 * plane)) else {
         return;
     };
-    let mut m: Vec<f32> = (0..plane)
-        .map(|i| {
-            let rv = r.get(i).copied().unwrap_or(0.0);
-            let gv = g.get(i).copied().unwrap_or(0.0);
-            let bv = b.get(i).copied().unwrap_or(0.0);
-            rv.max(gv).max(bv)
-        })
-        .collect();
+    let mut m: Vec<f32> = match clip_from {
+        Some(field) if field.len() == plane => field.to_vec(),
+        _ => (0..plane)
+            .map(|i| {
+                let rv = r.get(i).copied().unwrap_or(0.0);
+                let gv = g.get(i).copied().unwrap_or(0.0);
+                let bv = b.get(i).copied().unwrap_or(0.0);
+                rv.max(gv).max(bv)
+            })
+            .collect(),
+    };
     if !m.iter().any(|&v| v >= clip) {
         return;
     }
@@ -1024,7 +1084,7 @@ mod tests {
             (97, 103, 32, 8), // prime dimensions
         ] {
             let img = rgb_test_image(w, h);
-            let got = denoise_linear_rgb(&img, &model, &params(tile, overlap, Gain::None), &Control::default()).unwrap();
+            let got = denoise_linear_rgb(&img, None, &model, &params(tile, overlap, Gain::None), &Control::default()).unwrap();
             assert_eq!((got.width, got.height), (w, h));
             for (i, (a, b)) in got.data.iter().zip(&img.data).enumerate() {
                 for c in 0..3 {
@@ -1040,14 +1100,14 @@ mod tests {
         let (w, h) = (150usize, 110usize);
         let img = rgb_test_image(w, h);
         let gain = Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 };
-        let got = denoise_linear_rgb(&img, &MockLinearRgb { scale: 1.02e6 }, &params(32, 8, gain), &Control::default()).unwrap();
+        let got = denoise_linear_rgb(&img, None, &MockLinearRgb { scale: 1.02e6 }, &params(32, 8, gain), &Control::default()).unwrap();
         let mean = |im: &Rgb32f, c: usize| im.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / im.data.len() as f64;
         for c in 0..3 {
             let (a, b) = (mean(&got, c), mean(&img, c));
             assert!((a - b).abs() / b < 0.01, "channel {c}: {a} vs {b}");
         }
         // a scale far from nominal is clamped rather than trusted
-        let wild = denoise_linear_rgb(&img, &MockLinearRgb { scale: 3.0e6 }, &params(32, 8, gain), &Control::default()).unwrap();
+        let wild = denoise_linear_rgb(&img, None, &MockLinearRgb { scale: 3.0e6 }, &params(32, 8, gain), &Control::default()).unwrap();
         assert!(mean(&wild, 1) > 2.0 * mean(&img, 1));
     }
 
@@ -1072,11 +1132,45 @@ mod tests {
         let img = Rgb32f { width: w, height: h, data };
         let mut p = params(32, 8, Gain::None);
         p.clip = Some(0.99);
-        let got = denoise_linear_rgb(&img, &DimLinear(MockLinearRgb { scale: 1.0 }), &p, &Control::default()).unwrap();
+        let got = denoise_linear_rgb(&img, None, &DimLinear(MockLinearRgb { scale: 1.0 }), &p, &Control::default()).unwrap();
         let mid = got.data[48 * w + 55];
         assert!(mid.iter().all(|&v| v > 0.995), "clipped plateau preserved: {mid:?}");
         let dark = got.data[48 * w + 10];
         assert!(dark.iter().all(|&v| (v - 0.36).abs() < 0.01), "unclipped area dimmed: {dark:?}");
+    }
+
+    /// A model fed a converted picture (white balance and colour matrix applied) is told which pixels the *sensor*
+    /// clipped: a camera-domain value at white protects the pixel even when its converted channels are below the
+    /// threshold, and a converted value at white is denoised when the sensor did not clip.
+    #[test]
+    fn linear_rgb_clipping_is_decided_in_the_camera_domain() {
+        struct DimLinear(MockLinearRgb);
+        impl TileRunner for DimLinear {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(self.0.run(input)?.into_iter().map(|v| v * 0.9).collect())
+            }
+        }
+        let (w, h) = (96usize, 96usize);
+        // converted values: 0.4 everywhere, white on a plateau the sensor did not clip
+        let data: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let x = i % w;
+                let val = if (50..80).contains(&x) { 1.0 } else { 0.4 };
+                [val, val, val]
+            })
+            .collect();
+        // camera-domain maxima: the left band clipped, the rest far from white
+        let clip_from: Vec<f32> = (0..w * h).map(|i| if (10..40).contains(&(i % w)) { 1.0 } else { 0.2 }).collect();
+        let img = Rgb32f { width: w, height: h, data };
+        let mut p = params(32, 8, Gain::None);
+        p.clip = Some(0.99);
+        let got = denoise_linear_rgb(&img, Some(&clip_from), &DimLinear(MockLinearRgb { scale: 1.0 }), &p, &Control::default()).unwrap();
+        let camera_clipped = got.data[48 * w + 20];
+        assert!(camera_clipped.iter().all(|&v| (v - 0.4).abs() < 0.01), "sensor-clipped pixel kept undenoised: {camera_clipped:?}");
+        let converted_white = got.data[48 * w + 60];
+        assert!(converted_white.iter().all(|&v| (v - 0.9).abs() < 0.01), "unclipped pixel denoised: {converted_white:?}");
+        let plain = got.data[48 * w + 5];
+        assert!(plain.iter().all(|&v| (v - 0.36).abs() < 0.01), "other pixels denoised: {plain:?}");
     }
 
     /// Verifies cancellation and tile progress reporting for linear RGB denoising.
@@ -1085,13 +1179,19 @@ mod tests {
         let (w, h) = (150usize, 110usize);
         let img = rgb_test_image(w, h);
         let cancel = AtomicBool::new(true);
-        let r =
-            denoise_linear_rgb(&img, &MockLinearRgb { scale: 1.0 }, &params(32, 8, Gain::None), &Control { cancel: Some(&cancel), progress: None });
+        let r = denoise_linear_rgb(
+            &img,
+            None,
+            &MockLinearRgb { scale: 1.0 },
+            &params(32, 8, Gain::None),
+            &Control { cancel: Some(&cancel), progress: None },
+        );
         assert!(matches!(r, Err(Error::Cancelled)));
 
         let seen = std::sync::Mutex::new(Vec::new());
         let f = |d: usize, n: usize| seen.lock().unwrap().push((d, n));
-        denoise_linear_rgb(&img, &MockLinearRgb { scale: 1.0 }, &params(32, 8, Gain::None), &Control { cancel: None, progress: Some(&f) }).unwrap();
+        denoise_linear_rgb(&img, None, &MockLinearRgb { scale: 1.0 }, &params(32, 8, Gain::None), &Control { cancel: None, progress: Some(&f) })
+            .unwrap();
         let seen = seen.into_inner().unwrap();
         let total = tile_count_linear_rgb(w, h, 32, 8);
         assert!(total > 1);
@@ -1105,13 +1205,13 @@ mod tests {
         let mock = MockLinearRgb { scale: 1.0 };
         let p = params(32, 8, Gain::None);
         let empty = Rgb32f { width: 0, height: 0, data: vec![] };
-        assert!(matches!(denoise_linear_rgb(&empty, &mock, &p, &Control::default()), Err(Error::Input(_))));
+        assert!(matches!(denoise_linear_rgb(&empty, None, &mock, &p, &Control::default()), Err(Error::Input(_))));
         let bad_size = Rgb32f { width: 4, height: 4, data: vec![[0.0; 3]; 10] };
-        assert!(matches!(denoise_linear_rgb(&bad_size, &mock, &p, &Control::default()), Err(Error::Input(_))));
+        assert!(matches!(denoise_linear_rgb(&bad_size, None, &mock, &p, &Control::default()), Err(Error::Input(_))));
 
         // Non-finite pixel rejected
         let nan_img = Rgb32f { width: 4, height: 4, data: vec![[f32::NAN, 0.0, 0.0]; 16] };
-        assert!(matches!(denoise_linear_rgb(&nan_img, &mock, &p, &Control::default()), Err(Error::Input(_))));
+        assert!(matches!(denoise_linear_rgb(&nan_img, None, &mock, &p, &Control::default()), Err(Error::Input(_))));
 
         // Model returning wrong tile size or non-finite output
         struct Bad(Vec<f32>);
@@ -1122,8 +1222,11 @@ mod tests {
             }
         }
         let good_img = Rgb32f { width: 4, height: 4, data: vec![[0.5; 3]; 16] };
-        assert!(matches!(denoise_linear_rgb(&good_img, &Bad(vec![0.0; 5]), &p, &Control::default()), Err(Error::Model(_))));
-        assert!(matches!(denoise_linear_rgb(&good_img, &Bad(vec![f32::NAN; 3 * 32 * 32]), &p, &Control::default()), Err(Error::Model(_))));
+        assert!(matches!(denoise_linear_rgb(&good_img, None, &Bad(vec![0.0; 5]), &p, &Control::default()), Err(Error::Model(_))));
+        assert!(matches!(denoise_linear_rgb(&good_img, None, &Bad(vec![f32::NAN; 3 * 32 * 32]), &p, &Control::default()), Err(Error::Model(_))));
+        // a clip map must have exactly one finite value per pixel
+        assert!(matches!(denoise_linear_rgb(&good_img, Some(&[0.0; 3]), &mock, &p, &Control::default()), Err(Error::Input(_))));
+        assert!(matches!(denoise_linear_rgb(&good_img, Some(&[f32::NAN; 16]), &mock, &p, &Control::default()), Err(Error::Input(_))));
     }
 
     /// Tests linear RGB grid computation and tile count calculation.
@@ -1154,7 +1257,7 @@ mod tests {
             out[2 * plane + i] = 1.6;
         }
         let p = Params { tile: t, overlap: 4, gain: Gain::MatchMean { nominal: 2.0, max_deviation: 0.5 }, clip: None, parallel: 1 };
-        finish_tile_linear_rgb(&input, &mut out, &p, (true, true, true, true));
+        finish_tile_linear_rgb(&input, None, &mut out, &p, (true, true, true, true));
         for i in 0..plane {
             let (r, g, b) = (out[i], out[plane + i], out[2 * plane + i]);
             assert!((r - 0.2).abs() < 1e-5, "r was {r}, expected ~0.2");
@@ -1183,7 +1286,7 @@ mod tests {
             out[2 * plane + i] = 0.8 * 2.2;
         }
         let p = Params { tile: t, overlap: 4, gain: Gain::MatchMean { nominal: 2.0, max_deviation: 0.5 }, clip: None, parallel: 1 };
-        finish_tile_linear_rgb(&input, &mut out, &p, (true, true, true, true));
+        finish_tile_linear_rgb(&input, None, &mut out, &p, (true, true, true, true));
         for i in 0..plane {
             let (r, g, b) = (out[i], out[plane + i], out[2 * plane + i]);
             assert!((r - 0.2).abs() < 1e-5, "r was {r}, expected ~0.2");
@@ -1196,7 +1299,7 @@ mod tests {
             out[plane + i] = 0.4 * 2.0;
             out[2 * plane + i] = 0.8 * 2.0;
         }
-        finish_tile_linear_rgb(&input, &mut out, &p, (true, true, true, true));
+        finish_tile_linear_rgb(&input, None, &mut out, &p, (true, true, true, true));
         for i in 0..plane {
             let (r, g, b) = (out[i], out[plane + i], out[2 * plane + i]);
             assert!((r - 0.2 * 5.0 / 3.0).abs() < 1e-5, "r was {r}, expected the clamped 1/3");

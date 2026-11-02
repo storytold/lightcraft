@@ -135,8 +135,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>, expected: Option<&str
 }
 
 /// Install the model in `src`. A model that passes its self-test becomes the one in use (`activate`, the default): installing
-/// a model is how someone says they want it. `verified` is for a download whose hash was already checked; `expected` is the
-/// model that download was started for, since one archive can hold several.
+/// a model is how someone says they want it. `verified` is for a download whose hash was already checked (`sha_known`, so a
+/// finished download is not hashed a second time); `expected` is the model that download was started for, since one archive
+/// can hold several.
 struct InstallFile<'a> {
     dir: &'a Path,
     run_on: RunOn,
@@ -145,12 +146,13 @@ struct InstallFile<'a> {
     src: &'a Path,
     acknowledged: bool,
     verified: bool,
+    sha_known: Option<&'a str>,
     expected: Option<&'a str>,
 }
 
 fn install_file(loader: &crate::denoise::Loader, request: InstallFile<'_>) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
-    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified, expected } = request;
-    let ident = identify(src, c, None, expected)?;
+    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified, sha_known, expected } = request;
+    let ident = identify(src, c, sha_known, expected)?;
     let m = ident.manifest.clone();
     manifest::validate(&m).map_err(|e| bad(c, e.to_string()))?;
     if !acknowledged {
@@ -257,7 +259,9 @@ fn activate_install(s: &mut Session, result: &Value, model: Arc<dyn crate::denoi
     Ok(v)
 }
 
-fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, verified: bool) -> Result<Value> {
+/// Install the model at `src` on a worker thread. `sha` is the hash a finished download was checked against: it saves
+/// hashing the file again, and `id` says which of an archive's models was asked for.
+fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, verified: bool, sha: Option<String>) -> Result<Value> {
     const C: &str = "denoise.models.install";
     if s.denoise.install.is_some() {
         return Err(bad(C, "another model is being installed"));
@@ -283,6 +287,7 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
                     src: &src,
                     acknowledged: true,
                     verified,
+                    sha_known: sha.as_deref(),
                     expected: expected.as_deref(),
                 };
                 install_file(&loader, request).map_err(|e| plain(&e))
@@ -308,7 +313,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "the licence has not been accepted: show its terms first"));
     }
     if bool_or(p, "background", false) {
-        return start_install(s, PathBuf::from(path), "local-install".into(), activate, false);
+        return start_install(s, PathBuf::from(path), "local-install".into(), activate, false, None);
     }
     if s.denoise.install.is_some() {
         return Err(bad(C, "another model is being installed"));
@@ -323,6 +328,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
             src: Path::new(path),
             acknowledged,
             verified: false,
+            sha_known: None,
             expected: None,
         },
     )?;
@@ -387,8 +393,8 @@ pub(crate) fn finish_downloads(s: &mut Session) {
         }
     }
     if s.denoise.install.is_none()
-        && let Some((id, path, _sha)) = s.denoise.downloads.finished().into_iter().next()
-        && let Err(e) = start_install(s, path, id.clone(), true, true)
+        && let Some((id, path, sha)) = s.denoise.downloads.finished().into_iter().next()
+        && let Err(e) = start_install(s, path, id.clone(), true, true, Some(sha))
     {
         s.denoise.downloads.set_outcome(&id, State::Failed(plain(&e)));
     }

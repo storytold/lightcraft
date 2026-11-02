@@ -176,6 +176,14 @@ moves each plane by at most 0.2 of a level against the plain render, where one g
 red by 1.7–1.9. Where a model scales the planes equally, the three gains are equal and the
 result is the same as before.
 
+## Highlight clipping
+
+Where the sensor clipped, a tile's output is replaced by its input, so highlight recovery
+sees the camera's clipped values. Clipping is decided in the camera's own domain, before
+the white balance and colour matrix a model's `space` applies: a converted channel at white
+does not mean the sensor clipped, and a camera channel at white can convert to less than
+white. The values blended back are always the model's own input.
+
 ## Photos, previews and exports
 
 Original RAW files stay untouched. A cleaned picture is cached under

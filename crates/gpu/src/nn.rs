@@ -1000,18 +1000,17 @@ mod tests {
             .collect()
     }
 
-    /// The runner, or `None` (with a note) on a machine with no usable GPU.
+    /// The GPU runner for `net`, or `None` when this machine has no usable GPU (a skip). Only a missing adapter
+    /// skips: a planner or pipeline error is a real failure and panics, so a broken kernel cannot hide behind a skip.
     fn gpu(net: &Net, tile: usize) -> Option<NetRunner> {
         // creating the device and building the kernels arms the crash sentinel: take turns with
         // the tests that set its path (`backend::tests`)
         let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        match runner(net, tile) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                lightcraft_testkit::skip!(Gpu, "no GPU runner here ({e})");
-                None
-            }
+        if let Err(e) = adapter() {
+            lightcraft_testkit::skip!(Gpu, "no GPU runner here ({e})");
+            return None;
         }
+        Some(runner(net, tile).unwrap_or_else(|e| panic!("the GPU runner could not be built: {e}")))
     }
 
     fn worst(a: &[f32], b: &[f32]) -> f32 {
