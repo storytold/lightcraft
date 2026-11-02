@@ -60,6 +60,9 @@ fn main() {
         }
     }
     let mut h = Headless::new(LightcraftApp::new(s, Services::default()), [1600.0, 1000.0], 1.0);
+    // the first pass copies the app's saved settings into the session: those asked for are the
+    // app's too, so the run times them (CodeRabbit on #3080)
+    h.app.ui.settings.background_prep = h.app.session.prep.app;
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let n = h.app.session.visible_cloned().len();
     let start_at = n / 10;
