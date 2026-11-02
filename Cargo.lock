@@ -3997,6 +3997,7 @@ dependencies = [
  "lightcraft-preview",
  "lightcraft-raster",
  "lightcraft-slideshow",
+ "lightcraft-sysmem",
  "lightcraft-testkit",
  "log",
  "pollster 1.0.1",

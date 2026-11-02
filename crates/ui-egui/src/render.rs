@@ -351,6 +351,15 @@ thread_local! {
 }
 
 impl Turn {
+    /// Run a whole job (its render and the colour work after it) where this turn's processor
+    /// work goes: a view's on the view pool ([`lightcraft_engine::view_pool`]), the rest where it is.
+    pub(crate) fn scope<R: Send>(self, f: impl FnOnce() -> R + Send) -> R {
+        match self {
+            Turn::View => lightcraft_engine::view_pool::run(f),
+            Turn::Background | Turn::Batch => f(),
+        }
+    }
+
     /// The turn of a job for `slot` at `priority`.
     pub(crate) fn of(slot: Slot, priority: u32) -> Turn {
         match slot {
@@ -362,11 +371,13 @@ impl Turn {
     }
 
     /// Run `f` (a job's render, on its worker thread) in this turn.
-    pub(crate) fn run<R>(self, f: impl FnOnce() -> R) -> R {
+    pub(crate) fn run<R: Send>(self, f: impl FnOnce() -> R + Send) -> R {
         #[cfg(test)]
         LAST_TURN.with(|t| t.set(Some(self)));
         match self {
-            Turn::View => f(),
+            // (on the processor threads of their own: an export filling the shared pool never
+            // holds a view's stages back, `lightcraft_engine::view_pool`)
+            Turn::View => lightcraft_engine::view_pool::run(f),
             Turn::Background => lightcraft_engine::memory::in_background(f),
             Turn::Batch => lightcraft_engine::memory::in_background(|| lightcraft_engine::gpu::as_batch(f)),
         }
@@ -743,8 +754,10 @@ impl Renderer {
             key,
             priority,
             Box::new(move || {
-                let look = Some((geometry_look(&job.settings), job.request.apply_crop));
-                Finished { look, ..Self::run_for(|| turn.run(|| job.run()), &display) }
+                turn.scope(move || {
+                    let look = Some((geometry_look(&job.settings), job.request.apply_crop));
+                    Finished { look, ..Self::run_for(|| turn.run(|| job.run()), &display) }
+                })
             }),
         );
     }
@@ -805,7 +818,7 @@ impl Renderer {
         let key = job.key;
         let display = self.display.clone();
         let turn = Turn::of(slot, priority);
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| turn.run(|| job.run()), &display)));
+        self.pool.submit(slot, key, priority, Box::new(move || turn.scope(move || Self::run_for(|| turn.run(|| job.run()), &display))));
     }
 
     /// Render a slideshow title screen into `slot` (once per screen key, like [`Self::request`]):

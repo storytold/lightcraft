@@ -82,6 +82,7 @@ pub mod smart;
 pub mod sync;
 pub mod text;
 mod view;
+pub mod view_pool;
 pub mod walk;
 
 use std::sync::Arc;

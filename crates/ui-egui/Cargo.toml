@@ -39,6 +39,8 @@ lightcraft-engine = { workspace = true, features = ["denoise"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 lightcraft-denoise = { workspace = true, features = ["runtime"] }
 lightcraft-codecs = { workspace = true }
+# the export_loupe example installs the RAM probe as the apps do
+lightcraft-sysmem = { workspace = true }
 lightcraft-faces = { workspace = true }
 lightcraft-merge = { workspace = true }
 # a device for the GPU-resident view test (`render.rs`)
