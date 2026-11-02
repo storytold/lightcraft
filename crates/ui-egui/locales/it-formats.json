@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  "Remove {count} faces from {name}": "Rimuovi {count} volti da {name}",
+  "Grouping similar faces… {done} of {total}": "Raggruppa automaticamente i volti senza nome… {done} di {total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "Tutti i gruppi: {groups} · {unindexed} Volti · In attesa di riconoscimento",
+  "Scanning: {count} photos remaining": "Scansione: {count} Foto · rimanenti",
+  "{count} faces selected": "{count} Volti · Selezionati",
+  "Assign {n} faces": "Assegna: {n} Volti",
+  "Assign all {n} selected faces to {name}": "Assegna: {n} Volti · Selezionati → {name}",
+  "{count} faces": "{count} Volti",
+  "{selected} of {count} selected": "{selected} di {count} · Selezionati",
+  "Remove from {name}": "Rimuovi da {name}"
 }

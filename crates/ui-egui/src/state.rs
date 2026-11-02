@@ -132,6 +132,8 @@ pub struct UiState {
     /// The person whose page the People view shows (their faces and the faces that look like them); `None`: everyone.
     #[serde(skip)]
     pub person_page: Option<String>,
+    #[serde(skip)]
+    pub person_selection: crate::panels::person::Selection,
     /// The person page a photo in the loupe was opened from (`None`: the People view's unnamed faces), and that photo:
     /// Escape goes back there (not to the grid).
     #[serde(skip)]
@@ -156,6 +158,8 @@ pub struct UiState {
     pub unnamed_anchor: Option<usize>,
     #[serde(skip)]
     pub unnamed_focus: bool,
+    #[serde(skip)]
+    pub unnamed_groups: Option<crate::panels::face_groups::View>,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
     pub hidden_locations: Vec<String>,
     /// Copies opened in an external editor this session (reloaded when the window is focused
@@ -423,6 +427,7 @@ impl Default for UiState {
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,
+            person_selection: Default::default(),
             person_from: None,
             last_person: None,
             cull_burst: None,
@@ -431,6 +436,7 @@ impl Default for UiState {
             unnamed_name: String::new(),
             unnamed_anchor: None,
             unnamed_focus: false,
+            unnamed_groups: None,
             hidden_locations: Vec::new(),
             dragging_control: None,
             alt_held: false,

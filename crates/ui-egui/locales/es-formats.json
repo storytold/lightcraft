@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "No se pudo restablecer la disposición de paneles: {error}",
   "Panel move was not applied: {error}": "No se aplicó el movimiento del panel: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
+  "Remove {count} faces from {name}": "Quitar {count} caras de {name}",
+  "Grouping similar faces… {done} of {total}": "Agrupar automáticamente las caras sin nombre… {done} de {total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "Todos los grupos: {groups} · {unindexed} Caras · Pendientes de reconocimiento",
+  "Scanning: {count} photos remaining": "Analizando: {count} Fotos · restantes",
+  "{count} faces selected": "{count} Caras · Seleccionada",
+  "Assign {n} faces": "Asignar: {n} Caras",
+  "Assign all {n} selected faces to {name}": "Asignar: {n} Caras · Seleccionada → {name}",
+  "{count} faces": "{count} Caras",
+  "{selected} of {count} selected": "{selected} de {count} · Seleccionada",
+  "Remove from {name}": "Quitar de {name}"
 }

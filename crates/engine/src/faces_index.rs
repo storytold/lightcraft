@@ -557,6 +557,7 @@ mod tests {
 /// What the recognition commands keep between calls: the loaded model and the embeddings made with it.
 #[derive(Default)]
 pub(crate) struct FacesState {
+    pub groups: Option<crate::face_groups::Grouping>,
     /// `<model id>@<sha256>` and the loaded model.
     pub embedder: Option<(String, Arc<lightcraft_faces::runtime::Embedder>)>,
     pub index: Index,
@@ -590,6 +591,7 @@ impl FacesState {
     /// Another library is being opened: what was learned about the old one is saved, and nothing of it is kept (photo
     /// ids are only unique within a library). The loaded model stays; the index is reloaded for the new library.
     pub fn library_changed(&mut self) {
+        self.groups = None;
         self.index.reset("", 0, None);
         self.scanned.reset(None);
         self.scan_failed.clear();
@@ -606,6 +608,7 @@ impl FacesState {
     /// Photo `id`'s file was replaced by other content: the faces made from the old pixels are dropped and the photo is
     /// searched again (issue #1524). What a worker is still making from the old file is dropped when it comes back.
     pub fn content_replaced(&mut self, id: lightcraft_catalog::PhotoId) {
+        self.groups = None;
         self.index.forget_photo(id.0);
         self.scanned.remove(id.0);
         self.scan_failed.remove(&id.0);

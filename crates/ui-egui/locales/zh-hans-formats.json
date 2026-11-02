@@ -317,5 +317,15 @@
   "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
-  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "Remove {count} faces from {name}": "从{name}中移除{count}张面孔",
+  "Grouping similar faces… {done} of {total}": "自动分组未命名面孔… {done}／{total}",
+  "{groups} groups · {unindexed} faces awaiting recognition": "所有组: {groups} · {unindexed} 人脸 · 等待识别",
+  "Scanning: {count} photos remaining": "扫描中: {count} 照片 · 剩余",
+  "{count} faces selected": "{count} 人脸 · 已选择",
+  "Assign {n} faces": "分配: {n} 人脸",
+  "Assign all {n} selected faces to {name}": "分配: {n} 人脸 · 已选择 → {name}",
+  "{count} faces": "{count} 人脸",
+  "{selected} of {count} selected": "{selected}／{count} · 已选择",
+  "Remove from {name}": "从{name}中移除"
 }

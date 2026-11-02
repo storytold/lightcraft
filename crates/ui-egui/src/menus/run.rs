@@ -353,6 +353,7 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"show": app.ui.face_boxes}))
         }
         "view.people" => {
+            app.ui.unnamed_groups = None;
             // Everyone; the page just left stays one click away (the chip next to the title)
             if let Some(name) = app.ui.person_page.take() {
                 app.ui.last_person = Some(name);
@@ -366,10 +367,18 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {
                 return Some(Err("view.person: missing `name`".into()));
             };
+            app.ui.unnamed_groups = None;
             app.ui.view = ViewMode::People;
             app.ui.person_from = None;
             app.ui.person_page = Some(name.to_string());
             Ok(json!({"person": name}))
+        }
+        "view.unnamedGroups" => {
+            app.ui.view = ViewMode::People;
+            app.ui.person_page = None;
+            app.ui.unnamed_groups = Some(crate::panels::face_groups::View::default());
+            app.ui.unnamed_selected.clear();
+            Ok(json!({}))
         }
         "view.survey" => {
             app.ui.view = ViewMode::Survey;
@@ -1508,6 +1517,10 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
     } else if app.ui.right == RightPanel::Crop && app.ui.view == ViewMode::Detail {
         // Esc leaves the crop tool (the crop stays), as C does; the next Esc goes back
         panel(app, ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
+    } else if app.ui.view == ViewMode::People && app.ui.unnamed_groups.is_some() {
+        if !app.ui.unnamed_groups.as_mut().is_some_and(|view| view.back()) {
+            app.ui.unnamed_groups = None;
+        }
     } else if app.ui.view == ViewMode::People && app.ui.person_page.is_some() {
         app.ui.person_page = None;
     } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey | ViewMode::Reference) {
