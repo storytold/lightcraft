@@ -300,6 +300,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     }
 }
 
+/// Finish the prepared pipeline stages into an 8-bit RGBA image in `space` (or `display`).
 pub(crate) fn finish(
     p: &Prepared,
     s: &DevelopSettings,
@@ -317,11 +318,14 @@ pub(crate) fn finish(
         fp.for_display(d, proof);
     }
     let trc = fp.out_trc;
-    let data = finish_with(p, &fp, false, |e| match trc {
-        OutputTrc::Srgb => [enc(e[0]), enc(e[1]), enc(e[2]), 255],
-        t => {
-            let x = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0)))));
-            [x[0], x[1], x[2], 255]
+    let data = finish_with(p, &fp, false, |x, y, e| {
+        let d = bayer_dither_offset(x, y);
+        match trc {
+            OutputTrc::Srgb => [enc(e[0], d), enc(e[1], d), enc(e[2], d), 255],
+            t => {
+                let c = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0))), d));
+                [c[0], c[1], c[2], 255]
+            }
         }
     });
     Rgba8 { width: w, height: h, data }
@@ -345,18 +349,18 @@ pub(crate) fn finish_deep(
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
         OutputDepth::F32Hdr => {
             // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
             let peak = fp.peak;
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
+            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
             DeepSamples::F32(v.into_flattened())
         }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            let v = finish_with(p, &fp, true, |e| match trc {
+            let v = finish_with(p, &fp, true, |_x, _y, e| match trc {
                 OutputTrc::Srgb => e.map(q),
                 t => e.map(|v| q(t.encode(srgb_to_linear(v.clamp(0.0, 1.0))))),
             });
@@ -373,7 +377,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     p: &Prepared,
     fp: &FinishParams,
     exact: bool,
-    store: impl Fn([f32; 3]) -> T + Sync + Send,
+    store: impl Fn(usize, usize, [f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
@@ -382,6 +386,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
+    let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
     // the vignette belongs to the whole output frame, not to the window being drawn
     let aspect = vw / vh;
 
@@ -549,7 +554,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 None => e,
             };
-            *px = store(warn.unwrap_or(e));
+            *px = store(vx_u + x, vy_u + y, warn.unwrap_or(e));
         }
     });
     out
@@ -777,10 +782,35 @@ fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
     lut[i] + (lut[i + 1] - lut[i]) * t
 }
 
+#[rustfmt::skip]
+const BAYER_8X8: [u8; 64] = [
+     0, 32,  8, 40,  2, 34, 10, 42,
+    48, 16, 56, 24, 50, 18, 58, 26,
+    12, 44,  4, 36, 14, 46,  6, 38,
+    60, 28, 52, 20, 62, 30, 54, 22,
+     3, 35, 11, 43,  1, 33,  9, 41,
+    51, 19, 59, 27, 49, 17, 57, 25,
+    15, 47,  7, 39, 13, 45,  5, 37,
+    63, 31, 55, 23, 61, 29, 53, 21,
+];
+
+/// Returns the ordered Bayer 8×8 dither threshold offset in `0..1` for pixel `(x, y)`.
 #[inline]
-fn enc(v: f32) -> u8 {
-    // `v` is already sRGB-encoded; round to 8 bits.
-    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+fn bayer_dither_offset(x: usize, y: usize) -> f32 {
+    let idx = (y & 7) * 8 + (x & 7);
+    (BAYER_8X8[idx] as f32 + 0.5) / 64.0
+}
+
+/// Quantizes display-curve-encoded value `v` (0..1) to 8-bit integer with 8×8 ordered Bayer dithering.
+#[inline]
+fn enc(v: f32, dither: f32) -> u8 {
+    let y = v.clamp(0.0, 1.0) * 255.0;
+    // Guard against floating point rounding error (e.g. sRGB <-> Rec.2020 matrix conversion)
+    // where numerical white (1.0) evaluates to ~254.95.
+    if y >= 254.9 {
+        return 255;
+    }
+    (y + dither).clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]
@@ -821,5 +851,63 @@ mod tests {
         assert!(worst < 2e-5, "{worst}");
         assert_eq!(encode_srgb(lut, -1.0), 0.0);
         assert!((encode_srgb(lut, 2.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// Verifies 8x8 Bayer dithering preserves endpoints, exact 8-bit quantization steps, and fractional levels.
+    #[test]
+    fn bayer_dithering_preserves_extremes_and_dithers_smoothly() {
+        for y in 0..8 {
+            for x in 0..8 {
+                let d = bayer_dither_offset(x, y);
+                // Zero is strictly 0 across all dither offsets
+                assert_eq!(enc(0.0, d), 0);
+                // One is strictly 255 across all dither offsets
+                assert_eq!(enc(1.0, d), 255);
+                // Exact 8-bit quantization steps have zero spatial noise
+                for k in 0..=255 {
+                    assert_eq!(enc(k as f32 / 255.0, d), k);
+                }
+            }
+        }
+
+        // Fractional level: 128.5 / 255.0 should dither equally between 128 and 129
+        let v = 128.5 / 255.0;
+        let mut sum = 0u32;
+        let mut count_128 = 0;
+        let mut count_129 = 0;
+        for y in 0..8 {
+            for x in 0..8 {
+                let val = enc(v, bayer_dither_offset(x, y));
+                sum += val as u32;
+                if val == 128 {
+                    count_128 += 1;
+                } else if val == 129 {
+                    count_129 += 1;
+                }
+            }
+        }
+        assert_eq!(count_128, 32);
+        assert_eq!(count_129, 32);
+        assert_eq!(sum, 32 * 128 + 32 * 129);
+
+        // Fractional highlight level: 254.5 / 255.0 should dither equally between 254 and 255
+        let v = 254.5 / 255.0;
+        let mut sum_hl = 0u32;
+        let mut count_254 = 0;
+        let mut count_255 = 0;
+        for y in 0..8 {
+            for x in 0..8 {
+                let val = enc(v, bayer_dither_offset(x, y));
+                sum_hl += val as u32;
+                if val == 254 {
+                    count_254 += 1;
+                } else if val == 255 {
+                    count_255 += 1;
+                }
+            }
+        }
+        assert_eq!(count_254, 32);
+        assert_eq!(count_255, 32);
+        assert_eq!(sum_hl, 32 * 254 + 32 * 255);
     }
 }
