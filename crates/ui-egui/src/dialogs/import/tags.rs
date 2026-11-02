@@ -60,7 +60,7 @@ pub(crate) fn insert_at_cursor(ctx: &egui::Context, edit_id: egui::Id, text: &mu
 pub(crate) fn tag_help(ui: &mut egui::Ui, key: &str, text: &mut String, edit_id: egui::Id) {
     use lightcraft_engine::rename::{DATE_DIRECTIVES, TEMPLATE_NOTES, TOKENS, token_example};
     let t = Tokens::get(ui.ctx());
-    egui::Frame::new().fill(t.inset).corner_radius(4.0).inner_margin(6.0).show(ui, |ui| {
+    egui::Frame::new().fill(t.inset).corner_radius(crate::theme::RADIUS).inner_margin(6.0).show(ui, |ui| {
         ui.label(
             egui::RichText::new(crate::i18n::tr("Click a tag to insert it. Examples are for IMG_0042.CR3 taken 14 Jan 2026, 05:58:48."))
                 .color(t.text_dim)

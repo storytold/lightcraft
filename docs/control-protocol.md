@@ -272,7 +272,7 @@ use control ids and ranges from `develop.controls` rather than translated labels
 | Read selection and active photo | `library.state {}` | `selection: {ids, active}`; `active` is `null` when no photo is active |
 | Read photo identity and settings together | `photo.inspect {}` | Active photo's `id`, `develop`, rating, flag and history in one reply |
 | Read a specific photo without selecting it | `photo.inspect {id}` / `develop.get {id}` | Photo details / full develop JSON; omitting `id` reads the active photo |
-| Read global slider metadata and values | `develop.controls {section?}` | Array of `{id, label, section, min, max, default, step, decimals, track, value}` for the active photo |
+| Read global slider metadata and values | `develop.controls {section?}` | Array of `{id, label, section, min, max, default, step, decimals, track, shade, value}` (`shade`: the grey ramp in the track: `Plain`, `Ramp`, `ReverseRamp`, `CentreLight` or `Tinted`) for the active photo |
 | Set absolute slider values | `develop.set {values: {"light.exposure": 0.7}}` | Undoable edit of the active photo; also accepts `{control, value}` |
 | Move a relative control | `develop.adjust {control: "light.exposure", delta: 0.1}` | Adds to the current value, clamped to the control's range |
 | Change photo | `library.select {ids: [photoId]}` / `library.next {}` / `library.previous {}` | Changes the active photo; next/previous follow the current view's order |

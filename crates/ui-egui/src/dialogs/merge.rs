@@ -531,6 +531,7 @@ const BOUNDARY_WARP: lightcraft_develop::ControlSpec = lightcraft_develop::Contr
     step: 1.0,
     decimals: 0,
     track: lightcraft_develop::Track::Plain,
+    shade: lightcraft_develop::Shade::Plain,
 };
 const BRACKET: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec {
     id: "merge.bracket",
@@ -542,6 +543,7 @@ const BRACKET: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec
     step: 1.0,
     decimals: 0,
     track: lightcraft_develop::Track::Plain,
+    shade: lightcraft_develop::Shade::Plain,
 };
 
 fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, v: &mut f64) -> bool {

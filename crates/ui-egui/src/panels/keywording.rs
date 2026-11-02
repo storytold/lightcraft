@@ -450,7 +450,7 @@ pub(crate) fn offers_below(ui: &egui::Ui, below: egui::Rect, offers: &Offers, at
                 let resp = ui.interact(r, id, Sense::click()).union(resp);
                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, lit, said));
                 if lit || resp.hovered() {
-                    ui.painter().rect_filled(r, 4.0, if lit { t.pressed } else { t.hover });
+                    ui.painter().rect_filled(r, crate::theme::RADIUS, if lit { t.pressed } else { t.hover });
                 }
                 let font = t.font(13.0);
                 let measure = |s: &str, f: &egui::FontId| ui.painter().layout_no_wrap(s.to_string(), f.clone(), t.text).size().x;

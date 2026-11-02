@@ -77,6 +77,24 @@ pub enum Track {
     Rainbow,
 }
 
+/// The brightness ramp drawn inside a grey track, telling which way the slider darkens or
+/// lightens the photo (as Lightroom shades its tracks). Colour tracks ([`Track`] gradients, hue,
+/// temperature…) keep their colours and ignore it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum Shade {
+    /// A flat track.
+    #[default]
+    Plain,
+    /// Dark at the left, light at the right (Exposure, Shadows, Noise Reduction…).
+    Ramp,
+    /// Light at the left, dark at the right (Contrast, Clarity, Sharpening Masking).
+    ReverseRamp,
+    /// Lightest at the centre, darker toward both ends (Vignette Amount, Roundness).
+    CentreLight,
+    /// Dark grey to red (Sharpening Amount).
+    Tinted,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ControlSpec {
     pub id: &'static str,
@@ -89,6 +107,8 @@ pub struct ControlSpec {
     /// Decimal places shown.
     pub decimals: u8,
     pub track: Track,
+    /// The grey ramp inside a grey track.
+    pub shade: Shade,
 }
 
 impl ControlSpec {
@@ -142,11 +162,21 @@ const KELVIN_CENTRE: f64 = 7000.0;
 /// just past the centre (76 K against 100 K per 1 % of the track), so the thumb moves evenly across it.
 const KELVIN_KNEE: f64 = 1000.0;
 
+/// A row's [`Shade`]: the one named after `=>`, else plain.
+macro_rules! shade {
+    () => {
+        Shade::Plain
+    };
+    ($s:ident) => {
+        Shade::$s
+    };
+}
+
 macro_rules! controls {
-    ($( $id:literal => $($field:ident).+ , $label:literal, $section:ident, $min:expr, $max:expr, $def:expr, $step:expr, $dec:expr, $track:expr; )*) => {
+    ($( $id:literal => $($field:ident).+ , $label:literal, $section:ident, $min:expr, $max:expr, $def:expr, $step:expr, $dec:expr, $track:expr $(=> $shade:ident)?; )*) => {
         /// All numeric develop controls, in panel order.
         pub static CONTROLS: &[ControlSpec] = &[
-            $( ControlSpec { id: $id, label: $label, section: Section::$section, min: $min as f64, max: $max as f64, default: $def as f64, step: $step as f64, decimals: $dec, track: $track }, )*
+            $( ControlSpec { id: $id, label: $label, section: Section::$section, min: $min as f64, max: $max as f64, default: $def as f64, step: $step as f64, decimals: $dec, track: $track, shade: shade!($($shade)?) }, )*
         ];
 
         /// Read a control value by id.
@@ -175,12 +205,12 @@ controls! {
     "profile.amount" => profile.amount, "Amount", Profile, 0, 200, 100, 1, 0, Plain;
     "wb.temp" => wb.temp, "Temp", Color, 2000, 50000, 6500, 50, 0, Temp;
     "wb.tint" => wb.tint, "Tint", Color, -150, 150, 0, 1, 0, Tint;
-    "light.exposure" => light.exposure, "Exposure", Light, -5, 5, 0, 0.01, 2, Centered;
-    "light.contrast" => light.contrast, "Contrast", Light, -100, 100, 0, 1, 0, Centered;
-    "light.highlights" => light.highlights, "Highlights", Light, -100, 100, 0, 1, 0, Centered;
-    "light.shadows" => light.shadows, "Shadows", Light, -100, 100, 0, 1, 0, Centered;
-    "light.whites" => light.whites, "Whites", Light, -100, 100, 0, 1, 0, Centered;
-    "light.blacks" => light.blacks, "Blacks", Light, -100, 100, 0, 1, 0, Centered;
+    "light.exposure" => light.exposure, "Exposure", Light, -5, 5, 0, 0.01, 2, Centered => Ramp;
+    "light.contrast" => light.contrast, "Contrast", Light, -100, 100, 0, 1, 0, Centered => ReverseRamp;
+    "light.highlights" => light.highlights, "Highlights", Light, -100, 100, 0, 1, 0, Centered => Ramp;
+    "light.shadows" => light.shadows, "Shadows", Light, -100, 100, 0, 1, 0, Centered => Ramp;
+    "light.whites" => light.whites, "Whites", Light, -100, 100, 0, 1, 0, Centered => Ramp;
+    "light.blacks" => light.blacks, "Blacks", Light, -100, 100, 0, 1, 0, Centered => Ramp;
     "hdr.maxEv" => hdr.max_ev, "HDR Headroom", Light, 0, 5, 3, 0.1, 1, Plain;
     "hdr.sdrBrightness" => hdr.sdr_brightness, "SDR Brightness", Light, -100, 100, 0, 1, 0, Centered;
     "hdr.sdrContrast" => hdr.sdr_contrast, "SDR Contrast", Light, -100, 100, 0, 1, 0, Centered;
@@ -245,27 +275,27 @@ controls! {
     "grading.blending" => grading.blending, "Blending", Grading, 0, 100, 50, 1, 0, Plain;
     "grading.balance" => grading.balance, "Balance", Grading, -100, 100, 0, 1, 0, Centered;
     "effects.texture" => effects.texture, "Texture", Effects, -100, 100, 0, 1, 0, Centered;
-    "effects.clarity" => effects.clarity, "Clarity", Effects, -100, 100, 0, 1, 0, Centered;
+    "effects.clarity" => effects.clarity, "Clarity", Effects, -100, 100, 0, 1, 0, Centered => ReverseRamp;
     "effects.dehaze" => effects.dehaze, "Dehaze", Effects, -100, 100, 0, 1, 0, Centered;
-    "vignette.amount" => vignette.amount, "Vignette", Vignette, -100, 100, 0, 1, 0, Gradient { from: "#101010", to: "#f0f0f0" };
-    "vignette.midpoint" => vignette.midpoint, "Midpoint", Vignette, 0, 100, 50, 1, 0, Plain;
-    "vignette.roundness" => vignette.roundness, "Roundness", Vignette, -100, 100, 0, 1, 0, Centered;
-    "vignette.feather" => vignette.feather, "Feather", Vignette, 0, 100, 50, 1, 0, Plain;
-    "vignette.highlights" => vignette.highlights, "Highlights", Vignette, 0, 100, 0, 1, 0, Plain;
-    "grain.amount" => grain.amount, "Grain", Grain, 0, 100, 0, 1, 0, Plain;
+    "vignette.amount" => vignette.amount, "Vignette", Vignette, -100, 100, 0, 1, 0, Centered => CentreLight;
+    "vignette.midpoint" => vignette.midpoint, "Midpoint", Vignette, 0, 100, 50, 1, 0, Plain => Ramp;
+    "vignette.roundness" => vignette.roundness, "Roundness", Vignette, -100, 100, 0, 1, 0, Centered => CentreLight;
+    "vignette.feather" => vignette.feather, "Feather", Vignette, 0, 100, 50, 1, 0, Plain => Ramp;
+    "vignette.highlights" => vignette.highlights, "Highlights", Vignette, 0, 100, 0, 1, 0, Plain => Ramp;
+    "grain.amount" => grain.amount, "Grain", Grain, 0, 100, 0, 1, 0, Plain => Ramp;
     "grain.size" => grain.size, "Size", Grain, 0, 100, 25, 1, 0, Plain;
     "grain.roughness" => grain.roughness, "Roughness", Grain, 0, 100, 50, 1, 0, Plain;
     "enhance.denoise" => enhance.denoise, "Amount", Detail, 0, 100, 0, 1, 0, Plain;
-    "detail.sharpenAmount" => detail.sharpen_amount, "Sharpening", Detail, 0, 150, 0, 1, 0, Plain;
-    "detail.sharpenRadius" => detail.sharpen_radius, "Radius", Detail, 0.5, 3, 1, 0.1, 1, Plain;
-    "detail.sharpenDetail" => detail.sharpen_detail, "Detail", Detail, 0, 100, 25, 1, 0, Plain;
-    "detail.sharpenMasking" => detail.sharpen_masking, "Masking", Detail, 0, 100, 0, 1, 0, Plain;
-    "detail.nrLuminance" => detail.nr_luminance, "Noise Reduction", Detail, 0, 100, 0, 1, 0, Plain;
-    "detail.nrDetail" => detail.nr_detail, "Detail", Detail, 0, 100, 50, 1, 0, Plain;
-    "detail.nrContrast" => detail.nr_contrast, "Contrast", Detail, 0, 100, 0, 1, 0, Plain;
-    "detail.nrColor" => detail.nr_color, "Color Noise Reduction", Detail, 0, 100, 0, 1, 0, Plain;
-    "detail.nrColorDetail" => detail.nr_color_detail, "Detail", Detail, 0, 100, 50, 1, 0, Plain;
-    "detail.nrColorSmoothness" => detail.nr_color_smoothness, "Smoothness", Detail, 0, 100, 50, 1, 0, Plain;
+    "detail.sharpenAmount" => detail.sharpen_amount, "Sharpening", Detail, 0, 150, 0, 1, 0, Plain => Tinted;
+    "detail.sharpenRadius" => detail.sharpen_radius, "Radius", Detail, 0.5, 3, 1, 0.1, 1, Plain => Ramp;
+    "detail.sharpenDetail" => detail.sharpen_detail, "Detail", Detail, 0, 100, 25, 1, 0, Plain => Ramp;
+    "detail.sharpenMasking" => detail.sharpen_masking, "Masking", Detail, 0, 100, 0, 1, 0, Plain => ReverseRamp;
+    "detail.nrLuminance" => detail.nr_luminance, "Noise Reduction", Detail, 0, 100, 0, 1, 0, Plain => Ramp;
+    "detail.nrDetail" => detail.nr_detail, "Detail", Detail, 0, 100, 50, 1, 0, Plain => Ramp;
+    "detail.nrContrast" => detail.nr_contrast, "Contrast", Detail, 0, 100, 0, 1, 0, Plain => Ramp;
+    "detail.nrColor" => detail.nr_color, "Color Noise Reduction", Detail, 0, 100, 0, 1, 0, Plain => Ramp;
+    "detail.nrColorDetail" => detail.nr_color_detail, "Detail", Detail, 0, 100, 50, 1, 0, Plain => Ramp;
+    "detail.nrColorSmoothness" => detail.nr_color_smoothness, "Smoothness", Detail, 0, 100, 50, 1, 0, Plain => Ramp;
     "optics.distortion" => optics.distortion, "Distortion", Optics, -100, 100, 0, 1, 0, Centered;
     "optics.vignetting" => optics.vignetting, "Vignetting", Optics, -100, 100, 0, 1, 0, Centered;
     "optics.vignettingMidpoint" => optics.vignetting_midpoint, "Midpoint", Optics, 0, 100, 50, 1, 0, Plain;
@@ -308,6 +338,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Rainbow,
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.satShift",
@@ -319,6 +350,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Gradient { from: "#7a7a7a", to: "#e04a3a" },
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.lumShift",
@@ -330,6 +362,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Gradient { from: "#202020", to: "#f0f0f0" },
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.variance",
@@ -341,6 +374,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Centered,
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.range",
@@ -352,6 +386,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Plain,
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.hueRange",
@@ -363,6 +398,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Rainbow,
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.satRange",
@@ -374,6 +410,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Gradient { from: "#7a7a7a", to: "#e04a3a" },
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "pointColor.lumRange",
@@ -385,6 +422,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Gradient { from: "#202020", to: "#f0f0f0" },
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "redEye.pupilSize",
@@ -396,6 +434,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Plain,
+        shade: Shade::Plain,
     },
     ControlSpec {
         id: "redEye.darken",
@@ -407,6 +446,7 @@ pub static INDEXED: &[ControlSpec] = &[
         step: 1.0,
         decimals: 0,
         track: Gradient { from: "#d0d0d0", to: "#101010" },
+        shade: Shade::Plain,
     },
 ];
 
@@ -616,5 +656,48 @@ mod tests {
         // a Kelvin range that doesn't contain the centre falls back to linear rather than dividing by zero
         let narrow = ControlSpec { min: 7000.0, max: 9000.0, ..*temp };
         assert_eq!((narrow.position(8000.0), narrow.value_at(0.5)), (0.5, 8000.0));
+    }
+
+    /// FredApps on #3164: which way each grey track is shaded is data, reviewed here once. Every
+    /// control not listed is a flat track, and a colour track (white balance, mixer bands,
+    /// gradients) is never shaded: its colours already say which way it goes.
+    #[test]
+    fn every_control_has_the_shade_this_table_gives_it() {
+        use Shade::{CentreLight, Ramp, ReverseRamp, Tinted};
+        let table: &[(&str, Shade)] = &[
+            ("light.exposure", Ramp),
+            ("light.contrast", ReverseRamp),
+            ("light.highlights", Ramp),
+            ("light.shadows", Ramp),
+            ("light.whites", Ramp),
+            ("light.blacks", Ramp),
+            ("effects.clarity", ReverseRamp),
+            ("vignette.amount", CentreLight),
+            ("vignette.midpoint", Ramp),
+            ("vignette.roundness", CentreLight),
+            ("vignette.feather", Ramp),
+            ("vignette.highlights", Ramp),
+            ("grain.amount", Ramp),
+            ("detail.sharpenAmount", Tinted),
+            ("detail.sharpenRadius", Ramp),
+            ("detail.sharpenDetail", Ramp),
+            ("detail.sharpenMasking", ReverseRamp),
+            ("detail.nrLuminance", Ramp),
+            ("detail.nrDetail", Ramp),
+            ("detail.nrContrast", Ramp),
+            ("detail.nrColor", Ramp),
+            ("detail.nrColorDetail", Ramp),
+            ("detail.nrColorSmoothness", Ramp),
+        ];
+        for (id, _) in table {
+            assert!(find(id).is_some(), "{id}: listed but not a control");
+        }
+        for c in CONTROLS.iter().chain(INDEXED) {
+            let want = table.iter().find(|(id, _)| *id == c.id).map_or(Shade::Plain, |(_, s)| *s);
+            assert_eq!(c.shade, want, "{}: shade", c.id);
+            if !matches!(c.track, Track::Plain | Track::Centered) {
+                assert_eq!(c.shade, Shade::Plain, "{}: a colour track is not shaded", c.id);
+            }
+        }
     }
 }

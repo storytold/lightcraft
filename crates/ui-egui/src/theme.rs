@@ -34,6 +34,12 @@ pub fn label_toast_colors(label: lightcraft_catalog::ColorLabel) -> (Color32, Co
     (Color32::WHITE.lerp_to_gamma(label_color(label), 0.3), Color32::from_rgb(36, 24, 24))
 }
 
+/// Corner radius (points) of buttons, segmented controls, fields, hover and selection fills: kept
+/// small so the panels read calm (half of the earlier 4).
+pub const RADIUS: u8 = 2;
+/// Corner radius of panels, cards, windows and menus (half of the earlier 6).
+pub const RADIUS_PANEL: u8 = 3;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
     /// Top bar, side panels, bottom bar, tool strip.
@@ -57,6 +63,9 @@ pub struct Tokens {
     /// more against the grid.
     pub ring_selected: Color32,
     pub divider: Color32,
+    /// The band behind a major section's header (Light, Color, Effects…): the strongest row in a
+    /// panel, set apart from the chrome so a section's start reads at a glance.
+    pub section_band: Color32,
     pub inset: Color32,
     pub field: Color32,
     pub field_border: Color32,
@@ -142,6 +151,7 @@ impl Default for Tokens {
             ring_inner: Color32::from_rgb(0x00, 0x00, 0x00),
             ring_selected: Color32::from_rgb(0xc0, 0xc0, 0xc0),
             divider: Color32::from_rgb(0x1c, 0x1c, 0x1c),
+            section_band: Color32::from_rgb(0x3b, 0x3b, 0x3b),
             inset: Color32::from_rgb(0x23, 0x23, 0x23),
             field: Color32::from_rgb(0x22, 0x22, 0x22),
             field_border: Color32::from_rgb(0x3c, 0x3c, 0x3c),
@@ -168,8 +178,8 @@ impl Default for Tokens {
             bottom_bar_h: 48.0,
             panel_w: 270.0,
             strip_w: 48.0,
-            slider_row_h: 45.0,
-            section_h: 57.0,
+            slider_row_h: 20.0,
+            section_h: 26.0,
             film_h: 142.0,
         }
     }
@@ -190,6 +200,7 @@ impl Tokens {
                 cell_selected: rgb(0x262626),
                 skeleton: rgb(0x1d1d1d),
                 divider: rgb(0x0e0e0e),
+                section_band: rgb(0x2c2c2c),
                 inset: rgb(0x181818),
                 field: rgb(0x161616),
                 field_border: rgb(0x333333),
@@ -211,6 +222,7 @@ impl Tokens {
                 cell_selected: rgb(0xb4b4b4),
                 skeleton: rgb(0xa6a6a6),
                 divider: rgb(0xc4c4c4),
+                section_band: rgb(0xd0d0d0),
                 inset: rgb(0xdcdcdc),
                 field: rgb(0xf6f6f6),
                 field_border: rgb(0xb8b8b8),
@@ -245,6 +257,7 @@ impl Tokens {
                 cell_selected: rgb(0xd2d2d2),
                 skeleton: rgb(0xbcbcbc),
                 divider: rgb(0xe0e0e0),
+                section_band: rgb(0xe4e4e4),
                 inset: rgb(0xf0f0f0),
                 field: rgb(0xffffff),
                 field_border: rgb(0xcccccc),
@@ -442,8 +455,8 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     v.extreme_bg_color = t.field;
     v.faint_bg_color = t.inset;
     v.window_stroke = Stroke::new(1.0, t.button_border);
-    v.window_corner_radius = CornerRadius::same(6);
-    v.menu_corner_radius = CornerRadius::same(6);
+    v.window_corner_radius = CornerRadius::same(RADIUS_PANEL);
+    v.menu_corner_radius = CornerRadius::same(RADIUS_PANEL);
     v.selection.bg_fill = t.accent.gamma_multiply(0.6);
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.override_text_color = Some(t.text_label);
@@ -453,7 +466,7 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     let w = &mut v.widgets;
     craft_ui::theme::WidgetPalette { noninteractive: t.chrome, inactive: t.button, hovered: t.hover, active: t.pressed, open: t.hover }.apply_to(
         w,
-        CornerRadius::same(4),
+        CornerRadius::same(RADIUS),
         Stroke::new(1.0, t.text_label),
     );
     w.noninteractive.bg_stroke = Stroke::new(1.0, t.divider);

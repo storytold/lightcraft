@@ -78,6 +78,7 @@ mod rename_person;
 mod rules_editor;
 mod sam_setup;
 mod scroll;
+mod slider_columns;
 mod slider_reset;
 mod slideshow;
 mod solo_sections;
