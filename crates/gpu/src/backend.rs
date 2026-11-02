@@ -185,30 +185,139 @@ pub fn set_init_marker(path: Option<PathBuf>) {
     *MARKER.lock().unwrap_or_else(|e| e.into_inner()) = path;
 }
 
-/// The marker's text: what started, and when.
-fn marker_text(what: &str, secs: u64) -> String {
-    format!("GPU {what} started (unix time {secs})\n")
+/// The marker line naming the process that wrote it.
+const OWNER_PREFIX: &str = "owner ";
+
+/// This launch's owner token: the process id plus a per-launch random part, so that a second
+/// LightCraft sharing the configuration folder (and so the marker file) never mistakes the other
+/// instance's marker for its own, even after the operating system reuses a process id.
+fn owner_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        // `RandomState` is seeded randomly per process; the clock adds to it
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        h.write_u128(nanos);
+        format!("{}-{:016x}", std::process::id(), h.finish())
+    })
+}
+
+/// The marker's text: what started, when, and which launch wrote it (`owner`).
+fn marker_text(what: &str, secs: u64, owner: &str) -> String {
+    format!("GPU {what} started (unix time {secs})\n{OWNER_PREFIX}{owner}\n")
+}
+
+/// The marker text this launch writes when driver work `what` starts (owner line included), for
+/// tests outside this crate that stand in for a device creation still running.
+pub fn this_launch_marker_text(what: &str) -> String {
+    marker_text(what, 1, owner_token())
+}
+
+/// Whether the marker text names `owner` as the launch that wrote it. A marker without an owner
+/// line (written by an older LightCraft) belongs to no running launch.
+fn marker_owned_by(text: &str, owner: &str) -> bool {
+    text.lines().any(|l| l.trim().strip_prefix(OWNER_PREFIX) == Some(owner))
+}
+
+/// The lock file beside `marker` (`gpu-init.marker.lock`) that every LightCraft sharing the
+/// configuration folder holds while it writes, checks or removes the marker. The scope mutexes
+/// only order this process's threads; this orders the processes, so no instance can overwrite
+/// the marker between another one's ownership check and its removal.
+fn marker_lock_path(marker: &std::path::Path) -> PathBuf {
+    let mut name = marker.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
+    name.push(".lock");
+    marker.with_file_name(name)
+}
+
+/// Hold the cross-process marker lock (see [`marker_lock_path`]) until the returned file is
+/// dropped. `None` (logged) when the lock file can't be opened or locked: the caller goes on
+/// without it, as before the lock existed, rather than failing the GPU start or the quit.
+fn lock_marker(marker: &std::path::Path) -> Option<std::fs::File> {
+    let path = marker_lock_path(marker);
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let file = match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("gpu: could not open {}: {e}", path.display());
+            return None;
+        }
+    };
+    match file.lock() {
+        Ok(()) => Some(file),
+        Err(e) => {
+            log::warn!("gpu: could not lock {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Remove `marker` if this launch still owns it. Another LightCraft using the same configuration
+/// may have overwritten it while starting its own GPU device; that marker is left for it to clear
+/// (or, if it dies in the driver, for the next launch to report). The check and the removal run
+/// under the cross-process marker lock, which every marker write also takes. I/O errors are logged.
+fn remove_if_owned(marker: &std::path::Path) {
+    remove_if_owned_then(marker, || {});
+}
+
+/// [`remove_if_owned`], running `between` after the ownership check and before the removal (the
+/// tests start another instance's write there).
+fn remove_if_owned_then(marker: &std::path::Path, between: impl FnOnce()) {
+    let _lock = lock_marker(marker);
+    let text = match std::fs::read_to_string(marker) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            log::warn!("gpu: could not read {}: {e}", marker.display());
+            return;
+        }
+    };
+    if !marker_owned_by(&text, owner_token()) {
+        log::info!("gpu: leaving {} in place: another LightCraft wrote it", marker.display());
+        return;
+    }
+    between();
+    if let Err(e) = std::fs::remove_file(marker)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("gpu: could not remove {}: {e}", marker.display());
+    }
+}
+
+/// Write `text` to `marker` under the cross-process marker lock.
+fn write_marker(marker: &std::path::Path, text: &str) {
+    if let Some(d) = marker.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _lock = lock_marker(marker);
+    if let Err(e) = std::fs::write(marker, text) {
+        log::warn!("gpu: could not write {}: {e}", marker.display());
+    }
 }
 
 /// Enter a driver-work scope on `marker`: the first one writes the file.
+#[cfg(test)]
 fn arm(marker: &std::path::Path, active: &Mutex<u32>, what: &str) {
-    let mut n = active.lock().unwrap_or_else(|e| e.into_inner());
+    arm_locked(marker, &mut active.lock().unwrap_or_else(|e| e.into_inner()), what);
+}
+
+/// [`arm`] with the scope counter `n` already locked.
+fn arm_locked(marker: &std::path::Path, n: &mut u32, what: &str) {
     if *n == 0 {
-        if let Some(d) = marker.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let _ = std::fs::write(marker, marker_text(what, secs));
+        write_marker(marker, &marker_text(what, secs, owner_token()));
     }
     *n += 1;
 }
 
-/// Leave a scope: the last one removes the file.
+/// Leave a scope: the last one removes the file, if this launch still owns it.
 fn disarm(marker: &std::path::Path, active: &Mutex<u32>) {
     let mut n = active.lock().unwrap_or_else(|e| e.into_inner());
     *n = n.saturating_sub(1);
     if *n == 0 {
-        let _ = std::fs::remove_file(marker);
+        remove_if_owned(marker);
     }
 }
 
@@ -226,18 +335,46 @@ impl Drop for Armed<'_> {
 /// Run driver work `f` (`what`: "device creation", "kernel compilation"…) between writing and
 /// removing the init marker (if one is set).
 pub(crate) fn with_marker<T>(what: &str, f: impl FnOnce() -> T) -> T {
-    let marker = MARKER.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    with_marker_on(marker, &ACTIVE, what, f)
+    with_marker_in(&MARKER, &ACTIVE, what, f)
 }
 
-/// [`with_marker`] on an explicit marker path and scope counter (the tests use their own, so that
-/// device-creating tests running in parallel cannot join their scopes).
-fn with_marker_on<T>(marker: Option<PathBuf>, active: &Mutex<u32>, what: &str, f: impl FnOnce() -> T) -> T {
-    if let Some(m) = &marker {
-        arm(m, active, what);
-    }
+/// [`with_marker`] on an explicit marker slot and scope counter (the tests use their own, so that
+/// device-creating tests running in parallel cannot join their scopes). The slot is read under the scope
+/// lock, so a scope starting while [`release_on`] runs either is cleared by it or writes nothing.
+fn with_marker_in<T>(slot: &Mutex<Option<PathBuf>>, active: &Mutex<u32>, what: &str, f: impl FnOnce() -> T) -> T {
+    let marker = {
+        let mut n = active.lock().unwrap_or_else(|e| e.into_inner());
+        let marker = slot.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(m) = &marker {
+            arm_locked(m, &mut n, what);
+        }
+        marker
+    };
     let _armed = Armed(marker, active);
     f()
+}
+
+/// The app is quitting in an orderly way: remove the init marker now, even while device creation
+/// (or a kernel build) is still running on another thread, and write none from here on.
+///
+/// A launch that quits a few seconds in — before the driver returned the device, e.g. while a
+/// large library was still opening — used to leave the marker behind, so the next launch said
+/// LightCraft had closed unexpectedly while starting the GPU and turned GPU rendering off. An
+/// orderly quit proves the process wasn't killed inside the driver; a real crash or kill during
+/// device creation never gets here, so its marker stays for the next launch to report.
+pub fn release_init_marker_on_quit() {
+    release_on(&MARKER, &ACTIVE);
+}
+
+/// [`release_init_marker_on_quit`] on an explicit marker slot and scope counter (for the tests).
+fn release_on(slot: &Mutex<Option<PathBuf>>, active: &Mutex<u32>) {
+    // the scope lock first, as `arm` / `disarm` take it: no scope writes the file while it goes
+    let _n = active.lock().unwrap_or_else(|e| e.into_inner());
+    let marker = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(m) = marker {
+        // only our own: another instance may be inside device creation right now
+        remove_if_owned(&m);
+    }
 }
 
 /// Run device creation (and the kernel build that follows it) `f` under the init marker.
@@ -248,6 +385,7 @@ pub(crate) fn with_init_marker<T>(backends: Backends, f: impl FnOnce() -> T) -> 
 /// If the init marker `path` is present — the last process died while creating the GPU device —
 /// remove it and return what it recorded.
 pub fn take_init_marker(path: &std::path::Path) -> Option<String> {
+    let _lock = lock_marker(path);
     let text = read_init_marker(path)?;
     let _ = std::fs::remove_file(path);
     Some(text)
@@ -256,9 +394,12 @@ pub fn take_init_marker(path: &std::path::Path) -> Option<String> {
 /// What the init marker `path` recorded, if it is present — without removing it. For sessions
 /// that must leave the disk as they found it (`--memory`, issues #164 and #169): GPU rendering
 /// still starts off, and the marker stays for the next ordinary launch to report and clear.
+/// The owner line is left out of the description; a marker without one (an older LightCraft's)
+/// still counts.
 pub fn read_init_marker(path: &std::path::Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
-    Some(text.trim().to_string())
+    let what: Vec<&str> = text.lines().filter(|l| !l.trim().starts_with(OWNER_PREFIX)).collect();
+    Some(what.join("\n").trim().to_string())
 }
 
 /// What draws the desktop window: egui-wgpu on one wgpu backend, or eframe's OpenGL renderer
@@ -429,7 +570,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         // a local scope counter: other tests create real devices through the process-wide one
         let active = Mutex::new(0);
-        let seen = with_marker_on(Some(m.clone()), &active, "device creation", || m.exists());
+        let seen = with_marker_in(&Mutex::new(Some(m.clone())), &active, "device creation", || m.exists());
         assert!(seen, "the marker exists while the device is created");
         assert!(!m.exists(), "and is removed afterwards");
         // a marker left behind by a crashed process is reported once; reading it leaves it in place
@@ -439,6 +580,175 @@ mod tests {
         assert!(take_init_marker(&m).unwrap().contains("DX12"));
         assert_eq!(take_init_marker(&m), None);
         assert_eq!(read_init_marker(&m), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An orderly quit while the device is still being created (a launch closed a few seconds in,
+    /// before the driver returned) removes the marker, so the next launch reports no crash; the
+    /// creation finishing afterwards, or a new scope, writes nothing more. Before the fix the marker
+    /// stayed, and the next launch turned GPU rendering off.
+    #[test]
+    fn an_orderly_quit_during_device_creation_removes_the_marker() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-quit-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        let during = with_marker_in(&slot, &active, "device creation", || {
+            assert!(m.exists(), "armed while the device is created");
+            // the user quits before the driver returned
+            release_on(&slot, &active);
+            m.exists()
+        });
+        assert!(!during, "the orderly quit removed the marker while creation was still running");
+        assert!(!m.exists());
+        assert_eq!(read_init_marker(&m), None, "the next launch finds nothing to report");
+        // driver work starting after the quit writes no marker
+        assert!(!with_marker_in(&slot, &active, "kernel compilation", || m.exists()));
+        assert_eq!(*active.lock().unwrap(), 0);
+        // releasing twice, or with no marker, is harmless
+        release_on(&slot, &active);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of PR #3427: the quit's removal never waits for a driver call that is stuck. Device
+    /// creation blocks on its own thread (as `App::on_exit` finds it after its 2 s wait for
+    /// background work ran out); the quit on the UI thread still removes the marker at once, and
+    /// the stuck call returning later writes nothing. Also: a quit before any device creation,
+    /// after it, and with a marker that can't be removed (a folder in its place) do nothing harmful.
+    #[test]
+    fn the_quit_removes_the_marker_while_a_driver_call_is_stuck() {
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!("lc-gpu-stuck-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let slot = Arc::new(Mutex::new(Some(m.clone())));
+        let active = Arc::new(Mutex::new(0));
+        let (armed_tx, armed_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let driver = {
+            let (slot, active) = (slot.clone(), active.clone());
+            std::thread::spawn(move || {
+                with_marker_in(&slot, &active, "device creation", || {
+                    let _ = armed_tx.send(());
+                    // the driver call that doesn't return
+                    let _ = go_rx.recv_timeout(std::time::Duration::from_secs(30));
+                })
+            })
+        };
+        armed_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(m.exists(), "armed");
+        let t = std::time::Instant::now();
+        release_on(&slot, &active);
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "the quit didn't wait for the driver call");
+        assert!(!m.exists(), "removed while the call is stuck");
+        go_tx.send(()).unwrap();
+        driver.join().unwrap();
+        assert!(!m.exists(), "the call returning later writes nothing");
+        assert_eq!(*active.lock().unwrap(), 0);
+
+        // a quit before any device creation: nothing to remove, and none is written after it
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        release_on(&slot, &active);
+        assert!(!with_marker_in(&slot, &active, "device creation", || m.exists()));
+        // a quit after device creation returned: the scope already removed it
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "device creation", || {});
+        assert!(!m.exists());
+        release_on(&slot, &active);
+        // a marker that can't be read (a folder in its place): logged, no panic
+        std::fs::create_dir_all(&m).unwrap();
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "device creation", || release_on(&slot, &active));
+        assert!(m.is_dir(), "left as it was");
+        // our own marker whose removal fails after the ownership check (CodeRabbit on PR #3427:
+        // the folder above already fails the read): logged, no panic
+        std::fs::remove_dir_all(&m).unwrap();
+        std::fs::write(&m, marker_text("device creation", 0, owner_token())).unwrap();
+        remove_if_owned_then(&m, || {
+            std::fs::remove_file(&m).unwrap();
+            std::fs::create_dir_all(&m).unwrap();
+        });
+        assert!(m.is_dir(), "left as it was");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two LightCraft instances share one configuration (and so one marker file). Instance A arms,
+    /// then instance B starts its own device creation and overwrites the marker; A's orderly quit,
+    /// or A's scope ending, must leave B's marker so a crash of B is still reported. Before the
+    /// fix A removed B's marker. A alone still removes its own.
+    #[test]
+    fn an_orderly_quit_leaves_another_instances_marker() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-other-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let b_text = marker_text("device creation", 1, "99999-00000000deadbeef");
+        // the orderly quit while B owns the file
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "device creation", || {
+            assert!(marker_owned_by(&std::fs::read_to_string(&m).unwrap(), owner_token()), "A wrote its token");
+            std::fs::write(&m, &b_text).unwrap(); // instance B arms
+            release_on(&slot, &active);
+        });
+        assert_eq!(std::fs::read_to_string(&m).unwrap(), b_text, "B's marker stays after A's quit and scope end");
+        // A's scope ending (no quit) while B owns the file
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "kernel compilation", || std::fs::write(&m, &b_text).unwrap());
+        assert_eq!(std::fs::read_to_string(&m).unwrap(), b_text, "B's marker stays after A's scope ends");
+        // the description the next launch reports leaves the owner line out
+        assert_eq!(read_init_marker(&m).unwrap(), "GPU device creation started (unix time 1)");
+        // A alone: its quit removes its own marker
+        std::fs::remove_file(&m).unwrap();
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        with_marker_in(&slot, &active, "device creation", || release_on(&slot, &active));
+        assert!(!m.exists(), "A's own marker is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The race the ownership check alone left open: instance A reads the marker and finds its own
+    /// token, instance B then writes its marker, and A removes the file, B's marker with it. B's
+    /// write now waits for the cross-process lock A holds from the check to the removal, so B's
+    /// marker is written after A's removal and stays. Before the lock, B's write landed in between
+    /// (the thread signals it within the wait below) and A deleted it.
+    #[test]
+    fn another_instance_writing_between_the_check_and_the_removal_keeps_its_marker() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-race-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let b_text = marker_text("device creation", 1, "99999-00000000deadbeef");
+        let active = Mutex::new(0);
+        arm(&m, &active, "device creation");
+        assert!(marker_owned_by(&std::fs::read_to_string(&m).unwrap(), owner_token()), "A wrote its token");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = None;
+        remove_if_owned_then(&m, || {
+            // instance B arms on its own handle of the lock file (a separate process in real use)
+            let (m, b_text) = (m.clone(), b_text.clone());
+            b = Some(std::thread::spawn(move || {
+                write_marker(&m, &b_text);
+                let _ = tx.send(());
+            }));
+            // without the lock B's write lands now; with it, B waits until A's removal is done
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(300));
+        });
+        b.unwrap().join().unwrap();
+        assert_eq!(std::fs::read_to_string(&m).unwrap(), b_text, "B's marker, written after A's check, stays");
+        assert!(marker_lock_path(&m).ends_with("gpu-init.marker.lock"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The crash case is unchanged: a process that dies inside device creation never runs the
+    /// orderly quit, so the marker stays for the next launch.
+    #[test]
+    fn a_crash_during_device_creation_keeps_the_marker() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-killed-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
+        // armed, then the process "dies": the scope never ends and no quit runs
+        let n = &mut active.lock().unwrap();
+        let marker = slot.lock().unwrap().clone().unwrap();
+        arm_locked(&marker, n, "device creation");
+        assert!(read_init_marker(&m).unwrap().contains("device creation"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -525,7 +835,7 @@ mod tests {
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
         let active = Mutex::new(0);
-        let r = std::panic::catch_unwind(|| with_marker_on(Some(m.clone()), &active, "kernel compilation", || panic!("compile")));
+        let r = std::panic::catch_unwind(|| with_marker_in(&Mutex::new(Some(m.clone())), &active, "kernel compilation", || panic!("compile")));
         assert!(r.is_err());
         assert!(!m.exists(), "the process survived, so nothing is left to report");
         let _ = std::fs::remove_dir_all(&dir);

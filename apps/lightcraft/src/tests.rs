@@ -305,11 +305,42 @@ fn prefs_writer_writes_nothing_in_a_memory_or_temporary_session() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// The tests that arm the process-wide GPU crash sentinel, one at a time.
+static GPU_MARKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A launch the user quit a few seconds in, while the GPU device was still being created (a large
+/// library was opening; "quit: background work was still running after 2s"), left the marker,
+/// and the next launch said LightCraft had closed unexpectedly and turned GPU rendering off. The
+/// orderly quit now removes it; a launch killed inside the driver still leaves it.
+#[test]
+fn an_orderly_quit_during_gpu_start_up_is_not_a_crash() {
+    let _one = GPU_MARKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let d = dir("gpu-marker-quit");
+    let m = d.join("gpu-init.marker");
+    // launch: nothing left behind, the sentinel is armed
+    assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
+    // device creation started and has not returned (what `with_init_marker` writes, owned by this launch)
+    let ours = lightcraft_engine::gpu::backend::this_launch_marker_text("device and kernel creation (backends DX12)");
+    std::fs::write(&m, ours).unwrap();
+    // the orderly quit (`App::on_exit`) runs
+    gpu_quit_cleanly();
+    assert!(!m.exists());
+    // the next launch reports no crash
+    assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
+    // the crash case: armed, inside device creation, killed (no orderly quit) — still reported
+    std::fs::write(&m, "GPU device and kernel creation started (backends DX12) (unix time 2)\n").unwrap();
+    let notice = gpu_crash_check_at(Some(m.clone()), false).unwrap();
+    assert!(notice.contains("closed unexpectedly while starting the GPU") && notice.contains("GPU rendering is now off"), "{notice}");
+    lightcraft_engine::gpu::backend::set_init_marker(None);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 /// Issue #169: a `--memory` session neither arms the GPU crash sentinel (which would create
 /// the settings folder) nor removes a marker a crashed launch left; it still reports it, and
 /// the next ordinary launch finds it, reports it and clears it.
 #[test]
 fn memory_session_leaves_the_gpu_marker_and_folder_alone() {
+    let _one = GPU_MARKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let d = dir("gpu-marker-memory");
     let _ = std::fs::remove_dir_all(&d);
     let m = d.join("gpu-init.marker");
@@ -559,9 +590,15 @@ fn the_writer_follows_the_window_from_frame_to_frame() {
 
 /// #1331: on macOS the process ends inside `on_exit`, before eframe would tear the window down.
 /// The check runs in a child (this test binary again), since on macOS it ends the process.
+/// `on_exit` also removes the GPU start-up marker this launch armed (an orderly quit while the
+/// device is still being created is not a crash): the parent checks the file after the child ended.
 #[test]
 fn on_exit_ends_the_process_on_macos() {
-    if std::env::var_os("LIGHTCRAFT_TEST_ON_EXIT").is_some() {
+    if let Some(marker) = std::env::var_os("LIGHTCRAFT_TEST_ON_EXIT") {
+        let m = std::path::PathBuf::from(marker);
+        // armed at launch, and device creation started and has not returned
+        assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
+        std::fs::write(&m, lightcraft_engine::gpu::backend::this_launch_marker_text("device and kernel creation (backends DX12)")).unwrap();
         let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
         let mut app = App(
             app,
@@ -574,9 +611,11 @@ fn on_exit_ends_the_process_on_macos() {
         println!("on_exit returned");
         return;
     }
+    let d = dir("on-exit-gpu-marker");
+    let m = d.join("gpu-init.marker");
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "tests::on_exit_ends_the_process_on_macos", "--nocapture"])
-        .env("LIGHTCRAFT_TEST_ON_EXIT", "1")
+        .env("LIGHTCRAFT_TEST_ON_EXIT", &m)
         .env("LIGHTCRAFT_NO_PREFS", "1")
         .output()
         .unwrap();
@@ -584,6 +623,8 @@ fn on_exit_ends_the_process_on_macos() {
     assert!(out.status.success(), "{stdout}");
     assert!(stdout.contains("calling on_exit"), "the child didn't run the test: {stdout}");
     assert_eq!(stdout.contains("on_exit returned"), !cfg!(target_os = "macos"), "{stdout}");
+    assert!(!m.exists(), "the orderly quit removed the GPU start-up marker");
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// Quitting leaves no `catalog.lock.owner` behind, though the process ends without running
