@@ -2386,5 +2386,8 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Home Screen": "Головний екран",
+  "Welcome to LightCraft": "Ласкаво просимо до LightCraft",
+  "Your photo library and raw developer: local, open and scriptable.": "Бібліотека фотографій та обробка RAW: локально, відкрито, зі скриптами."
 }

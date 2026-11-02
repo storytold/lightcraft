@@ -106,6 +106,8 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// The Home screen: a house.
+    Home,
 }
 
 struct Pen<'a> {
@@ -529,6 +531,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.circle(10.0, 7.0, 3.0);
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
+        Home => {
+            pen.line(&[(2.5, 10.0), (10.0, 3.0), (17.5, 10.0)]);
+            pen.line(&[(4.5, 8.5), (4.5, 17.0), (15.5, 17.0), (15.5, 8.5)]);
+            pen.line(&[(8.5, 17.0), (8.5, 12.0), (11.5, 12.0), (11.5, 17.0)]);
         }
         Play => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], color),
         Pause => {

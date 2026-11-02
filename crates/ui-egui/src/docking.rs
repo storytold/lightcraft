@@ -441,6 +441,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             crate::state::ViewMode::Survey => crate::panels::compare::show_survey(app, ui),
             crate::state::ViewMode::Reference => crate::panels::compare::show_reference(app, ui),
             crate::state::ViewMode::People => crate::panels::people::show(app, ui),
+            crate::state::ViewMode::Home => crate::panels::home::show(app, ui),
         });
     }
 

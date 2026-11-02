@@ -8,10 +8,12 @@ use super::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub enum StartupView {
     /// Whatever was showing at quit.
-    #[default]
     Last,
     Grid,
     Detail,
+    /// The Home screen.
+    #[default]
+    Home,
 }
 
 /// What the desktop app opens at launch (Settings ▸ General ▸ At launch; issue #1290). `--library`
@@ -216,7 +218,7 @@ impl Default for AppSettings {
             recent_libraries: Vec::new(),
             recent_opened: Default::default(),
             at_launch: LaunchLibrary::Last,
-            startup_view: StartupView::Last,
+            startup_view: StartupView::Home,
             confirm_delete: true,
             ask_before_move: true,
             close_dialogs_outside: false,

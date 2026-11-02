@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### A Home screen
+- LightCraft has a Home screen: a welcome, Import Photos…, Open Library…, All Photos, your recent libraries, and the
+  help and community links. Open it from View ▸ Home Screen or the house in the top bar or the bottom bar. Picking a
+  source in the sidebar, or All Photos, goes on to the grid. A new install opens on it; if you already use LightCraft,
+  your saved choice stays, and Settings ▸ General ▸ Open in changes it.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

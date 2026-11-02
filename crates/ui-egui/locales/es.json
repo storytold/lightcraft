@@ -2390,5 +2390,8 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Home Screen": "Pantalla de inicio",
+  "Welcome to LightCraft": "Te damos la bienvenida a LightCraft",
+  "Your photo library and raw developer: local, open and scriptable.": "Biblioteca de fotos y revelador RAW: local, abierto y programable."
 }

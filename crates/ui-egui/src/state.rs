@@ -597,12 +597,18 @@ impl UiState {
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
             self.settings.preview_limit = AppSettings::default().preview_limit;
         }
+        self.open_on_startup_view();
+        self
+    }
+    /// Go to the view Settings ▸ General ▸ Open in names. The host calls this itself when there is
+    /// no settings file to sanitize, so a first launch opens where the default says.
+    pub fn open_on_startup_view(&mut self) {
         match self.settings.startup_view {
             StartupView::Last => {}
             StartupView::Grid => self.view = ViewMode::PhotoGrid,
             StartupView::Detail => self.view = ViewMode::Detail,
+            StartupView::Home => self.view = ViewMode::Home,
         }
-        self
     }
 }
 
