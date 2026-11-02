@@ -41,7 +41,21 @@ that precheck does not relax the UTF-8 byte limit. A single invalid name rejects
 `setResources` list, retaining the previous list. Hosts should map incompatible external display
 names to stable valid filenames before calling `setResources`.
 
+`updatedAt` is optional. When supplied, it must be a primitive string with no control characters
+and at most 100 UTF-8 bytes. The browser also bounds its UTF-16 length before copying it into
+WASM. A numeric timestamp, `Date` object, `null` or any invalid value rejects the entire resource
+list without replacing the previous list. For example:
+
+```js
+api.setResources(connectionId, [{id: "library_1", name: "Library.zip", updatedAt: "2026-11-02T19:00:00Z"}]);
+```
+
 requestOpen(resourceId) emits openRequest. The host replies using openResource(requestId, filename, Uint8Array), or cancelOpen(requestId,error). The supplied open filename must end in .zip (case insensitive, so .ZIP is accepted). A valid name without that suffix can pass the callback checks but is rejected later during library admission. ZIPs restore into a fresh browser-storage folder; the old library is retained. CRCs, original content hashes and required catalog originals are checked. The new catalog must load through the engine before its browser pointer changes.
+
+The `cancelOpen` error argument must be a primitive string with no control characters and at
+most 1024 UTF-8 bytes. An empty string is accepted. Passing a JavaScript `Error` object rejects
+the callback and leaves the read pending. Convert caught errors to an appropriately bounded,
+control-free message before calling it, for example `api.cancelOpen(requestId, "Download failed")`.
 
 Dropped-photo reads also block library replacement from scheduling, before their first asynchronous poll, through byte reading and storage. Success keeps the stored original pending until the ordinary import consumer admits it; read failure or cancellation releases the read owner.
 
@@ -72,7 +86,7 @@ than being treated as missing or corrupt data. Invalid archive bytes never repla
 
 ## Save and acknowledgement
 
-Registering a provider adds Save Library (Ctrl/Cmd+S) and Save Library As (Ctrl/Cmd+Shift+S). These entries and their default or customized keyboard shortcuts are unavailable without an enabled provider. Ordinary local commands and unrelated shortcuts keep their existing behavior. Each Save emits saveDialog with requestId, documentId, revision, name, saveAs and an optional resourceId. The host calls resolveSaveDialog(requestId, provider|device|cancel, filename). A .zip filename is required.
+Registering a provider adds Save Library (Ctrl/Cmd+S) and Save Library As (Ctrl/Cmd+Shift+S). These entries and their default or customized keyboard shortcuts are unavailable without an enabled provider. Without one, the existing Ctrl/Cmd+S Save Metadata to File and Ctrl/Cmd+Shift+S Create Version defaults remain available. An enabled provider borrows those keys only while its effective bindings use the same keys. Custom mappings and explicit removals keep their existing collision rules. Ordinary local commands and unrelated shortcuts keep their existing behavior. Each Save emits saveDialog with requestId, documentId, revision, name, saveAs and an optional resourceId. The host calls resolveSaveDialog(requestId, provider|device|cancel, filename). A .zip filename is required.
 
 The capture is an immutable atomic snapshot of the six small library files, paired with the originals referenced by that snapshot. An absent, corrupted or non-browser original fails the save. Unrelated originals left in browser storage are never uploaded. Subsequent edits can continue while the archive is prepared and persisted.
 
