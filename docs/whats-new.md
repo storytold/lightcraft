@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Truer colour for hard-to-match raws from cameras with measured colour
+- Some raws, often night shots under coloured LED or neon light, are too hard for LightCraft to match to the camera's
+  own JPEG. Until now they opened with generic colour and could look washed out and shifted in hue: on a Canon EOS
+  R50, a wall lit magenta came out blue-violet. When the camera model has measured colour matrices (the EOS R50 and
+  dozens of other Canon, Nikon, Sony and Fujifilm bodies), these photos now start from that measured colour, with the brightness
+  and contrast still matched to the camera's JPEG. Photos that already matched their camera JPEG are unchanged.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

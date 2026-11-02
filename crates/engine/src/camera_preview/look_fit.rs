@@ -26,7 +26,9 @@ pub(crate) fn fit_preview(
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
-    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro) {
+    // Without a profile, a model with measured spectral matrices gives its partial look their colour (`fit_partial`).
+    let measured = if profile.is_none() { measured_colour(raw, transform) } else { None };
+    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro, measured) {
         Some(look) => look,
         // A black-and-white JPEG has no colour to fit: the profile's colour and the JPEG's tone curve
         // (`monochrome_look` does it without a profile).
@@ -52,6 +54,22 @@ pub(crate) fn fit_preview(
     (Some(look), black_and_white)
 }
 
+/// The colour of the camera model's measured spectral matrices ([`lightcraft_raw::spectral`]) in the space of the
+/// sensor proxy developed with `transform` (the generic colour of a raw without matrices): white-balanced camera RGB
+/// through the matrices, at the file's as-shot white. Like a camera profile's colour it keeps white white, so the
+/// look's tone curve sets the brightness. `None` for a model without them or a file with matrices of its own.
+pub(super) fn measured_colour(raw: &RawImage, transform: &CameraTransform) -> Option<Mat3> {
+    let camera = lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), raw.metadata.model.as_deref()?)?;
+    let mut color = raw.color.clone();
+    if !camera.fill(&mut color) {
+        return None;
+    }
+    let white = lightcraft_raw::color::as_shot_white_of(&color, raw.wb_multipliers);
+    let measured = lightcraft_raw::color::camera_transform_of(&color, white).matrix;
+    let colour = measured.mul(&transform.matrix.inverse()?);
+    colour.0.iter().flatten().all(|v| v.is_finite()).then_some(colour)
+}
+
 /// Sensor level (normalised, white = 1) at or above which a raw channel counts as clipped, as in
 /// the render's highlight reconstruction.
 pub(super) const SENSOR_CLIP: f32 = 0.99;
@@ -59,7 +77,7 @@ pub(super) const SENSOR_CLIP: f32 = 0.99;
 /// [`fit_look_with`] for a photo without Sony's DRO.
 #[cfg(test)]
 pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
-    fit_look_with(sensor, reference, clipped, colour, false)
+    fit_look_with(sensor, reference, clipped, colour, false, None)
 }
 
 /// The photo's look, refitted without the proxy pixels whose sensor values are clipped.
@@ -79,13 +97,14 @@ pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], co
 /// its look and none switches attempt (a refit that just clears the gate on all pixels must not
 /// replace a look fitted away from edges). A photo that had no look gets one when the search
 /// without the clipped pixels finds it, and otherwise the [`fit_partial`] look when that is clearly
-/// closer to the camera JPEG than the neutral fallback.
+/// closer to the camera JPEG than the neutral fallback (in the `measured` colour when the model has one).
 pub(super) fn fit_look_with(
     sensor: &Rgb32f,
     reference: &Rgb32f,
     clipped: &[bool],
     colour: Option<(Mat3, Option<HsvTable>)>,
     dro: bool,
+    measured: Option<Mat3>,
 ) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);
     // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
@@ -95,7 +114,7 @@ pub(super) fn fit_look_with(
             .as_ref()
             .and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright))
             .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright));
+            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright, measured));
     };
     let Some(unclipped) = unclipped else { return Some(look) };
     let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright);
