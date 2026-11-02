@@ -707,7 +707,6 @@ fn provider_save_shortcuts_follow_menu_availability_without_stealing_local_comma
         let mut fired = Vec::new();
         ctx.run_ui(
             egui::RawInput {
-                modifiers,
                 events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }],
                 ..Default::default()
             },
