@@ -405,6 +405,54 @@ fn survey_command_click_takes_the_photo_out() {
     assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
 
+/// A photo taken out of the survey leaves the others to glide to their new cells, so it shows
+/// which photo went where: a frame later a tile is between its old and new place, then it lands.
+#[test]
+fn survey_tiles_glide_to_their_new_cells() {
+    let mut h = demo();
+    let [a, _, c] = survey_of_three(&mut h);
+    let tile = |h: &Headless| h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{c}")).map(|(_, r)| *r).expect("the tile is laid out");
+    let before = tile(&h);
+    h.app.run("library.select", json!({"ids": [a], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let moving = tile(&h);
+    assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
+    h.settle(SETTLE);
+    let after = tile(&h);
+    assert!(!h.app.survey_motion.moving(h.time()));
+    assert_ne!(before, after, "the photo has a new cell");
+    assert!(moving != before && moving != after, "between {before:?} and {after:?}: {moving:?}");
+}
+
+/// Every surveyed photo gets its own render, and keeps it when another photo leaves the survey
+/// (each photo keeps its render slot, so the tiles that move don't fall back to thumbnails).
+#[test]
+fn survey_tiles_keep_their_renders_when_a_photo_leaves() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let rendered = |h: &Headless, ids: &[u64]| {
+        ids.iter().all(|id| h.app.renderer.textures.iter().any(|(s, t)| matches!(s, crate::render::Slot::Compare(_)) && t.photo.0 == *id))
+    };
+    assert!(h.step_until(SETTLE, |h| rendered(h, &[a, b, c])), "each tile shows its render");
+    let slot_of = |h: &Headless, id: u64| {
+        h.app.renderer.textures.iter().find(|(s, t)| matches!(s, crate::render::Slot::Compare(_)) && t.photo.0 == id).map(|(s, _)| *s)
+    };
+    let c_slot = slot_of(&h, c).expect("c is rendered");
+    let c_tex = h.app.renderer.textures.get(&c_slot).map(|t| t.tex.id()).expect("c's texture");
+    h.app.run("library.select", json!({"ids": [a], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.app.survey_motion.moving(h.time()));
+    let drawn = h.view.painted_shapes().iter().any(|s| match s {
+        egui::epaint::Shape::Rect(r) => r.fill_texture_id() == c_tex,
+        egui::epaint::Shape::Mesh(m) => m.texture_id == c_tex,
+        _ => false,
+    });
+    assert!(drawn, "c's render is drawn while it moves, not its thumbnail");
+    assert!(h.step_until(SETTLE, |h| rendered(h, &[b, c])));
+}
+
 /// ⌘/Ctrl-click on the active survey photo while others remain: it leaves, and the last
 /// remaining photo becomes active, so the keys still act on a photo on screen.
 #[test]
