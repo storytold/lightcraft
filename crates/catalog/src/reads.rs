@@ -57,6 +57,21 @@ const FIELDS_WITHOUT_DEVELOP: &[&str] = &[
     "bestOfGroup",
 ];
 
+/// Search-text fields (`field:value` in [`Filter::text`]) whose matches don't depend on a photo's develop state. A
+/// token on any other field (`edited:`, one added later and not listed here, or a word with a colon in it such as
+/// "10:30") counts as reading it, so a forgotten field costs a query per slider tick, never a stale view.
+const SEARCH_FIELDS_WITHOUT_DEVELOP: &[&str] = &[
+    "rating", "stars", "flag", "label", "color", "iso", "f", "aperture", "focal", "camera", "lens", "keyword", "kw", "person", "who", "type", "kind",
+    "date", "copy", "virtual", "name", "file",
+];
+
+/// Whether a search-text word can match differently after a develop edit: a `field:value` word on a field not known
+/// to be free of develop state (a quoted one too: erring that way costs a query, never a stale view). A word without
+/// a colon is text, which a develop edit doesn't change.
+fn token_reads_develop(token: &str) -> bool {
+    token.to_lowercase().split_once(':').is_some_and(|(field, _)| !SEARCH_FIELDS_WITHOUT_DEVELOP.contains(&field))
+}
+
 /// Whether a rule on `field` can match differently after a develop edit (Has Edits, Edit Date, Cropped, Treatment,
 /// and the sizes a crop or rotation changes).
 pub fn field_reads_develop(field: &str) -> bool {
@@ -82,19 +97,23 @@ impl RuleSet {
 }
 
 impl Filter {
-    /// Whether the filter itself tests develop state: Edited, an `edited:` search token or a rule that does. The
-    /// albums it tests are [`Catalog::filter_reads_develop`]'s concern.
+    /// Whether the filter itself tests develop state: Edited, an `edited:` (or unlisted) search token or a rule that
+    /// does. The albums it tests are [`Catalog::filter_reads_develop`]'s concern.
     pub fn reads_develop(&self) -> bool {
-        self.edited.is_some()
-            || self.text.split_whitespace().any(|t| t.to_lowercase().split_once(':').is_some_and(|(field, _)| field == "edited"))
-            || self.rule_set.as_ref().is_some_and(RuleSet::reads_develop)
+        self.edited.is_some() || self.text.split_whitespace().any(token_reads_develop) || self.rule_set.as_ref().is_some_and(RuleSet::reads_develop)
     }
 }
 
 impl Sort {
-    /// Whether the order depends on develop state (Edit Date: every edit moves the photo).
+    /// Whether the order depends on develop state (Edit Date: every edit moves the photo). Every field and key is
+    /// named, with no wildcard: a new one doesn't compile until it is put on its side here.
     pub fn reads_develop(&self) -> bool {
-        self.key == SortKey::EditDate
+        // the date headers (`group`) follow the key's date
+        let Sort { key, ascending: _, group: _, seed: _ } = self;
+        match key {
+            SortKey::EditDate => true,
+            SortKey::CaptureDate | SortKey::ImportDate | SortKey::FileName | SortKey::Rating | SortKey::FileSize | SortKey::Random => false,
+        }
     }
 }
 
@@ -170,8 +189,12 @@ mod tests {
         assert!(!Filter { text: "harbour rating:3".into(), rating: 2, keyword: Some("travel".into()), ..Default::default() }.reads_develop());
         assert!(Filter { edited: Some(false), ..Default::default() }.reads_develop());
         assert!(Filter { text: "harbour Edited:yes".into(), ..Default::default() }.reads_develop());
+        // a search field not known to be free of develop state counts as reading it
+        assert!(Filter { text: "cropped:yes".into(), ..Default::default() }.reads_develop());
+        assert!(!Filter { text: "harbour kw:travel F:<4 camera:x100".into(), ..Default::default() }.reads_develop());
         assert!(Sort { key: SortKey::EditDate, ..Default::default() }.reads_develop());
         assert!(!Sort { key: SortKey::FileName, ..Default::default() }.reads_develop());
+        assert!(!Sort { key: SortKey::Random, seed: 7, ..Default::default() }.reads_develop());
         for field in ["edited", "cropped", "treatment", "editDate", "longEdge", "shortEdge", "aspect", "megapixels"] {
             let nested = rules(
                 json!({"rules": [{"field": "rating", "op": ">=", "value": 1}, {"group": {"match": "any", "rules": [{"field": field, "op": "is", "value": true}]}}]}),
