@@ -563,7 +563,10 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
                 let id = active(s, "develop.mixerNeutralPick")?;
-                let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.mixerNeutralPick", e))?;
+                // a source that cannot be loaded is an operational failure, not a bad parameter: the
+                // picker's UI shows this message itself and saves its "can't be made neutral" advice
+                // for the maths' refusal (a BadParams answer)
+                let src = s.source_now(id, SourceLevel::Thumb).map_err(crate::EngineError::Other)?;
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
                 // The colour at the mixer's input: the sample with the photo's current white balance

@@ -117,3 +117,68 @@ fn mixer_picker_is_in_the_tools_menu_beside_the_wb_selector() {
     let mixer = tools.iter().position(|id| id == "tool.mixerPicker").expect("the Channel Mixer Neutral in Tools");
     assert!(mixer > wb, "beside the WB Selector: {tools:?}");
 }
+
+/// A pick whose source cannot be loaded toasts the load failure itself (a source gone from disk),
+/// not the picker's "can't be made neutral" advice — that is only for a spot the maths refuses
+/// (issue #2158 review). The refusal branch is guarded by the singular-mixer case at the end.
+#[test]
+fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-mixer-src-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 16, height: 12, data: vec![[200, 120, 40, 255]; 16 * 12] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let file = dir.join("gone.png");
+    std::fs::write(&file, png).unwrap();
+
+    let services = crate::Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1400.0, 1100.0], 1.0);
+    h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["channelMixer"]}), T);
+    // import the file and wait for it to finish, so the photo is active with a rendered canvas
+    crate::import::start_paths(&mut h.app, vec![file.to_string_lossy().to_string()]).unwrap();
+    let t0 = std::time::Instant::now();
+    while h.app.import.is_some() && t0.elapsed() < SETTLE {
+        h.step();
+    }
+    assert!(h.app.import.is_none(), "import finished");
+    h.settle(SETTLE);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "canvas:image"), "the canvas is there");
+
+    // the source is gone and nothing holds it: the pick cannot load it
+    std::fs::remove_file(&file).unwrap();
+    h.app.session.media.clear_sources();
+    let r = h.request("engine.execute", json!({"command": "tool.mixerPicker"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.5, "fy": 0.5}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let toast = h.app.ui.toast.clone().expect("a toast").0;
+    assert!(toast.contains("gone.png") || toast.contains("could not"), "the load failure itself: {toast}");
+    assert!(!toast.contains("can't be made neutral"), "not the refusal: {toast}");
+
+    // the refusal branch still shows the advice: a singular mixer is refused as a bad parameter
+    let gone = h.app.session.active().expect("the imported photo");
+    let demo_id = h.app.session.visible_cloned().into_iter().find(|id| *id != gone).expect("a demo photo");
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [demo_id.0], "active": demo_id.0}}), T);
+    h.settle(SETTLE);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "canvas:image"), "the canvas is back");
+    for (control, value) in [
+        ("channelMixer.red.red", 100.0),
+        ("channelMixer.green.red", 100.0),
+        ("channelMixer.green.green", 0.0),
+        ("channelMixer.blue.red", 100.0),
+        ("channelMixer.blue.green", 0.0),
+        ("channelMixer.blue.blue", 0.0),
+    ] {
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T);
+    }
+    h.app.ui.toast = None;
+    h.request("engine.execute", json!({"command": "tool.mixerPicker"}), T);
+    let r = h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.5, "fy": 0.5}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let toast = h.app.ui.toast.clone().expect("a toast").0;
+    assert!(toast.contains("can't be made neutral"), "the advice for a refused spot: {toast}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

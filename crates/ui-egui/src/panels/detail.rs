@@ -1031,7 +1031,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             // a spot the maths refuses (too dark, too saturated) says why; a mixer scaled down to
             // fit the sliders had Exposure raised with it, and says by how much — unless the Light
             // section's eye is off, where the raise would not render and the photo keeps the darkening
-            match app.run("develop.mixerNeutralPick", json!({"x": n.x, "y": n.y})) {
+            match app.run_typed("develop.mixerNeutralPick", json!({"x": n.x, "y": n.y})) {
                 Ok(r) => {
                     let raised = r["exposureAdded"].as_f64().unwrap_or(0.0);
                     if r["lightOff"] == true {
@@ -1042,8 +1042,14 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Exposure raised by {ev:+.1} to keep brightness", ev = raised));
                     }
                 }
-                Err(_) => {
-                    app.toast_error(ui.ctx(), crate::i18n::tr("This spot can't be made neutral: pick a brighter, less saturated area"));
+                Err(e) => {
+                    // only the maths' refusal (a bad parameter) shows the picker's advice; anything
+                    // else — a source that could not be loaded — says its own message
+                    if e.kind == lightcraft_engine::ErrorKind::BadParams {
+                        app.toast_error(ui.ctx(), crate::i18n::tr("This spot can't be made neutral: pick a brighter, less saturated area"));
+                    } else {
+                        app.toast_error(ui.ctx(), e.message);
+                    }
                 }
             }
             app.ui.tool.clear();
