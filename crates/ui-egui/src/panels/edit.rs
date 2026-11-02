@@ -359,9 +359,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // A mixer Lightroom hasn't got, mainly for infrared: swap red and blue, or pull down a channel
     // white balance can't reach (issue #2158).
     section(app, ui, &d, "channelMixer", "Channel Mixer", |app, ui, d| {
-        // the infrared workflow in two clicks: pick foliage to neutralize, then swap red and blue
+        // the infrared workflow in two clicks: pick foliage to neutralize, then swap red and blue;
+        // the row wraps, so a longer translation (Finnish) or a narrow panel drops the button to
+        // its own line instead of past the panel's edge
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 6 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let active = app.ui.tool == "mixerPicker";
                 if crate::widgets::icon_button(
                     ui,

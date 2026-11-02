@@ -182,3 +182,22 @@ fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     assert!(toast.contains("can't be made neutral"), "the advice for a refused spot: {toast}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The eyedropper and Swap Red and Blue share a wrapping row: in a narrow panel with a longer
+/// translation (Finnish) the text button drops to its own line below the eyedropper instead of
+/// running past the panel's edge (issue #2158 review).
+#[test]
+fn swap_button_wraps_to_its_own_line_in_a_narrow_panel() {
+    let services = crate::Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [900.0, 1000.0], 1.0);
+    let r =
+        h.request("ui.set", json!({"view": "detail", "right": "edit", "language": "fi", "rightWidth": 230.0, "openSections": ["channelMixer"]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let rect = |id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r);
+    let eye = rect("icon:mixerPicker").expect("the eyedropper");
+    let swap = rect("button:mixerSwapRB").expect("the swap button");
+    assert!(swap.right() <= 900.0 - 4.0, "the swap button fits the panel: {swap:?}");
+    assert!(swap.top() >= eye.bottom() - 2.0, "it wrapped below the eyedropper: {eye:?} vs {swap:?}");
+}
