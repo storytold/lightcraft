@@ -49,6 +49,58 @@ fn all_photos_leaves_for_the_grid() {
 }
 
 #[test]
+fn all_photos_shows_the_whole_library_whatever_source_was_picked() {
+    let mut h = headless(lightcraft_engine::Session::with_demo());
+    h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "recentlyDeleted"}}), T);
+    h.settle(T);
+    home(&mut h);
+    h.request("ui.clickWidget", json!({"id": "button:homeAllPhotos"}), T);
+    h.settle(T);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
+}
+
+/// A folder for a library of its own, gone when the test ends.
+struct TempLibrary(std::path::PathBuf);
+
+impl TempLibrary {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("lc-ui-home-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TempLibrary(dir)
+    }
+}
+
+impl Drop for TempLibrary {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn open_library_goes_on_to_the_grid_once_a_library_opens() {
+    let library = TempLibrary::new("open");
+    let picked = library.0.to_string_lossy().into_owned();
+    let mut h = headless(lightcraft_engine::Session::new().with_fs());
+    h.app.services.pick_folder = Some(Box::new(move || Some(picked.clone())));
+    home(&mut h);
+    h.request("ui.clickWidget", json!({"id": "button:homeOpenLibrary"}), T);
+    h.settle(T);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+}
+
+#[test]
+fn a_cancelled_open_library_stays_on_the_screen() {
+    let mut h = headless(lightcraft_engine::Session::new().with_fs());
+    h.app.services.pick_folder = Some(Box::new(|| None));
+    home(&mut h);
+    h.request("ui.clickWidget", json!({"id": "button:homeOpenLibrary"}), T);
+    h.settle(T);
+    assert_eq!(h.app.ui.view, ViewMode::Home);
+}
+
+#[test]
 fn import_photos_leaves_for_the_grid_where_they_show_up() {
     let mut h = headless(lightcraft_engine::Session::with_demo());
     h.app.services.pick_files = Some(Box::new(Vec::new));

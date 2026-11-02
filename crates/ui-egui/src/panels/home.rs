@@ -1,7 +1,7 @@
 //! The Home screen (`view.home`): a welcome, the ways into a library (Import Photos…, Open Library…,
 //! All Photos), the recent libraries and the help and community links.
 
-use egui::{Align2, CornerRadius, Rect, Sense, Ui, pos2, vec2};
+use egui::{CornerRadius, Rect, Sense, Ui, pos2, vec2};
 use lightcraft_engine::LibrarySource;
 use serde_json::{Value, json};
 
@@ -23,7 +23,10 @@ enum Action {
     Run(&'static str),
     /// The grid, where what the command brings in shows up, then the command.
     GridThen(&'static str),
+    /// The grid, whatever it was showing.
     Grid,
+    /// The grid, with every photo of the library.
+    AllPhotos,
     OpenLibrary(String),
 }
 
@@ -61,6 +64,11 @@ fn run(app: &mut LightcraftApp, action: Action) -> Result<Value, String> {
             app.ui.view = ViewMode::PhotoGrid;
             Ok(Value::Null)
         }
+        Action::AllPhotos => {
+            app.run("library.source", json!({ "kind": "all" }))?;
+            app.ui.view = ViewMode::PhotoGrid;
+            Ok(Value::Null)
+        }
         Action::OpenLibrary(path) => {
             let opened = app.run("app.openLibrary", json!({ "path": path }))?;
             app.ui.view = ViewMode::PhotoGrid;
@@ -69,16 +77,18 @@ fn run(app: &mut LightcraftApp, action: Action) -> Result<Value, String> {
     }
 }
 
-/// A source picked in the sidebar (an album, a date, a folder) is there to be looked at: the grid
-/// shows it. The source this screen last saw lives in the context, so coming back to the screen
-/// with another source already picked stays here.
+/// A source picked in the sidebar (an album, a date, a folder) or a library opened (its folder
+/// dialog may answer frames after the click, and a cancelled one changes nothing) is there to be
+/// looked at: the grid shows it. What this screen last saw lives in the context, so coming back to
+/// the screen with another source already picked stays here.
 fn follow_the_sidebar(app: &mut LightcraftApp, ui: &Ui) {
     let id = egui::Id::unique("home-source");
-    let now = app.session.source;
+    let now = (app.session.source, app.session.library.as_ref().map(|l| l.dir.clone()));
     let pass = ui.ctx().cumulative_frame_nr();
-    let seen: Option<(LibrarySource, u64)> = ui.data(|d| d.get_temp(id));
+    let seen: Option<((LibrarySource, Option<std::path::PathBuf>), u64)> = ui.data(|d| d.get_temp(id));
+    let changed = seen.is_some_and(|(before, last_pass)| before != now && last_pass + 1 == pass);
     ui.data_mut(|d| d.insert_temp(id, (now, pass)));
-    if seen.is_some_and(|(source, last_pass)| source != now && last_pass + 1 == pass) {
+    if changed {
         app.ui.view = ViewMode::PhotoGrid;
         ui.ctx().request_repaint();
     }
@@ -104,7 +114,7 @@ fn content(app: &LightcraftApp, ui: &mut Ui) -> Option<Action> {
             action = Some(Action::Run("app.openLibrary"));
         }
         if Button::new("All Photos").widget("button:homeAllPhotos").show(ui).clicked() {
-            action = Some(Action::Grid);
+            action = Some(Action::AllPhotos);
         }
     });
     if let Some(picked) = recent(app, ui) {
@@ -172,9 +182,14 @@ fn recent_row(ui: &mut Ui, t: &Tokens, index: usize, dir: &std::path::Path, is_o
         }
         let x = rect.left() + PAD + ICON + 6.0;
         let name_color = if enabled { t.text } else { t.text_dim };
-        let shown = ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), name_color);
+        // a long name is cut, and leaves the folder room
+        let mut job = egui::text::LayoutJob::simple_singleline(name.clone(), t.font(13.0), name_color);
+        job.wrap = egui::text::TextWrapping { max_width: (rect.right() - PAD - x) * 0.6, max_rows: 1, break_anywhere: true, ..Default::default() };
+        let galley = ui.painter().layout_job(job);
+        let shown = galley.size().x;
+        ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, name_color);
         let folder = dir.parent().map(|p| p.display().to_string()).unwrap_or_default();
-        let folder_x = shown.right() + 10.0;
+        let folder_x = x + shown + 10.0;
         let room = rect.right() - PAD - folder_x;
         if room > 0.0 && !folder.is_empty() {
             let mut job = egui::text::LayoutJob::simple_singleline(folder, t.font(12.0), t.text_dim);
