@@ -430,6 +430,10 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         // a held Space repeats: it toggles the zoom (or takes the hand) once per press
         let space_repeat = !i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
         for b in bindable() {
+            // These opt-in saves share the menu's availability, including custom bindings.
+            if matches!(b.id, "file.saveLibrary" | "file.saveLibraryAs") && !crate::menus::ui_enabled(app, b.id) {
+                continue;
+            }
             if let Some(sc) = binding(keymap, b.id, b.default)
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)

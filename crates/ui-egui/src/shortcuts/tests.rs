@@ -700,3 +700,85 @@ mod issue1771 {
         assert_eq!(h.app.session.selection.ids.len(), 3);
     }
 }
+
+#[test]
+fn provider_save_shortcuts_follow_menu_availability_without_stealing_local_commands() {
+    fn press(app: &mut LightcraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) -> Vec<String> {
+        let mut fired = Vec::new();
+        ctx.run_ui(
+            egui::RawInput {
+                modifiers,
+                events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            },
+            |ui| {
+                fired = super::pressed_commands(app, ui.ctx()).0;
+                super::handle(app, ui.ctx());
+            },
+        )
+        .textures_delta
+        .clear();
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: Modifiers::NONE }],
+                ..Default::default()
+            },
+            |ui| super::handle(app, ui.ctx()),
+        )
+        .textures_delta
+        .clear();
+        fired
+    }
+    let ctx = egui::Context::default();
+    let local_backups = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = local_backups.clone();
+    let services = crate::Services {
+        backup_library: Some(Box::new(move |_| {
+            observed.set(observed.get() + 1);
+            Ok(json!({"local":true}))
+        })),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), services);
+    let save_as = Modifiers { shift: true, ..Modifiers::COMMAND };
+    for modifiers in [Modifiers::COMMAND, save_as] {
+        assert!(press(&mut app, &ctx, Key::S, modifiers).is_empty(), "no provider means no provider shortcut dispatch");
+    }
+    let host = crate::file_providers::Host::default();
+    host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+    app.file_provider = Some(host.clone());
+    assert!(press(&mut app, &ctx, Key::S, Modifiers::COMMAND).is_empty());
+    host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+    host.set_enabled(false).unwrap();
+    for modifiers in [Modifiers::COMMAND, save_as] {
+        assert!(press(&mut app, &ctx, Key::S, modifiers).is_empty(), "paused providers keep both shortcuts unavailable");
+        assert!(host.take_events().is_empty());
+    }
+    host.set_enabled(true).unwrap();
+    for (modifiers, id, expected_save_as) in [(Modifiers::COMMAND, "file.saveLibrary", false), (save_as, "file.saveLibraryAs", true)] {
+        assert_eq!(press(&mut app, &ctx, Key::S, modifiers), vec![id]);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "saveDialog");
+        assert_eq!(events[0].metadata["saveAs"], expected_save_as);
+        host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+    }
+    super::assign(&mut app.ui.settings.keymap, "file.saveLibrary", Some("F8")).unwrap();
+    super::assign(&mut app.ui.settings.keymap, "file.backupLibrary", Some("F10")).unwrap();
+    host.set_enabled(false).unwrap();
+    assert!(press(&mut app, &ctx, Key::F8, Modifiers::NONE).is_empty(), "custom provider bindings use the same availability");
+    assert!(host.take_events().is_empty());
+    assert_eq!(press(&mut app, &ctx, Key::F10, Modifiers::NONE), vec!["file.backupLibrary"]);
+    assert_eq!(local_backups.get(), 1, "the ordinary local backup still dispatches");
+    let filmstrip = app.ui.filmstrip;
+    assert_eq!(press(&mut app, &ctx, Key::Slash, Modifiers::NONE), vec!["view.filmstrip"]);
+    assert_eq!(app.ui.filmstrip, !filmstrip, "unrelated default shortcuts still run");
+    host.set_enabled(true).unwrap();
+    assert!(press(&mut app, &ctx, Key::S, Modifiers::COMMAND).is_empty(), "the saved custom key still replaces the default");
+    assert_eq!(press(&mut app, &ctx, Key::F8, Modifiers::NONE), vec!["file.saveLibrary"]);
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "saveDialog");
+    host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+    assert!(!host.busy());
+}

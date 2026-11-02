@@ -3,8 +3,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::cell::Cell;
+use std::future::{Future, poll_fn};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::Poll;
 
 use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
@@ -349,6 +351,132 @@ async fn admit_valid_zip(app: &mut WebApp, ctx: &Context, host: &Host, events: &
     Err(error("bounded real ZIP admission did not finish"))
 }
 
+fn refuse_replacement_during_drop(app: &mut WebApp, ctx: &Context, host: &Host, events: &PublishedEvents, zip: &[u8]) -> Result<(), JsValue> {
+    assert_idle_input(ctx);
+    assert!(app.app.can_admit_provider_library(ctx).is_ok(), "the import owner must be the admission barrier");
+    assert!(!app.frozen.get() && !app.flushing.get() && !app.files.is_dirty());
+    let document = app.app.file_provider_document;
+    let generation = app.app.session.library_generation();
+    let library = app.app.session.library.as_ref().unwrap().dir.clone();
+    let selection = app.app.session.selection.clone();
+    let snapshot = app.files.snapshot().map_err(error)?;
+    let request = host.request_open("incoming").map_err(error)?;
+    crate::file_providers::publish(host, ctx);
+    let since = events.len();
+    host.open(request.clone(), "Incoming.zip".into(), zip.to_vec()).map_err(error)?;
+    app.provider_tick(ctx);
+    let refused = events.matching(since, "openFailed", Some(&request));
+    assert!(
+        app.provider.as_ref().is_some_and(|bridge| !bridge.loading && bridge.waiting.is_none())
+            && refused.len() == 1
+            && text(&refused[0], "resourceId").as_deref() == Some("incoming")
+            && text(&refused[0], "error").as_deref() == Some("Finish the current import/save before opening a provider library")
+            && events.matching(since, "opened", Some(&request)).is_empty(),
+        "deferred dropped bytes must keep provider admission closed"
+    );
+    assert_eq!(app.app.file_provider_document, document);
+    assert_eq!(app.app.session.library_generation(), generation);
+    assert_eq!(app.app.session.library.as_ref().unwrap().dir, library);
+    assert_eq!(app.app.session.selection, selection);
+    assert_eq!(app.files.snapshot().map_err(error)?, snapshot);
+    assert!(!host.busy());
+    Ok(())
+}
+
+async fn deferred_drop_lifetimes(app: &mut WebApp, ctx: &Context, host: &Host, events: &PublishedEvents, zip: &[u8]) -> Result<String, JsValue> {
+    assert_eq!(super::super::IMPORT_READS.with(Cell::get), 0);
+    assert!(!app.originals.imports_waiting());
+    assert!(crate::safety::take_notices().is_empty());
+    hidden_idle_frame(ctx);
+    // Cancel both before the first poll and while the production byte-read task is suspended.
+    for polled in [false, true] {
+        let mut cancelled = Box::pin(super::super::read_dropped_file(
+            app.originals.clone(),
+            app.backend.clone(),
+            "cancelled-drop.png".into(),
+            std::future::pending::<Result<Vec<u8>, String>>(),
+            ctx.clone(),
+        ));
+        refuse_replacement_during_drop(app, ctx, host, events, zip)?;
+        if polled {
+            poll_fn(|cx| {
+                assert!(cancelled.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            refuse_replacement_during_drop(app, ctx, host, events, zip)?;
+        }
+        assert_eq!(super::super::IMPORT_READS.with(Cell::get), 1);
+        drop(cancelled);
+        assert_eq!(super::super::IMPORT_READS.with(Cell::get), 0);
+        assert!(!app.originals.imports_waiting());
+    }
+    let png = crate::store::png_bytes(6, 3);
+    let hash = content_hash(&png);
+    let stored_key = storage_key(&hash);
+    for success in [false, true] {
+        let mut resolve = None;
+        let mut reject = None;
+        let promise = js_sys::Promise::new(&mut |yes, no| {
+            resolve = Some(yes);
+            reject = Some(no);
+        });
+        let bytes = async move {
+            JsFuture::from(promise).await.map(|value| Uint8Array::new(&value).to_vec()).map_err(|_| "fixture deferred read failure".to_owned())
+        };
+        let mut read =
+            Box::pin(super::super::read_dropped_file(app.originals.clone(), app.backend.clone(), "deferred-drop.png".into(), bytes, ctx.clone()));
+        // First before spawn_local could poll, then while the actual byte future is pending.
+        refuse_replacement_during_drop(app, ctx, host, events, zip)?;
+        poll_fn(|cx| {
+            assert!(read.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        refuse_replacement_during_drop(app, ctx, host, events, zip)?;
+        assert!(!app.originals.imports_waiting(), "no stored original can mask the pending byte read");
+        assert_eq!(super::super::IMPORT_READS.with(Cell::get), 1);
+        if success {
+            resolve.ok_or_else(|| error("missing deferred resolve"))?.call1(&JsValue::UNDEFINED, &Uint8Array::from(png.as_slice()))?;
+        } else {
+            reject.ok_or_else(|| error("missing deferred reject"))?.call1(&JsValue::UNDEFINED, &"fixture deferred read failure".into())?;
+        }
+        read.await;
+        assert_eq!(super::super::IMPORT_READS.with(Cell::get), 0);
+        if success {
+            assert!(app.originals.imports_waiting());
+            refuse_replacement_during_drop(app, ctx, host, events, zip)?;
+            let backend = app.backend.as_ref().ok_or_else(|| error("missing drop storage"))?;
+            assert_eq!(backend.read_capped(&stored_key, 64 * 1024).await.map_err(error)?, Some(png.clone()));
+            let count = app.app.session.catalog.len();
+            let document = app.app.file_provider_document;
+            app.import_dropped(ctx);
+            assert!(!app.originals.imports_waiting());
+            assert_eq!(app.app.session.catalog.len(), count + 1, "the actual drop consumer imported into the original library");
+            assert_eq!(app.app.file_provider_document, document);
+            assert_eq!(app.lib_dir, CURRENT_DIR);
+            let path = crate::store::original_path(&hash, "deferred-drop.png");
+            assert!(
+                app.app
+                    .session
+                    .catalog
+                    .photos()
+                    .any(|photo| matches!(&photo.source, lightcraft_engine::catalog::Source::File { path: source } if source == &path))
+            );
+            assert_eq!(app.originals.get(&path).unwrap().as_ref(), png.as_slice());
+            settle_writes(app).await?;
+        } else {
+            assert!(!app.originals.imports_waiting());
+            assert_eq!(
+                crate::safety::take_notices(),
+                vec![lightcraft_ui_egui::i18n::dropped_file_unreadable("deferred-drop.png", "fixture deferred read failure")]
+            );
+        }
+    }
+    assert!(crate::safety::take_notices().is_empty());
+    Ok(stored_key)
+}
+
 fn capture_for_dispatch(app: &WebApp, host: &Host, ctx: &Context, events: &PublishedEvents, bytes: Vec<u8>) -> Result<(String, Capture), JsValue> {
     let document = app.app.file_provider_document;
     let revision = app.files.generation().map_err(error)?;
@@ -415,6 +543,8 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
         .await
         .map_err(error)?;
     assert!(zip.len() < 64 * 1024);
+    let dropped_original = deferred_drop_lifetimes(&mut app, &ctx, &host, &events, &zip).await?;
+    assert_eq!(backend.read_capped(ACTIVE_LIBRARY, 128).await.map_err(error)?, Some(CURRENT_DIR.as_bytes().to_vec()));
     let backing_count = key_count(&backend).await?;
     for parked in [false, true] {
         settle_writes(&mut app).await?;
@@ -585,6 +715,7 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
     }
     backend.remove(&current_original).await.map_err(error)?;
     backend.remove(&incoming_original).await.map_err(error)?;
+    backend.remove(&dropped_original).await.map_err(error)?;
     assert_eq!(key_count(&backend).await?, 0);
     Ok(())
 }

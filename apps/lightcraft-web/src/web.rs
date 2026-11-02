@@ -129,6 +129,25 @@ async fn store_file(originals: Originals, backend: Option<Backend>, name: String
     ctx.request_repaint();
 }
 
+/// Own a drained drop from scheduling through its byte read and storage. Count it before the
+/// returned future's first poll, and release it on success, read failure or cancellation.
+fn read_dropped_file<E: ToString>(
+    originals: Originals,
+    backend: Option<Backend>,
+    name: String,
+    bytes: impl std::future::Future<Output = Result<Vec<u8>, E>>,
+    ctx: egui::Context,
+) -> impl std::future::Future<Output = ()> {
+    let reading = ImportRead::new();
+    async move {
+        let _reading = reading;
+        match bytes.await {
+            Ok(bytes) => store_file(originals, backend, name, bytes, ctx).await,
+            Err(error) => notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, &error.to_string())),
+        }
+    }
+}
+
 /// Read a browser `File` into storage.
 async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
     let _reading = ImportRead::new();
@@ -607,14 +626,16 @@ impl WebApp {
             return;
         }
         for f in drained.dropped {
-            let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
-            wasm_bindgen_futures::spawn_local(async move {
-                let name = egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string();
-                match egui::DroppedFile::bytes_async(f.as_ref()).await {
-                    Ok(bytes) => store_file(originals, backend, name, bytes, ctx).await,
-                    Err(e) => notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, &e.to_string())),
-                }
-            });
+            let name = egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string();
+            // Construct the counted owner synchronously: spawn_local may not poll this frame.
+            let read = read_dropped_file(
+                self.originals.clone(),
+                self.backend.clone(),
+                name,
+                async move { egui::DroppedFile::bytes_async(f.as_ref()).await },
+                ctx.clone(),
+            );
+            wasm_bindgen_futures::spawn_local(read);
         }
         let Some(paths) = drained.pending else { return };
         if !paths.is_empty() {

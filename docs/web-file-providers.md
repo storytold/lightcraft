@@ -34,7 +34,16 @@ Provider IDs, account namespaces and resource IDs must be nonempty, at most 160 
 only ASCII letters, digits, `_` or `-`. Map email addresses, filesystem paths and other external
 identifiers to stable IDs that satisfy this contract; display labels and filenames are separate.
 
+Each resource `name` must be nonblank after trimming, contain no control characters, be neither
+`.` nor `..`, and contain no slash or backslash. Its native limit is 255 UTF-8 bytes. Before
+native validation, the browser callback also rejects names over 255 UTF-16 code units; passing
+that precheck does not relax the UTF-8 byte limit. A single invalid name rejects the whole
+`setResources` list, retaining the previous list. Hosts should map incompatible external display
+names to stable valid filenames before calling `setResources`.
+
 requestOpen(resourceId) emits openRequest. The host replies using openResource(requestId, filename, Uint8Array), or cancelOpen(requestId,error). The supplied open filename must end in .zip (case insensitive, so .ZIP is accepted). A valid name without that suffix can pass the callback checks but is rejected later during library admission. ZIPs restore into a fresh browser-storage folder; the old library is retained. CRCs, original content hashes and required catalog originals are checked. The new catalog must load through the engine before its browser pointer changes.
+
+Dropped-photo reads also block library replacement from scheduling, before their first asynchronous poll, through byte reading and storage. Success keeps the stored original pending until the ordinary import consumer admits it; read failure or cancellation releases the read owner.
 
 A read may be requested while the editor is idle and finish after editing starts. Both the Recent command and byte-delivery admission recheck real text-edit/slider drafts, interactions, photo/control drags, hover previews and the existing dialog/import/export/storage-error guards. Delivery additionally refuses queued or unconsumed editing input and held presses before a UI pass, without treating idle pointer movement, raw mouse motion, idle pointer leave or its own provider read as editing. Motion or pointer leave while a button is held still blocks admission until release or actual focus loss/pointer cancellation. Numeric draft tracking references the widgets' actual resident buffers, including hidden controls. Refusal does not commit/cancel text or gestures, capture UI files, decode bytes, create staging data or change the active-library pointer. The user can commit/cancel the edit and request the library again.
 
@@ -63,7 +72,7 @@ than being treated as missing or corrupt data. Invalid archive bytes never repla
 
 ## Save and acknowledgement
 
-Registering a provider adds Save Library (Ctrl/Cmd+S) and Save Library As (Ctrl/Cmd+Shift+S). These entries are hidden without an enabled provider. Each Save emits saveDialog with requestId, documentId, revision, name, saveAs and an optional resourceId. The host calls resolveSaveDialog(requestId, provider|device|cancel, filename). A .zip filename is required.
+Registering a provider adds Save Library (Ctrl/Cmd+S) and Save Library As (Ctrl/Cmd+Shift+S). These entries and their default or customized keyboard shortcuts are unavailable without an enabled provider. Ordinary local commands and unrelated shortcuts keep their existing behavior. Each Save emits saveDialog with requestId, documentId, revision, name, saveAs and an optional resourceId. The host calls resolveSaveDialog(requestId, provider|device|cancel, filename). A .zip filename is required.
 
 The capture is an immutable atomic snapshot of the six small library files, paired with the originals referenced by that snapshot. An absent, corrupted or non-browser original fails the save. Unrelated originals left in browser storage are never uploaded. Subsequent edits can continue while the archive is prepared and persisted.
 
