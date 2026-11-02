@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### No point added on top of another on the point curve
+- Clicking the point curve's graph level with a point, but away from it, added a second point at the same spot in the
+  input range, and the curve fell off a cliff between the two. A drag already kept points at least 1 % of the graph
+  apart; adding a point now keeps the same distance, so a click or a drag that begins that close to a point adds
+  nothing.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

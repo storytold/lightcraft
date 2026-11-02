@@ -223,6 +223,35 @@ fn curve_points_from_an_agent_are_stored_in_order() {
     assert!(c[1].0 < c[2].0, "dragged up to its neighbour, not past it: {c:?}");
 }
 
+/// A click, or a drag begun, on empty graph level with a point but too far above or below it to
+/// grab it, used to add a second point on top of the first, closer than a drag lets two points get
+/// (0.01): the curve fell off a cliff between them. Nothing is added now (and a refused drag
+/// leaves no `develop` interaction open); a point clear of the others is added as before.
+#[test]
+fn a_point_is_not_added_on_top_of_another() {
+    let mut h = curve_open("master");
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]}));
+    h.step();
+    let undo_before = h.app.session.undo.len();
+    // level with the point at 0.5, a third of the graph above it
+    let r = h.request("ui.clickWidget", json!({"id": "curve", "fx": 0.502, "fy": 0.2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(pts(&develop(&h).curve.master).len(), 3, "a click above the point adds nothing");
+    let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.498, "fy": 0.2, "dx": 0.0, "dy": 20.0, "steps": 8}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(pts(&develop(&h).curve.master).len(), 3, "nor does a drag started there");
+    assert_eq!(h.app.session.undo.len(), undo_before, "and neither is an edit");
+    // clear of the other points: added, as before
+    let r = h.request("ui.clickWidget", json!({"id": "curve", "fx": 0.6, "fy": 0.2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let c = pts(&develop(&h).curve.master);
+    assert_eq!(c.len(), 4, "{c:?}");
+    assert!(c.windows(2).all(|w| w[1].0 - w[0].0 >= 0.0099), "no two points closer than the drag's minimum: {c:?}");
+}
+
 /// The settings the parametric graph is drawn from: two neighbouring regions pushed opposite ways,
 /// where the raw sum of their bumps folds back on itself before the renderer's running maximum
 /// straightens it out.
