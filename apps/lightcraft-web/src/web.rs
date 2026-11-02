@@ -798,7 +798,7 @@ impl eframe::App for WebApp {
         }
         self.app.logic(ctx);
         self.save();
-        self.provider_publish();
+        self.provider_publish(ctx);
     }
 
     /// Pass the browser's raw input to the app hook before egui processes it, so prompt barriers
@@ -824,7 +824,7 @@ impl eframe::App for WebApp {
                 ui.spinner();
                 ui.label("Restoring the provider library and its original photos…");
             });
-            self.provider_publish();
+            self.provider_publish(&ctx);
             return;
         } else {
             self.import_dropped(&ctx);

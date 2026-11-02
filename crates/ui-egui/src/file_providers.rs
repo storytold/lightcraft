@@ -471,6 +471,45 @@ impl Host {
         if events.is_empty() { std::mem::take(&mut s.events) } else { events }
     }
 
+    /// The platform publisher's bounded drain, shared with native delivery-failure regressions.
+    /// Dispatch must return recoverable platform exceptions as Err. A failed save is consumed as
+    /// a correlated failed result, never a durable acknowledgement. Returns whether repaint is
+    /// needed to let the application consume the failure without waiting for more host input.
+    pub fn publish_events_with<E>(
+        &self,
+        mut dispatch: impl FnMut(&Value, Option<Vec<u8>>) -> Result<(), E>,
+        mut on_error: impl FnMut(E),
+    ) -> bool {
+        let mut failed = false;
+        // The first drain frees a full queue; the second delivers retained terminals in order.
+        for _ in 0..2 {
+            let events = self.take_events();
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                if let Err(error) = dispatch(&event.metadata, event.bytes) {
+                    failed = true;
+                    if event.metadata.get("type").and_then(Value::as_str) == Some("save")
+                        && let Some(request) = event.metadata.get("requestId").and_then(Value::as_str)
+                    {
+                        let mut s = self.state();
+                        // A synchronous listener may already have consumed this capture. Never
+                        // replace its accepted result, or another request, with our failure.
+                        if let Some(capture) = s.captures.remove(request) {
+                            // Reserve no new operation: at most MAX_PENDING existing captures
+                            // can add these failures to the bounded ordinary command queue.
+                            // Recovery must also work when that queue is already full.
+                            s.commands.push(Command::Result { capture, resource: String::new(), status: "failed".into() });
+                        }
+                    }
+                    on_error(error);
+                }
+            }
+        }
+        failed
+    }
+
     pub fn publish_documents(&self, documents: Value, open_ids: &[u64]) {
         let mut s = self.state();
         s.documents = documents;

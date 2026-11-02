@@ -224,7 +224,7 @@ impl WebApp {
         }
         self.resume_provider_open(&mut bridge, ctx);
         self.provider = Some(bridge);
-        self.provider_publish();
+        self.provider_publish(ctx);
     }
 
     fn complete_provider_operation(&mut self, bridge: &mut Bridge, completion: Completion, ctx: &egui::Context) {
@@ -387,7 +387,7 @@ impl WebApp {
         });
     }
 
-    pub(super) fn provider_publish(&mut self) {
+    pub(super) fn provider_publish(&mut self, ctx: &egui::Context) {
         let Some(bridge) = &self.provider else { return };
         let revision = self.files.generation();
         // A checkpoint belongs to a provider connection as well as a library generation.
@@ -402,6 +402,6 @@ impl WebApp {
             &[doc],
         );
         bridge.leave.set(bridge.host.enabled() && dirty);
-        crate::file_providers::publish(&bridge.host);
+        crate::file_providers::publish(&bridge.host, ctx);
     }
 }

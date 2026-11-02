@@ -1,4 +1,5 @@
-//! Native regressions exercise actual slider buffers and the guard used before web staging.
+//! Native unit regressions exercise actual slider buffers and can_admit_provider_library.
+//! They do not run the WASM WebApp::provider_tick/begin_provider_open dispatch or ZIP staging.
 
 // Fixture helpers share the test-only panic policy; production guards retain the crate-wide deny.
 #![allow(clippy::unwrap_used)]
@@ -35,7 +36,9 @@ fn request(app: &mut LightcraftApp, host: &Host) -> String {
     request
 }
 
-fn deliver(host: &Host, request: &str) {
+// Verify only the Host's correlated Command::Open. Application admission is tested separately
+// below by calling the guard directly, not by pretending this helper runs the web adapter.
+fn queue_open_without_web_dispatch(host: &Host, request: &str) {
     host.open(request.into(), "Other.zip".into(), vec![1, 2, 3]).unwrap();
     let commands = host.take_commands();
     assert_eq!(commands.len(), 1);
@@ -102,7 +105,7 @@ fn pending_provider_read_preserves_a_real_numeric_draft_including_when_parked() 
     let active = app.session.active();
     let generation = app.session.library_generation();
     let settings = app.session.develop_of(active.unwrap()).unwrap();
-    deliver(&host, &pending);
+    queue_open_without_web_dispatch(&host, &pending);
     assert!(app.can_admit_provider_library(&ctx).is_err());
     assert!(app.run("file.providerRecent", json!({"resourceId":"other"})).is_err());
     assert_eq!(ctx.data(|data| data.get_temp::<(String, u8, bool)>(draft_id)), Some(before.clone()));
@@ -134,7 +137,7 @@ fn a_gesture_or_hover_preview_started_after_request_is_not_committed_by_admissio
     let original = app.session.interaction.as_ref().unwrap().original.clone();
     let generation = app.session.library_generation();
     assert!(app.session.unsaved().is_none(), "storage-error status is not a gesture guard");
-    deliver(&host, &pending);
+    queue_open_without_web_dispatch(&host, &pending);
     assert!(app.can_admit_provider_library(&ctx).is_err());
     assert_eq!(app.session.interaction.as_ref().unwrap().original, original);
     assert_eq!(app.session.develop_of(active).unwrap(), settings);
@@ -154,7 +157,7 @@ fn a_gesture_or_hover_preview_started_after_request_is_not_committed_by_admissio
 fn same_frame_input_waits_for_widgets_but_idle_hover_and_leave_do_not_block_a_read() {
     let (_photos, mut app, host, ctx) = fixture("provider-raw-input");
     let pending = request(&mut app, &host);
-    deliver(&host, &pending);
+    queue_open_without_web_dispatch(&host, &pending);
     let mut allowed = true;
     frame(&mut app, &ctx, vec![key(Key::Delete)], Some(&mut allowed));
     assert!(!allowed, "delivery before this frame's widgets must not retarget a key");
@@ -187,7 +190,7 @@ fn a_dialog_created_after_the_read_request_is_rejected_without_mutation() {
     let ui = serde_json::to_value(&app.ui).unwrap();
     let active = app.session.active();
     let generation = app.session.library_generation();
-    deliver(&host, &pending);
+    queue_open_without_web_dispatch(&host, &pending);
     assert!(app.can_admit_provider_library(&ctx).is_err());
     assert_eq!(serde_json::to_value(&app.ui).unwrap(), ui);
     assert_eq!(app.session.active(), active);

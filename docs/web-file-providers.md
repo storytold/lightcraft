@@ -22,6 +22,13 @@ The capture is an immutable atomic snapshot of the six small library files, pair
 
 The device destination uses the existing browser download writer. The provider destination emits save with destination=provider and native ZIP bytes. Only after a durable write may the host call saveResult(requestId,saved,resourceId). failed, cancel and download never advance the provider checkpoint. Acknowledgement records only the captured file-generation counter; later changes remain dirty. The catalog's independent local autosave is never marked as a successful remote save. Save As does not reuse the old resource ID.
 
+Recoverable JavaScript payload-copy and event-dispatch errors are logged. If a taken save event
+cannot be delivered, its exact captured request becomes a failed result and the application is
+scheduled to consume it on another frame. It does not acknowledge persistence or advance the
+saved checkpoint. Later events still dispatch. A result already accepted from a synchronous host
+listener is retained instead of being replaced by the delivery failure. This recovery covers
+returned JavaScript exceptions, not unrecoverable WASM traps or process termination.
+
 snapshot() describes the active library, generation, dirty/pending/loading state and separate provider resources. Library IDs are session-local and change on replacement even if catalog photo IDs or generations repeat. Before-unload protection applies to pending provider work and unsaved provider revisions only after explicit registration; publishing the API alone does not change the default page behavior.
 
 ## Account boundaries and limits
@@ -41,10 +48,29 @@ Terminal `opened`, `openFailed` and `saveFailed` events survive a full event que
 already-admitted read/save owners remain pending until the terminal can be enqueued, with at
 most 16 retained read completions and 16 save failures. The publisher drains bounded batches
 twice in order; the queue and each returned batch remain limited to 64 events.
+Delivery-failure recovery consumes only already-admitted captures. If the ordinary command queue
+is full, at most 16 such captures can append their correlated failures before the next logic
+drain. This does not admit new operations or relax the public command/result queue checks.
 
 ## Validation
 
 Source regression fixtures cover opt-in defaults, save choices, separate resource identities, atomic library snapshots, content generations, overflow handling and archive bounds including the central directory. Execution results are recorded only after validation of the published source candidate.
+
+Native publisher fixtures exercise the same bounded event pump used by the web publisher with
+an injected returned delivery error, including a full command queue, normal delivery, continued
+event order and a synchronous result. They do not reproduce a browser allocation exception.
+Native input fixtures exercise real resident slider drafts and the admission guard directly.
+The Host closed-document fixture verifies result correlation and Host state, not the web
+application's closed-document binding guard. Neither fixture runs WebApp::provider_tick or
+begin_provider_open.
+
+Browser integration still needs to deliver a valid provider ZIP after a live draft starts and
+verify openFailed plus preservation of the current library/draft with no staging. It also needs
+to deliver a saved result for an older library instance after another becomes active and verify
+that the old instance is not rebound. A recoverable JavaScript payload-copy failure must be
+checked through actual event dispatch, confirming the error log, failed request consumption,
+unchanged saved checkpoint and a subsequent successful save. These are runtime requirements,
+not results established by native unit fixtures.
 
 ## Native UI preview
 

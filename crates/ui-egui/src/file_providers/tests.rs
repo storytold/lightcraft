@@ -254,7 +254,7 @@ fn closed_document_keeps_its_capture_result_reachable_without_binding_the_new_do
     assert_eq!(resource, "one");
     assert_eq!(status, "saved");
     assert_eq!(host.snapshot()["documents"], documents);
-    assert!(!host.bound(1), "the application must reject the closed document before admitting the binding");
+    assert!(!host.bound(1), "consuming a Host result does not itself bind the closed document; this test does not run WebApp::provider_tick");
     assert_eq!(host.state().bindings.get(&2).unwrap().resource, "two");
     assert!(!host.busy());
 }
@@ -270,6 +270,132 @@ fn disabled_provider_keeps_pending_result_reachable() {
     host.result(id, "cancel".into(), String::new()).unwrap();
     host.take_commands();
     host.disconnect().unwrap();
+}
+
+#[test]
+fn failed_save_delivery_becomes_a_correlated_failure_and_later_events_still_dispatch() {
+    let (host, _) = connected();
+    let id = request(&host, 1);
+    host.resolve_dialog(&id, "provider", "").unwrap();
+    host.take_commands();
+    host.capture(&id, capture(1, 23), vec![1, 2, 3]).unwrap();
+    host.state().event(json!({"type":"after-save"}), None).unwrap();
+    let mut errors = Vec::new();
+    let mut delivered = Vec::new();
+    let repaint = host.publish_events_with(
+        |metadata, bytes| {
+            if metadata["type"] == "save" {
+                assert_eq!(metadata["requestId"], id);
+                assert_eq!(bytes, Some(vec![1, 2, 3]));
+                Err("recoverable JavaScript payload allocation failure")
+            } else {
+                delivered.push(metadata["type"].as_str().unwrap().to_string());
+                Ok(())
+            }
+        },
+        |error| errors.push(error),
+    );
+    assert!(repaint, "the app must process the failed result without another host callback");
+    assert_eq!(errors, vec!["recoverable JavaScript payload allocation failure"]);
+    assert_eq!(delivered, vec!["after-save"]);
+    assert!(host.state().captures.is_empty(), "taken bytes cannot leave an unreachable capture");
+    assert!(host.result(id, "saved".into(), "late".into()).is_err(), "the failed delivery cannot later acknowledge persistence");
+    let commands = host.take_commands();
+    assert_eq!(commands.len(), 1);
+    let Command::Result { capture, resource, status } = &commands[0] else { panic!("expected correlated delivery failure") };
+    assert_eq!((capture.doc, capture.revision), (1, 23));
+    assert_eq!(status, "failed");
+    assert!(resource.is_empty());
+    assert!(!host.bound(1));
+    assert!(!host.pending_for(1));
+    assert!(!host.busy());
+    host.disconnect().unwrap();
+}
+
+#[test]
+fn successful_save_delivery_stays_pending_until_the_hosts_explicit_result() {
+    let (host, _) = connected();
+    let id = request(&host, 1);
+    host.resolve_dialog(&id, "provider", "").unwrap();
+    host.take_commands();
+    host.capture(&id, capture(1, 23), vec![4, 5, 6]).unwrap();
+    let mut delivered = 0;
+    let mut errors = 0;
+    assert!(!host.publish_events_with(
+        |metadata, bytes| {
+            assert_eq!(metadata["requestId"], id);
+            assert_eq!(bytes, Some(vec![4, 5, 6]));
+            delivered += 1;
+            Ok::<(), &str>(())
+        },
+        |_| errors += 1,
+    ));
+    assert_eq!((delivered, errors), (1, 0));
+    assert!(host.pending_for(1));
+    assert!(host.take_commands().is_empty(), "successful delivery is not a persistence acknowledgement");
+    host.result(id, "saved".into(), "one".into()).unwrap();
+    let commands = host.take_commands();
+    assert!(matches!(commands.as_slice(), [Command::Result { status, .. }] if status == "saved"));
+}
+
+#[test]
+fn failed_delivery_recovers_its_existing_capture_even_with_a_full_command_queue() {
+    let (host, connection) = connected();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Other.zip".into(), updated_at: String::new() }]).unwrap();
+    let id = request(&host, 1);
+    host.resolve_dialog(&id, "provider", "").unwrap();
+    host.take_commands();
+    host.capture(&id, capture(1, 23), vec![7]).unwrap();
+    let mut reads = Vec::new();
+    for _ in 0..super::MAX_PENDING {
+        let read = host.request_open("one").unwrap();
+        host.open(read.clone(), "Other.zip".into(), vec![]).unwrap();
+        reads.push(read);
+    }
+    assert_eq!(host.state().commands.len(), super::MAX_PENDING);
+    assert!(host.result(id.clone(), "saved".into(), "one".into()).unwrap_err().contains("queue is full"));
+    assert!(host.publish_events_with(
+        |metadata, _| if metadata["type"] == "save" { Err("delivery failed") } else { Ok(()) },
+        |_| {},
+    ));
+    assert!(host.state().captures.is_empty());
+    let commands = host.take_commands();
+    assert_eq!(commands.len(), super::MAX_PENDING + 1);
+    assert_eq!(commands.iter().filter(|command| matches!(command, Command::Open { .. })).count(), reads.len());
+    let failures: Vec<_> = commands.iter().filter_map(|command| match command {
+        Command::Result { capture, resource, status } => Some((capture.doc, capture.revision, resource.as_str(), status.as_str())),
+        _ => None,
+    }).collect();
+    assert_eq!(failures, vec![(1, 23, "", "failed")]);
+    assert!(!host.bound(1));
+    assert!(host.result(id, "saved".into(), "late".into()).is_err());
+    for read in reads {
+        host.opened(&read, None, "fixture complete");
+    }
+    assert!(!host.publish_events_with(|_, _| Ok::<(), &str>(()), |_| {}));
+    assert!(!host.busy());
+}
+
+#[test]
+fn delivery_error_cannot_replace_a_result_already_accepted_from_a_synchronous_listener() {
+    let (host, _) = connected();
+    let id = request(&host, 1);
+    host.resolve_dialog(&id, "provider", "").unwrap();
+    host.take_commands();
+    host.capture(&id, capture(1, 23), vec![8]).unwrap();
+    assert!(host.publish_events_with(
+        |metadata, _| {
+            assert_eq!(metadata["requestId"], id);
+            host.result(id.clone(), "saved".into(), "one".into()).unwrap();
+            Err("dispatcher failed after the listener's result")
+        },
+        |_| {},
+    ));
+    let commands = host.take_commands();
+    assert_eq!(commands.len(), 1);
+    let Command::Result { capture, resource, status } = &commands[0] else { panic!("expected the listener's result") };
+    assert_eq!((capture.doc, capture.revision, resource.as_str(), status.as_str()), (1, 23, "one", "saved"));
+    assert!(!host.busy());
 }
 
 #[test]
