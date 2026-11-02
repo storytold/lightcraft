@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use lightcraft_catalog::dates::MONTHS;
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lightcraft_catalog::{CatalogError, Op, Photo, PhotoId, Source};
 use serde::Serialize;
 
 use crate::sidecar::SidecarNaming;
@@ -41,10 +41,10 @@ mod tokens;
 pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
 use fs::{folded_path, same_contents};
-pub(crate) use moves::move_all;
 #[cfg(test)]
 pub(crate) use moves::move_file_with;
 pub use moves::{MoveError, move_file};
+pub(crate) use moves::{move_all, rest_after_move_back};
 pub use plan::{plan_rename_photos, rename_photos};
 #[cfg(test)]
 pub(crate) use sidecar::PacketVersion;

@@ -1,8 +1,8 @@
 use super::fs::{MoveFs, RealFs, folded_path};
-use super::moves::{BatchMoveError, move_all, set_file_ops_to};
+use super::moves::{BatchMoveError, move_all, rest_after_move_back, set_file_ops_to};
 use super::sidecar::{PacketVersion, retry_sidecars, retry_sidecars_for_paths};
 use super::tokens::{expand, split_ext};
-use super::{EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
+use super::{CatalogError, EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
 
 /// The photos among `ids` a rename handles, in order: photos sharing one file (virtual copies)
 /// rename once. No file-system calls.
@@ -208,7 +208,26 @@ impl Session {
             && let Err(err) = self.commit(&label(n), op)
         {
             let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-            if let Err(e) = move_all(fs, &back) {
+            let moved_back = move_all(fs, &back);
+            if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                && let Some(rest) = self.undo.last().map(|step| step.op.clone())
+            {
+                // (what is left of the rollback must follow the files as far as they went back, not move them again)
+                let rest = rest_after_move_back(rest, &moved_back);
+                if let Some(step) = self.undo.last_mut() {
+                    step.op = rest;
+                }
+            }
+            if let Err(e) = moved_back {
+                // sidecars left apart from their photo are repaired later: with the partial step (undo retries them) or,
+                // when the catalog changed nothing, with the next rename
+                if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                    && let Some(step) = self.undo.last_mut()
+                {
+                    step.retry_sidecars.extend(e.pending_sidecars);
+                } else {
+                    self.pending_sidecar_repairs.extend(e.pending_sidecars);
+                }
                 return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
             }
             return Err(err);
