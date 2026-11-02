@@ -337,6 +337,9 @@ pub struct Gpu {
     free: std::sync::Mutex<Vec<Tracked>>,
     /// Largest storage buffer the device accepts (bytes).
     pub max_buffer: u64,
+    /// The crystal grain tables of the last grain pattern, resident: a render (each Amount step
+    /// of a drag) copies them on the GPU instead of uploading their 12 MB again ([`Gpu::grain_tables`]).
+    grain: std::sync::Mutex<Option<(std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>, Buf)>>,
 }
 
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
@@ -459,7 +462,7 @@ impl Gpu {
         });
         let max_buffer = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
         log::info!("gpu: {} ({:?}), {} kernels in {build_ms} ms, buffers ≤ {} MiB", info.name, info.backend, kernels.len(), max_buffer >> 20);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer })
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, grain: Default::default() })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -639,6 +642,41 @@ impl Gpu {
             FailKind::Limit,
             format!("a {} MiB buffer exceeds the device's {} MiB storage-buffer limit", size.div_ceil(1 << 20), self.limit() >> 20),
         );
+    }
+
+    /// Record into `enc` a copy of `tile`'s summed-area tables (both tori, back to back) into
+    /// `dst` at value offset `at`, uploading them first unless they are the resident ones. False
+    /// when `dst` can't hold them (an over-limit placeholder: the render has failed already).
+    pub fn grain_tables(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        tile: &std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>,
+        dst: &Buf,
+        at: usize,
+    ) -> bool {
+        let len: usize = tile.sats.iter().map(Vec::len).sum();
+        let (start, bytes) = ((at as u64) * 4, (len as u64) * 4);
+        if len == 0 || dst.raw().size() < start.saturating_add(bytes) {
+            return false;
+        }
+        let mut resident = self.grain.lock().unwrap_or_else(|e| e.into_inner());
+        if !resident.as_ref().is_some_and(|(t, b)| std::sync::Arc::ptr_eq(t, tile) && b.raw().size() >= bytes) {
+            // the old tables go back to the pool first: one pattern's tables are resident at a time
+            *resident = None;
+            let buf = self.buffer(len);
+            if buf.raw().size() < bytes {
+                return false;
+            }
+            let mut off = 0u64;
+            for sat in &tile.sats {
+                self.queue.write_buffer(buf.raw(), off, bytemuck::cast_slice(sat));
+                off += (sat.len() as u64) * 4;
+            }
+            *resident = Some((tile.clone(), buf));
+        }
+        let Some((_, src)) = resident.as_ref() else { return false };
+        enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), start, bytes);
+        true
     }
 
     /// Stands in for a buffer that could not be created (the render has failed already).

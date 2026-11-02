@@ -97,10 +97,23 @@ curtain; #1060: −9.3). Fine detail under the grain is kept (detail gain
 ## Performance
 
 - **Drawing the emulsion** (per Size, Roughness and seed; cached, so Amount drags and re-renders
-  draw nothing): every crystal is stamped as bit spans from a per-layer table of its rasterisation at
-  16 × 16 sub-pixel phases, layers are counted in bit-sliced counters, and the tiles are drawn in
-  parallel bands. 5–17 ms on an M2 Max (12 threads) at any setting (`tile_timing_report`).
-- **Per pixel:** two box sums, on the CPU and on the GPU; the tables (12 MB) follow the finish
-  kernel's other tables in its `aux` buffer.
+  draw nothing): every crystal is stamped from a per-layer table of its rasterisation at 16 × 16
+  sub-pixel phases, as one 64-bit mask per row (a fixed number of rows per layer, those outside a
+  band landing in scratch rows around it, so a crystal costs no branch per row), layers are counted
+  in bit-sliced counters, and the tiles are drawn in parallel bands. 5–17 ms on an M2 Max (12
+  threads; measured before the row masks), 15–33 ms on a Ryzen 5 7545U (6 cores, 12 threads; 10–20 %
+  less than before them) at any setting (`tile_timing_report`).
+- **Drags.** A draft render (a slider drag) doesn't wait for a tile it hasn't got: the last tile
+  drawn for the photo's seed stands in while the new one is drawn in the background, on a pool of
+  half the cores so the drag's renders don't queue behind it, and the next render takes it. The
+  full-quality render when the drag ends waits for the exact tile. A Size drag on the Ryzen with its
+  Radeon 740M (GPU, 2.5 MP preview): 13–14 ms a frame instead of 62–66 ms. (On wasm, without
+  threads, drafts wait.)
+- **Per pixel:** two box sums, on the CPU and on the GPU. The tables (12 MB) stay on the GPU
+  between renders, for the last tile used (`Gpu::grain_tables`), and are copied after the finish
+  kernel's other tables in its `aux` buffer on the GPU: an Amount drag uploads nothing. On the
+  Radeon 740M an Amount drag frame (2.5 MP) went from 16.9 to 11–15 ms (no grain: 8 ms).
 - **24 MP NEF → PNG** (`lightcraft-cli render`, M2 Max, median of three): no grain 1.09 s, grain
   50 / 25 / 50 1.09 s on the GPU; 1.33 s and 1.49 s CPU-only (the finish stage 0.26 → 0.42 s).
+- **24 MP NEF → PNG on the Ryzen 5 7545U / Radeon 740M** (median of three): no grain 2.07 s, grain
+  50 / 25 / 50 2.09 s on the GPU; 2.69 s and 2.87 s CPU-only.

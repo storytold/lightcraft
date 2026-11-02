@@ -236,11 +236,29 @@ const STAMP_R: f64 = 16.0;
 /// `(X + qx/PHASES, Y + qy/PHASES)` (`X`, `Y` integers) it covers rows `Y + rows[qy].0 ..= Y +
 /// rows[qy].1`, and in row `Y + rows[qy].0 + k` the pixels `X + o.0 ..= X + o.1`, with
 /// `o = spans[(qy·PHASES + qx)·height + k]`.
+///
+/// The same rows as bit masks, for drawing a crystal without a branch per row: phase
+/// `p = qy·PHASES + qx` spans pixels `X + extent[p].0 ..= X + extent[p].1`, and its row `k` is
+/// `masks[p·height + k]` shifted to `X + extent[p].0` (rows past the phase's own are empty).
+/// `masks` is empty when a phase is wider than 64 pixels.
 #[derive(Clone, Debug)]
 struct Stamp {
     rows: [(i32, i32); PHASES],
     height: usize,
     spans: Vec<(i32, i32)>,
+    extent: Vec<(i32, i32)>,
+    masks: Vec<u64>,
+}
+
+/// Where [`Layer::draw`] draws: rows `y0..y0 + rows` of a torus of side `t`, `w` words per row,
+/// after `margin` scratch rows.
+#[derive(Clone, Copy)]
+struct Band {
+    t: usize,
+    y0: usize,
+    rows: usize,
+    w: usize,
+    margin: usize,
 }
 
 /// One emulsion layer: its crystal (a regular polygon) and seed density, in tile pixels.
@@ -340,7 +358,25 @@ impl Layer {
                 }
             }
         }
-        Stamp { rows, height, spans }
+        let mut extent = vec![(0, -1); PHASES * PHASES];
+        let mut masks = vec![0u64; PHASES * PHASES * height];
+        let mut fits = true;
+        for (p, e) in extent.iter_mut().enumerate() {
+            let Some(rows) = spans.get(p * height..(p + 1) * height) else { continue };
+            let used = || rows.iter().filter(|(o0, o1)| o0 <= o1);
+            let (Some(lo), Some(hi)) = (used().map(|o| o.0).min(), used().map(|o| o.1).max()) else { continue };
+            *e = (lo, hi);
+            fits &= hi - lo < 64;
+            for (m, &(o0, o1)) in masks.iter_mut().skip(p * height).zip(rows) {
+                if o0 <= o1 && o1 - lo < 64 {
+                    *m = (!0u64 >> (63 - (o1 - o0))) << (o0 - lo);
+                }
+            }
+        }
+        if !fits {
+            masks.clear();
+        }
+        Stamp { rows, height, spans, extent, masks }
     }
 
     /// The crystal's horizontal extent at height `y` above its centre (convex: one interval).
@@ -352,12 +388,14 @@ impl Layer {
     }
 
     /// Sets the bits of the pixels the layer covers in rows `y0..` of a torus of side `t`:
-    /// `cover` holds whole rows of `w` words (bit `i % 64` of word `i / 64` is pixel `i`).
-    fn draw(&self, t: usize, y0: usize, w: usize, cover: &mut [u64]) {
-        let rows = cover.len() / w.max(1);
+    /// `cover` holds whole rows of `w` words (bit `i % 64` of word `i / 64` is pixel `i`), the
+    /// band's rows between `margin` rows above and below it (scratch: what lands there is not part
+    /// of the band; `margin` is at least the stamp's height).
+    fn draw(&self, t: usize, y0: usize, w: usize, margin: usize, cover: &mut [u64]) {
+        let rows = (cover.len() / w.max(1)).saturating_sub(2 * margin);
         if 2.0 * self.r < FINE {
             // each pixel covered with probability FILLING (one half: one random bit)
-            for (j, row) in cover.chunks_mut(w.max(1)).enumerate() {
+            for (j, row) in cover.chunks_mut(w.max(1)).skip(margin).take(rows).enumerate() {
                 let mut bits = Stream(hash(self.seed, self.index, (y0 + j) as u32, 0xb175));
                 for v in row.iter_mut() {
                     *v = bits.next() as u64 | (bits.next() as u64) << 32;
@@ -379,7 +417,7 @@ impl Layer {
                 let mut h = Stream(hash(self.seed ^ (self.index << 20), cx as u32, wy, 0xce11));
                 for _ in 0..poisson(&cdf, h.next()) {
                     let (u, v) = (unit(h.next()), unit(h.next()));
-                    self.splat((cx as f64 + u) * c, (cy as f64 + v) * c, t, y0, w, cover);
+                    self.splat((cx as f64 + u) * c, (cy as f64 + v) * c, Band { t, y0, rows, w, margin }, cover);
                 }
             }
         }
@@ -387,22 +425,47 @@ impl Layer {
 
     /// Marks the pixels whose centres the crystal at (`px`, `py`) covers (see [`Self::draw`]).
     #[inline]
-    fn splat(&self, px: f64, py: f64, t: usize, y0: usize, w: usize, cover: &mut [u64]) {
-        let rows = cover.len() / w.max(1);
+    fn splat(&self, px: f64, py: f64, band: Band, cover: &mut [u64]) {
+        let Band { t, y0, rows, w, margin } = band;
         if let Some(st) = &self.stamp {
             let (bx, by) = (px.floor(), py.floor());
             let (qx, qy) = ((((px - bx) * PHASES as f64) as usize).min(PHASES - 1), (((py - by) * PHASES as f64) as usize).min(PHASES - 1));
             let (bx, by) = (bx as i64, by as i64);
             let Some(&(a, b)) = st.rows.get(qy) else { return };
             let (lo, hi) = ((by + a as i64).max(y0 as i64), (by + b as i64).min((y0 + rows) as i64 - 1));
-            let base = (qy * PHASES + qx) * st.height;
-            let Some(spans) = st.spans.get(base + (lo - by - a as i64).max(0) as usize..) else { return };
-            for (j, &(o0, o1)) in (lo..=hi).zip(spans) {
-                if o0 <= o1 {
-                    let off = (j as usize - y0) * w;
-                    if let Some(row) = cover.get_mut(off..off + w) {
-                        set_wrapped(row, t, bx + o0 as i64, bx + o1 as i64);
+            if hi < lo {
+                return;
+            }
+            // within the torus across: the whole stamp, a fixed number of rows of masks (those
+            // above or below the band land in the margins)
+            let p = qy * PHASES + qx;
+            if let (Some(&(e0, e1)), Some(masks)) = (st.extent.get(p), st.masks.get(p * st.height..(p + 1) * st.height)) {
+                let (xs, top) = (bx + e0 as i64, by + a as i64 - y0 as i64 + margin as i64);
+                if xs >= 0 && bx + (e1 as i64) < t as i64 && top >= 0 {
+                    let (word, shift) = ((xs >> 6) as usize, (xs & 63) as u32);
+                    // a bit past the row's last word would be a pixel ≥ t: the high word is then 0
+                    let start = top as usize * w + word;
+                    for (k, &m) in masks.iter().enumerate() {
+                        let v = (m as u128) << shift;
+                        let i = start + k * w;
+                        if let Some(c) = cover.get_mut(i) {
+                            *c |= v as u64;
+                        }
+                        if let Some(c) = cover.get_mut(i + 1) {
+                            *c |= (v >> 64) as u64;
+                        }
                     }
+                    return;
+                }
+            }
+            // rows `lo..=hi` of the band, spans `k0..` of the stamp's rows (`hi ≤ by + b`: within its height)
+            let (k0, n) = ((lo - by - a as i64) as usize, (hi - lo + 1) as usize);
+            let base = (qy * PHASES + qx) * st.height + k0;
+            let (r0, r1) = (lo as usize - y0 + margin, hi as usize + 1 - y0 + margin);
+            let (Some(spans), Some(band)) = (st.spans.get(base..base + n), cover.get_mut(r0 * w..r1 * w)) else { return };
+            for (row, &(o0, o1)) in band.chunks_exact_mut(w.max(1)).zip(spans) {
+                if o0 <= o1 {
+                    set_wrapped(row, t, bx + o0 as i64, bx + o1 as i64);
                 }
             }
             return;
@@ -418,7 +481,7 @@ impl Layer {
             if i1 < i0 {
                 continue;
             }
-            let Some(row) = cover.get_mut((j - y0) * w..(j - y0 + 1) * w) else { continue };
+            let Some(row) = cover.get_mut((j - y0 + margin) * w..(j - y0 + margin + 1) * w) else { continue };
             set_wrapped(row, t, i0, i1);
         }
     }
@@ -519,15 +582,17 @@ impl std::fmt::Debug for CrystalTile {
 fn draw_torus(which: usize, t: usize, seed: u32, look: &CrystalLook) -> Vec<u8> {
     let layers: Vec<Layer> = emulsion(seed, look).into_iter().filter(|l| l.index as usize % 2 == which).collect();
     let w = t.div_ceil(64);
+    // scratch rows above and below a band, for the stamps' rows outside it (`Layer::splat`)
+    let margin = layers.iter().filter_map(|l| l.stamp.as_ref().map(|s| s.height)).max().unwrap_or(0);
     let mut count = vec![0u8; t * t];
     par_rows(&mut count, t * BAND, |band, out| {
         let rows = out.len() / t.max(1);
         let n = rows * w;
-        let (mut cover, mut planes) = (vec![0u64; n], vec![0u64; PLANES * n]);
+        let (mut cover, mut planes) = (vec![0u64; n + 2 * margin * w], vec![0u64; PLANES * n]);
         for layer in &layers {
             cover.fill(0);
-            layer.draw(t, band * BAND, w, &mut cover);
-            add_layer(&mut planes, &cover);
+            layer.draw(t, band * BAND, w, margin, &mut cover);
+            add_layer(&mut planes, cover.get(margin * w..margin * w + n).unwrap_or_default());
         }
         for (j, row) in out.chunks_mut(t.max(1)).enumerate() {
             for (i, o) in row.iter_mut().enumerate() {
@@ -746,23 +811,77 @@ pub struct CrystalGrain {
 type Key = (u64, u64, u32);
 static TILES: Mutex<Vec<(Key, Arc<CrystalTile>)>> = Mutex::new(Vec::new());
 
-/// The tile of `look` and `seed`, drawn or from the cache.
-fn tile(look: CrystalLook, seed: u32) -> Option<Arc<CrystalTile>> {
+/// The tile being drawn in the background for a drag ([`tile`]): one at a time.
+static DRAWING: Mutex<Option<Key>> = Mutex::new(None);
+
+/// The tile of `look` and `seed`, drawn or from the cache. Unless `wait`, a tile not drawn yet
+/// is drawn in the background and the last one drawn for `seed` stands in for it meanwhile: a
+/// Size or Roughness drag doesn't wait for every step's tile (tens of milliseconds on a slow
+/// CPU), and the full-quality render when it ends waits for the exact one.
+fn tile(look: CrystalLook, seed: u32, wait: bool) -> Option<Arc<CrystalTile>> {
     let key = (look.width.to_bits(), look.spread.to_bits() ^ (look.layers as u64).rotate_left(40), seed);
     {
         let cache = TILES.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((_, t)) = cache.iter().find(|(k, _)| *k == key) {
             return Some(t.clone());
         }
+        // (wasm has no threads to draw on)
+        if !wait
+            && !cfg!(target_arch = "wasm32")
+            && let Some((_, stand_in)) = cache.iter().rev().find(|(k, _)| k.2 == seed)
+        {
+            let stand_in = stand_in.clone();
+            drop(cache);
+            draw_in_background(key, look, seed);
+            return Some(stand_in);
+        }
     }
     let t = Arc::new(CrystalTile::new(look, seed)?);
+    keep(key, t.clone());
+    Some(t)
+}
+
+/// Adds `t` to the cache (the most recent last).
+fn keep(key: Key, t: Arc<CrystalTile>) {
     let mut cache = TILES.lock().unwrap_or_else(PoisonError::into_inner);
     cache.retain(|(k, _)| *k != key);
     if cache.len() >= CACHE {
         cache.remove(0);
     }
-    cache.push((key, t.clone()));
-    Some(t)
+    cache.push((key, t));
+}
+
+/// Draws the tile of `key` on the thread pool unless another is being drawn (the next render
+/// asks again for what it needs then).
+fn draw_in_background(key: Key, look: CrystalLook, seed: u32) {
+    {
+        let mut drawing = DRAWING.lock().unwrap_or_else(PoisonError::into_inner);
+        if drawing.is_some() {
+            return;
+        }
+        *drawing = Some(key);
+    }
+    let draw = move || {
+        if let Some(t) = CrystalTile::new(look, seed) {
+            keep(key, Arc::new(t));
+        }
+        *DRAWING.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    };
+    // on a pool of its own: the renders of the drag don't queue behind its parallel bands
+    match background_pool() {
+        Some(pool) => pool.spawn(draw),
+        None => rayon::spawn(draw),
+    }
+}
+
+/// Half the cores, for tiles drawn in the background (`None`: the pool couldn't be made).
+fn background_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(2, |n| n.get()).div_ceil(2);
+        rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("grain-tile-{i}")).build().ok()
+    })
+    .as_ref()
 }
 
 /// The tone weight of an encoded channel value `v` (0..1): `Y·dV/dY` of the sRGB curve, i.e. how
@@ -781,6 +900,16 @@ fn mid_weight() -> f32 {
 impl CrystalGrain {
     /// The grain of `g` at `px_per_long` output pixels per long edge (`None`: no grain).
     pub fn new(g: &Grain, px_per_long: f64) -> Option<CrystalGrain> {
+        Self::with(g, px_per_long, true)
+    }
+
+    /// [`Self::new`] for a draft render (a drag): while its tile is drawn, the last tile drawn for
+    /// the same seed stands in for it (see [`tile`]).
+    pub fn draft(g: &Grain, px_per_long: f64) -> Option<CrystalGrain> {
+        Self::with(g, px_per_long, false)
+    }
+
+    fn with(g: &Grain, px_per_long: f64, wait: bool) -> Option<CrystalGrain> {
         let levels = strength_levels(g.amount, g.size, g.roughness);
         if !(levels > 0.0 && px_per_long.is_finite() && px_per_long > 0.0) {
             return None;
@@ -789,7 +918,7 @@ impl CrystalGrain {
         if !(foot.is_finite() && foot > 0.0 && foot < MAX_FOOTPRINT) {
             return None;
         }
-        let tile = tile(CrystalLook::new(g.size, g.roughness), g.seed)?;
+        let tile = tile(CrystalLook::new(g.size, g.roughness), g.seed, wait)?;
         Some(CrystalGrain { tile, k: (levels / 255.0) as f32 / mid_weight(), foot })
     }
 

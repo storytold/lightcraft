@@ -30,12 +30,12 @@ fn std(v: &[f64]) -> f64 {
 #[test]
 fn processes_before_v3_keep_the_value_noise() {
     for p in Process::ALL {
-        let model = GrainModel::new(&on(p, 40.0), 2000.0);
+        let model = GrainModel::new(&on(p, 40.0), 2000.0, false);
         match p {
             Process::V1 | Process::V2 => assert!(matches!(model, Some(GrainModel::Value(_))), "{p:?}"),
             Process::V3 => assert!(matches!(model, Some(GrainModel::Crystal(_))), "{p:?}"),
         }
-        assert!(GrainModel::new(&on(p, 0.0), 2000.0).is_none(), "{p:?}: no grain at Amount 0");
+        assert!(GrainModel::new(&on(p, 0.0), 2000.0, false).is_none(), "{p:?}: no grain at Amount 0");
     }
     let src = Rgb32f::filled(160, 120, [0.18; 3]);
     let (v2, v3) = (luma(&src, &on(Process::V2, 50.0), 160, 120), luma(&src, &on(Process::V3, 50.0), 160, 120));

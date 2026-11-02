@@ -152,7 +152,8 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms | crystal grain tables) for `fp` with `masks` (their local adjustments' terms).
+/// mask terms) for `fp` with `masks` (their local adjustments' terms). The crystal grain's tables go
+/// after `aux` in the kernel's buffer ([`crate::render`] copies them there).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
@@ -169,11 +170,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for m in masks {
         aux.extend_from_slice(m);
     }
+    // the crystal grain's tables follow `aux` on the GPU without being part of it: they stay
+    // resident between renders ([`crate::Gpu::grain_tables`]) and the render copies them in
     let mut sat_off = [0u32; 2];
     if let Some(GrainModel::Crystal(g)) = &fp.grain {
-        for (off, sat) in sat_off.iter_mut().zip(&g.tile.sats) {
-            *off = aux.len() as u32;
-            aux.extend_from_slice(sat);
+        let mut off = aux.len();
+        for (slot, sat) in sat_off.iter_mut().zip(&g.tile.sats) {
+            *slot = off as u32;
+            off += sat.len();
         }
     }
 

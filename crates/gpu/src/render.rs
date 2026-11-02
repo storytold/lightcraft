@@ -156,6 +156,20 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// The finish kernel's `aux` buffer: `aux`, then the crystal grain's tables when it has them
+    /// (copied on the GPU from the resident ones, see [`Gpu::grain_tables`]).
+    pub fn finish_aux(&mut self, aux: &[f32], grain: Option<&lightcraft_pipeline::finish::GrainModel>) -> Buf {
+        let Some(lightcraft_pipeline::finish::GrainModel::Crystal(g)) = grain else { return self.gpu.upload(aux) };
+        let tables: usize = g.tile.sats.iter().map(Vec::len).sum();
+        let out = self.gpu.buffer(aux.len().saturating_add(tables));
+        if !aux.is_empty() && out.raw().size() >= (aux.len() as u64) * 4 {
+            self.gpu.queue.write_buffer(out.raw(), 0, bytemuck::cast_slice(aux));
+        }
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        self.gpu.grain_tables(enc, &g.tile, &out, aux.len());
+        out
+    }
+
     /// Submit what is recorded and read back `len` values of `b`.
     pub fn read<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize) -> Vec<T> {
         self.pending = 0;
@@ -683,6 +697,7 @@ pub fn render(
         px_per_long: plan.px_per_long,
         air_pre: prep.air,
         space: req.space,
+        draft: req.quality == lightcraft_pipeline::Quality::Draft,
     });
     // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
     fp.proof = req.proof.map(|pr| pr.params(req.space));
@@ -696,7 +711,7 @@ pub fn render(
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
     let (p, aux) = finish_block(&fp, &terms, &present);
-    let aux = gpu.upload(&aux);
+    let aux = cx.finish_aux(&aux, fp.grain.as_ref());
     // cleared, so that work which never ran cannot pass for an image (see the check below)
     let out = cx.zeroed(n);
     if fault == Some(crate::Fault::Validation) {

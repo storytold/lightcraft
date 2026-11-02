@@ -46,7 +46,7 @@ fn half_width(v: &[f32], n: usize) -> f64 {
 }
 
 fn tile_of(size: f64, roughness: f64) -> Arc<CrystalTile> {
-    tile(CrystalLook::new(size, roughness), 7).expect("a tile")
+    tile(CrystalLook::new(size, roughness), 7, true).expect("a tile")
 }
 
 #[test]
@@ -146,11 +146,40 @@ fn hostile_settings_render_finite_or_no_grain() {
 #[test]
 fn seed_picks_the_pattern() {
     let look = CrystalLook::new(25.0, 50.0);
-    let (a, b, c) = (tile(look, 1), tile(look, 1), tile(look, 2));
+    let (a, b, c) = (tile(look, 1, true), tile(look, 1, true), tile(look, 2, true));
     let (Some(a), Some(b), Some(c)) = (a, b, c) else { panic!("tiles") };
     let (pa, pb, pc) = (patch(&a, REF_LONG, 64, 0), patch(&b, REF_LONG, 64, 0), patch(&c, REF_LONG, 64, 0));
     assert_eq!(pa, pb);
     assert_ne!(pa, pc);
+}
+
+/// A draft (a Size or Roughness drag) doesn't wait for a new tile: the last tile of the seed stands
+/// in while the new one is drawn in the background, and then the drag gets it. A render that
+/// waits always gets the exact tile, as does a draft for a seed with no tile yet.
+#[test]
+fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
+    // seeds of their own: other tests share the cache (which they may also evict from)
+    let (seed, fresh) = (0x0d4a_0001, 0x0d4a_0002);
+    let (a, b) = (CrystalLook::new(30.0, 50.0), CrystalLook::new(31.0, 50.0));
+    let exact = |look: CrystalLook, seed: u32| patch(&CrystalTile::new(look, seed).expect("tile"), REF_LONG, 32, 0);
+    let first = tile(a, seed, true).expect("tile");
+    assert_eq!(first.look, a);
+    let stand_in = tile(b, seed, false).expect("tile");
+    assert_eq!(stand_in.look, a, "the draft waited for its tile");
+    // the drag's next renders get the new tile once it is drawn
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let drawn = loop {
+        let t = tile(b, seed, false).expect("tile");
+        if t.look == b {
+            break t;
+        }
+        assert!(std::time::Instant::now() < deadline, "the background tile never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert_eq!(patch(&drawn, REF_LONG, 32, 0), exact(b, seed));
+    assert_eq!(patch(&tile(b, seed, true).expect("tile"), REF_LONG, 32, 0), exact(b, seed));
+    // nothing drawn for this seed: nothing to stand in, the draft draws it
+    assert_eq!(patch(&tile(a, fresh, false).expect("tile"), REF_LONG, 32, 0), exact(a, fresh));
 }
 
 /// Grain width (autocorrelation half-width at mid grey, 6000 px) at Lightroom Classic's

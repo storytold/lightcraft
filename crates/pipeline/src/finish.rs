@@ -109,8 +109,9 @@ pub enum GrainModel {
 }
 
 impl GrainModel {
-    /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: none).
-    pub fn new(s: &DevelopSettings, px_per_long: f64) -> Option<GrainModel> {
+    /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: none);
+    /// `draft`: for a drag ([`crate::crystal::CrystalGrain::draft`]).
+    pub fn new(s: &DevelopSettings, px_per_long: f64, draft: bool) -> Option<GrainModel> {
         let g = &s.grain;
         match s.process.process() {
             Process::V1 | Process::V2 => (g.amount > 0.0).then(|| {
@@ -122,6 +123,7 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
+            Process::V3 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
             Process::V3 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
@@ -264,12 +266,14 @@ pub struct FinishParamsInput<'a> {
     pub px_per_long: f64,
     pub air_pre: f32,
     pub space: OutputSpace,
+    /// A draft render (a drag, [`crate::Quality::Draft`]): see [`GrainModel::new`].
+    pub draft: bool,
 }
 
 impl FinishParams {
     /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`].
     pub fn new(input: FinishParamsInput<'_>) -> FinishParams {
-        let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space } = input;
+        let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space, draft } = input;
         let effects = s.section_enabled("effects");
         let (clar, tex, dehaze) = if effects {
             ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32)
@@ -286,7 +290,7 @@ impl FinishParams {
             && frame.oh.is_finite()
             && frame.ow.max(frame.oh) > 0.0
             && out_to_norm.0.iter().all(|v| v.is_finite());
-        let grain = if effects && finite_frame { GrainModel::new(s, px_per_long) } else { None };
+        let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -354,18 +358,20 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     }
 }
 
-pub(crate) fn finish(
-    p: &Prepared,
-    s: &DevelopSettings,
-    frame: &Frame,
-    info: &SourceInfo,
-    space: OutputSpace,
-    display: Option<&crate::DisplaySpace>,
-    proof: Option<crate::Proof>,
-) -> Rgba8 {
+pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, req: &crate::RenderRequest) -> Rgba8 {
+    let (space, display, proof) = (req.space, req.display.as_ref(), req.proof);
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp =
-        FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long: p.px_per_long, air_pre: p.air, space });
+    let draft = req.quality == crate::Quality::Draft;
+    let mut fp = FinishParams::new(FinishParamsInput {
+        settings: s,
+        frame,
+        info,
+        image_size: (w, h),
+        px_per_long: p.px_per_long,
+        air_pre: p.air,
+        space,
+        draft,
+    });
     fp.proof = proof.map(|pr| pr.params(space));
     if let Some(d) = display {
         fp.for_display(d, proof);
@@ -382,19 +388,21 @@ pub(crate) fn finish(
 }
 
 /// [`finish`] into 16-bit display-encoded or 32-bit float linear samples (output primaries).
-pub(crate) fn finish_deep(
-    p: &Prepared,
-    s: &DevelopSettings,
-    frame: &Frame,
-    info: &SourceInfo,
-    space: OutputSpace,
-    depth: OutputDepth,
-    proof: Option<crate::Proof>,
-) -> DeepImage {
+pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, req: &crate::RenderRequest) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
+    let (space, depth, proof) = (req.space, req.depth, req.proof);
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp =
-        FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long: p.px_per_long, air_pre: p.air, space });
+    let draft = req.quality == crate::Quality::Draft;
+    let mut fp = FinishParams::new(FinishParamsInput {
+        settings: s,
+        frame,
+        info,
+        image_size: (w, h),
+        px_per_long: p.px_per_long,
+        air_pre: p.air,
+        space,
+        draft,
+    });
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {

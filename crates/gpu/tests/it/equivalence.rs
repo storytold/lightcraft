@@ -153,6 +153,33 @@ fn banded_full_size_render_matches() {
     check("banded 3000×2000", &src, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, h));
 }
 
+/// The crystal grain's tables stay on the GPU between renders: an Amount change reuses them,
+/// another pattern (Size, Roughness, seed) replaces them, and going back draws the first again.
+#[test]
+fn grain_patterns_in_turn_match() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 480, 320);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let steps: [(&str, f64, f64, f64, u32); 6] = [
+        ("grain 50/25/50", 50.0, 25.0, 50.0, 1),
+        ("grain 90/25/50 (same pattern)", 90.0, 25.0, 50.0, 1),
+        ("grain 50/70/50 (new size)", 50.0, 70.0, 50.0, 1),
+        ("grain 50/70/0 (new roughness)", 50.0, 70.0, 0.0, 1),
+        ("grain 50/70/0 seed 7", 50.0, 70.0, 0.0, 7),
+        ("grain 50/25/50 again", 50.0, 25.0, 50.0, 1),
+    ];
+    for (name, amount, size, roughness, seed) in steps {
+        let mut s = DevelopSettings::default();
+        s.grain.amount = amount;
+        s.grain.size = size;
+        s.grain.roughness = roughness;
+        s.grain.seed = seed;
+        check(name, &src, &info, &s, &RenderRequest::fit(480, 320));
+    }
+}
+
 fn cases() -> Vec<(&'static str, Edit)> {
     vec![
         ("default", |_| {}),
