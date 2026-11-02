@@ -205,6 +205,11 @@ fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: 
     if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
         app.renderer.request(slot, job, 60);
     }
+    request_thumb(app, id);
+}
+
+/// Ask for the thumbnail a tile shows until its render is there.
+fn request_thumb(app: &mut LightcraftApp, id: PhotoId) {
     if let Some(job) = app.session.thumb_job(id, 256) {
         app.renderer.request(Slot::Thumb(id), job, 30);
     }
@@ -248,8 +253,11 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
-    // a survey tile asks for its render once it has landed, not one per size it passes on the way
-    if !(app.ui.view == ViewMode::Survey && app.survey_motion.moving(ui.input(|i| i.time))) {
+    // a survey tile asks for its render once it has landed, not one per size it passes on the way;
+    // its thumbnail (one size) meanwhile, so a photo that joins doesn't wait for it
+    if app.ui.view == ViewMode::Survey && app.survey_motion.moving(ui.input(|i| i.time)) {
+        request_thumb(app, id);
+    } else {
         request_tile_renders(app, id, slot, want, aspect);
     }
     // zoomed past what that render holds (1:1 to check focus): the part on screen as a window, as

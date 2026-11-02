@@ -14,9 +14,10 @@ pub const GAP: f32 = 6.0;
 /// Seconds a tile takes to glide to its new cell.
 pub const GLIDE_SECS: f64 = 0.2;
 
-/// A width / height ratio that layout arithmetic can use (a hostile size gives a square).
+/// A width / height ratio that layout arithmetic can use: the photo's own, as it is drawn (a
+/// 100:1 panorama counts as one), or a square for a size that is none.
 fn usable_aspect(a: f32) -> f32 {
-    if a.is_finite() && a > 0.0 { a.clamp(0.05, 20.0) } else { 1.0 }
+    if a.is_finite() && a > 0.0 { a } else { 1.0 }
 }
 
 /// Image area photos with `aspects` show in a grid of `cols` equal cells in `area`.
@@ -139,6 +140,12 @@ impl SurveyMotion {
         let slots = photos.iter().map(|id| *self.slots.entry(*id).or_insert_with(|| free.next().unwrap_or(u8::MAX))).collect();
         (slots, freed)
     }
+
+    /// Whether `id` has a tile here (its place or its render slot).
+    #[cfg(test)]
+    pub fn tracks(&self, id: PhotoId) -> bool {
+        self.tiles.contains_key(&id) || self.slots.contains_key(&id)
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +172,15 @@ mod tests {
         assert_eq!(cols(&c), 2, "{c:?}");
     }
 
+    /// Column choice follows the ratio drawn, also past 20:1: four 100:1 panoramas and four
+    /// portraits show most side by side in four columns, not one tall column.
+    #[test]
+    fn panoramas_count_at_their_own_ratio() {
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(2560.0, 1440.0));
+        let aspects = [100.0, 100.0, 100.0, 100.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
+        assert_eq!(cols(&cells(&aspects, area)), 4);
+    }
+
     #[test]
     fn the_last_row_is_centred() {
         let c = cells(&[1.5; 5], WIDE);
@@ -177,7 +193,7 @@ mod tests {
 
     #[test]
     fn cells_stay_inside_the_area_and_survive_hostile_sizes() {
-        for aspects in [vec![f32::NAN, 0.0, -1.0, f32::INFINITY, 1e9], vec![1.5; 48]] {
+        for aspects in [vec![f32::NAN, 0.0, -1.0, f32::INFINITY, 1e9, f32::MAX, f32::MIN_POSITIVE], vec![1.5; 48]] {
             let c = cells(&aspects, WIDE);
             assert_eq!(c.len(), aspects.len());
             assert!(c.iter().all(|r| WIDE.expand(0.01).contains_rect(*r)), "{c:?}");

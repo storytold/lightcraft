@@ -425,6 +425,45 @@ fn survey_tiles_glide_to_their_new_cells() {
     assert!(moving != before && moving != after, "between {before:?} and {after:?}: {moving:?}");
 }
 
+/// A photo that joins the survey makes room: the tiles already there glide to their new cells too.
+#[test]
+fn survey_tiles_glide_when_a_photo_joins() {
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let joining = h.app.session.visible_cloned().iter().map(|p| p.0).find(|p| !ids.contains(p)).expect("a fourth photo");
+    let tile = |h: &Headless, id: u64| h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{id}")).map(|(_, r)| *r).expect("the tile is laid out");
+    let before = ids.map(|id| tile(&h, id));
+    h.app.run("library.select", json!({"ids": [joining], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let moving = ids.map(|id| tile(&h, id));
+    assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
+    h.settle(SETTLE);
+    let after = ids.map(|id| tile(&h, id));
+    let moved: Vec<usize> = (0..3).filter(|&i| before[i] != after[i]).collect();
+    assert!(!moved.is_empty(), "a photo joining changes the grid: {before:?} → {after:?}");
+    for i in moved {
+        assert!(moving[i] != before[i] && moving[i] != after[i], "tile {i} between {:?} and {:?}: {:?}", before[i], after[i], moving[i]);
+    }
+}
+
+/// Photo ids are local to a library: opening another one forgets the survey's tiles, so a photo
+/// there with the same id doesn't glide from a cell of the library left.
+#[test]
+fn opening_another_library_forgets_the_survey_tiles() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-survey-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let tracked = |h: &Headless| ids.iter().filter(|id| h.app.survey_motion.tracks(lightcraft_catalog::PhotoId(**id))).count();
+    assert_eq!(tracked(&h), 3);
+    let r = h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()}));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(tracked(&h), 0, "nothing of the library left is remembered");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Every surveyed photo gets its own render, and keeps it when another photo leaves the survey
 /// (each photo keeps its render slot, so the tiles that move don't fall back to thumbnails).
 #[test]
