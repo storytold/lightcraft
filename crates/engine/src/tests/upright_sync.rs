@@ -214,6 +214,120 @@ fn cancelling_the_upright_row_stops_the_batch() {
     assert!(transform(&s, b).is_some() && transform(&s, c).is_some());
 }
 
+/// Review of #3585: opening (or closing) a library drops a running batch: photo ids mean other
+/// photos there, so nothing of the old library's analysis may land on them.
+#[test]
+fn opening_another_library_drops_the_running_batch() {
+    let (mut s, [_, b, _]) = three(true);
+    s.execute("geometry.upright", &json!({"mode": "vertical"})).unwrap();
+    assert_eq!(s.upright_jobs.pending(), 2);
+    let lib = std::env::temp_dir().join(format!("lc-upright-lib-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&lib);
+    // the new library's demo photos have the same ids; one of them asks for Vertical too
+    s.open_library(&lib, true).unwrap();
+    let mut d = (*s.develop_of(b).expect("the same id in the new library")).clone();
+    d.geometry.upright = Upright::Vertical;
+    s.catalog.apply(lightcraft_catalog::Op::SetDevelop { id: b, settings: Arc::new(d), label: "x".into(), edited: None }).unwrap();
+    // the old batch's workers are done by now
+    std::thread::sleep(Duration::from_millis(1500));
+    s.upright_poll();
+    assert_eq!(s.upright_jobs.pending(), 0);
+    assert!(rows(&s).is_empty(), "the row goes");
+    assert!(transform(&s, b).is_none(), "the old library's analysis never lands");
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Review of #3585: work asked for after the row's ✕ (and before the next frame) starts a batch
+/// of its own instead of joining the cancelled one, whose flag would stop it at once.
+#[test]
+fn work_after_a_cancel_starts_a_fresh_batch() {
+    let (mut s, [a, b, c]) = three(true);
+    s.execute("geometry.upright", &json!({"mode": "vertical"})).unwrap();
+    let row = rows(&s);
+    s.activity.cancel(row[0].id).unwrap();
+    // no poll in between: Level on the three before the next frame
+    s.execute("library.select", &json!({"ids": [a.0, b.0, c.0], "active": a.0})).unwrap();
+    s.execute("geometry.upright", &json!({"mode": "level"})).unwrap();
+    let now = rows(&s);
+    assert_eq!(now.len(), 1);
+    assert_ne!(now[0].id, row[0].id, "a new row");
+    assert!(!now[0].cancelling);
+    finish(&mut s);
+    for id in [b, c] {
+        assert_eq!(transform(&s, id), Some(s.upright_for(id, Upright::Level).unwrap()), "worked out");
+    }
+}
+
+/// Review of #3585: a photo whose file is replaced while its analysis runs never gets the
+/// analysis of the old pixels; it is analysed again on the new ones.
+#[test]
+fn a_replaced_file_is_analysed_again_and_the_old_answer_never_lands() {
+    let (mut s, [_, b, _]) = three(true);
+    s.execute("geometry.upright", &json!({"mode": "vertical"})).unwrap();
+    let posts_answer = s.upright_for(b, Upright::Vertical).unwrap();
+    let p = s.catalog.photo(b).unwrap().clone();
+    let op = lightcraft_catalog::Op::SetContent {
+        id: b,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: None,
+        preview_only: None,
+        preview_checked: String::new(),
+    };
+    // the old pixels (posts) are forgotten: b's own scene is what it shows now
+    s.commit("Replace", op).unwrap();
+    finish(&mut s);
+    let now = s.upright_for(b, Upright::Vertical).unwrap();
+    assert_ne!(now, posts_answer, "the test needs other pixels");
+    assert_eq!(transform(&s, b), Some(now), "the new pixels' correction");
+}
+
+/// Review of #3585: a correction that lands in the background is written to the photo's sidecar
+/// with auto-write on, as an edit is.
+#[test]
+fn a_background_result_is_written_to_the_sidecar() {
+    let base = std::env::temp_dir().join(format!("lc-upright-xmp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (src, lib) = (base.join("src"), base.join("lib"));
+    std::fs::create_dir_all(&src).unwrap();
+    for (n, seed) in [("a.png", 3u8), ("b.png", 90)] {
+        let (w, h) = (60usize, 40usize);
+        let data: Vec<[u8; 4]> =
+            (0..w * h).map(|i| [if (i % w + i / w * usize::from(seed % 5)) % 12 < 3 { 230 } else { 20 }, 40, seed, 255]).collect();
+        let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(src.join(n), bytes).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.upright_jobs.background = true;
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true, "naming": "full"})).unwrap();
+    let ids: Vec<PhotoId> = s.visible_cloned();
+    assert_eq!(ids.len(), 2);
+    let raw: Vec<u64> = ids.iter().map(|i| i.0).collect();
+    s.execute("library.select", &json!({"ids": raw, "active": raw[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("geometry.upright", &json!({"mode": "vertical"})).unwrap();
+    assert_eq!(s.upright_jobs.pending(), 1);
+    finish(&mut s);
+    let other = ids[1];
+    let name = match &s.catalog.photo(other).unwrap().source {
+        lightcraft_catalog::Source::File { path } => std::path::Path::new(path).file_name().unwrap().to_string_lossy().to_string(),
+        other => panic!("{other:?}"),
+    };
+    let xmp = std::fs::read_to_string(src.join(format!("{name}.xmp"))).unwrap();
+    let written = match crate::sidecar::parse_sidecar(&xmp, crate::crs::Target::Rendered).unwrap().develop {
+        Some(crate::sidecar::DevelopPatch::Full(d)) => d.geometry.upright_transform,
+        other => panic!("{other:?}"),
+    };
+    assert!(written.is_some(), "the sidecar holds the correction");
+    assert_eq!(written, transform(&s, other));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// UI-thread time of Upright with Auto Sync on 20 selected procedural demo scenes (CPU): the click,
 /// and the per-frame merges while the worker analyses the others, against working all of them out
 /// on the UI thread. `cargo test -p lightcraft-engine --lib upright_sync_bench -- --ignored --nocapture`

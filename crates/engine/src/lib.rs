@@ -689,6 +689,8 @@ impl Session {
         for id in invalidated {
             self.media.forget(id);
         }
+        // an Upright analysis of the old pixels never lands
+        self.upright_content_replaced(&replaced);
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {
             self.faces.content_replaced(id);

@@ -60,11 +60,21 @@ pub(crate) fn needs_any(op: &Op) -> bool {
     set.iter().any(|(_, d)| needs_analysis(d))
 }
 
-/// One photo to analyse: its mode and what its analysis depends on.
+/// One photo to analyse: its mode and what its analysis depends on, and which request it is (a
+/// photo whose file was replaced is asked again for the same mode and basis: the older answer,
+/// from the old pixels, must not pass for the newer one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Job {
     mode: Upright,
     basis: u64,
+    ticket: u64,
+}
+
+impl Job {
+    /// The same analysis (whichever request asked for it).
+    fn same(&self, other: &Job) -> bool {
+        self.mode == other.mode && self.basis == other.basis
+    }
 }
 
 /// What a worker found for a photo.
@@ -89,6 +99,11 @@ pub struct UprightJobs {
     cancel: Option<Arc<AtomicBool>>,
     /// Photos the batch has finished.
     done: u64,
+    /// The library the batch was started in ([`Session::library_identity`]): photo ids mean
+    /// other photos in another one, so its results are dropped once a library opens or closes.
+    library: Option<Arc<()>>,
+    /// The last request's number ([`Job::ticket`]).
+    tickets: u64,
     /// Set by `geometry.upright {again}` while its edit is committed: Auto Sync carries the mode to
     /// every selected photo again, each to be analysed afresh.
     pub(crate) again: bool,
@@ -109,6 +124,7 @@ impl UprightJobs {
         self.rx.clear();
         self.guard = None;
         self.done = 0;
+        self.library = None;
         self.pending.drain().map(|(id, _)| id).collect()
     }
 }
@@ -145,8 +161,10 @@ impl Session {
             if !needs_analysis(&d) || todo.iter().any(|(x, _)| *x == id) {
                 continue;
             }
-            let job = Job { mode: d.geometry.upright, basis: basis(&d) };
-            if self.upright_jobs.pending.get(&id) != Some(&job) {
+            let uj = &mut self.upright_jobs;
+            uj.tickets = uj.tickets.wrapping_add(1);
+            let job = Job { mode: d.geometry.upright, basis: basis(&d), ticket: uj.tickets };
+            if !uj.pending.get(&id).is_some_and(|p| p.same(&job)) {
                 todo.push((id, job));
             }
         }
@@ -161,6 +179,13 @@ impl Session {
                 self.upright_land(Found { id, job, result });
             }
         }
+    }
+
+    /// Photos whose file was replaced (`Op::SetContent`): an analysis of the old pixels never
+    /// lands; they are analysed again on the new ones.
+    pub(crate) fn upright_content_replaced(&mut self, ids: &[PhotoId]) {
+        let waiting: Vec<PhotoId> = ids.iter().copied().filter(|id| self.upright_jobs.pending.remove(id).is_some()).collect();
+        self.upright_start(waiting);
     }
 
     /// Give photo `f.id` what its analysis found, when its settings still ask for it.
@@ -183,8 +208,15 @@ impl Session {
         // Constrain Crop fits the crop to the new warp, as it does for an edit
         let d = self.fit_constrained_crop(f.id, d);
         let edited = self.catalog.photo(f.id).and_then(|p| p.edited.clone());
+        let log_start = self.pending_log.len();
         if let Err(e) = self.apply_system(Op::SetDevelop { id: f.id, settings: Arc::new(d), label: "Upright".into(), edited }) {
             log::warn!("Upright on photo {}: {e}", f.id.0);
+            return;
+        }
+        // the sidecar gets the correction too, as after a command (never mid-drag: the drag's
+        // own end writes it)
+        if self.xmp.auto_write && self.interaction.is_none() && self.depth == 0 {
+            self.auto_write_sidecars_since(log_start);
         }
     }
 
@@ -202,7 +234,14 @@ impl Session {
         if jobs.is_empty() {
             return;
         }
-        let cancel = self.upright_jobs.cancel.get_or_insert_with(|| Arc::new(AtomicBool::new(false))).clone();
+        // a batch the row's ✕ stopped, or one of another library, isn't joined: a new one starts
+        let uj = &mut self.upright_jobs;
+        let other_library = uj.library.as_ref().is_some_and(|l| !Arc::ptr_eq(l, &self.library_identity));
+        if other_library || uj.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            uj.stop();
+        }
+        uj.library = Some(self.library_identity.clone());
+        let cancel = uj.cancel.get_or_insert_with(|| Arc::new(AtomicBool::new(false))).clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let work = jobs.iter().map(|(id, job, ..)| (*id, *job)).collect::<Vec<_>>();
         let flag = cancel.clone();
@@ -256,8 +295,10 @@ impl Session {
     /// end the batch when it is done or cancelled → whether a photo's settings changed.
     pub fn upright_poll(&mut self) -> bool {
         let uj = &mut self.upright_jobs;
-        if uj.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
-            // the row's ✕: the photos left keep rendering with a correction worked out per render
+        let other_library = uj.library.as_ref().is_some_and(|l| !Arc::ptr_eq(l, &self.library_identity));
+        if other_library || uj.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            // the row's ✕, or another library opened: the photos left keep rendering with a
+            // correction worked out per render
             uj.stop();
             return false;
         }
