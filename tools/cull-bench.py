@@ -121,10 +121,17 @@ def steps_since(n0):
         sys.exit(f"{new} loupe steps since the phase began but the app kept {len(s['steps'])}: use fewer --steps")
     return (s["steps"][-new:] if new > 0 else []), s
 
-out = {"label": LABEL, "folder": FOLDER, "holdMs": HOLD_MS}
+SKIP_BROWSE = "--skip-browse" in args
+# (--skip-browse times whatever view the app shows: no folder is claimed for it)
+out = {"label": LABEL, "folder": None if SKIP_BROWSE else FOLDER, "skipBrowse": SKIP_BROWSE, "holdMs": HOLD_MS}
 SIZE = opt("--size", "")
 if SIZE:
-    w, h = (int(v) for v in SIZE.split("x"))
+    try:
+        w, h = (int(v) for v in SIZE.split("x"))
+    except ValueError:
+        sys.exit(f"--size {SIZE!r}: not WIDTHxHEIGHT; {USAGE}")
+    if w < 1 or h < 1:
+        sys.exit(f"--size {SIZE!r}: both sides must be 1 or more; {USAGE}")
     C.call("ui.resize", {"width": w, "height": h})
     time.sleep(1.0)
 out["window"] = C.call("ui.inspect").get("window")
@@ -134,13 +141,18 @@ for _ in range(10):
 out["control_rtt_ms"] = stats(rtt)
 
 # --- browse -------------------------------------------------------------------------------------
-if "--skip-browse" not in args:
+if not SKIP_BROWSE:
     # thumbnails already in the cache aren't this browse's: count only the ones it adds. thumbsMade
     # counts photos given a thumbnail (eviction doesn't lower it); thumbTextures is the fallback for
     # builds without it
     def thumbs_made(st):
         p = st.get("perf") or {}
         return p.get("thumbsMade", p.get("thumbTextures", 0))
+    # (thumbnails of the view before, still being made, would count as this browse's: let them finish)
+    def idle_renders(st):
+        p = st.get("perf") or {}
+        return not p.get("renderQueue") and not p.get("rendersInFlight")
+    wait(idle_renders, 30, 0.05)
     pre_thumbs = thumbs_made(inspect())
     t0 = time.perf_counter()
     ex("library.browse", {"path": FOLDER})
@@ -185,8 +197,11 @@ if "--skip-browse" not in args:
     out["browse_first_thumb_s"] = thumb1
     out["browse_12_thumbs_s"] = thumbs12
     out["browse_all_s"] = allp
-    # the thumbnail times are a cold browse's: none when every one was already in memory
-    out["browse_thumbs_were_in_memory"] = thumb1 is None and allp is not None
+    # the thumbnail times are a cold browse's: none when every one was already in memory, which cells
+    # still without a picture (thumbnails that failed, never counted as made) rule out
+    waiting = (inspect().get("thumbFirst") or {}).get("waiting") or 0
+    out["browse_thumbs_waiting"] = waiting
+    out["browse_thumbs_were_in_memory"] = thumb1 is None and allp is not None and not waiting
     out["photos"] = shown
 
 # --- loupe on the first photo ----------------------------------------------------------------------
@@ -210,8 +225,12 @@ for i in range(10):
 ex("library.next")
 time.sleep(0.3)
 done, _ = steps_since(n0)
+if len(done) < 10:
+    # (a folder of fewer than eleven photos: the last steps went nowhere)
+    print(f"step_rest: only {len(done)} of 10 steps were made", file=sys.stderr)
 done = done[:10]
 out["step_rest"] = {
+    "steps": len(done),
     "any": stats([d["anyMs"] for d in done]),
     "full": stats([d["fullMs"] for d in done]),
     "sharp": stats([d["sharpMs"] for d in done]),
