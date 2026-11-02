@@ -1406,6 +1406,9 @@ impl FilmAnalysis {
     /// Largest magnitude a stored base or density may have: transmittances and densities of real scans are tiny next
     /// to it, and it is far inside `f32`'s range.
     pub const LIMIT: f64 = 1.0e6;
+    /// Smallest film base a stored analysis may have: the conversion never divides by less (its own floor, `EPS` in
+    /// `lightcraft_pipeline::negative`), so a smaller one would convert with a different base than the one stored.
+    pub const MIN_BASE: f64 = 1.0e-6;
 
     /// Valid ([`Self::is_valid`]) and measured for `film` (or of unknown type, from before the type was recorded).
     pub fn fits(&self, film: FilmType) -> bool {
@@ -1421,7 +1424,8 @@ impl FilmAnalysis {
             && fin(&self.hi)
             && fin(&self.mid)
             && self.tones.is_none_or(|t| t.iter().all(fin))
-            && self.base.iter().all(|b| *b > 0.0)
+            // (at least the smallest transmittance the conversion divides by, so the base stored is the base used)
+            && self.base.iter().all(|b| *b >= Self::MIN_BASE)
             && self.lo.iter().zip(&self.hi).all(|(l, h)| h - l > 1e-4)
     }
 }

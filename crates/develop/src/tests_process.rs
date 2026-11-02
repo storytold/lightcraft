@@ -216,6 +216,7 @@ fn absurd_film_analysis_numbers_are_not_valid() {
         FilmAnalysis { base: [1.0e39, 0.5, 0.3], ..ok },
         FilmAnalysis { mid: [-1.0e20; 3], ..ok },
         FilmAnalysis { tones: Some([[1.0e30; 3]; 9]), ..ok },
+        FilmAnalysis { base: [1.0e-9, 0.5, 0.3], ..ok },
     ] {
         assert!(!bad.is_valid(), "{bad:?}");
     }
