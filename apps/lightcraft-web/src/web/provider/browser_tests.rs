@@ -380,6 +380,11 @@ fn refuse_replacement_during_drop(app: &mut WebApp, ctx: &Context, host: &Host, 
     assert_eq!(app.app.session.selection, selection);
     assert_eq!(app.files.snapshot().map_err(error)?, snapshot);
     assert!(!host.busy());
+    assert_eq!(
+        crate::safety::take_notices(),
+        vec!["Finish the current import/save before opening a provider library".to_owned()],
+        "each refused replacement must report only its expected admission notice"
+    );
     Ok(())
 }
 
