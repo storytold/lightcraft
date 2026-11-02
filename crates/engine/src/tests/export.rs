@@ -1394,6 +1394,272 @@ fn same_folder_as_original_refuses_photos_without_a_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A library with one 300 × 200 PNG: transparent, with an opaque red 150 × 100 rectangle in the middle.
+fn library_with_transparent_png(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::path::PathBuf) {
+    let dir = temp_dir(tag);
+    let src = dir.join("logo.png");
+    let img =
+        lightcraft_raster::Rgba8::from_fn(
+            300,
+            200,
+            |x, y| if (75..225).contains(&x) && (50..150).contains(&y) { [200, 40, 30, 255] } else { [0, 0, 0, 0] },
+        );
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+    std::fs::write(&src, png).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    (s, id, dir)
+}
+
+/// Issue #2976: exports of a transparent source keep its alpha in PNG and TIFF at 8 and 16 bits, in
+/// WebP at 8 bits and in 32-bit float TIFF, with the colour of the opaque part as it was (no white
+/// mixed in); TIFF stores it unassociated (`ExtraSamples` = 2, as #1670 writes it).
+#[test]
+fn transparent_sources_keep_their_alpha_in_png_tiff_and_webp() {
+    let (mut s, id, dir) = library_with_transparent_png("export-alpha");
+    for (format, depth) in [("png", 8), ("png", 16), ("tiff", 8), ("tiff", 16), ("tiff", 32), ("webp", 8)] {
+        let o = ExportOptions::from_json(&json!({"format": format, "bitDepth": depth}));
+        let e = export_photo(&mut s, id, &o, 1).unwrap();
+        let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+        assert!(d.has_alpha, "{format} {depth}-bit keeps alpha");
+        assert_eq!((d.width, d.height), (300, 200), "{format} {depth}-bit");
+        let a = d.alpha.as_ref().unwrap();
+        for (x, y) in [(2, 2), (297, 197), (74, 100), (150, 49)] {
+            assert!(a.get(x, y) < 1e-3, "{format} {depth}-bit: transparent at ({x}, {y})");
+        }
+        for (x, y) in [(75, 100), (150, 100), (224, 149)] {
+            assert!(a.get(x, y) > 0.999, "{format} {depth}-bit: opaque at ({x}, {y})");
+        }
+        let edge = d.to_srgb8().get(75, 100);
+        assert!(edge[0].abs_diff(200) <= 2 && edge[1].abs_diff(40) <= 2 && edge[2].abs_diff(30) <= 2, "{format} {depth}-bit edge {edge:?}");
+        if format == "tiff" {
+            // ExtraSamples (338), SHORT, count 1, value 2: unassociated alpha
+            assert!(e.bytes.windows(10).any(|w| w == [0x52, 0x01, 3, 0, 1, 0, 0, 0, 2, 0]), "{depth}-bit TIFF alpha is unassociated");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// JPEG (and the other formats without alpha in this export) composites a transparent source onto
+/// white as before; an opaque PNG source still exports as RGB (#1670).
+#[test]
+fn transparency_stays_on_white_where_it_is_not_kept() {
+    let (mut s, id, dir) = library_with_transparent_png("export-alpha-white");
+    // (AVIF is left out: it composites onto white too, but this build can't decode one to check)
+    for format in ["jpeg", "psd", "jxl"] {
+        let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": format})), 1).unwrap();
+        let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+        assert!(!d.has_alpha, "{format}");
+        let corner = d.to_srgb8().get(2, 2);
+        assert!(corner.iter().take(3).all(|&c| c >= 250), "{format} corner on white: {corner:?}");
+    }
+    let src = dir.join("opaque.png");
+    let img = lightcraft_raster::Rgba8::from_fn(64, 48, |x, y| [(x * 3) as u8, (y * 5) as u8, 90, 255]);
+    std::fs::write(&src, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let opaque = s.catalog.photos().map(|p| p.id).find(|&p| p != id).unwrap();
+    let e = export_photo(&mut s, opaque, &ExportOptions::from_json(&json!({"format": "png"})), 1).unwrap();
+    assert_eq!(e.bytes[25], 2, "PNG IHDR declares RGB");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The alpha follows the pixels through rotation, crop and resize.
+#[test]
+fn exported_alpha_follows_rotate_crop_and_resize() {
+    let (mut s, id, dir) = library_with_transparent_png("export-alpha-geometry");
+    // turned right: 200 × 300 with the rectangle at x 50..150, y 75..225; its left half: 100 × 300;
+    // fitted to 150 px: 50 × 150, the rectangle at x 25..50, y 37.5..112.5
+    s.execute("photo.rotateRight", &json!({})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.0, 0.0, 0.5, 1.0]})).unwrap();
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "png", "longEdge": 150})), 1).unwrap();
+    let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+    assert_eq!((d.width, d.height), (50, 150));
+    let px = d.to_srgb8();
+    for (x, y) in [(30, 75), (45, 40), (45, 110)] {
+        let p = px.get(x, y);
+        assert_eq!(p[3], 255, "opaque at ({x}, {y})");
+        assert!(p[0] > 150 && p[1] < 80, "red at ({x}, {y}): {p:?}");
+    }
+    for (x, y) in [(10, 75), (30, 20), (30, 130)] {
+        assert_eq!(px.get(x, y)[3], 0, "transparent at ({x}, {y})");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #2976: a source without transparency (no alpha channel, or one opaque everywhere) exports
+/// exactly as before, byte for byte, through the PNG/TIFF/WebP path too: the grey a Transform brings
+/// in around the photo stays grey and no alpha is written.
+#[test]
+fn opaque_sources_export_exactly_as_before() {
+    let dir = temp_dir("export-alpha-opaque");
+    let mut s = Session::new().with_fs();
+    let img = lightcraft_raster::Rgba8::from_fn(96, 64, |x, y| [(x * 2) as u8, (y * 3) as u8, 90, 255]);
+    let rgba = dir.join("rgba.png");
+    std::fs::write(&rgba, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    let rgb = dir.join("rgb.png");
+    let flat: Vec<u8> = img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let rgb_png =
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::new(96, 64, 3, lightcraft_codecs::Samples::U8(&flat)), &Default::default());
+    std::fs::write(&rgb, rgb_png.unwrap()).unwrap();
+    s.execute("library.import", &json!({"paths": [rgba.to_string_lossy(), rgb.to_string_lossy()]})).unwrap();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        s.execute("develop.set", &json!({"ids": [id.0], "control": "geometry.vertical", "value": -60})).unwrap();
+        for (format, depth) in [("png", 8), ("png", 16), ("tiff", 8), ("webp", 8)] {
+            let o = ExportOptions::from_json(&json!({"format": format, "bitDepth": depth}));
+            let e = export_photo(&mut s, id, &o, 1).unwrap();
+            // the same render without the transparency path, as before #2976
+            let (w, h) = crate::export::output_size(s.catalog.photo(id).unwrap(), &o);
+            let meta = crate::export::export_metadata(s.catalog.photo(id).unwrap(), &s.catalog, &o);
+            let job = s.export_job(id, w, h, o.effective_space(), o.effective_depth()).unwrap();
+            let before = crate::export::encode_rendered(&job.run().rendered.unwrap(), &o, meta.as_ref()).unwrap();
+            assert!(e.bytes == before, "{format} {depth}-bit: identical to the render without transparency");
+            let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+            assert!(!d.has_alpha, "{format} {depth}-bit: no alpha");
+            if (format, depth) == ("png", 8) {
+                // the keystone brings in the light grey outside the photo at the bottom corners
+                let corner = d.to_srgb8().get(1, d.height as usize - 2);
+                assert!(corner[0] == corner[1] && corner[1] == corner[2] && corner[0] > 150, "grey corner: {corner:?}");
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #2976, end to end: a logo with soft, semi-transparent edges keeps them through a crop, a
+/// 10° straighten and an exposure change, with the colour of its opaque part (no white fringe) and
+/// transparent corners, in PNG, TIFF and WebP.
+#[test]
+fn soft_edges_keep_their_colour_through_crop_straighten_and_exposure() {
+    let dir = temp_dir("export-alpha-soft");
+    let src = dir.join("soft.png");
+    // a blue disc of radius 90 with a 24 px soft edge
+    let img = lightcraft_raster::Rgba8::from_fn(400, 300, |x, y| {
+        let d = ((x as f32 + 0.5 - 200.0).powi(2) + (y as f32 + 0.5 - 150.0).powi(2)).sqrt();
+        let a = ((90.0 - d) / 24.0 + 0.5).clamp(0.0, 1.0);
+        if a > 0.0 { [30, 120, 200, (a * 255.0).round() as u8] } else { [0, 0, 0, 0] }
+    });
+    std::fs::write(&src, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("crop.set", &json!({"rect": [0.1, 0.1, 0.9, 0.9]})).unwrap();
+    s.execute("crop.set", &json!({"angle": 10.0})).unwrap();
+    s.execute("develop.set", &json!({"ids": [id.0], "control": "light.exposure", "value": 0.7})).unwrap();
+    for format in ["png", "tiff", "webp"] {
+        let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": format})), 1).unwrap();
+        let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+        assert!(d.has_alpha, "{format}");
+        let px = d.to_srgb8();
+        let (w, h) = (px.width, px.height);
+        assert_eq!(px.get(1, 1)[3], 0, "{format}: transparent corner");
+        let centre = px.get(w / 2, h / 2);
+        assert_eq!(centre[3], 255, "{format}: opaque centre");
+        assert!(centre[2] > 200, "{format}: the exposure brightened the disc: {centre:?}");
+        // every soft-edge pixel has the colour of the opaque part
+        let soft: Vec<[u8; 4]> = px.data.iter().copied().filter(|p| (24..=232).contains(&p[3])).collect();
+        assert!(soft.len() > 500, "{format}: the soft edge survives ({} pixels)", soft.len());
+        let tolerance = 3;
+        for p in &soft {
+            assert!((0..3).all(|c| p[c].abs_diff(centre[c]) <= tolerance), "{format}: soft-edge colour {p:?} vs the disc's {centre:?}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #2976: a hard edge (the issue's opaque red rectangle on transparency) resampled by a
+/// downscale or a straighten keeps its colour wherever its alpha is partial: no white mixed in.
+#[test]
+fn hard_edges_stay_red_when_downscaled_or_straightened() {
+    let (mut s, id, dir) = library_with_transparent_png("export-alpha-hard-edge");
+    let straightened = |s: &mut Session| s.execute("crop.set", &json!({"angle": 5.0})).map(|_| ());
+    let cases: [(&str, serde_json::Value, bool); 2] =
+        [("longEdge 150", json!({"format": "png", "longEdge": 150}), false), ("5° straighten", json!({"format": "png"}), true)];
+    for (name, options, straighten) in cases {
+        if straighten {
+            straightened(&mut s).unwrap();
+        }
+        let e = export_photo(&mut s, id, &ExportOptions::from_json(&options), 1).unwrap();
+        let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+        assert!(d.has_alpha, "{name}");
+        let px = d.to_srgb8();
+        let partial: Vec<[u8; 4]> = px.data.iter().copied().filter(|p| p[3] > 0 && p[3] < 255).collect();
+        assert!(partial.len() > 20, "{name}: the edge is resampled ({} partial pixels)", partial.len());
+        for p in &partial {
+            assert!(p[0].abs_diff(200) <= 4 && p[1].abs_diff(40) <= 4 && p[2].abs_diff(30) <= 4, "{name}: edge pixel {p:?} is not red (200, 40, 30)");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #2976: a transparency plane that does not fit the source's pixels fails the export
+/// with an error; the file is never written as flattened RGB in its place.
+#[test]
+fn a_transparency_that_does_not_fit_fails_the_export() {
+    use lightcraft_pipeline::{OutputDepth, OutputSpace, SourceInfo};
+    use std::sync::Arc;
+    let (mut s, id, dir) = library_with_transparent_png("export-alpha-mismatch");
+    let image = Arc::new(lightcraft_raster::Rgb32f::from_fn(300, 200, |_, _| [1.0; 3]));
+    let info = SourceInfo { alpha: Some(Arc::new(lightcraft_raster::Plane::new(10, 10))), ..Default::default() };
+    let mut job = s.export_job_with_alpha(id, 300, 200, OutputSpace::Srgb, OutputDepth::U8, true).unwrap();
+    job.source = crate::media::SourceRef::Loaded(Box::new(crate::media::DecodedSource::new(image.clone(), Some(info.clone()))));
+    let err = job.run().rendered.err().expect("the export fails");
+    assert!(err.contains("transparency"), "{err}");
+    // the same source exported without transparency (JPEG) renders as before
+    let mut job = s.export_job_with_alpha(id, 300, 200, OutputSpace::Srgb, OutputDepth::U8, false).unwrap();
+    job.source = crate::media::SourceRef::Loaded(Box::new(crate::media::DecodedSource::new(image, Some(info))));
+    assert!(job.run().rendered.is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #2976: a source the decoder fits down (a 600 × 400 transparent PNG exported at
+/// `longEdge 300`, decoded at a smaller level) keeps its colour at a hard edge: the colour under
+/// the transparent pixels (`[0, 0, 0, 0]`: black) must not bleed into the edge.
+#[test]
+fn hard_edges_stay_red_when_the_decoder_downscales() {
+    let dir = temp_dir("export-alpha-decode-fit");
+    let src = dir.join("big.png");
+    let img = lightcraft_raster::Rgba8::from_fn(600, 400, |x, y| {
+        if (150..450).contains(&x) && (100..300).contains(&y) { [200, 40, 30, 255] } else { [0, 0, 0, 0] }
+    });
+    std::fs::write(&src, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "png", "longEdge": 300})), 1).unwrap();
+    let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+    assert!(d.has_alpha);
+    assert_eq!((d.width, d.height), (300, 200));
+    let px = d.to_srgb8();
+    let partial: Vec<[u8; 4]> = px.data.iter().copied().filter(|p| p[3] > 0 && p[3] < 255).collect();
+    assert!(!partial.is_empty(), "the edge is resampled");
+    for p in &partial {
+        assert!(p[0].abs_diff(200) <= 4 && p[1].abs_diff(40) <= 4 && p[2].abs_diff(30) <= 4, "edge pixel {p:?} is not red (200, 40, 30)");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #2976: a decode the decoder fits down keeps a straight 0..1 alpha plane for a
+/// transparent file, and none for an RGBA file that is opaque everywhere (the fit brings 1.0 back
+/// as 0.99999994: that must not send an opaque photo down the transparent export path).
+#[test]
+fn a_fitted_decode_keeps_alpha_only_for_real_transparency() {
+    let png =
+        |img: &lightcraft_raster::Rgba8| lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &Default::default()).unwrap();
+    let opaque = lightcraft_raster::Rgba8::from_fn(600, 400, |x, y| [(x % 256) as u8, (y % 256) as u8, 90, 255]);
+    let (_, info) = crate::files::load_bytes(&png(&opaque), 300).unwrap();
+    assert!(info.alpha.is_none(), "an opaque RGBA file has no transparency");
+    let clear = lightcraft_raster::Rgba8::from_fn(600, 400, |x, y| {
+        if (150..450).contains(&x) && (100..300).contains(&y) { [200, 40, 30, 255] } else { [0, 0, 0, 0] }
+    });
+    let (img, info) = crate::files::load_bytes(&png(&clear), 300).unwrap();
+    let a = info.alpha.expect("a transparent file keeps its alpha");
+    assert_eq!((a.width, a.height), (img.width, img.height));
+    assert!(a.data.iter().all(|&v| (0.0..=1.0).contains(&v)), "straight alpha stays in 0..1");
+}
+
 /// Issue #2882: the demo photo's 16-bit TIFF export (2000 px long edge) with ZIP (the default) is
 /// never larger than the same export uncompressed.
 #[test]

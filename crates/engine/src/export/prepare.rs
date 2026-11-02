@@ -123,8 +123,14 @@ fn prepare_guarded(
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        // (HDR files are written without alpha: their transparent areas stay on white)
+        let alpha = o.format.keeps_alpha() && !o.hdr_output();
+        let alpha_file = can_carry_alpha(&p.format);
+        let job = session.export_job_with_alpha(id, w, h, o.effective_space(), o.effective_depth(), alpha)?;
         let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
+        // a file that can carry transparency, exported to a format that keeps it: its alpha planes too
+        // (whether it has any is only known once it is decoded)
+        let weight = if alpha && alpha_file { weight.saturating_add(alpha_weight(full_px, long, job.level, w.saturating_mul(h))) } else { weight };
         if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
             return Err(format!("{label}: {why}"));
         }
@@ -185,6 +191,21 @@ pub(super) fn too_big_for_memory(out: (usize, usize), native_px: usize, weight: 
         gb(weight).ceil(),
         gb(ram)
     ))
+}
+
+/// What keeping a transparent source's alpha adds to [`render_weight`] (issue #2976): the source's
+/// alpha plane and its oriented or prefiltered copy (8 bytes a source pixel), and at the output the
+/// colour and alpha resampled side by side, the alpha plane and the RGBA image encoded (24 bytes
+/// a pixel).
+fn alpha_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, out_px: usize) -> usize {
+    let src_px = render_weight(full_px, long, level, 0) / 12;
+    src_px.saturating_mul(8).saturating_add(out_px.saturating_mul(24))
+}
+
+/// Whether a photo of catalog format `format` (its upper-case extension, `Photo::format`) is a
+/// kind of file whose decoder can give it transparency ([`lightcraft_codecs::Format::can_carry_alpha`]).
+pub(super) fn can_carry_alpha(format: &str) -> bool {
+    lightcraft_codecs::Format::from_extension(format).is_some_and(lightcraft_codecs::Format::can_carry_alpha)
 }
 
 /// Working memory of rendering a photo of `full_px` pixels (long edge `long`) from source level

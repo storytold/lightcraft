@@ -132,6 +132,14 @@
 
 ## 2026-10-27
 
+### Transparent images stay transparent in PNG, TIFF and WebP exports
+- Exporting a PNG logo or cut-out with transparency as PNG, TIFF or WebP keeps its transparency, instead of
+  flattening it onto white (issue #2976). Edits apply to the colour only; crop, rotation, lens and Transform
+  corrections and resizing move the transparency with the picture, and hard and soft edges keep their colour. All
+  three store it as straight (unassociated) alpha. JPEG, and the other formats without transparency in this export,
+  still composite onto white, and the grid and loupe still show transparent areas on white. Transparent exports
+  render on the CPU for now; other photos still use the GPU.
+
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
 
@@ -256,7 +264,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 

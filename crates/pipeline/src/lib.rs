@@ -100,6 +100,12 @@ pub struct SourceInfo {
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+    /// The source's straight alpha (0..1), EXIF-oriented and the size of the source buffer, when it
+    /// has transparency. The pixels handed to the renderer are flattened onto white in linear light
+    /// (`lightcraft_codecs::to_working`, issue #1212); a render that keeps transparency
+    /// ([`RenderRequest::alpha`]) resamples them together with this plane and recovers their colour
+    /// after (`geometry::Frame::sample_with_alpha`, issue #2976).
+    pub alpha: Option<Arc<Plane>>,
 }
 
 impl Default for SourceInfo {
@@ -116,6 +122,7 @@ impl Default for SourceInfo {
             mattes: None,
             local_tone: None,
             native_long: None,
+            alpha: None,
         }
     }
 }
@@ -150,6 +157,10 @@ pub struct RenderRequest {
     /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
     /// `space` (see [`DisplaySpace`]; ignored by deep renders).
     pub display: Option<DisplaySpace>,
+    /// The output keeps the source's transparency (exports to PNG, TIFF and WebP of a source with
+    /// [`SourceInfo::alpha`]): the colour is developed without the white it is flattened onto, and
+    /// [`Rendered::alpha`] carries the alpha through the same geometry (issue #2976).
+    pub alpha: bool,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -202,6 +213,7 @@ impl RenderRequest {
             proof: None,
             window: None,
             display: None,
+            alpha: false,
         }
     }
 }
@@ -212,6 +224,9 @@ pub struct Rendered {
     pub histogram: Histogram,
     /// The high-bit-depth result when [`RenderRequest::depth`] asks for one.
     pub deep: Option<DeepImage>,
+    /// Straight alpha (0..1) of the output, the size of `image`, when the request keeps the
+    /// source's transparency and the source has some ([`RenderRequest::alpha`]).
+    pub alpha: Option<Plane>,
 }
 
 /// Everything the per-pixel stage needs, precomputed at output resolution.
@@ -575,14 +590,22 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
+    // an output that keeps transparency: the flattened pixels and their alpha are resampled
+    // together and unflattened after (`Frame::sample_with_alpha`, issue #2976)
+    let alpha_src = info.alpha.as_deref().filter(|a| req.alpha && a.width == src_img.width && a.height == src_img.height);
     let shared = match (&src, cache) {
-        (Src::Shared(a), Some(c)) => Some((*a, c)),
+        // (the straight colour is this render's own: no stage of an earlier render applies to it)
+        (Src::Shared(a), Some(c)) if alpha_src.is_none() => Some((*a, c)),
         _ => None,
     };
     let cached = shared.and_then(|(a, c)| c.get(a, geo));
-    let sampled = match &cached {
-        Some(e) => e.sampled.clone(),
-        None => Arc::new(frame.sample(src_img, w, h)),
+    let (sampled, alpha) = match (&cached, alpha_src) {
+        (Some(e), _) => (e.sampled.clone(), None),
+        (None, Some(a)) => {
+            let (img, alpha) = frame.sample_with_alpha(src_img, a, w, h);
+            (Arc::new(img), Some(alpha))
+        }
+        (None, None) => (Arc::new(frame.sample(src_img, w, h)), None),
     };
     lap("sample", &mut t);
 
@@ -619,7 +642,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         let image = deep.to_rgba8();
         let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered { image, histogram, deep: Some(deep), alpha };
     }
     let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
     lap("finish", &mut t);
@@ -637,6 +660,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
+    let alpha = match (alpha, plan.keep) {
+        (Some(a), Some(k)) => Some(a.crop(k.x, k.y, k.w, k.h)),
+        (a, _) => a,
+    };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
         let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..*req };
@@ -645,7 +672,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         }
         lap("visualize hdr", &mut t);
     }
-    Rendered { image, histogram, deep: None }
+    Rendered { image, histogram, deep: None, alpha }
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the

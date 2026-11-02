@@ -1420,7 +1420,7 @@ mod color_image_tests {
             display: None,
         };
         let histogram = Histogram::of_srgb8(&image);
-        let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
+        let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None, alpha: None })), &None);
         assert_eq!(ok.color.map(|c| c.pixels.clone()), Some(color_image(&image).pixels));
         let failed = Renderer::run_for(|| result(Err("unreadable".into())), &None);
         assert!(failed.color.is_none());
