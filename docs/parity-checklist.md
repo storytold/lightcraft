@@ -52,10 +52,10 @@ cited here still exists. Formerly docs/parity.md.
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
-| Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 420 | 66 | 57 | 35 | 195/203 (96%) | 146/161 (91%) |
+| Lightroom Classic extras | 40 | 26 | 21 | 8 | — | 23/26 (88%) |
+| **Total** | 419 | 67 | 57 | 35 | 195/203 (96%) | 145/161 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 543 in-scope rows — P0 98.0% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 543 in-scope rows — P0 98.0% of 203 · P1 94.1% of 161 · P2 56.7% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -724,7 +724,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-SNAPSHOTS | Named snapshots | P1 | ✅ | `cmd:version.create`, `cmd:version.restore` | = versions |
 | LRC-DEV-HISTORY | Full history panel | P1 | ✅ | `cmd:history.list`, `cmd:history.restore`, `cmd:history.previous`, `cmd:history.next`, `cmd:history.clear` | row menu: copy step to before, create version from step, clear history; clicking a step loads it without adding one (current step highlighted, later steps greyed and returnable until a new edit truncates them; one undo step; cursor saved in the catalog, old catalogs open at the latest step) |
 | LRC-DEV-SOFTPROOF | Soft proofing | P2 | 🟡 | `cmd:view.softProof`, `crates/pipeline/src/output.rs` (`Proof`), `crates/ui-egui/src/panels/edit.rs` (`soft_proofing`) | S in the loupe (in grids S stays Expand/Collapse Stack): paper-white surround and "Proof Preview", proof profile (sRGB / Display P3 / Adobe RGB / ProPhoto / Rec. 2020), destination (red) and display (blue) gamut warnings (the display's gamut is the monitor profile's, `cmd:app.displayProfile`, else sRGB), Create Proof Copy (a named virtual copy). printer / paper ICC profiles can be loaded as the proof profile (size-capped, the last few kept), with rendering intent (Perceptual / Relative Colorimetric), Simulate Paper & Ink and a device-gamut warning (`crates/codecs/src/proof.rs`, `crates/engine/src/proof.rs`); on the GPU for output-space proofs (destination and display gamut warnings included; equivalence-tested), an output-device profile's 3D table on the CPU |
-| LRC-DEV-AUTOSYNC | Sync / auto sync / paste previous | P1 | ✅ | `cmd:develop.sync`, `cmd:develop.autoSync`, `cmd:develop.pastePrevious` | Edit ▸ Sync Settings / Auto Sync (⌥⇧⌘A): only the changed settings carry over, one undo step, slider drags sync on release, spots / red eye stay per photo; AI masks (Object, Describe) carry their settings and components but each photo keeps its own AI shape (a component new to a photo is computed later; Sync Settings and Paste too); Edit panel banner |
+| LRC-DEV-AUTOSYNC | Sync / auto sync / paste previous | P1 | 🟡 | `cmd:develop.sync`, `cmd:develop.autoSync`, `cmd:develop.pastePrevious` | Edit ▸ Sync Settings / Auto Sync (⌥⇧⌘A): only the changed settings carry over, one undo step, slider drags sync on release, spots / red eye stay per photo; AI masks (Object, Describe) carry their settings and components but each photo keeps its own AI shape (Sync Settings and Paste too). Missing: an AI component new to a photo (an Object or Describe added on the active photo) arrives with no shape and has no effect there until the user picks it again on that photo (its clicks or its description); nothing computes it on its own; Edit panel banner |
 | LRC-DEV-MATCHEXP | Match total exposures | P2 | ✅ | `cmd:develop.matchExposure` | Photo ▸ Match Total Exposures: the selected photos' Exposure set so shutter × ISO ÷ aperture² plus the slider matches the active photo's |
 | LRC-DEV-CALIB | Calibration panel | P1 | ✅ | `ctl:calibration.*` | |
 | LRC-DEV-TAT | Targeted adjustment tools | P1 | ✅ | `cmd:develop.targeted` (`target`: curve / hue / sat / lum) | |
@@ -799,6 +799,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | patch | LRC-DEV-AUTOSYNC: 🟡 — an AI component synced to a photo that lacks it has no shape until the user picks it again on that photo (it isn't computed on its own) |
 | 2026-10-30 | patch | LR-BEHAV-ACCESS: the Flatpak manifests grant `--talk-name=org.a11y.Bus`, so AccessKit can find out whether a screen reader is running and publish the window inside the sandbox; packaging lint requires it in both manifests; status unchanged (🟡), not tried with Orca |
 | 2026-10-27 | patch | LR-LIB-LABEL, MENU-PHOTO-LABEL, KEY-LABELS: Clear Color Label (`photo.clearLabel`) is a command of its own, so Help → Keyboard Shortcuts can give it a key (#2980); the Photo ▸ Set Color Label ▸ None row runs it; status unchanged |
 | 2026-10-25 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌘⌥⇧K / Ctrl+Alt+Shift+K (`dialog.keywordShortcut`, Set Keyword Shortcut) and ⇧K (`keyword.toggleShortcut`) add and remove the keyword shortcut's keywords; Keyword Shortcut leaves LRC-LIB-KEYWORDS' Not yet list; status counts unchanged (KEYC-METADATA stays 🟡) |
