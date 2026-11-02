@@ -1403,13 +1403,19 @@ impl Default for FilmAnalysis {
 
 impl FilmAnalysis {
     /// Every number finite, the base positive and each range ordered: anything else renders unconverted.
+    /// Largest magnitude a stored base or density may have: transmittances and densities of real scans are tiny next
+    /// to it, and it is far inside `f32`'s range.
+    pub const LIMIT: f64 = 1.0e6;
+
     /// Valid ([`Self::is_valid`]) and measured for `film` (or of unknown type, from before the type was recorded).
     pub fn fits(&self, film: FilmType) -> bool {
         self.is_valid() && self.film.is_none_or(|f| f == film)
     }
 
     pub fn is_valid(&self) -> bool {
-        let fin = |a: &[f64; 3]| a.iter().all(|v| v.is_finite());
+        // finite and within what a film can measure (and an f32 can hold): a damaged or hand-edited sidecar with values
+        // past that is measured again instead of rendering a channel black or flat
+        let fin = |a: &[f64; 3]| a.iter().all(|v| v.is_finite() && v.abs() <= Self::LIMIT);
         fin(&self.base)
             && fin(&self.lo)
             && fin(&self.hi)

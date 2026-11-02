@@ -98,3 +98,19 @@ fn convert_confirms_on_the_photo_it_warned_about() {
     assert!(of(&h, ids[0]).negative.converts(), "the photo the warning named");
     assert!(!of(&h, ids[1]).negative.converts(), "not the one active at confirmation");
 }
+
+#[test]
+fn convert_refuses_edits_made_after_its_warning_and_a_bad_film() {
+    let mut h = edit_panel();
+    let r = h.request("engine.execute", json!({"command": "dialog.convertNegative", "params": {"film": 7}}), T);
+    assert_eq!(r["ok"], false, "a film type that isn't one is refused before any dialog: {r}");
+    req(&mut h, "engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.0}}));
+    req(&mut h, "engine.execute", json!({"command": "dialog.convertNegative", "params": {}}));
+    h.step();
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::ConvertNegative { reset, .. }) if reset == &["Light".to_string()]));
+    // a Color edit arrives (an agent) while the warning names only Light
+    h.app.session.execute("develop.set", &json!({"control": "color.saturation", "value": 30})).unwrap();
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert!(!develop(&h).negative.converts(), "not converted: the warning didn't list Color ({r})");
+    assert_eq!(develop(&h).color.saturation, 30.0);
+}

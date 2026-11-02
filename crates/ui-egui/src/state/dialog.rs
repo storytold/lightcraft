@@ -304,6 +304,8 @@ pub enum Dialog {
         roll: Vec<u64>,
         /// The photo Convert warned about: the one converted, whatever is active when the dialog is confirmed.
         photo: Option<u64>,
+        /// The library the ids belong to (`Session::library_generation`): confirming in another one does nothing.
+        library: u64,
     },
     /// Confirm deleting mask effect presets.
     DeleteEffects {

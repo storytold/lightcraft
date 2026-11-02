@@ -232,7 +232,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             let sampled = d
                 .negative
                 .analysis
-                .filter(|a| a.base_source == BaseSource::Sampled && f == FilmType::ColorNegative)
+                // (a B&W negative divides by the base too; a slide has none)
+                .filter(|a| a.base_source == BaseSource::Sampled && f != FilmType::Slide)
                 .and_then(|a| a.base_rect.map(|r| (a.base, r)));
             d.negative.film = f;
             d.negative.locked = false;
@@ -349,7 +350,7 @@ pub fn roll_plan(s: &mut Session, p: &Value) -> Result<RollPlan> {
 /// each frame; stops with an error when `cancel` is set. A frame that can't be read or measured is left out (its id
 /// and why come back in the list); an error when fewer than two frames could be measured.
 pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, progress: &dyn Fn(usize)) -> std::result::Result<RollMeasured, String> {
-    use lightcraft_pipeline::negative::{analyze_roll, base_spread, measure_frame};
+    use lightcraft_pipeline::negative::{analyze_roll, base_spread, measure_frame, thin_for_roll};
     let mut measured = Vec::with_capacity(plan.frames.len());
     let mut skipped = Vec::new();
     for (i, f) in plan.frames.iter().enumerate() {
@@ -360,7 +361,10 @@ pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, pro
         let sampled = f.settings.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
         let m = f.source.load_source().and_then(|src| measure_frame(&src.image, &f.settings.negative, f.settings.negative_region(), sampled));
         match m {
-            Ok(m) => measured.push(m),
+            Ok(mut m) => {
+                thin_for_roll(&mut m);
+                measured.push((f.id, m));
+            }
             Err(e) => skipped.push((f.id, e)),
         }
         progress(i + 1);
@@ -368,12 +372,13 @@ pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, pro
     if measured.len() < 2 {
         return Err(format!("only {} of {} frames could be measured", measured.len(), plan.frames.len()));
     }
-    let analysis = analyze_roll(plan.film, &measured)?;
-    let spread = base_spread(&measured);
+    let frames: Vec<_> = measured.iter().map(|(_, m)| m.clone()).collect();
+    let analysis = analyze_roll(plan.film, &frames)?;
+    let spread = base_spread(&frames);
     let mixed = (spread > MIXED_SCANS).then(|| {
         format!("the film bases found on these frames differ by {:.0} %: they look scanned differently (light, exposure or scanner), so one analysis may not fit them all", (spread - 1.0) * 100.0)
     });
-    Ok(RollMeasured { analysis, skipped, mixed })
+    Ok(RollMeasured { analysis, skipped, mixed, frames: measured })
 }
 
 /// Largest ratio between film bases found on a roll's frames before a sync warns that they look scanned differently.
@@ -386,19 +391,28 @@ pub struct RollMeasured {
     pub skipped: Vec<(PhotoId, String)>,
     /// Set when the frames' film bases disagree (see `lightcraft_pipeline::negative::base_spread`).
     pub mixed: Option<String>,
+    /// Each measured frame's samples (thinned), so the roll can be analysed again without frames left out at apply.
+    pub frames: Vec<(PhotoId, lightcraft_pipeline::negative::FrameMeasure)>,
 }
 
 /// Write the roll's analysis `roll` to every measured frame of `plan` (each keeps its own region), locked, as one undo
 /// step; frames not yet converted are converted (their edits made on the negative reset unless the plan keeps them).
 pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Result<Value> {
     const C: &str = "negative.syncRoll";
-    let RollMeasured { analysis: roll, mut skipped, mixed } = measured;
-    // a frame whose measured inputs changed while the roll was read (another crop, border, picked base or film type)
-    // keeps its newer edit: the roll's numbers would describe a picture it no longer shows
+    let RollMeasured { analysis: mut roll, mut skipped, mixed, frames } = measured;
+    // a frame edited in any way while the roll was read (its crop or film type, an unlock, or an edit the sync would
+    // reset) keeps its newer edit: it is left out, and neither written nor counted in the roll's numbers
+    let before = skipped.len();
     for f in &plan.frames {
         let now = s.develop_of(f.id);
-        if !skipped.iter().any(|(k, _)| *k == f.id) && now.is_none_or(|d| roll_inputs(&d) != roll_inputs(&f.original)) {
+        if !skipped.iter().any(|(k, _)| *k == f.id) && now.is_none_or(|d| *d != f.original) {
             skipped.push((f.id, "changed while the roll was read".into()));
+        }
+    }
+    if skipped.len() > before {
+        let kept: Vec<_> = frames.into_iter().filter(|(id, _)| !skipped.iter().any(|(k, _)| k == id)).map(|(_, m)| m).collect();
+        if kept.len() >= 2 {
+            roll = lightcraft_pipeline::negative::analyze_roll(plan.film, &kept).map_err(|e| bad(C, e))?;
         }
     }
     let ids: Vec<PhotoId> = plan.frames.iter().map(|f| f.id).filter(|id| !skipped.iter().any(|(k, _)| k == id)).collect();
@@ -433,17 +447,6 @@ pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Re
         }
     }
     Ok(out)
-}
-
-/// What a roll's measurement of a frame depends on: the part of the source measured, the border left out, a base picked
-/// on the frame, and its film type.
-fn roll_inputs(d: &DevelopSettings) -> (lightcraft_geom::Rect, u64, Option<([u64; 3], [u64; 4])>, FilmType) {
-    let sampled = d
-        .negative
-        .analysis
-        .filter(|a| a.base_source == BaseSource::Sampled)
-        .and_then(|a| a.base_rect.map(|r| (a.base.map(f64::to_bits), [r.x0, r.y0, r.x1, r.y1].map(f64::to_bits))));
-    (d.negative_region(), d.negative.border.to_bits(), sampled, d.negative.film)
 }
 
 /// `negative.syncRoll` in place (the app reads the frames in the background unless `wait`).

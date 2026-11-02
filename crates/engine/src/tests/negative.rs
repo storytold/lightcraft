@@ -330,3 +330,49 @@ fn a_preset_made_from_a_converted_photo_carries_no_film_base_or_lock() {
     let n = &p.settings["negative"];
     assert!(n.get("analysis").is_none() && n.get("locked").is_none() && n["film"] == "colorNegative", "{n}");
 }
+
+#[test]
+fn updating_a_preset_from_a_converted_photo_keeps_out_its_film_base_and_lock() {
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[0]], "active": ids[0]})).unwrap();
+    let r = s.execute("preset.create", &json!({"name": "Mine", "groups": ["negative"]})).unwrap();
+    let pid = r["id"].as_str().unwrap_or_default().to_string();
+    let pid = if pid.is_empty() { s.presets.iter().find(|p| p.name == "Mine").unwrap().id.clone() } else { pid };
+    for p in [json!({"id": pid}), json!({"id": pid, "groups": ["negative"]})] {
+        s.execute("preset.update", &p).unwrap();
+        let n = &s.presets.iter().find(|x| x.id == pid).unwrap().settings["negative"];
+        assert!(n.get("analysis").is_none() && n.get("locked").is_none(), "{p}: {n}");
+    }
+}
+
+#[test]
+fn a_b_and_w_switch_keeps_a_sampled_base() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.execute("negative.sampleBase", &json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 0.1, "y1": 0.05}})).unwrap();
+    s.execute("negative.set", &json!({"film": "bwNegative"})).unwrap();
+    let a = neg(&s).analysis.unwrap();
+    assert_eq!((a.base_source, a.film), (lightcraft_develop::BaseSource::Sampled, Some(FilmType::BwNegative)));
+}
+
+#[test]
+fn a_frame_left_out_of_a_roll_doesn_t_count_in_its_numbers() {
+    use crate::cmd::negative::{roll_apply, roll_measure, roll_plan};
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    let plan = roll_plan(&mut s, &json!({"ids": ids})).unwrap();
+    let measured = roll_measure(&plan, &std::sync::atomic::AtomicBool::new(false), &|_| ()).unwrap();
+    // meanwhile frame 2 gets an edit the sync would reset
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.8, "ids": [ids[1]]})).unwrap();
+    let r = roll_apply(&mut s, plan, measured).unwrap();
+    assert!(r["skipped"].as_array().unwrap().iter().any(|v| v["id"] == ids[1]), "{r}");
+    assert_eq!(s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap().light.exposure, 0.8, "its edit is kept");
+    // the others carry the roll of frames 1 and 3 alone
+    let written = s.develop_of(lightcraft_catalog::PhotoId(ids[0])).unwrap().negative.analysis.unwrap();
+    let mut fresh = Session::with_demo();
+    fresh.execute("negative.syncRoll", &json!({"ids": [ids[0], ids[2]], "wait": true})).unwrap();
+    let alone = fresh.develop_of(lightcraft_catalog::PhotoId(ids[0])).unwrap().negative.analysis.unwrap();
+    assert_eq!((written.lo, written.hi, written.tones), (alone.lo, alone.hi, alone.tones));
+}

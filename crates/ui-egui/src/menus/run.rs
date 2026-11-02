@@ -1117,11 +1117,17 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             }
             // (no film type chosen here: confirming lets negative.syncRoll infer it from the selection, as it does without
             // the dialog)
-            app.ui.dialog = Some(Dialog::ConvertNegative { film: String::new(), reset, roll: ids, photo: None });
+            let library = app.session.library_generation();
+            app.ui.dialog = Some(Dialog::ConvertNegative { film: String::new(), reset, roll: ids, photo: None, library });
             Ok(Value::Null)
         }
         "dialog.convertNegative" => {
-            let film = p.get("film").cloned().unwrap_or(json!("colorNegative"));
+            // (a film type that isn't one is refused here, as negative.convert refuses it, before any dialog)
+            let film = match p.get("film") {
+                None | Some(Value::Null) => json!("colorNegative"),
+                Some(Value::String(f)) if matches!(f.as_str(), "colorNegative" | "bwNegative" | "slide") => json!(f),
+                Some(other) => return Some(Err(format!("dialog.convertNegative: invalid `film` {other} (colorNegative, bwNegative or slide)"))),
+            };
             let reset: Vec<String> = match app.session.execute("negative.conflicts", &json!({})) {
                 Ok(r) => r["reset"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
                 Err(e) => return Some(Err(e.to_string())),
@@ -1131,7 +1137,8 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             }
             let film = film.as_str().unwrap_or("colorNegative").to_string();
             let photo = app.session.active().map(|id| id.0);
-            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: Vec::new(), photo });
+            let library = app.session.library_generation();
+            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: Vec::new(), photo, library });
             Ok(Value::Null)
         }
         "dialog.newFolder" => {

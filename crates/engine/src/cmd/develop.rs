@@ -65,9 +65,14 @@ fn wb_mode_ignores_its_numbers(mode: WbMode, info: &lightcraft_pipeline::SourceI
 /// numbers, neither, or a mode of its own. [`merge_settings_for_photo`] and `preset.apply` both start here, and
 /// both finish with `normalize_wb` so the photo ends on the scale it is edited on.
 pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value, info: &lightcraft_pipeline::SourceInfo) -> Option<DevelopSettings> {
-    // (a converted film scan's white balance is relative to its positive, whatever its source)
-    let info = &*lightcraft_pipeline::local::wb_source(info, d);
+    let info = &wb_info_after(info, d, partial);
     let mut d = (*d).clone();
+    // the white the photo renders is read in the conversion state it ends in (a partial that switches the conversion
+    // off keeps the raw's as-shot white for the field it leaves out, not the positive's neutral)
+    if let Ok(after) = d.merged(partial) {
+        d.negative = after.negative;
+        d.set_section_enabled("negative", after.section_enabled("negative"));
+    }
     let wb = partial.get("wb").and_then(Value::as_object);
     // the partial names one of the two numbers, and not both or neither
     let one_field = wb.is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"));
@@ -101,6 +106,14 @@ pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value,
     Some(d)
 }
 
+/// The source facts a white balance partial is read against: a converted film scan's white balance is relative to its
+/// positive, so the photo's conversion state counts, as it will be once `partial` is merged (a preset that switches
+/// the conversion off leaves a raw on its own Kelvin scale, one that switches it on, on the positive's).
+fn wb_info_after(info: &lightcraft_pipeline::SourceInfo, d: &DevelopSettings, partial: &Value) -> lightcraft_pipeline::SourceInfo {
+    let after = d.merged(partial).unwrap_or_else(|_| d.clone());
+    lightcraft_pipeline::local::wb_source(info, &after).into_owned()
+}
+
 /// Merge a partial settings JSON into a photo's settings (issue #2910). `DevelopSettings::merged` keeps a white
 /// balance that names no scale on the relative scale; on a photo edited in Kelvin the field the partial does not
 /// name (a partial with only `temp`, or only `tint`) would then be read on the other scale, giving a white neither
@@ -117,7 +130,7 @@ pub(crate) fn merge_settings_for_photo(
     partial: &Value,
     info: &lightcraft_pipeline::SourceInfo,
 ) -> std::result::Result<DevelopSettings, serde_json::Error> {
-    let info = &*lightcraft_pipeline::local::wb_source(info, d);
+    let info = &wb_info_after(info, d, partial);
     let prepared = prepare_photo_for_wb_partial(d, partial, info);
     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
     let mut out = prepared.as_ref().unwrap_or(d).merged(partial)?;
@@ -1117,8 +1130,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
                     // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
                     let info = s.source_info(id);
-                    // (a converted film scan: relative to its positive)
-                    let info = lightcraft_pipeline::local::wb_source(&info, &d).into_owned();
+                    // (a converted film scan: relative to its positive, as the photo will be after the preset)
+                    let info = wb_info_after(&info, &d, &preset.settings);
                     let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
                     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
                     let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
@@ -1191,6 +1204,8 @@ pub fn specs() -> Vec<CommandSpec> {
                         Value::Object(keys.into_iter().filter_map(|k| current.get(&k).cloned().map(|v| (k, v))).collect())
                     }
                 };
+                // (the conversion's options, never this frame's film base, range or roll lock)
+                lightcraft_develop::strip_frame_measurements(&mut pr.settings);
                 ok()
             }
         ),
@@ -1315,5 +1330,48 @@ fn has_history_after(s: &Session) -> std::result::Result<(), String> {
         Ok(())
     } else {
         Err("at the latest History step".into())
+    }
+}
+
+#[cfg(test)]
+mod tests_negative_wb {
+    use lightcraft_develop::{DevelopSettings, FilmType, WbMode, WbScale};
+    use lightcraft_pipeline::SourceInfo;
+    use serde_json::json;
+
+    /// A raw camera scan's source facts (its own Kelvin scale and as-shot white).
+    fn raw() -> SourceInfo {
+        SourceInfo { raw: true, as_shot_temp: 3442.0, as_shot_tint: 22.0, ..Default::default() }
+    }
+
+    fn converted() -> DevelopSettings {
+        let mut d = DevelopSettings::for_raw(3442.0, 22.0);
+        d.negative.film = FilmType::ColorNegative;
+        (d.wb.mode, d.wb.temp, d.wb.tint) = (WbMode::AsShot, 6500.0, 0.0);
+        d
+    }
+
+    /// A one-field white balance partial that also switches the conversion off is read on the raw's own Kelvin scale
+    /// (the field it leaves out is the raw's as-shot white), not the positive's relative one; and one that switches
+    /// it on is read on the positive's.
+    #[test]
+    fn a_partial_that_switches_the_conversion_reads_white_balance_on_the_final_scale() {
+        for (partial, field) in [
+            (json!({"negative": {"film": "off"}, "wb": {"temp": 5000.0, "scale": "kelvin"}}), "temp"),
+            (json!({"negative": {"film": "off"}, "wb": {"tint": 10.0, "scale": "kelvin"}}), "tint"),
+        ] {
+            let out = super::merge_settings_for_photo(&converted(), &partial, &raw()).unwrap();
+            assert!(!out.negative.converts());
+            assert_eq!(out.wb.scale, WbScale::Kelvin, "{field}: on the raw's Kelvin scale");
+            match field {
+                "temp" => assert_eq!((out.wb.temp, out.wb.tint), (5000.0, 22.0), "the raw's as-shot tint kept"),
+                _ => assert_eq!((out.wb.temp, out.wb.tint), (3442.0, 10.0), "the raw's as-shot temperature kept"),
+            }
+        }
+        // switched on by the partial: read against the positive (as converted = 6500 K / 0)
+        let plain = DevelopSettings::for_raw(3442.0, 22.0);
+        let on = super::merge_settings_for_photo(&plain, &json!({"negative": {"film": "colorNegative"}, "wb": {"temp": 7000.0}}), &raw()).unwrap();
+        assert!(on.negative.converts());
+        assert_eq!((on.wb.temp, on.wb.tint), (7000.0, 0.0), "the positive's neutral tint, not the raw's +22");
     }
 }

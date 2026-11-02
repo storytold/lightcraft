@@ -132,6 +132,16 @@ impl SettingsGroup {
     }
 }
 
+/// Take one frame's measured film base and range and its roll lock out of a preset's settings: a preset carries the
+/// conversion's options only, since those numbers would replace the ones measured on the scan it is applied to (and a
+/// lock would keep them there). Every way a preset is made or updated from a photo goes through this.
+pub fn strip_frame_measurements(settings: &mut Value) {
+    if let Some(n) = settings.get_mut("negative").and_then(Value::as_object_mut) {
+        n.remove("analysis");
+        n.remove("locked");
+    }
+}
+
 /// `s`'s Negative group spelled out in full: the saved JSON leaves the group out while it is off, and `locked` while
 /// false, so a copy of an unconverted or unlocked photo would otherwise leave the target converted or locked, and an
 /// amount would have nothing to interpolate from.
@@ -240,12 +250,7 @@ pub struct Preset {
 impl Preset {
     pub fn from_settings(id: &str, name: &str, group: &str, s: &DevelopSettings, groups: &[SettingsGroup]) -> Preset {
         let mut settings = extract_groups(s, groups);
-        // a preset carries the conversion's options, never one frame's measured film base and range nor its roll lock:
-        // applied to another scan those would replace the numbers measured on it
-        if let Some(n) = settings.get_mut("negative").and_then(Value::as_object_mut) {
-            n.remove("analysis");
-            n.remove("locked");
-        }
+        strip_frame_measurements(&mut settings);
         Preset { id: id.into(), name: name.into(), group: group.into(), settings, favorite: false, builtin: false }
     }
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it

@@ -120,7 +120,9 @@ const EDGE_MAX: f32 = 8.0;
 const CLIPPED: f32 = 0.9995;
 /// The part of a tile's pixels at the plateau that makes it clipped.
 const PLATEAU: f32 = 0.5;
-/// Smallest channel maximum that can be a white level: below it nothing in the scan clipped.
+/// Smallest channel maximum that can be a white level: below it nothing in the scan clipped, and the clipping test is
+/// skipped. A scan whose bare light (a holder gap) stays under it in every channel isn't exposed to clip it, and such a
+/// gap can then pass the other tests as film; the film-base eyedropper is for that case.
 const WHITE: f32 = 0.98;
 
 fn luma(p: [f32; 3]) -> f32 {
@@ -238,33 +240,26 @@ pub fn detect_base(src: &Rgb32f, clear: [f32; 3], interior: Rect, one_strip: boo
     if found.len() < MIN_TILES {
         return None;
     }
-    // the brightest cluster: from the top, each tile not yet in a cluster starts one with the unclaimed tiles of its
-    // colour (every channel within SAME_EDGE); the first with at least MIN_TILES tiles that looks like a film edge
-    // wins. A few stray bright tiles can't form one, a film edge always does; each tile is weighed in one cluster only,
-    // so a large clear patch that isn't an edge costs one rejection, not one per tile.
+    // the brightest cluster: from the top, each tile starts a cluster of the tiles of its colour (every channel within
+    // SAME_EDGE); the first with at least MIN_TILES tiles that looks like a film edge wins. A few stray bright tiles
+    // can't form one, a film edge always does. A rejected cluster's colour isn't tried again as an anchor (so a large
+    // clear patch costs one rejection, not one per tile), but its tiles stay free to join a later cluster: a rebate
+    // close in colour to a brighter patch is still found.
     found.sort_by(|a, b| b.2.total_cmp(&a.2));
     let same = |a: &[f32; 3], b: &[f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= SAME_EDGE * y);
-    let mut claimed = vec![false; found.len()];
+    let mut rejected: Vec<[f32; 3]> = Vec::new();
     let mut group: Option<Vec<&([f32; 3], Rect, f32)>> = None;
-    for i in 0..found.len() {
-        if claimed.get(i).copied().unwrap_or(true) {
+    for (i, t) in found.iter().enumerate() {
+        let anchor = t.0;
+        if rejected.iter().any(|r| same(&anchor, r)) {
             continue;
         }
-        let anchor = found.get(i)?.0;
-        let mut g = Vec::new();
-        for (j, t) in found.iter().enumerate().skip(i) {
-            if let Some(c) = claimed.get_mut(j)
-                && !*c
-                && same(&t.0, &anchor)
-            {
-                *c = true;
-                g.push(t);
-            }
-        }
+        let g: Vec<&([f32; 3], Rect, f32)> = found.iter().skip(i).filter(|u| same(&u.0, &anchor)).collect();
         if g.len() >= MIN_TILES && looks_like_edge(&g, (sx, sy), one_strip) {
             group = Some(g);
             break;
         }
+        rejected.push(anchor);
     }
     let group = group?;
     let colours: Vec<[f32; 3]> = group.iter().map(|t| t.0).collect();
@@ -348,6 +343,7 @@ pub fn analyze_roll(film: FilmType, frames: &[FrameMeasure]) -> Result<FilmAnaly
         let step = f.px.len().div_ceil(ROLL_SAMPLES).max(1);
         pooled.extend(f.px.iter().step_by(step));
     }
+    // (frames already thinned by `thin_for_roll` pool alike: their step is 1)
     range_of(film, &pooled, base, base_source, base_rect)
 }
 
@@ -366,6 +362,15 @@ pub fn base_spread(frames: &[FrameMeasure]) -> f32 {
             if lo > 0.0 { hi / lo } else { f32::INFINITY }
         })
         .fold(1.0, f32::max)
+}
+
+/// Keep only the samples [`analyze_roll`] reads from `m` (at most [`ROLL_SAMPLES`]), so a roll's frames can be held
+/// until it is written, and the roll analysed again without some of them, at a bounded cost.
+pub fn thin_for_roll(m: &mut FrameMeasure) {
+    let step = m.px.len().div_ceil(ROLL_SAMPLES).max(1);
+    if step > 1 {
+        m.px = m.px.iter().step_by(step).copied().collect();
+    }
 }
 
 /// One frame's measurements for an analysis ([`measure_frame`]): its picture's pixels and its film base.
