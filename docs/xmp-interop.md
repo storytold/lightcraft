@@ -17,6 +17,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 
 | Field | XMP property |
 |---|---|
+| ISO sensitivity | `exif:ISOSpeedRatings` / `exifEX:PhotographicSensitivity` (positive integer; invalid candidates are skipped so a valid fallback can supply ISO) |
 | Rating 0–5 | `xmp:Rating` |
 | Colour label | `xmp:Label` (`Red`, `Yellow`, `Green`, `Blue`, `Purple`) |
 | Title / caption / copyright / creator | `dc:title` / `dc:description` / `dc:rights` / `dc:creator` |

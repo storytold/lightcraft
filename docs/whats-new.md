@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### XMP ISO values are checked before import
+- Fractional, non-positive, non-finite and out-of-range XMP ISO values no longer become an invented integer ISO value. A later valid ISO property can still supply the value; raw metadata remains available.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

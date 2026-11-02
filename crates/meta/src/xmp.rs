@@ -514,6 +514,10 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
+fn iso_from_number(value: f64) -> Option<u32> {
+    if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 || value > u32::MAX as f64 { None } else { Some(value as u32) }
+}
+
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
@@ -571,7 +575,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         label: first("xmp:Label"),
         ..Default::default()
     };
-    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find(|v| *v > 0.0).map(|v| v as u32);
+    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find_map(iso_from_number);
     if let Some(spec) = props.get("exifEX:LensSpecification").filter(|v| v.len() == 4) {
         let v: Vec<f64> = spec.iter().filter_map(|s| parse_number(s)).collect();
         if v.len() == 4 {

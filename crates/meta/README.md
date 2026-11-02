@@ -49,7 +49,7 @@ PSD/PSB XMP resources require valid UTF-8; trailing NUL padding is trimmed after
 
 ISO capture-time parsing requires a complete clock and consumes every clock and fractional-second character. Invalid
 XMP capture-time values remain available in the raw property map but are not projected into `Metadata`; a later valid
-capture-time property can still supply the metadata value. Invalid GPX point times are treated as untimed.
+capture-time property can still supply the metadata value. Invalid GPX point times are treated as untimed. XMP ISO candidates are projected only when finite, positive, integral and representable as `u32`; an invalid primary candidate does not hide a valid fallback.
 
 ## Sources
 
