@@ -1166,7 +1166,8 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json();
+                // (a preset stores no AI shape found on this photo)
+                let current = lightcraft_develop::presets::without_ai_shapes(&s.develop_of(id).unwrap_or_default()).to_json();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {

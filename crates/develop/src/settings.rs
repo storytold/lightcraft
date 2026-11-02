@@ -1106,6 +1106,20 @@ fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+impl Mask {
+    /// Drop the AI segmentation (`seg`, `detail`) every component computed on its photo, keeping
+    /// what the AI was asked for, Edge and Add/Subtract: what a preset stores and brings, so the
+    /// photo it is applied to computes its own shape.
+    pub fn clear_ai_segmentations(&mut self) {
+        for c in &mut self.components {
+            if let Some((seg, detail)) = c.shape.ai_segmentation_mut() {
+                *seg = None;
+                detail.clear();
+            }
+        }
+    }
+}
+
 impl Default for Mask {
     fn default() -> Self {
         Self { id: 0, name: "Mask 1".into(), visible: true, invert: false, components: Vec::new(), adjust: LocalAdjustments::default(), refine: 0.0 }
