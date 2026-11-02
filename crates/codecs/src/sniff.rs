@@ -52,6 +52,7 @@ impl Format {
         }
     }
 
+    /// Standard MIME type for this image or video container format.
     pub fn mime(self) -> &'static str {
         match self {
             Format::Jpeg => "image/jpeg",
@@ -156,6 +157,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     None
 }
 
+/// Detect ISO Base Media File Format container (MP4, MOV, HEIF, CR3, AVIF) by checking the ftyp box.
 fn sniff_bmff(b: &[u8]) -> Option<Format> {
     let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
     let end = size.clamp(12, b.len().min(4096));
@@ -181,14 +183,18 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
     if has(b"qt  ") {
         return Some(Format::Mov);
     }
-    if [&b"isom"[..], b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash", b"avc1", b"M4V ", b"M4A ", b"mp71", b"XAVC", b"xavc"]
+    // Audio-only brands are not video, even when they carry an `isom` compatible brand (an
+    // `.m4a` book or song): they must keep failing as unrecognized, not be catalogued as MP4.
+    if has(b"M4A ") || has(b"M4B ") || has(b"M4P ") {
+        return None;
+    }
+    if [&b"isom"[..], b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash", b"avc1", b"M4V ", b"mp71", b"XAVC", b"xavc"]
         .iter()
         .any(|x| has(x))
     {
         return Some(Format::Mp4);
     }
-    // Any other BMFF container with an ftyp box is a video container
-    Some(Format::Mp4)
+    None
 }
 
 /// Heuristic camera-raw detection for classic TIFF: DNGVersion, the CR2 signature, CFA/LinearRaw
@@ -248,6 +254,7 @@ fn tiff_is_raw(b: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Test sniffing signatures for supported image and video formats.
     #[test]
     fn magic_numbers() {
         assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some(Format::Jpeg));
@@ -258,6 +265,9 @@ mod tests {
         assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some(Format::Heif));
         assert_eq!(sniff(b"\0\0\0\x18ftypcrx \0\0\0\x01crx isom"), Some(Format::RawOther));
         assert_eq!(sniff(b"\0\0\0\x18ftypmp42\0\0\0\0mp41isom"), Some(Format::Mp4));
+        assert_eq!(sniff(b"\0\0\0\x14ftypM4A \0\0\0\0"), None);
+        assert_eq!(sniff(b"\0\0\0\x1cftypM4A \0\0\0\0M4A mp42isom"), None, "audio with an isom compatible brand is not video");
+        assert_eq!(sniff(b"\0\0\0\x14ftypxxxx\0\0\0\0"), None);
         assert_eq!(sniff(b"\0\0\0\x14ftypqt  \0\0\0\0"), Some(Format::Mov));
         assert_eq!(sniff(b"\0\0\0\x08moov\0\0\0\0"), Some(Format::Mov));
         assert_eq!(sniff(b"\0\0\0\x08wide\0\0\0\0"), Some(Format::Mov));

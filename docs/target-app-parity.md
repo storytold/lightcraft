@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Canon CRW decoder shared via craft-libs `craft-crw`; Canon CRW decoded clean-room, 6 bodies verified; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 85% of Adobe's models decode, 39% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (video: MP4/MOV/M4V import and cataloguing with duration, dimensions, capture date and camera/GPS, grid/filmstrip badges, a loupe card and a per-file warning when a rendered export, print or contact sheet skips a clip; no player; Canon CRW decoder shared via craft-libs `craft-crw`; Canon CRW decoded clean-room, 6 bodies verified; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 85% of Adobe's models decode, 39% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -300,7 +300,11 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Gap 18 review: Remove Location reads the QuickTime metadata layouts the catalog reads (`trak`/`mdia` `udta`, mdta `meta`), treats cleared location atoms as no location, and refuses an XMP property inventory a size limit cut short (video and image Originals) instead of reading the omission as absence. Scope, hours and headline counts unchanged |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
+| 2026-10-27 | patch | Original file admission is independent of cache budgets; physical/platform capacity and allocation checks replace the cache-derived threshold. Browser caching avoids the handoff copy. Breadth, readiness and hours unchanged |
+| 2026-10-27 | patch | Video review audit: content-based bounded probes, truthful CLI no-output errors and configurable buffering budgets without an arbitrary per-file limit. Breadth, readiness and hours unchanged |
+| 2026-10-27 | patch | Video: streamed Original copies and browser Blobs without a clip-size cap; location-free clips pass Remove Location verification, GPS-bearing or unverifiable metadata fails; legacy filtering fixed. Breadth, readiness, remaining work and hours unchanged |
 | 2026-10-23 | minor | Video: MP4/MOV/M4V import and cataloguing (duration, dimensions, capture date, camera/GPS), grid format/duration badges and a loupe card; Video breadth and readiness 0% → 10%, remaining 25–45 → 20–40 h; headline numbers unchanged |
 | 2026-10-13 | minor | Canon CRW decoded (clean-room, craft-libs `crates/crw/clean-room/`): 551 models verified with the coverage sweep (557 with MRW after merging main), Canon preview rows 21 → 6; RAW decoding unchanged |
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |

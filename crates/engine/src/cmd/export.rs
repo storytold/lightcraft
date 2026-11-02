@@ -168,6 +168,7 @@ fn photos_imports(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// The export commands and their contact-sheet variant.
 pub fn specs() -> Vec<CommandSpec> {
     #[allow(unused_mut)]
     let mut v = vec![
@@ -176,10 +177,12 @@ pub fn specs() -> Vec<CommandSpec> {
             always, |s, p| {
                 let path = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad("export.contactSheet", "missing path"))?;
                 s.check_write_target(path).map_err(|e| bad("export.contactSheet", e))?;
-                let doc = crate::contact_sheet::prepare(s, p).and_then(|work| work.run(&mut |_, _| true)).map_err(|e| bad("export.contactSheet", e))?;
+                let work = crate::contact_sheet::prepare(s, p).map_err(|e| bad("export.contactSheet", e))?;
+                let skipped: Vec<Value> = work.skipped().iter().map(|(file, warning)| json!({"file": file, "warning": warning})).collect();
+                let doc = work.run(&mut |_, _| true).map_err(|e| bad("export.contactSheet", e))?;
                 s.check_write_target(path).map_err(|e| bad("export.contactSheet", e))?;
                 crate::export::write_file(path, &doc.bytes).map_err(|e| bad("export.contactSheet", e))?;
-                Ok(json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len()}))
+                Ok(json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "skipped": skipped}))
             }
         ),
         cmd!(

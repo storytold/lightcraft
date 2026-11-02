@@ -14,10 +14,12 @@ use crate::{LightcraftApp, Services};
 const T: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_secs(60);
 
+/// Check whether a widget or element with the given identifier is registered.
 fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+/// Encode a test RGBA8 image as PNG bytes.
 fn png(img: &lightcraft_raster::Rgba8) -> Vec<u8> {
     lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
 }
@@ -33,6 +35,7 @@ fn shot(h: &mut Headless, name: &str) {
     assert_eq!(r["ok"], true, "{r}");
 }
 
+/// Select a photo or video by ID in the test application and wait for the UI to settle.
 fn select(h: &mut Headless, id: PhotoId) {
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -61,6 +64,7 @@ fn video_app(view: ViewMode) -> Headless {
         Services {
             png: Some(Box::new(png)),
             write: Some(Box::new(|path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| e.to_string()))),
+            write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
             ..Default::default()
         },
     );
@@ -101,6 +105,42 @@ fn grid_cells_mark_videos_with_their_format_and_running_time() {
         assert!(!has(&h, "badge:videoDuration:4"), "{view:?}: a clip without a duration shows no time");
         assert!(!has(&h, "badge:videoDuration:2") && !has(&h, "badge:videoFormat:2"), "{view:?}: a still has neither badge");
         shot(&mut h, &format!("video-{view:?}.png"));
+    }
+}
+
+#[test]
+fn grids_announce_video_even_without_a_duration() {
+    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+        let mut h = video_app(view);
+        let ctx = h.view.ctx.clone();
+        ctx.enable_accesskit();
+        let mut labels = Vec::new();
+        for frame in 0..3 {
+            let raw = crate::headless::HeadlessView::raw_input(egui::vec2(1200.0, 800.0), 1.0, h.time() + frame as f64, Vec::new());
+            let out = ctx.run_ui(raw, |ui| h.app.ui(ui));
+            if let Some(update) = out.platform_output.accesskit_update {
+                labels.extend(update.nodes.into_iter().filter_map(|(_, node)| node.label().map(str::to_string)));
+            }
+        }
+        let video = crate::i18n::tr("Video");
+        assert!(labels.iter().any(|label| label == &format!("unknown.mp4, {video}")), "{view:?}: {labels:?}");
+        assert!(labels.iter().any(|label| label == &format!("clip.mp4, {video} 01:24")), "{view:?}: {labels:?}");
+        assert!(labels.iter().any(|label| label == "photo.jpg"));
+    }
+}
+
+#[test]
+fn culling_views_show_video_cards_without_scheduling_frames() {
+    for command in ["view.compare", "view.reference", "view.survey"] {
+        let mut h = video_app(ViewMode::PhotoGrid);
+        h.app.run("library.select", json!({"ids": [1, 3], "active": 3})).unwrap();
+        h.app.run(command, json!({})).unwrap();
+        h.settle(SETTLE);
+        assert!(has(&h, "cull:1:videoCard"), "{command}: the first clip is not a permanent skeleton");
+        assert!(has(&h, "cull:3:videoCard"), "{command}: the second clip is not a permanent skeleton");
+        assert_eq!(h.app.renderer.in_flight(), 0, "{command}: no frame decoder jobs");
+        assert!(!h.app.widgets.iter().any(|(id, _)| id.starts_with("compare:rendering:")));
+        shot(&mut h, &format!("video-{}.png", command.replace('.', "-")));
     }
 }
 
@@ -150,4 +190,21 @@ fn a_still_has_no_video_card_or_duration_row() {
     h.settle(SETTLE);
     assert!(!has(&h, "canvas:videoCard"));
     assert!(!has(&h, "info:duration"));
+}
+
+/// A very small loupe pane (e.g. docked or small window) never crashes video_card with f32::clamp bounds.
+#[test]
+fn video_card_never_panics_on_small_pane() {
+    let mut session = lightcraft_engine::Session::new();
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/test.mp4".into() }, "test.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    p.duration = Some(10.0);
+    session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let app = LightcraftApp::new(session, Services::default());
+    // Small window: height 100px (canvas height < 120px)
+    let mut h = Headless::new(app, [300.0, 100.0], 1.0);
+    select(&mut h, PhotoId(1));
+    h.app.ui.view = ViewMode::Detail;
+    h.settle(SETTLE);
+    assert!(has(&h, "canvas:videoCard"), "the card is drawn even in small pane without panicking");
 }

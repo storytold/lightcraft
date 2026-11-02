@@ -33,6 +33,41 @@ and brotli (`-11`) precompressed copies next to each file (`*.gz`, `*.br`, pure 
 as a size table). `--serve` sends them with `Content-Encoding` when the browser accepts them;
 configure a production server the same way (e.g. nginx `gzip_static`/`brotli_static`).
 
+## Video originals (unreleased)
+
+This section describes the development branch, not the released user guide. These instructions
+must be checked against a release before moving them into the guide and updating its `verified` tag.
+
+LightCraft cannot yet turn a video into an exported photo. If your selection includes videos,
+a photo export skips them and tells you which clips were skipped.
+
+To keep a copy of a video, choose **Original files**. This copies the clip without changing it,
+along with a separate XMP file containing its catalogue information.
+
+With **Remove location info** on, LightCraft checks the clip before copying it. If it finds
+coordinates or recognized place names (such as city, country or location), or cannot complete
+the check, it does not export the clip. It cannot yet
+remove location information from videos. Turn the option off only if you intend to share the
+unchanged clip, including any location it contains.
+
+### Implementation reference
+
+Desktop, CLI and MCP Original-video exports stream to the destination; browser downloads reuse
+stored Blobs. These paths do not buffer the whole clip in Rust memory or impose a clip-size limit.
+The CLI's `render` command refuses rendered video output with a nonzero status and no output file;
+`--opt format=original` copies the clip instead. Whole-buffer APIs check platform buffer capacity,
+physical RAM when known, and allocation failures. `app.memoryBudget` controls cache retention and
+scheduling, not whether originals are accepted.
+
+The native and browser metadata scanners share a one-million-top-level-box traversal budget for
+fragmented MP4s, while retaining the existing 64 MiB per-box and total metadata caps. QuickTime
+and ISO FullBox metadata use the same child-box selection for extraction and location checks.
+The same verifier guards buffered APIs, filesystem copies and browser Blobs, including after
+storage reload. Empty place-name fields alone do not block export; original bytes remain unchanged
+when Remove Location is off.
+Failed browser original loads are not requeued every frame: changing selection or explicitly
+retrying with `photo.reload` permits another attempt.
+
 ## Bundle size
 
 Measured on the full bundle (every codec and raw decoder is in the module), without `wasm-opt`:
@@ -98,8 +133,22 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     a library folder: `catalog.lock`, issue #99). Use one tab at a time; a guard through the Web
     Locks API (`navigator.locks`) is still to do.
   - `originals/<content hash>`: the bytes of every imported photo. The catalog refers to them as
-    `web/<hash>/<file name>`; the main thread keeps recently used originals in memory (≤ 768 MB)
+    `web/<hash>/<file name>`; the main thread keeps recently used originals in memory
+    (half the application memory budget, by default 768 MiB)
     and loads the rest on demand (the active photo is prefetched).
+    Imports read one file at a time. Originals are stored as browser Blobs, avoiding IndexedDB's
+    serialized-buffer size ceiling. Videos are hashed in 1 MiB chunks;
+    only bounded container metadata enters WASM memory (64 MiB total, skipping movie payloads).
+    Original video downloads reuse those Blobs, with no clip-size limit. Remove Location accepts
+    verified location-free clips and refuses GPS-bearing or unverifiable metadata without downloading.
+    Whole-buffer originals, including images, are not limited by `app.memoryBudget`: it controls
+    cache retention and scheduling, not which files may be imported. A single active original may
+    exceed the cache target; other originals are evicted instead of rejecting it. Buffer transfers
+    use fallible allocation and the cache takes ownership without another full copy.
+    WASM's address-space and contiguous-buffer limits still apply, and allocation failures are
+    reported explicitly. Destination-backed video exports do not use that byte cache.
+    Library backups and restores also process original Blobs in chunks, so large clips remain
+    usable there within the existing 4 GB backup limit.
   - `thumbs/<key>.jpg` + `thumbs/index.json`: the rendered-thumbnail cache, with the desktop's
     budget (2 GB, least recently used pruned to 80 %).
 

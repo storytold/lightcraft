@@ -1483,7 +1483,17 @@ fn ui_commands_12(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             crate::links::open(app, url)
         }
         "app.exportPrevious" => match app.session.last_export.clone() {
-            Some(prev) => crate::control::export_active(app, &lightcraft_engine::export::ExportOptions::known_keys_only(&prev)),
+            Some(prev) => {
+                // Keep the stored settings; only the caller's target IDs may differ (the browser
+                // freezes them while an Original loads).
+                let mut settings = lightcraft_engine::export::ExportOptions::known_keys_only(&prev);
+                if let Some(ids) = p.get("ids")
+                    && let Some(o) = settings.as_object_mut()
+                {
+                    o.insert("ids".into(), ids.clone());
+                }
+                crate::control::export_active(app, &settings)
+            }
             None => Err("nothing exported yet — use Export…".into()),
         },
         _ => return None,

@@ -498,6 +498,36 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
     assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
     assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
+    assert!(d.properties_truncated, "the map says it is not a complete inventory");
+}
+
+#[test]
+fn a_packet_within_the_budget_keeps_a_complete_inventory() {
+    let d = parse_xmp(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="A"/></rdf:RDF>"#).unwrap();
+    assert!(!d.properties_truncated);
+    assert_eq!(d.properties.len(), 1);
+}
+
+/// A later description that repeats `LocationShown` with an empty item must not erase the city
+/// an earlier description named: the packet still holds a place the export has to refuse.
+#[test]
+fn a_later_empty_location_keeps_an_earlier_city() {
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">"#,
+        r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown></rdf:Description>"#,
+        r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li></rdf:li></rdf:Bag></place:LocationShown></rdf:Description>"#,
+        r#"</rdf:RDF>"#
+    );
+    let parsed = parse_xmp(packet).expect("valid XMP");
+    assert!(parsed.has_location_metadata(), "the earlier city is still in the packet");
+    let city = parsed
+        .values
+        .get("Iptc4xmpExt:LocationShown")
+        .and_then(|value| value.items().first())
+        .and_then(|item| item.field("Iptc4xmpExt:City"))
+        .and_then(XmpValue::text);
+    assert_eq!(city, Some("Rome"));
 }
 
 #[test]
