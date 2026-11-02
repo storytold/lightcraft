@@ -194,6 +194,8 @@
   "Candidate": "Candidato",
   "Caption": "Legenda",
   "Capture Date": "Data de captura",
+  "Capture Time": "Hora de captura",
+  "Custom Order": "Ordem personalizada",
   "Capture date and time in your own format (directives below)": "Data e hora de captura no seu próprio formato (diretivas abaixo)",
   "Capture date as YYYYMMDD": "Data de captura como AAAAMMDD",
   "Captured": "Capturada",

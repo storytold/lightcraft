@@ -518,7 +518,8 @@ fn scale_100k_library_queries() {
     m("undo", &mut || {
         s.execute("edit.undo", &serde_json::json!({})).unwrap();
     });
-    // a 20k-photo album shown in its own order (capture-date sort, no filter)
+    // a 20k-photo album shown in its own order (Custom Order sort, no filter)
+    s.execute("library.sort", &serde_json::json!({"key": "custom"})).unwrap();
     let big = s.execute("album.create", &serde_json::json!({"name": "Big"})).unwrap()["id"].as_u64().unwrap();
     let ids: Vec<u64> = (0..n).rev().step_by(5).map(|i| i + 1).collect();
     m("add 20k to an album", &mut || {

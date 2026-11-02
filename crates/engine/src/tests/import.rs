@@ -532,8 +532,10 @@ fn recently_added_covers_recent_imports_newest_first() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Inside one import batch, Recently Added follows the sort chosen (note 50): photos without a
+/// capture time tie and go by file name, in the sort's direction, as in All Photos.
 #[test]
-fn recently_added_keeps_an_import_batch_in_file_order() {
+fn recently_added_sorts_an_import_batch_like_the_other_views() {
     use lightcraft_catalog::{Op, Photo, PhotoId, Source};
     let mut s = Session::new();
     // one import batch: one `imported` string, ids running opposite to the names
@@ -549,7 +551,11 @@ fn recently_added_keeps_an_import_batch_in_file_order() {
         s.execute("library.sort", &serde_json::json!({"key": "captureDate", "ascending": ascending})).unwrap();
         s.execute("library.source", &serde_json::json!({"kind": "recentlyAdded"})).unwrap();
         let names: Vec<String> = s.visible_cloned().iter().map(|id| s.catalog.photo(*id).unwrap().file_name.clone()).collect();
-        assert_eq!(names, by_name, "ascending: {ascending}");
+        let want: Vec<String> = if ascending { by_name.clone() } else { by_name.iter().rev().cloned().collect() };
+        assert_eq!(names, want, "ascending: {ascending}");
+        s.execute("library.source", &serde_json::json!({"kind": "all"})).unwrap();
+        let all: Vec<String> = s.visible_cloned().iter().map(|id| s.catalog.photo(*id).unwrap().file_name.clone()).collect();
+        assert_eq!(all, want, "the same order as All Photos");
     }
 }
 

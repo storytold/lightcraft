@@ -189,6 +189,8 @@
   "Candidate": "Candidat",
   "Caption": "Légende",
   "Capture Date": "Date de prise de vue",
+  "Capture Time": "Heure de prise de vue",
+  "Custom Order": "Ordre personnalisé",
   "Capture date and time in your own format (directives below)": "Date et heure de prise de vue dans votre propre format (directives ci-dessous)",
   "Capture date as YYYYMMDD": "Date de prise de vue au format AAAAMMJJ",
   "Captured": "Prise de vue",

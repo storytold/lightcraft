@@ -308,13 +308,14 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let cur = app.session.sort;
     ui.label(egui::RichText::new(crate::i18n::tr("Sort by")).weak());
     for (label, key, k) in [
-        ("Capture Date", CaptureDate, "captureDate"),
+        ("Capture Time", CaptureDate, "captureDate"),
         ("Import Date", ImportDate, "importDate"),
         ("Modified Date", EditDate, "editDate"),
         ("File Name", FileName, "fileName"),
         ("Rating", Rating, "rating"),
         ("File Size", FileSize, "fileSize"),
         ("Random", Random, "random"),
+        ("Custom Order", Custom, "custom"),
     ] {
         if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {
             let _ = app.run("library.sort", json!({"key": k}));

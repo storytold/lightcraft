@@ -193,6 +193,8 @@
   "Candidate": "候选",
   "Caption": "题注",
   "Capture Date": "拍摄日期",
+  "Capture Time": "拍摄时间",
+  "Custom Order": "自定义顺序",
   "Capture date and time in your own format (directives below)": "自定义格式的拍摄日期和时间（格式说明见下方）",
   "Capture date as YYYYMMDD": "拍摄日期（YYYYMMDD）",
   "Captured": "拍摄时间",
