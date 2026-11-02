@@ -30,15 +30,68 @@ impl LightcraftApp {
         self.ui.was_focused = focused;
     }
 
+    /// The window and the GPU's batch work (exports): a resize makes room for the window's own
+    /// drawing first (`lightcraft_gpu::hold_batch`: the surface is reconfigured, which waits for
+    /// the GPU); what happened to the GPU (it stopped responding, it was restarted) is told once.
+    fn gpu_housekeeping(&mut self, ctx: &egui::Context) {
+        let screen = ctx.content_rect().size();
+        if screen != self.last_screen {
+            if self.last_screen != egui::Vec2::ZERO {
+                lightcraft_engine::gpu::hold_batch(std::time::Duration::from_millis(800));
+            }
+            self.last_screen = screen;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for e in lightcraft_engine::gpu::events_after(self.gpu_event_seen) {
+            self.gpu_event_seen = self.gpu_event_seen.max(e.seq);
+            let text = crate::i18n::tr(&e.text).to_string();
+            match e.kind {
+                lightcraft_engine::gpu::EventKind::Recovered => self.toast_for(ctx, text, 8.0),
+                _ => self.toast_for(ctx, text, 15.0),
+            }
+        }
+    }
+
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
+        // another card chosen after startup: the last Test my machine measured the cards before
+        // (its second-card choice and numbers no longer hold), so Automatic goes back to the defaults
+        let changed = |applied: &Option<String>, now: &str| applied.as_deref().is_some_and(|a| a != now);
+        if changed(&self.gpu_helper_applied, &self.ui.settings.gpu_helper) || changed(&self.gpu_card_applied, &self.ui.settings.gpu_card) {
+            self.ui.settings.machine_test = None;
+            // (and a test running now would report on the cards before: stopped)
+            if let Some(t) = &self.machine {
+                t.stop();
+            }
+        }
+        // the second graphics card (Settings ▸ Performance), before the warm-up below sets it up
+        if self.gpu_helper_applied.as_deref() != Some(self.ui.settings.gpu_helper.as_str()) {
+            self.gpu_helper_applied = Some(self.ui.settings.gpu_helper.clone());
+            let helper = if self.ui.settings.gpu_helper.is_empty() { "auto".to_string() } else { self.ui.settings.gpu_helper.clone() };
+            if let Err(e) = self.session.execute("app.gpu", &serde_json::json!({"helper": helper, "wait": false})) {
+                log::warn!("second graphics card: {e}");
+            }
+        }
         if self.gpu_applied != Some(self.ui.settings.gpu) {
+            // (GPU rendering turned on: the second card is set again on the next pass, as a named
+            // card can't be found while the cards aren't listed; review of PR #3544)
+            if self.gpu_applied.is_some() && self.ui.settings.gpu {
+                self.gpu_helper_applied = None;
+            }
             self.gpu_applied = Some(self.ui.settings.gpu);
             let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu, "wait": false}));
             // GPU device + kernels off the UI thread, once the window is up and only when GPU
             // rendering is on: a broken driver must not keep the window from appearing (issue #136)
             if self.ui.settings.gpu {
                 lightcraft_engine::gpu::warm_up();
+            }
+        }
+        // the graphics card for editing (Settings ▸ Performance): applied at once, renders move over when it is ready
+        if self.gpu_card_applied.as_deref() != Some(self.ui.settings.gpu_card.as_str()) {
+            self.gpu_card_applied = Some(self.ui.settings.gpu_card.clone());
+            let card = if self.ui.settings.gpu_card.is_empty() { "auto".to_string() } else { self.ui.settings.gpu_card.clone() };
+            if let Err(e) = self.session.execute("app.gpu", &serde_json::json!({"card": card, "wait": false})) {
+                log::warn!("graphics card for editing: {e}");
             }
         }
         let mb = self.ui.settings.memory_mb;
@@ -48,6 +101,14 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        // export lanes and the GPU's share for exports (Settings ▸ Performance, "Test my machine")
+        let st = &self.ui.settings;
+        let tuning = crate::machine_test::tuning(st);
+        if self.export_tuning_applied != Some(tuning) {
+            crate::machine_test::apply(st);
+            self.export_tuning_applied = Some(tuning);
+        }
+        self.gpu_housekeeping(ctx);
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

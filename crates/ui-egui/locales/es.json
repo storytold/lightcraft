@@ -121,6 +121,8 @@
   "Auto-Tag from Tracklog…": "Etiquetar automáticamente desde el registro de ruta…",
   "Add Locations": "Añadir ubicaciones",
   "Automatic": "Automático",
+  "Tested": "Probado",
+  "tested": "probado",
   "Automatic renders the Detail view at the size it is shown, up to the photo's own pixels. Choose a size to cap it: smaller is faster.": "Automático muestra la vista Detalle al tamaño en que se ve, hasta los píxeles propios de la foto. Elegir un tamaño para limitarla: cuanto más pequeño, más rápido.",
   "Automatically Write Changes into XMP": "Escribir automáticamente los cambios en XMP",
   "Automatically write changes into XMP sidecars": "Escribir automáticamente los cambios en los archivos XMP complementarios",

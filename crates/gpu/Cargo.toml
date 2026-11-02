@@ -24,6 +24,8 @@ log = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
+# (the second card's set-up thread runs below normal priority)
+lightcraft-sysmem = { workspace = true }
 
 [features]
 default = []

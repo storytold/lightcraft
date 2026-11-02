@@ -122,7 +122,14 @@ impl LightcraftApp {
             hover_preview: None,
             window_is_fullscreen: false,
             gpu_applied: None,
+            gpu_card_applied: None,
+            gpu_helper_applied: None,
             gpu_notice: false,
+            gpu_event_seen: 0,
+            last_screen: egui::Vec2::ZERO,
+            export_tuning_applied: None,
+            machine: None,
+            machine_last: None,
             memory_applied: None,
             display_applied: None,
             display_error: None,
@@ -631,6 +638,12 @@ impl LightcraftApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
+        // input this frame: batch work leaves the editing card to the interface for a moment
+        // (§8). Read here, on UI passes only: hidden logic ticks keep the last pass's events
+        // (review of PR #3544).
+        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            lightcraft_engine::gpu::note_interaction();
+        }
         if !self.fonts_ready {
             ctx.request_repaint();
             return;

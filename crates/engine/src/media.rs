@@ -35,7 +35,12 @@ mod source;
 
 pub use cache::DenoiseIndex;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
-pub use render::{RenderJob, RenderResult, develop, develop_reporting, fit_for_display};
+#[cfg(test)]
+pub(crate) use render::thread_render_counts;
+pub use render::{
+    RenderCounts, RenderJob, RenderResult, ScreenFrame, as_background_gpu, background_gpu, background_photo, develop, develop_reporting,
+    fit_for_display, render_counts, rendering_in_background,
+};
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;

@@ -50,9 +50,9 @@ mod platform;
 mod prefs;
 mod session;
 
-use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lost_reason, record_gpu_lost, window_files};
+use gpu_crash::{GpuCrash, gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lost_reason, record_gpu_lost, window_files};
 #[cfg(test)]
-use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, window_wgpu_options};
+use gpu_crash::{gpu_crash_check_at, gpu_crash_from, gpu_crash_notice, window_wgpu_options};
 #[cfg(test)]
 use launch::launch_imports_in;
 use launch::{
@@ -79,7 +79,67 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(LightcraftApp, PrefsWriter, Option<WindowTextures>, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+
+/// Draws renders that stayed on the GPU: registers their textures with the window's egui-wgpu
+/// renderer (the GPU renderer runs on the window's device, see [`adopt_window_device`]).
+struct WindowTextures {
+    device: eframe::wgpu::Device,
+    queue: eframe::wgpu::Queue,
+    renderer: std::sync::Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>,
+}
+
+impl lightcraft_ui_egui::render::ScreenTextures for WindowTextures {
+    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        let view = frame.texture.create_view(&Default::default());
+        let mut r = self.renderer.write();
+        let filter = eframe::wgpu::FilterMode::Linear;
+        Some(match id {
+            Some(id) => {
+                r.update_egui_texture_from_wgpu_texture(&self.device, &view, filter, id);
+                id
+            }
+            None => r.register_native_texture(&self.device, &view, filter),
+        })
+    }
+
+    fn free(&mut self, id: egui::TextureId) {
+        self.renderer.write().free_texture(&id);
+    }
+
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        match lightcraft_engine::gpu::read_texture(&self.device, &self.queue, &frame.texture, frame.width, frame.height) {
+            Ok(img) => Some(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], img.data.as_flattened())),
+            Err(e) => {
+                log::warn!("gpu: a view can't be read back for the screenshot: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// Render on the window's device (off the UI thread: building the kernels takes a moment), so the
+/// loupe's drafts are drawn straight from the GPU; the textures they leave are shown through
+/// [`WindowTextures`] once that worked. Otherwise the GPU renderer makes a device of its own, as
+/// before, and every render comes back as pixels.
+fn adopt_window_device(rs: &eframe::egui_wgpu::RenderState, ctx: &egui::Context) -> WindowTextures {
+    let (device, queue, info) = (rs.device.clone(), rs.queue.clone(), rs.adapter.get_info());
+    let ctx = ctx.clone();
+    // before the first frame's GPU warm-up can start a device of its own
+    lightcraft_engine::gpu::set_window_device_pending(true);
+    let spawned = std::thread::Builder::new().name("lc-gpu-window".into()).spawn(move || {
+        match lightcraft_engine::gpu::adopt_window_device(device, queue, info) {
+            Ok(()) => log::info!("gpu: rendering on the window's device"),
+            Err(e) => log::info!("gpu: renders come back as pixels: {e}"),
+        }
+        ctx.request_repaint();
+    });
+    if let Err(e) = spawned {
+        log::warn!("gpu: {e}");
+        lightcraft_engine::gpu::set_window_device_pending(false);
+    }
+    WindowTextures { device: rs.device.clone(), queue: rs.queue.clone(), renderer: rs.renderer.clone() }
+}
 
 impl eframe::App for App {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -89,7 +149,7 @@ impl eframe::App for App {
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        if let Some(m) = self.2.as_mut()
+        if let Some(m) = self.3.as_mut()
             && m.update(&mut self.0, ctx)
             && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
         {
@@ -109,6 +169,13 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
+        // the GPU renderer adopted the window's device: its renders can be drawn as they are
+        if self.2.is_some()
+            && lightcraft_engine::gpu::on_window_device()
+            && let Some(t) = self.2.take()
+        {
+            self.0.renderer.set_screen_textures(Box::new(t));
+        }
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -227,9 +294,25 @@ fn main() -> eframe::Result {
     );
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
-    let gpu_crash = gpu_crash_check(in_memory).or_else(|| gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
-    let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
+    let saved_card = prefs.as_ref().map(|u| u.settings.gpu_card.clone()).unwrap_or_default();
+    let gpu_crash = GpuCrash::with_lost(gpu_crash_check(in_memory, &saved_card), gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
+    let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && !gpu_crash.as_ref().is_some_and(|c| c.gpu_off);
     lightcraft_engine::gpu::set_enabled(gpu_on);
+    // the graphics card for editing, before anything can create the device (a card that crashed
+    // starting last time: Automatic)
+    let card = if gpu_crash.as_ref().is_some_and(|c| c.reset_card) { "" } else { saved_card.as_str() };
+    if let Err(e) = lightcraft_engine::gpu::set_card(card) {
+        log::warn!("gpu: the graphics card in the settings: {e}");
+    }
+    // the second graphics card likewise (one that crashed starting last time: not used)
+    // (no settings file: the default, no second card)
+    let saved_helper = prefs.as_ref().map_or_else(|| lightcraft_ui_egui::state::AppSettings::default().gpu_helper, |u| u.settings.gpu_helper.clone());
+    let helper = if gpu_crash.as_ref().is_some_and(|c| c.helper_off) { "off" } else { saved_helper.as_str() };
+    if let Err(e) = lightcraft_engine::gpu::set_helper(helper) {
+        log::warn!("gpu: the second graphics card in the settings: {e}");
+    }
+    // batch work (exports, previews, AI) leaves the editing card to the interface while it is used
+    lightcraft_engine::gpu::track_interaction(true);
     // the window's renderer: probed (Windows) and with a fallback chain, so a driver that can't
     // build egui's pipeline never kills the start-up
     let compose_window =
@@ -332,9 +415,17 @@ fn main() -> eframe::Result {
                     settings.library_path = dir;
                 }
                 // after the snapshot above, so the writer saves the switched-off preference
-                if let Some(notice) = gpu_crash {
-                    app.ui.settings.gpu = false;
-                    app.notices.push(notice);
+                if let Some(crash) = gpu_crash {
+                    if crash.gpu_off {
+                        app.ui.settings.gpu = false;
+                    }
+                    if crash.reset_card {
+                        app.ui.settings.gpu_card = String::new();
+                    }
+                    if crash.helper_off {
+                        app.ui.settings.gpu_helper = "off".into();
+                    }
+                    app.notices.push(crash.notice);
                 }
                 if let Some(port) = control_port {
                     let rx = control_server::start(port, cc.egui_ctx.clone());
@@ -358,9 +449,20 @@ fn main() -> eframe::Result {
                 #[cfg(target_os = "macos")]
                 let menu =
                     (std::env::var_os("LIGHTCRAFT_NO_NATIVE_MENU").is_none()).then(|| native_menu::NativeMenu::install(&mut app, &cc.egui_ctx));
+                // the GPU renderer on the window's device, when GPU rendering is on
+                // (LIGHTCRAFT_GPU_WINDOW=0: a device of its own, renders read back - for comparison or a driver
+                // that misbehaves with compute and drawing on one device)
+                let window_device = std::env::var_os("LIGHTCRAFT_GPU_WINDOW").is_none_or(|v| v != "0");
+                // the screen's card: Automatic edits there (Settings ▸ Performance names it)
+                if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                    lightcraft_engine::gpu::set_screen_card(&rs.adapter.get_info());
+                }
+                let window_textures =
+                    cc.wgpu_render_state.as_ref().filter(|_| gpu_on && window_device).map(|rs| adopt_window_device(rs, &cc.egui_ctx));
                 Ok(Box::new(App(
                     app,
                     writer,
+                    window_textures,
                     #[cfg(target_os = "macos")]
                     menu,
                 )))

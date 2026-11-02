@@ -37,6 +37,7 @@ mod preset_files;
 pub mod previews;
 mod print;
 mod query;
+pub use query::{gpu_batch_usage_json, gpu_helper_json};
 pub mod recheck;
 pub mod reload;
 mod slideshow;
@@ -153,6 +154,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
         v.extend(mask_effects::specs());
+        v.extend(crate::machine_test::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());

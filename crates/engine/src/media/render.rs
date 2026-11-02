@@ -32,6 +32,9 @@ pub struct RenderJob {
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
+    /// Shown on screen at once and not kept: the result may stay on the GPU as a texture
+    /// ([`Self::on_screen`]).
+    pub on_screen: bool,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
     pub slide: Option<Arc<crate::slide::SlideCompose>>,
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
@@ -57,6 +60,17 @@ pub fn fit_for_display(img: &Rgba8, max_w: usize, max_h: usize) -> Rgba8 {
     Rgba8 { width: small.width, height: small.height, data: small.data.iter().map(|p| [c(p[0]), c(p[1]), c(p[2]), c(p[3])]).collect() }
 }
 
+/// A render left on the GPU for the window to draw ([`RenderResult::frame`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub type ScreenFrame = lightcraft_gpu::DisplayFrame;
+/// A render left on the GPU for the window to draw (never, in the browser build).
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug)]
+pub struct ScreenFrame {
+    pub width: usize,
+    pub height: usize,
+}
+
 pub struct RenderResult {
     pub request_id: u64,
     pub source_key: Option<Hash128>,
@@ -74,6 +88,9 @@ pub struct RenderResult {
     /// The display profile (id) the image is encoded for; `None`: sRGB (see
     /// [`crate::display::present`]).
     pub display: Option<u64>,
+    /// The result as a texture on the window's GPU device ([`RenderJob::on_screen`]); `rendered`
+    /// then holds its histogram and an empty image.
+    pub frame: Option<ScreenFrame>,
 }
 
 impl RenderJob {
@@ -120,6 +137,15 @@ impl RenderJob {
         if proof.is_some() {
             self.view_cache = None;
         }
+        self
+    }
+
+    /// The result is only drawn (an interactive draft of a view): when the GPU renderer runs on the
+    /// window's device it may hand back a texture ([`RenderResult::frame`]) instead of reading the
+    /// pixels back. Ignored where pixels are needed: thumbnails (cached), a full-quality render
+    /// kept as the view preview, and a monitor profile (corrected on the CPU).
+    pub fn on_screen(mut self) -> Self {
+        self.on_screen = true;
         self
     }
 
@@ -189,6 +215,7 @@ impl RenderJob {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         }
     }
 
@@ -232,6 +259,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -252,6 +280,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
@@ -267,14 +296,43 @@ impl RenderJob {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
                 let info = source.info_or(self.info);
-                // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
-                // the GPU when there is one.
-                let gpu = self.cache.is_none();
+                // Views and exports use the GPU when there is one (waiting for the device if it is
+                // still being created). Thumbnails (grid, filmstrip, preset and profile previews)
+                // use it once it is ready - ~20-30 % faster than the CPU at 256 px with six jobs
+                // side by side (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay free for
+                // decoding - but never wait for it: at startup they render on the CPU.
+                let gpu = self.cache.is_none() || lightcraft_gpu::ready();
                 // a clipping preview tests sRGB values, like the histogram: rendered in sRGB, then
                 // converted for the display below
                 let clip_view = self.request.overlay.is_clipping();
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu);
+                let pixels_needed =
+                    self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
+                let frame = (self.on_screen && !pixels_needed && gpu)
+                    .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
+                let (mut rendered, gpu_fallback) = match frame {
+                    Some(OnScreen::Frame(frame, histogram)) => {
+                        return RenderResult {
+                            request_id: self.request_id,
+                            source_key: self.source_key,
+                            photo: self.photo,
+                            level: self.level,
+                            key: self.key,
+                            rendered: Ok(Rendered {
+                                image: lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() },
+                                histogram,
+                                deep: None,
+                            }),
+                            gpu_fallback: None,
+                            loaded: (!was_loaded).then_some(source),
+                            quick: None,
+                            display: None,
+                            frame: Some(frame),
+                        };
+                    }
+                    Some(OnScreen::Pixels(r)) => (r, None),
+                    None => develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu),
+                };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -329,6 +387,7 @@ impl RenderJob {
                     loaded: (!was_loaded).then_some(source),
                     quick: None,
                     display,
+                    frame: None,
                 }
             }
             Err(e) => self.failed(e),
@@ -370,14 +429,14 @@ fn develop_image(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    // LUT profiles have no GPU stage: they render on the CPU
-    let fallback = if gpu
-        && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
-        && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
-        && req.proof.is_none()
-    {
+    // (LUT profiles, Refine Edges and soft proofs render on the GPU too)
+    count_render(false);
+    let fallback = if gpu {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
-            Ok(r) => return (r, None),
+            Ok(r) => {
+                count_render(true);
+                return (r, None);
+            }
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
             Err(lightcraft_gpu::Fallback::NotTried) => None,
         }
@@ -389,4 +448,173 @@ fn develop_image(
         None => lightcraft_pipeline::render(src, info, s, req),
     };
     (rendered, fallback)
+}
+
+thread_local! {
+    /// This thread's renders are background work ([`background_gpu`]).
+    static BACKGROUND_GPU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Renders so far, by who they were for: `[interactive, background]` (all), then of those the ones
+/// on the screen's card (`[2, 3]`) and on the second card (`[4, 5]`).
+static RENDERS: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
+
+/// Count one render (`gpu`: one more that the GPU rendered, on this thread's card) for this
+/// thread's kind of work.
+fn count_render(gpu: bool) {
+    let card = match lightcraft_gpu::current_role() {
+        _ if !gpu => 0,
+        lightcraft_gpu::Role::Primary => 2,
+        lightcraft_gpu::Role::Helper => 4,
+    };
+    let i = usize::from(rendering_in_background()) + card;
+    if let Some(n) = RENDERS.get(i) {
+        n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    let _ = THREAD_RENDERS.try_with(|c| {
+        let mut n = c.get();
+        if let Some(k) = n.get_mut(i) {
+            *k += 1;
+        }
+        c.set(n);
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    /// [`RENDERS`] of this thread only (tests run side by side).
+    static THREAD_RENDERS: std::cell::Cell<[u64; 6]> = const { std::cell::Cell::new([0; 6]) };
+}
+
+/// This thread's renders so far, as [`RENDERS`] (tests).
+#[cfg(test)]
+pub(crate) fn thread_render_counts() -> [u64; 6] {
+    THREAD_RENDERS.with(std::cell::Cell::get)
+}
+
+/// Renders since the process started, by who they were for (see [`background_gpu`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderCounts {
+    /// For what is on screen (the loupe and its drafts, the grid in view, compare, an export's
+    /// own photo when it is not a batch).
+    pub interactive: u64,
+    /// Work done ahead ([`background_gpu`]).
+    pub background: u64,
+    /// Of `interactive` / `background`, those the screen's card (the editing card) rendered.
+    pub interactive_editing: u64,
+    pub background_editing: u64,
+    /// Of `interactive` / `background`, those the second graphics card rendered
+    /// (`interactive_helper` stays 0: what is on screen never renders there).
+    pub interactive_helper: u64,
+    pub background_helper: u64,
+}
+
+/// See [`RenderCounts`].
+pub fn render_counts() -> RenderCounts {
+    let n = |i: usize| RENDERS.get(i).map_or(0, |n| n.load(std::sync::atomic::Ordering::Relaxed));
+    RenderCounts {
+        interactive: n(0),
+        background: n(1),
+        interactive_editing: n(2),
+        background_editing: n(3),
+        interactive_helper: n(4),
+        background_helper: n(5),
+    }
+}
+
+/// Is this thread rendering background work ([`background_gpu`])?
+pub fn rendering_in_background() -> bool {
+    BACKGROUND_GPU.try_with(std::cell::Cell::get).unwrap_or(false)
+}
+
+/// Resets [`BACKGROUND_GPU`] when [`background_gpu`] ends, also when its work panicked.
+struct BackgroundMark(bool);
+
+impl BackgroundMark {
+    fn set() -> Self {
+        BackgroundMark(BACKGROUND_GPU.try_with(|c| c.replace(true)).unwrap_or(false))
+    }
+}
+
+impl Drop for BackgroundMark {
+    fn drop(&mut self) {
+        let was = self.0;
+        let _ = BACKGROUND_GPU.try_with(|c| c.set(was));
+    }
+}
+
+/// Run `f`, work done ahead of the user rather than for what is on screen (finding eyes ahead of
+/// culling, a smart preview's original read), as background GPU work: its renders take turns at
+/// the GPU as batch work ([`lightcraft_gpu::as_batch`]) behind the photo on screen, which never
+/// waits for them, on the second graphics card when it is ready (design §8 of 2026-10-31: the
+/// second card first, always). The photo on screen, its drafts and the window's textures never
+/// run in here. A panic inside `f` is its error (`what` names the work), so the thread's routing
+/// is restored whatever happens. Without a second card (one card, or Settings ▸ Second graphics
+/// card: Off) it is batch work on the one card, as before.
+///
+/// Work that renders photos one by one takes a turn per photo instead ([`background_photo`]).
+pub fn background_gpu<R>(what: &str, f: impl FnOnce() -> R) -> std::result::Result<R, String> {
+    let _mark = BackgroundMark::set();
+    lightcraft_gpu::as_batch(|| lightcraft_gpu::on_helper(|| crate::guard::catch(what, f)))
+}
+
+/// [`background_gpu`] for a job pool's background jobs ([`lightcraft_preview::pool::JobPool::run_background_with`]:
+/// the grid's thumbnails rendered behind their stand-ins): `f` runs once, a panic goes through
+/// (the job's own guard catches it).
+pub fn as_background_gpu(f: &mut dyn FnMut()) {
+    let _mark = BackgroundMark::set();
+    lightcraft_gpu::as_batch(|| lightcraft_gpu::on_helper(f));
+}
+
+/// [`background_gpu`] for the renders of one photo (a source of `src_px` pixels, results of at most
+/// `out_px`; Build Previews, the background preparation, the import's previews): they wait for a
+/// turn on whichever card has room first — the second card, else the screen's card while nobody
+/// touches the interface (its gate yields to it, §8) — and all run on that card. Without a GPU
+/// (or while LightCraft closes) they render on the CPU.
+pub fn background_photo<R>(what: &str, src_px: usize, out_px: usize, f: impl FnOnce() -> R) -> std::result::Result<R, String> {
+    let _mark = BackgroundMark::set();
+    lightcraft_gpu::as_batch(|| match lightcraft_gpu::wait_batch_turn_any(src_px, out_px, &lightcraft_gpu::shutting_down) {
+        Some(turn) => {
+            let r = crate::guard::catch(what, f);
+            drop(turn);
+            r
+        }
+        None => lightcraft_gpu::on_cpu(|| crate::guard::catch(what, f)),
+    })
+}
+
+/// What [`develop_on_screen`] made.
+enum OnScreen {
+    /// A texture on the window's device, and the histogram (never in the browser build).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Frame(ScreenFrame, Histogram),
+    /// Pixels (GPU or CPU).
+    Pixels(Rendered),
+}
+
+/// [`develop`] for a render that is only drawn: a texture on the window's device when the GPU
+/// renderer can hand one over, else the pixels.
+fn develop_on_screen(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> OnScreen {
+    #[cfg(not(target_arch = "wasm32"))]
+    match lightcraft_gpu::render_display(src, info, s, req, stages) {
+        // an HDR edit's histogram shows the HDR range, as `develop_reporting` gives it
+        Some(lightcraft_gpu::Output::Display { frame, histogram }) => {
+            count_render(false);
+            count_render(true);
+            OnScreen::Frame(frame, lightcraft_pipeline::hdr_histogram(src, info, s, req).unwrap_or(histogram))
+        }
+        Some(lightcraft_gpu::Output::Image(mut r)) => {
+            count_render(false);
+            count_render(true);
+            if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
+                r.histogram = h;
+            }
+            OnScreen::Pixels(r)
+        }
+        None => OnScreen::Pixels(develop(src, info, s, req, stages, false)),
+    }
+    #[cfg(target_arch = "wasm32")]
+    OnScreen::Pixels(develop(src, info, s, req, stages, false))
 }

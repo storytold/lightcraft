@@ -105,14 +105,20 @@ fn xguided_ab(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgrou
     dst[2u * i + 1u] = mp - k * mi;
 }
 
-// `max(p, clamp(a·guide + b, 0, 1))` (a: guide, b: blurred coefficients, c: the input p).
+// q = clamp(a·guide + b, 0, 1) (a: guide, b: blurred coefficients, c: the input p), then
+// P[1] = 0: max(p, q) (Auto Mask strokes); 1: p + (q − p)·P[2] (Refine Edges).
 @compute @workgroup_size(256)
 fn xguided_apply(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    dst[i] = max(c[i], clamp(b[2u * i] * a[i] + b[2u * i + 1u], 0.0, 1.0));
+    let q = clamp(b[2u * i] * a[i] + b[2u * i + 1u], 0.0, 1.0);
+    if (pu(1u) == 0u) {
+        dst[i] = max(c[i], q);
+    } else {
+        dst[i] = c[i] + (q - c[i]) * pf(2u);
+    }
 }
 
 // White balance: 3×3 matrix (P[1] = has matrix, P[2..11] row-major), clamped at 0.
@@ -225,4 +231,54 @@ fn redeye_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
         }
     }
     put_rgb(i, c);
+}
+
+// Defringe, first step (`optics::defringe`): OkLab of the clamped colour (a: image) → dst
+// (lightness, a, b interleaved).
+@compute @workgroup_size(256)
+fn fringe_lab(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    put_rgb(i, oklab(max(rgb_a(i), vec3<f32>(0.0))));
+}
+
+// `optics::hue_weight`: membership of hue h (deg) in [lo, hi] with 8° shoulders.
+fn hue_weight(h: f32, lo: f32, hi: f32) -> f32 {
+    let mid = (lo + hi) / 2.0;
+    let half = (hi - lo) / 2.0;
+    var d = abs(h - mid) % 360.0;
+    if (d > 180.0) {
+        d = 360.0 - d;
+    }
+    return 1.0 - sstep(half, half + 8.0, d);
+}
+
+// Defringe, last step: desaturate fringe colours at edges (a: OkLab, b / c: lightness min / max
+// around each pixel; dst: the image, written only where it changes, so it starts as a copy).
+// P[1..7] = purple lo, hi, green lo, hi, purple strength, green strength.
+@compute @workgroup_size(256)
+fn fringe_apply(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let edge = sstep(0.08, 0.25, c[i] - b[i]);
+    if (edge <= 0.0) {
+        return;
+    }
+    let lab = rgb_a(i);
+    let ch = sqrt(lab.y * lab.y + lab.z * lab.z);
+    let chroma_w = sstep(0.015, 0.05, ch);
+    if (chroma_w <= 0.0) {
+        return;
+    }
+    let hue = rem_euclid(degrees(atan2(lab.z, lab.y)), 360.0);
+    let k = max(pf(5u) * hue_weight(hue, pf(1u), pf(2u)), pf(6u) * hue_weight(hue, pf(3u), pf(4u))) * edge * chroma_w;
+    if (k <= 0.0) {
+        return;
+    }
+    let f = 1.0 - min(k, 1.0);
+    put_rgb(i, max(oklab_inv(vec3<f32>(lab.x, lab.y * f, lab.z * f)), vec3<f32>(0.0)));
 }

@@ -12,6 +12,9 @@
 //!   (the platform default), or `off` (no GPU compute; the window still needs one backend and
 //!   keeps the platform default);
 //! - else `WGPU_BACKEND` (wgpu's own variable, same names) for both the window and compute.
+//! - `LIGHTCRAFT_GPU_ADAPTER` = (part of) a graphics card's name, any case (`4070`): the card for
+//!   the compute devices — the render device, the denoise network's, the face detector's
+//!   ([`pick_adapter`]). The window stays on the card that drives the screen.
 //!
 //! Backends this build doesn't contain (e.g. `gl`: the GL backend isn't compiled in) are ignored
 //! with a warning and the platform default is used.
@@ -166,15 +169,245 @@ pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlag
     instance_flags(flags, std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
 }
 
+/// The graphics card `LIGHTCRAFT_GPU_ADAPTER` asks for: (part of) its name, trimmed and in lower
+/// case; `None` when it is unset or blank.
+pub fn wanted_adapter() -> Option<String> {
+    wanted_adapter_from(std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().as_deref())
+}
+
+/// [`wanted_adapter`] from the variable's value `env`.
+pub fn wanted_adapter_from(env: Option<&str>) -> Option<String> {
+    env.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty())
+}
+
+/// Whether the adapter called `name` is the one `wanted` asks for: `wanted` is part of its name,
+/// ignoring case (`4070` matches "NVIDIA GeForce RTX 4070 SUPER").
+pub fn adapter_name_matches(wanted: &str, name: &str) -> bool {
+    let wanted = wanted.trim().to_lowercase();
+    !wanted.is_empty() && name.to_lowercase().contains(&wanted)
+}
+
+/// One adapter as [`choose_named_adapter`] sees it, in wgpu's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Candidate<'a> {
+    pub name: &'a str,
+    /// Order among several matching cards, lower first ([`kind_rank`]).
+    pub rank: u8,
+    /// A software renderer (WARP, llvmpipe): never picked, the CPU pipeline is faster.
+    pub software: bool,
+}
+
+impl<'a> Candidate<'a> {
+    /// A candidate from an adapter's name and kind.
+    pub fn of(name: &'a str, kind: wgpu::DeviceType) -> Candidate<'a> {
+        Candidate { name, rank: kind_rank(kind), software: kind == wgpu::DeviceType::Cpu }
+    }
+}
+
+/// The order among cards that all match: dedicated, built-in, virtual, other, software.
+pub fn kind_rank(kind: wgpu::DeviceType) -> u8 {
+    match kind {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    }
+}
+
+/// What a `LIGHTCRAFT_GPU_ADAPTER` name picks among the candidates ([`choose_named_adapter`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NamedChoice {
+    /// The card used (the first of `matches`), `None`: the default choice.
+    pub index: Option<usize>,
+    /// Every hardware card whose name matches, in the defined order.
+    pub matches: Vec<usize>,
+    /// Software renderers whose name matches (never used).
+    pub software: Vec<usize>,
+}
+
+/// Which of `candidates` (in wgpu's order) `wanted` picks: of the hardware cards whose name
+/// contains it (any case), the one whose whole name it is, then dedicated before built-in before
+/// virtual cards ([`kind_rank`]), then wgpu's order. Software renderers are never picked.
+pub fn choose_named_adapter(wanted: &str, candidates: &[Candidate<'_>]) -> NamedChoice {
+    let w = wanted.trim().to_lowercase();
+    let hits = || candidates.iter().enumerate().filter(|(_, c)| adapter_name_matches(&w, c.name));
+    let software: Vec<usize> = hits().filter(|(_, c)| c.software).map(|(i, _)| i).collect();
+    let mut ranked: Vec<(bool, u8, usize)> =
+        hits().filter(|(_, c)| !c.software).map(|(i, c)| (c.name.trim().to_lowercase() != w, c.rank, i)).collect();
+    // (the index last: equal ones keep wgpu's order)
+    ranked.sort_unstable();
+    let matches: Vec<usize> = ranked.into_iter().map(|(_, _, i)| i).collect();
+    NamedChoice { index: matches.first().copied(), matches, software }
+}
+
+/// The log line for `choice` (warning: `true`): which card the name picked and why, or why none.
+pub fn named_choice_note(wanted: &str, choice: &NamedChoice, candidates: &[Candidate<'_>]) -> (bool, String) {
+    let name = |i: &usize| candidates.get(*i).map_or("?", |c| c.name);
+    let list = |v: &[usize]| v.iter().map(name).collect::<Vec<_>>().join(", ");
+    match (choice.index, choice.matches.len()) {
+        (Some(i), 1) => (false, format!("gpu: LIGHTCRAFT_GPU_ADAPTER={wanted}: using {}", name(&i))),
+        (Some(i), n) => (
+            false,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} matches {n} graphics cards ({}): using {} (a card's whole name first, then dedicated before built-in cards, then the system's order); give more of the name to pick another",
+                list(&choice.matches),
+                name(&i)
+            ),
+        ),
+        (None, _) if !choice.software.is_empty() => (
+            true,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} names only a software renderer ({}), never used: the processor is faster; using the default choice",
+                list(&choice.software)
+            ),
+        ),
+        (None, _) => {
+            let all: Vec<&str> = candidates.iter().map(|c| c.name).collect();
+            (true, format!("gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} names none of the graphics cards ({}); using the default choice", all.join(", ")))
+        }
+    }
+}
+
+/// Lines already logged by [`log_once`] (each device that picks a card asks again).
+static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Log `line` (as a warning when `warn`) the first time only; whether it was logged now.
+pub fn log_once(warn: bool, line: &str) -> bool {
+    let mut seen = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.iter().any(|l| l == line) {
+        return false;
+    }
+    // (a handful of distinct lines in a run; the cap only bounds a pathological caller)
+    if seen.len() < 64 {
+        seen.push(line.to_string());
+    }
+    if warn {
+        log::warn!("{line}");
+    } else {
+        log::info!("{line}");
+    }
+    true
+}
+
+/// Which of `adapters` (name and kind, in wgpu's order) `wanted` picks ([`choose_named_adapter`]).
+pub fn find_named_adapter<'a>(wanted: &str, adapters: impl IntoIterator<Item = (&'a str, wgpu::DeviceType)>) -> Option<usize> {
+    let candidates: Vec<Candidate<'a>> = adapters.into_iter().map(|(n, k)| Candidate::of(n, k)).collect();
+    choose_named_adapter(wanted, &candidates).index
+}
+
+/// A compute instance on `backends`, with LightCraft's backend options and flags.
+pub(crate) fn compute_instance(backends: Backends) -> wgpu::Instance {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    // only these drivers are loaded (never Vulkan on Windows unless asked: see the module docs)
+    desc.backends = backends;
+    // DX12 shaders compile with FXC (issue #471)
+    desc.backend_options = backend_options();
+    // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
+    desc.flags = instance_flags_from_env(desc.flags);
+    wgpu::Instance::new(desc)
+}
+
+/// The adapters on `instance` in wgpu's order, and the settings' list of them
+/// ([`crate::cards::entries_from`]; also kept for [`crate::adapters`]).
+pub(crate) fn enumerate(instance: &wgpu::Instance, backends: Backends) -> (Vec<wgpu::Adapter>, Vec<crate::cards::AdapterEntry>) {
+    let all = pollster::block_on(instance.enumerate_adapters(backends));
+    let described: Vec<(wgpu::AdapterInfo, u32, Option<u64>)> = all
+        .iter()
+        .map(|a| {
+            let info = a.get_info();
+            let memory = crate::vram::adapter_memory(&info);
+            (info, a.limits().max_storage_buffers_per_shader_stage, memory)
+        })
+        .collect();
+    let entries = crate::cards::entries_from(&described, crate::cards::screen().as_ref());
+    crate::cards::set_listed(entries.clone());
+    (all, entries)
+}
+
+/// An adapter picked for a compute device, with what the settings know of it.
+pub(crate) struct Picked {
+    pub adapter: wgpu::Adapter,
+    /// Its key (`None`: wgpu picked one the listing doesn't show).
+    pub key: Option<crate::cards::AdapterKey>,
+    pub resolution: crate::cards::Resolution,
+    pub entries: Vec<crate::cards::AdapterEntry>,
+}
+
+/// The editing card's adapter on `instance` ([`crate::cards::resolve_card`]: `LIGHTCRAFT_GPU_ADAPTER`,
+/// else the card saved in the settings unless `automatic`, else the screen's, else the
+/// high-performance one). Never a panic; `Err` only when there is no adapter at all.
+pub(crate) fn pick_editing(instance: &wgpu::Instance, backends: Backends, automatic: bool) -> Result<Picked, String> {
+    let (all, entries) = enumerate(instance, backends);
+    let saved = if automatic { None } else { crate::cards::card() };
+    let resolution = crate::cards::resolve_card(&entries, wanted_adapter().as_deref(), saved.as_ref());
+    picked_at(instance, backends, all, entries, resolution)
+}
+
+/// The adapter of entry `resolution.index` (none: wgpu's high-performance pick).
+pub(crate) fn picked_at(
+    instance: &wgpu::Instance,
+    backends: Backends,
+    all: Vec<wgpu::Adapter>,
+    entries: Vec<crate::cards::AdapterEntry>,
+    resolution: crate::cards::Resolution,
+) -> Result<Picked, String> {
+    let mut all = all;
+    if let Some(i) = resolution.index.filter(|i| *i < all.len()) {
+        let adapter = all.swap_remove(i);
+        let key = entries.get(i).map(|e| e.key.clone());
+        return Ok(Picked { adapter, key, resolution, entries });
+    }
+    let adapter = pollster::block_on(
+        instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
+    )
+    .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?;
+    let k = crate::cards::AdapterKey::of(&adapter.get_info(), 1);
+    let wgpu_pick = entries.iter().position(|e| e.key.same_model(&k));
+    // wgpu's pick can't render here but a listed card can: that one (review of PR #3544)
+    if let Some(u) = usable_instead(&entries, wgpu_pick).filter(|u| *u < all.len()) {
+        let adapter = all.swap_remove(u);
+        let key = entries.get(u).map(|e| e.key.clone());
+        return Ok(Picked { adapter, key, resolution, entries });
+    }
+    let key = wgpu_pick.and_then(|i| entries.get(i)).map(|e| e.key.clone());
+    Ok(Picked { adapter, key, resolution, entries })
+}
+
+/// When wgpu's own pick (entry `wgpu_pick`) is listed as unusable: the first usable entry.
+fn usable_instead(entries: &[crate::cards::AdapterEntry], wgpu_pick: Option<usize>) -> Option<usize> {
+    let pick = entries.get(wgpu_pick?)?;
+    if pick.usable { None } else { entries.iter().position(|e| e.usable) }
+}
+
+/// The adapter for a compute device of its own (the denoise network's, the face detector's, the
+/// mask models'): the editing card ([`pick_editing`]). Never a panic.
+pub fn pick_adapter(instance: &wgpu::Instance, backends: Backends) -> Result<wgpu::Adapter, String> {
+    pick_editing(instance, backends, false).map(|p| p.adapter)
+}
+
 /// `LIGHTCRAFT_GPU_BACKEND=off`.
 pub(crate) fn env_off() -> bool {
     env_choice() == BackendChoice::Off
 }
 
 static MARKER: Mutex<Option<PathBuf>> = Mutex::new(None);
-/// Scopes of driver work (device creation, shader and pipeline compilation) running now, so
-/// that overlapping ones (the window-side warm-up and a first denoise) share one marker file.
-static ACTIVE: Mutex<u32> = Mutex::new(0);
+/// Scopes of driver work (device creation, shader and pipeline compilation) running now, each
+/// with what it does, so that overlapping ones (the window-side warm-up and a first denoise, the
+/// editing card and the second card) share one marker file that names them all.
+static ACTIVE: Mutex<Scopes> = Mutex::new(Scopes::new());
+
+/// Driver-work scopes running now: (number, line) of each.
+pub(crate) struct Scopes {
+    next: u64,
+    running: Vec<(u64, String)>,
+}
+
+impl Scopes {
+    pub(crate) const fn new() -> Scopes {
+        Scopes { next: 1, running: Vec::new() }
+    }
+}
 
 /// Write this file before the compute device is created or any shader / pipeline is compiled
 /// (the kernels, the denoise network's), and remove it once that returned (successfully or not).
@@ -185,40 +418,52 @@ pub fn set_init_marker(path: Option<PathBuf>) {
     *MARKER.lock().unwrap_or_else(|e| e.into_inner()) = path;
 }
 
-/// The marker's text: what started, and when.
+/// The marker's line for one scope: what started, and when.
 fn marker_text(what: &str, secs: u64) -> String {
     format!("GPU {what} started (unix time {secs})\n")
 }
 
-/// Enter a driver-work scope on `marker`: the first one writes the file.
-fn arm(marker: &std::path::Path, active: &Mutex<u32>, what: &str) {
-    let mut n = active.lock().unwrap_or_else(|e| e.into_inner());
-    if *n == 0 {
-        if let Some(d) = marker.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let _ = std::fs::write(marker, marker_text(what, secs));
-    }
-    *n += 1;
-}
-
-/// Leave a scope: the last one removes the file.
-fn disarm(marker: &std::path::Path, active: &Mutex<u32>) {
-    let mut n = active.lock().unwrap_or_else(|e| e.into_inner());
-    *n = n.saturating_sub(1);
-    if *n == 0 {
+/// Write the marker with a line per running scope, or remove it when none runs.
+fn write_marker(marker: &std::path::Path, s: &Scopes) {
+    if s.running.is_empty() {
         let _ = std::fs::remove_file(marker);
+        return;
+    }
+    if let Some(d) = marker.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let text: String = s.running.iter().map(|(_, line)| line.as_str()).collect();
+    let _ = std::fs::write(marker, text);
+}
+
+/// Enter a driver-work scope on `marker`: its line joins the file. Returns the scope's number.
+fn arm(marker: &std::path::Path, active: &Mutex<Scopes>, what: &str) -> u64 {
+    let mut s = active.lock().unwrap_or_else(|e| e.into_inner());
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let id = s.next;
+    s.next = s.next.wrapping_add(1);
+    s.running.push((id, marker_text(what, secs)));
+    write_marker(marker, &s);
+    id
+}
+
+/// Leave scope `id`: its line goes; the last one removes the file.
+fn disarm(marker: &std::path::Path, active: &Mutex<Scopes>, id: u64) {
+    let mut s = active.lock().unwrap_or_else(|e| e.into_inner());
+    let before = s.running.len();
+    s.running.retain(|(i, _)| *i != id);
+    if s.running.len() != before || s.running.is_empty() {
+        write_marker(marker, &s);
     }
 }
 
-/// Removes the marker on the way out, a panic included (the process survived).
-struct Armed<'a>(Option<PathBuf>, &'a Mutex<u32>);
+/// Removes the scope's line on the way out, a panic included (the process survived).
+struct Armed<'a>(Option<(PathBuf, u64)>, &'a Mutex<Scopes>);
 
 impl Drop for Armed<'_> {
     fn drop(&mut self) {
-        if let Some(m) = &self.0 {
-            disarm(m, self.1);
+        if let Some((m, id)) = &self.0 {
+            disarm(m, self.1, *id);
         }
     }
 }
@@ -230,19 +475,52 @@ pub(crate) fn with_marker<T>(what: &str, f: impl FnOnce() -> T) -> T {
     with_marker_on(marker, &ACTIVE, what, f)
 }
 
-/// [`with_marker`] on an explicit marker path and scope counter (the tests use their own, so that
+/// [`with_marker`] on an explicit marker path and scope list (the tests use their own, so that
 /// device-creating tests running in parallel cannot join their scopes).
-fn with_marker_on<T>(marker: Option<PathBuf>, active: &Mutex<u32>, what: &str, f: impl FnOnce() -> T) -> T {
-    if let Some(m) = &marker {
-        arm(m, active, what);
-    }
-    let _armed = Armed(marker, active);
+fn with_marker_on<T>(marker: Option<PathBuf>, active: &Mutex<Scopes>, what: &str, f: impl FnOnce() -> T) -> T {
+    let armed = marker.map(|m| {
+        let id = arm(&m, active, what);
+        (m, id)
+    });
+    let _armed = Armed(armed, active);
     f()
 }
 
 /// Run device creation (and the kernel build that follows it) `f` under the init marker.
 pub(crate) fn with_init_marker<T>(backends: Backends, f: impl FnOnce() -> T) -> T {
     with_marker(&format!("device and kernel creation (backends {backends:?})"), f)
+}
+
+/// [`with_init_marker`] for the device of a known card `key` in role `role` (`editing`,
+/// `helper`): the marker names them ([`marker_scopes`]), so a crash there costs the next launch
+/// only that choice, not the GPU.
+pub(crate) fn with_init_marker_for<T>(backends: Backends, key: Option<&crate::cards::AdapterKey>, role: &str, f: impl FnOnce() -> T) -> T {
+    match key {
+        Some(k) => with_marker(&format!("device and kernel creation (backends {backends:?}) [card={k}; role={role}]"), f),
+        None => with_init_marker(backends, f),
+    }
+}
+
+/// A scope a crash marker names: the card's key and role when it was a device of a known card
+/// (`None`: other driver work, e.g. listing the cards or a denoise network's kernels).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkerScope {
+    pub card: Option<(crate::cards::AdapterKey, String)>,
+}
+
+/// The scopes a crash marker's text names, one a line ([`with_init_marker_for`]).
+pub fn marker_scopes(text: &str) -> Vec<MarkerScope> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let card = l.split_once("[card=").and_then(|(_, rest)| {
+                let (key, rest) = rest.split_once("; role=")?;
+                let (role, _) = rest.split_once(']')?;
+                Some((crate::cards::AdapterKey::parse(key)?, role.trim().to_string()))
+            });
+            MarkerScope { card }
+        })
+        .collect()
 }
 
 /// If the init marker `path` is present — the last process died while creating the GPU device —
@@ -346,6 +624,24 @@ pub fn window_renderer_order(
 #[allow(clippy::unwrap_used)]
 mod tests {
 
+    /// Review of PR #3544: wgpu's pick that can't render here gives way to a usable listed card.
+    #[test]
+    fn an_unusable_wgpu_pick_gives_way_to_a_usable_card() {
+        let info = |name: &str, device| wgpu::AdapterInfo {
+            name: name.into(),
+            vendor: 0x10de,
+            device,
+            ..wgpu::AdapterInfo::new(wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Dx12)
+        };
+        let mut e = crate::cards::entries_from(&[(info("Card A", 1), 64, None), (info("Card B", 2), 64, None)], None);
+        assert_eq!(super::usable_instead(&e, Some(0)), None, "wgpu's pick is usable");
+        e[0].usable = false;
+        assert_eq!(super::usable_instead(&e, Some(0)), Some(1));
+        assert_eq!(super::usable_instead(&e, None), None, "wgpu's pick isn't listed: kept");
+        e[1].usable = false;
+        assert_eq!(super::usable_instead(&e, Some(0)), None, "nothing usable: kept");
+    }
+
     /// #250: the indirect-call validation pipeline is off unless asked for; other flags are kept.
     #[test]
     fn indirect_call_validation_is_off_unless_asked_for() {
@@ -410,6 +706,88 @@ mod tests {
         }
     }
 
+    /// `LIGHTCRAFT_GPU_ADAPTER` picks a card by part of its name, any case; software adapters never.
+    #[test]
+    fn gpu_adapter_variable_matches_part_of_the_card_name() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu};
+        assert_eq!(wanted_adapter_from(None), None);
+        assert_eq!(wanted_adapter_from(Some("  ")), None);
+        assert_eq!(wanted_adapter_from(Some(" RTX 4070 ")).as_deref(), Some("rtx 4070"));
+        assert!(adapter_name_matches("4070", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(adapter_name_matches("geforce rtx 4070 super", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(adapter_name_matches(" Super ", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(!adapter_name_matches("4070", "NVIDIA GeForce RTX 5070"));
+        assert!(!adapter_name_matches("", "NVIDIA GeForce RTX 5070"), "a blank name matches nothing");
+        // two cards: the screen's card first in wgpu's order, as here
+        let two = [("NVIDIA GeForce RTX 5070", DiscreteGpu), ("NVIDIA GeForce RTX 4070 SUPER", DiscreteGpu), ("Microsoft Basic Render Driver", Cpu)];
+        assert_eq!(find_named_adapter("4070", two), Some(1));
+        assert_eq!(find_named_adapter("5070", two), Some(0));
+        // "070" is in both: the first one in wgpu's order
+        assert_eq!(find_named_adapter("070", two), Some(0));
+        assert_eq!(find_named_adapter("radeon", two), None, "no match: the caller falls back to the default choice");
+        assert_eq!(find_named_adapter("basic render", two), None, "a software adapter is never picked");
+        assert_eq!(find_named_adapter("intel", [("Intel(R) UHD Graphics 770", IntegratedGpu)]), Some(0));
+        assert_eq!(find_named_adapter("4070", [] as [(&str, wgpu::DeviceType); 0]), None);
+    }
+
+    /// A fake adapter list (a laptop: built-in card first, a dedicated one, WARP; and two of a
+    /// kind): no match, several matches, software, and the one log line each gives.
+    #[test]
+    fn a_fake_adapter_list_picks_in_a_defined_order() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, VirtualGpu};
+        let laptop = [
+            Candidate::of("Intel(R) Iris(R) Xe Graphics", IntegratedGpu),
+            Candidate::of("NVIDIA GeForce RTX 4060 Laptop GPU", DiscreteGpu),
+            Candidate::of("Microsoft Basic Render Driver", Cpu),
+        ];
+        // no match: the default choice, and a warning that lists the cards
+        let none = choose_named_adapter("radeon", &laptop);
+        assert_eq!(none, NamedChoice::default());
+        let (warn, line) = named_choice_note("radeon", &none, &laptop);
+        assert!(warn && line.contains("names none") && line.contains("RTX 4060 Laptop GPU") && line.contains("default choice"), "{line}");
+        // several: dedicated before built-in although the built-in card comes first in wgpu's order
+        let g = choose_named_adapter("g", &laptop);
+        assert_eq!((g.index, g.matches.clone()), (Some(1), vec![1, 0]));
+        let (warn, line) = named_choice_note("g", &g, &laptop);
+        assert!(!warn && line.contains("matches 2") && line.contains("using NVIDIA GeForce RTX 4060 Laptop GPU"), "{line}");
+        // one: says which
+        let one = choose_named_adapter("iris", &laptop);
+        assert_eq!(one.index, Some(0));
+        assert_eq!(
+            named_choice_note("iris", &one, &laptop),
+            (false, "gpu: LIGHTCRAFT_GPU_ADAPTER=iris: using Intel(R) Iris(R) Xe Graphics".to_string())
+        );
+        // a software renderer: never, and the warning says so
+        let warp = choose_named_adapter("basic render", &laptop);
+        assert_eq!((warp.index, warp.software.clone()), (None, vec![2]));
+        let (warn, line) = named_choice_note("basic render", &warp, &laptop);
+        assert!(warn && line.contains("only a software renderer"), "{line}");
+        // a card's whole name beats a longer name that contains it, wherever it is listed
+        let twins = [
+            Candidate::of("NVIDIA GeForce RTX 4070 SUPER", DiscreteGpu),
+            Candidate::of("NVIDIA GeForce RTX 4070", DiscreteGpu),
+            Candidate::of("Virtual RTX 4070", VirtualGpu),
+        ];
+        assert_eq!(choose_named_adapter("nvidia geforce rtx 4070", &twins).matches, vec![1, 0]);
+        // same kind: wgpu's order; virtual after dedicated
+        assert_eq!(choose_named_adapter("4070", &twins).matches, vec![0, 1, 2]);
+        // the same card on two backends (Vulkan and GL on Linux): the first listed
+        let both = [Candidate::of("AMD Radeon RX 7800 XT", DiscreteGpu), Candidate::of("AMD Radeon RX 7800 XT", DiscreteGpu)];
+        assert_eq!(choose_named_adapter("7800", &both).index, Some(0));
+        assert_eq!(choose_named_adapter("7800", &[]), NamedChoice::default());
+    }
+
+    /// The render device, the denoise network's and the face detector's each ask for a card: the
+    /// line about it is logged once, not three times.
+    #[test]
+    fn a_choice_is_logged_once() {
+        let line = "gpu: LIGHTCRAFT_GPU_ADAPTER=test-only-name names none of the graphics cards (); using the default choice";
+        assert!(log_once(true, line));
+        assert!(!log_once(true, line));
+        assert!(!log_once(false, line));
+        assert!(log_once(true, &format!("{line} (another)")));
+    }
+
     #[test]
     fn resolves_against_the_build() {
         let compiled = Backends::DX12 | Backends::VULKAN;
@@ -427,8 +805,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-marker-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
-        // a local scope counter: other tests create real devices through the process-wide one
-        let active = Mutex::new(0);
+        // a local scope list: other tests create real devices through the process-wide one
+        let active = Mutex::new(Scopes::new());
         let seen = with_marker_on(Some(m.clone()), &active, "device creation", || m.exists());
         assert!(seen, "the marker exists while the device is created");
         assert!(!m.exists(), "and is removed afterwards");
@@ -501,21 +879,50 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-scopes-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
-        let active = Mutex::new(0);
-        arm(&m, &active, "device creation");
+        let active = Mutex::new(Scopes::new());
+        let a = arm(&m, &active, "device creation");
         assert!(read_init_marker(&m).unwrap().contains("device creation"));
-        // a second scope (a denoise network's kernels) keeps the first's text and the file
-        arm(&m, &active, "denoise kernel compilation");
-        assert!(read_init_marker(&m).unwrap().contains("device creation"));
-        disarm(&m, &active);
-        assert!(m.exists(), "the first scope is still running");
-        disarm(&m, &active);
+        // a second scope (a denoise network's kernels) joins the file: both are named
+        let b = arm(&m, &active, "denoise kernel compilation");
+        let text = read_init_marker(&m).unwrap();
+        assert!(text.contains("device creation") && text.contains("denoise kernel compilation"), "{text}");
+        disarm(&m, &active, a);
+        assert!(m.exists(), "the second scope is still running");
+        let text = read_init_marker(&m).unwrap();
+        assert!(!text.contains("device creation") && text.contains("denoise"), "only what still runs: {text}");
+        disarm(&m, &active, b);
         assert!(!m.exists(), "the last scope removes it");
-        // a stray extra disarm does not underflow or break the next scope
-        disarm(&m, &active);
-        arm(&m, &active, "kernel compilation");
+        // a stray extra disarm does not break the next scope
+        disarm(&m, &active, b);
+        let c = arm(&m, &active, "kernel compilation");
         assert!(m.exists());
-        disarm(&m, &active);
+        disarm(&m, &active, c);
+        assert!(!m.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The marker of a device of a chosen card names the card and its role, so a crash there
+    /// costs the next launch that choice only.
+    #[test]
+    fn the_marker_names_the_card_being_started() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-card-marker-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let active = Mutex::new(Scopes::new());
+        let key = crate::cards::AdapterKey::parse("dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1").unwrap();
+        let a = arm(&m, &active, &format!("device and kernel creation (backends DX12) [card={key}; role=helper]"));
+        let b = arm(&m, &active, "adapter listing");
+        let text = read_init_marker(&m).unwrap();
+        let scopes = marker_scopes(&text);
+        assert_eq!(scopes.len(), 2, "{text}");
+        assert_eq!(scopes[0].card, Some((key, "helper".to_string())));
+        assert_eq!(scopes[1].card, None);
+        disarm(&m, &active, a);
+        disarm(&m, &active, b);
+        // older markers (one line, no card) and junk
+        assert_eq!(marker_scopes("GPU device and kernel creation (backends DX12) started (unix time 1)"), vec![MarkerScope { card: None }]);
+        assert_eq!(marker_scopes("x [card=not a key; role=editing] y"), vec![MarkerScope { card: None }]);
+        assert!(marker_scopes("").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -524,7 +931,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-panic-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
-        let active = Mutex::new(0);
+        let active = Mutex::new(Scopes::new());
         let r = std::panic::catch_unwind(|| with_marker_on(Some(m.clone()), &active, "kernel compilation", || panic!("compile")));
         assert!(r.is_err());
         assert!(!m.exists(), "the process survived, so nothing is left to report");
