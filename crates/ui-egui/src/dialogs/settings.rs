@@ -29,6 +29,8 @@ mod performance;
 mod slideshow;
 mod widgets;
 
+#[cfg(test)]
+pub(crate) use appearance::favorite_star_colour;
 pub use display::display_profile;
 pub(super) use display::view_options;
 use display::{display_tab, interface_tab};
@@ -36,8 +38,13 @@ use general::general_tab;
 use import::import_tab;
 pub(crate) use libraries::{can_switch_library, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
+#[cfg(test)]
+pub(crate) use performance::gpu_line;
 use performance::performance_tab;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) use performance::smart_folder_default;
 use slideshow::slideshow_tab;
+use widgets::legible_controls;
 pub(crate) use widgets::{check, choices, heading, hint, row};
 
 pub mod slide_layout;
@@ -106,6 +113,11 @@ const PREVIEW_CHROME: f32 = 82.0;
 pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_height: f32) {
     ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x));
     let top = ui.cursor().top();
+    let t = Tokens::get(ui.ctx());
+    // What says where a control is, and what a text box says while it is empty, are made legible
+    // here for everything in the window: a theme's border is 1.6 to 1.7:1 against the window and
+    // its weak text under 4.3:1 in a box (the tokens keep their values for the rest of the app).
+    legible_controls(ui, &t);
     // The page drawn is the one that was open when the frame began: a tab clicked now opens on
     // the next frame, so a text box on the page being left is drawn once more and saves what was
     // typed in it (the click took the focus from it).
