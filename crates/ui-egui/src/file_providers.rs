@@ -213,8 +213,11 @@ impl Host {
 
     pub fn disconnect(&self) -> Result<(), String> {
         let mut s = self.state();
-        if s.busy() {
-            return Err("finish or cancel pending operations before unregistering".into());
+        let queued_terminal = s.events.iter().any(|event| {
+            matches!(event.metadata.get("type").and_then(Value::as_str), Some("opened" | "openFailed" | "saveFailed"))
+        });
+        if s.busy() || queued_terminal {
+            return Err("finish or cancel pending operations and consume completion events before unregistering".into());
         }
         s.identity = None;
         s.connection.clear();
@@ -512,6 +515,9 @@ impl Host {
 
     pub fn publish_documents(&self, documents: Value, open_ids: &[u64]) {
         let mut s = self.state();
+        if s.identity.is_none() || !s.enabled {
+            return;
+        }
         s.documents = documents;
         s.bindings.retain(|doc, _| open_ids.contains(doc));
         // A closed tab cannot retain an unresolvable chooser. Captures still require a result.

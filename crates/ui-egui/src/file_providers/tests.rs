@@ -11,10 +11,19 @@ fn disconnect_clears_published_document_metadata_before_another_account_connects
     assert_eq!(host.snapshot()["documents"], documents, "the regression must start with nonempty metadata");
     host.disconnect().unwrap();
     assert!(host.snapshot()["documents"].is_null());
+    host.publish_documents(documents.clone(), &[42]);
+    assert!(host.snapshot()["documents"].is_null(), "a disconnected frame must not republish the previous library");
     host.connect("test".into(), "Test files".into(), "account-two".into()).unwrap();
     let snapshot = host.snapshot();
     assert_eq!(snapshot["namespace"], "account-two");
     assert!(snapshot["documents"].is_null(), "the new account has not received an editor publication");
+    host.set_enabled(false).unwrap();
+    host.publish_documents(documents, &[42]);
+    assert!(host.snapshot()["documents"].is_null(), "paused providers do not publish new library metadata");
+    host.set_enabled(true).unwrap();
+    let current = json!([{"id":"84", "title":"Current account library", "dirty":false}]);
+    host.publish_documents(current.clone(), &[84]);
+    assert_eq!(host.snapshot()["documents"], current);
 }
 
 fn connected() -> (Host, String) {
@@ -415,6 +424,55 @@ fn fill_event_queue(host: &Host) {
     let mut state = host.state();
     for index in 0..super::MAX_EVENTS {
         state.event(json!({"type":"queued", "index":index}), None).unwrap();
+    }
+}
+
+#[test]
+fn disconnect_during_publish_preserves_the_retained_completion_batch() {
+    for kind in ["opened", "openFailed", "saveFailed"] {
+        let (host, connection) = connected();
+        let request = if kind == "saveFailed" {
+            let request = request(&host, 1);
+            host.resolve_dialog(&request, "provider", "").unwrap();
+            host.take_commands();
+            request
+        } else {
+            host.set_resources(&connection, vec![Resource { id: "one".into(), name: "One.zip".into(), updated_at: String::new() }]).unwrap();
+            let request = host.request_open("one").unwrap();
+            host.open(request.clone(), "One.zip".into(), vec![7]).unwrap();
+            host.take_commands();
+            request
+        };
+        host.take_events();
+        fill_event_queue(&host);
+        if kind == "saveFailed" {
+            host.failed(&request, "encoder failed");
+        } else {
+            host.opened(&request, (kind == "opened").then(|| capture(1, 1)), "decoder failed");
+        }
+        let mut attempted_disconnect = false;
+        let mut delivered = Vec::new();
+        let failed = host.publish_events_with(
+            |metadata, _| {
+                if metadata["type"] == "queued" && !attempted_disconnect {
+                    attempted_disconnect = true;
+                    assert!(host.disconnect().is_err(), "the next batch still owns an undelivered terminal");
+                    assert_eq!(host.connection_id().as_deref(), Some(connection.as_str()));
+                } else if metadata["type"] == kind {
+                    delivered.push(metadata.clone());
+                }
+                Ok::<(), String>(())
+            },
+            |error| panic!("unexpected delivery failure: {error}"),
+        );
+        assert!(!failed && attempted_disconnect);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0]["requestId"], request);
+        assert_eq!(delivered[0]["namespace"], "account-one");
+        assert_eq!(delivered[0]["connectionId"], connection);
+        assert!(!host.busy());
+        assert!(host.take_events().is_empty());
+        host.disconnect().unwrap();
     }
 }
 

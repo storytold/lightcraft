@@ -177,7 +177,19 @@ fn same_frame_input_waits_for_widgets_but_idle_hover_and_leave_do_not_block_a_re
     frame(&mut app, &ctx, vec![Event::MouseMoved(Vec2::new(2.0, -1.0))], Some(&mut held_motion_allowed));
     assert!(!held_motion_allowed, "raw mouse motion with a held press still blocks delivery before widgets");
     assert!(app.can_admit_provider_library(&ctx).is_err(), "the held press survives its motion's settled pass");
+    let active = app.session.active();
+    let generation = app.session.library_generation();
+    let mut held_leave_allowed = true;
+    frame(&mut app, &ctx, vec![Event::PointerGone], Some(&mut held_leave_allowed));
+    assert!(!held_leave_allowed, "leaving with a held press is not idle pointer movement");
+    assert!(ctx.input(|input| input.pointer.any_down()), "egui retains the press after PointerGone");
+    assert!(app.can_admit_provider_library(&ctx).is_err(), "the held press survives the leave's settled pass");
+    frame(&mut app, &ctx, vec![], None);
+    assert!(app.can_admit_provider_library(&ctx).is_err(), "an event-empty pass cannot release the press");
+    assert_eq!(app.session.active(), active);
+    assert_eq!(app.session.library_generation(), generation);
     frame(&mut app, &ctx, vec![pointer(at, false)], None);
+    assert!(!ctx.input(|input| input.pointer.any_down()));
     assert!(app.can_admit_provider_library(&ctx).is_ok());
     host.opened(&pending, None, "fixture complete");
 }

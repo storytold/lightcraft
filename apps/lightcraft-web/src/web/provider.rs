@@ -395,13 +395,16 @@ impl WebApp {
         let dirty = bridge.dirty(&revision);
         self.app.file_provider_revision = revision.unwrap_or(u64::MAX);
         let doc = self.app.file_provider_document;
-        bridge.host.publish_documents(
-            json!([{"documentId":doc.to_string(),"revision":self.app.file_provider_revision,
-            "name":bridge.host.filename(doc).unwrap_or_else(||"LightCraft library.zip".into()),"dirty":dirty,
-            "pending":bridge.host.pending_for(doc),"loading":bridge.loading}]),
-            &[doc],
-        );
-        bridge.leave.set(bridge.host.enabled() && dirty);
+        let enabled = bridge.host.enabled();
+        if enabled {
+            bridge.host.publish_documents(
+                json!([{"documentId":doc.to_string(),"revision":self.app.file_provider_revision,
+                "name":bridge.host.filename(doc).unwrap_or_else(||"LightCraft library.zip".into()),"dirty":dirty,
+                "pending":bridge.host.pending_for(doc),"loading":bridge.loading}]),
+                &[doc],
+            );
+        }
+        bridge.leave.set(enabled && dirty);
         crate::file_providers::publish(&bridge.host, ctx);
     }
 }

@@ -723,6 +723,9 @@ impl LightcraftApp {
         self.ui.compare = None;
         self.ui.brief_info = Default::default();
         self.ui.keyword_list_selected = None;
+        self.ui.person_page = None;
+        self.ui.person_from = None;
+        self.ui.last_person = None;
         self.ui.search = self.session.filter.text.clone();
         if self.ui.view == state::ViewMode::Reference {
             self.ui.view = state::ViewMode::PhotoGrid;
@@ -736,6 +739,21 @@ mod provider_library_tests {
     use super::{LightcraftApp, Services, Session};
     use crate::file_providers::{Host, Resource};
     use serde_json::json;
+
+    #[test]
+    fn provider_library_replacement_clears_person_navigation_without_saved_ui() {
+        let mut app = LightcraftApp::new(Session::new(), Services::default());
+        app.ui.person_page = Some("Previous person".into());
+        app.ui.person_from = Some((Some("Previous filter".into()), 42));
+        app.ui.last_person = Some("Previous person".into());
+        let mut incoming = Session::new();
+        incoming.filter.text = "Incoming library".into();
+        app.replace_provider_library(incoming);
+        assert!(app.ui.person_page.is_none());
+        assert!(app.ui.person_from.is_none());
+        assert!(app.ui.last_person.is_none());
+        assert_eq!(app.ui.search, "Incoming library");
+    }
 
     #[test]
     fn provider_commands_are_hidden_by_default_and_each_save_asks_for_a_destination() {
