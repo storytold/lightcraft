@@ -2,7 +2,7 @@
 //! `<canvas id="lightcraft_canvas">`, wires the file picker and drag-and-drop, and turns exports
 //! into downloads.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -76,8 +76,8 @@ struct Options {
     store: String,
     workers: Option<usize>,
     reset: bool,
-    /// `host=parent`: a same-origin page frames LightCraft and speaks to it (see [`crate::host`]).
-    host: bool,
+    /// The raw query string, for the host mode ([`crate::host::transport_for`]).
+    query: String,
 }
 
 impl Options {
@@ -98,7 +98,7 @@ impl Options {
             store: get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()),
             workers: get("workers").and_then(|v| v.parse().ok()),
             reset: get("reset").is_some(),
-            host: get("host").as_deref() == Some("parent"),
+            query: q,
         }
     }
 }
@@ -170,6 +170,57 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     }
     log::info!("exported {name} ({} bytes)", bytes.len());
     Ok(())
+}
+
+/// Keep egui's hidden text field content-box, so host page CSS cannot misplace typed text:
+/// eframe (0.36 web) types through a hidden `<input type="text">` it inserts as the canvas's
+/// next sibling, and a host page's global `* { box-sizing: border-box }` reaches it and leaves it
+/// no content box, so the next key lands before text just committed by an input method or a
+/// paste-like insert. Inline style beats any host stylesheet rule without `!important`, so the
+/// property is set on the element itself, in every host mode, and retried on the next animation
+/// frames while eframe hasn't inserted the field yet.
+fn fix_text_field_box_sizing() {
+    /// How many animation frames the fix may wait for eframe to insert its hidden text field.
+    const MAX_FRAMES: u32 = 120;
+
+    /// True when the field was found and set: the canvas's next sibling, or an
+    /// `input[type=text]` in the canvas's parent.
+    fn fix_once() -> bool {
+        let Some(doc) = window().and_then(|w| w.document()) else { return false };
+        let Some(canvas) = doc.get_element_by_id("lightcraft_canvas") else { return false };
+        let input = canvas.next_element_sibling().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()).or_else(|| {
+            canvas
+                .parent_element()
+                .and_then(|p| p.query_selector("input[type=text]").ok())
+                .flatten()
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        });
+        input.is_some_and(|i| i.style().set_property("box-sizing", "content-box").is_ok())
+    }
+
+    // the closure reschedules itself until the field is fixed or the frames run out; done, it is
+    // left parked in its slot (dropping it from inside itself would free its own state, and the
+    // slot holds the only reference) — a one-off leak, like the forgotten listeners
+    let tries = Rc::new(Cell::new(MAX_FRAMES));
+    let slot: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::default();
+    let own = Rc::clone(&slot);
+    *slot.borrow_mut() = Some(Closure::new(move || {
+        if fix_once() || tries.get() <= 1 {
+            return; // done: stop rescheduling
+        }
+        tries.set(tries.get() - 1);
+        let again = own.borrow_mut().take();
+        if let Some(again) = again {
+            let _ = window().and_then(|w| w.request_animation_frame(again.as_ref().unchecked_ref()).ok());
+            // put the same closure back, now that the frame it was handed to has its own reference
+            *own.borrow_mut() = Some(again);
+        }
+    }));
+    let first = slot.borrow_mut().take();
+    if let Some(first) = first {
+        let _ = window().and_then(|w| w.request_animation_frame(first.as_ref().unchecked_ref()).ok());
+        *slot.borrow_mut() = Some(first);
+    }
 }
 
 /// Build the browser host's `Services`: library backup/restore through browser storage and a
@@ -911,9 +962,16 @@ pub fn start(chinese_font: Vec<u8>) {
     }
     let opts = Options::from_url();
     // `?host=parent`: a same-origin page framing LightCraft hands photos in, stores what would
-    // be downloaded and hears about unsaved changes (see `host`)
-    let bridge = opts.host.then(crate::host::Bridge::new).flatten();
-    if opts.host && bridge.is_none() {
+    // be downloaded and hears about unsaved changes (see `host`). `data-host="page"` on the
+    // canvas opts a page in instead: it runs LightCraft in its own document and talks over DOM
+    // `CustomEvent`s on the canvas; page mode wins when a page asks for both.
+    let canvas = window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("lightcraft_canvas"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+    let mode = crate::host::transport_for(canvas.as_ref().and_then(|c| c.get_attribute("data-host")).as_deref(), &opts.query);
+    let bridge = mode.and_then(|m| crate::host::Bridge::for_mode(m, canvas.as_ref()));
+    if mode == Some(crate::host::Mode::Parent) && bridge.is_none() {
         log::warn!("lightcraft: ?host=parent, but this page is not framed or has an opaque origin; no page to speak to");
     }
     wasm_bindgen_futures::spawn_local(async move {
@@ -928,11 +986,7 @@ pub fn start(chinese_font: Vec<u8>) {
             }
             return;
         }
-        let Some(canvas) = window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("lightcraft_canvas"))
-            .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-        else {
+        let Some(canvas) = canvas else {
             log::error!("missing <canvas id=\"lightcraft_canvas\">");
             if let Some(b) = &bridge {
                 b.post(&Outgoing::Failed("the page has no <canvas id=\"lightcraft_canvas\">".into()));
@@ -947,6 +1001,8 @@ pub fn start(chinese_font: Vec<u8>) {
                 if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {
                     el.remove();
                 }
+                // the runner just started: egui's hidden text field exists from now on
+                fix_text_field_box_sizing();
             }
             Err(e) => {
                 log::error!("LightCraft failed to start: {e:?}");
