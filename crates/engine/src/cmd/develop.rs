@@ -558,7 +558,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Mixer Neutral",
             [],
             None,
-            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render)",
+            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); only the global white balance is modelled (a mask's local temperature/tint is not: the mixer is global)",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
@@ -569,8 +569,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let src = s.source_now(id, SourceLevel::Thumb).map_err(crate::EngineError::Other)?;
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
-                // The colour at the mixer's input: the sample with the photo's current white balance
-                // applied (the model the render uses), so whatever white balance has already done stays.
+                // The colour at the mixer's input: the sample with the photo's global white balance
+                // applied, so whatever that white balance has already done stays. The mixer is global,
+                // so a mask's local temperature/tint is deliberately not modelled here: the pick
+                // neutralizes for the photo as a whole, not per masked region.
                 let sample = sample_point(&src, &d, x, y);
                 let c = lightcraft_pipeline::local::wb_matrix_for(&info, &d).map_or(sample, |m| {
                     [
