@@ -263,8 +263,10 @@
 - Settings ▸ Faces ▸ Matching ▸ Faces per person in a match: a face was always matched to a person by the mean of the
   2 of their faces most like it, so in a large library two odd photos of someone (blurred, in profile) were enough for
   a stranger to be suggested as them, and confirming the suggestions in a batch then snowballed. Choose 1 to 8 (2 is
-  still the default): more faces mean fewer wrong suggestions for people with many photos, and fewer suggestions for
-  people with few. It applies to name suggestions, a person's More faces and the unnamed faces. Agents:
+  still the default): more faces mean fewer wrong suggestions for people with many photos. Only the scores of people
+  with more faces than the count before can fall: a person with fewer faces is scored on the ones they have, so one
+  face keeps the same score at every count. It applies to name suggestions, a person's More faces and the unnamed
+  faces. Agents:
   `faces.matching {topFaces}`; `faces.suggest` and `faces.evaluate` take `topFaces` too, so `faces.evaluate` can
   compare counts on your own photos. (#3250)
 

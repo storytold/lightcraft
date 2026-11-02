@@ -3577,5 +3577,5 @@
   "Matching": "Correspondance",
   "(default)": "(par défaut)",
   "Faces per person in a match": "Visages par personne pour une correspondance",
-  "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos, fewer suggestions for people with few.": "Un visage est rapproché d'une personne par la moyenne de ce nombre de ses visages qui lui ressemblent le plus. Plus de visages : moins de propositions fausses pour les personnes qui ont beaucoup de photos, moins de propositions pour celles qui en ont peu."
+  "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos. A person with fewer faces than that is scored on the ones they have.": "Un visage est rapproché d'une personne par la moyenne de ce nombre de ses visages qui lui ressemblent le plus. Plus de visages : moins de propositions fausses pour les personnes qui ont beaucoup de photos. Une personne qui a moins de visages que ce nombre est jugée sur ceux qu'elle a."
 }

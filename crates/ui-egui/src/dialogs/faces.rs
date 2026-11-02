@@ -195,7 +195,7 @@ fn matching_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list
     hint(
         ui,
         t,
-        "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos, fewer suggestions for people with few.",
+        "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos. A person with fewer faces than that is scored on the ones they have.",
     );
 }
 

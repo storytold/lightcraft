@@ -10,7 +10,8 @@ use std::cmp::Ordering;
 
 /// How many of a person's best matching faces are averaged into their score, unless the user chose otherwise
 /// (Settings ▸ Faces). More faces make a stranger who happens to match two odd photos of someone (blurred, in
-/// profile) less likely to be suggested as them, at the cost of fewer suggestions for people with few photos.
+/// profile) less likely to be suggested as them. A person with fewer faces than the count is scored on the ones they
+/// have, so their score does not change.
 pub const TOP_FACES: usize = 2;
 /// The most faces a score may be based on.
 pub const MAX_TOP_FACES: usize = 8;
@@ -157,6 +158,11 @@ mod tests {
         let four = rank_top(&eve, &gallery, 4);
         assert_eq!(four[0].name, "Bob", "{four:?}");
         assert!(four.iter().find(|r| r.name == "Ann").is_some_and(|r| r.score < 0.6), "{four:?}");
+        // the More faces path scores with person_score: the same mean, and a count above two counts too
+        let ann: Vec<&[f32]> = vec![&odd1, &odd2, &usual, &usual];
+        let ann4 = person_score(&eve, &ann, 4).unwrap();
+        assert!((ann4 - four.iter().find(|r| r.name == "Ann").unwrap().score).abs() < 1e-6, "{ann4} against {four:?}");
+        assert!(ann4 < person_score(&eve, &ann, 2).unwrap() - 0.4, "{ann4}");
         // out-of-range counts are clamped, never a panic or an empty score
         assert_eq!(rank_top(&eve, &gallery, 0), rank_top(&eve, &gallery, 1));
         assert_eq!(rank_top(&eve, &gallery, 1000), rank_top(&eve, &gallery, MAX_TOP_FACES));
