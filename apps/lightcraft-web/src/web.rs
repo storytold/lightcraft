@@ -314,8 +314,8 @@ fn services(
         pick_print_templates: None,
         save_print_template: None,
         write: Some(write),
-        // the browser download path has no meaningful create-new file write; the control channel
-        // (and therefore screenshot paths) is not available on the web
+        // the browser download path has no meaningful create-new file write, so `ui.screenshot`
+        // (through `lightcraft.request`) can't write to a path on the web
         write_new: None,
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
