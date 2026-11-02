@@ -990,8 +990,11 @@ impl Session {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let mut old_json = old.to_json();
-        let mut new_json = new.to_json();
+        // An identity channel mixer is omitted from stored JSON; materialize it on both sides (as
+        // `hdr` below) so a mix returning to the identity is a change the synced photos receive,
+        // not a key the delta silently drops while they keep their mix.
+        let mut old_json = old.to_json_with_mixer();
+        let mut new_json = new.to_json_with_mixer();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);

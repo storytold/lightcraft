@@ -1538,6 +1538,31 @@ fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     }
 }
 
+/// Issue #2158 review: Auto Sync carries the channel mixer both ways — a mix that returns to the
+/// identity on the active photo is a change (stored JSON omits the identity, so the delta would
+/// otherwise have no mixer key at all), and the other selected photos reset with it.
+#[test]
+fn auto_sync_resets_the_channel_mixer_when_it_returns_to_identity() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    // a mix on the active photo reaches the other
+    s.execute("develop.set", &json!({"control": "channelMixer.red.red", "value": 0.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.red.blue", "value": 100.0})).unwrap();
+    assert!(!s.develop_of(PhotoId(ids[1])).unwrap().channel_mixer.is_identity(), "Auto Sync carried the mix out");
+    // and back to the identity on the active photo resets the other
+    s.execute("develop.set", &json!({"control": "channelMixer.red.red", "value": 100.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "channelMixer.red.blue", "value": 0.0})).unwrap();
+    assert!(s.develop_of(PhotoId(ids[0])).unwrap().channel_mixer.is_identity());
+    assert!(s.develop_of(PhotoId(ids[1])).unwrap().channel_mixer.is_identity(), "Auto Sync resets the mix too");
+    // one undo puts the mix back on both
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.develop_of(PhotoId(ids[0])).unwrap().channel_mixer.is_identity());
+    assert!(!s.develop_of(PhotoId(ids[1])).unwrap().channel_mixer.is_identity());
+}
+
 #[test]
 fn auto_sync_camera_local_tone_changes_only_when_edited() {
     use lightcraft_catalog::PhotoId;
