@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Edit in Other Editor works again on a photo whose copy was never changed
+- Running Edit in Other Editor a second time on a photo, with its first copy left as LightCraft rendered it (the editor
+  didn't open, or was closed without saving), failed with "invalid parameters for `photo.editExternal`", never opened
+  the editor, and left another full-size `-Edit-N.tif` on disk each time. The render is the same bytes as the existing
+  copy, so the library skipped it as a duplicate. The editor now opens that existing copy, and the file just written
+  is removed.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

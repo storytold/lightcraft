@@ -1093,6 +1093,32 @@ fn external_edit_copy_is_stacked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #3617: a second Edit In on a photo whose first copy is unchanged renders the same bytes. Import skips
+/// them as a duplicate; the command used to fail with "invalid parameters" and leave the new file behind.
+#[test]
+fn external_edit_again_on_an_unchanged_copy_still_works() {
+    let dir = temp_dir("extedit-again");
+    let src = dir.join("beach.png");
+    write_png(&src, 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let first = s.execute("photo.editExternal", &json!({})).unwrap();
+    let first_path = first["path"].as_str().unwrap().to_string();
+    // the editor was closed without saving: same photo, same settings
+    s.execute("library.select", &json!({"ids": [orig.0]})).unwrap();
+    let files = || std::fs::read_dir(&dir).unwrap().count();
+    let before = files();
+    let again = s.execute("photo.editExternal", &json!({})).expect("a second Edit In works");
+    let again_path = again["path"].as_str().unwrap();
+    assert!(std::path::Path::new(again_path).exists(), "{again}");
+    assert_eq!(std::fs::read(again_path).unwrap(), std::fs::read(&first_path).unwrap(), "the same render");
+    let id = lightcraft_catalog::PhotoId(again["id"].as_u64().unwrap());
+    assert!(s.catalog.photo(id).is_some(), "the copy it hands to the editor is in the library: {again}");
+    assert!(files() <= before, "no orphan copy is left on disk ({} files before, {} after)", before, files());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #920: with several photos selected, each gets its own `-Edit` copy stacked on its
 /// original, the copies end up selected and are all reported; `ids` picks photos explicitly.
 #[test]
