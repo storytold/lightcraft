@@ -91,6 +91,38 @@ fn open_library_goes_on_to_the_grid_once_a_library_opens() {
 }
 
 #[test]
+fn opening_the_library_already_open_goes_on_to_the_grid() {
+    let library = TempLibrary::new("reopen");
+    let picked = library.0.to_string_lossy().into_owned();
+    let mut h = headless(lightcraft_engine::Session::new().with_fs());
+    h.app.services.pick_folder = Some(Box::new(move || Some(picked.clone())));
+    home(&mut h);
+    h.request("ui.clickWidget", json!({"id": "button:homeOpenLibrary"}), T);
+    h.settle(T);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the first open");
+    home(&mut h);
+    h.request("ui.clickWidget", json!({"id": "button:homeOpenLibrary"}), T);
+    h.settle(T);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the same library again");
+}
+
+#[test]
+fn a_recent_lightroom_catalog_asks_over_the_screen() {
+    let library = TempLibrary::new("lightroom");
+    let catalog = library.0.join("Photos.lrcat-data");
+    std::fs::create_dir_all(&catalog).unwrap();
+    let mut h = headless(lightcraft_engine::Session::new().with_fs());
+    // a checked catalog is greyed out as no library; this one is clicked before a check says so
+    h.app.recent_checks = crate::panels::library_problem::RecentChecks::with_check(|_| None);
+    h.app.ui.settings.recent_libraries = vec![catalog.to_string_lossy().into_owned()];
+    home(&mut h);
+    h.request("ui.clickWidget", json!({"id": "home:recent:0"}), T);
+    h.settle(T);
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::LightroomCatalog { .. })), "the offer to import it");
+    assert_eq!(h.app.ui.view, ViewMode::Home, "no library opened: nothing to leave for");
+}
+
+#[test]
 fn a_cancelled_open_library_stays_on_the_screen() {
     let mut h = headless(lightcraft_engine::Session::new().with_fs());
     h.app.services.pick_folder = Some(Box::new(|| None));

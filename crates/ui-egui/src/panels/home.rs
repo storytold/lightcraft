@@ -71,21 +71,25 @@ fn run(app: &mut LightcraftApp, action: Action) -> Result<Value, String> {
         }
         Action::OpenLibrary(path) => {
             let opened = app.run("app.openLibrary", json!({ "path": path }))?;
-            app.ui.view = ViewMode::PhotoGrid;
+            // a Lightroom catalog isn't opened: its dialog answers here, over this screen
+            if opened.get("opened") != Some(&json!(false)) {
+                app.ui.view = ViewMode::PhotoGrid;
+            }
             Ok(opened)
         }
     }
 }
 
 /// A source picked in the sidebar (an album, a date, a folder) or a library opened (its folder
-/// dialog may answer frames after the click, and a cancelled one changes nothing) is there to be
-/// looked at: the grid shows it. What this screen last saw lives in the context, so coming back to
-/// the screen with another source already picked stays here.
+/// dialog may answer frames after the click, a cancelled one changes nothing, and the one already
+/// open counts: the generation moves on each open) is there to be looked at: the grid shows it.
+/// What this screen last saw lives in the context, so coming back to the screen with another source
+/// already picked stays here.
 fn follow_the_sidebar(app: &mut LightcraftApp, ui: &Ui) {
     let id = egui::Id::unique("home-source");
-    let now = (app.session.source, app.session.library.as_ref().map(|l| l.dir.clone()));
+    let now = (app.session.source, app.session.library_generation());
     let pass = ui.ctx().cumulative_frame_nr();
-    let seen: Option<((LibrarySource, Option<std::path::PathBuf>), u64)> = ui.data(|d| d.get_temp(id));
+    let seen: Option<((LibrarySource, u64), u64)> = ui.data(|d| d.get_temp(id));
     let changed = seen.is_some_and(|(before, last_pass)| before != now && last_pass + 1 == pass);
     ui.data_mut(|d| d.insert_temp(id, (now, pass)));
     if changed {
