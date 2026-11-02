@@ -16,19 +16,21 @@ An active slider gesture finishes before the pending action resumes.
 
 **No model weights are bundled.** Models live in the per-user `denoise-models` folder
 (override with `LIGHTCRAFT_DENOISE_MODELS`). Settings provides **Install from file…**
-for a user-supplied ONNX file with a `denoise-model.json` beside it. The default build
-offers no model downloads. The separate `rawnind-model` Cargo feature enables the
-pinned RawNIND offer only when a release's model policy permits it.
+for a user-supplied ONNX file with a `denoise-model.json` beside it. The desktop app and
+the CLI also offer the pinned RawNIND model as a download (their default `rawnind-model`
+feature); a build with `--no-default-features --features denoise` offers user-supplied
+models only.
 Terms must be acknowledged before installation or
 download. Downloads use the shared pure-Rust `lightcraft-fetch` client, with resume,
 progress, cancellation, size limits and SHA-256 verification.
 
-RawNIND's optional ONNX weights are **GPL-3.0**, as recorded in the pinned model catalog.
-They are downloaded separately after consent and read by our own Rust executor.
-Whether releases should offer this download remains a maintainer policy decision;
-permissively licensed or independently trained weights remain a gap. This is not a
-claim that optional downloading settles licensing questions. No GPL decoder or neural
-runtime code is included. Model metadata is in `crates/denoise-core/src/known.rs`.
+RawNIND's optional ONNX weights ("RawNIND" by Benoit Brummer) are dual-licensed by their
+author under **GPL-3.0 and CC BY 4.0** ([rawnind_jddc](https://github.com/trougnouf/rawnind_jddc),
+issue #1760); the pinned model catalog offers them under **CC BY 4.0**, which allows any use,
+commercial use included, and asks for credit. The terms shown before the download give that
+credit. The weights are downloaded separately after consent and read by our own Rust executor;
+none are bundled. No GPL decoder or neural runtime code is included. Model metadata is in
+`crates/denoise-core/src/known.rs`.
 
 Installation checks the manifest, model hash and size, then runs a synthetic self-test:
 finite output of the promised shape, repeatability, the declared scale and reduced

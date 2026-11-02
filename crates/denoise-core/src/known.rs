@@ -20,7 +20,8 @@ pub struct Known {
 }
 
 /// RawNIND's UtNet2 for Bayer sensors, as published for darktable (`rawdenoise-nind.dtmodel`, a zip with a Bayer and a
-/// linear model). Its weights are GPL-3.0; the training pictures are CC BY 4.0 and CC0.
+/// linear model). Its author dual-licenses the weights under GPL-3.0 and CC BY 4.0 (rawnind_jddc README, issue #1760);
+/// we offer them under CC BY 4.0, which asks only for credit. The training pictures are CC BY 4.0 and CC0.
 #[cfg(any(feature = "rawnind-model", test))]
 fn rawnind_bayer() -> Known {
     let manifest = DenoiserManifest {
@@ -28,19 +29,25 @@ fn rawnind_bayer() -> Known {
         name: "RawNIND UtNet2 (Bayer)".into(),
         version: "1.0".into(),
         licence: Licence {
-            name: "GPL-3.0".into(),
+            name: "CC-BY-4.0 OR GPL-3.0".into(),
             commercial: Commercial::Yes,
-            url: Some("https://www.gnu.org/licenses/gpl-3.0.html".into()),
-            notice: "The weights are published under the GNU General Public License v3. LightCraft does not include them: they \
-                     are downloaded to your computer at your request and used by it only. If you pass the model file on, the \
-                     GPL applies to that copy. Commercial use is subject to the GPL terms, including applicable source, licence and notice obligations on redistribution."
+            url: Some("https://creativecommons.org/licenses/by/4.0/".into()),
+            notice: "RawNIND by Benoit Brummer. Its author licenses these weights under your choice of Creative Commons \
+                     Attribution 4.0 (CC BY 4.0) or the GNU General Public License v3; LightCraft uses them under CC BY 4.0. \
+                     You may use them for any purpose, commercial work included. The model is downloaded to your computer at \
+                     your request and used by it only. If you pass the model file on, credit the author (RawNIND by Benoit \
+                     Brummer), name the licence with a link to it (creativecommons.org/licenses/by/4.0) and say whether \
+                     you changed the file."
                 .into(),
         },
         source: Some("https://github.com/darktable-org/darktable-ai/tree/master/models/rawdenoise-nind".into()),
         sha256: Some("da27509dab6a2915da67e988acd86cf71f9d5bbc8d1aa0ed32933578a887b901".into()),
         size_bytes: Some(31_056_425),
-        provenance: "Trained on RawNIND, real photographs of the same scenes taken noisy and clean (images CC BY 4.0 and CC0, \
-                     published on Wikimedia Commons and by the University of Louvain). Paper: arXiv 2501.08924."
+        // shown after "Trained on:"
+        provenance: "RawNIND, real photographs of the same scenes taken noisy and clean (images CC BY 4.0 and CC0, \
+                     published on Wikimedia Commons and by the University of Louvain). Dataset and model by Benoit Brummer; \
+                     papers by Benoit Brummer and Christophe De Vleeschouwer: Joint Denoising, Demosaicing, and Compression: \
+                     A Recommended Paradigm for Learning-Based Image Workflows (EUVIP 2026), and arXiv 2501.08924."
             .into(),
         domain: Domain::BayerToRgb,
         tile: 512,
@@ -106,6 +113,10 @@ mod tests {
         }
         assert_eq!(find("rawnind-bayer").is_some(), cfg!(feature = "rawnind-model"));
         assert!(find("nothing").is_none());
+        // CC BY 4.0 is the option we use: it allows any use and asks for credit, which the terms give (#1760)
+        let rawnind = rawnind_bayer().manifest;
+        assert!(rawnind.licence.name.starts_with("CC-BY-4.0") && rawnind.licence.commercial == Commercial::Yes);
+        assert!(rawnind.licence.notice.contains("Benoit Brummer") && rawnind.provenance.contains("Benoit Brummer"));
         assert_eq!(
             by_sha256("da27509dab6a2915da67e988acd86cf71f9d5bbc8d1aa0ed32933578a887b901").map(|m| m.id),
             if cfg!(feature = "rawnind-model") { Some("rawnind-bayer".into()) } else { None }
