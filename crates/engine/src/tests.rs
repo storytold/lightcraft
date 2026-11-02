@@ -50,6 +50,7 @@ mod slide;
 mod slideshow_export;
 mod spots;
 mod sync;
+mod upright_sync;
 mod view_follow;
 pub(super) mod xmp;
 

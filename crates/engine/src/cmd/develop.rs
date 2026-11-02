@@ -834,26 +834,39 @@ pub fn specs() -> Vec<CommandSpec> {
             "Upright",
             [],
             None,
-            "{mode: off|auto|guided|level|vertical|full} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes",
+            "{mode: off|auto|guided|level|vertical|full, again?: bool} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes. With Auto Sync the mode goes to every selected photo and each is analysed on its own lines (in the background in the app; Guided stays on this photo). `again` (a second click on the mode that is on) starts over: analyses still running are cancelled, every photo it reaches is analysed afresh, Guided's guides are cleared; the Transform sliders stay",
             has_active,
             |s, p| {
                 let mode: Upright =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("auto"))).map_err(|e| bad("geometry.upright", e.to_string()))?;
+                let again = bool_or(p, "again", false);
                 let id = active(s, "geometry.upright")?;
-                let d = s.develop_of(id).unwrap_or_default();
                 let transform = match mode {
                     Upright::Off | Upright::Guided => None,
-                    m => {
-                        let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad("geometry.upright", e))?;
-                        let info = s.source_info(id);
-                        Some(lightcraft_pipeline::upright::auto_transform(&src, &info, &d, m))
-                    }
+                    m => Some(s.upright_for(id, m).map_err(|e| bad("geometry.upright", e))?),
                 };
-                edit(s, "geometry.upright", "Upright", |d| {
+                // a second click starts over: what is still running is stopped and started again
+                // below, with the photos this edit reaches
+                let waiting = if again { s.upright_cancel() } else { Vec::new() };
+                s.upright_jobs.again = again;
+                let r = edit(s, "geometry.upright", "Upright", |d| {
                     d.geometry.upright = mode;
                     d.geometry.upright_transform = transform;
+                    if again && mode == Upright::Guided {
+                        d.geometry.guides.clear();
+                    }
                     Ok(())
-                })?;
+                });
+                s.upright_jobs.again = false;
+                r?;
+                if again {
+                    let mut ids = waiting;
+                    ids.push(id);
+                    if s.auto_sync_applies(id, "Upright") {
+                        ids.extend(s.selection.ids.iter().copied());
+                    }
+                    s.upright_start(ids);
+                }
                 Ok(json!({"mode": mode, "transform": transform}))
             }
         ),
@@ -919,7 +932,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let prev =
                     s.previous_active.filter(|id| s.catalog.photo(*id).is_some_and(|ph| !ph.deleted)).ok_or_else(|| bad(c, "no previous photo"))?;
                 let groups = groups_param(p, c)?.unwrap_or_else(|| s.copy_groups.clone());
-                let partial = lightcraft_develop::extract_groups(&s.develop_of(prev).unwrap_or_default(), &groups);
+                let mut partial = lightcraft_develop::extract_groups(&s.develop_of(prev).unwrap_or_default(), &groups);
+                lightcraft_develop::upright_recipe(&mut partial);
                 let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| *id != prev).collect();
                 let ops = ids
                     .iter()
@@ -947,6 +961,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     let full = lightcraft_develop::apply_partial(&DevelopSettings::default(), &clip, 1.0);
                     clip = lightcraft_develop::extract_groups(&full, &only);
                 }
+                lightcraft_develop::upright_recipe(&mut clip);
                 let ids = s.targets(p)?;
                 let ops = ids
                     .iter()
@@ -970,7 +985,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = active(s, c)?;
                 let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_copy);
                 let d = s.develop_of(id).unwrap_or_default();
-                let partial = lightcraft_develop::extract_groups(&d, &groups);
+                let mut partial = lightcraft_develop::extract_groups(&d, &groups);
+                lightcraft_develop::upright_recipe(&mut partial);
                 let ops = s
                     .selection
                     .ids

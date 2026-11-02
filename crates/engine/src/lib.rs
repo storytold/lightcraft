@@ -81,6 +81,7 @@ pub mod smart;
 pub mod sync;
 mod sync_same;
 pub mod text;
+pub mod upright_jobs;
 mod view;
 pub mod walk;
 
@@ -386,6 +387,9 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// Upright worked out on each photo an automatic mode reaches without its own correction
+    /// ([`upright_jobs`]).
+    pub upright_jobs: upright_jobs::UprightJobs,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
@@ -525,6 +529,7 @@ impl Session {
             import_probes: Default::default(),
             folder_changes: None,
             activity: Default::default(),
+            upright_jobs: Default::default(),
             preview_build: None,
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
@@ -635,6 +640,9 @@ impl Session {
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
+        // an automatic Upright mode that reached a photo without its own correction: worked out
+        // on that photo ([`upright_jobs`])
+        let upright = upright_jobs::needs_any(&fwd).then(|| fwd.clone());
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -644,6 +652,9 @@ impl Session {
         }
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
+        }
+        if let Some(op) = upright {
+            self.upright_after(&op);
         }
         Ok(())
     }
@@ -790,7 +801,11 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        let upright = upright_jobs::needs_any(&e.op).then(|| e.op.clone());
         self.pending_log.push(e.op);
+        if let Some(op) = upright {
+            self.upright_after(&op);
+        }
         self.redo.push(UndoEntry {
             label: e.label.clone(),
             op: redo,
@@ -815,7 +830,11 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        let upright = upright_jobs::needs_any(&e.op).then(|| e.op.clone());
         self.pending_log.push(e.op);
+        if let Some(op) = upright {
+            self.upright_after(&op);
+        }
         self.undo.push(UndoEntry {
             label: e.label.clone(),
             op: undo,
@@ -986,6 +1005,11 @@ impl Session {
     /// White balance goes on each photo as the active photo's mode or value on the photo's own
     /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
     /// its pixels), a Temp or Tint the same number, only the slider that moved.
+    ///
+    /// Upright is an analysis of each photo's own lines, like Auto white balance: an automatic mode
+    /// travels without the active photo's correction, and each photo gets its own after the commit
+    /// ([`upright_jobs`], in the background in the app). Guided Upright is drawn on one photo's
+    /// lines, so it doesn't travel: the others keep the Upright they have.
     fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
         if !self.auto_sync_applies(id, label) {
             return Vec::new();
@@ -1000,17 +1024,23 @@ impl Session {
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);
-        let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
+        // a second click on the Upright mode that is on: every selected photo is analysed afresh,
+        // also when the active photo's correction came out the same
+        let again =
+            self.upright_jobs.again && !matches!(new.geometry.upright, lightcraft_develop::Upright::Off | lightcraft_develop::Upright::Guided);
+        let Some(mut delta) = json_delta(&old_json, &new_json).or_else(|| again.then(|| serde_json::json!({}))) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
             }
-            if o.is_empty() {
+            if o.is_empty() && !again {
                 return Vec::new();
             }
         }
         let ainfo = self.source_info(id);
         let wb_changed = old.wb != new.wb;
+        let (og, ng) = (&old.geometry, &new.geometry);
+        let upright_changed = again || og.upright != ng.upright || og.upright_transform != ng.upright_transform;
         self.selection
             .ids
             .iter()
@@ -1020,6 +1050,17 @@ impl Session {
                 let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
                 if wb_changed {
                     sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+                }
+                if ng.upright == lightcraft_develop::Upright::Guided {
+                    // drawn on the active photo's lines: each photo keeps its own Upright
+                    synced.geometry.upright = d.geometry.upright;
+                    synced.geometry.upright_transform = d.geometry.upright_transform;
+                    synced.geometry.guides = d.geometry.guides.clone();
+                } else if upright_changed {
+                    // the mode, never the active photo's correction: each photo's own comes later
+                    synced.geometry.upright = ng.upright;
+                    synced.geometry.upright_transform = None;
+                    synced.geometry.guides = d.geometry.guides.clone();
                 }
                 let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
