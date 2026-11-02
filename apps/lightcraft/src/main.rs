@@ -292,6 +292,8 @@ fn main() -> eframe::Result {
                 app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
                     app.ui = ui;
+                } else {
+                    app.ui.open_on_startup_view();
                 }
                 // the recent libraries to choose from (issue #1290), checked on a worker once shown
                 if launch == Launch::Ask {
@@ -330,6 +332,10 @@ fn main() -> eframe::Result {
                     }
                     lightcraft_ui_egui::panels::settings::remember_library(&mut settings.recent_libraries, &dir);
                     settings.library_path = dir;
+                    // the library asked for is there to be looked at, as Home sends one opened from it to the grid
+                    if app.ui.view == lightcraft_ui_egui::state::ViewMode::Home {
+                        app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+                    }
                 }
                 // after the snapshot above, so the writer saves the switched-off preference
                 if let Some(notice) = gpu_crash {

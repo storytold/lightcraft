@@ -4,9 +4,9 @@
 
 ### A Home screen
 - LightCraft has a Home screen: a welcome, Import Photos…, Open Library…, All Photos, your recent libraries, and the
-  help and community links. Open it from View ▸ Home Screen or the house in the bottom bar. Picking a source in the
-  sidebar, or All Photos, goes on to the grid. To open on it at launch, choose Home Screen in Settings ▸ General ▸
-  Open in; the default stays the last view, so nothing changes until you do.
+  help and community links. Open it from View ▸ Home Screen or the house in the top bar or the bottom bar. Picking a
+  source in the sidebar, or All Photos, goes on to the grid. A new install opens on it; if you already use LightCraft,
+  your saved choice stays, and Settings ▸ General ▸ Open in changes it.
 
 ## 2026-10-30
 

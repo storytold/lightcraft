@@ -1,5 +1,5 @@
 //! LR-BEHAV-HOME: the Home screen is a view like the others, offers the ways into a library, lists
-//! the recent ones, and can be what the app opens on. No library opens on it unless asked.
+//! the recent ones, and is what the app opens on unless Settings say otherwise.
 
 use std::time::Duration;
 
@@ -200,12 +200,53 @@ fn the_menu_ticks_the_view() {
 }
 
 #[test]
-fn startup_opens_on_home_only_when_asked() {
-    let mut ui = UiState { view: ViewMode::Detail, ..Default::default() };
-    ui = ui.sanitized();
-    assert_eq!(ui.view, ViewMode::Detail, "the default is the last view");
-    ui.settings.startup_view = StartupView::Home;
-    assert_eq!(ui.sanitized().view, ViewMode::Home);
+fn startup_opens_on_home_by_default() {
+    let ui = UiState { view: ViewMode::Detail, ..Default::default() }.sanitized();
+    assert_eq!(ui.view, ViewMode::Home);
+}
+
+#[test]
+fn a_first_launch_with_no_settings_file_opens_on_home() {
+    let mut ui = UiState::default();
+    assert_ne!(ui.view, ViewMode::Home, "what the host starts from");
+    ui.open_on_startup_view();
+    assert_eq!(ui.view, ViewMode::Home);
+}
+
+#[test]
+fn a_saved_choice_of_the_last_view_is_kept() {
+    let saved = r#"{"view": "detail", "settings": {"startupView": "last"}}"#;
+    let ui = serde_json::from_str::<UiState>(saved).unwrap().sanitized();
+    assert_eq!(ui.settings.startup_view, StartupView::Last);
+    assert_eq!(ui.view, ViewMode::Detail);
+}
+
+#[test]
+fn settings_saved_without_the_choice_open_on_home() {
+    let ui = serde_json::from_str::<UiState>(r#"{"view": "detail"}"#).unwrap().sanitized();
+    assert_eq!(ui.view, ViewMode::Home);
+}
+
+#[test]
+fn the_top_bar_house_opens_home_and_sits_left_of_the_menus() {
+    let mut h = headless(lightcraft_engine::Session::with_demo());
+    let at = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap();
+    assert!(at(&h, "icon:forward").right() < at(&h, "icon:topHome").left());
+    assert!(at(&h, "icon:topHome").right() < at(&h, "menu:File").left());
+    h.request("ui.clickWidget", json!({"id": "icon:topHome"}), T);
+    h.settle(T);
+    assert_eq!(h.app.ui.view, ViewMode::Home);
+    assert!(has(&h, "button:homeImportPhotos"));
+}
+
+#[test]
+fn in_a_narrow_window_the_house_gives_way_to_the_menus() {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default()), [1160.0, 560.0], 1.0);
+    h.settle(T);
+    assert!(has(&h, "menu:File"), "the menus stay titles");
+    assert!(!has(&h, "menu:all"));
+    assert!(!has(&h, "icon:topHome"));
+    assert!(has(&h, "icon:home"), "the bottom bar still leads to Home");
 }
 
 #[test]

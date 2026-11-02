@@ -8,6 +8,9 @@ use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
+/// What the Home button takes from the bar: its gap, its width and the spacing after it.
+const HOME_ROOM: f32 = 8.0 + 30.0 + 4.0;
+
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click acts as the system setting says. Made before the bar's widgets so they win the click.
 fn window_handle(ui: &mut egui::Ui, bar: Rect) {
@@ -50,7 +53,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let mut sw = 640.0f32.min(2.0 * (full.right() - 310.0 - bar.center().x)).max(190.0);
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
-                let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
+                let menus_right = full.left() + 182.0 + crate::menubar::bar_width(ui) + 24.0;
                 sw = sw.min(2.0 * (bar.center().x - menus_right)).max(190.0);
             }
             let search_left = bar.center().x - sw / 2.0;
@@ -69,7 +72,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Sidebar toggle, back/forward and, without a native menu bar, the in-window menus.
+/// Sidebar toggle, back/forward, Home and, without a native menu bar, the in-window menus.
 fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -83,6 +86,16 @@ fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
             let _ = app.run("view.back", json!({}));
         }
         icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
+        // in a narrow window the house gives way before the menus fold into one button: the bottom
+        // bar and the View menu lead to Home too
+        let menus_need = if app.native_menu { 0.0 } else { crate::menubar::bar_width(ui) + 10.0 + 16.0 };
+        if search_left - ui.cursor().left() - HOME_ROOM >= menus_need {
+            ui.add_space(8.0);
+            let on_home = app.ui.view == crate::state::ViewMode::Home;
+            if icon_button(ui, "topHome", Icon::Home, vec2(30.0, 30.0), on_home, true, crate::i18n::tr("Home Screen")).clicked() {
+                let _ = app.run("view.home", json!({}));
+            }
+        }
         if !app.native_menu {
             // no native menu bar (web, Windows, Linux): menus in the top bar
             ui.add_space(10.0);
