@@ -297,6 +297,28 @@ fn work_gate_waits_for_room() {
     drop(g.acquire(1000));
 }
 
+/// Review of PR #3506: two holders that fit are admitted together (a gate that let one in at a time
+/// would pass `work_gate_waits_for_room`).
+#[test]
+fn two_fitting_holders_are_admitted_together() {
+    use crate::memory::WorkGate;
+    use std::sync::mpsc;
+    let g = Arc::new(WorkGate::new(100));
+    let a = g.acquire(40);
+    let (tx, rx) = mpsc::channel();
+    let g2 = g.clone();
+    let t = std::thread::spawn(move || {
+        let _b = g2.acquire(40);
+        let _ = tx.send(g2.usage().0);
+    });
+    // a gate that serialises leaves the second holder waiting until this times out
+    let held = rx.recv_timeout(std::time::Duration::from_secs(5));
+    drop(a);
+    t.join().unwrap();
+    assert_eq!(held, Ok(80), "a second holder that fits waited");
+    assert_eq!(g.usage().0, 0);
+}
+
 /// Issue #2576: work weighed with saturating maths can ask for `usize::MAX` bytes. Adding to
 /// that overflowed (a panic with the gate's mutex held in a debug build, a wrapped count that
 /// let everything in for a release one). The count is now exact past `usize::MAX`: later work

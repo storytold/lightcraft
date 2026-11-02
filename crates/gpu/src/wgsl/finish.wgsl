@@ -230,6 +230,52 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     return a + (b - a) * v;
 }
 
+// The 3×3 matrix at parameter `o` (row-major).
+fn mat_at(o: u32) -> array<vec3<f32>, 3> {
+    return array<vec3<f32>, 3>(
+        vec3<f32>(pf(o), pf(o + 1u), pf(o + 2u)),
+        vec3<f32>(pf(o + 3u), pf(o + 4u), pf(o + 5u)),
+        vec3<f32>(pf(o + 6u), pf(o + 7u), pf(o + 8u)),
+    );
+}
+
+// `finish::out_of_gamut`: needed real desaturation, and isn't a neutral clipping at white/black.
+fn out_of_gamut(r: vec3<f32>, t: f32) -> bool {
+    let lo = min(r.x, min(r.y, r.z));
+    let hi = max(r.x, max(r.y, r.z));
+    return t < GAMUT_WARN && (hi - lo) > 0.02 * max(abs(hi), 1e-3) && hi - lo > 1e-3 && (lo < -1e-3 || (hi > 1.0 && lo < 1.0));
+}
+
+// `Lut3d::apply` (trilinear) on the LUT profile's table in `aux` (red fastest).
+fn lut_at(r: u32, g: u32, b: u32) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let o = pu(F_LUT_OFF) + 3u * (r + n * (g + n * b));
+    return vec3<f32>(aux[o], aux[o + 1u], aux[o + 2u]);
+}
+
+fn lut_apply(c: vec3<f32>) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let s = f32(n - 1u);
+    var idx = vec3<u32>(0u);
+    var fr = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        let lo = pf(F_LUT_MIN + k);
+        let span = max(pf(F_LUT_MAX + k) - lo, 1e-6);
+        let x = clamp((c[k] - lo) / span, 0.0, 1.0) * s;
+        let i = min(u32(floor(x)), n - 2u);
+        idx[k] = i;
+        fr[k] = x - f32(i);
+    }
+    let r = idx.x;
+    let g = idx.y;
+    let b = idx.z;
+    let c00 = mix(lut_at(r, g, b), lut_at(r + 1u, g, b), fr.x);
+    let c10 = mix(lut_at(r, g + 1u, b), lut_at(r + 1u, g + 1u, b), fr.x);
+    let c01 = mix(lut_at(r, g, b + 1u), lut_at(r + 1u, g, b + 1u), fr.x);
+    let c11 = mix(lut_at(r, g + 1u, b + 1u), lut_at(r + 1u, g + 1u, b + 1u), fr.x);
+    return mix(mix(c00, c10, fr.y), mix(c01, c11, fr.y), fr.z);
+}
+
 fn enc8(v: f32) -> u32 {
     return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
 }
@@ -254,44 +300,29 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
-// The 3×3 matrix stored row by row from field `o`.
-fn mat_at(o: u32) -> array<vec3<f32>, 3> {
-    return array<vec3<f32>, 3>(
-        vec3<f32>(pf(o), pf(o + 1u), pf(o + 2u)),
-        vec3<f32>(pf(o + 3u), pf(o + 4u), pf(o + 5u)),
-        vec3<f32>(pf(o + 6u), pf(o + 7u), pf(o + 8u)),
-    );
-}
-
-// `finish::gamut_map` (SDR): the chroma scale that brings `r` into 0..1 towards its luminance (1: in gamut) ...
-fn gamut_scale(r: vec3<f32>, luma: vec3<f32>) -> f32 {
-    let yy = clamp(dot(luma, r), 0.0, 1.0);
+// `finish::gamut_map_to` into 0..peak (1 for SDR): the chroma scale that brings `r` into range
+// towards its luminance (1: in gamut) ...
+fn gamut_scale(r: vec3<f32>, luma: vec3<f32>, peak: f32) -> f32 {
+    let yy = clamp(dot(luma, r), 0.0, peak);
     var tg = 1.0;
     for (var k = 0u; k < 3u; k++) {
         let cc = r[k];
         if (cc < 0.0) {
             tg = min(tg, yy / max(yy - cc, 1e-9));
-        } else if (cc > 1.0) {
-            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+        } else if (cc > peak) {
+            tg = min(tg, (peak - yy) / max(cc - yy, 1e-9));
         }
     }
     return tg;
 }
 
 // ... and `r` scaled by it.
-fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32) -> vec3<f32> {
+fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32, peak: f32) -> vec3<f32> {
     if (tg < 1.0) {
-        let yy = clamp(dot(luma, r), 0.0, 1.0);
+        let yy = clamp(dot(luma, r), 0.0, peak);
         return yy + (r - yy) * tg;
     }
     return r;
-}
-
-// `finish::out_of_gamut`: `r` needed desaturating by `t` to fit and isn't just a neutral beyond white or below black.
-fn out_of_gamut(r: vec3<f32>, t: f32) -> bool {
-    let lo = min(r.x, min(r.y, r.z));
-    let hi = max(r.x, max(r.y, r.z));
-    return t < 0.995 && (hi - lo) > 0.02 * max(abs(hi), 1e-3) && hi - lo > 1e-3 && (lo < -1e-3 || (hi > 1.0 && lo < 1.0));
 }
 
 @compute @workgroup_size(16, 16)
@@ -463,8 +494,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
     }
     let mx = max(d.x, max(d.y, d.z));
-    if (mx > 1.0) {
-        let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
+    // (an HDR render keeps colour up to its peak)
+    let peak = pf(F_PEAK);
+    let hdr = peak > 1.0;
+    if (mx > peak) {
+        let t = clamp((mx - peak) / max(mx - o, 1e-6), 0.0, 1.0);
         d = d + (o - d) * t;
     }
 
@@ -506,6 +540,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 } else {
                     d = d * f;
                 }
+            } else if (hdr) {
+                // lighten towards SDR white; never pull HDR highlights down to it
+                d = d + max(vec3<f32>(1.0) - d, vec3<f32>(0.0)) * amount * t * 0.85;
             } else {
                 d = d + (1.0 - d) * amount * t * 0.85;
             }
@@ -519,26 +556,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var r: vec3<f32>;
     if (pu(F_PROOF) != 0u) {
         let q0 = mul3(mat_at(F_PROOF_M), d);
-        let tq = gamut_scale(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)));
+        let tq = gamut_scale(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)), peak);
         if (pu(F_PROOF_DEST_WARN) != 0u && out_of_gamut(q0, tq)) {
             warn = 1u;
         }
-        r = mul3(mat_at(F_PROOF_OUT), gamut_apply(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)), tq));
+        r = mul3(mat_at(F_PROOF_OUT), gamut_apply(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)), tq, peak));
     } else {
         r = mul3(mat_at(F_OUT_M), d);
     }
     let oy = vec3<f32>(pf(F_OUT_Y), pf(F_OUT_Y + 1u), pf(F_OUT_Y + 2u));
-    let tg = gamut_scale(r, oy);
+    let tg = gamut_scale(r, oy, peak);
     if (pu(F_PROOF) != 0u && pu(F_PROOF_DISP_WARN) != 0u && warn == 0u && out_of_gamut(r, tg)) {
         warn = 2u;
     }
-    r = gamut_apply(r, oy, tg);
+    r = gamut_apply(r, oy, tg, peak);
 
     // --- encode, curves, grain
-    var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    var e: vec3<f32>;
+    if (pu(F_HDR_OUT) != 0u) {
+        // a float render (`finish::finish_deep`): the exact sRGB curve, unbounded above SDR white
+        e = vec3<f32>(lin_to_srgb(max(r.x, 0.0)), lin_to_srgb(max(r.y, 0.0)), lin_to_srgb(max(r.z, 0.0)));
+    } else {
+        e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    }
     if (pu(F_CURVES) != 0u) {
         let e0 = e;
-        e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
+        if (hdr) {
+            // above SDR white the curves continue with slope 1 from their end point
+            e = vec3<f32>(curve_hdr(0u, e.x), curve_hdr(1u, e.y), curve_hdr(2u, e.z));
+        } else {
+            e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
+        }
         let rs = pf(F_REFINE_SAT);
         if (rs < 1.0) {
             e = refine_saturation(e0, e, rs);
@@ -554,15 +602,64 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let seed = pu(F_GRAIN_SEED);
         var g = grain_noise(gx * sc, gy * sc, seed);
         g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
-        let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
+        var lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
+        if (hdr) {
+            // (as the CPU: above SDR white the weight below would grow huge and negative)
+            lum = clamp(lum, 0.0, 1.0);
+        }
         let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
         e = e + k;
     }
+    if (pu(F_LUT) != 0u) {
+        if (hdr) {
+            // the LUT sees SDR values; the part above SDR white is carried over
+            let c = clamp(e, vec3<f32>(0.0), vec3<f32>(1.0));
+            let m = lut_apply(c);
+            e = e + (m - c) * pf(F_LUT_AMT);
+        } else {
+            let m = lut_apply(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
+            e = e + (m - e) * pf(F_LUT_AMT);
+        }
+    }
     if (warn == 1u) {
-        e = vec3<f32>(1.0, 0.0, 0.0);
+        e = vec3<f32>(PROOF_DEST_R, PROOF_DEST_G, PROOF_DEST_B);
     } else if (warn == 2u) {
-        e = vec3<f32>(0.0, 0.25, 1.0);
+        e = vec3<f32>(PROOF_DISP_R, PROOF_DISP_G, PROOF_DISP_B);
+    }
+    if (pu(F_HDR_OUT) != 0u) {
+        // linear in the output primaries, up to the peak (`OutputDepth::F32Hdr`); the fourth word
+        // marks the pixel written
+        let o = i * 4u;
+        out[o] = bitcast<u32>(clamp(srgb_to_lin(max(e.x, 0.0)), 0.0, peak));
+        out[o + 1u] = bitcast<u32>(clamp(srgb_to_lin(max(e.y, 0.0)), 0.0, peak));
+        out[o + 2u] = bitcast<u32>(clamp(srgb_to_lin(max(e.z, 0.0)), 0.0, peak));
+        out[o + 3u] = bitcast<u32>(1.0);
+        return;
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
+}
+
+// `transfer::linear_to_srgb`: exact, unbounded above 1.
+fn lin_to_srgb(v: f32) -> f32 {
+    if (v <= 0.0031308) {
+        return v * 12.92;
+    }
+    return 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+// `transfer::srgb_to_linear`: exact, unbounded above 1.
+fn srgb_to_lin(v: f32) -> f32 {
+    if (v <= 0.04045) {
+        return v / 12.92;
+    }
+    return pow((v + 0.055) / 1.055, 2.4);
+}
+
+// A tone curve continued above SDR white with slope 1 from its end point (HDR renders).
+fn curve_hdr(ch: u32, x: f32) -> f32 {
+    if (x > 1.0) {
+        return curve(ch, 1.0) + (x - 1.0);
+    }
+    return curve(ch, x);
 }

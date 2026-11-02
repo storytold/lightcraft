@@ -1,9 +1,11 @@
 use super::options::{ExportFormat, MetadataPolicy, SharpenAmount, SharpenFor};
+use super::prepare::note_encode;
 use super::watermark::{Watermark, draw_watermark, draw_watermark_deep};
 use super::{
     ChromaSubsampling, DateTime, DeepImage, DeepSamples, EncodeImage, EncodeMeta, ExportOptions, Gps, Metadata, NamedSpace, OutputDepth, OutputSpace,
     Rgba8, Samples, encode, icc,
 };
+use super::{lap, lap_clock};
 use std::borrow::Cow;
 
 /// Unsharp mask on an 8-bit image (separable box-blur approximation of a small Gaussian).
@@ -104,6 +106,7 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    note_encode();
     let img = finish_8bit(img, o);
     let space = o.effective_space();
     let profile = icc::write_named(named_space(space));
@@ -193,8 +196,11 @@ fn finish_deep<'a>(img: &'a DeepImage, o: &ExportOptions) -> Cow<'a, DeepImage> 
 /// against the base as written, so its 8-bit rounding is handed back by the map.
 pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
     use lightcraft_codecs::gainmap;
+    note_encode();
+    let mut t = lap_clock();
     let base = finish_8bit(sdr, o);
     let hdr = finish_deep(hdr, o);
+    lap("gain map: output sharpening and watermark", &mut t);
     let DeepSamples::F32(hv) = &hdr.samples else {
         return Err("HDR export needs a float HDR render".into());
     };
@@ -203,16 +209,36 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
         return Err("HDR and SDR renders differ in size".into());
     }
     let space = o.effective_space();
-    let trc = space.trc();
-    let sdr_lin: Vec<[f32; 3]> = base.data.iter().map(|p| [0, 1, 2].map(|c| trc.decode(p[c] as f32 / 255.0))).collect();
+    let sdr_lin = linear_of_8bit(&base, space.trc());
     let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
+    lap("gain map: SDR to linear", &mut t);
     let (map, gm) = gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
+    drop(sdr_lin);
+    lap("gain map: compute", &mut t);
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
-    encode_jpeg_with_limit(o, |q| gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, q, sub, &em))
+    let r = encode_jpeg_with_limit(o, |q| gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, q, sub, &em));
+    lap("gain map: JPEG encode", &mut t);
+    r
+}
+
+/// The linear values of an 8-bit image encoded with `trc` (a table of the 256 levels: the same
+/// values as decoding each sample, in a fraction of the time), rows in parallel.
+pub(super) fn linear_of_8bit(img: &Rgba8, trc: lightcraft_pipeline::OutputTrc) -> Vec<[f32; 3]> {
+    let lut: [f32; 256] = std::array::from_fn(|v| trc.decode(v as f32 / 255.0));
+    let at = |v: u8| lut.get(v as usize).copied().unwrap_or(0.0);
+    let mut out = vec![[0f32; 3]; img.data.len()];
+    let w = img.width.max(1);
+    lightcraft_raster::par_rows(&mut out, w, |y, row| {
+        let src = img.data.get(y * w..).unwrap_or(&[]);
+        for (o, p) in row.iter_mut().zip(src) {
+            *o = [at(p[0]), at(p[1]), at(p[2])];
+        }
+    });
+    out
 }
 
 /// The codecs' name of an output space (for its ICC profile).
