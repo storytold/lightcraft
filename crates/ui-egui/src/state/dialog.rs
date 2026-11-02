@@ -171,6 +171,7 @@ pub enum Dialog {
     Cull {
         reject_below: f32,
         pick_best: bool,
+        #[serde(default)]
         stack_groups: bool,
         burst_gap: f32,
         similarity: f32,
