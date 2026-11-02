@@ -49,9 +49,9 @@ pub struct Policy {
     pub export_root: Option<PathBuf>,
 }
 
-/// The comma-separated, trimmed, non-empty items of environment variable `var`.
-fn csv(var: &str) -> impl Iterator<Item = String> {
-    std::env::var(var).unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().into_iter()
+/// The comma-separated, trimmed, non-empty items of variable `var`, as `get` finds it.
+fn csv(get: &impl Fn(&str) -> Option<String>, var: &str) -> Vec<String> {
+    get(var).unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
 
 impl Policy {
@@ -62,13 +62,18 @@ impl Policy {
 
     /// Read `LIGHTCRAFT_MCP_*` from the environment.
     pub fn from_env() -> Self {
-        let safe = matches!(std::env::var("LIGHTCRAFT_MCP_SAFE").as_deref(), Ok("1") | Ok("true") | Ok("yes"));
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Read `LIGHTCRAFT_MCP_*` through `get` (the environment, or a map in tests).
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Self {
+        let safe = matches!(get("LIGHTCRAFT_MCP_SAFE").as_deref(), Some("1") | Some("true") | Some("yes"));
         let mut p = Self { safe, ..Self::default() };
         if safe {
             p.deny.extend(SAFE_DENY.iter().map(|s| s.to_string()));
             p.deny_tools.extend(SAFE_DENY_TOOLS.iter().map(|s| s.to_string()));
         }
-        for item in csv("LIGHTCRAFT_MCP_DENY") {
+        for item in csv(&get, "LIGHTCRAFT_MCP_DENY") {
             // A command id contains a dot (`library.import`, `photo.*`); anything else is a tool name.
             if item.contains('.') {
                 p.deny.insert(item);
@@ -76,11 +81,11 @@ impl Policy {
                 p.deny_tools.insert(item);
             }
         }
-        let allow: BTreeSet<String> = csv("LIGHTCRAFT_MCP_ALLOW_TOOLS").collect();
+        let allow: BTreeSet<String> = csv(&get, "LIGHTCRAFT_MCP_ALLOW_TOOLS").into_iter().collect();
         if !allow.is_empty() {
             p.allow_tools = Some(allow);
         }
-        if let Ok(root) = std::env::var("LIGHTCRAFT_MCP_EXPORT_ROOT") {
+        if let Some(root) = get("LIGHTCRAFT_MCP_EXPORT_ROOT") {
             let root = root.trim();
             if !root.is_empty() {
                 p.export_root = Some(PathBuf::from(root));
@@ -352,6 +357,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// A policy read from `vars` instead of the process environment.
+    fn from_vars(vars: &[(&str, &str)]) -> Policy {
+        Policy::from_lookup(|k| vars.iter().find(|(name, _)| *name == k).map(|(_, v)| v.to_string()))
+    }
+
+    #[test]
+    fn an_empty_allow_list_means_no_allow_list() {
+        for value in ["", "  ", " , ,"] {
+            assert_eq!(from_vars(&[("LIGHTCRAFT_MCP_ALLOW_TOOLS", value)]).allow_tools, None, "{value:?}");
+        }
+        assert!(!from_vars(&[]).is_active(), "nothing set: the policy is inert");
+    }
+
+    #[test]
+    fn a_non_empty_allow_list_lets_only_those_tools_through() {
+        let p = from_vars(&[("LIGHTCRAFT_MCP_ALLOW_TOOLS", " render_photo , query_photos ")]);
+        assert!(p.tool_allowed("render_photo").is_ok());
+        assert!(p.tool_allowed("query_photos").is_ok());
+        assert!(p.tool_allowed("export").is_err());
+        assert!(p.tool_allowed("cmd_photo_rate").is_err());
+    }
+
+    #[test]
+    fn safe_from_the_environment_denies_the_safe_set() {
+        for on in ["1", "true", "yes"] {
+            let p = from_vars(&[("LIGHTCRAFT_MCP_SAFE", on)]);
+            assert!(p.safe, "{on}");
+            assert!(SAFE_DENY.iter().all(|id| p.deny.contains(*id)), "{on}: {:?}", p.deny);
+            assert!(SAFE_DENY_TOOLS.iter().all(|t| p.deny_tools.contains(*t)), "{on}");
+        }
+        for off in ["0", "", "no"] {
+            assert!(!from_vars(&[("LIGHTCRAFT_MCP_SAFE", off)]).safe, "{off:?}");
+        }
+    }
+
+    #[test]
+    fn deny_is_split_and_sorted_into_command_ids_and_tool_names() {
+        let p = from_vars(&[("LIGHTCRAFT_MCP_DENY", " folder.*, photo.rate ,export,, clipboard ")]);
+        assert_eq!(p.deny.iter().map(String::as_str).collect::<Vec<_>>(), ["folder.*", "photo.rate"]);
+        assert_eq!(p.deny_tools.iter().map(String::as_str).collect::<Vec<_>>(), ["clipboard", "export"]);
+        // safe and deny add up
+        let p = from_vars(&[("LIGHTCRAFT_MCP_SAFE", "1"), ("LIGHTCRAFT_MCP_DENY", "photo.rate")]);
+        assert!(p.deny.contains("photo.rate") && p.deny.contains("app.quit"));
+    }
+
+    #[test]
+    fn the_export_root_is_trimmed_and_empty_means_none() {
+        assert_eq!(from_vars(&[("LIGHTCRAFT_MCP_EXPORT_ROOT", " /srv/out ")]).export_root, Some(PathBuf::from("/srv/out")));
+        assert_eq!(from_vars(&[("LIGHTCRAFT_MCP_EXPORT_ROOT", "  ")]).export_root, None);
     }
 
     #[test]
