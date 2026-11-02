@@ -509,8 +509,14 @@ impl crate::Session {
                     if let Some(info) = &r.info {
                         self.learn_as_shot_wb(id, info);
                     }
+                    // read before the insert: the cache's budget may evict this very entry, and
+                    // the header facts alone lack the decoder's camera colour
+                    let facts = match r.info {
+                        Some(_) => r.info_or(self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default()),
+                        None => self.source_info(id),
+                    };
                     self.media.insert_source(id, level, r);
-                    (image, self.source_info(id))
+                    (image, facts)
                 });
                 (id, r)
             })
