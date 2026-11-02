@@ -321,9 +321,11 @@ pub fn scene_colour_matrix(s: &DevelopSettings) -> Option<[[f32; 3]; 3]> {
 /// the user act on.
 pub const MIXER_NEUTRAL_ERROR: &str = "This spot can't be made neutral: pick a brighter, less saturated area";
 
-/// What a singular mixer refuses with: no spot can be made neutral while the rows can't be inverted,
-/// so the advice to pick elsewhere can't help — the mixer has to change or be reset (issue #2158).
-pub const MIXER_SINGULAR_ERROR: &str = "The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again";
+/// What a mixer that no spot can fix refuses with: the rows can't be inverted, or the gains'
+/// direction `M⁻¹ · [1,1,1]` has a non-positive part (so every spot's gains come out non-positive).
+/// Picking elsewhere can't help — the mixer has to change or be reset (issue #2158).
+pub const MIXER_IMPOSSIBLE_ERROR: &str =
+    "The Channel Mixer's current mix can't be made neutral at any spot: change or reset the mixer, then pick again";
 
 /// The Rec.2020 luminance weights, as the tone map reads them.
 fn luminance(c: [f64; 3]) -> f64 {
@@ -347,8 +349,8 @@ fn luminance(c: [f64; 3]) -> f64 {
 /// colour matrix and touches only dark tones, and is not modelled: a dark spot with a shadow tint
 /// set may keep a little of it. Returns the new nine values in per cent and how much the whole
 /// matrix was scaled down to fit the ±200 % sliders (1.0 when it already fitted; the point stays
-/// neutral at that lower luminance, and Exposure can compensate). `Err` ([`MIXER_SINGULAR_ERROR`])
-/// when `m` is singular, or ([`MIXER_NEUTRAL_ERROR`]) when the sample has no usable signal (a
+/// neutral at that lower luminance, and Exposure can compensate). `Err` ([`MIXER_IMPOSSIBLE_ERROR`])
+/// when no spot can fix the mixer, or ([`MIXER_NEUTRAL_ERROR`]) when the sample has no usable signal (a
 /// component ≤ 1e-6, or not a number) or the gains come out non-finite or non-positive; nothing is
 /// changed then.
 pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3], calib: Option<[[f64; 3]; 3]>, mixer_rendered: bool) -> Result<(ChannelMixer, f64), &'static str> {
@@ -357,7 +359,13 @@ pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3], calib: Option<[[f64; 3]; 3]>
         return Err(MIXER_NEUTRAL_ERROR);
     }
     let mat = Mat3(rows);
-    let u = mat.inverse().ok_or(MIXER_SINGULAR_ERROR)?.apply([1.0, 1.0, 1.0]);
+    let u = mat.inverse().ok_or(MIXER_IMPOSSIBLE_ERROR)?.apply([1.0, 1.0, 1.0]);
+    // the gains are g ∝ (M⁻¹ · 1) / c with c > 0: a non-positive (or not finite) component there
+    // refuses every spot, whatever and wherever it is — a mixer-level refusal, before the spot is
+    // even looked at
+    if u.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
+        return Err(MIXER_IMPOSSIBLE_ERROR);
+    }
     // what the spot rendered as before the pick: the calibration over the mixer — or over the
     // mixer's input, when the mixer's own section was off and the render skipped it
     let pre =

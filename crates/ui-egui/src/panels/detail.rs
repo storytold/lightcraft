@@ -1043,14 +1043,16 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
                     }
                 }
                 Err(e) => {
-                    // the maths' refusals (bad parameters) show the picker's advice — the singular
-                    // mixer its own, spot-dependent one the plain advice; anything else (a source
-                    // that could not be loaded) says its own message
+                    // the maths' refusals (bad parameters) show the picker's advice — a mixer no
+                    // spot can fix its own, spot-dependent one the plain advice; anything else (a
+                    // source that could not be loaded) says its own message
                     if e.kind == lightcraft_engine::ErrorKind::BadParams {
-                        if e.message.contains(lightcraft_engine::pipeline::colorops::MIXER_SINGULAR_ERROR) {
+                        if e.message.contains(lightcraft_engine::pipeline::colorops::MIXER_IMPOSSIBLE_ERROR) {
                             app.toast_error(
                                 ui.ctx(),
-                                crate::i18n::tr("The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again"),
+                                crate::i18n::tr(
+                                    "The Channel Mixer's current mix can't be made neutral at any spot: change or reset the mixer, then pick again",
+                                ),
                             );
                         } else {
                             app.toast_error(ui.ctx(), crate::i18n::tr("This spot can't be made neutral: pick a brighter, less saturated area"));

@@ -2297,7 +2297,7 @@
   "End": "Кінець",
   "The intro plays once before the first photo; the ending after the last photo when Repeat is off. The identity plate is the one set under Overlays. Titles fade like slides and random order never moves them.": "Вступ показується один раз перед першим фото, фінал — після останнього фото, якщо повтор вимкнено. Фірмова табличка — та, що задана в розділі «Накладання». Титри з'являються й зникають як слайди, а випадковий порядок їх не переміщує.",
   "This screen is off: turn it on under Titles to play it.": "Цей екран вимкнено: увімкніть його в розділі «Титри», щоб показувати.",
-  "The Channel Mixer's rows can't be inverted: change or reset the mixer, then pick again": "Рядки Змішувача каналів не можна інвертувати: змініть або скиньте змішувач і виберіть знову",
+  "The Channel Mixer's current mix can't be made neutral at any spot: change or reset the mixer, then pick again": "Поточне змішування Змішувача каналів не можна зробити нейтральним жодної точки: змініть або скиньте змішувач і виберіть знову",
   "This spot can't be made neutral: pick a brighter, less saturated area": "Цю точку неможливо зробити нейтральною: виберіть світлішу й менш насичену ділянку",
   "The intro screen, before the first photo.": "Вступний екран, перед першим фото.",
   "The ending screen, after the last photo.": "Завершальний екран, після останнього фото.",

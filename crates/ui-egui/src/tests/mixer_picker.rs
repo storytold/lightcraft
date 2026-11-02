@@ -157,9 +157,9 @@ fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     assert!(toast.contains("gone.png") || toast.contains("could not"), "the load failure itself: {toast}");
     assert!(!toast.contains("can't be made neutral"), "not the refusal: {toast}");
 
-    // the refusal branch still shows the advice: the flip mixer's negative gain refuses every spot
-    // as a bad parameter (the spot-dependent refusal — a singular mixer now has its own message,
-    // covered by a_singular_mixer_toasts_its_own_message_not_the_pick_elsewhere_advice)
+    // the refusal branch still shows localized advice (not the raw error message): the flip mixer's
+    // gains come out non-positive at every spot, so it answers with the mixer-level message
+    // (a_mixer_no_spot_can_fix_toasts_its_own_message_not_the_pick_elsewhere_advice)
     let gone = h.app.session.active().expect("the imported photo");
     let demo_id = h.app.session.visible_cloned().into_iter().find(|id| *id != gone).expect("a demo photo");
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [demo_id.0], "active": demo_id.0}}), T);
@@ -176,7 +176,7 @@ fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     let toast = h.app.ui.toast.clone().expect("a toast").0;
-    assert!(toast.contains("can't be made neutral"), "the advice for a refused spot: {toast}");
+    assert!(toast.contains("can't be made neutral at any spot"), "the localized advice for a refused pick: {toast}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -199,11 +199,11 @@ fn swap_button_wraps_to_its_own_line_in_a_narrow_panel() {
     assert!(swap.top() >= eye.bottom() - 2.0, "it wrapped below the eyedropper: {eye:?} vs {swap:?}");
 }
 
-/// A singular mixer refuses every spot, so the toast names the cause (the rows can't be inverted)
-/// instead of advising to pick elsewhere; a spot-dependent refusal (the flip mixer's negative gains)
-/// keeps that advice (issue #2158 review).
+/// A mixer no spot can fix — singular rows, or the review's red-takes-green mix whose gains come
+/// out non-positive everywhere — refuses with the mixer-level message instead of advising to pick
+/// elsewhere (issue #2158 review).
 #[test]
-fn a_singular_mixer_toasts_its_own_message_not_the_pick_elsewhere_advice() {
+fn a_mixer_no_spot_can_fix_toasts_its_own_message_not_the_pick_elsewhere_advice() {
     let mut h = mixer_open();
     let set = |h: &mut Headless, control: &str, value: f64| {
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T);
@@ -229,21 +229,21 @@ fn a_singular_mixer_toasts_its_own_message_not_the_pick_elsewhere_advice() {
         set(&mut h, control, value);
     }
     let toast = pick(&mut h);
-    assert!(toast.contains("can't be inverted"), "the singular cause is named: {toast}");
+    assert!(toast.contains("can't be made neutral at any spot"), "the mixer-level cause is named: {toast}");
     assert!(!toast.contains("pick a brighter"), "not the pick-elsewhere advice: {toast}");
 
-    // the flip mixer (a negative gain for every spot) keeps the spot-dependent advice
+    // the review's example: Red Output takes Red +100 and Green +100 — invertible, but the gains'
+    // direction has a zero part, so every spot is refused the same way
     for (control, value) in [
         ("channelMixer.red.red", 100.0),
-        ("channelMixer.red.green", 200.0),
-        ("channelMixer.green.red", -100.0),
-        ("channelMixer.green.green", 100.0),
+        ("channelMixer.red.green", 100.0),
+        ("channelMixer.green.red", 0.0),
         ("channelMixer.green.green", 100.0),
         ("channelMixer.blue.blue", 100.0),
     ] {
         set(&mut h, control, value);
     }
     let toast = pick(&mut h);
-    assert!(toast.contains("pick a brighter"), "the spot-dependent advice stays: {toast}");
-    assert!(!toast.contains("can't be inverted"), "not the singular message: {toast}");
+    assert!(toast.contains("can't be made neutral at any spot"), "the mixer-level message again: {toast}");
+    assert!(!toast.contains("pick a brighter"), "not the pick-elsewhere advice: {toast}");
 }
