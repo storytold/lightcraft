@@ -17,6 +17,11 @@
   Auto and the white balance selector work on the positive.
 - A raw camera scan and a JPEG scan of the same negative convert alike. Film base detection also finds the film's edge
   on uncropped camera scans with a holder, and the Film Base Selector eyedropper picks it by hand.
+- **Sync Roll** (Photo ▸ Sync Roll…, or in the Negative section with two frames or more selected) gives a whole roll
+  one film base and range, measured on every frame in the background, so frames shot alike convert alike; each frame
+  keeps it until you unlock it. It warns when the frames look scanned in different setups.
+- **Film Stocks** looks next to the conversion looks: portrait, landscape, everyday, pro and cine colour films,
+  B&W 100 / 400 / 3200 and slide, each with a grain to match.
 - Photos that aren't film scans are unchanged.
 
 ## 2026-10-30

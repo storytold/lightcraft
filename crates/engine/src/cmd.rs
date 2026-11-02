@@ -31,7 +31,7 @@ mod masks;
 mod merge;
 pub mod metadata;
 pub mod missing;
-mod negative;
+pub mod negative;
 mod organize;
 mod prefs;
 mod preset_files;

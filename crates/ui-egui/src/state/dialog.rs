@@ -300,6 +300,8 @@ pub enum Dialog {
         film: String,
         /// The panels whose edits are reset.
         reset: Vec<String>,
+        /// Sync Roll's frames (`negative.syncRoll`'s `ids`); empty: Convert on the active photo.
+        roll: Vec<u64>,
     },
     /// Confirm deleting mask effect presets.
     DeleteEffects {

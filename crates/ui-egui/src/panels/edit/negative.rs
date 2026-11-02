@@ -10,8 +10,8 @@ use crate::LightcraftApp;
 use crate::theme::Tokens;
 use crate::widgets::text_button;
 
-/// Group of the conversion presets (`crates/engine/src/presets.rs`).
-const PRESET_GROUP: &str = "Film Conversion";
+/// Groups of the conversion presets (`crates/engine/src/presets.rs`): the conversion looks, then the film stocks.
+const PRESET_GROUPS: [&str; 2] = ["Film Conversion", "Film Stocks"];
 
 /// A row inside the panel's margins that wraps onto the next line when the panel is too narrow for it (the right
 /// column can be narrow, and translations run long).
@@ -72,19 +72,28 @@ pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
         choice(app, ui, ("negativeFilm", "Film"), n.film, &FilmType::ALL, FilmType::label, |app, v| {
             if v == json!("off") { app.run("negative.reset", json!({})) } else { app.run("negative.set", json!({"film": v})) }
         });
-        // conversion presets: options only, so each frame keeps its own measured base and range
-        let presets: Vec<(String, String)> =
-            app.session.presets.iter().filter(|p| p.group == PRESET_GROUP).map(|p| (p.id.clone(), p.name.clone())).collect();
-        if !presets.is_empty() {
+        // conversion looks and film stocks: options only, so each frame keeps its own measured base and range
+        let groups: Vec<(&str, Vec<(String, String)>)> = PRESET_GROUPS
+            .iter()
+            .map(|g| (*g, app.session.presets.iter().filter(|p| p.group == *g).map(|p| (p.id.clone(), p.name.clone())).collect::<Vec<_>>()))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+        if !groups.is_empty() {
             row(ui, |ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr("Look")).font(t.font(13.0)).color(t.text_dim));
                 let r = crate::widgets::dropdown(ui, "negativePreset", crate::i18n::tr("Choose…"), t.font(14.0), t.text_label);
                 egui::Popup::menu(&r).show(|ui| {
-                    for (id, name) in &presets {
-                        if ui.selectable_label(false, name.as_str()).clicked()
-                            && let Err(e) = app.run("preset.apply", json!({"id": id}))
-                        {
-                            app.toast(ui.ctx(), e);
+                    for (k, (group, presets)) in groups.iter().enumerate() {
+                        if k > 0 {
+                            ui.separator();
+                        }
+                        ui.label(egui::RichText::new(crate::i18n::tr(group)).size(11.5).color(t.text_dim));
+                        for (id, name) in presets {
+                            if ui.selectable_label(false, name.as_str()).clicked()
+                                && let Err(e) = app.run("preset.apply", json!({"id": id}))
+                            {
+                                app.toast(ui.ctx(), e);
+                            }
                         }
                     }
                 });
@@ -107,6 +116,11 @@ pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
         row(ui, |ui| {
             ui.label(egui::RichText::new(crate::i18n::tr(status)).size(12.0).color(if warn { t.text_dim } else { t.accent }));
         });
+        if n.locked {
+            row(ui, |ui| {
+                ui.label(egui::RichText::new(crate::i18n::tr("Roll-synced: base and range shared with the roll")).size(12.0).color(t.accent));
+            });
+        }
         // the analysis measured another part of the photo than the crop shows now
         let region = d.negative_region();
         let stale = n.analysis.map(|a| match a.region {
@@ -114,7 +128,8 @@ pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
             // measured by an older LightCraft (whole scan, medians only)
             None => true,
         });
-        if stale == Some(true) {
+        // (a roll-synced frame keeps the roll's numbers whatever its crop)
+        if stale == Some(true) && !n.locked {
             row(ui, |ui| {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr("The analysis is out of date (crop changed, or an older version): Re-analyze"))
@@ -142,8 +157,21 @@ pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
                     app.toast(ui.ctx(), e);
                 }
             }
-            if text_button(ui, "negativeAnalyze", "Re-analyze", false).clicked()
+            if n.locked {
+                if text_button(ui, "negativeUnlock", "Unlock", false).clicked()
+                    && let Err(e) = app.run("negative.unlock", json!({}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            } else if text_button(ui, "negativeAnalyze", "Re-analyze", false).clicked()
                 && let Err(e) = app.run("negative.analyze", json!({}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+            // two frames or more selected: one analysis for all of them
+            if app.session.selected().len() >= 2
+                && text_button(ui, "negativeSyncRoll", "Sync Roll", false).clicked()
+                && let Err(e) = app.run("dialog.syncRoll", json!({}))
             {
                 app.toast(ui.ctx(), e);
             }

@@ -57,7 +57,7 @@ fn report(done: &[(PhotoId, DevelopSettings)]) -> Value {
         .iter()
         .map(|(id, d)| {
             let n = &d.negative;
-            json!({"id": id.0, "film": n.film, "tone": n.tone, "colorModel": n.color_model, "analysis": n.analysis})
+            json!({"id": id.0, "film": n.film, "tone": n.tone, "colorModel": n.color_model, "locked": n.locked, "analysis": n.analysis})
         })
         .collect();
     json!({"photos": photos})
@@ -99,14 +99,21 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(pr) = &preset {
             *d = lightcraft_develop::apply_partial(d, &pr.settings, 1.0);
         }
-        if !d.negative.converts() || p.get("film").is_some() {
+        let was_converted = d.negative.converts();
+        if !was_converted || p.get("film").is_some() {
             d.negative.film = film;
         }
         d.set_section_enabled("negative", true);
-        // keep a base sampled from the film edge; measure everything else again
-        let sampled = d.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
-        d.negative.analysis = Some(analysis_of(s, id, d, sampled, C)?);
-        reset_wb(d);
+        // a roll-synced frame keeps the roll's analysis; otherwise keep a base sampled from the film edge and measure
+        // everything else again
+        if !(d.negative.locked && d.negative.analysis.is_some_and(|a| a.is_valid())) {
+            let sampled = d.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
+            d.negative.analysis = Some(analysis_of(s, id, d, sampled, C)?);
+        }
+        // (a converted photo's white balance was set on the positive: kept)
+        if !was_converted {
+            reset_wb(d);
+        }
         Ok(())
     })?;
     let mut out = report(&done);
@@ -139,6 +146,10 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let done = commit_each(s, &ids, C, "Analyze Negative", |s, id, d| {
         if !d.negative.converts() {
             return Err(bad(C, format!("photo {} is not converted (negative.convert first)", id.0)));
+        }
+        // a roll-synced frame keeps the roll's numbers (negative.unlock first)
+        if d.negative.locked {
+            return Ok(());
         }
         let sampled =
             d.negative.analysis.filter(|a| keep_sampled && a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
@@ -176,6 +187,8 @@ fn sample_base(s: &mut Session, p: &Value) -> Result<Value> {
         }
         d.negative.analysis =
             Some(lightcraft_pipeline::negative::analyze(&src, &d.negative, d.negative_region(), Some((base, r))).map_err(|e| bad(C, e))?);
+        // a base picked on this frame makes it its own, no longer the roll's
+        d.negative.locked = false;
         Ok(())
     })?;
     Ok(report(&done))
@@ -199,6 +212,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
                 // a range measured for another film type doesn't fit this one: measured again at render time
                 // (negative.analyze stores it)
                 d.negative.analysis = d.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled && f == FilmType::ColorNegative);
+                d.negative.locked = false;
                 if !d.negative.converts() {
                     reset_wb(d);
                 }
@@ -225,6 +239,160 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(report(&done))
+}
+
+fn unlock(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "negative.unlock";
+    let ids = targets(s, p, C)?;
+    let done = commit_each(s, &ids, C, "Unlock Roll Analysis", |_, _, d| {
+        d.negative.locked = false;
+        Ok(())
+    })?;
+    Ok(report(&done))
+}
+
+/// What a roll sync needs from the session: the frames (the selection or `ids`, at least two), the film type, each
+/// frame's settings and a way to read its source off the UI thread. Made by [`roll_plan`], measured by
+/// [`roll_measure`] (on a worker, in the app), written by [`roll_apply`].
+pub struct RollPlan {
+    pub frames: Vec<RollFrame>,
+    pub film: FilmType,
+    /// Reset the edits made on the negative on frames that weren't converted yet (`keepEdits` false).
+    pub reset_edits: bool,
+}
+
+/// One frame of a [`RollPlan`].
+pub struct RollFrame {
+    pub id: PhotoId,
+    /// The frame's settings when the sync was planned (its crop, border and any sampled base are measured).
+    pub settings: DevelopSettings,
+    pub source: crate::media::SourceRef,
+}
+
+/// Plan `negative.syncRoll` for `p` (`ids?`, `film?`, `keepEdits?`).
+pub fn roll_plan(s: &mut Session, p: &Value) -> Result<RollPlan> {
+    const C: &str = "negative.syncRoll";
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<PhotoId> = match photo_ids(p, C)? {
+        Some(ids) => ids,
+        None => s.selected(),
+    }
+    .into_iter()
+    .filter(|id| seen.insert(*id))
+    .collect();
+    if ids.len() < 2 {
+        return Err(bad(C, "select at least two frames of the roll"));
+    }
+    let asked = match enum_param::<FilmType>(p, "film", C)? {
+        Some(f @ (FilmType::ColorNegative | FilmType::BwNegative | FilmType::Slide)) => Some(f),
+        None => None,
+        Some(_) => return Err(bad(C, "`film` must be colorNegative, bwNegative or slide")),
+    };
+    // the film type: asked for, else the active frame's (or the first converted frame's), else colour negative
+    let from_frames = s
+        .active()
+        .into_iter()
+        .chain(ids.iter().copied())
+        .filter_map(|id| s.develop_of(id))
+        .map(|d| d.negative.film)
+        .find(|f| matches!(f, FilmType::ColorNegative | FilmType::BwNegative | FilmType::Slide));
+    let film = asked.or(from_frames).unwrap_or(FilmType::ColorNegative);
+    let mut frames = Vec::with_capacity(ids.len());
+    for id in ids {
+        let photo = s.catalog.photo(id).cloned().ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
+        let mut settings = (*s.develop_of(id).unwrap_or_default()).clone();
+        settings.negative.film = film;
+        let source = s.media.source_ref(&photo, SourceLevel::Preview);
+        frames.push(RollFrame { id, settings, source });
+    }
+    Ok(RollPlan { frames, film, reset_edits: !p.get("keepEdits").and_then(Value::as_bool).unwrap_or(false) })
+}
+
+/// Read every frame of `plan` and measure the roll (off the UI thread in the app), calling `progress(done)` after
+/// each frame; stops with an error when `cancel` is set. A frame that can't be read or measured is left out (its id
+/// and why come back in the list); an error when fewer than two frames could be measured.
+pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, progress: &dyn Fn(usize)) -> std::result::Result<RollMeasured, String> {
+    use lightcraft_pipeline::negative::{analyze_roll, base_spread, measure_frame};
+    let mut measured = Vec::with_capacity(plan.frames.len());
+    let mut skipped = Vec::new();
+    for (i, f) in plan.frames.iter().enumerate() {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("stopped".into());
+        }
+        // a base sampled on a frame counts for the roll
+        let sampled = f.settings.negative.analysis.filter(|a| a.base_source == BaseSource::Sampled).and_then(|a| a.base_rect.map(|r| (a.base, r)));
+        let m = f.source.load_source().and_then(|src| measure_frame(&src.image, &f.settings.negative, f.settings.negative_region(), sampled));
+        match m {
+            Ok(m) => measured.push(m),
+            Err(e) => skipped.push((f.id, e)),
+        }
+        progress(i + 1);
+    }
+    if measured.len() < 2 {
+        return Err(format!("only {} of {} frames could be measured", measured.len(), plan.frames.len()));
+    }
+    let analysis = analyze_roll(plan.film, &measured)?;
+    let spread = base_spread(&measured);
+    let mixed = (spread > MIXED_SCANS).then(|| {
+        format!("the film bases found on these frames differ by {:.0} %: they look scanned differently (light, exposure or scanner), so one analysis may not fit them all", (spread - 1.0) * 100.0)
+    });
+    Ok(RollMeasured { analysis, skipped, mixed })
+}
+
+/// Largest ratio between film bases found on a roll's frames before a sync warns that they look scanned differently.
+const MIXED_SCANS: f32 = 1.15;
+
+/// What [`roll_measure`] found.
+pub struct RollMeasured {
+    pub analysis: FilmAnalysis,
+    /// Frames that couldn't be read or measured, and why (left out of the roll).
+    pub skipped: Vec<(PhotoId, String)>,
+    /// Set when the frames' film bases disagree (see `lightcraft_pipeline::negative::base_spread`).
+    pub mixed: Option<String>,
+}
+
+/// Write the roll's analysis `roll` to every measured frame of `plan` (each keeps its own region), locked, as one undo
+/// step; frames not yet converted are converted (their edits made on the negative reset unless the plan keeps them).
+pub fn roll_apply(s: &mut Session, plan: RollPlan, measured: RollMeasured) -> Result<Value> {
+    const C: &str = "negative.syncRoll";
+    let RollMeasured { analysis: roll, skipped, mixed } = measured;
+    let ids: Vec<PhotoId> = plan.frames.iter().map(|f| f.id).filter(|id| !skipped.iter().any(|(k, _)| k == id)).collect();
+    let mut reset: Vec<&'static str> = Vec::new();
+    let done = commit_each(s, &ids, C, "Sync Roll", |_, _, d| {
+        if !d.negative.converts() {
+            if plan.reset_edits {
+                for name in d.negative_conflicts() {
+                    if !reset.contains(&name) {
+                        reset.push(name);
+                    }
+                }
+                d.reset_negative_conflicts();
+            }
+            reset_wb(d);
+        }
+        d.negative.film = plan.film;
+        d.set_section_enabled("negative", true);
+        d.negative.analysis = Some(FilmAnalysis { region: Some(d.negative_region()), ..roll });
+        d.negative.locked = true;
+        Ok(())
+    })?;
+    let mut out = report(&done);
+    if let Some(o) = out.as_object_mut() {
+        o.insert("reset".into(), json!(reset));
+        o.insert("skipped".into(), json!(skipped.iter().map(|(id, why)| json!({"id": id.0, "error": why})).collect::<Vec<_>>()));
+        if let Some(w) = mixed {
+            o.insert("warning".into(), json!(w));
+        }
+    }
+    Ok(out)
+}
+
+/// `negative.syncRoll` in place (the app reads the frames in the background unless `wait`).
+fn sync_roll(s: &mut Session, p: &Value) -> Result<Value> {
+    let plan = roll_plan(s, p)?;
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let measured = roll_measure(&plan, &never, &|_| ()).map_err(|e| bad("negative.syncRoll", e))?;
+    roll_apply(s, plan, measured)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -288,6 +456,30 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{film?: off|colorNegative|bwNegative|slide, tone?: linear|soft|standard|hard, colorModel?: none|neutral|warm|cool, ids?: [photo]} — sliders are negative.* controls (develop.set)",
                 has_active,
                 set
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "negative.syncRoll",
+                "Sync Roll",
+                [],
+                None,
+                "{ids?: [photo] (default: the selection, at least two), film?: colorNegative|bwNegative|slide, keepEdits?: bool, wait?: bool} — one analysis for the whole roll: the film base (sampled, found on the film edges, or the clearest estimate) and the density range measured on every frame together, written to every frame and locked (Re-analyze leaves it until negative.unlock); frames not yet converted are converted (edits made on the negative reset unless keepEdits). The app reads the frames in the background, with a row in the activity stack, unless wait; the reply lists `reset` and `skipped` frames",
+                has_active,
+                sync_roll
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "negative.unlock",
+                "Unlock Roll Analysis",
+                [],
+                None,
+                "{ids?: [photo]} — a roll-synced frame becomes its own again: Re-analyze then measures it alone (its numbers are kept until then)",
+                has_active,
+                unlock
             )
         },
         CommandSpec {

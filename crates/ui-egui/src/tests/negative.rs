@@ -57,3 +57,27 @@ fn convert_without_edits_converts_at_once_and_the_eyedropper_is_a_tool() {
     req(&mut h, "engine.execute", json!({"command": "tool.filmBase", "params": {}}));
     assert_eq!(h.app.ui.tool, "filmBase");
 }
+
+#[test]
+fn sync_roll_asks_then_measures_the_frames_in_the_background() {
+    let mut h = edit_panel();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(3).map(|p| p.id.0).collect();
+    req(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids, "active": ids[0]}}));
+    req(&mut h, "engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.6, "ids": [ids[1]]}}));
+    req(&mut h, "engine.execute", json!({"command": "dialog.syncRoll", "params": {}}));
+    h.step();
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::ConvertNegative { roll, .. }) if roll == &ids), "{:?}", h.app.ui.dialog);
+    req(&mut h, "ui.dialog.confirm", json!({}));
+    // the frames are read on a worker, with a row in the activity stack, then written as one step
+    let rows = h.app.session.activity.list();
+    assert!(rows.iter().any(|r| r.kind == "negativeRoll" && r.label == crate::negative_roll::LABEL), "{rows:?}");
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    assert!(h.app.session.activity.list().iter().all(|r| r.kind != "negativeRoll"), "the row is gone");
+    let first = h.app.session.develop_of(lightcraft_engine::catalog::PhotoId(ids[0])).unwrap().negative.analysis;
+    for id in &ids {
+        let n = h.app.session.develop_of(lightcraft_engine::catalog::PhotoId(*id)).unwrap().negative;
+        assert!(n.locked && n.converts(), "frame {id}");
+        assert_eq!(n.analysis.map(|a| a.hi), first.map(|a| a.hi), "one analysis for the roll");
+    }
+    assert_eq!(h.app.session.develop_of(lightcraft_engine::catalog::PhotoId(ids[1])).unwrap().light.exposure, 0.0, "edits on the negative reset");
+}

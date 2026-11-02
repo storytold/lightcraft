@@ -123,3 +123,106 @@ fn keep_edits_converts_without_resetting() {
     assert_eq!(r["reset"], json!([]));
     assert_eq!(s.develop_of(s.active().unwrap()).unwrap().light.exposure, 0.8);
 }
+
+fn three_frames(s: &Session) -> Vec<u64> {
+    s.catalog.photos().take(3).map(|p| p.id.0).collect()
+}
+
+#[test]
+fn sync_roll_shares_one_locked_analysis_across_the_frames() {
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7, "ids": [ids[1]]})).unwrap();
+    let r = s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
+    assert!(r["reset"].as_array().unwrap().contains(&json!("Light")), "{r}");
+    let frames: Vec<_> = ids.iter().map(|id| s.develop_of(lightcraft_catalog::PhotoId(*id)).unwrap().negative).collect();
+    for n in &frames {
+        assert!(n.locked && n.film == FilmType::ColorNegative);
+        let (a, b) = (n.analysis.unwrap(), frames[0].analysis.unwrap());
+        assert_eq!((a.base, a.lo, a.hi, a.tones), (b.base, b.lo, b.hi, b.tones), "one analysis for the roll");
+        assert!(a.region.is_some());
+    }
+    // one undo step
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(ids.iter().all(|id| !s.develop_of(lightcraft_catalog::PhotoId(*id)).unwrap().negative.converts()));
+    s.execute("edit.redo", &json!({})).unwrap();
+    // Re-analyze and Convert leave a locked frame's numbers alone; Unlock frees it
+    let first = lightcraft_catalog::PhotoId(ids[0]);
+    s.execute("library.select", &json!({"ids": [ids[0]], "active": ids[0]})).unwrap();
+    let before = neg(&s).analysis;
+    s.execute("negative.analyze", &json!({})).unwrap();
+    s.execute("negative.convert", &json!({})).unwrap();
+    assert_eq!(neg(&s).analysis, before);
+    s.execute("negative.unlock", &json!({})).unwrap();
+    assert!(!neg(&s).locked);
+    s.execute("negative.analyze", &json!({})).unwrap();
+    assert_ne!(neg(&s).analysis.map(|a| a.hi), before.map(|a| a.hi), "measured alone once unlocked");
+    // a base picked on a frame makes it its own
+    s.execute("negative.unlock", &json!({"ids": [ids[1]]})).unwrap();
+    let _ = first;
+}
+
+#[test]
+fn sync_roll_needs_two_frames_and_a_picked_base_unlocks() {
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    assert!(s.execute("negative.syncRoll", &json!({"ids": [ids[0]], "wait": true})).is_err());
+    assert!(s.execute("negative.syncRoll", &json!({"ids": [ids[0], ids[0]], "wait": true})).is_err(), "duplicates are one frame");
+    assert!(s.execute("negative.syncRoll", &json!({"ids": ids, "film": "kodachrome", "wait": true})).is_err());
+    s.execute("negative.syncRoll", &json!({"ids": ids, "film": "bwNegative", "wait": true})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[2]], "active": ids[2]})).unwrap();
+    assert_eq!(neg(&s).film, FilmType::BwNegative);
+    s.execute("negative.sampleBase", &json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 0.1, "y1": 0.05}})).unwrap();
+    assert!(!neg(&s).locked, "a base picked on one frame makes it its own");
+}
+
+#[test]
+fn converting_again_keeps_the_white_balance_set_on_the_positive() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    s.execute("develop.wb", &json!({"mode": "custom", "temp": 7200, "tint": 6})).unwrap();
+    s.execute("negative.convert", &json!({"film": "colorNegative"})).unwrap();
+    let wb = s.develop_of(s.active().unwrap()).unwrap().wb;
+    assert_eq!((wb.temp, wb.tint), (7200.0, 6.0));
+}
+
+#[test]
+fn stock_presets_set_a_look_and_keep_the_frame_s_numbers() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    let measured = neg(&s).analysis;
+    let stocks: Vec<_> = s.presets.iter().filter(|p| p.group == "Film Stocks").cloned().collect();
+    assert!(stocks.len() >= 10);
+    for p in &stocks {
+        assert!(p.settings["negative"].get("analysis").is_none() && p.settings["negative"].get("locked").is_none(), "{}", p.id);
+        s.execute("preset.apply", &json!({"id": p.id})).unwrap();
+        let n = neg(&s);
+        assert!(n.converts(), "{}", p.id);
+        assert_eq!(n.analysis, measured, "{} kept the measured base and range", p.id);
+        let d = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(d.treatment == lightcraft_develop::Treatment::Bw, n.film == FilmType::BwNegative, "{}: B&W film, B&W treatment", p.id);
+        assert!(d.grain.amount > 0.0, "{} sets a grain", p.id);
+    }
+}
+
+#[test]
+fn mixed_scans_still_sync_but_warn() {
+    use lightcraft_pipeline::negative::{FrameMeasure, base_spread};
+    let frame = |b: [f32; 3], src: lightcraft_develop::BaseSource| FrameMeasure {
+        px: vec![[0.1; 3]; 4],
+        base: b,
+        base_source: src,
+        base_rect: None,
+        region: lightcraft_geom::Rect::UNIT,
+    };
+    use lightcraft_develop::BaseSource::{Detected, Estimated};
+    assert_eq!(base_spread(&[frame([0.6, 0.5, 0.3], Detected)]), 1.0);
+    assert!(base_spread(&[frame([0.6, 0.5, 0.3], Detected), frame([0.62, 0.51, 0.31], Detected)]) < 1.15, "one setup");
+    assert!(base_spread(&[frame([0.67, 0.65, 0.57], Detected), frame([0.31, 0.30, 0.24], Detected)]) > 2.0, "two setups");
+    assert_eq!(base_spread(&[frame([0.6, 0.5, 0.3], Detected), frame([0.2, 0.2, 0.2], Estimated)]), 1.0, "estimates don't count");
+    // the demo frames carry no film edge: no warning
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    let r = s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
+    assert!(r.get("warning").is_none(), "{r}");
+}

@@ -322,6 +322,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::SaveEffect { .. } => "New Effect Preset",
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
+        Dialog::ConvertNegative { roll, .. } if !roll.is_empty() => "Sync Roll",
         Dialog::ConvertNegative { .. } => "Convert Negative",
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
         Dialog::DeleteEffects { .. } => "Delete Effect Presets",
@@ -422,6 +423,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConvertNegative { roll, .. } if !roll.is_empty() => "Sync Roll",
         Dialog::ConvertNegative { .. } => "Convert",
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
@@ -1809,9 +1811,17 @@ fn delete_keyword_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the ConvertNegative dialog: which edits the conversion resets, and why.
 fn convert_negative_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::ConvertNegative { reset, .. } = dlg else { return };
+    let Dialog::ConvertNegative { reset, roll, .. } = dlg else { return };
     let names: Vec<&str> = reset.iter().map(|n| crate::i18n::tr(n)).collect();
-    ui.label(crate::i18n::tr_format!("Converting resets the edits made on the negative: {list}.", list = names.join(", ")));
+    if roll.is_empty() {
+        ui.label(crate::i18n::tr_format!("Converting resets the edits made on the negative: {list}.", list = names.join(", ")));
+    } else {
+        ui.label(crate::i18n::tr_format!(
+            "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.",
+            n = roll.len(),
+            list = names.join(", ")
+        ));
+    }
     ui.label(
         egui::RichText::new(crate::i18n::tr(
             "After the conversion every slider works on the positive, so values set for the negative would act the wrong way. Crop, rotation, lens corrections, retouching, detail, grain and vignette are kept. Edit → Undo brings them back.",

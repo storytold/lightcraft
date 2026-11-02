@@ -154,6 +154,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id == "negative.syncRoll" {
+        // the frames are read in the background (a raw's decode takes a second or more)
+        return crate::negative_roll::command(app, p);
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
@@ -1098,6 +1102,27 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             }
             Ok(Value::Null)
         }
+        "dialog.syncRoll" => {
+            // every selected frame; frames not yet converted lose their edits made on the negative: ask first
+            let ids: Vec<u64> = app.session.selected().iter().map(|id| id.0).collect();
+            if ids.len() < 2 {
+                return Some(Err(crate::i18n::tr("Select at least two frames of the roll").to_string()));
+            }
+            let reset: Vec<String> = match app.session.execute("negative.conflicts", &json!({"ids": ids})) {
+                Ok(r) => r["reset"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if reset.is_empty() {
+                return Some(app.run("negative.syncRoll", json!({"ids": ids})));
+            }
+            let film = app.session.active().and_then(|id| app.session.develop_of(id)).map(|d| d.negative.film).filter(|f| f.label() != "Off");
+            let film = film
+                .and_then(|f| serde_json::to_value(f).ok())
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| "colorNegative".into());
+            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: ids });
+            Ok(Value::Null)
+        }
         "dialog.convertNegative" => {
             let film = p.get("film").cloned().unwrap_or(json!("colorNegative"));
             let reset: Vec<String> = match app.session.execute("negative.conflicts", &json!({})) {
@@ -1108,7 +1133,7 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Some(app.run("negative.convert", json!({"film": film})));
             }
             let film = film.as_str().unwrap_or("colorNegative").to_string();
-            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset });
+            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: Vec::new() });
             Ok(Value::Null)
         }
         "dialog.newFolder" => {

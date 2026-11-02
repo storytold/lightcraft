@@ -167,6 +167,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("section.negative", "Negative", None, ""),
     // {film?}: negative.convert, asking first when it would reset edits made on the negative (negative.conflicts)
     ("dialog.convertNegative", "Convert Negative…", None, "Photo"),
+    // negative.syncRoll on the selection (two frames or more), asking first when it would reset edits
+    ("dialog.syncRoll", "Sync Roll…", None, "Photo"),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),

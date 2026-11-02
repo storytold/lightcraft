@@ -22,14 +22,22 @@ Built against this plan (milestones N0–N3, N5 and N6 in full or in part; N4 an
   camera scans in a holder (tiles that are uniform, clearer than the picture in every channel, one colour along the
   edge and shaped like an edge; light clipped at the scan's own white level is rejected); else estimated, and the
   panel says so. Range measured inside the crop (or the frame the found edge outlines); per-channel balance at nine
-  tone levels; auto exposure anchors the frame's median at mid grey. Roll analysis / sync is not built.
+  tone levels; auto exposure anchors the frame's median at mid grey.
+- **Roll sync (N2):** `negative.syncRoll` (Photo ▸ Sync Roll…, or Sync Roll in the panel with two frames or more
+  selected) reads every frame on a worker with a row in the activity stack, pools them into one analysis (a sampled
+  base if any frame has one, else the median of the bases found on film edges, else the clearest estimate; range and
+  balance from every frame's pixels together) and writes it to every frame, locked, as one undo step. Re-analyze and
+  Convert leave a locked frame's numbers alone until `negative.unlock`; picking a base on a frame unlocks it. Frames
+  whose film bases differ by more than 15 % look scanned differently, and the sync says so.
 - **Commands (N3):** `negative.convert`, `negative.conflicts`, `negative.analyze`, `negative.sampleBase`,
-  `negative.set`, `negative.reset`; CLI and MCP get them as usual.
+  `negative.set`, `negative.syncRoll`, `negative.unlock`, `negative.reset`; CLI and MCP get them as usual.
 - **UI (N5):** the Negative section (at the top for converted photos, last otherwise), Film Base Selector
   eyedropper (`tool.filmBase`), Re-analyze hint when the crop changed, and a dialog before Convert resets edits made
   on the negative (`dialog.convertNegative`, Photo ▸ Convert Negative…). No analysis-area overlay; no batch convert.
-- **Presets (N6):** nine Film Conversion presets that carry options only, never a frame's base or range. Apply on
-  import is not built.
+- **Presets (N6):** nine Film Conversion presets and eleven Film Stocks looks (portrait, landscape, everyday, pro,
+  cine tungsten, B&W 100 / 400 / 3200, slide), our own slider settings with a matching grain, named by kind and
+  character rather than by trademark (no maker's data). All carry options only, never a frame's base or range, and
+  set the treatment to match the film. Apply on import is not built.
 - **After conversion** every slider, Auto, Auto White Balance and the white balance selector work on the positive;
   white balance is relative (as converted = neutral); converted photos use the scene tone map (raw and rendered
   scans of one negative convert alike) and skip the camera's own local tone map.

@@ -282,11 +282,75 @@ fn tile_samples(src: &Rgb32f, r: Rect, out: &mut Vec<[f32; 3]>) {
 
 /// Measure the film base and the density range of `src` for `neg`'s film type inside `region` (normalised source
 /// coordinates: the crop, [`DevelopSettings::negative_region`]), leaving out `neg.border` % of each of its edges for
-/// the range, so the holder, the rebate and light leaks around the picture don't count. The base is, in order: `sampled` (a colour and the region it came from,
-/// `negative.sampleBase`), the film's unexposed edge found in the scan ([`detect_base`]), or an estimate from the
-/// clearest part of the picture. A measured base sets the black point's colour: the film's own clear base is neutral
-/// black. An error when there is nothing to measure.
+/// the range, so the holder, the rebate and light leaks around the picture don't count. The base is, in order:
+/// `sampled` (a colour and the region it came from, `negative.sampleBase`), the film's unexposed edge found in the
+/// scan ([`detect_base`]), or an estimate from the clearest part of the picture. A measured base sets the black
+/// point's colour: the film's own clear base is neutral black. An error when there is nothing to measure.
 pub fn analyze(src: &Rgb32f, neg: &Negative, region: Rect, sampled: Option<([f64; 3], Rect)>) -> Result<FilmAnalysis, String> {
+    let m = measure_frame(src, neg, region, sampled)?;
+    let a = range_of(neg.film, &m.px, m.base, m.base_source, m.base_rect)?;
+    Ok(FilmAnalysis { region: Some(m.region), ..a })
+}
+
+/// Most picture samples one frame gives a roll analysis, so every frame weighs about the same.
+const ROLL_SAMPLES: usize = 40_000;
+
+/// One analysis for a whole roll (`frames`, each measured by [`measure_frame`]): the same film base and density range
+/// for every frame, so frames shot alike convert alike, as a lab scans a roll. The base is a sampled one if any frame
+/// has it, else the per-channel median of the bases found on film edges, else the clearest estimate (the roll's
+/// least dense film); the range and balance are measured on every frame's pixels together. Its region is `None`: the
+/// caller stores each frame's own. An error when no frame was measured.
+pub fn analyze_roll(film: FilmType, frames: &[FrameMeasure]) -> Result<FilmAnalysis, String> {
+    let first = frames.first().ok_or("no frames to analyse")?;
+    let pick = |source: BaseSource| frames.iter().filter(move |f| f.base_source == source);
+    let (base, base_source, base_rect) = if let Some(f) = pick(BaseSource::Sampled).next() {
+        (f.base, BaseSource::Sampled, f.base_rect)
+    } else if pick(BaseSource::Detected).next().is_some() {
+        let bases: Vec<[f32; 3]> = pick(BaseSource::Detected).map(|f| f.base).collect();
+        (median(&bases), BaseSource::Detected, pick(BaseSource::Detected).next().and_then(|f| f.base_rect))
+    } else {
+        let b = frames.iter().fold([0.0f32; 3], |m, f| [0, 1, 2].map(|i| m[i].max(f.base[i])));
+        (b, first.base_source, None)
+    };
+    let mut pooled: Vec<[f32; 3]> = Vec::with_capacity(frames.len().saturating_mul(ROLL_SAMPLES));
+    for f in frames {
+        let step = f.px.len().div_ceil(ROLL_SAMPLES).max(1);
+        pooled.extend(f.px.iter().step_by(step));
+    }
+    range_of(film, &pooled, base, base_source, base_rect)
+}
+
+/// How far apart the film bases measured on a roll's film edges are: the largest ratio, over the channels, of the
+/// clearest to the densest base among the frames whose base was found or sampled (1 when fewer than two were). One
+/// roll scanned in one setup measures about the same base on every frame; a much larger spread means the frames were
+/// scanned differently (light, exposure, scanner), and one analysis won't fit them all.
+pub fn base_spread(frames: &[FrameMeasure]) -> f32 {
+    let bases: Vec<[f32; 3]> = frames.iter().filter(|f| f.base_source.measured()).map(|f| f.base).collect();
+    if bases.len() < 2 {
+        return 1.0;
+    }
+    (0..3)
+        .map(|i| {
+            let (lo, hi) = bases.iter().fold((f32::INFINITY, 0.0f32), |(lo, hi), b| (lo.min(b[i]), hi.max(b[i])));
+            if lo > 0.0 { hi / lo } else { f32::INFINITY }
+        })
+        .fold(1.0, f32::max)
+}
+
+/// One frame's measurements for an analysis ([`measure_frame`]): its picture's pixels and its film base.
+#[derive(Clone, Debug)]
+pub struct FrameMeasure {
+    /// Sampled picture pixels (inside the frame, its border left out), linear.
+    pub px: Vec<[f32; 3]>,
+    pub base: [f32; 3],
+    pub base_source: BaseSource,
+    pub base_rect: Option<Rect>,
+    /// The part of the source measured (the crop, or the whole scan).
+    pub region: Rect,
+}
+
+/// [`analyze`]'s first half: the frame's picture pixels and its film base, for one frame or a roll.
+pub fn measure_frame(src: &Rgb32f, neg: &Negative, region: Rect, sampled: Option<([f64; 3], Rect)>) -> Result<FrameMeasure, String> {
     if !neg.converts() {
         return Err("no film type chosen".into());
     }
@@ -343,6 +407,12 @@ pub fn analyze(src: &Rgb32f, neg: &Negative, region: Rect, sampled: Option<([f64
     if base.iter().any(|b| !(b.is_finite() && *b > 0.0)) {
         return Err("could not find the film base".into());
     }
+    Ok(FrameMeasure { px, base, base_source, base_rect, region })
+}
+
+/// Each channel's black point, white point, median and tone levels of the picture pixels `px` (densities of `film`
+/// over `base`), as a [`FilmAnalysis`] without a region. A measured base gives one black point for every channel.
+fn range_of(film: FilmType, px: &[[f32; 3]], base: [f32; 3], base_source: BaseSource, base_rect: Option<Rect>) -> Result<FilmAnalysis, String> {
     let d: Vec<[f32; 3]> = px.iter().map(|p| density(film, *p, base)).collect();
     let mut ch: Vec<f32> = Vec::with_capacity(d.len());
     let mut lo = [0.0f32; 3];
@@ -385,7 +455,7 @@ pub fn analyze(src: &Rgb32f, neg: &Negative, region: Rect, sampled: Option<([f64
         tones: Some(tones),
         base_source,
         base_rect,
-        region: Some(region),
+        region: None,
     })
 }
 
@@ -835,5 +905,35 @@ mod tests {
         let a = analyze(&img, &s.negative, s.negative_region(), None).unwrap();
         assert_eq!(a.base_source, BaseSource::Detected, "{a:?}");
         assert!((a.base[2] - f64::from(BASE[2])).abs() < 1e-3, "base {:?}", a.base);
+    }
+
+    #[test]
+    fn a_roll_shares_the_base_found_on_one_frame_and_pools_the_range() {
+        let n = settings(FilmType::ColorNegative).negative;
+        // frame A shows the rebate; frame B is a darker scene with none (its clearest estimate is denser film)
+        let a = negative(300, 200, 0.02);
+        let mut b = negative(300, 200, 0.0);
+        for p in &mut b.data {
+            *p = p.map(|c| c * 0.6);
+        }
+        let ma = measure_frame(&a, &n, Rect::UNIT, None).unwrap();
+        let mb = measure_frame(&b, &n, Rect::UNIT, None).unwrap();
+        assert_eq!((ma.base_source, mb.base_source), (BaseSource::Detected, BaseSource::Estimated));
+        let roll = analyze_roll(FilmType::ColorNegative, &[ma.clone(), mb.clone()]).unwrap();
+        assert_eq!(roll.base_source, BaseSource::Detected);
+        assert!(roll.base.iter().zip(&BASE).all(|(r, b)| (r - f64::from(*b)).abs() < 1e-3), "{:?}", roll.base);
+        // the pooled range reaches as far as either frame's own
+        let alone = |m: &FrameMeasure| range_of(FilmType::ColorNegative, &m.px, m.base, BaseSource::Detected, None).unwrap();
+        let (ra, rb) = (alone(&ma), analyze(&b, &n, Rect::UNIT, Some((roll.base, Rect::UNIT))).unwrap());
+        for i in 0..3 {
+            assert!(
+                roll.hi[i] >= ra.hi[i].min(rb.hi[i]) - 1e-6 && roll.hi[i] <= ra.hi[i].max(rb.hi[i]) + 1e-6,
+                "hi {:?} vs {:?} / {:?}",
+                roll.hi,
+                ra.hi,
+                rb.hi
+            );
+        }
+        assert!(analyze_roll(FilmType::ColorNegative, &[]).is_err());
     }
 }

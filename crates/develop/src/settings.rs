@@ -1419,6 +1419,10 @@ pub struct Negative {
     /// Measured base and range; `None`: measured from the photo at render time (the same numbers
     /// `negative.analyze` would store).
     pub analysis: Option<FilmAnalysis>,
+    /// Roll-synced (`negative.syncRoll`): the analysis is the roll's, shared with its other frames, and Re-analyze
+    /// leaves it alone until `negative.unlock`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
     /// Border of the frame left out of the analysis (holder, rebate, light leaks), % of each edge.
     pub border: f64,
     /// Contrast of the conversion (−100..100): scales the stops the density range spans.
@@ -1449,6 +1453,7 @@ impl Default for Negative {
             tone: FilmTone::Standard,
             color_model: FilmColorModel::Warm,
             analysis: None,
+            locked: false,
             border: 5.0,
             contrast: 0.0,
             brightness: 0.0,
