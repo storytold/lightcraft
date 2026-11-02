@@ -188,7 +188,9 @@ fn gpu_helper_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         return;
     }
     let in_use = gpu::card_in_use();
-    let editing = editing_card_key(&cards, &app.ui.settings.gpu_card, in_use.as_deref());
+    // the card the engine picks (the variable, keys in any case: review of PR #3506), else read
+    // from the list here
+    let editing = gpu::editing_card_key(&app.ui.settings.gpu_card).or_else(|| editing_card_key(&cards, &app.ui.settings.gpu_card, in_use.as_deref()));
     let opts = gpu_helper_choices(&cards, editing.as_deref(), &saved);
     let mut at = opts.iter().position(|(k, _)| *k == saved).unwrap_or(0);
     row(ui, t, crate::i18n::tr("Second graphics card"), |ui| {

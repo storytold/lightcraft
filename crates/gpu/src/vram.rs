@@ -194,9 +194,9 @@ fn sysfs_memory(cards: impl Iterator<Item = SysfsCard>, vendor: u32, device: u32
 /// The memory of adapter `name` in `reg query … /s` output (several queries' outputs one after
 /// another: a subkey's values are gathered under its path): the subkey whose `DriverDesc` is the
 /// name, only when every subkey with that name reports one size (two cards of one model can't be
-/// told apart by name; `None` rather than another card's size); when none has the name, the one
-/// adapter that reports a size, if there is only one (never another card's on a computer with
-/// several). `HardwareInformation.qwMemorySize` is a QWORD;
+/// told apart by name; `None` rather than another card's size); when none has the name, the size
+/// only when the listing has a single adapter (never another card's on a computer with several,
+/// even when that card is the only one reporting a size). `HardwareInformation.qwMemorySize` is a QWORD;
 /// older drivers write `HardwareInformation.MemorySize` (a DWORD, wrong past 4 GiB: used only
 /// without the other).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -230,7 +230,9 @@ fn parse_registry(text: &str, name: &str) -> Option<u64> {
         match parts.as_slice() {
             ["DriverDesc", "REG_SZ", rest @ ..] => k.desc = Some(rest.join(" ")),
             ["HardwareInformation.qwMemorySize", "REG_QWORD", v] => k.qword = parse_hex(v),
-            ["HardwareInformation.MemorySize", "REG_DWORD" | "REG_BINARY", v] => k.dword = parse_hex(v),
+            ["HardwareInformation.MemorySize", "REG_DWORD", v] => k.dword = parse_hex(v),
+            // `reg` prints a binary value as its bytes in order (little-endian), without `0x`
+            ["HardwareInformation.MemorySize", "REG_BINARY", v] => k.dword = parse_le_bytes(v),
             _ => {}
         }
     }
@@ -242,8 +244,28 @@ fn parse_registry(text: &str, name: &str) -> Option<u64> {
             let b = memory(first)?;
             named.iter().all(|k| memory(k) == Some(b)).then_some(b)
         }
-        None => only(keys.iter().filter_map(memory)),
+        // no adapter of that name: a size counts only when the listing has one adapter (another
+        // adapter's size is not this one's: review of PR #3506 / #3511; `assumed` applies instead)
+        None if keys.iter().filter(|k| k.desc.is_some()).count() <= 1 => only(keys.iter().filter_map(memory)),
+        None => None,
     }
+}
+
+/// A `REG_BINARY` value as `reg` prints it (`00000080`: bytes in order, least significant first)
+/// as a number; `None` for an empty, odd-length, longer than 8 bytes or not hex value (review of
+/// PR #3565).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_le_bytes(v: &str) -> Option<u64> {
+    let v = v.trim();
+    if v.is_empty() || !v.len().is_multiple_of(2) || v.len() > 16 || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut n = 0u64;
+    for (i, pair) in v.as_bytes().chunks(2).enumerate() {
+        let byte = u64::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+        n |= byte << (8 * i);
+    }
+    Some(n)
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -331,7 +353,7 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
 
 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001
     DriverDesc    REG_SZ    NVIDIA GeForce RTX 5070
-    HardwareInformation.MemorySize    REG_BINARY    0x80000000
+    HardwareInformation.MemorySize    REG_BINARY    00000080
     HardwareInformation.qwMemorySize    REG_QWORD    0x300000000
 
 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0002
@@ -350,6 +372,26 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bf
         // a DWORD alone still counts
         let old = "HKEY_X\n    DriverDesc    REG_SZ    Old Card\n    HardwareInformation.MemorySize    REG_DWORD    0x40000000\n";
         assert_eq!(parse_registry(old, "Old Card"), Some(1 << 30));
+        // a binary value is read as `reg` prints it: its bytes, least significant first (review of PR #3565)
+        let bin = "HKEY_X\n    DriverDesc    REG_SZ    Old Card\n    HardwareInformation.MemorySize    REG_BINARY    00000080\n";
+        assert_eq!(parse_registry(bin, "Old Card"), Some(2 << 30));
+        assert_eq!(parse_le_bytes("00000080"), Some(0x8000_0000));
+        for bad in ["", "0", "0x80000000", "zz000000", "000000000000000000"] {
+            assert_eq!(parse_le_bytes(bad), None, "{bad:?}");
+        }
+    }
+
+    /// Review of PR #3506 / #3511: an adapter whose name isn't listed, on a machine where another
+    /// adapter reports the only size, isn't given that adapter's size.
+    #[test]
+    fn an_unlisted_adapter_is_not_given_the_only_other_size() {
+        let two = "HKEY_X\\0000\n    DriverDesc    REG_SZ    Card A\n\nHKEY_X\\0001\n    DriverDesc    REG_SZ    Card B\n    HardwareInformation.qwMemorySize    REG_QWORD    0x300000000\n";
+        assert_eq!(parse_registry(two, "Card B"), Some(12 << 30));
+        assert_eq!(parse_registry(two, "Card A"), None, "Card A reports no size");
+        assert_eq!(parse_registry(two, "Card C"), None, "an adapter not listed");
+        // one adapter in the listing, under another name: its size is the card's
+        let one = "HKEY_X\\0000\n    DriverDesc    REG_SZ    Card B\n    HardwareInformation.qwMemorySize    REG_QWORD    0x300000000\n";
+        assert_eq!(parse_registry(one, "Card B (driver name)"), Some(12 << 30));
     }
 
     /// One query a value (`reg query … /s /v …`, fast) instead of every value of every adapter
