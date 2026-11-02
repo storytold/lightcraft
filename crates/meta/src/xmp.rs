@@ -522,8 +522,16 @@ fn iso_from_number(value: f64) -> Option<u32> {
 #[derive(Clone, Copy)]
 struct ExactDecimal {
     negative: bool,
+    coefficient: u128,
+    exponent: i64,
+}
+
+#[derive(Clone, Copy)]
+struct ExactRatio {
+    negative: bool,
     numerator: u128,
     denominator: u128,
+    exponent: i64,
 }
 
 fn gcd(mut a: u128, mut b: u128) -> u128 {
@@ -566,7 +574,7 @@ fn exact_decimal(value: &str) -> Option<ExactDecimal> {
     }
     let leading_zeroes = digits.clone().take_while(|digit| *digit == b'0').count();
     if leading_zeroes == digit_count {
-        return Some(ExactDecimal { negative, numerator: 0, denominator: 1 });
+        return Some(ExactDecimal { negative, coefficient: 0, exponent: 0 });
     }
     let trailing_zeroes = digits.clone().rev().take_while(|digit| *digit == b'0').count();
     let significant_digits = digit_count.checked_sub(leading_zeroes)?.checked_sub(trailing_zeroes)?;
@@ -574,40 +582,82 @@ fn exact_decimal(value: &str) -> Option<ExactDecimal> {
     for digit in digits.skip(leading_zeroes).take(significant_digits) {
         coefficient = coefficient.checked_mul(10)?.checked_add(u128::from(digit - b'0'))?;
     }
-    let scale = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing_zeroes).ok()?)?;
-    let (numerator, denominator) = if scale >= 0 {
-        (coefficient.checked_mul(10u128.checked_pow(u32::try_from(scale).ok()?)?)?, 1)
-    } else {
-        (coefficient, 10u128.checked_pow(u32::try_from(scale.checked_neg()?).ok()?)?)
-    };
-    let divisor = gcd(numerator, denominator);
-    Some(ExactDecimal { negative, numerator: numerator / divisor, denominator: denominator / divisor })
+    let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing_zeroes).ok()?)?;
+    Some(ExactDecimal { negative, coefficient, exponent })
 }
 
-fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactDecimal> {
-    if denominator.numerator == 0 {
+fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactRatio> {
+    if denominator.coefficient == 0 {
         return None;
     }
-    let negative = numerator.negative ^ denominator.negative;
-    let numerator_divisor = gcd(numerator.numerator, denominator.numerator);
-    let denominator_divisor = gcd(denominator.denominator, numerator.denominator);
-    let combined_numerator = (numerator.numerator / numerator_divisor).checked_mul(denominator.denominator / denominator_divisor)?;
-    let combined_denominator = (numerator.denominator / denominator_divisor).checked_mul(denominator.numerator / numerator_divisor)?;
-    let divisor = gcd(combined_numerator, combined_denominator);
-    Some(ExactDecimal { negative, numerator: combined_numerator / divisor, denominator: combined_denominator / divisor })
+    let divisor = gcd(numerator.coefficient, denominator.coefficient);
+    Some(ExactRatio {
+        negative: numerator.negative ^ denominator.negative,
+        numerator: numerator.coefficient / divisor,
+        denominator: denominator.coefficient / divisor,
+        exponent: numerator.exponent.checked_sub(denominator.exponent)?,
+    })
+}
+
+fn exact_ratio_to_u32(value: ExactRatio) -> Option<u32> {
+    if value.negative || value.numerator == 0 || value.denominator == 0 {
+        return None;
+    }
+    let mut numerator = value.numerator;
+    let mut denominator = value.denominator;
+    if value.exponent < 0 {
+        if denominator != 1 {
+            return None;
+        }
+        let scale = u32::try_from(value.exponent.checked_neg()?).ok()?;
+        if scale > 128 {
+            return None;
+        }
+        for _ in 0..scale {
+            if !numerator.is_multiple_of(10) {
+                return None;
+            }
+            numerator /= 10;
+        }
+    } else if value.exponent > 0 {
+        let scale = u32::try_from(value.exponent).ok()?;
+        if scale > 128 {
+            return None;
+        }
+        let mut twos = 0;
+        while denominator.is_multiple_of(2) {
+            denominator /= 2;
+            twos += 1;
+        }
+        let mut fives = 0;
+        while denominator.is_multiple_of(5) {
+            denominator /= 5;
+            fives += 1;
+        }
+        if denominator != 1 || twos > scale || fives > scale {
+            return None;
+        }
+        for _ in twos..scale {
+            numerator = numerator.checked_mul(2)?;
+        }
+        for _ in fives..scale {
+            numerator = numerator.checked_mul(5)?;
+        }
+    } else if denominator != 1 {
+        return None;
+    }
+    u32::try_from(numerator).ok().filter(|value| *value > 0)
 }
 
 fn exact_iso_from_text(value: &str) -> Option<u32> {
     let value = value.trim();
-    let exact = if let Some((numerator, denominator)) = value.split_once('/') {
+    let ratio = if let Some((numerator, denominator)) = value.split_once('/') {
         exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
     } else {
-        exact_decimal(value)?
+        let value = exact_decimal(value)?;
+        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: 1, exponent: value.exponent }
     };
-    if exact.negative || exact.numerator == 0 || exact.numerator % exact.denominator != 0 {
-        return None;
-    }
-    u32::try_from(exact.numerator / exact.denominator).ok().filter(|value| *value > 0)
+    exact_ratio_to_u32(ratio)
 }
 
 fn iso_from_text(value: &str) -> Option<u32> {

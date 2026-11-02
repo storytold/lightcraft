@@ -242,6 +242,9 @@ fn xmp_iso_preserves_valid_values() {
         ("400/2", 200),
         ("1.5/0.5", 3),
         ("1.0000000000000001/1.0000000000000001", 1),
+        ("1e39/1e39", 1),
+        ("1e39/5e38", 2),
+        ("1e39/2e38", 5),
         ("4294967295", u32::MAX),
     ] {
         let packet = iso_packet(&format!(r#"exif:ISOSpeedRatings="{value}""#), "");
