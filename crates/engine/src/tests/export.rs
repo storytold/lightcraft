@@ -1217,10 +1217,13 @@ fn a_subfolder_can_not_lead_out_of_the_export_folder() {
     for sub in ["/etc", "\\\\server\\share", "C:\\Users", "c:/x"] {
         assert!(err(sub).contains("`subfolder` is an absolute path"), "{sub}: {}", err(sub));
     }
-    for sub in ["CON", "a/nul", "Aux.jpg", "COM1", "lpt9 "] {
+    for sub in ["CON", "a/nul", "Aux.jpg", "COM1", "lpt9 ", "COM¹"] {
         assert!(err(sub).contains("`subfolder` names a Windows device"), "{sub}: {}", err(sub));
     }
-    for sub in ["", "Exports", "a/b", "..x", "x..", "Trip: day 1", "Console", "COM10", "./a"] {
+    for sub in ["Trip: day 1", "a/b*", "why?", "say \"hi\"", "<a>", "a|b", "tab\there"] {
+        assert!(err(sub).contains("`subfolder` can't contain : * ?"), "{sub}: {}", err(sub));
+    }
+    for sub in ["", "Exports", "a/b", "..x", "x..", "Trip - day 1", "Console", "COM10", "./a"] {
         assert_eq!(err(sub), "", "{sub}");
     }
 

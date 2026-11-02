@@ -57,7 +57,8 @@ pub(super) struct Placer<'a> {
 }
 
 /// Why `subfolder` would lead out of the export folder (a `..` component, also as Windows reads
-/// `...` or `.. .`, an absolute path or drive, or a Windows device name such as `CON` or `NUL`),
+/// `...` or `.. .`, an absolute path or drive, a character Windows refuses such as `:`, or a
+/// Windows device name such as `CON` or `NUL`),
 /// `None` when it stays inside. Nested subfolders (`a/b`) are fine. Checked when the params come
 /// in and again before writing, since a saved preset is read without the checks.
 pub(super) fn subfolder_escapes(subfolder: &str) -> Option<&'static str> {
@@ -69,6 +70,10 @@ pub(super) fn subfolder_escapes(subfolder: &str) -> Option<&'static str> {
     // Windows drops a name's trailing dots and spaces, so `...` and `.. .` are `..` there
     if components().any(|c| c.contains("..") && c.trim_matches([' ', '.']).is_empty()) {
         return Some("can't contain `..`; give a folder inside the export folder");
+    }
+    // the characters Windows refuses in a name; file names drop the same ones (`rename::tokens`)
+    if s.contains(|c: char| matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()) {
+        return Some("can't contain : * ? \" < > | or control characters; give another folder name");
     }
     if components().any(is_device_name) {
         return Some("names a Windows device (CON, PRN, AUX, NUL, COM1–9, LPT1–9); give another folder name");
@@ -87,9 +92,8 @@ fn is_device_name(component: &str) -> bool {
     let base = component.trim_end_matches([' ', '.']);
     let base = base.split('.').next().unwrap_or(base).trim_end();
     let numbered = |prefix: &str| {
-        base.len() == 4
-            && base.get(..3).is_some_and(|p| p.eq_ignore_ascii_case(prefix))
-            && base.as_bytes().get(3).is_some_and(|d| (b'1'..=b'9').contains(d))
+        base.get(..3).is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+            && matches!(base.get(3..), Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
     };
     DEVICES.iter().any(|d| base.eq_ignore_ascii_case(d)) || numbered("COM") || numbered("LPT")
 }
@@ -239,10 +243,10 @@ mod tests {
 
     #[test]
     fn device_names_are_known_with_any_case_and_extension() {
-        for name in ["CON", "nul", "Aux", "PRN ", "nul.txt", "COM1", "lpt9", "com3.jpg", "CON."] {
+        for name in ["CON", "nul", "Aux", "PRN ", "nul.txt", "COM1", "lpt9", "com3.jpg", "CON.", "COM¹", "lpt³.txt", "Com²"] {
             assert!(is_device_name(name), "{name}");
         }
-        for name in ["Console", "COM0", "COM10", "LPT", "connect", "a.nul", ""] {
+        for name in ["Console", "COM0", "COM10", "LPT", "connect", "a.nul", "", "COM⁴", "LPT¹0"] {
             assert!(!is_device_name(name), "{name}");
         }
     }
