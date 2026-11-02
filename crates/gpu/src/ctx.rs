@@ -365,9 +365,17 @@ static LOST_DEVICES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new
 pub(crate) fn mark_lost(generation: u64) {
     let mut lost = LOST_DEVICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lost.contains(&generation) {
+        // (the latest ones only: a device that is gone isn't asked about again, and the list
+        // stays short however many losses there are: review of PR #3506)
+        if lost.len() >= MAX_LOST_KEPT {
+            lost.remove(0);
+        }
         lost.push(generation);
     }
 }
+
+/// Lost devices remembered ([`mark_lost`]).
+const MAX_LOST_KEPT: usize = 64;
 
 /// Whether device `generation` is lost (0, an unknown device: never).
 pub(crate) fn is_lost(generation: u64) -> bool {
@@ -1392,6 +1400,11 @@ mod tests {
         }
         assert!(got.is_none(), "the lost device is not handed out");
         assert!(crate::slot::lost_reason(crate::Role::Primary).is_some(), "its loss is recorded");
+        // a replacement lost while it was made doesn't say the card is back (review of PR #3532)
+        crate::slot::replace(crate::Role::Primary, made_lost(crate::Role::Primary));
+        assert!(crate::slot::lost_reason(crate::Role::Primary).is_some(), "the replacement's loss is recorded");
+        let kinds: Vec<_> = crate::slot::events_after(0).into_iter().map(|e| e.kind).collect();
+        assert!(!kinds.contains(&crate::slot::EventKind::Recovered), "no Recovered notice: {kinds:?}");
         println!("CHILD: survived");
     }
 
