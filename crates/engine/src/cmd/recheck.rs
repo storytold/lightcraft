@@ -97,7 +97,14 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
     }
     if !ops.is_empty() {
         #[cfg(not(target_arch = "wasm32"))]
-        let replaced: Vec<_> = ops.iter().filter_map(|op| if let Op::SetContent { id, .. } = op { Some(*id) } else { None }).collect();
+        let replaced: Vec<_> = ops
+            .iter()
+            .filter_map(|op| {
+                let Op::SetContent { id, width, height, file_size, content_hash, .. } = op else { return None };
+                let old = s.catalog.photo(*id)?;
+                (old.width != *width || old.height != *height || old.file_size != *file_size || old.content_hash != *content_hash).then_some(*id)
+            })
+            .collect();
         s.apply_system(Op::Batch { ops })?;
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {

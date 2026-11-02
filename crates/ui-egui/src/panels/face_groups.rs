@@ -105,8 +105,18 @@ fn review(view: &mut View, groups: &[Value], index: usize) {
 /// Keep a save error visible while dropping faces that were already assigned in memory.
 fn assignment_failed(view: &mut View, error: String, refreshed: Option<Value>) {
     if let Some(r) = refreshed {
-        let present: HashSet<_> = r["groups"].as_array().into_iter().flatten().flat_map(|group| keys(group, true)).collect();
-        view.selected.retain(|key| present.contains(key));
+        let hashes = |response: &Value| -> std::collections::HashMap<FaceKey, Value> {
+            response["groups"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|group| group["faces"].as_array().into_iter().flatten())
+                .filter_map(|face| Some((key(face)?, face["contentHash"].clone())))
+                .collect()
+        };
+        let previous = view.response.as_deref().map(hashes).unwrap_or_default();
+        let current = hashes(&r);
+        view.selected.retain(|key| previous.get(key).is_some_and(|hash| current.get(key) == Some(hash)));
         view.group = None;
         view.response = Some(Arc::new(r));
     }
@@ -502,13 +512,15 @@ mod tests {
 
     #[test]
     fn failed_assignment_keeps_the_error_and_drops_already_named_faces() {
-        let mut view = View { selected: HashSet::from([(1, 0), (2, 0)]), group: Some(0), ..Default::default() };
-        let refreshed = json!({"complete": true, "groups": [{"faces": [{"photo": 2, "index": 0}]}]});
+        let previous = json!({"groups": [{"faces": [{"photo": 1, "index": 0, "contentHash": "old"}, {"photo": 2, "index": 0, "contentHash": "same"}, {"photo": 3, "index": 0, "contentHash": "old"}]}]});
+        let mut view =
+            View { selected: HashSet::from([(1, 0), (2, 0), (3, 0)]), group: Some(0), response: Some(Arc::new(previous)), ..Default::default() };
+        let refreshed = json!({"complete": true, "groups": [{"faces": [{"photo": 2, "index": 0, "contentHash": "same"}, {"photo": 3, "index": 0, "contentHash": "new"}]}]});
         assignment_failed(&mut view, "Could not save".into(), Some(refreshed));
         assert_eq!(view.selected, HashSet::from([(2, 0)]));
         assert!(view.group.is_none());
         assert_eq!(view.error.as_deref(), Some("Could not save"));
-        assert_eq!(view.response.as_ref().unwrap()["groups"][0]["faces"].as_array().unwrap().len(), 1);
+        assert_eq!(view.response.as_ref().unwrap()["groups"][0]["faces"].as_array().unwrap().len(), 2);
         assignment_failed(&mut view, "Still not saved".into(), None);
         assert_eq!(view.selected, HashSet::from([(2, 0)]));
         assert_eq!(view.error.as_deref(), Some("Still not saved"));

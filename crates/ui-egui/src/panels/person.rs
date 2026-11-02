@@ -20,7 +20,7 @@ const SECTION_H: f32 = 56.0;
 pub struct Selection {
     name: String,
     active: bool,
-    faces: std::collections::HashMap<(u64, usize), lightcraft_geom::Rect>,
+    faces: std::collections::HashMap<(u64, usize), (lightcraft_geom::Rect, Option<String>)>,
     anchor: Option<(usize, bool)>,
     before_click: Option<BeforeClick>,
 }
@@ -28,7 +28,7 @@ pub struct Selection {
 #[derive(Clone, Debug)]
 struct BeforeClick {
     face: (u64, usize),
-    faces: std::collections::HashMap<(u64, usize), lightcraft_geom::Rect>,
+    faces: std::collections::HashMap<(u64, usize), (lightcraft_geom::Rect, Option<String>)>,
     anchor: Option<(usize, bool)>,
 }
 
@@ -52,7 +52,7 @@ fn select_confirmed(selection: &mut Selection, faces: &[Face], target: &Face, sh
     let (start, selecting) = selection.anchor.filter(|_| shift).unwrap_or((index, !selection.faces.contains_key(&key)));
     for face in faces.get(start.min(index)..=start.max(index)).unwrap_or_default() {
         if selecting {
-            selection.faces.insert((face.photo, face.index), face.region_rect);
+            selection.faces.insert((face.photo, face.index), (face.region_rect, face.content_hash.clone()));
         } else {
             selection.faces.remove(&(face.photo, face.index));
         }
@@ -64,8 +64,13 @@ fn select_confirmed(selection: &mut Selection, faces: &[Face], target: &Face, sh
 
 /// Clear the selected person's assignments atomically and hide them from More for this session.
 fn remove_selected(app: &mut LightcraftApp, ctx: &egui::Context, name: &str) {
-    let faces: Vec<_> =
-        app.ui.person_selection.faces.iter().map(|((photo, index), rect)| json!({"photo": photo, "index": index, "rect": rect})).collect();
+    let faces: Vec<_> = app
+        .ui
+        .person_selection
+        .faces
+        .iter()
+        .map(|((photo, index), (rect, hash))| json!({"photo": photo, "index": index, "rect": rect, "contentHash": hash}))
+        .collect();
     match app.run("faces.nameFaces", json!({"faces": faces, "name": null, "expectedName": name})) {
         Ok(_) => {
             app.ui.dismissed_faces.extend(app.ui.person_selection.faces.drain().map(|(key, _)| key));
@@ -84,6 +89,7 @@ pub struct Face {
     pub rect: lightcraft_geom::Rect,
     /// The original catalog box, which can differ from the detector's display crop.
     pub region_rect: lightcraft_geom::Rect,
+    pub content_hash: Option<String>,
     pub score: f32,
 }
 
@@ -108,6 +114,7 @@ fn face_of(v: &Value) -> Option<Face> {
         // shown by the detector's box when the scan has one: every face equally close
         rect: rect(&v["view"]).or_else(|| rect(&v["rect"]))?,
         region_rect: rect(&v["rect"])?,
+        content_hash: v["contentHash"].as_str().map(str::to_owned),
         score: v["score"].as_f64().unwrap_or(0.0) as f32,
     })
 }
@@ -262,7 +269,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             register(ui, "person:selectAll", all.rect);
             if all.clicked() {
                 app.ui.person_selection.before_click = None;
-                app.ui.person_selection.faces.extend(page.confirmed.iter().map(|f| ((f.photo, f.index), f.region_rect)));
+                app.ui.person_selection.faces.extend(page.confirmed.iter().map(|f| ((f.photo, f.index), (f.region_rect, f.content_hash.clone()))));
             }
             let clear = ui.button(crate::i18n::tr("Clear selection"));
             register(ui, "person:clearSelection", clear.rect);
@@ -422,7 +429,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             Hit::Remove => {
                 match app.run(
                     "faces.nameFaces",
-                    json!({"faces": [{"photo": f.photo, "index": f.index, "rect": f.region_rect}], "name": null, "expectedName": shown_name}),
+                    json!({"faces": [{"photo": f.photo, "index": f.index, "rect": f.region_rect, "contentHash": f.content_hash}], "name": null, "expectedName": shown_name}),
                 ) {
                     Ok(_) => {
                         app.ui.dismissed_faces.insert((f.photo, f.index));
@@ -588,7 +595,7 @@ mod tests {
         let page = PersonPage {
             name: "Person".into(),
             total: 5001,
-            confirmed: vec![Face { photo: 1, index: 0, rect, region_rect: rect, score: 0.0 }],
+            confirmed: vec![Face { photo: 1, index: 0, rect, region_rect: rect, content_hash: None, score: 0.0 }],
             ..Default::default()
         };
         h.app.caches.person_page = Some(("Person".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, h.time(), Arc::new(page)));
@@ -719,6 +726,7 @@ mod tests {
                 index: 0,
                 rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
                 region_rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
+                content_hash: None,
                 score: 0.0,
             })
             .collect();
@@ -738,6 +746,7 @@ mod tests {
             index: 0,
             rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
             region_rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
+            content_hash: None,
             score,
         };
         // The tie is deliberately after a lower-score tile: an index slice would miss it.

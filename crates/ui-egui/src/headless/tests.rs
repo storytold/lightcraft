@@ -1013,12 +1013,20 @@ fn person_more_confirms_all_above_with_one_undo_step() {
             index: 0,
             rect: region(None).rect,
             region_rect: region(None).rect,
+            content_hash: None,
             score: 0.0,
         }],
         more: ids[1..6]
             .iter()
             .zip([0.95, 0.80, 0.80, 0.80, 0.60])
-            .map(|(id, score)| crate::panels::person::Face { photo: id.0, index: 0, rect: region(None).rect, region_rect: region(None).rect, score })
+            .map(|(id, score)| crate::panels::person::Face {
+                photo: id.0,
+                index: 0,
+                rect: region(None).rect,
+                region_rect: region(None).rect,
+                content_hash: None,
+                score,
+            })
             .collect(),
         ready: true,
         pending: 0,

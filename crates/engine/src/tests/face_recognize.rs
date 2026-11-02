@@ -551,6 +551,23 @@ fn removing_person_assignments_refuses_a_stale_batch_without_partial_changes() {
     assert_eq!(s.catalog.photo(b).unwrap().meta.regions[0].name.as_deref(), Some("PERSON"));
 }
 
+#[test]
+fn removing_imported_long_person_name_checks_reviewed_content() {
+    let mut s = Session::with_demo();
+    let (a, _) = two_photos(&s);
+    let name = format!("{}\nname", "x".repeat(201));
+    let face = region(0.1, Some(&name));
+    set_regions(&mut s, a, vec![face.clone()]);
+    let reviewed = s.execute("faces.person", &json!({"name": name})).unwrap()["confirmed"][0].clone();
+    assert!(reviewed.get("contentHash").is_some());
+    let mut stale = reviewed.clone();
+    stale["contentHash"] = json!("different-content");
+    assert!(s.execute("faces.nameFaces", &json!({"faces": [stale], "name": null, "expectedName": name})).is_err());
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some(name.as_str()));
+    s.execute("faces.nameFaces", &json!({"faces": [reviewed], "name": null, "expectedName": name})).unwrap();
+    assert!(s.catalog.photo(a).unwrap().meta.regions[0].name.is_none());
+}
+
 /// Saved membership persists across reopen and refresh replaces it only after successful completion.
 #[test]
 fn face_groups_survive_reopening_and_refresh_only_when_requested() {

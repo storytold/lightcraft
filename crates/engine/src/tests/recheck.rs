@@ -101,6 +101,20 @@ fn recheck_invalidates_face_grouping_and_old_embeddings() {
     assert!(!x.s.faces.index.contains(x.id.0, &rect));
 }
 
+#[test]
+fn recheck_of_unchanged_content_preserves_face_data() {
+    let mut x = library("face-cache-unchanged");
+    let rect = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 };
+    let mut meta = x.s.catalog.photo(x.id).unwrap().meta.clone();
+    meta.regions = vec![lightcraft_meta::Region { rect, kind: lightcraft_meta::RegionKind::Face, name: None, description: None }];
+    x.s.commit("face", Op::SetMeta { id: x.id, meta: Box::new(meta) }).unwrap();
+    x.s.faces.index.insert(x.id.0, &rect, vec![1.0, 0.0]);
+    crate::face_groups::query(&mut x.s, &json!({}), 0.5).unwrap();
+    x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert!(x.s.faces.groups.is_some());
+    assert!(x.s.faces.index.contains(x.id.0, &rect));
+}
+
 /// A file that still doesn't decode is stamped by this version (with the decoder's current
 /// reason), so the next open doesn't probe it again.
 #[test]

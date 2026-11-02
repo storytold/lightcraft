@@ -1,8 +1,8 @@
 //! Incremental library-wide grouping, using the same best-two-example score as People → More.
 //! Confirmed people seed galleries; unnamed groups learn from their members as they grow.
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicU8, Ordering},
     mpsc,
 };
 use std::time::{Duration, Instant};
@@ -42,21 +42,31 @@ pub(crate) struct Grouping {
 /// A cancelled or superseded save must not race a later refresh to the same file.
 struct PendingSave {
     result: mpsc::Receiver<std::result::Result<(), String>>,
-    cancelled: Arc<AtomicBool>,
+    cancelled: Arc<AtomicU8>,
 }
 
 impl Drop for PendingSave {
     fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
+        let _ = self.cancelled.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
     }
 }
 
-static SAVE_BUSY: AtomicBool = AtomicBool::new(false);
+static SAVE_BUSY: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::new());
 
-struct SaveSlot;
+struct SaveSlot(std::path::PathBuf);
+impl SaveSlot {
+    fn acquire(path: &std::path::Path) -> Option<Self> {
+        let mut busy = SAVE_BUSY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if busy.iter().any(|p| p == path) {
+            return None;
+        }
+        busy.push(path.to_path_buf());
+        Some(Self(path.to_path_buf()))
+    }
+}
 impl Drop for SaveSlot {
     fn drop(&mut self) {
-        SAVE_BUSY.store(false, Ordering::Release);
+        SAVE_BUSY.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|p| p != &self.0);
     }
 }
 
@@ -326,11 +336,11 @@ pub(crate) fn query(s: &mut Session, p: &Value, model_threshold: f32) -> Result<
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         } else if let Some(path) = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("unnamed-face-groups.json")) {
-            if SAVE_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            let Some(slot) = SaveSlot::acquire(&path) else {
                 return Ok(
                     json!({"complete": false, "strict": g.strict, "processed": g.next, "total": g.faces.len(), "unindexed": g.unindexed, "groups": []}),
                 );
-            }
+            };
             let groups = g
                 .groups
                 .iter()
@@ -350,27 +360,27 @@ pub(crate) fn query(s: &mut Session, p: &Value, model_threshold: f32) -> Result<
                 .collect();
             let saved = Saved { version: 1, tag: g.tag.clone(), strict: g.strict, unindexed: g.unindexed, groups };
             let (tx, result) = mpsc::channel();
-            let cancelled = Arc::new(AtomicBool::new(false));
+            let cancelled = Arc::new(AtomicU8::new(0));
             let worker_cancelled = cancelled.clone();
             let spawned = std::thread::Builder::new().name("face-group-save".into()).spawn(move || {
-                let _slot = SaveSlot;
+                let _slot = slot;
                 let outcome = (|| {
-                    if worker_cancelled.load(Ordering::Acquire) {
+                    if worker_cancelled.load(Ordering::Acquire) != 0 {
                         return Ok(());
                     }
                     let bytes = serde_json::to_vec(&saved).map_err(|e| e.to_string())?;
                     if bytes.len() > 32 * 1024 * 1024 {
                         return Err("Saved groups exceed 32 MiB".to_string());
                     }
-                    if worker_cancelled.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| format!("Cannot save unnamed groups: {e}"))
+                    lightcraft_catalog::safe_file::write_atomic_if(&path, &bytes, || {
+                        worker_cancelled.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire).is_ok()
+                    })
+                    .map(|_| ())
+                    .map_err(|e| format!("Cannot save unnamed groups: {e}"))
                 })();
                 let _ = tx.send(outcome);
             });
             if let Err(e) = spawned {
-                SAVE_BUSY.store(false, Ordering::Release);
                 return Err(crate::cmd::bad("faces.groupUnnamed", format!("Cannot start group save: {e}")));
             }
             g.saving = Some(PendingSave { result, cancelled });
@@ -431,6 +441,18 @@ pub(crate) fn query(s: &mut Session, p: &Value, model_threshold: f32) -> Result<
 mod tests {
     use super::*;
 
+    #[test]
+    fn save_slots_are_scoped_to_the_cache_path() {
+        let a = std::env::temp_dir().join("lc-group-slot-a");
+        let b = std::env::temp_dir().join("lc-group-slot-b");
+        let first = SaveSlot::acquire(&a).unwrap();
+        assert!(SaveSlot::acquire(&a).is_none());
+        let other = SaveSlot::acquire(&b).unwrap();
+        drop(first);
+        assert!(SaveSlot::acquire(&a).is_some());
+        drop(other);
+    }
+
     /// A slow save must not make the next grouping query wait on its UI thread.
     #[test]
     fn an_outstanding_save_never_blocks_grouping_queries() {
@@ -438,16 +460,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut s = Session::new().with_fs();
         s.open_library(&dir, false).unwrap();
-        let mut acquired = false;
+        let path = dir.join("unnamed-face-groups.json");
+        let mut guard = None;
         for _ in 0..5000 {
-            if SAVE_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                acquired = true;
+            if let Some(slot) = SaveSlot::acquire(&path) {
+                guard = Some(slot);
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
         }
-        assert!(acquired, "the earlier save did not finish");
-        let guard = SaveSlot;
+        assert!(guard.is_some(), "the earlier save did not finish");
         let started = Instant::now();
         let pending = query(&mut s, &json!({}), 0.5).unwrap();
         assert_eq!(pending["complete"], false);

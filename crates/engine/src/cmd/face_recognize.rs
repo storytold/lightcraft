@@ -58,11 +58,8 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
     let name = name_param(p, C)?;
     let expected_name = p
         .get("expectedName")
-        .map(|v| {
+        .map(|v| -> Result<String> {
             let name = v.as_str().ok_or_else(|| bad(C, "`expectedName` must be text"))?;
-            if name.chars().count() > 200 || name.chars().any(char::is_control) {
-                return Err(bad(C, "invalid expected person name"));
-            }
             Ok(name.trim().to_lowercase())
         })
         .transpose()?;
@@ -310,7 +307,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
             }
             total += 1;
             if confirmed.len() < MAX_CONFIRMED {
-                confirmed.push(json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect), "view": rect_json(&s.face_view(ph.id, r.rect))}));
+                confirmed.push(json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect), "view": rect_json(&s.face_view(ph.id, r.rect)), "contentHash": ph.content_hash}));
             }
         }
     }
