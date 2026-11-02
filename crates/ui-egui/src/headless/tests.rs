@@ -1701,7 +1701,7 @@ fn filter_bar_flags_combine() {
     h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
     let f = h.app.session.filter.clone();
     assert_eq!((f.flag, f.flags), (None, vec![Flag::Pick, Flag::None]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking filter:none");
 }
 
 /// The photo grid shows date headers (registered as `group:<date>` widgets); clicking one
@@ -2471,13 +2471,13 @@ fn crop_box_on_the_next_photo_shows_the_remembered_ratio() {
     h.request("engine.execute", json!({"command": "panel.crop"}), t);
     h.app.run("crop.aspect", json!({"aspect": "4x5"})).unwrap();
     h.app.run("tool.done", json!({})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after tool.done");
     let photo = photos[1];
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [photo.0]}}), t);
     let before = h.app.session.catalog.photo(photo).unwrap().clone();
     let undo = h.app.session.undo.len();
     h.request("engine.execute", json!({"command": "panel.crop"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.crop");
     let after = h.app.session.catalog.photo(photo).unwrap();
     assert_eq!(after.develop, before.develop, "browsing doesn't edit the photo");
     assert_eq!(after.history.len(), before.history.len());
@@ -2493,7 +2493,7 @@ fn crop_box_on_the_next_photo_shows_the_remembered_ratio() {
     assert!(same(shown, drawn), "the dropdown says {shown:.3} but the crop box is {drawn:.3}");
     // Return crops to the box shown
     h.request("engine.execute", json!({"command": "tool.done"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after tool.done");
     let p = h.app.session.catalog.photo(photo).unwrap();
     let r = p.develop.crop.geometry.rect;
     let cropped = r.width() * f64::from(p.width) / (r.height() * f64::from(p.height));
@@ -5273,13 +5273,13 @@ fn export_sizes_keep_the_pixels_typed() {
     let mut h = demo([1400.0, 900.0]);
     let t = Duration::from_secs(10);
     h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dialog.export");
     let type_value = |h: &mut Headless, id: &str, text: &str| {
         let r = h.request("ui.clickWidget", json!({"id": id}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
         h.request("ui.text", json!({"text": text}), t);
         h.request("ui.key", json!({"key": "Enter"}), t);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after typing a size and Enter");
     };
     let resize = |h: &Headless| match &h.app.ui.dialog {
         Some(crate::state::Dialog::Export { resize, .. }) => *resize,
@@ -5289,14 +5289,14 @@ fn export_sizes_keep_the_pixels_typed() {
         *full_size = false;
         *resize = lightcraft_engine::export::Resize::long_edge(2048);
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting a 2048 px long edge");
     type_value(&mut h, "sliderValue:export.sizePx", "3000");
     assert_eq!(resize(&h).value, 3000.0);
     if let Some(crate::state::Dialog::Export { resize, .. }) = &mut h.app.ui.dialog {
         resize.mode = lightcraft_engine::export::ResizeMode::WidthHeight;
         resize.height = 2048;
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting width and height");
     type_value(&mut h, "sliderValue:export.sizeW", "1080");
     type_value(&mut h, "sliderValue:export.sizeH", "1350");
     assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));

@@ -418,7 +418,7 @@ fn the_settings_page_does_not_move_when_the_slide_preview_finishes_rendering() {
     assert!(!h.app.renderer.textures.contains_key(&Slot::SlidePreview), "the render is held back");
     open.set(true);
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.contains_key(&Slot::SlidePreview)), "the render lands");
-    h.settle(Duration::from_secs(5));
+    h.settled(Duration::from_secs(5), "after the slide preview landed");
     assert_eq!(rect(&h, "settings:pageRoom"), room, "the page's room is the same before and after the render");
     assert_eq!(rect(&h, "check:settings.slideshowRandom"), check, "a control stays where it was drawn");
 }

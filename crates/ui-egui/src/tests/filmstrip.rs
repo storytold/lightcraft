@@ -76,7 +76,7 @@ fn the_filmstrip_marks_the_active_photo_heavier_than_the_other_selected_one() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a.0, b.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     let t = crate::theme::Tokens::get(&h.view.ctx);
     assert!(crate::theme::current(&h.view.ctx).is_some_and(|k| !k.is_dark()));
     let active = h.app.session.selection.active.expect("active");

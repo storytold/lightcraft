@@ -22,7 +22,7 @@ fn detail() -> Headless {
         h.app.ui.toggle_section("light");
     }
     h.app.renderer.keep_pixels = true;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after opening the Light section");
     h
 }
 
@@ -47,16 +47,16 @@ fn alt_during_a_blacks_drag_shows_shadow_clipping_until_released() {
     for i in 1..=8 {
         h.app.synthetic.push(Event::PointerMoved(from - egui::vec2(6.0 * i as f32, 0.0)));
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the drag on the Blacks slider");
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some("light.blacks"));
     assert!(binary_share(&h) < 0.5, "no preview without Alt");
     // Alt pressed mid-drag: the shadow clipping view
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::ALT));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after pressing Alt mid-drag");
     assert!(binary_share(&h) > 0.99, "the clipping view: {}", binary_share(&h));
     // Alt released: the photo again, the drag still on
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after releasing Alt");
     assert!(binary_share(&h) < 0.5, "the photo is back");
     h.app.synthetic.push(Event::PointerButton {
         pos: from - egui::vec2(48.0, 0.0),
@@ -64,7 +64,7 @@ fn alt_during_a_blacks_drag_shows_shadow_clipping_until_released() {
         pressed: false,
         modifiers: Modifiers::NONE,
     });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after releasing the drag");
     assert_eq!(h.app.ui.dragging_control, None);
     let after = h.app.session.develop_of(h.app.session.active().expect("photo")).expect("develop").light.blacks;
     assert!(after < before, "the drag itself still moved Blacks: {before} → {after}");
