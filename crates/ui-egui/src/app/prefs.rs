@@ -30,6 +30,28 @@ impl LightcraftApp {
         self.ui.was_focused = focused;
     }
 
+    /// The window and the GPU's batch work (exports): a resize makes room for the window's own
+    /// drawing first (`lightcraft_gpu::hold_batch`: the surface is reconfigured, which waits for
+    /// the GPU); what happened to the GPU (it stopped responding, it was restarted) is told once.
+    fn gpu_housekeeping(&mut self, ctx: &egui::Context) {
+        let screen = ctx.content_rect().size();
+        if screen != self.last_screen {
+            if self.last_screen != egui::Vec2::ZERO {
+                lightcraft_engine::gpu::hold_batch(std::time::Duration::from_millis(800));
+            }
+            self.last_screen = screen;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for e in lightcraft_engine::gpu::events_after(self.gpu_event_seen) {
+            self.gpu_event_seen = self.gpu_event_seen.max(e.seq);
+            let text = crate::i18n::tr(&e.text).to_string();
+            match e.kind {
+                lightcraft_engine::gpu::EventKind::Recovered => self.toast_for(ctx, text, 8.0),
+                _ => self.toast_for(ctx, text, 15.0),
+            }
+        }
+    }
+
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
         if self.gpu_applied != Some(self.ui.settings.gpu) {
@@ -48,6 +70,14 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        // export lanes and the GPU's share for exports (Settings ▸ Performance, "Test my machine")
+        let st = &self.ui.settings;
+        let tuning = crate::machine_test::tuning(st);
+        if self.export_tuning_applied != Some(tuning) {
+            crate::machine_test::apply(st);
+            self.export_tuning_applied = Some(tuning);
+        }
+        self.gpu_housekeeping(ctx);
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

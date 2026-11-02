@@ -163,7 +163,7 @@ fn cell_ui(
     if let Some(job) = app.session.variant_job(id, &s, THUMB_EDGE)
         && let Some(tex) = app.renderer.variant(job)
     {
-        painter.image(tex.tex.id(), thumb, cover_uv(thumb, tex.size), Color32::WHITE);
+        painter.image(tex.id(), thumb, cover_uv(thumb, tex.size), Color32::WHITE);
     }
     let applied = d.profile.id == p_id;
     if applied {

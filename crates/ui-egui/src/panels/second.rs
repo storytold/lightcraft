@@ -55,9 +55,10 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
     let tex = mine(Slot::Second).or_else(|| mine(Slot::Main)).or_else(|| app.renderer.thumb(id));
     if let Some(t) = tex {
-        let [tw, th] = t.tex.size();
+        // (the frame's size: a GPU-resident render's `tex` is only a placeholder)
+        let [tw, th] = t.size.map(|n| n.max(1));
         let s = (area.width() / tw as f32).min(area.height() / th as f32);
         let r = Rect::from_center_size(area.center(), vec2(tw as f32 * s, th as f32 * s));
-        ui.painter().image(t.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        ui.painter().image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 }

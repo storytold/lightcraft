@@ -53,6 +53,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod machine_test;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -81,6 +82,7 @@ pub mod smart;
 pub mod sync;
 pub mod text;
 mod view;
+pub mod view_pool;
 pub mod walk;
 
 use std::sync::Arc;
