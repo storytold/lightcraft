@@ -82,6 +82,7 @@ mod slider_reset;
 mod slideshow;
 mod solo_sections;
 mod space_hand;
+mod spot_stroke;
 mod switch_library;
 mod sync;
 mod tallies;
