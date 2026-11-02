@@ -7,17 +7,26 @@ use serde_json::{Value, json};
 use crate::Session;
 
 /// A small generator of numbers that is the same on every run.
-struct Dice(u64);
+struct Dice {
+    state: u64,
+    /// How many photos the edits moved to Local.
+    to_local: usize,
+}
 
 impl Dice {
+    fn new(seed: u64) -> Self {
+        Dice { state: seed, to_local: 0 }
+    }
+
     fn roll(&mut self, sides: usize) -> usize {
-        self.0 = lightcraft_catalog::mix64(self.0);
-        (self.0 % sides.max(1) as u64) as usize
+        self.state = lightcraft_catalog::mix64(self.state);
+        (self.state % sides.max(1) as u64) as usize
     }
 }
 
 /// A library of `n` photos in three folders, with ratings, flags, keywords and dates spread over them, an album
-/// holding every third photo, a smart album of the photos without keywords, and a stack.
+/// holding every third photo, a smart album of the photos without keywords, and a stack. About one photo in four
+/// has the content of another (some as a Duplicate's `:dup` key), and a few have no content hash.
 fn library(n: usize) -> (Session, Vec<PhotoId>, u64, u64) {
     let mut s = Session::new();
     let mut ids = Vec::new();
@@ -34,6 +43,11 @@ fn library(n: usize) -> (Session, Vec<PhotoId>, u64, u64) {
             &format!("2026-01-{:02}T10:00:00", 1 + i % 9),
         );
         p.captured = Some(format!("2025-{:02}-{:02}T10:00:{:02}", 1 + i % 12, 1 + i % 28, i % 60));
+        p.content_hash = match i % 13 {
+            0 => None,
+            5 => Some(format!("{:032x}:dup{}", (i * 7) % (n * 4 / 5).max(1), id.0)),
+            _ => Some(format!("{:032x}", (i * 7) % (n * 4 / 5).max(1))),
+        };
         s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
         ids.push(id);
     }
@@ -56,8 +70,9 @@ fn library(n: usize) -> (Session, Vec<PhotoId>, u64, u64) {
 }
 
 /// One edit at random: most touch a photo or a few (what it is rated, flagged, keyworded, developed; when it was
-/// taken; where its file is; whether it is in the library at all), some change an album, a stack or the library's
-/// past, and now and then a photo is added or removed for good.
+/// taken; where its file is and what is in it; whether it is in the library at all), some change an album, a stack
+/// or the library's past, and now and then a photo is added (at times with the content of one the library has) or
+/// removed for good.
 fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
     let chosen: Vec<u64> = (0..1 + dice.roll(3)).map(|_| ids[dice.roll(ids.len())].0).collect();
     let one = PhotoId(chosen[0]);
@@ -80,6 +95,7 @@ fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
             let name = format!("NEW_{n:04}.jpg");
             let mut p = Photo::new(id, Source::File { path: format!("/pics/{}/{name}", n % 3) }, &name, "JPEG", 60, 40, "2026-02-01T10:00:00");
             p.captured = Some(format!("2025-{:02}-11T09:00:00", 1 + n % 12));
+            p.content_hash = s.catalog.photo(ids[dice.roll(ids.len())]).and_then(|q| q.content_hash.clone()).filter(|_| n.is_multiple_of(8));
             if s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).is_ok() {
                 ids.push(id);
             }
@@ -89,8 +105,29 @@ fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
             let _ = s.commit("Remove", Op::RemovePhoto { id: one });
             return;
         }
+        2 if n % 4 == 2 => {
+            // the file's content changed (Reload): it is now the same as another photo's, or has no hash
+            let content_hash = s.catalog.photo(ids[dice.roll(ids.len())]).and_then(|q| q.content_hash.clone()).filter(|_| n % 8 == 2);
+            if let Some(p) = s.catalog.photo(one) {
+                let op = Op::SetContent {
+                    id: one,
+                    width: p.width,
+                    height: p.height,
+                    file_size: p.file_size,
+                    content_hash,
+                    preview_only: p.preview_only.clone(),
+                    preview_checked: p.preview_checked.clone(),
+                };
+                let _ = s.commit("Reload", op);
+            }
+            return;
+        }
         2 => {
-            let _ = s.commit("Local", Op::SetLocal { id: one, local: n.is_multiple_of(2) });
+            // (n % 4 is 3 here: its quotient decides, or no photo would ever move to Local)
+            let local = (n / 4).is_multiple_of(2);
+            if s.commit("Local", Op::SetLocal { id: one, local }).is_ok() && local {
+                dice.to_local += 1;
+            }
             return;
         }
         _ => {}
@@ -133,7 +170,7 @@ fn relative_clock_session(captures: &[&str]) -> (Session, std::sync::Arc<std::sy
 #[test]
 fn following_an_edit_gives_the_list_worked_out_from_every_photo() {
     let (mut s, mut ids, album, smart) = library(240);
-    let mut dice = Dice(7);
+    let mut dice = Dice::new(7);
     let sources = [
         json!({"kind": "all"}),
         json!({"kind": "picks"}),
@@ -150,7 +187,13 @@ fn following_an_edit_gives_the_list_worked_out_from_every_photo() {
         json!({"key": "editDate", "ascending": false}),
         json!({"key": "importDate", "ascending": true}),
     ];
-    let filters = [json!({"rating": 0, "text": ""}), json!({"rating": 3, "text": ""}), json!({"rating": 0, "text": "travel"})];
+    let same_content = json!({"match": "all", "rules": [{"field": "sameContent", "op": "is", "value": true}]});
+    let filters = [
+        json!({"rating": 0, "text": ""}),
+        json!({"rating": 3, "text": ""}),
+        json!({"rating": 0, "text": "travel"}),
+        json!({"rating": 0, "text": "", "ruleSet": same_content}),
+    ];
     let mut checked = 0;
     for (i, source) in sources.iter().enumerate() {
         for (j, sort) in sorts.iter().enumerate() {
@@ -176,6 +219,8 @@ fn following_an_edit_gives_the_list_worked_out_from_every_photo() {
     // and it was following that was checked: most edits touch a photo or two, and the view kept up with those
     // without asking every photo again
     assert!(s.view_followed > 400, "followed {} times, worked out {} times", s.view_followed, s.view_worked_out);
+    // (and the edits did move photos to Local, a case of its own for what the view keeps)
+    assert!(dice.to_local > 0, "no photo moved to Local");
 }
 
 #[test]
@@ -374,6 +419,9 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         json!({"edited": true}),
         json!({"dateFrom": "2025-06-01"}),
         json!({"text": "REN"}),
+        // whether another photo has the same content: an edit to one photo changes it for others
+        json!({"ruleSet": {"match": "all", "rules": [{"field": "sameContent", "op": "is", "value": true}]}}),
+        json!({"ruleSet": {"match": "all", "rules": [{"field": "sameContent", "op": "is", "value": false}]}}),
     ] {
         let made = s.execute("album.createSmart", &json!({"name": "More", "rules": rules}));
         assert!(made.is_ok(), "{rules}: {made:?}");
@@ -391,7 +439,7 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
     };
     let mut tally = AlbumTally::of(&s.catalog);
     assert_eq!(shown(&tally), fresh(&s));
-    let mut dice = Dice(23);
+    let mut dice = Dice::new(23);
     let (mut followed, mut whole) = (0, 0);
     for step in 0..900 {
         edit(&mut s, &mut dice, &mut ids, album);
@@ -409,6 +457,7 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         assert_eq!(shown(&tally), fresh(&s), "after edit {step}");
     }
     assert!(followed > 300 && whole > 20, "followed {followed} times, counted whole {whole} times");
+    assert!(dice.to_local > 0, "no photo moved to Local");
     // a photo deleted: the album of chosen photos it is in counts one less, without every photo being asked
     let in_album = s
         .catalog
