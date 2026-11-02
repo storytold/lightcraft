@@ -226,7 +226,10 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
             if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
                 let (_, mode, key) = modes[i];
-                let _ = app.run("geometry.upright", json!({"mode": key}));
+                // a second click on the mode that is on starts it over: analysed afresh on every
+                // photo it reaches (what was still running is cancelled), Guided's guides cleared
+                let again = active == Some(i) && mode != Upright::Off;
+                let _ = app.run("geometry.upright", json!({"mode": key, "again": again}));
                 app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
             }
         }

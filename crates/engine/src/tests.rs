@@ -7,6 +7,7 @@ mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
+mod autosync_wb;
 mod color;
 mod constrain_crop;
 mod crop_angle;
@@ -49,6 +50,7 @@ mod slide;
 mod slideshow_export;
 mod spots;
 mod sync;
+mod upright_sync;
 mod view_follow;
 pub(super) mod xmp;
 

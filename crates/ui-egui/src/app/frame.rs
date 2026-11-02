@@ -74,6 +74,7 @@ impl LightcraftApp {
         self.preview_build_status(ctx);
         self.save_status(ctx);
         self.ai_mask_detail(ctx, now);
+        self.upright_results(ctx);
         self.place_names_outcome(ctx);
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);

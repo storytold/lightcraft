@@ -138,6 +138,29 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
     Value::Object(out)
 }
 
+/// Upright in `partial` as it goes to other photos (Paste, Sync Settings, presets): an automatic
+/// mode travels without the correction found on one photo, so each photo is analysed on its own
+/// lines; Guided Upright, drawn on one photo's lines, doesn't travel at all (the photos it lands on
+/// keep the Upright they have). The Transform sliders travel as they are.
+pub fn upright_recipe(partial: &mut Value) {
+    let Some(g) = partial.get_mut("geometry").and_then(Value::as_object_mut) else { return };
+    match g.get("upright").and_then(Value::as_str) {
+        Some("guided") => {
+            for k in ["upright", "upright_transform", "guides"] {
+                g.remove(k);
+            }
+        }
+        Some(_) => {
+            g.insert("upright_transform".into(), Value::Null);
+            g.remove("guides");
+        }
+        None => {
+            g.remove("upright_transform");
+            g.remove("guides");
+        }
+    }
+}
+
 /// Recursively merge `patch` into `base` (objects merge; everything else replaces).
 pub fn deep_merge(base: &mut Value, patch: &Value) {
     match (base, patch) {
@@ -212,10 +235,15 @@ impl Preset {
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it
     /// already has are skipped), their effect scaled by the amount.
     pub fn apply(&self, s: &DevelopSettings, amount: f64) -> DevelopSettings {
-        let Some(masks) = self.settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
-            return apply_partial(s, &self.settings, amount);
+        // a preset saved from (or written for) one photo carries Upright as a recipe
+        let mut settings = Cow::Borrowed(&self.settings);
+        if settings.get("geometry").is_some() {
+            upright_recipe(settings.to_mut());
+        }
+        let Some(masks) = settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
+            return apply_partial(s, &settings, amount);
         };
-        let mut rest = self.settings.clone();
+        let mut rest = settings.clone().into_owned();
         if let Some(o) = rest.as_object_mut() {
             o.remove("masks");
         }

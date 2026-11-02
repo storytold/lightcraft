@@ -26,6 +26,9 @@ impl LightcraftApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        // Upright synced, pasted or preset onto other photos is worked out on each of them on a
+        // worker; frames merge the results (`upright_poll`)
+        session.upright_jobs.background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -477,6 +480,17 @@ impl LightcraftApp {
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
+    /// Upright worked out on other photos in the background: merge what finished, and look again
+    /// while photos are waiting.
+    fn upright_results(&mut self, ctx: &egui::Context) {
+        if self.session.upright_poll() {
+            ctx.request_repaint();
+        }
+        if self.session.upright_jobs.pending() > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
     fn place_names_outcome(&mut self, ctx: &egui::Context) {
         use lightcraft_engine::cmd::geocode::DownloadOutcome;
         match self.session.place_names.take_outcome() {
