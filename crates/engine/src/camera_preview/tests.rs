@@ -1107,6 +1107,109 @@ fn external_profile_geometry_preserves_oriented_default_crop_and_resolution() {
 }
 
 #[test]
+fn configured_lens_geometry_reaches_pool_add_after_raw_decode() {
+    const DB: &str = r#"<lensdatabase>
+      <camera><maker>Nikon</maker><model>Uncalibrated</model><mount>T</mount><cropfactor>1.5</cropfactor></camera>
+      <lens><maker>Synthetic</maker><model>Synthetic 18mm</model><mount>T</mount><cropfactor>1.5</cropfactor>
+        <calibration><distortion model="poly5" focal="18" k1="-0.24" k2="0.08" /></calibration>
+      </lens></lensdatabase>"#;
+    const CHILD: &str = "LIGHTCRAFT_TEST_POOL_DECODE_GEOMETRY_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-pool-decode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("synthetic.xml"), DB).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "camera_preview::tests::configured_lens_geometry_reaches_pool_add_after_raw_decode", "--nocapture"])
+            .env(CHILD, "1")
+            .env(crate::lens_profiles::ENV, &dir)
+            .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+            .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+
+    // A complete, bounded uncompressed NEF: production decode reads a real Bayer strip,
+    // EXIF lens identity and an embedded JPEG. No corpus or injected RawImage is involved.
+    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags};
+    let (w, h) = (768, 512);
+    let scene = profile_geometry_scene(w, h);
+    let samples: Vec<u8> = scene
+        .data
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            let channel = match (i / w % 2, i % w % 2) {
+                (0, 0) => 0,
+                (1, 1) => 2,
+                _ => 1,
+            };
+            ((p[channel] * 16383.0).round() as u16).to_le_bytes()
+        })
+        .collect();
+    let mut mosaic = IfdBuilder::new();
+    mosaic.set(tags::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+    mosaic.set(tags::IMAGE_WIDTH, Value::Long(vec![w as u32]));
+    mosaic.set(tags::IMAGE_LENGTH, Value::Long(vec![h as u32]));
+    mosaic.set(tags::BITS_PER_SAMPLE, Value::Short(vec![14]));
+    mosaic.set(tags::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+    mosaic.set(tags::COMPRESSION, Value::Short(vec![1]));
+    mosaic.set(tags::PHOTOMETRIC, Value::Short(vec![32803]));
+    mosaic.set(tags::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+    mosaic.set(tags::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+    mosaic.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![samples] });
+    let mut ifd = IfdBuilder::new();
+    ifd.set(tags::MAKE, Value::Ascii("Nikon".into()));
+    ifd.set(tags::MODEL, Value::Ascii("Uncalibrated".into()));
+    ifd.add_sub_ifd(mosaic);
+    let mut exif = IfdBuilder::new();
+    exif.set(tags::FOCAL_LENGTH, Value::Rational(vec![(18, 1)]));
+    exif.set(tags::LENS_MODEL, Value::Ascii("Synthetic 18mm".into()));
+    ifd.set_child(tags::EXIF_IFD, exif);
+    let shell = TiffWriter::default().write(&[ifd.clone()]).unwrap();
+    let raw = lightcraft_raw::decode(&shell).expect("procedural NEF decodes through the production reader");
+    assert_eq!(raw.format, RawFormat::Nef);
+    assert!(raw.opcodes.list3.is_empty());
+    assert_eq!(raw.info().developed_size(), (w, h));
+    let lens = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(&shell)).expect("configured database resolves EXIF identity");
+    let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+    assert!(transform.matrix_is_fallback);
+    let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
+    sensor.map_in_place(|p| {
+        transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * 2f32.powf(transform.baseline_exposure as f32)))
+    });
+    let mut target = profile_geometry_target(&sensor, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    target.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let to_srgb = lightcraft_color::SRGB.from_xyz().mul(&REC2020.to_xyz());
+    let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let pixels: Vec<u8> = target.data.iter().flat_map(|p| to_srgb.apply_f32(*p).map(|v| (srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+    let image = lightcraft_codecs::EncodeImage::new(target.width as u32, target.height as u32, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 98, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
+    ifd.set(0x0201, Value::Long(vec![0]));
+    ifd.set(0x0202, Value::Long(vec![jpeg.len() as u32]));
+    let offset = TiffWriter::default().write(&[ifd.clone()]).unwrap().len();
+    ifd.set(0x0201, Value::Long(vec![offset as u32]));
+    let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+    assert_eq!(file.len(), offset);
+    file.extend(jpeg);
+    let decoded = lightcraft_raw::decode(&file).unwrap();
+    let corrected = profile_pairs(&decoded, &file, None, Some(&lens)).expect("corrected decoded NEF contributes colour pairs");
+    let plain = profile_pairs(&decoded, &file, None, None).unwrap();
+    assert_ne!(corrected, plain, "fixture distinguishes forwarding the resolved correction from dropping it");
+    // Match the documented per-photo cap, then observe the result through Pool's public fit API.
+    let step = corrected.len().div_ceil(4000).max(1);
+    let expected: Vec<_> = corrected.into_iter().step_by(step).collect();
+    let (matrix, hue_sat) = fit_profile(&expected).expect("synthetic scene spans enough colours for pooled calibration");
+    let expected = crate::camera_profiles::CameraProfile::new("Uncalibrated", 1, expected.len(), matrix, hue_sat);
+    let mut pool = crate::camera_profiles::Pool::default();
+    assert_eq!(pool.add(&file).unwrap(), Some("Uncalibrated".into()));
+    assert_eq!(pool.files(), vec![("Uncalibrated".into(), 1)]);
+    assert_eq!(pool.fit(1), vec![Ok(expected)], "Pool::add must forward the database correction after decoding the actual bytes");
+}
+
+#[test]
 fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
     const DB: &str = r#"<lensdatabase>
       <camera><maker>Synthetic</maker><model>Uncalibrated</model><mount>T</mount><cropfactor>1.5</cropfactor></camera>
@@ -1124,6 +1227,8 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
             .args(["--exact", "camera_preview::tests::external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop", "--nocapture"])
             .env(CHILD, "1")
             .env(crate::lens_profiles::ENV, &dir)
+            .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+            .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
             .output()
             .unwrap();
         std::fs::remove_dir_all(&dir).unwrap();

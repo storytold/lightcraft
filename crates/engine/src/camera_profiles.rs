@@ -263,6 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn public_cache_key_includes_the_configured_lens_database() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_CAMERA_CACHE_KEY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = std::env::temp_dir().join(format!("lc-camera-key-wiring-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("lens.xml"),
+                r#"<lensdatabase><lens><maker>Test</maker><model>18mm</model><mount>T</mount><cropfactor>1.5</cropfactor>
+                <calibration><distortion model="poly3" focal="18" k1="-0.03" /></calibration></lens></lensdatabase>"#,
+            )
+            .unwrap();
+            // Both OnceLocks and the configured camera-profile folder belong to the child only.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "camera_profiles::tests::public_cache_key_includes_the_configured_lens_database", "--nocapture"])
+                .env(CHILD, "1")
+                .env(crate::lens_profiles::ENV, &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        assert!(crate::lens_profiles::database().is_some(), "fixture database was loaded by the public loader");
+        let lens_key = crate::lens_profiles::cache_key();
+        assert_ne!(lens_key, 0);
+        let directory = dir();
+        assert_eq!(cache_key(), cache_key_with_lens(directory.as_deref(), lens_key));
+        assert_ne!(cache_key(), cache_key_with_lens(directory.as_deref(), 0), "public camera key must forward the loaded lens key");
+    }
+
+    #[test]
     fn profiles_round_trip_and_reject_bad_files() {
         let dir = std::env::temp_dir().join(format!("lc-camera-profiles-{}", std::process::id()));
         let path = save(&profile(), &dir).unwrap();

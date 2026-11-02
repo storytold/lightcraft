@@ -382,11 +382,18 @@ fn smart_preview_from_another_database_stays_decodable_offline() {
     let bytes = encode(&image, None).unwrap();
     let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
     let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
-    head[LENS_FIELD] = serde_json::json!(123);
-    assert!(header_is_stale(&head, true, 456));
+    head[LENS_FIELD] = serde_json::json!(crate::lens_profiles::cache_key().wrapping_add(1));
     let mut changed = MAGIC.to_vec();
     changed.extend_from_slice(head.to_string().as_bytes());
     changed.extend_from_slice(&bytes[nl..]);
-    let (decoded, _, _) = decode(&changed).unwrap();
-    assert_eq!((decoded.width, decoded.height), (image.width, image.height));
+    let dir = temp("lens-database-offline");
+    let path = dir.join("old.lcsp");
+    std::fs::write(&path, &changed).unwrap();
+    assert!(is_stale_for(&path, true), "the public disk check compares the current lens identity");
+    assert!(!is_stale_for(&path, false), "non-fitted photos do not depend on the lens database");
+    assert!(is_valid(&path), "staleness does not invalidate the offline copy");
+    let decoded = load(&path).unwrap();
+    assert!(decoded.from_proxy);
+    assert_eq!((decoded.image.width, decoded.image.height), (image.width, image.height));
+    let _ = std::fs::remove_dir_all(&dir);
 }

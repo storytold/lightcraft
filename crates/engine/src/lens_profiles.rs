@@ -174,6 +174,31 @@ mod tests {
       </lens></lensdatabase>"#;
 
     #[test]
+    fn public_cache_key_hashes_the_configured_database() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_LENS_CACHE_KEY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = std::env::temp_dir().join(format!("lc-lens-key-wiring-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("lens.xml"), DB).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "lens_profiles::tests::public_cache_key_hashes_the_configured_database", "--nocapture"])
+                .env(CHILD, "1")
+                .env(ENV, &dir)
+                .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let loaded = database().expect("fixture database was loaded by the public loader");
+        assert_eq!(loaded, &LensDb::parse(DB).unwrap());
+        assert_ne!(cache_key(), 0, "configured nonempty database cannot use the no-database identity");
+        assert_eq!(cache_key(), cache_key_for(Some(loaded)), "public lens key hashes the actual loaded snapshot");
+    }
+
+    #[test]
     fn database_identity_tracks_loaded_geometry_not_xml_formatting() {
         let db = LensDb::parse(DB).unwrap();
         let key = cache_key_for(Some(&db));

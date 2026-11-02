@@ -354,8 +354,8 @@ struct SmartCounts {
 
 /// `source` if it reads the photo's original, else `None`. A source decoded from a smart preview
 /// (it now carries the proxy's stored facts), a proxy standing in for an offline original, and the
-/// proxy fallback of a file source are not the original: refreshing a stale proxy from one of them
-/// would stamp its older look as current.
+/// proxy fallback of a file source are not the original: building or repairing a proxy from one
+/// of them would stamp its older look as current.
 #[cfg(not(target_arch = "wasm32"))]
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
@@ -364,6 +364,7 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
             Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
+        source @ SourceRef::Demo { .. } => Some(source),
         _ => None,
     }
 }
@@ -410,9 +411,9 @@ fn smart_run(
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
-                // a stale proxy is rebuilt from the original only: never from itself (the file
-                // fallback or a source decoded from a proxy would stamp the old look as current)
-                let source = if stale { source.and_then(original_only) } else { source };
+                // Every encode stamps current identities, including repairs and missing targets.
+                // Never relabel pixels from a proxy, even when the destination has no readable header.
+                let source = source.and_then(original_only);
                 // atomic: a failed write leaves no partial proxy that would pass for a built one;
                 // and synced (issue #134): built so the photo can be edited while its original
                 // is offline, when it is the only copy — the sync is small next to the decode
@@ -420,6 +421,9 @@ fn smart_run(
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
+                        if src.from_proxy || src.reduced {
+                            return Err("smart previews need the original source".to_string());
+                        }
                         let info = src.info_or(Default::default());
                         crate::smart::encode(&src.image, Some(&info))
                     })
@@ -735,5 +739,106 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod smart_provenance_tests {
+    use super::smart_run;
+    use crate::media::{SourceLevel, SourceRef};
+    use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+    use std::sync::Arc;
+
+    fn temp(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-smart-provenance-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn damaged_shard_never_relabels_cached_legacy_fallback_and_repairs_from_online_original() {
+        let dir = temp("legacy-fallback");
+        let mut photo = Photo::new(
+            PhotoId(1),
+            Source::File { path: dir.join("offline.arw").to_string_lossy().into_owned() },
+            "offline.arw",
+            "ARW",
+            48,
+            32,
+            "2026-11-02T00:00:00",
+        );
+        photo.kind = MediaKind::Raw;
+        let shard = crate::smart::sharded_file_path(&dir, &photo);
+        let legacy = dir.join(crate::smart::file_name(&photo));
+        std::fs::create_dir_all(shard.parent().unwrap()).unwrap();
+        let mut image = lightcraft_raster::Rgb32f::new(48, 32);
+        image.data.fill([0.25, 0.3, 0.2]);
+        let bytes = crate::smart::encode(&image, None).unwrap();
+        let start = b"LCSP1\n".len();
+        let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+        let mut head: serde_json::Value = serde_json::from_slice(&bytes[start..nl]).unwrap();
+        head["lens_db"] = serde_json::json!(crate::lens_profiles::cache_key().wrapping_add(1));
+        let mut old = bytes[..start].to_vec();
+        old.extend_from_slice(head.to_string().as_bytes());
+        old.extend_from_slice(&bytes[nl..]);
+        std::fs::write(&legacy, &old).unwrap();
+        std::fs::write(&shard, b"broken").unwrap();
+        assert!(crate::smart::is_stale_for(&legacy, true));
+        assert!(!crate::smart::is_stale_for(&shard, true), "a damaged header is not stale");
+
+        let mut session = crate::Session::new();
+        session.media.smart_dir = Some(dir.clone());
+        session.media.file_loader = Some(Arc::new(|_, _| Err("original is offline".into())));
+        // Reproduce the UI cache selecting legacy while the worker sees the damaged shard.
+        let cached_missing = shard.to_string_lossy().into_owned();
+        session.media.availability.set_probe(Arc::new(move |path| path != cached_missing));
+        let source = session.media.source_ref(&photo, SourceLevel::Preview);
+        assert!(matches!(&source, SourceRef::File { fallback: Some(p), .. } if p == &legacy));
+        assert!(source.load_source().unwrap().from_proxy, "the renderer can still use the offline fallback");
+        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.stale_kept, counts.failed.len()), (0, 0, 0, 0, 1));
+        assert_eq!(std::fs::read(&shard).unwrap(), b"broken", "a failed repair leaves its destination untouched");
+        assert_eq!(std::fs::read(&legacy).unwrap(), old);
+        assert!(crate::smart::load(&legacy).unwrap().from_proxy);
+
+        session.media.file_loader = Some(Arc::new(move |_, _| Ok((image.clone(), Default::default()))));
+        let source = session.media.source_ref(&photo, SourceLevel::Preview);
+        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.failed.len()), (1, 1, 0, 0));
+        assert!(crate::smart::is_valid(&shard));
+        assert!(!crate::smart::is_stale_for(&shard, true));
+        assert_eq!(std::fs::read(&legacy).unwrap(), old, "repair does not overwrite the valid legacy copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_target_never_encodes_proxy_sources_but_keeps_valid_offline_proxies() {
+        let dir = temp("missing-target");
+        let legacy = dir.join("legacy.lcsp");
+        let image = lightcraft_raster::Rgb32f::new(48, 32);
+        let bytes = crate::smart::encode(&image, Some(&Default::default())).unwrap();
+        std::fs::write(&legacy, &bytes).unwrap();
+        let loaded = crate::smart::load(&legacy).unwrap();
+        assert!(loaded.info.is_some(), "stored facts do not confer original provenance");
+        let mut reduced = crate::media::DecodedSource::new(Arc::new(image.clone()), Some(Default::default()));
+        reduced.reduced = true;
+        let sources = [
+            SourceRef::Loaded(Box::new(reduced)),
+            SourceRef::Loaded(Box::new(loaded.clone())),
+            SourceRef::Fit { from: Box::new(loaded), max_edge: 24 },
+            SourceRef::Smart { path: legacy.clone() },
+        ];
+        for (i, source) in sources.into_iter().enumerate() {
+            let target = dir.join(format!("missing-{i}.lcsp"));
+            let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), true)], None).unwrap();
+            assert_eq!((counts.built, counts.repaired, counts.failed.len()), (0, 0, 1));
+            assert!(!target.exists());
+        }
+        let source = SourceRef::Smart { path: legacy.clone() };
+        let counts = smart_run(&dir, false, false, vec![(PhotoId(1), legacy.clone(), Some(source), true)], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.failed.len()), (1, 0, 0));
+        assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
