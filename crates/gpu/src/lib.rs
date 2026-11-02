@@ -764,6 +764,9 @@ pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu:
     let g = slot::adopt(|| {
         let adopted = if info.device_type == wgpu::DeviceType::Cpu {
             Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name))
+        } else if !backend::may_adopt_window_device(&info.name) {
+            // (the photos render on the card LIGHTCRAFT_GPU_ADAPTER names, on a device of its own)
+            Err(format!("LIGHTCRAFT_GPU_ADAPTER names another card than the window's ({})", info.name))
         } else {
             // (building the kernels is a long call into the driver: the crash sentinel covers it)
             backend::with_init_marker(wgpu::Backends::from(info.backend), || {
