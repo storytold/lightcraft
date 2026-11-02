@@ -305,7 +305,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             out.write_all(b"partial")?;
             return Err(io::Error::other("write failed (injected)"));
         }
-        io::copy(&mut inp, &mut out)?;
+        copy_in_chunks(&mut inp, &mut out)?;
         #[cfg(test)]
         if injected(Fault::Slow) {
             COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
@@ -332,6 +332,26 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
         let _ = fs::remove_file(dst);
     }
     r
+}
+
+/// Bytes per write of [`copy_in_chunks`]. `io::copy` from one `File` to another writes 8 KiB at a
+/// time on Windows, and on a network share every write waits for the server: 1.9 MB/s on gigabit
+/// SMB, against 17 MB/s in 1 MiB writes (issue #3561).
+pub(crate) const COPY_CHUNK: usize = 1 << 20;
+
+/// Copy `from` into `to` in [`COPY_CHUNK`] writes, however little each read returns: every write
+/// but the last is a full chunk. Returns the number of bytes copied.
+pub(crate) fn copy_in_chunks(from: &mut impl Read, to: &mut impl Write) -> io::Result<u64> {
+    let mut buf = vec![0u8; COPY_CHUNK];
+    let mut total = 0u64;
+    loop {
+        let n = fill(from, &mut buf)?;
+        if n == 0 {
+            return Ok(total);
+        }
+        to.write_all(buf.get(..n).unwrap_or(&[]))?;
+        total = total.saturating_add(n as u64);
+    }
 }
 
 /// [`lightcraft_preview::hash_bytes`] of a file's content, read in chunks.
@@ -367,7 +387,7 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
 }
 
 /// Read until `buf` is full or the file ends.
-fn fill(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
+fn fill(f: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     let mut n = 0;
     while let Some(rest) = buf.get_mut(n..).filter(|r| !r.is_empty()) {
         match f.read(rest) {

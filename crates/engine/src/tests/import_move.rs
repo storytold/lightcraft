@@ -142,6 +142,51 @@ fn move_across_volumes_copies_then_removes() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Hands out at most 8 KiB per read, as `io::copy` reads a file.
+struct Trickle<'a>(&'a [u8]);
+
+impl std::io::Read for Trickle<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(8192).min(self.0.len());
+        buf[..n].copy_from_slice(&self.0[..n]);
+        self.0 = &self.0[n..];
+        Ok(n)
+    }
+}
+
+/// Keeps what is written and counts the writes.
+#[derive(Default)]
+struct CountedWrites {
+    data: Vec<u8>,
+    writes: usize,
+}
+
+impl std::io::Write for CountedWrites {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.writes += 1;
+        self.data.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Copies to another volume reach it in 1 MiB writes, not one per 8 KiB read: on a network share
+/// every write waits for the server (issue #3561).
+#[test]
+fn copies_are_written_in_large_chunks() {
+    use crate::import_move::{COPY_CHUNK, copy_in_chunks};
+    for len in [0, 1, COPY_CHUNK - 1, COPY_CHUNK, COPY_CHUNK + 1, 3 * COPY_CHUNK + 12_345] {
+        let src: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+        let mut out = CountedWrites::default();
+        let n = copy_in_chunks(&mut Trickle(&src), &mut out).unwrap();
+        assert_eq!(n, len as u64);
+        assert!(out.data == src, "{len} bytes: the copy differs");
+        assert_eq!(out.writes, len.div_ceil(COPY_CHUNK), "{len} bytes");
+    }
+}
+
 /// A copy that fails while writing, or comes out different, leaves nothing behind and keeps the
 /// source; nothing is catalogued.
 #[test]
