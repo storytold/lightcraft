@@ -2390,5 +2390,10 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Reduce Motion": "Reducir movimiento",
+  "Reduce motion": "Reducir movimiento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen. Sigue el ajuste Reducir movimiento del sistema hasta que lo cambies aquí.",
+  "Use the system setting": "Usar el ajuste del sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen."
 }

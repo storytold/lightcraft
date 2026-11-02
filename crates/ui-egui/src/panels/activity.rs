@@ -147,7 +147,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
 }
 
 /// The progress bar, named after its task for screen readers; while the amount of work isn't
-/// known, a segment sweeps across.
+/// known, a segment sweeps across (it stands still with Reduce motion on).
 pub(crate) fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) -> egui::Response {
     let fraction = (task.total > 0).then(|| (task.done as f64 / task.total as f64) as f32);
     let response = crate::progress::Progress::new(fraction).width(width).dimmed(task.cancelling).show(ui);

@@ -260,6 +260,16 @@
 
 ## 2026-10-24
 
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
