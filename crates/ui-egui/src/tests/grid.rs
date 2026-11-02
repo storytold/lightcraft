@@ -143,7 +143,7 @@ fn unloaded_thumbnails_show_their_selection() {
     h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
     h.step();
     h.request("engine.execute", json!({"command": "library.selectAll"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.selectAll");
     let t = crate::theme::Tokens::get(&h.view.ctx);
     assert!(crate::theme::current(&h.view.ctx).is_some_and(|k| !k.is_dark()), "light theme");
     let active = h.app.session.selection.active.expect("active");

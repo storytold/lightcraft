@@ -55,9 +55,10 @@ fn three(h: &mut Headless) -> [u64; 3] {
     [v[0].0, v[1].0, v[2].0]
 }
 
+#[track_caller]
 fn select(h: &mut Headless, ids: &[u64]) {
     h.app.run("library.select", json!({"ids": ids})).unwrap();
-    h.settle(Duration::from_secs(60));
+    h.settled(Duration::from_secs(60), "after library.select");
 }
 
 #[test]

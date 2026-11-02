@@ -30,10 +30,11 @@ fn clean(dir: &std::path::Path) {
     let _ = std::fs::remove_dir_all(dir.parent().unwrap());
 }
 
+#[track_caller]
 fn app() -> Headless {
     let session = lightcraft_engine::Session::new().with_fs();
     let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1300.0, 900.0], 1.0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new session");
     h
 }
 
@@ -49,7 +50,7 @@ fn confirm(h: &mut Headless, dialog: Dialog) {
     }
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:dialogOk");
 }
 
 fn toast(h: &Headless) -> String {

@@ -98,7 +98,8 @@ impl Drop for Review {
     fn drop(&mut self) {
         self.h.app.ui.dialog = None;
         self.h.app.renderer.forget_imports();
-        self.h.settle(T);
+        // best effort: a panic here, while a failed test unwinds, would abort the whole binary
+        let _ = self.h.settle(T);
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }

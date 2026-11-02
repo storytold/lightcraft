@@ -383,7 +383,7 @@ fn object_and_describe_masks_show_pins_that_select_but_do_not_move() {
     assert_eq!(h.app.session.active_mask, Some(2));
     // pins shown without the pointer over the photo
     exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.toolOverlay");
     let pin_at = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.center());
     let (Some(object_pin), Some(prompt_pin)) = (pin_at(&h, "maskPin:1:0"), pin_at(&h, "maskPin:2:0")) else {
         panic!("both masks have a pin: {:?}", h.app.widgets.iter().filter(|(w, _)| w.starts_with("maskPin:")).collect::<Vec<_>>())
@@ -405,7 +405,7 @@ fn object_and_describe_masks_show_pins_that_select_but_do_not_move() {
     assert_eq!(h.app.session.active_mask, Some(1), "the press still selects the mask");
     let after = h.app.session.catalog.photo(id).expect("photo").clone();
     assert_eq!((after.develop.clone(), after.history.len()), (before.develop.clone(), before.history.len()));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dragging from the pin");
 }
 
 /// Issue #3049: with the Object tool on, a click on another mask's pin selects that mask instead
@@ -429,12 +429,12 @@ fn the_object_tool_selects_the_mask_whose_pin_is_clicked() {
     assert_eq!(h.app.session.active_mask, Some(3));
     exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
     h.app.ui.tool = "object".into();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after choosing the Object tool");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone());
     let before = develop(&h).masks;
     // the Object mask's pin: it is selected, its clicks and the selected mask's stay as they were
     pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking the Object mask's pin");
     assert_eq!(h.app.session.active_mask, Some(1), "the pinned mask is selected");
     assert_eq!(develop(&h).masks, before, "no Object click was added to any mask");
     assert_eq!(h.app.ui.dialog, None, "no Object click was tried");
@@ -442,7 +442,7 @@ fn the_object_tool_selects_the_mask_whose_pin_is_clicked() {
     assert_eq!(h.app.ui.tool, "object", "the tool stays on to refine the Object mask");
     // the Radial mask's pin: selected, and the Object tool goes off (nothing for it to refine)
     pointer(&mut h, json!([{"kind": "down", "x": 0.2, "y": 0.8}, {"kind": "up", "x": 0.2, "y": 0.8}]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking the Radial mask's pin");
     assert_eq!(h.app.session.active_mask, Some(2));
     assert_eq!(develop(&h).masks, before);
     assert_eq!(h.app.ui.tool, "", "the Object tool is off");
@@ -466,12 +466,12 @@ fn the_object_tool_adds_no_click_on_the_selected_masks_own_pin() {
     assert_eq!(h.app.session.active_mask, Some(1));
     exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
     h.app.ui.tool = "object".into();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after choosing the Object tool");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone());
     let before = develop(&h).masks;
     // a little off the pin's centre, as a hand clicks it
     pointer(&mut h, json!([{"kind": "down", "x": 0.601, "y": 0.501}, {"kind": "up", "x": 0.601, "y": 0.501}]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking near the pin's centre");
     assert_eq!(develop(&h).masks, before, "no Object click was added");
     assert_eq!(h.app.session.active_mask, Some(1), "the mask stays selected");
     assert_eq!(h.app.ui.dialog, None, "no Object click was tried");
@@ -2039,9 +2039,10 @@ fn stroke_centreline(h: &Headless, y: f32) -> Vec<[f32; 3]> {
 
 /// The fast stroke of the #517 test at height `y`, with the button still held: its centreline
 /// before painting and while painting.
+#[track_caller]
 fn hold_fast_stroke(h: &mut Headless, y: f32) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
     pointer(h, json!([{"kind": "move", "x": 0.02, "y": 0.02}]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after moving the pointer to the corner");
     let photo = stroke_centreline(h, y);
     pointer(
         h,
@@ -2063,7 +2064,7 @@ fn tinted(photo: &[[f32; 3]], held: &[[f32; 3]]) -> Vec<([f32; 3], [f32; 3])> {
 #[test]
 fn a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden() {
     let mut h = detail("panel.masking");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the Masking panel");
     exec(&mut h, "tool.brush", json!({"new": true}));
     let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 50.0, "brushFlow": 100.0}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -2080,7 +2081,7 @@ fn a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden() {
     assert!(strokes[0].points.len() >= 3, "{strokes:?}");
     assert!(!h.app.ui.mask_overlay, "painting leaves the overlay hidden");
     // committed: the stroke brightens the photo
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the committed stroke");
     let luma = |c: &[[f32; 3]]| c.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / c.len() as f32;
     let done = stroke_centreline(&h, 0.3);
     assert!(luma(&done) > luma(&photo) + 30.0, "committed {} vs before {}", luma(&done), luma(&photo));

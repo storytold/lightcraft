@@ -1643,7 +1643,7 @@ fn folders_app_with_deep_labeled_chain() -> (Headless, String) {
         h.step();
     }
     h.app.run("folder.label", json!({"path": dir, "label": "red"})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after folder.label");
     (h, dir)
 }
 
@@ -1676,7 +1676,7 @@ fn a_count_never_covers_the_name_of_a_deep_row() {
     for width in (200..=330).step_by(2) {
         let r = h.request("ui.set", json!({"leftWidth": width}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.set leftWidth");
         let panel = widget(&h, "panel:left_panel");
         for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
             assert!(r.right() <= panel.right() || r.left() >= panel.right(), "at {width} pt {id} straddles the edge: {r:?} / {panel:?}");
@@ -1718,7 +1718,7 @@ fn a_count_that_gives_way_is_whole_after_a_sideways_flick() {
     for dx in [-10.0, -20.0, -30.0, -40.0, -60.0, -90.0, 20.0, 40.0, 90.0] {
         for width in [210, 230, 250, 290] {
             h.request("ui.set", json!({"leftWidth": width}), T);
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after ui.set leftWidth");
             h.request("ui.scroll", json!({"dx": dx}), T);
             h.step();
             let panel = widget(&h, "panel:left_panel");
@@ -1743,7 +1743,7 @@ fn a_count_that_gives_way_is_whole_when_the_panel_grows_in_one_frame() {
                 let r = h.request("ui.set", json!({"leftWidth": width}), T);
                 assert_eq!(r["ok"], true, "{r}");
                 if width == from {
-                    h.settle(SETTLE);
+                    h.settled(SETTLE, "after ui.set leftWidth");
                 } else {
                     h.step();
                 }

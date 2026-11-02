@@ -200,11 +200,12 @@ fn pixel(img: &egui::ColorImage, p: egui::Pos2) -> egui::Color32 {
     img.pixels[p.y as usize * img.size[0] + p.x as usize]
 }
 
+#[track_caller]
 fn with_export_dialog(mut h: Headless) -> Headless {
     h.app.run("dialog.export", json!({})).unwrap();
     h.step();
     h.step();
-    h.settle(T);
+    h.settled(T, "after dialog.export");
     h
 }
 
@@ -227,7 +228,7 @@ fn a_dialog_dims_the_top_bar_without_the_integrated_title_bar() {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    h.settle(Duration::from_secs(120));
+    h.settled(Duration::from_secs(120), "the new demo session");
     let spot = egui::pos2(20.0, 20.0);
     let closed = h.snapshot(T);
     let mut h = with_export_dialog(h);
@@ -303,7 +304,7 @@ fn dragging_the_empty_bar_moves_the_window_under_a_dialog() {
         h.app.run(command, json!({})).unwrap();
         h.step();
         h.step();
-        h.settle(T);
+        h.settled(T, &format!("after {command}"));
         let p = empty_spot(&h);
         h.window_commands.clear();
         h.request("ui.drag", json!({"x": p.x, "y": p.y, "toX": p.x + 120.0, "toY": p.y + 40.0}), T);
