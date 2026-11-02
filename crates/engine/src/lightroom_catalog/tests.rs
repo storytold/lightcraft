@@ -599,6 +599,7 @@ fn a_collection_listed_twice_imports_once_and_a_conflicting_one_is_skipped_with_
     assert_eq!(r["collections"], 2);
     assert_eq!(s.catalog.albums().filter(|a| a.name == "Keepers").count(), 1);
     assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert_eq!(r["warnings"], json!([]), "an exact repeat drops quietly");
 
     let mut s = crate::Session::new();
     let mut data = sample();
@@ -616,6 +617,24 @@ fn a_collection_listed_twice_imports_once_and_a_conflicting_one_is_skipped_with_
         json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
     );
     assert_eq!(s.undo.len(), 1);
+}
+/// The search for the nearest set ends on a parent loop that got past `validate` (A in B in A, a collection in
+/// itself) and on a chain of plain collections deeper than 64: the album goes to the top level, flagged as moved.
+#[test]
+fn the_nearest_set_search_ends_on_a_parent_loop_or_a_deep_chain() {
+    let plain = |id: i64, parent: i64| row(json!({"id_local":id,"parent":parent,"name":format!("C{id}"),"creationId":"collection"}));
+    let (a, b, own) = (plain(1, 2), plain(2, 1), plain(3, 3));
+    let child = plain(4, 1);
+    let collections: HashMap<i64, &Row> = [(1, &a), (2, &b), (3, &own), (4, &child)].into_iter().collect();
+    let no_sets = HashSet::new();
+    for c in [&a, &b, &own, &child] {
+        assert_eq!(collection_parent(c, &collections, &no_sets), (None, true), "{c:?}");
+    }
+    // a set in the loop is still found
+    assert_eq!(collection_parent(&child, &collections, &HashSet::from([2])), (Some(2), true));
+    let chain: Vec<Row> = (100..200).map(|id| plain(id, if id == 100 { 0 } else { id - 1 })).collect();
+    let collections: HashMap<i64, &Row> = chain.iter().map(|r| (number(r, "id_local"), r)).collect();
+    assert_eq!(collection_parent(&chain[99], &collections, &no_sets), (None, true));
 }
 /// A damaged index that names one existing album for two collections gives the second an album of its own rather
 /// than merging its photos into the first's.
