@@ -790,7 +790,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let rm6: Vec<crate::Opcode> = if linear_rgb || !super::arw_lens::is_3_2(crop) {
         Vec::new()
     } else {
-        super::arw_lens_rm6::lens_opcodes(raw, &model, Rect::new(0, 0, w, h), reference)
+        let lens = metadata.lens_model.as_deref();
+        super::arw_lens_rm6::lens_opcodes(raw, &model, lens, metadata.focal_length, Rect::new(0, 0, w, h), reference)
     };
     if !rm6.is_empty()
         && let Some(record) = sony_lens.as_mut()
