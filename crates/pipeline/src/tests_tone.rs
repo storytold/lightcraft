@@ -208,6 +208,85 @@ fn median_orders_special_values_and_ties_like_total_cmp() {
     }
 }
 
+/// A row of "8"s (two rings each, strokes 1.3 detail radii `r` wide, neighbours 0.8 radii apart):
+/// dark lettering on a bright panel at the size of a bus number, as log luminance.
+fn lettering(r: usize) -> (Plane, impl Fn(usize, usize) -> bool) {
+    let rf = r as f32;
+    let ring = move |x: f32, y: f32, cx: f32, cy: f32, outer: f32| {
+        let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+        d <= outer && d >= outer - 1.3 * rf
+    };
+    let stroke = move |x: usize, y: usize| {
+        let (x, y) = (x as f32, y as f32);
+        (0..5).any(|i| {
+            let cx = 150.0 + i as f32 * 7.4 * rf;
+            ring(x, y, cx, 200.0 - 2.8 * rf, 2.9 * rf) || ring(x, y, cx, 200.0 + 3.2 * rf, 3.3 * rf)
+        })
+    };
+    (Plane::from_fn(900, 400, |x, y| if stroke(x, y) { -4.6 } else { -1.3 }), stroke)
+}
+
+#[test]
+fn gaps_between_letters_keep_their_own_tone_in_the_base() {
+    // At the size of a bus number in a 7000 px photo, a median at the detail radius filled the
+    // gaps between the digits and around their waists with the letters' tone: 360 panel pixels
+    // sat over 1 EV (up to 2.3 EV) above their base, so Shadows lifted them by up to 1.3 EV into
+    // bright blocks. The wider median sees the panel there, so the gaps keep their own tone.
+    let ppl = 6960.0;
+    let r = local::base_detail_radius(ppl);
+    assert_eq!(r, 10);
+    let (l, stroke) = lettering(r);
+    let (w, h) = (l.width, l.height);
+    let base = local::tone_base(&l, 0.015 * ppl as f32, r);
+    // panel pixels at least 3 px from a stroke (the guided filter's own edge softness aside)
+    let panel = |x: usize, y: usize| !(x.saturating_sub(2)..(x + 3).min(w)).any(|a| (y.saturating_sub(2)..(y + 3).min(h)).any(|b| stroke(a, b)));
+    let (mut worst, mut under) = (0.0f32, 0usize);
+    for y in 0..h {
+        for x in (0..w).filter(|&x| panel(x, y)) {
+            let d = l.get(x, y) - base.get(x, y);
+            worst = worst.max(d);
+            under += usize::from(d > 1.0);
+        }
+    }
+    assert!(under == 0 && worst < 1.0, "{under} panel px over 1 EV above their base; worst {worst} EV");
+}
+
+#[test]
+fn isolated_lines_up_to_the_detail_radius_stay_out_of_the_base() {
+    // Light lines 1 to 9 px wide on a dark ground (twigs against a dark wall, r = 10): the base
+    // keeps the ground's tone under each, as under the median (#632), so Shadows lifts them with
+    // the ground and they keep their contrast. Clamping to the window's quartiles instead let lines
+    // of 6 px and more a third to two thirds of the way into the base.
+    let ppl = 6960.0;
+    let r = local::base_detail_radius(ppl);
+    let widths = [1usize, 2, 3, 4, 5, 6, 7, 8, 9];
+    let l = Plane::from_fn(1300, 200, |x, _| {
+        let (i, off) = (x / 130, x % 130);
+        if i < widths.len() && (60..60 + widths[i]).contains(&off) { -2.0 } else { -6.0 }
+    });
+    let base = local::tone_base(&l, 0.015 * ppl as f32, r);
+    for (i, wd) in widths.iter().enumerate() {
+        let leak = (base.get(i * 130 + 60 + wd / 2, 100) + 6.0) / 4.0;
+        assert!(leak.abs() < 0.05, "a {wd} px line is {leak} of the way into the base");
+    }
+}
+
+#[test]
+fn detail_free_keeps_steps_and_regions() {
+    // a step between two flat regions, and a flat field, come out as they went in
+    let step = Plane::from_fn(90, 60, |x, _| if x < 45 { -4.0 } else { 0.5 });
+    assert_eq!(local::detail_free(&step, 6).data, step.data);
+    let flat = Plane::from_fn(31, 17, |_, _| -1.25);
+    assert_eq!(local::detail_free(&flat, 3).data, flat.data);
+    assert_eq!(local::detail_free(&step, 0).data, step.data);
+    // tiny and empty planes, and NaNs, are not a panic
+    for (w, h) in [(1, 1), (2, 3), (5, 1)] {
+        let p = Plane::from_fn(w, h, |x, y| if (x + y) % 2 == 0 { f32::NAN } else { 1.0 });
+        assert_eq!(local::detail_free(&p, 4).data.len(), w * h);
+    }
+    assert!(local::detail_free(&Plane::new(0, 0), 4).data.is_empty());
+}
+
 #[test]
 fn v1_keeps_the_base_it_always_had() {
     // V1's base is the edge-aware filter of log luminance itself, as before process V2: no median

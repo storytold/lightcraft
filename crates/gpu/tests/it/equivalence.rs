@@ -616,7 +616,7 @@ fn cached_renders_match_uncached() {
 }
 
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
-/// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
+/// luminance; V2: of its detail-free plane, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
 #[test]
 fn highlights_shadows_base_matches_on_every_process() {

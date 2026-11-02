@@ -8,7 +8,7 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | Process | What it changes |
 |---|---|
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
-| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
+| **V2** (the latest) | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of log luminance without its fine detail (`local::detail_free`: each value clamped between its separable median at 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`, and the median of a 3× wider neighbourhood) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no detail removal under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
 
 ## The rule
 
@@ -33,6 +33,20 @@ background, which a raised Exposure turned into a bright outline around the subj
 exports. Existing AI masks become 1–2 px tighter at a subject's edges, on every process; their
 inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
 a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
+
+**Lettering under Highlights and Shadows** (V2) no longer grows blocks of the wrong tone. V2's base
+was first the edge-aware filter of a separable median alone. Dark lettering on a bright panel (a bus
+number, a sign) has strokes and gaps about as wide as the median's radius, so each row and column
+window was close to half letter and half panel, and the median picked one tone or the other in
+rectangles: it filled the gaps between the letters and their counters with the letters' tone.
+Shadows then lifted those patches of panel by over 1 EV, into bright blocks beside the letters. Each
+value now moves toward that median only as far as the median of a 3× wider neighbourhood agrees
+(`local::detail_free`). A twig against a wall has both medians on the wall's side and takes its tone,
+as before (#632); the gap between two strokes sits in a wider neighbourhood that is mostly panel, the
+two medians disagree, and the gap keeps its own tone. The letters themselves count as fine dark detail
+on the panel and keep their contrast, as twigs do. V2 renders with Highlights or Shadows change only
+in detail about as fine as the radius, mostly where it is packed closely (lettering, grilles). It
+landed in place as a bug fix: the blocks are output that is neither in the photo nor in the edit.
 
 ## Adding a process
 

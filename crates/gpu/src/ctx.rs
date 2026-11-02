@@ -46,6 +46,7 @@ const MODULES: &[Module] = &[
             "guided_pre",
             "guided_ab",
             "guided_apply",
+            "clamp_between_k",
             "wb_k",
             "nr_lum",
             "chroma_k",
@@ -162,7 +163,11 @@ fn build_jobs(
             layout: Some(&p.pipeline_layout),
             module: &p.module,
             entry_point: Some(entry),
-            compilation_options: Default::default(),
+            // Only the median kernels (`blur.wgsl`, `med_tile`) use workgroup memory, and they
+            // load every element they read before the barrier, so wgpu's default zeroing is not
+            // needed. On DX12 it is written out as one assignment per element, which made FXC take
+            // about 87 s over these kernels at every start of a release build.
+            compilation_options: wgpu::PipelineCompilationOptions { zero_initialize_workgroup_memory: false, ..Default::default() },
             cache: None,
         });
         let kernel = Kernel { pipeline, layout: p.layout.clone(), nbuf: p.nbuf };
