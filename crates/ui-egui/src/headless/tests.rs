@@ -604,6 +604,55 @@ fn compare_survey_and_auto_advance_by_keyboard() {
     h.settle(SETTLE);
 }
 
+/// Face boxes are off in the loupe by default (they got in the way of looking at the photo); they
+/// show when switched on (View ▸ Face Boxes) and on a photo opened from the People view, and a
+/// choice saved since is kept (an older file's `faceBoxes: true` was never the user's choice).
+#[test]
+fn face_boxes_are_off_by_default_and_show_only_when_needed() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    assert!(!h.app.ui.face_boxes, "off by default");
+    let id = h.app.session.active().unwrap();
+    let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+    meta.regions = vec![lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.55, y1: 0.6 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: Some("Person A".into()),
+        description: None,
+    }];
+    h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    h.settle(SETTLE);
+    let boxes = |h: &mut Headless| {
+        h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
+        h.step();
+        h.step();
+        h.app.widgets.iter().any(|(w, _)| w.starts_with("regionLabel:"))
+    };
+    assert!(!boxes(&mut h), "no face box over the photo by default");
+    h.app.ui.person_from = Some((Some("Person A".into()), id.0));
+    assert!(boxes(&mut h), "a photo opened from the People view shows its faces");
+    // opened from People on another photo, or a name box left open on another photo: none here (review of #3582)
+    h.app.ui.person_from = Some((Some("Person A".into()), id.0 + 1_000_000));
+    assert!(!boxes(&mut h), "only the photo opened from People shows its faces");
+    h.app.ui.person_from = None;
+    h.app.ui.name_edit = Some(crate::state::NameEdit { photo: id.0 + 1_000_000, ..Default::default() });
+    assert!(!boxes(&mut h), "a name box on another photo shows no boxes here");
+    assert!(h.app.ui.name_edit.is_none(), "and is dropped");
+    assert!(!boxes(&mut h));
+    let r = h.request("engine.execute", json!({"command": "view.faceBoxes", "params": {}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(boxes(&mut h), "View ▸ Face Boxes switches them on");
+    // saved: the choice is kept; an older file's key is not a choice
+    let saved = serde_json::to_value(&h.app.ui).unwrap();
+    assert_eq!(saved["faceBoxesOn"], true);
+    let back: crate::state::UiState = serde_json::from_value(saved).unwrap();
+    assert!(back.face_boxes);
+    let old: crate::state::UiState = serde_json::from_value(json!({"faceBoxes": true})).unwrap();
+    assert!(!old.face_boxes, "an older build's default is not the user's choice");
+}
+
 /// Naming a face in the loupe: point at an unnamed face, click its "Add name" label, type, Enter. Needs the
 /// recognition runtime only for the background indexer, so the naming itself is tested whatever the build.
 #[test]
@@ -622,6 +671,9 @@ fn naming_a_face_in_the_loupe() {
     }];
     h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    // face boxes are off by default: switched on here
+    let r = h.request("engine.execute", json!({"command": "view.faceBoxes", "params": {"show": true}}), t);
+    assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     // pointing at the box shows the invitation; clicking it opens the name box
     h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
@@ -844,6 +896,8 @@ fn people_and_the_name_box_offer_to_set_face_recognition_up() {
     h.app.ui.dialog = None;
 
     // the loupe's name box offers it too, and its button leaves for Settings with the box closed
+    // (face boxes are off by default: switched on here)
+    h.request("engine.execute", json!({"command": "view.faceBoxes", "params": {"show": true}}), t);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
     h.settle(SETTLE);
     h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
