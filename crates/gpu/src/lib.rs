@@ -1352,13 +1352,19 @@ pub fn card_setting() -> String {
     }
 }
 
-/// The key ([`CardInfo::key`]) of the card photos are edited on with `saved` as the editing card's
-/// setting, picked as the editing card is (`LIGHTCRAFT_GPU_ADAPTER` first, keys in any case, the
+/// The key ([`CardInfo::key`]) of the card photos are edited on: the editing device's, once there
+/// is one; before, the one it would be made on with `saved` as the editing card's setting, picked
+/// as the editing card is (`LIGHTCRAFT_GPU_ADAPTER` first, keys in any case, the
 /// same model under another number): for the settings. `None` until the cards were listed, or
 /// when wgpu picks.
 pub fn editing_card_key(saved: &str) -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // the card the editing device is on, once there is one (whichever way it was picked:
+        // review of PR #3506); before, the one it will be made on
+        if let Some(k) = slot::existing(Role::Primary).and_then(|g| g.key.clone()) {
+            return Some(k.to_string());
+        }
         let listed = cards::listed()?;
         cards::editing_key(&listed, backend::wanted_adapter().as_deref(), saved).map(|k| k.to_string())
     }
