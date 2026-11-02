@@ -1923,6 +1923,225 @@ fn export_dialog_drops_a_depth_the_format_lacks() {
     assert_eq!(opened(&mut h, json!({"format": "tiff", "bitDepth": 32})).bit_depth, Some(32));
 }
 
+/// Export dialog preset tests: a control request, then two frames for it to show.
+fn preset_ask(h: &mut Headless, method: &str, params: serde_json::Value) {
+    let r = h.request(method, params, Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{method}: {r}");
+    h.step();
+    h.step();
+}
+
+fn preset_click(h: &mut Headless, id: &str) {
+    preset_ask(h, "ui.clickWidget", json!({"id": id}));
+}
+
+/// Loads the preset of this name from the Export dialog's list.
+fn preset_load(h: &mut Headless, name: &str) {
+    preset_click(h, "combo:exportPreset");
+    preset_click(h, &format!("button:exportPreset-{name}"));
+}
+
+/// Runs an item of the menu beside the loaded user preset.
+fn preset_menu_item(h: &mut Headless, item: &str) {
+    preset_click(h, "icon:exportPresetActions");
+    preset_click(h, &format!("button:{item}"));
+}
+
+/// Changes the Export dialog's options or Save field, as typing would.
+fn preset_edit(h: &mut Headless, change: &dyn Fn(&mut lightcraft_engine::export::ExportOptions, &mut String)) {
+    if let Some(crate::state::Dialog::Export { opts, preset_name, .. }) = &mut h.app.ui.dialog {
+        change(opts, preset_name);
+    }
+    h.step();
+    h.step();
+}
+
+/// The Save field, the preset loaded and the action on it under way.
+fn preset_state(h: &Headless) -> (String, Option<(String, bool)>, Option<crate::state::ExportPresetPending>) {
+    match &h.app.ui.dialog {
+        Some(crate::state::Dialog::Export { preset_name, preset, .. }) => (preset_name.clone(), preset.loaded.clone(), preset.pending.clone()),
+        _ => panic!("the export dialog is open"),
+    }
+}
+
+fn preset_opts(h: &Headless) -> lightcraft_engine::export::ExportOptions {
+    match &h.app.ui.dialog {
+        Some(crate::state::Dialog::Export { opts, .. }) => opts.clone(),
+        _ => panic!("the export dialog is open"),
+    }
+}
+
+fn has_widget(h: &Headless, w: &str) -> bool {
+    h.app.widgets.iter().any(|(id, _)| id == w)
+}
+
+fn preset_names(h: &Headless) -> Vec<String> {
+    h.app.session.export_presets.iter().map(|p| p.name.clone()).collect()
+}
+
+fn preset_quality(h: &Headless, name: &str) -> Option<u64> {
+    h.app.session.export_presets.iter().find(|p| p.name == name).and_then(|p| p.params["quality"].as_u64())
+}
+
+fn shows_text(h: &Headless, text: &str) -> bool {
+    h.painted_text().iter().any(|p| p == text)
+}
+
+/// Issue #2510: the preset loaded in the Export dialog stays named there, its name in the Save
+/// field, with a * once the options change (not when they settle as the dialog draws them: a
+/// PNG preset without a bit depth). Save onto a preset's name asks first, and only for the
+/// name it asked about; the menu beside a user preset updates it, renames it in place,
+/// duplicates its saved settings and deletes it, without the name being typed again.
+#[test]
+fn export_dialog_manages_a_loaded_preset() {
+    let mut h = demo([1200.0, 1100.0]);
+    h.app.session.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "jpeg", "quality": 70}})).unwrap();
+    h.app.session.execute("export.savePreset", &json!({"name": "Small PNG", "params": {"format": "png", "width": 64}})).unwrap();
+    h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), Duration::from_secs(10));
+    h.settle(SETTLE);
+    loaded_preset_saves_and_replaces(&mut h);
+    loaded_preset_menu_updates_and_renames(&mut h);
+    loaded_preset_menu_duplicates_and_deletes(&mut h);
+
+    // an older user preset named like a built-in loads its own settings, not the built-in's
+    h.app.session.export_presets.push(lightcraft_engine::export::ExportPreset { name: "DNG".into(), params: json!({"format": "png", "width": 64}) });
+    preset_load(&mut h, "DNG");
+    assert_eq!(preset_state(&h).1, Some(("DNG".into(), false)));
+    assert_eq!(preset_opts(&h).format, lightcraft_engine::export::ExportFormat::Png);
+    // renamed elsewhere (MCP, the control channel): no longer the one loaded
+    h.app.session.execute("export.renamePreset", &json!({"name": "DNG", "to": "Old DNG"})).unwrap();
+    h.step();
+    h.step();
+    assert_eq!(preset_state(&h).1, None);
+    assert!(!has_widget(&h, "icon:exportPresetActions") && shows_text(&h, "Choose…"), "{:?}", h.painted_text());
+}
+
+/// #2510: loading names the preset (a built-in's name is reserved), and Save onto a preset's name
+/// asks first, for the name it asked about.
+fn loaded_preset_saves_and_replaces(h: &mut Headless) {
+    use crate::state::ExportPresetPending as Pending;
+    preset_load(h, "Small PNG");
+    assert_eq!(preset_state(h), ("Small PNG".into(), Some(("Small PNG".into(), false)), None));
+    assert!(shows_text(h, "Small PNG") && !shows_text(h, "Small PNG*"), "{:?}", h.painted_text());
+    // a built-in's name is reserved: nothing to save to, no menu
+    preset_load(h, "JPEG (Small)");
+    assert_eq!(preset_state(h), (String::new(), Some(("JPEG (Small)".into(), true)), None));
+    assert!(shows_text(h, "JPEG (Small)"), "the menu names it: {:?}", h.painted_text());
+    assert!(!has_widget(h, "icon:exportPresetActions"));
+
+    preset_load(h, "Web");
+    assert_eq!(preset_state(h), ("Web".into(), Some(("Web".into(), false)), None));
+    assert!(!shows_text(h, "Web*"));
+    preset_edit(h, &|o, _| o.quality = 90);
+    assert!(shows_text(h, "Web*"), "{:?}", h.painted_text());
+    // Save onto an existing name asks first
+    preset_click(h, "button:exportSavePreset");
+    assert_eq!(preset_quality(h, "Web"), Some(70), "not replaced yet");
+    assert_eq!(preset_state(h).2, Some(Pending::Replace("Web".into())));
+    assert!(shows_text(h, "Replace"));
+    // …for the name it asked about: another one asks again
+    preset_edit(h, &|_, name| *name = "Small PNG".into());
+    preset_click(h, "button:exportSavePreset");
+    assert_eq!(preset_state(h).2, Some(Pending::Replace("Small PNG".into())));
+    assert_eq!(h.app.session.export_presets[1].params["format"], "png", "not replaced");
+    preset_edit(h, &|_, name| *name = "Web".into());
+    preset_click(h, "button:exportSavePreset");
+    assert_eq!(preset_quality(h, "Web"), Some(70));
+    preset_click(h, "button:exportSavePreset");
+    assert_eq!(preset_quality(h, "Web"), Some(90), "the second click replaces it");
+    assert_eq!(preset_state(h), ("Web".into(), Some(("Web".into(), false)), None));
+    assert!(!shows_text(h, "Web*"));
+}
+
+/// #2510: the menu beside the loaded "Web" updates it and renames it in place.
+fn loaded_preset_menu_updates_and_renames(h: &mut Headless) {
+    use crate::state::ExportPresetPending as Pending;
+    preset_edit(h, &|o, _| o.quality = 60);
+    preset_menu_item(h, "exportUpdatePreset");
+    assert_eq!(preset_quality(h, "Web"), Some(60));
+    assert!(!shows_text(h, "Web*"));
+    // Rename… edits the name where the menu is: Esc leaves it, and the dialog, as they were…
+    preset_menu_item(h, "exportRenamePreset");
+    assert!(has_widget(h, "field:exportPresetRename") && !has_widget(h, "combo:exportPreset"));
+    preset_ask(h, "ui.text", json!({"text": "Nope"}));
+    assert_eq!(preset_state(h).2, Some(Pending::Rename("Nope".into())));
+    preset_ask(h, "ui.key", json!({"key": "Escape"}));
+    assert_eq!(preset_names(h), ["Web", "Small PNG"]);
+    assert_eq!(preset_state(h), ("Web".into(), Some(("Web".into(), false)), None), "the dialog stays open");
+    assert!(has_widget(h, "combo:exportPreset"));
+    // …Return renames it, and Save follows
+    preset_menu_item(h, "exportRenamePreset");
+    preset_ask(h, "ui.key", json!({"key": "a", "cmd": true}));
+    preset_ask(h, "ui.text", json!({"text": "Web Small"}));
+    preset_ask(h, "ui.key", json!({"key": "enter"}));
+    assert_eq!(preset_names(h), ["Web Small", "Small PNG"]);
+    assert_eq!(preset_quality(h, "Web Small"), Some(60));
+    assert_eq!(preset_state(h), ("Web Small".into(), Some(("Web Small".into(), false)), None));
+}
+
+/// #2510: the menu beside the loaded "Web Small" duplicates its saved settings and deletes it.
+fn loaded_preset_menu_duplicates_and_deletes(h: &mut Headless) {
+    use crate::state::ExportPresetPending as Pending;
+    // Duplicate copies the saved settings, not the changes made in the dialog since; those
+    // stay in the dialog, unsaved, against the copy now loaded
+    preset_edit(h, &|o, _| o.quality = 40);
+    preset_menu_item(h, "exportDuplicatePreset");
+    assert_eq!(preset_names(h), ["Web Small", "Small PNG", "Web Small copy"]);
+    assert_eq!((preset_quality(h, "Web Small"), preset_quality(h, "Web Small copy")), (Some(60), Some(60)));
+    assert_eq!(preset_state(h), ("Web Small copy".into(), Some(("Web Small copy".into(), false)), None));
+    assert_eq!(preset_opts(h).quality, 40);
+    assert!(shows_text(h, "Web Small copy*"), "{:?}", h.painted_text());
+    // Delete asks first
+    preset_menu_item(h, "exportDeletePreset");
+    assert_eq!(preset_names(h).len(), 3, "not deleted yet");
+    assert_eq!(preset_state(h).2, Some(Pending::Delete("Web Small copy".into())));
+    preset_click(h, "button:exportDeletePresetCancel");
+    assert_eq!(preset_state(h).2, None);
+    preset_menu_item(h, "exportDeletePreset");
+    preset_click(h, "button:exportDeletePresetConfirm");
+    assert_eq!(preset_names(h), ["Web Small", "Small PNG"]);
+    assert_eq!(preset_state(h), (String::new(), None, None));
+}
+
+#[test]
+fn export_dialog_follows_presets_renamed_or_deleted_elsewhere() {
+    use crate::state::{Dialog, ExportPresetPending as Pending};
+    let mut h = demo([1200.0, 1100.0]);
+    let t = Duration::from_secs(10);
+    let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+        let r = h.request(method, params, t);
+        assert_eq!(r["ok"], true, "{method}: {r}");
+        h.step();
+        h.step();
+    };
+    let click = |h: &mut Headless, id: &str| ask(h, "ui.clickWidget", json!({"id": id}));
+    let state = |h: &Headless| match &h.app.ui.dialog {
+        Some(Dialog::Export { preset, .. }) => (preset.loaded.clone(), preset.pending.clone()),
+        _ => panic!("the export dialog is open"),
+    };
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
+    h.app.session.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "jpeg", "quality": 70}})).unwrap();
+    h.app.session.execute("export.savePreset", &json!({"name": "Small PNG", "params": {"format": "png", "width": 64}})).unwrap();
+    h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+    h.settle(SETTLE);
+    click(&mut h, "combo:exportPreset");
+    click(&mut h, "button:exportPreset-Web");
+    assert_eq!(state(&h).0, Some(("Web".into(), false)));
+    // a case-only rename elsewhere keeps it loaded, under the new spelling, with its menu
+    ask(&mut h, "engine.execute", json!({"command": "export.renamePreset", "params": {"name": "Web", "to": "WEB"}}));
+    assert_eq!(state(&h).0, Some(("WEB".into(), false)));
+    assert!(has(&h, "icon:exportPresetActions"));
+    // Replace asks about a preset that is still there: deleted elsewhere, the question goes
+    if let Some(Dialog::Export { preset_name, .. }) = &mut h.app.ui.dialog {
+        *preset_name = "Small PNG".into();
+    }
+    h.step();
+    click(&mut h, "button:exportSavePreset");
+    assert_eq!(state(&h).1, Some(Pending::Replace("Small PNG".into())));
+    ask(&mut h, "engine.execute", json!({"command": "export.deletePreset", "params": {"name": "Small PNG"}}));
+    assert_eq!(state(&h).1, None, "no stale Replace for a preset that is gone");
+}
+
 /// Review of #1966: a `path` whose extension names no format exports JPEG here, so its
 /// `bitDepth` is checked against JPEG's, not let through to an 8-bit file.
 #[test]

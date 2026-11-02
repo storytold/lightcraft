@@ -226,6 +226,9 @@ pub enum Dialog {
         /// Name typed for "Save as Preset".
         #[serde(default)]
         preset_name: String,
+        /// The preset loaded (boxed: `Dialog` is as large as its largest dialog).
+        #[serde(default)]
+        preset: Box<ExportDialogPreset>,
         limit_kb: u32,
         dir: String,
     },
@@ -348,6 +351,32 @@ pub enum Dialog {
 
 fn yes() -> bool {
     true
+}
+
+/// The preset loaded into the Export dialog, and an action on it under way.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ExportDialogPreset {
+    /// Its name, and whether it is built-in.
+    #[serde(default)]
+    pub loaded: Option<(String, bool)>,
+    /// The dialog's settings (`app.export` params) as it set them, to show when they change;
+    /// `Null` until the frame that loads it has drawn every option.
+    #[serde(default)]
+    pub params: serde_json::Value,
+    #[serde(default)]
+    pub pending: Option<ExportPresetPending>,
+}
+
+/// An action on an export preset that needs a second step in the Export dialog.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportPresetPending {
+    /// Save onto the user preset of this name: the second click (Replace) replaces it.
+    Replace(String),
+    /// Delete the loaded user preset of this name, once confirmed.
+    Delete(String),
+    /// The loaded user preset is being renamed, with the text typed so far.
+    Rename(String),
 }
 
 /// How many changes a Synchronize Folder scan found, by kind.

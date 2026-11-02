@@ -189,6 +189,142 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Issue #2510: a user preset is renamed in place, keeping its settings. Built-in names stay
+/// reserved and another preset's name is refused (a change of letter case is not); a user preset
+/// saved before a built-in of its name existed can be renamed away from it.
+#[test]
+fn a_user_export_preset_is_renamed_keeping_its_settings() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    let user = |s: &Session| s.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png", "width": 64}})).unwrap();
+    let list = s.execute("export.renamePreset", &json!({"name": " web ", "to": " Web Small "})).unwrap();
+    assert!(list.as_array().unwrap().iter().any(|p| p["name"] == "Web Small" && p["builtin"] == false), "{list}");
+    assert_eq!(user(&s), ["Web Small"]);
+    assert_eq!(s.export_params(&json!({"preset": "Web Small"})).unwrap(), json!({"format": "png", "width": 64}));
+    for (p, why) in [
+        (json!({"name": "Web Small", "to": "JPEG (Large)"}), "built-in"),
+        (json!({"name": "DNG", "to": "Mine"}), "no user export preset `DNG`"),
+        (json!({"name": "Nope", "to": "Mine"}), "no user export preset `Nope`"),
+        (json!({"name": "Web Small"}), "missing `to`"),
+        (json!({"name": "Web Small", "to": "  "}), "missing `to`"),
+        (json!({"to": "Mine"}), "missing `name`"),
+    ] {
+        let e = s.execute("export.renamePreset", &p).unwrap_err().to_string();
+        assert!(e.contains(why), "{p}: {e}");
+    }
+    s.execute("export.savePreset", &json!({"name": "Other", "params": {"format": "webp"}})).unwrap();
+    let e = s.execute("export.renamePreset", &json!({"name": "Web Small", "to": "other"})).unwrap_err().to_string();
+    assert!(e.contains("an export preset named `other` exists already"), "{e}");
+    assert_eq!(user(&s), ["Web Small", "Other"]);
+    assert_eq!(s.export_params(&json!({"preset": "Other"})).unwrap(), json!({"format": "webp"}));
+    s.execute("export.renamePreset", &json!({"name": "Web Small", "to": "web small"})).unwrap();
+    assert_eq!(user(&s), ["web small", "Other"], "a change of case is a rename");
+    s.export_presets.push(ExportPreset { name: "DNG".into(), params: json!({"format": "png"}) });
+    s.execute("export.renamePreset", &json!({"name": "dng", "to": "Old DNG"})).unwrap();
+    assert_eq!(user(&s), ["web small", "Other", "Old DNG"]);
+    assert_eq!(s.export_params(&json!({"preset": "Old DNG"})).unwrap(), json!({"format": "png"}));
+}
+
+/// Issue #2510: Duplicate copies a user preset's saved settings to the first free "<name> copy"
+/// name, or to the name given, which can't be a built-in's or another preset's.
+#[test]
+fn a_user_export_preset_is_duplicated_with_its_saved_settings() {
+    let mut s = Session::with_demo();
+    let user = |s: &Session| s.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let web = json!({"format": "png", "width": 64});
+    s.execute("export.savePreset", &json!({"name": "Web", "params": web})).unwrap();
+    let r = s.execute("export.duplicatePreset", &json!({"name": " web "})).unwrap();
+    assert_eq!(r["name"], "Web copy", "{r}");
+    assert!(r["presets"].as_array().unwrap().iter().any(|p| p["name"] == "Web copy" && p["builtin"] == false), "{r}");
+    assert_eq!(s.execute("export.duplicatePreset", &json!({"name": "Web"})).unwrap()["name"], "Web copy 2");
+    assert_eq!(s.execute("export.duplicatePreset", &json!({"name": "Web", "to": " Print "})).unwrap()["name"], "Print");
+    assert_eq!(user(&s), ["Web", "Web copy", "Web copy 2", "Print"]);
+    for name in ["Web copy", "Web copy 2", "Print"] {
+        assert_eq!(s.export_params(&json!({"preset": name})).unwrap(), web, "{name}");
+    }
+    for (p, why) in [
+        (json!({"name": "Web", "to": "dng"}), "built-in"),
+        (json!({"name": "Web", "to": "print"}), "an export preset named `print` exists already"),
+        (json!({"name": "JPEG (Small)"}), "no user export preset `JPEG (Small)`"),
+        (json!({"name": "Nope"}), "no user export preset `Nope`"),
+        (json!({"to": "Mine"}), "missing `name`"),
+    ] {
+        let e = s.execute("export.duplicatePreset", &p).unwrap_err().to_string();
+        assert!(e.contains(why), "{p}: {e}");
+    }
+    assert_eq!(user(&s).len(), 4, "a refused copy adds nothing");
+}
+
+/// With every "<name> copy" name taken, Duplicate says so instead of adding a preset; one that
+/// already holds a free name still gets it.
+#[test]
+fn duplicating_a_preset_with_no_free_name_left_is_refused() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png"}})).unwrap();
+    s.export_presets.push(ExportPreset { name: "Web copy".into(), params: json!({}) });
+    s.export_presets.extend((2..10_000).map(|n| ExportPreset { name: format!("Web copy {n}"), params: json!({}) }));
+    let before = s.export_presets.len();
+    let e = s.execute("export.duplicatePreset", &json!({"name": "Web"})).unwrap_err().to_string();
+    assert!(e.contains("no free name for a copy of `Web`"), "{e}");
+    assert_eq!(s.export_presets.len(), before, "nothing is added");
+    assert_eq!(s.execute("export.duplicatePreset", &json!({"name": "Web", "to": "Web 2"})).unwrap()["name"], "Web 2");
+}
+
+/// The library's preferences can't be written: a rename or a copy is refused and not kept in
+/// memory either, where the next save of anything else would write it.
+#[test]
+fn a_rename_or_copy_that_cant_be_saved_is_not_kept() {
+    use lightcraft_catalog::{MemStore, Store};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Clone, Default)]
+    struct Failing {
+        files: MemStore,
+        fail: Arc<AtomicBool>,
+    }
+    impl Store for Failing {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.files.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            if self.fail.load(Ordering::Relaxed) && name == "prefs.json" {
+                return Err(std::io::Error::other("disk full"));
+            }
+            self.files.write_atomic(name, data)
+        }
+        fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.files.append(name, data)
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.files.truncate(name, len)
+        }
+        fn describe(&self) -> String {
+            "failing".into()
+        }
+    }
+    let files = Failing::default();
+    let mut s = Session::new();
+    let stores =
+        crate::library::LibraryStores { dir: "failing".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png"}})).unwrap();
+    files.fail.store(true, Ordering::Relaxed);
+    let names = |s: &Session| s.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let e = s.execute("export.renamePreset", &json!({"name": "Web", "to": "Web Small"})).unwrap_err().to_string();
+    assert!(e.contains("disk full"), "{e}");
+    assert_eq!(names(&s), ["Web"], "the rename isn't kept");
+    let e = s.execute("export.duplicatePreset", &json!({"name": "Web"})).unwrap_err().to_string();
+    assert!(e.contains("disk full"), "{e}");
+    assert_eq!(names(&s), ["Web"], "the copy isn't kept");
+    // once it can be written, both work
+    files.fail.store(false, Ordering::Relaxed);
+    s.execute("export.renamePreset", &json!({"name": "Web", "to": "Web Small"})).unwrap();
+    s.execute("export.duplicatePreset", &json!({"name": "Web Small"})).unwrap();
+    assert_eq!(names(&s), ["Web Small", "Web Small copy"]);
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}

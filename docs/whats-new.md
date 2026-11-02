@@ -509,6 +509,15 @@
 
 ## 2026-10-22
 
+### Export presets: update, rename and delete in the Export dialog
+- The Export dialog's Preset menu keeps showing the preset you chose, with a * once you change its options. Choosing
+  one of your own presets also puts its name in the Save preset field (issue #2510).
+- A menu beside one of your presets updates it with the current settings, renames it right there (Return renames,
+  Esc leaves it as it was), duplicates it or deletes it (after asking), without retyping its name. The copy gets the
+  preset's saved settings and becomes the preset shown; changes you had made in the dialog stay there, marked with *.
+- Save asks before it replaces a preset of the same name: the button turns into Replace, and a second click
+  replaces it.
+
 ### Exports don't create a photo's sidecar
 - Saving an export, a preset or any other file as `IMG_1.xmp` or `IMG_1.jpg.xmp` in the folder of the library photo
   `IMG_1.jpg` is now refused when no sidecar is there yet, as writing over an existing one already was. The library
