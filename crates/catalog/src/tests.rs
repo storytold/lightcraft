@@ -1096,3 +1096,54 @@ fn a_batch_that_cannot_be_rolled_back_whole_makes_earlier_changes_unknown() {
     assert_eq!(c.touched_since(start), None, "so nothing is said of what changed");
     assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
 }
+
+/// Note 50: two bodies at one wedding, interleaved through the day. Sorted by capture time the
+/// grid goes morning → night across both cameras, whatever their file names; sub-seconds order a
+/// burst; a body that writes a UTC offset and one that doesn't compare by the time they show; the
+/// file name only breaks a true tie.
+#[test]
+fn capture_time_interleaves_two_cameras_through_the_day() {
+    let mut c = Catalog::new();
+    // camera 71 writes an offset and sub-seconds, camera 74 neither (as two bodies set up apart)
+    let shots = [
+        ("_71_9276.CR3", "2026-10-18T22:40:05.120+02:00"), // cake cutting, end of the night
+        ("_74_8160.CR3", "2026-10-18T09:02:00"),           // getting ready, morning
+        ("_71_8001.CR3", "2026-10-18T09:05:30.500+02:00"),
+        ("_74_8161.CR3", "2026-10-18T09:05:30.400"), // 0.1 s before the 71 frame
+        ("_74_9000.CR3", "2026-10-18T15:00:00"),     // ceremony
+        ("_71_8500.CR3", "2026-10-18T14:59:59.990+02:00"),
+        ("_74_9900.CR3", "2026-10-18T22:40:05.120"),       // same instant as _71_9276: name decides
+        ("_71_8002.CR3", "2026-10-18T09:05:30.500+02:00"), // same burst frame time as _71_8001
+    ];
+    let mut by_name = std::collections::HashMap::new();
+    for (name, t) in shots {
+        by_name.insert(photo(&mut c, name, t), name);
+    }
+    let sort = Sort { key: SortKey::CaptureDate, ascending: true, ..Default::default() };
+    let order: Vec<&str> = c.query(&Filter::default(), &sort).iter().map(|id| by_name[id]).collect();
+    assert_eq!(
+        order,
+        ["_74_8160.CR3", "_74_8161.CR3", "_71_8001.CR3", "_71_8002.CR3", "_71_8500.CR3", "_74_9000.CR3", "_71_9276.CR3", "_74_9900.CR3",]
+    );
+    // descending is the exact reverse
+    let desc = Sort { ascending: false, ..sort };
+    let back: Vec<&str> = c.query(&Filter::default(), &desc).iter().map(|id| by_name[id]).collect();
+    assert_eq!(back, order.iter().rev().copied().collect::<Vec<_>>());
+    // Custom Order outside a collection is capture time too
+    let custom = Sort { key: SortKey::Custom, ..sort };
+    assert_eq!(c.query(&Filter::default(), &custom), c.query(&Filter::default(), &sort));
+}
+
+#[test]
+fn capture_key_reads_sub_seconds_and_ignores_the_offset() {
+    use crate::query::capture_key;
+    let base = capture_key("2026-10-18T09:05:30").unwrap();
+    assert_eq!(capture_key("2026-10-18T09:05:30.5").unwrap(), (base.0, 500));
+    assert_eq!(capture_key("2026-10-18T09:05:30.05+02:00").unwrap(), (base.0, 50));
+    assert_eq!(capture_key("2026-10-18T09:05:30.123456").unwrap(), (base.0, 123));
+    assert_eq!(capture_key("2026-10-18T09:05:30-07:00").unwrap(), base);
+    assert_eq!(capture_key("2026-10-18").unwrap().0 + 9 * 3600 + 5 * 60 + 30, base.0);
+    assert_eq!(capture_key("not a date"), None);
+    assert_eq!(capture_key(""), None);
+    assert_eq!(capture_key("2026-10-18T09:05:30.ü"), Some(base));
+}

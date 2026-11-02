@@ -100,7 +100,7 @@ fn problems_and_description() {
     let r = rs(
         json!({"match": "any", "rules": [{"field": "rating", "op": "gte", "value": 3}, {"field": "captureDate", "op": "inLast", "value": {"n": 2, "unit": "weeks"}}]}),
     );
-    assert_eq!(r.describe(), "rating is ≥ 3 or capture date is in the last 2 weeks");
+    assert_eq!(r.describe(), "rating is ≥ 3 or capture time is in the last 2 weeks");
     // every field has a kind with operators
     for (f, _, k) in FIELDS {
         assert!(!ops_for(*k).is_empty(), "{f}");

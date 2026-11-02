@@ -332,6 +332,8 @@
   "Canon PowerShot G9 raws open with the camera's white balance (White Balance ▸ As Shot); it used to start from a": "Canon PowerShot G9-ის RAW ფაილები კამერის თეთრის ბალანსით იხსნება (თეთრის ბალანსი → როგორც გადაღებულია); ადრე ისინი",
   "Caption": "წარწერა",
   "Capture Date": "გადაღების თარიღი",
+  "Capture Time": "გადაღების დრო",
+  "Custom Order": "საკუთარი რიგი",
   "Capture date and time in your own format (directives below)": "გადაღების თარიღი და დრო თქვენივე ფორმატით (დირექტივები ქვემოთ)",
   "Capture date as YYYYMMDD": "გადაღების თარიღი YYYYMMDD ფორმატით",
   "Captured": "გადაღებულია",

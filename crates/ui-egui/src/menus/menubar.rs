@@ -657,13 +657,14 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             use lightcraft_catalog::SortKey::*;
             let cur = app.session.sort;
             let mut v: Vec<MenuNode> = [
-                ("Capture Date", CaptureDate, "captureDate"),
+                ("Capture Time", CaptureDate, "captureDate"),
                 ("Import Date", ImportDate, "importDate"),
                 ("Modified Date", EditDate, "editDate"),
                 ("File Name", FileName, "fileName"),
                 ("Rating", Rating, "rating"),
                 ("File Size", FileSize, "fileSize"),
                 ("Random", Random, "random"),
+                ("Custom Order", Custom, "custom"),
             ]
             .into_iter()
             .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))

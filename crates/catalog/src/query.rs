@@ -84,6 +84,8 @@ fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) ->
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SortKey {
+    /// Capture time ("Capture Time" in the UI; the id stays `captureDate` for saved sorts): the
+    /// full time the camera recorded, sub-seconds included ([`capture_key`]).
     #[default]
     CaptureDate,
     ImportDate,
@@ -94,6 +96,9 @@ pub enum SortKey {
     /// A shuffle fixed by [`Sort::seed`]: the same seed always gives the same order, and photos
     /// added or edited later never reshuffle the others. Pick a new seed to reshuffle.
     Random,
+    /// A collection's own order (the order its photos were added in, or the one a Lightroom
+    /// catalog gave it). Views that have no order of their own sort by capture time.
+    Custom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,7 +116,7 @@ impl Sort {
     /// Which of two photos comes first in this order (never `Equal` for two photos: the id decides last).
     pub fn order(&self, a: &Photo, b: &Photo) -> std::cmp::Ordering {
         let o = match self.key {
-            SortKey::CaptureDate => a.captured.cmp(&b.captured).then_with(|| a.imported.cmp(&b.imported)),
+            SortKey::CaptureDate | SortKey::Custom => cmp_captured(a, b).then_with(|| a.imported.cmp(&b.imported)),
             SortKey::ImportDate => a.imported.cmp(&b.imported),
             SortKey::EditDate => a.edited.cmp(&b.edited),
             SortKey::FileName => cmp_name(&a.file_name, &b.file_name),
@@ -132,6 +137,40 @@ impl Default for Sort {
     fn default() -> Self {
         Sort { key: SortKey::CaptureDate, ascending: false, group: crate::GroupBy::Auto, seed: 0 }
     }
+}
+
+/// A capture time (`Photo::captured`, ISO 8601) as a sort key: the camera's wall-clock time in
+/// seconds, then the milliseconds of `SubSecTimeOriginal`. The UTC offset is left out on purpose,
+/// as Lightroom does: two bodies at one wedding record the same local time, and only some of them
+/// write an offset (`OffsetTimeOriginal`); comparing some photos in UTC and others in local time
+/// would interleave the cameras wrongly (and not even give one order). `None`: not a date.
+pub fn capture_key(s: &str) -> Option<(i64, u32)> {
+    let secs = crate::stacks::iso_seconds(s)?;
+    let s = s.trim();
+    let mut ms = 0u32;
+    if s.len() >= 19
+        && let Some(frac) = s.get(19..).and_then(|r| r.strip_prefix('.'))
+    {
+        let mut scale = 100u32;
+        for b in frac.bytes().take_while(u8::is_ascii_digit).take(3) {
+            ms += u32::from(b - b'0') * scale;
+            scale /= 10;
+        }
+    }
+    Some((secs, ms))
+}
+
+/// Two photos by capture time ([`capture_key`]): photos without a date first, then any whose
+/// date can't be read (by its text), then the dated ones in time order.
+fn cmp_captured(a: &Photo, b: &Photo) -> std::cmp::Ordering {
+    fn rank(p: &Photo) -> Option<(u8, (i64, u32), &str)> {
+        let c = p.captured.as_deref()?;
+        Some(match capture_key(c) {
+            Some(t) => (1, t, ""),
+            None => (0, (0, 0), c),
+        })
+    }
+    rank(a).cmp(&rank(b))
 }
 
 /// splitmix64 finaliser: a stateless, platform-independent mix (no RNG state, no `rand` version

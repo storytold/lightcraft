@@ -79,7 +79,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
     // Date
-    ("captureDate", "Capture Date", Kind::Date),
+    ("captureDate", "Capture Time", Kind::Date),
     ("importDate", "Import Date", Kind::Date),
     ("editDate", "Edit Date", Kind::Date),
     // Keywords & People

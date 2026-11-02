@@ -137,8 +137,16 @@ fn sorted_queries_keep_their_order() {
         c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
     let all = Filter::default();
-    for key in [SortKey::CaptureDate, SortKey::ImportDate, SortKey::EditDate, SortKey::FileName, SortKey::Rating, SortKey::FileSize, SortKey::Random]
-    {
+    for key in [
+        SortKey::CaptureDate,
+        SortKey::ImportDate,
+        SortKey::EditDate,
+        SortKey::FileName,
+        SortKey::Rating,
+        SortKey::FileSize,
+        SortKey::Random,
+        SortKey::Custom,
+    ] {
         for ascending in [true, false] {
             let sort = Sort { key, ascending, seed: 7, ..Default::default() };
             // the comparison the query sorts by

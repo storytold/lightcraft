@@ -210,6 +210,8 @@
   "Canon CR3 files show their full-size embedded JPEG (e.g. 6960 × 4640 on an EOS R6 Mark III) instead of the": "Canon-CR3-Dateien zeigen ihr eingebettetes JPEG in voller Größe, etwa 6960 × 4640 auf einer EOS R6 Mark III, statt der",
   "Caption": "Bildunterschrift",
   "Capture Date": "Aufnahmedatum",
+  "Capture Time": "Aufnahmezeit",
+  "Custom Order": "Benutzerdefinierte Reihenfolge",
   "Capture date and time in your own format (directives below)": "Aufnahmedatum und -zeit im eigenen Format (Formatangaben unten)",
   "Capture date as YYYYMMDD": "Aufnahmedatum als JJJJMMTT",
   "Captured": "Aufgenommen",

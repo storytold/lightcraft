@@ -514,6 +514,8 @@
   "Cancel Preview Build": "Скасувати створення переглядів",
   "Candidate": "Кандидат",
   "Capture Date": "Дата знімання",
+  "Capture Time": "Час знімання",
+  "Custom Order": "Власний порядок",
   "Capture date and time in your own format (directives below)": "Дата й час знімання у власному форматі (директиви нижче)",
   "Capture date as YYYYMMDD": "Дата знімання як YYYYMMDD",
   "Captured": "Знято",
