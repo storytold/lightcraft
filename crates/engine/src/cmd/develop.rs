@@ -971,6 +971,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_copy);
                 let d = s.develop_of(id).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&d, &groups);
+                let with_crop = partial.get("crop").is_some();
                 let ops = s
                     .selection
                     .ids
@@ -978,7 +979,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     .into_iter()
                     .filter(|x| *x != id)
                     .filter_map(|x| s.develop_of(x).map(|d| (x, d)))
-                    .filter_map(|(x, dd)| s.develop_op(x, lightcraft_develop::apply_partial(&dd, &partial, 1.0), "Sync Settings"))
+                    .filter_map(|(x, dd)| {
+                        let mut synced = lightcraft_develop::apply_partial(&dd, &partial, 1.0);
+                        // the crop as what it means on each photo's own frame (note 15)
+                        if with_crop {
+                            s.fit_synced_crop(id, &d, x, &mut synced);
+                        }
+                        s.develop_op(x, synced, "Sync Settings")
+                    })
                     .collect::<Vec<_>>();
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
