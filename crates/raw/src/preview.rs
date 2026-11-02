@@ -252,8 +252,12 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
         let (a, b) = (u64::from(w) * u64::from(bh), u64::from(h) * u64::from(bw));
         w > 0 && h > 0 && c == bc && a.abs_diff(b) * 100 <= a
     };
+    // (one cut short before its end marker would fail to decode, and nothing would try another: CodeRabbit
+    // on #3583)
+    let whole = |s: &[u8]| trim_eoi(s).ends_with(&[0xff, 0xd9]);
     found
         .iter()
+        .filter(|s| whole(s))
         .filter_map(|&s| jpeg_frame(s).filter(|&f| like(f) && f.0.max(f.1) >= min_edge).map(|(w, h, _)| (s, w.max(h))))
         .min_by_key(|&(_, long)| long)
         .map(|(s, _)| s)
@@ -274,7 +278,7 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
             let mut found = cr3_preview_box_list(bytes);
             let full = cr3_full_jpeg(bytes);
             found.extend(full);
-            if let Some(largest) = full.or_else(|| found.iter().copied().max_by_key(|j| j.len()))
+            if let Some(largest) = full.or_else(|| largest_by_pixels(&found))
                 && let Some(j) = smallest_covering(&found, largest, min)
             {
                 return Some(trim_eoi(j).to_vec());
@@ -533,7 +537,14 @@ const CR3_MAX_WALK: usize = 8 << 20;
 /// sample) is `u32 size, "PRVW", u32 0, u16 ?, u16 width, u16 height, u16 ?, u32 jpeg length, JPEG`; the smaller
 /// `THMB` box has the same shape. Returns the larger valid one.
 fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
-    cr3_preview_box_list(bytes).into_iter().max_by_key(|j| j.len())
+    largest_by_pixels(&cr3_preview_box_list(bytes))
+}
+
+/// Of `found`, the JPEG with the longest edge in pixels (a smaller picture can take more bytes); the
+/// first of equals. CodeRabbit on #3077.
+fn largest_by_pixels<'a>(found: &[&'a [u8]]) -> Option<&'a [u8]> {
+    let long = |j: &[u8]| jpeg_frame(j).map_or(0, |(w, h, _)| w.max(h));
+    found.iter().copied().rev().max_by_key(|j| long(j))
 }
 
 /// The valid JPEGs of a CR3's `PRVW` and `THMB` boxes, every one: a file may carry more than one
@@ -544,12 +555,27 @@ fn cr3_preview_box_list(bytes: &[u8]) -> Vec<&[u8]> {
     // the boxes sit outside the media data: only the rest of the file is searched (the media data
     // is most of the file, and a thumbnail is asked for every photo in view)
     let file = bytes;
-    let regions: Vec<&[u8]> = match cr3_media_data(file) {
-        Some((start, end)) => [file.get(..start), file.get(end..)].into_iter().flatten().collect(),
-        None => vec![file],
-    };
+    // (every top-level `mdat` is left out, not only the first: a PRVW-shaped JPEG in media data is not a
+    // preview; CodeRabbit on #3583)
+    let media = cr3_media_data(file);
+    let whole_file = media.is_empty();
+    let mut regions: Vec<&[u8]> = Vec::new();
+    let mut from = 0usize;
+    for (start, end) in media {
+        if start >= from {
+            regions.extend(file.get(from..start));
+        }
+        from = from.max(end);
+    }
+    regions.extend(file.get(from..));
     for tag in [b"PRVW", b"THMB"] {
+        // the whole file searched (its media data not found): the first valid box of a kind only, as
+        // the declared one comes before the media data and a later look-alike must not win
+        let mut taken = false;
         for &bytes in &regions {
+            if whole_file && taken {
+                break;
+            }
             let mut from = 0;
             while let Some(i) = bytes.get(from..).and_then(|s| s.windows(4).position(|w| w == tag)).map(|p| p + from) {
                 from = i + 4;
@@ -567,6 +593,10 @@ fn cr3_preview_box_list(bytes: &[u8]) -> Vec<&[u8]> {
                 walked = walked.saturating_add(jpeg.len());
                 if is_dct_jpeg(jpeg) {
                     out.push(jpeg);
+                    taken = true;
+                    if whole_file {
+                        break;
+                    }
                     // (past it: a tag inside its JPEG is not another box)
                     from = end;
                 }
@@ -576,10 +606,17 @@ fn cr3_preview_box_list(bytes: &[u8]) -> Vec<&[u8]> {
     out
 }
 
-/// Where a CR3's top-level `mdat` box lies (`start..end`, `end` clamped to the file): the media
-/// data, most of the file. `None` when there is none, or the boxes stop making sense first. The
-/// metadata and the small previews are in the other top-level boxes, before or after it.
-fn cr3_media_data(bytes: &[u8]) -> Option<(usize, usize)> {
+/// Where a CR3's top-level `mdat` boxes lie (`start..end` each, `end` clamped to the file, in file
+/// order): the media data, most of the file. Empty when there is none, or the boxes stop making sense
+/// before the first. The metadata and the small previews are in the other top-level boxes.
+fn cr3_media_data(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let _ = cr3_media_walk(bytes, &mut out);
+    out
+}
+
+/// [`cr3_media_data`]'s walk of the top-level boxes; `None` where they stop making sense.
+fn cr3_media_walk(bytes: &[u8], out: &mut Vec<(usize, usize)>) -> Option<()> {
     let be32 = |at: usize| bytes.get(at..at.checked_add(4)?).map(|s| u64::from(u32::from_be_bytes([s[0], s[1], s[2], s[3]])));
     let be64 = |at: usize| bytes.get(at..at.checked_add(8)?).map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]));
     let mut at = 0usize;
@@ -593,9 +630,9 @@ fn cr3_media_data(bytes: &[u8]) -> Option<(usize, usize)> {
         };
         let next = usize::try_from(len).ok().filter(|l| *l >= 8).and_then(|l| at.checked_add(l));
         if bytes.get(at.checked_add(4)?..at.checked_add(8)?) == Some(b"mdat".as_slice()) {
-            return Some((at, next.unwrap_or(bytes.len()).min(bytes.len())));
+            out.push((at, next.unwrap_or(bytes.len()).min(bytes.len())));
         }
-        at = next?;
+        at = next.filter(|n| *n < bytes.len())?;
     }
     None
 }

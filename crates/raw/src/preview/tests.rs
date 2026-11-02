@@ -641,8 +641,10 @@ fn a_cr3_with_two_prvw_boxes_offers_both() {
     let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
     let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))));
     file.extend(bx(b"moov", &trak));
-    file.resize(at as usize, 0);
-    file.extend_from_slice(&big);
+    // (the track in the media data, as a camera writes it, after a `free` box up to it)
+    let pad = at as usize - 16 - file.len();
+    file.extend(bx(b"free", &vec![0u8; pad]));
+    file.extend(bx(b"mdat", &big));
     assert_eq!(embedded_preview_covering(&file, 1024).unwrap(), covering);
     assert_eq!(embedded_preview_covering(&file, 200).unwrap(), small);
 }
@@ -782,4 +784,71 @@ fn the_walks_to_a_jpegs_end_share_a_budget() {
     assert!(budget < 1500 - 1000, "and is charged for its steps: {budget} left");
     assert_eq!(jpeg_end(&j, &mut budget), None, "the second would overspend what is left");
     assert_eq!(budget, 0);
+}
+
+/// A CR3 without a JPEG track whose smaller `PRVW` (another shape) takes more bytes: the picture is
+/// the box with the most pixels, not the most bytes (CodeRabbit on #3077).
+#[test]
+fn a_box_only_cr3_is_judged_by_pixels_not_bytes() {
+    let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };
+    let boxed = |j: &[u8]| {
+        let mut b = b"\0\0\0\0\0\x01\x06\x54\x04\x38\0\x01".to_vec();
+        b.extend_from_slice(&(j.len() as u32).to_be_bytes());
+        b.extend_from_slice(j);
+        b
+    };
+    let (big, square) = (sized_jpeg(1620, 1080, 3, 300), sized_jpeg(800, 800, 3, 5000));
+    let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+    file.extend(bx(b"PRVW", &boxed(&square)));
+    file.extend(bx(b"PRVW", &boxed(&big)));
+    // no media data found: the whole file is searched, and only its first box counts (a later look-alike could be
+    // in media data; CodeRabbit on #3583)
+    assert_eq!(embedded_preview(&file).unwrap(), square);
+    file.extend(bx(b"mdat", &[0u8; 16]));
+    assert_eq!(embedded_preview(&file).unwrap(), big);
+    assert_eq!(embedded_preview_covering(&file, 100).unwrap(), big, "the square is another picture's shape");
+}
+
+/// Every top-level `mdat` is media data, not only the first: a PRVW-shaped JPEG in a second one is
+/// never the preview; and a `PRVW` cut short before its end marker isn't chosen to cover a size
+/// (CodeRabbit on #3583).
+#[test]
+fn cr3_boxes_in_any_media_data_or_cut_short_are_not_previews() {
+    let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };
+    let boxed = |j: &[u8]| {
+        let mut b = b"\0\0\0\0\0\x01\x06\x54\x04\x38\0\x01".to_vec();
+        b.extend_from_slice(&(j.len() as u32).to_be_bytes());
+        b.extend_from_slice(j);
+        b
+    };
+    let (real, fake) = (sized_jpeg(1620, 1080, 3, 300), sized_jpeg(3000, 2000, 3, 300));
+    let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+    file.extend(bx(b"PRVW", &boxed(&real)));
+    file.extend(bx(b"mdat", &[0u8; 64]));
+    file.extend(bx(b"mdat", &bx(b"PRVW", &boxed(&fake))));
+    assert_eq!(embedded_preview(&file).unwrap(), real, "the look-alike in the second mdat is media data");
+    // a PRVW cut short (no end marker): the full-size track covers a thumbnail instead
+    let mut short = real.clone();
+    short.truncate(real.len() - 2);
+    let big = sized_jpeg(6000, 4000, 3, 3000);
+    assert_eq!(embedded_preview_covering(&cr3_with(&short, &big), 512).unwrap(), big);
+    assert_eq!(embedded_preview_covering(&cr3_with(&real, &big), 512).unwrap(), real, "a whole one is still taken");
+}
+
+/// The copy a CR3 thumbnail is given decodes, whichever is chosen (CodeRabbit on #3583: the other CR3 fixtures have
+/// no scan): real encoded JPEGs, the `PRVW` for a small size, the full-size track past it.
+#[test]
+fn the_cr3_copy_chosen_for_a_thumbnail_decodes() {
+    let encode = |w: u16, h: u16| {
+        let px: Vec<u8> = (0..usize::from(w) * usize::from(h)).flat_map(|i| [(i % 251) as u8, 90, 160]).collect();
+        let mut j = Vec::new();
+        jpeg_encoder::Encoder::new(&mut j, 85).encode(&px, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+        j
+    };
+    let file = cr3_with(&encode(96, 64), &encode(384, 256));
+    for (min, want) in [(64u32, (96, 64)), (200, (384, 256))] {
+        let j = embedded_preview_covering(&file, min).unwrap();
+        let (_, w, h, c) = crate::tiffraw::lossy_jpeg(&j, 3, 1 << 20).unwrap();
+        assert_eq!(((w, h), c), (want, 3), "covering {min} px");
+    }
 }

@@ -29,7 +29,8 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
         // an idle window still takes the read's answer and makes the next check: a pass soon while
         // the read runs, and one when the next check is due
         if !app.session.disk_space_alert_raised() {
-            ctx.request_repaint_after(disk_check_wait(app.session.disk_space_read_running_for()));
+            let s = &app.session;
+            ctx.request_repaint_after(disk_check_wait(s.disk_space_read_running_for(), s.disk_space_next_check_in()));
         }
         if let Some(alert) = app.session.take_disk_space_alert() {
             let text = disk_space_notice(&alert);
@@ -48,13 +49,13 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 /// How soon the notice logic looks again for the free-space read: soon while a read runs, less often once it has
 /// run for a while (a drive that hangs must not keep an idle window drawing four times a second for good), and
-/// when the next check is due when none runs.
-fn disk_check_wait(running_for: Option<std::time::Duration>) -> std::time::Duration {
+/// when the next check is due (`next_in`: sooner after a read that couldn't start) when none runs.
+fn disk_check_wait(running_for: Option<std::time::Duration>, next_in: Option<std::time::Duration>) -> std::time::Duration {
     use std::time::Duration;
     match running_for {
         Some(d) if d < Duration::from_secs(5) => Duration::from_millis(250),
         Some(_) => Duration::from_secs(5),
-        None => lightcraft_engine::disk_space::CHECK_EVERY,
+        None => next_in.unwrap_or(lightcraft_engine::disk_space::CHECK_EVERY),
     }
 }
 
@@ -707,11 +708,14 @@ mod tests {
     /// (CodeRabbit on #3577: it asked for 250 ms passes for as long as the drive hung).
     #[test]
     fn a_hanging_free_space_read_is_looked_at_less_often() {
+        use lightcraft_engine::disk_space::{CHECK_EVERY, RETRY_AFTER};
         use std::time::Duration;
-        assert_eq!(super::disk_check_wait(Some(Duration::ZERO)), Duration::from_millis(250));
-        assert_eq!(super::disk_check_wait(Some(Duration::from_secs(60))), Duration::from_secs(5));
-        assert_eq!(super::disk_check_wait(Some(Duration::MAX)), Duration::from_secs(5));
-        assert_eq!(super::disk_check_wait(None), lightcraft_engine::disk_space::CHECK_EVERY);
+        assert_eq!(super::disk_check_wait(Some(Duration::ZERO), None), Duration::from_millis(250));
+        assert_eq!(super::disk_check_wait(Some(Duration::from_secs(60)), None), Duration::from_secs(5));
+        assert_eq!(super::disk_check_wait(Some(Duration::MAX), None), Duration::from_secs(5));
+        assert_eq!(super::disk_check_wait(None, None), CHECK_EVERY);
+        // after a read that couldn't start: at the retry, not five minutes on (CodeRabbit on #3077)
+        assert_eq!(super::disk_check_wait(None, Some(RETRY_AFTER)), RETRY_AFTER);
     }
 
     /// The prompt barrier keeps its own keys and pointer input, drops text/wheel input, and drops

@@ -576,6 +576,18 @@ fn a_bad_smart_preview_request_leaves_the_background_build_running() {
     assert!(b.running());
     assert!(s.execute("library.smartPreviews", &json!({"ids": ["x"], "background": true})).is_err(), "ids that are not photo ids");
     assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
+    // a smart-preview worker that can't start: the background build carries on, and stays the session's
+    crate::cmd::previews::test_gate::fail_next_spawn();
+    assert!(s.execute("library.smartPreviews", &json!({"ids": ids_json(&ids), "background": true})).is_err(), "the worker didn't start");
+    assert!(!b.cancel.load(std::sync::atomic::Ordering::Relaxed), "the background build was not stopped");
+    assert!(s.preview_build.as_ref().is_some_and(|now| std::sync::Arc::ptr_eq(now, &b)), "and is still the session's build");
+    // (stopped and finished before its folder goes)
+    b.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    drop(_hold);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while b.running() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 

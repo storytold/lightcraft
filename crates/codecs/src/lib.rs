@@ -173,8 +173,9 @@ pub fn decode(bytes: &[u8], opts: DecodeOptions) -> Result<Decoded> {
 /// EXIF orientation (1..=8, not applied), the picture `decode(bytes, DecodeOptions::fit(..))
 /// .to_srgb8()` gives within a few levels, in about half the time for a large camera preview.
 /// `Ok(None)` when the file is not a plain 8-bit sRGB JPEG (an ICC profile or an Adobe RGB EXIF
-/// hint, CMYK, 12-bit, lossless or arithmetic coding): use [`decode`]. Malformed input is an
-/// error, never a panic.
+/// hint, CMYK, 12-bit, lossless or arithmetic coding) or its headers can't be read: use
+/// [`decode`], which reports a malformed header as an error. Bad scan data is an error here, and
+/// nothing is ever a panic.
 pub fn decode_jpeg_srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
     if sniff(bytes) != Some(Format::Jpeg) {
         return Ok(None);
