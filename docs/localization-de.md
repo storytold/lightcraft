@@ -36,6 +36,7 @@ festgelegt. Neue Texte verwenden sie ebenfalls:
 | Upright | Perspektivkorrektur | |
 | Smart Album | Smart-Album | |
 | Activity stack | Aktivitätsstapel | |
+| Preset (Develop) | Preset | wie in Lightroom: gespeicherte Entwicklungseinstellungen (Bedienfeld „Presets“); andere Arten bleiben „…vorgabe“ (Export-, Filter-, Metadatenvorgabe) |
 
 Typografie: Gedankenstrich mit Leerzeichen als Halbgeviertstrich (` – `), Auslassungspunkte
 ohne Leerzeichen direkt am Wort (`Importieren…`), deutsche Anführungszeichen („…“). „Ihre“

@@ -1003,10 +1003,85 @@ fn gaps_text(messages: &std::collections::BTreeSet<String>, formats: &std::colle
     out
 }
 
+/// The message a contextual catalog key (`"<context>|<source>"`, one of [`CONTEXTS`]) translates.
+fn contextual_source(key: &str) -> Option<&str> {
+    CONTEXTS.iter().find_map(|context| key.strip_prefix(context).and_then(|k| k.strip_prefix('|')))
+}
+
+/// Whether `key` reads as `"<context>|<source>"`: words right before its first `|` (letters,
+/// spaces, `-`, `_`, so `develop-presets|` and `Develop Presets|` count too). Plain messages with
+/// a `|` in them have punctuation or a space before it (`Use | for levels, e.g. Travel|Italy`).
+fn looks_contextual(key: &str) -> bool {
+    key.split_once('|').is_some_and(|(prefix, _)| {
+        !prefix.is_empty() && prefix.trim() == prefix && prefix.chars().all(|c| c.is_ascii_alphabetic() || matches!(c, ' ' | '-' | '_'))
+    })
+}
+
+/// A contextual entry translates a message the app shows (a typo, or a message the app no longer
+/// has, would silently fall back to the plain message): its context is one of [`CONTEXTS`], and
+/// its message is in the source or the UI's tables, not merely a key some catalog still holds.
+/// The German lookups through each context read their entry rather than the plain one.
+#[test]
+fn contextual_entries_name_real_messages() {
+    let shown = app_messages();
+    for language in Locale::ALL {
+        for key in language.catalog().keys() {
+            if let Some(source) = contextual_source(key) {
+                assert!(shown.contains(source), "{}: {key:?} names no message", language.code());
+            } else {
+                assert!(!looks_contextual(key), "{}: {key:?} names no context (one of {CONTEXTS:?})", language.code());
+            }
+        }
+    }
+    for misspelt in ["develop preset|Rename Preset", "develop-presets|Rename Preset", "develop_presets|Rename Preset", "Develop Presets|Rename Preset"] {
+        assert!(looks_contextual(misspelt), "{misspelt:?}: a misspelt context is caught");
+    }
+    assert!(!looks_contextual("Characters not allowed in file names (/ \\ : * ? \" < > |) become -"));
+    assert!(!looks_contextual("Use | for levels, e.g. Travel|Italy"));
+    assert!(!looks_contextual("use | to separate levels"), "a plain message in lowercase words isn't one");
+    assert_eq!(tr_ctx_in(Locale::De, FILTER_BAR_CONTEXT, "Presets"), "Vorgaben");
+    assert_eq!(tr_ctx_in(Locale::De, RENAME_DIALOG_CONTEXT, "Presets"), "Vorgaben");
+    assert_eq!(Locale::De.tr("Presets"), "Presets");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Import Presets…"), "Presets importieren…");
+    assert_eq!(Locale::De.tr("Import Presets…"), "Vorgaben importieren…");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Preset name"), "Name des Presets");
+    assert_eq!(Locale::De.tr("Preset name"), "Name der Vorgabe");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Rename Preset"), "Preset umbenennen");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Export Presets"), "Presets exportieren");
+    assert_eq!(Locale::De.tr("Export Presets"), "Vorgaben exportieren");
+    assert_eq!(tr_ctx_in(Locale::De, DEVELOP_PRESETS_CONTEXT, "Export Presets…"), "Presets exportieren…");
+    assert_eq!(Locale::De.tr("Export Presets…"), "Vorgaben exportieren…");
+    assert_eq!(tr_ctx_in(Locale::En, FILTER_BAR_CONTEXT, "Presets"), "Presets");
+}
+
+/// The File menu's preset import and export, and the file dialogs behind them, call develop
+/// presets "Presets" in German; the curve panel's and the Effect menu's "Export Presets…" don't.
+#[test]
+fn file_menu_preset_commands_say_presets() {
+    set_language(Locale::De);
+    let label = |id: &str| crate::menus::ui_commands().find(|c| c.0 == id).map(|c| c.1).unwrap_or_default();
+    let menu = |id: &str| crate::menubar::display_item_label(id, &serde_json::Value::Null, label(id)).to_string();
+    assert_eq!(menu("file.importPresets"), "Profile und Presets importieren…");
+    assert_eq!(menu("file.exportPresets"), "Presets exportieren…");
+    let shortcut = crate::shortcuts::find_bindable("file.exportPresets").map(|b| command_label(b.id, b.label));
+    assert_eq!(shortcut, Some("Presets exportieren…"));
+    assert_eq!(tr("Import Presets"), "Presets importieren");
+    assert_eq!(tr("Presets & Profiles"), "Presets und Profile");
+    assert_eq!(command_label("curve.exportPresets", "Export Presets…"), "Vorgaben exportieren…");
+    set_language(Locale::En);
+}
+
 /// Every plain message: the keys of every catalog (but contextual entries, which a language adds
-/// only where it needs one), the `tr("…")` literals in the source and the labels the UI
-/// translates from tables.
+/// only where it needs one) and the [`app_messages`].
 fn plain_messages() -> std::collections::BTreeSet<String> {
+    let mut messages = app_messages();
+    messages.extend(Locale::ALL.iter().flat_map(|language| language.catalog().keys()).filter(|key| contextual_source(key).is_none()).cloned());
+    messages
+}
+
+/// The messages the app itself shows: the `tr("…")` / `tr_ctx(…, "…")` literals in the source and
+/// the labels the UI translates from tables.
+fn app_messages() -> std::collections::BTreeSet<String> {
     use lightcraft_catalog::rules;
     let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
     labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
@@ -1041,15 +1116,7 @@ fn plain_messages() -> std::collections::BTreeSet<String> {
         "Imported Photos",
     ]);
     labels.extend(crate::panels::keyword_list::VARIABLE_LABELS);
-    let contextual = format!("{BOOL_CONTEXT}|");
-    Locale::ALL
-        .iter()
-        .flat_map(|language| language.catalog().keys())
-        .filter(|key| !key.starts_with(&contextual))
-        .cloned()
-        .chain(gaps::source_messages())
-        .chain(labels.into_iter().map(str::to_string))
-        .collect()
+    gaps::source_messages().into_iter().chain(labels.into_iter().map(str::to_string)).collect()
 }
 
 /// Help ▸ What's New, line by line as the dialog looks each one up.

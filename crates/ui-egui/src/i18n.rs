@@ -232,9 +232,34 @@ pub fn tr(source: &str) -> &str {
     tr_in(language(), source)
 }
 
+/// A develop preset's own wording, where a message is shared with other kinds of preset (German
+/// "Presets importieren…" for develop presets, "Vorgaben importieren…" for curve presets).
+pub const DEVELOP_PRESETS_CONTEXT: &str = "develop presets";
+/// The filter bar's filter presets, where "Presets" alone reads as the develop presets.
+pub const FILTER_BAR_CONTEXT: &str = "filter bar";
+/// The rename dialog's template presets, where "Presets" alone reads as the develop presets.
+pub const RENAME_DIALOG_CONTEXT: &str = "rename dialog";
+/// Every context a catalog may key an entry by ([`tr_ctx`]); the tests check each entry's message.
+#[cfg(test)]
+const CONTEXTS: [&str; 4] = [BOOL_CONTEXT, DEVELOP_PRESETS_CONTEXT, FILTER_BAR_CONTEXT, RENAME_DIALOG_CONTEXT];
+
 /// [`tr`] for a message whose translation depends on where it appears: a catalog entry keyed
 /// `"<context>|<source>"` wins, else the plain message. A language adds the contextual entry only
 /// where its shared translation reads wrongly there (Japanese はい / いいえ as a rule's value).
+pub fn tr_ctx<'a>(context: &str, source: &'a str) -> &'a str {
+    tr_ctx_in(language(), context, source)
+}
+
+/// A UI command's label from the command tables, in the context its command gives it: the File
+/// menu's "Export Presets…" exports develop presets, the curve panel's and the Effect menu's
+/// their own kind. Wherever a command's label is shown (menus, Keyboard Shortcuts).
+pub fn command_label<'a>(id: &str, label: &'a str) -> &'a str {
+    match id {
+        "file.exportPresets" => tr_ctx(DEVELOP_PRESETS_CONTEXT, label),
+        _ => tr(label),
+    }
+}
+
 fn tr_ctx_in<'a>(language: Locale, context: &str, source: &'a str) -> &'a str {
     match language.catalog().get(&format!("{context}|{source}")) {
         Some(translation) => translation.as_str(),
