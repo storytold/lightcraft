@@ -205,7 +205,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
 fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), JsValue> {
     let detail = object(metadata)?;
     if let Some(bytes) = bytes {
-        set(&detail, "bytes", &copy_event_bytes(&bytes)?)?;
+        set(&detail, "bytes", &copy_event_bytes(&bytes)?.into())?;
     }
     let init = web_sys::CustomEventInit::new();
     init.set_detail(&detail);
