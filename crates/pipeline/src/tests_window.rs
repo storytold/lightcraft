@@ -353,6 +353,7 @@ fn with_spot(mode: lightcraft_develop::SpotMode, at: (f64, f64), offset: Option<
         feather: 30.0,
         opacity: 100.0,
         source_offset: offset.map(|(x, y)| Point::new(x, y)),
+        anchor: Default::default(),
     });
     s
 }
@@ -366,6 +367,19 @@ fn a_spot_with_its_source_outside_the_window_matches_the_whole_render() {
         let s = with_spot(mode, (0.40, 0.5), Some((0.12, 0.05)));
         // a window that holds the target (x ≈ 384) but not the source (x ≈ 499..)
         check_whole(&format!("{mode:?}"), &s, PixelWindow { x: 250, y: 200, w: 200, h: 200 }, 1, 0.1);
+    }
+}
+
+/// Source-anchored sensor correction must use the same retouching pixels in
+/// a magnified window and a full export, even when the lens warp moves them.
+#[test]
+fn a_sensor_anchored_spot_under_distortion_matches_full_render_in_a_window() {
+    use lightcraft_develop::{SpotAnchor, SpotMode};
+    for mode in [SpotMode::Clone, SpotMode::Heal] {
+        let mut settings = with_spot(mode, (0.22, 0.28), Some((0.18, 0.01)));
+        settings.optics.distortion = 100.0;
+        settings.spots[0].anchor = SpotAnchor::Sensor;
+        check_whole(&format!("sensor-anchored {mode:?}"), &settings, PixelWindow { x: 0, y: 0, w: 340, h: 290 }, 2, 0.2);
     }
 }
 

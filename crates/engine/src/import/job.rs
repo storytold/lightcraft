@@ -480,6 +480,7 @@ impl Session {
         p.kind = c.kind;
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
+            p.sensor_orientation = info.sensor_orientation;
             p.embedded_lens = info.embedded_lens;
             p.preview_only = info.preview_only.clone();
         }

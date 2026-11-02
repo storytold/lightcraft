@@ -125,6 +125,7 @@ fn header_info(p: &Photo) -> SourceInfo {
         let relative = p.relative_wb();
         let (temp, tint) = if relative { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
         SourceInfo {
+            sensor_orientation: p.sensor_orientation,
             raw: true,
             as_shot_temp: temp,
             as_shot_tint: tint,
@@ -135,6 +136,6 @@ fn header_info(p: &Photo) -> SourceInfo {
             ..Default::default()
         }
     } else {
-        SourceInfo::default()
+        SourceInfo { sensor_orientation: p.sensor_orientation, ..Default::default() }
     }
 }

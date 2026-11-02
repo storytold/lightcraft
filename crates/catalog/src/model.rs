@@ -166,6 +166,10 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
     .filter(|v: &f64| v.is_finite() && *v > 0.0)
 }
 
+fn orientation_is_normal(o: &lightcraft_meta::Orientation) -> bool {
+    *o == lightcraft_meta::Orientation::Normal
+}
+
 /// Descriptive + capture metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -242,6 +246,10 @@ pub struct Photo {
     pub imported: String,
     #[serde(default)]
     pub meta: Meta,
+    /// EXIF orientation applied by the decoder to its sensor pixels. Needed to
+    /// place a camera-fixed retouch after switching between portrait/landscape.
+    #[serde(default, skip_serializing_if = "orientation_is_normal")]
+    pub sensor_orientation: lightcraft_meta::Orientation,
     #[serde(default)]
     pub rating: u8,
     #[serde(default)]
@@ -387,6 +395,7 @@ impl Photo {
             captured: None,
             imported: imported.to_string(),
             meta: Meta::default(),
+            sensor_orientation: lightcraft_meta::Orientation::Normal,
             rating: 0,
             flag: Flag::None,
             label: None,

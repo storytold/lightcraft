@@ -10,8 +10,8 @@
 //!   structure is chosen at a scale set by the spot's size (the same at preview and export size).
 //!   Deterministic; the source offset is ignored.
 
-use lightcraft_develop::{Spot, SpotMode};
-use lightcraft_geom::Point;
+use lightcraft_develop::{Spot, SpotAnchor, SpotMode};
+use lightcraft_geom::{Affine, Point};
 use lightcraft_raster::Rgb32f;
 
 use crate::geometry::Frame;
@@ -98,6 +98,41 @@ pub fn auto_source(img: &Rgb32f, target: (f32, f32), r: f32) -> (f32, f32) {
     ranked_sources(img, target, r).first().copied().unwrap_or((r * 2.5, 0.0))
 }
 
+/// Map a spot point from its coordinate space into the actual output frame.
+fn spot_to_out(frame: &Frame, anchor: SpotAnchor, p: Point, to_out: &Affine) -> Option<Point> {
+    let p = match anchor {
+        SpotAnchor::Image => p,
+        SpotAnchor::Sensor => frame.sensor_to_transformed(p)?,
+    };
+    let q = to_out.apply(p);
+    (q.x.is_finite() && q.y.is_finite()).then_some(q)
+}
+
+/// A stored source delta must follow the optical warp along with its target.
+fn spot_offset_out(frame: &Frame, spot: &Spot, to_out: &Affine) -> Option<(f32, f32)> {
+    let offset = spot.source_offset?;
+    let (a, b) = match spot.anchor {
+        SpotAnchor::Image => (to_out.apply(Point::new(0.0, 0.0)), to_out.apply(offset)),
+        SpotAnchor::Sensor => {
+            let target = *spot.points.first()?;
+            let source = Point::new(target.x + offset.x, target.y + offset.y);
+            (spot_to_out(frame, spot.anchor, target, to_out)?, spot_to_out(frame, spot.anchor, source, to_out)?)
+        }
+    };
+    let delta = (b.x - a.x, b.y - a.y);
+    (delta.0.is_finite() && delta.1.is_finite()).then_some((delta.0 as f32, delta.1 as f32))
+}
+
+/// Transform displayed coordinates back into the spot's stored coordinate space.
+fn spot_from_out(frame: &Frame, anchor: SpotAnchor, p: Point, to_norm: &Affine) -> Option<Point> {
+    let mut q = to_norm.apply(p);
+    q = match anchor {
+        SpotAnchor::Image => q,
+        SpotAnchor::Sensor => frame.transformed_to_sensor(q)?,
+    };
+    (q.x.is_finite() && q.y.is_finite()).then_some(q)
+}
+
 /// A source offset (normalized, as [`Spot::source_offset`]) for `spot` on `src` developed with
 /// `s`: the best match, or with `avoid` (the current offset) the best one at least a spot radius
 /// away from it ("refresh source"). `None` when no candidate fits in the image.
@@ -115,15 +150,13 @@ pub fn pick_source(
     }
     let img = frame.sample(src, w, h);
     let (to_out, to_norm) = (frame.norm_to_out(w, h), frame.out_to_norm(w, h));
-    let t = to_out.apply(*spot.points.first()?);
+    let t = spot_to_out(&frame, spot.anchor, *spot.points.first()?, &to_out)?;
     let r = radius_px(spot.size, frame.px_per_long(w)) as f32;
-    let avoid = avoid.map(|o| {
-        let (a, b) = (to_out.apply(Point::new(0.0, 0.0)), to_out.apply(o));
-        ((b.x - a.x) as f32, (b.y - a.y) as f32)
-    });
+    let avoid = avoid.and_then(|o| spot_offset_out(&frame, &Spot { source_offset: Some(o), ..spot.clone() }, &to_out));
     let far = |d: &(f32, f32)| avoid.is_none_or(|a| ((d.0 - a.0).powi(2) + (d.1 - a.1).powi(2)).sqrt() > r);
     let d = ranked_sources(&img, (t.x as f32, t.y as f32), r).into_iter().find(far)?;
-    let (n0, n1) = (to_norm.apply(t), to_norm.apply(Point::new(t.x + d.0 as f64, t.y + d.1 as f64)));
+    let src_out = Point::new(t.x + d.0 as f64, t.y + d.1 as f64);
+    let (n0, n1) = (spot_from_out(&frame, spot.anchor, t, &to_norm)?, spot_from_out(&frame, spot.anchor, src_out, &to_norm)?);
     Some(Point::new(n1.x - n0.x, n1.y - n0.y))
 }
 
@@ -177,13 +210,12 @@ pub fn window_for_reads_checked(
         return Some(win);
     }
     let to_out = frame.norm_to_out(full_w, full_h);
-    let origin = to_out.apply(Point::new(0.0, 0.0));
     // (target box, source box) of each spot, in output pixels: [x0, y0, x1, y1]
     let boxes: Vec<([f64; 4], [f64; 4])> = spots
         .iter()
         .filter_map(|spot| {
             let r = radius_px(spot.size, ppl);
-            let pts: Vec<_> = spot.points.iter().map(|p| to_out.apply(*p)).collect();
+            let pts: Vec<_> = spot.points.iter().map(|p| spot_to_out(frame, spot.anchor, *p, &to_out)).collect::<Option<Vec<_>>>()?;
             let first = pts.first()?;
             let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
             for p in &pts {
@@ -192,10 +224,9 @@ pub fn window_for_reads_checked(
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
             let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
             let s = match spot.source_offset {
-                Some(o) => {
-                    let b = to_out.apply(o);
-                    let (dx, dy) = (b.x - origin.x, b.y - origin.y);
-                    [t[0] + dx, t[1] + dy, t[2] + dx, t[3] + dy]
+                Some(_) => {
+                    let (dx, dy) = spot_offset_out(frame, spot, &to_out)?;
+                    [t[0] + dx as f64, t[1] + dy as f64, t[2] + dx as f64, t[3] + dy as f64]
                 }
                 None => [t[0] - 4.2 * r, t[1] - 4.2 * r, t[2] + 4.2 * r, t[3] + 4.2 * r],
             };
@@ -281,23 +312,19 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
     let to_out = frame.norm_to_out(w, h);
     for spot in spots {
         let r = radius_px(spot.size, ppl) as f32;
-        let pts: Vec<(f32, f32)> = spot
-            .points
-            .iter()
-            .map(|p| {
-                let q = to_out.apply(*p);
-                (q.x as f32, q.y as f32)
-            })
-            .collect();
+        let Some(pts): Option<Vec<(f32, f32)>> =
+            spot.points.iter().map(|p| spot_to_out(frame, spot.anchor, *p, &to_out).map(|q| (q.x as f32, q.y as f32))).collect()
+        else {
+            continue;
+        };
         let Some(&first) = pts.first() else { continue };
         let fill = spot.mode == SpotMode::Fill;
         let offset = match spot.source_offset {
             _ if fill => (0.0, 0.0),
-            Some(o) => {
-                let a = to_out.apply(Point::new(0.0, 0.0));
-                let b = to_out.apply(o);
-                ((b.x - a.x) as f32, (b.y - a.y) as f32)
-            }
+            Some(_) => match spot_offset_out(frame, spot, &to_out) {
+                Some(delta) => delta,
+                None => continue,
+            },
             None => auto_source(img, first, r),
         };
         // Bounding box of the stroke.
@@ -402,6 +429,7 @@ mod tests {
                     feather: 0.0,
                     opacity: 0.0,
                     source_offset: Some(Point::new(8.0 / 64.0, 0.0)),
+                    anchor: Default::default(),
                 };
                 apply(&mut img, &[spot], &frame, frame.px_per_long(64));
                 for (i, (actual, expected)) in img.data.iter().zip(&original.data).enumerate() {
@@ -424,6 +452,7 @@ mod tests {
                 feather: 0.0,
                 opacity: 100.0,
                 source_offset: Some(Point::new(0.125, 0.0)),
+                anchor: Default::default(),
             };
             apply(&mut img, &[spot], &frame, frame.px_per_long(w));
             let (x, y) = (cx as usize, cy as usize);
@@ -584,6 +613,93 @@ mod tests {
         }
         let empty = Spot { points: vec![], ..Default::default() };
         assert_eq!(window_for_reads(&with_spots(vec![empty]), &frame, 40_000, 30_000, ppl, win), win);
+    }
+
+    /// An EXIF portrait and a landscape have the same physical sensor blemish
+    /// in different display positions. A reusable sensor preset must land on it
+    /// in all eight orientations, even with manual distortion enabled.
+    #[test]
+    fn sensor_spot_presets_follow_exif_orientation() {
+        use lightcraft_develop::SpotAnchor;
+        use lightcraft_geom::Orientation;
+
+        let (sensor_w, sensor_h) = (200usize, 150usize);
+        let physical = Point::new(34.5, 28.5);
+        let raw = Rgb32f::from_fn(sensor_w, sensor_h, |x, y| {
+            if (x as f64 + 0.5 - physical.x).hypot(y as f64 + 0.5 - physical.y) < 2.5 { [0.95, 0.05, 0.95] } else { [0.4; 3] }
+        });
+        let spot = Spot {
+            mode: SpotMode::Clone,
+            anchor: SpotAnchor::Sensor,
+            points: vec![Point::new(physical.x / sensor_w as f64, physical.y / sensor_h as f64)],
+            source_offset: Some(Point::new(0.2, 0.0)),
+            size: 6.0 / sensor_w as f64,
+            feather: 0.0,
+            ..Default::default()
+        };
+        for exif in [
+            Orientation::Normal,
+            Orientation::Rotate90,
+            Orientation::Rotate270,
+            Orientation::Rotate180,
+            Orientation::FlipH,
+            Orientation::FlipV,
+            Orientation::Transpose,
+            Orientation::Transverse,
+        ] {
+            let upright = raw.oriented(exif);
+            let (w, h) = (upright.width, upright.height);
+            let mut settings = DevelopSettings::default();
+            settings.optics.distortion = 50.0;
+            let mut frame = Frame::new(w, h, &settings, true);
+            frame.sensor_orientation = exif;
+            let warped = frame.sample(&upright, w, h);
+            let (ux, uy) = exif.map(physical.x, physical.y, sensor_w as f64, sensor_h as f64);
+            let display = frame.warp.as_ref().unwrap().from_source(Point::new(ux, uy), 1).unwrap();
+            let (px, py) = (display.x.floor() as usize, display.y.floor() as usize);
+            assert!(warped.get(px, py)[0] > 0.7, "{exif:?}: defect not visible in synthetic input");
+            let mut fixed = warped;
+            apply(&mut fixed, std::slice::from_ref(&spot), &frame, frame.px_per_long(w));
+            assert!(fixed.get(px, py)[0] < 0.5, "{exif:?}: sensor-anchored preset did not follow EXIF rotation");
+        }
+    }
+
+    /// Issue #3590: the retouch must follow a fixed sensor blemish after optics
+    /// are changed, while legacy image-anchored spots keep their old behavior.
+    #[test]
+    fn sensor_anchored_clone_follows_a_sensor_defect_under_distortion() {
+        use lightcraft_develop::SpotAnchor;
+
+        let (w, h) = (200usize, 150usize);
+        let defect = Point::new(35.0, 32.0);
+        let original = Rgb32f::from_fn(w, h, |x, y| {
+            if ((x as f64 + 0.5 - defect.x).powi(2) + (y as f64 + 0.5 - defect.y).powi(2)).sqrt() < 3.0 { [0.95, 0.05, 0.95] } else { [0.4; 3] }
+        });
+        let mut settings = DevelopSettings::default();
+        settings.optics.distortion = 100.0;
+        let frame = Frame::new(w, h, &settings, true);
+        let blemish_display = frame.warp.as_ref().unwrap().from_source(defect, 1).unwrap();
+        let (x, y) = (blemish_display.x.floor() as usize, blemish_display.y.floor() as usize);
+        assert!(defect.dist(blemish_display) > 4.0);
+        let warped = frame.sample(&original, w, h);
+        assert!(warped.get(x, y)[0] > 0.7, "the synthetic defect is visible");
+
+        let sensor_spot = Spot {
+            mode: SpotMode::Clone,
+            anchor: SpotAnchor::Sensor,
+            points: vec![Point::new(defect.x / w as f64, defect.y / h as f64)],
+            source_offset: Some(Point::new(0.2, 0.0)),
+            size: 5.0 / w as f64,
+            feather: 0.0,
+            ..Default::default()
+        };
+        let mut corrected = warped.clone();
+        apply(&mut corrected, std::slice::from_ref(&sensor_spot), &frame, frame.px_per_long(w));
+        assert!(corrected.get(x, y)[0] < 0.5, "the sensor-anchored retouch must cover the defect");
+
+        let mut legacy = warped;
+        apply(&mut legacy, &[Spot { anchor: SpotAnchor::Image, ..sensor_spot }], &frame, frame.px_per_long(w));
+        assert!(legacy.get(x, y)[0] > 0.7, "old retouches stay in transformed-image coordinates");
     }
 
     // Given an Auto Mask stroke reaching into the window, the window grows to hold all of it

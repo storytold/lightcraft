@@ -80,8 +80,10 @@ const ENC_FIELD: &str = "enc";
 /// record the field at all (a version 1 proxy is stored at JPEG quality 92, which this build
 /// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail. A
 /// stale proxy whose original is offline is kept as it is (see [`is_stale`]).
+/// Version 4 records the sensor's original EXIF orientation, required for source-anchored
+/// spot presets across landscape/portrait raw files.
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
-pub(crate) const ENCODE_VERSION: u64 = 3;
+pub(crate) const ENCODE_VERSION: u64 = 4;
 
 /// The decoder facts a render interprets its settings against, stored with the proxy's pixels so
 /// an offline original edits like it did online (the catalog's header facts cannot carry them).
@@ -89,6 +91,8 @@ pub(crate) const ENCODE_VERSION: u64 = 3;
 /// budget (up to 12 336 gains).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SmartFacts {
+    #[serde(default)]
+    sensor_orientation: lightcraft_geom::Orientation,
     raw: bool,
     as_shot_temp: f64,
     as_shot_tint: f64,
@@ -189,6 +193,7 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             .map(|m| m.iter().map(|(kind, a)| StoredMatte { kind: kind.code(), w: a.width, h: a.height, len: a.data.len() }).collect())
             .unwrap_or_default();
         let facts = SmartFacts {
+            sensor_orientation: i.sensor_orientation,
             raw: i.raw,
             as_shot_temp: i.as_shot_temp,
             as_shot_tint: i.as_shot_tint,
@@ -236,6 +241,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
     let info = stored_facts(&head, bytes).map(|(f, mattes)| SourceInfo {
+        sensor_orientation: f.sensor_orientation,
         raw: f.raw,
         as_shot_temp: f.as_shot_temp,
         as_shot_tint: f.as_shot_tint,

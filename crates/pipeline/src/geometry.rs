@@ -23,6 +23,9 @@ pub struct Frame {
     pub src_h: usize,
     /// User orientation (Rotate Left/Right, Flip) on top of the source.
     pub orient: Orientation,
+    /// EXIF rotation already applied to the decoded image. Sensor-anchored
+    /// spots are stored before this rotation, so presets work across captures.
+    pub sensor_orientation: Orientation,
     /// Oriented dimensions.
     pub ow: f64,
     pub oh: f64,
@@ -69,6 +72,7 @@ impl Frame {
             src_w,
             src_h,
             orient,
+            sensor_orientation: Orientation::Normal,
             ow,
             oh,
             crop,
@@ -144,6 +148,59 @@ impl Frame {
         let w = self.warp.get_or_insert_with(|| Warp::identity(self.ow, self.oh));
         w.ca[0] += ca[0];
         w.ca[2] += ca[1];
+    }
+
+    /// EXIF-/user-oriented source coordinates → transformed coordinates,
+    /// before the crop and canvas flips.
+    pub fn oriented_source_to_transformed(&self, source: Point) -> Option<Point> {
+        if !source.x.is_finite() || !source.y.is_finite() || self.ow <= 0.0 || self.oh <= 0.0 {
+            return None;
+        }
+        let src_px = Point::new(source.x * self.ow, source.y * self.oh);
+        let transformed = match &self.warp {
+            Some(warp) => warp.from_source(src_px, 1)?,
+            None => src_px,
+        };
+        let q = Point::new(transformed.x / self.ow, transformed.y / self.oh);
+        (q.x.is_finite() && q.y.is_finite()).then_some(q)
+    }
+
+    /// Inverse of the oriented source transformation.
+    pub fn transformed_to_oriented_source(&self, transformed: Point) -> Option<Point> {
+        if !transformed.x.is_finite() || !transformed.y.is_finite() || self.ow <= 0.0 || self.oh <= 0.0 {
+            return None;
+        }
+        let t = Point::new(transformed.x * self.ow, transformed.y * self.oh);
+        let source = match &self.warp {
+            Some(warp) => warp.to_source(t, 1),
+            None => t,
+        };
+        let q = Point::new(source.x / self.ow, source.y / self.oh);
+        (q.x.is_finite() && q.y.is_finite()).then_some(q)
+    }
+
+    /// Sensor-native normalized position → final optical-frame normalized
+    /// coordinates (before crop/flip). The raw decoder has already applied
+    /// EXIF orientation; the user's own rotation is applied by this Frame.
+    pub fn sensor_to_transformed(&self, sensor: Point) -> Option<Point> {
+        if !sensor.x.is_finite() || !sensor.y.is_finite() || self.ow <= 0.0 || self.oh <= 0.0 {
+            return None;
+        }
+        let (x, y) = self.sensor_orientation.map(sensor.x, sensor.y, 1.0, 1.0);
+        let (x, y) = self.orient.map(x, y, 1.0, 1.0);
+        self.oriented_source_to_transformed(Point::new(x, y))
+    }
+
+    /// Inverse of [`Self::sensor_to_transformed`]. Returns the stored,
+    /// camera-native pixel's normalized location before EXIF rotation.
+    pub fn transformed_to_sensor(&self, transformed: Point) -> Option<Point> {
+        if !transformed.x.is_finite() || !transformed.y.is_finite() || self.ow <= 0.0 || self.oh <= 0.0 {
+            return None;
+        }
+        let oriented = self.transformed_to_oriented_source(transformed)?;
+        let (x, y) = self.orient.inverse().map(oriented.x, oriented.y, 1.0, 1.0);
+        let (x, y) = self.sensor_orientation.inverse().map(x, y, 1.0, 1.0);
+        (x.is_finite() && y.is_finite()).then_some(Point::new(x, y))
     }
 
     /// Map a point of the transformed image (normalized) to the lens-corrected, pre-perspective image (normalized).
@@ -377,6 +434,39 @@ mod tests {
         let p = m.apply(Point::new(150.0, 100.0));
         assert!((p.x - 0.5).abs() < 1e-9 && (p.y - 0.5).abs() < 1e-9);
         assert!((f.px_per_long(300) - 300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn oriented_source_and_sensor_mapping_have_different_exif_semantics() {
+        let d = DevelopSettings::default();
+        let mut frame = Frame::new(150, 200, &d, true);
+        frame.sensor_orientation = Orientation::Rotate270;
+        let pin = Point::new(0.12, 0.13);
+        assert!(frame.oriented_source_to_transformed(pin).unwrap().dist(pin) < 1e-12);
+        let expected = Point::new(0.13, 0.88);
+        assert!(frame.sensor_to_transformed(pin).unwrap().dist(expected) < 1e-12);
+        assert!(frame.transformed_to_sensor(expected).unwrap().dist(pin) < 1e-12);
+        assert!(frame.transformed_to_oriented_source(pin).unwrap().dist(pin) < 1e-12);
+    }
+
+    #[test]
+    fn sensor_spots_follow_exif_orientation_and_user_rotation() {
+        for exif in [Orientation::Normal, Orientation::Rotate90, Orientation::Rotate270, Orientation::FlipH] {
+            for user in [Orientation::Normal, Orientation::Rotate90, Orientation::Rotate180, Orientation::FlipV] {
+                let d = DevelopSettings { orientation: user, ..Default::default() };
+                let (w, h) = if exif.swaps_axes() { (150, 200) } else { (200, 150) };
+                let mut frame = Frame::new(w, h, &d, true);
+                frame.sensor_orientation = exif;
+                for sensor in [Point::new(0.11, 0.16), Point::new(0.5, 0.5), Point::new(0.8, 0.7)] {
+                    let mapped = frame.sensor_to_transformed(sensor).expect("valid sensor point");
+                    let back = frame.transformed_to_sensor(mapped).expect("invertible orientation");
+                    let (x, y) = exif.map(sensor.x, sensor.y, 1.0, 1.0);
+                    let (x, y) = user.map(x, y, 1.0, 1.0);
+                    assert!(mapped.dist(Point::new(x, y)) < 1e-12, "EXIF={exif:?} user={user:?}");
+                    assert!(back.dist(sensor) < 1e-12, "EXIF={exif:?} user={user:?}");
+                }
+            }
+        }
     }
 
     #[test]

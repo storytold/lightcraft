@@ -306,6 +306,11 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         ui.add_space(4.0);
+        if app.ui.tool != "fill" {
+            ui.checkbox(&mut app.ui.remove_sensor_anchor, crate::i18n::tr("Anchor new spots to sensor")).on_hover_text(crate::i18n::tr(
+                "New retouches follow fixed source pixels when optical distortion changes; existing retouches are unchanged.",
+            ));
+        }
         ui.label(egui::RichText::new(crate::i18n::tr("Paint over a distraction on the photo to remove it.")).color(Tokens::get(ui.ctx()).text_dim));
     });
     // brush settings; with a spot selected they edit that spot too
@@ -320,6 +325,9 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             lightcraft_develop::SpotMode::Fill => "Content-Aware",
         };
         crate::panels::edit::sub_title(ui, &crate::i18n::tr_format!("{mode} spot {} of {}", i + 1, d.spots.len(), mode = crate::i18n::tr(mode)));
+        if sp.anchor == lightcraft_develop::SpotAnchor::Sensor {
+            ui.label(crate::i18n::tr("Sensor-anchored correction"));
+        }
     }
     let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| lightcraft_develop::ControlSpec {
         id,

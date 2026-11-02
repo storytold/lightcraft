@@ -190,6 +190,7 @@ fn load_bytes_now(
             img,
             twin,
             SourceInfo {
+                sensor_orientation: raw.orientation,
                 raw: true,
                 as_shot_temp: temp,
                 as_shot_tint: tint,
@@ -210,7 +211,12 @@ fn load_bytes_now(
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+    Ok((
+        img.into_oriented(Orientation::from_exif(d.orientation)),
+        None,
+        SourceInfo { sensor_orientation: Orientation::from_exif(d.orientation), ..Default::default() },
+        false,
+    ))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from
