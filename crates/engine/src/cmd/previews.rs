@@ -739,10 +739,11 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     // (as Build Previews: the photos named, or the selected ones when more than one is, else
     // everything in view; read first, so a request with bad ids stops nothing: CodeRabbit on #3577)
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    // (the background preparation gives way, as to Build Previews: once this one's worker has started)
+    let mut gives_way = None;
     if background && let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
-        // (the background preparation gives way, as to Build Previews)
         if b.background {
-            b.cancel.store(true, Ordering::Relaxed);
+            gives_way = Some(b.cancel.clone());
         } else {
             return Err(bad(C, "a preview build is already running"));
         }
@@ -761,19 +762,35 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     if background {
         let what = if discard { "discarding smart previews" } else { "smart previews" };
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
-        s.preview_build = Some(state.clone());
+        let previous = s.preview_build.replace(state.clone());
         let task = task_for(s, &state);
         let st = state.clone();
-        std::thread::Builder::new()
-            .name("lc-smart-previews".into())
-            .spawn(move || {
-                if let Err(e) = smart_run(&dir, custom, discard, jobs, Some((&st, &task))) {
-                    log::warn!("{C}: {e}");
-                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
-                }
-                st.finished.store(true, Ordering::Relaxed);
-            })
-            .map_err(|e| bad(C, format!("could not start: {e}")))?;
+        let work = move || {
+            if let Err(e) = smart_run(&dir, custom, discard, jobs, Some((&st, &task))) {
+                log::warn!("{C}: {e}");
+                *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
+            }
+            st.finished.store(true, Ordering::Relaxed);
+        };
+        #[cfg(test)]
+        let started = if test_gate::take_fail_spawn() {
+            drop(work);
+            Err(std::io::Error::other("no thread (test)"))
+        } else {
+            std::thread::Builder::new().name("lc-smart-previews".into()).spawn(work)
+        };
+        #[cfg(not(test))]
+        let started = std::thread::Builder::new().name("lc-smart-previews".into()).spawn(work);
+        if let Err(e) = started {
+            // never started: not left "running", and the background build it was to replace carries on
+            // (CodeRabbit on #3077)
+            state.finished.store(true, Ordering::Relaxed);
+            s.preview_build = previous;
+            return Err(bad(C, format!("could not start: {e}")));
+        }
+        if let Some(cancel) = gives_way {
+            cancel.store(true, Ordering::Relaxed);
+        }
         return Ok(state.json());
     }
     let r = smart_run(&dir, custom, discard, jobs, None).map_err(|e| bad(C, e))?;

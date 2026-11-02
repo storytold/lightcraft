@@ -54,17 +54,14 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
         let gb = lightcraft_engine::media::default_disk_cache_bytes(app.session.catalog.len()).div_ceil(1 << 30);
         let auto = format!("{} ({gb} GB)", crate::i18n::tr("Automatic"));
-        let opts = [
-            (512u32, "512 MB"),
-            (1024, "1 GB"),
-            (2048, "2 GB"),
-            (4096, "4 GB"),
-            (8192, "8 GB"),
-            (51_200, "50 GB"),
-            (204_800, "200 GB"),
-            (0, auto.as_str()),
-        ];
-        let mut v = if CACHE_SIZES.contains(&cur) { cur } else { 0 };
+        let custom = custom_cache_option(cur);
+        let mut opts =
+            vec![(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB"), (51_200, "50 GB"), (204_800, "200 GB")];
+        opts.extend(custom.as_ref().map(|(mb, l)| (*mb, l.as_str())));
+        opts.push((0, auto.as_str()));
+        // (a saved size the list doesn't offer shows as its own option, not as Automatic: picking
+        // Automatic then changes it; CodeRabbit on #3583)
+        let mut v = if CACHE_SIZES.contains(&cur) || custom.is_some() { cur } else { 0 };
         if choices(ui, "settingsCache", &opts, &mut v) {
             let _ = app.run("library.preferences", json!({"cacheMb": v}));
         }
@@ -297,4 +294,25 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+/// The cache size limit saved in the settings, as an option of its own when the list doesn't offer
+/// it (set through `library.preferences`, or by an older version): its value and label.
+fn custom_cache_option(cur: u32) -> Option<(u32, String)> {
+    if cur == 0 || CACHE_SIZES.contains(&cur) {
+        return None;
+    }
+    let label = if cur.is_multiple_of(1024) { format!("{} GB", cur / 1024) } else { format!("{cur} MB") };
+    Some((cur, label))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_saved_cache_size_the_list_does_not_offer_is_an_option() {
+        assert_eq!(super::custom_cache_option(0), None, "Automatic");
+        assert_eq!(super::custom_cache_option(51_200), None, "offered");
+        assert_eq!(super::custom_cache_option(10_240), Some((10_240, "10 GB".to_string())));
+        assert_eq!(super::custom_cache_option(3000), Some((3000, "3000 MB".to_string())));
+    }
 }

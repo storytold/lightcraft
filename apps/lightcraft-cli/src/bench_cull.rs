@@ -233,6 +233,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 return Ok(());
             }
             a if a.starts_with("--") => return Err(format!("unknown option {a}\n{USAGE}")),
+            // (a second folder would replace the first and be timed in its place: CodeRabbit on #3583)
+            a if folder.is_some() => return Err(format!("{a}: one FOLDER only\n{USAGE}")),
             a => folder = Some(PathBuf::from(a)),
         }
         i += 1;
@@ -455,6 +457,12 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_folder_is_an_error() {
+        let e = run(&["a".to_string(), "b".to_string()]).unwrap_err();
+        assert!(e.starts_with("b: one FOLDER only"), "{e}");
+    }
 
     /// `--work` may hold anything: a run makes a new folder of its own there and never deletes
     /// what is already in it (it used to remove `lib-browse`, `lib-add` and `lib-copy` there).

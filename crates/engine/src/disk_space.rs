@@ -283,6 +283,16 @@ impl crate::Session {
         self.disk_alert.probe.is_some()
     }
 
+    /// How long until [`Session::check_disk_space`] reads the drive again (zero when it is due, `None`
+    /// when it won't: the alert was raised, a read runs, or nothing has been read yet).
+    pub fn disk_space_next_check_in(&self) -> Option<std::time::Duration> {
+        let a = &self.disk_alert;
+        if a.raised || a.probe.is_some() {
+            return None;
+        }
+        Some(CHECK_EVERY.saturating_sub(a.checked_at?.elapsed()))
+    }
+
     /// How long the free-space read running on its worker has run (`Duration::MAX` for one started for the
     /// library before), or `None` when none runs.
     pub fn disk_space_read_running_for(&self) -> Option<std::time::Duration> {
