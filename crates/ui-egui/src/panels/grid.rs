@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, MediaKind, PhotoId, SortKey, StackId};
+use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, PhotoId, SortKey, StackId};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -774,6 +774,7 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
+/// Render a single photo or video thumbnail cell in the library grid.
 fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
@@ -811,12 +812,14 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
 
 pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
     let mut spoken = photo.file_name.clone();
-    if is_clip(photo)
-        && let Some(d) = photo.duration
-    {
-        let text = crate::widgets::format_duration(d);
-        if !text.is_empty() {
-            spoken.push_str(&format!(", {} {text}", crate::i18n::tr("Video")));
+    if is_clip(photo) {
+        spoken.push_str(&format!(", {}", crate::i18n::tr("Video")));
+        if let Some(d) = photo.duration {
+            let text = crate::widgets::format_duration(d);
+            if !text.is_empty() {
+                spoken.push(' ');
+                spoken.push_str(&text);
+            }
         }
     }
     if photo.rating > 0 {
@@ -836,7 +839,7 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
 /// A catalogued clip: it has no decoded frame yet (playback and trim come in a later update), so its
 /// cell is a placeholder tile with the container and running time, never a failed image.
 fn is_clip(photo: &lightcraft_catalog::Photo) -> bool {
-    photo.kind == MediaKind::Video || photo.duration.is_some()
+    photo.is_video() || photo.duration.is_some()
 }
 
 fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) -> Rect {
@@ -1081,7 +1084,10 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
     }
     let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
     let w = g.size().x + 26.0;
-    // (a cell smaller than the pill still keeps it inside its own picture)
+    // A pill wider than the cell's margins would spill over its neighbours: skip it instead.
+    if w > img_rect.width() - 10.0 {
+        return;
+    }
     let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
     let y = (img_rect.bottom() - 24.0 - 20.0).max(img_rect.top() + 4.0);
     let br = Rect::from_min_size(pos2(x, y), vec2(w, 17.0));
