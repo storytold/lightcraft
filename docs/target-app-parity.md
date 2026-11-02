@@ -12,7 +12,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 | Number | Value | Kind |
 |---|---:|---|
-| **Feature breadth**, checklist | **83.2%** of 543 in-scope rows (P0 97.5%, P1 94.4%, P2 56.7%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
+| **Feature breadth**, checklist | **83.2%** of 546 in-scope rows (P0 97.5%, P1 94.5%, P2 56.7%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~62%** (range 57–67%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
 | **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 74.5% × 0.804 × colour 0.85 |
@@ -78,8 +78,8 @@ from the checklist sections and the deep-dive documents.
 | Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
-| Video | 1% | 0% | 0% | 25–45 h | catalogued only |
-| **Weighted** | 100% | **~77%** | **~62%** (62.2%) | **600–1,100 h** | |
+| Video | 1% | 10% | 10% | 20–40 h | imported and catalogued (kind, duration, dimensions, date, camera/GPS), with format/duration badges and a loupe card; no playback, trim, edits or export |
+| **Weighted** | 100% | **~77%** | **~62%** (62.3%) | **600–1,100 h** | |
 
 ## AI
 
@@ -302,6 +302,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
+| 2026-10-23 | minor | Video: MP4/MOV/M4V import and cataloguing (duration, dimensions, capture date, camera/GPS), grid format/duration badges and a loupe card; Video breadth and readiness 0% → 10%, remaining 25–45 → 20–40 h; headline numbers unchanged |
 | 2026-10-23 | minor | AI Denoise runs without a model (built-in denoiser); percentages unchanged, since it is a classical filter and Bayer-only |
 | 2026-10-13 | minor | Canon CRW decoded (clean-room, craft-libs `crates/crw/clean-room/`): 551 models verified with the coverage sweep (557 with MRW after merging main), Canon preview rows 21 → 6; RAW decoding unchanged |
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
