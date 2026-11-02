@@ -178,9 +178,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, &r.path));
     let inner = Rect::from_min_max(rect.min + vec2(16.0, 0.0), rect.max - vec2(16.0, 0.0));
     if picked {
-        ui.painter().rect_filled(inner, 4.0, t.canvas);
+        ui.painter().rect_filled(inner, crate::theme::RADIUS, t.canvas);
     } else if resp.hovered() {
-        ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
+        ui.painter().rect_filled(inner, crate::theme::RADIUS, t.hover.gamma_multiply(0.6));
     }
     let x = inner.left() + 4.0 + r.depth as f32 * INDENT;
     let cy = rect.center().y;

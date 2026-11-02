@@ -34,7 +34,7 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
             register(ui, format!("version:{i}"), r);
             let current = *v.settings == *p.develop;
             if resp.hovered() {
-                ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
+                ui.painter().rect_filled(r, crate::theme::RADIUS, t.hover.gamma_multiply(0.7));
             }
             // thumbnail of the version's look
             let tr = Rect::from_min_size(r.min + vec2(4.0, 5.0), vec2(72.0, 48.0));
@@ -145,9 +145,9 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
             register(ui, format!("history:{i}"), r);
             let row = history_row(i, cursor);
             if row == HistoryRow::Current {
-                ui.painter().rect_filled(r, 3.0, t.pressed);
+                ui.painter().rect_filled(r, crate::theme::RADIUS, t.pressed);
             } else if resp.hovered() {
-                ui.painter().rect_filled(r, 3.0, t.hover);
+                ui.painter().rect_filled(r, crate::theme::RADIUS, t.hover);
             }
             let (icon, text) = if row == HistoryRow::Undone { (t.text_disabled, t.text_disabled) } else { (t.icon, t.text_label) };
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(0.0, 4.0), vec2(16.0, 16.0)), Icon::Clock, icon);

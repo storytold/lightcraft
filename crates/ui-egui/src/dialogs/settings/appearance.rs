@@ -51,7 +51,7 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
     egui::Frame::new()
         .fill(t.inset)
         .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.field_border }))
-        .corner_radius(6)
+        .corner_radius(crate::theme::RADIUS_PANEL)
         .inner_margin(8)
         .show(ui, |ui| {
             ui.vertical(|ui| {

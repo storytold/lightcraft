@@ -61,6 +61,8 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
 
 const TILE: f32 = 52.0;
 const TILE_GAP: f32 = 6.0;
+/// Height of a Create New Mask tile.
+const TILE_H: f32 = 36.0;
 /// Room left and right of a tile's label.
 const TILE_PAD: f32 = 3.0;
 
@@ -90,9 +92,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(0, 4)).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
-        ui.add_space(6.0);
+        ui.add_space(3.0);
         let tiles: [(&str, &str, Icon); 10] = [
             ("object", "Object", Icon::Subject),
             ("prompt", "Describe", Icon::Subject),
@@ -116,16 +118,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let (cols, tile, size) = tile_layout(ui.available_width(), widest);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
-                let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(tile, TILE_H), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(label));
                 register(ui, format!("maskNew:{kind}"), r);
-                ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
-                paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
+                ui.painter().rect_filled(r, crate::theme::RADIUS, if resp.hovered() { t.hover } else { t.inset });
+                paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 5.0), vec2(14.0, 14.0)), *icon, t.text_label);
                 // (cut short only in a panel too narrow for the label: the full name on hover)
                 let label = crate::i18n::tr(label);
                 let g = one_line(ui.painter(), label, t.font(size), t.text_dim, tile - 2.0 * TILE_PAD);
                 let elided = g.elided;
-                let at = pos2(r.center().x, r.bottom() - 9.0) - g.size() / 2.0;
+                let at = pos2(r.center().x, r.bottom() - 7.0) - g.size() / 2.0;
                 register(ui, format!("maskNewLabel:{kind}"), Rect::from_min_size(at, g.size()));
                 ui.painter().galley(at, g, t.text_dim);
                 let resp = if elided { resp.on_hover_text(label) } else { resp };
@@ -305,7 +307,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, |ui| {
         for (i, c) in m.components.iter().enumerate() {
             let (kind, icon) = kind_label(&c.shape);
             let label = c.name.clone().unwrap_or_else(|| match &c.shape {
@@ -382,25 +384,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         brush_settings(app, ui);
     }
     divider(ui);
-    super::mask_effects::effect_row(app, ui, &m);
-    for s in LOCAL {
-        let v = local_get(&m.adjust, s.id);
-        let out = slider(ui, s, v, true, None);
-        apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
-    }
-    let amt = ControlSpec {
-        id: "amount",
-        label: "Amount",
-        section: Section::Light,
-        min: 0.0,
-        max: 200.0,
-        default: 100.0,
-        step: 1.0,
-        decimals: 0,
-        track: Track::Plain,
-    };
-    let out = slider(ui, &amt, m.adjust.amount, true, None);
-    apply_slider_out(app, &amt, out, |app, v| app.run("mask.adjust", json!({"values": {"amount": v}})));
+    // the mask's edges: a setting of its shape, not one of its effects, so above them
     let refine = ControlSpec {
         id: "refine",
         label: "Refine Edges",
@@ -414,8 +398,60 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     };
     let out = slider(ui, &refine, m.refine, true, None);
     apply_slider_out(app, &refine, out, |app, v| app.run("mask.refine", json!({"value": v})));
+    divider(ui);
+    super::mask_effects::effect_row(app, ui, &m);
+    // how strongly the mask's adjustments apply, above them
+    let amt = ControlSpec {
+        id: "amount",
+        label: "Amount",
+        section: Section::Light,
+        min: 0.0,
+        max: 200.0,
+        default: 100.0,
+        step: 1.0,
+        decimals: 0,
+        track: Track::Plain,
+    };
+    let out = slider(ui, &amt, m.adjust.amount, true, None);
+    apply_slider_out(app, &amt, out, |app, v| app.run("mask.adjust", json!({"values": {"amount": v}})));
+    ui.add_space(2.0);
+    // the effect sliders in sections, as the Edit panel's: Tone, Color, Effects, Details
+    for (section, title, keys) in MASK_GROUPS {
+        divider(ui);
+        if !mask_section(app, ui, section, title) {
+            continue;
+        }
+        for key in *keys {
+            let Some(s) = LOCAL.iter().find(|s| s.id == *key) else { continue };
+            let v = local_get(&m.adjust, s.id);
+            let out = slider(ui, s, v, true, None);
+            apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+        }
+        ui.add_space(3.0);
+    }
+
     ui.add_space(30.0);
     let _ = Stroke::NONE;
+}
+
+/// The mask's effect sliders in sections, in Lightroom Classic's order: section id (folded state
+/// in [`crate::state::UiState::folded_sections`]), title, and the `LOCAL` keys in it. Every
+/// `LOCAL` key is in one.
+pub(crate) const MASK_GROUPS: &[(&str, &str, &[&str])] = &[
+    ("maskTone", "Tone", &["exposure", "contrast", "highlights", "shadows", "whites", "blacks"]),
+    ("maskColor", "Color", &["temp", "tint", "hue", "saturation"]),
+    ("maskEffects", "Effects", &["texture", "clarity", "dehaze"]),
+    ("maskDetails", "Details", &["sharpness", "noise", "moire", "defringe"]),
+];
+
+/// A mask section's header (the Edit panel's), folding it on a click. True while it is open.
+fn mask_section(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
+    let open = !app.ui.section_folded(id);
+    let (resp, _) = crate::widgets::section_header(ui, id, title, open, None);
+    if resp.clicked() {
+        app.ui.toggle_folded(id);
+    }
+    open
 }
 
 /// Translate fixed action labels, but never mutate or translate user-entered mask names.
@@ -875,7 +911,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
 
 fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 0)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Brush")).font(t.semibold(13.0)));
             if text_button(ui, "brushAdd", crate::i18n::tr("Add"), !app.ui.brush_erase).clicked() {
