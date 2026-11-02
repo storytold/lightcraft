@@ -335,6 +335,9 @@ pub struct UiState {
     /// Window full screen requested (⇧⌘F); the host applies it (`None` = no change pending).
     #[serde(skip)]
     pub window_fullscreen: Option<bool>,
+    /// Native window state before Full Screen Preview took it full screen, if it did.
+    #[serde(skip)]
+    pub(crate) full_screen_preview_window_was_fullscreen: Option<bool>,
     /// Compare view: (select, candidate) photo ids.
     #[serde(skip)]
     pub compare: Option<(u64, u64)>,
@@ -497,6 +500,7 @@ impl Default for UiState {
             navigator: true,
             settings: AppSettings::default(),
             window_fullscreen: None,
+            full_screen_preview_window_was_fullscreen: None,
             filter_bar: false,
             local_roots: Vec::new(),
             local_browse_root: None,
