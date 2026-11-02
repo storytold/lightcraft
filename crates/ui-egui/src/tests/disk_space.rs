@@ -95,7 +95,9 @@ fn a_drive_that_runs_low_without_a_preview_build_is_told() {
     app.disk_space_notice = true;
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
     h.app.session.open_library(&dir, false).unwrap();
-    assert!(h.step_until(T, |h| !h.app.session.disk_space_alert_raised() && h.app.session.preview_build.is_none()));
+    // (the open's read answered: a pass before that would see no alert yet whatever the drive holds)
+    assert!(h.step_until(T, |h| !h.app.session.disk_space_reading() && h.app.session.preview_build.is_none()));
+    assert!(!h.app.session.disk_space_alert_raised());
     for _ in 0..5 {
         h.step();
     }

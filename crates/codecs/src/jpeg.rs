@@ -869,7 +869,12 @@ mod tests {
 /// image and its conversions were half the time). `Ok(None)` for anything else.
 pub(crate) fn srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
     let Some(m) = parse_markers(bytes) else { return Ok(None) };
-    let plain = matches!(m.components, 1 | 3) && m.precision == 8 && matches!(m.sof, 0xC0..=0xC2) && m.icc.is_none() && m.adobe_transform.is_none();
+    let plain = matches!(m.components, 1 | 3)
+        && m.precision == 8
+        && matches!(m.sof, 0xC0..=0xC2)
+        && m.icc.is_none()
+        && !m.icc_invalid
+        && m.adobe_transform.is_none();
     let summary = m.exif.as_deref().map(exif::summarize).unwrap_or_default();
     if !plain || summary.adobe_rgb_hint || max_w == 0 || max_h == 0 {
         return Ok(None);
@@ -1026,6 +1031,25 @@ mod srgb8_fit_tests {
         let thin = jpeg(1, 300, |_, y| [y as u8, y as u8, y as u8]);
         let (img, _) = srgb8_fit(&thin, 10, 10).unwrap().unwrap();
         assert_eq!((img.width, img.height), (1, 10));
+    }
+
+    /// An incomplete ICC_PROFILE sequence (chunk 1 of 2) is "has a profile we can't read", not
+    /// "plain sRGB": the general decode handles it, as the doc says (CodeRabbit on #3577).
+    #[test]
+    fn an_incomplete_icc_sequence_goes_the_general_way() {
+        let b = jpeg(16, 16, |x, y| [x as u8, y as u8, 0]);
+        let mut seg = vec![0xFF, 0xE2, 0, 0];
+        seg.extend_from_slice(b"ICC_PROFILE ");
+        seg.extend_from_slice(&[1, 2]);
+        seg.extend_from_slice(&[0u8; 64]);
+        let len = u16::try_from(seg.len() - 2).unwrap();
+        seg[2..4].copy_from_slice(&len.to_be_bytes());
+        let mut with = b[..2].to_vec();
+        with.extend_from_slice(&seg);
+        with.extend_from_slice(&b[2..]);
+        assert!(parse_markers(&with).unwrap().icc_invalid);
+        assert!(srgb8_fit(&b, 8, 8).unwrap().is_some());
+        assert!(srgb8_fit(&with, 8, 8).unwrap().is_none());
     }
 
     /// The 8-bit path refuses an APP1 flood before its decoders walk it again, as the general one does.

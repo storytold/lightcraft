@@ -22,6 +22,16 @@ pub const LOW_FREE_BYTES: u64 = 20 << 30;
 pub const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 /// A read when the library opens that hasn't answered after this long shows in the activity stack.
 const SHOW_ROW_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+/// A read whose thread couldn't start (the system out of threads for a moment) is tried again this
+/// soon, not after [`CHECK_EVERY`].
+pub const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What a read's worker answers: the drive's space and the cache's size when low (`None`: the drive
+/// didn't say), or that the read couldn't start.
+type Answer = Result<Option<(DiskSpace, u64)>, NotStarted>;
+
+/// A read's thread couldn't be started.
+struct NotStarted;
 
 /// Space on one drive, in bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,13 +97,24 @@ pub(crate) struct DiskAlertState {
     /// the check runs on the UI thread. It answers with the drive's space and, when that is low,
     /// the preview cache's size (counting the cache can mean reading every file's size: that too
     /// stays off the UI thread).
-    probe: Option<std::sync::mpsc::Receiver<Option<(DiskSpace, u64)>>>,
+    probe: Option<std::sync::mpsc::Receiver<Answer>>,
     /// The running read was started for the library open before this one: its answer is ignored,
     /// and the drive is read again for the current library once it has come. Until then no second
     /// read starts, so switching libraries while a drive hangs never piles up workers.
     stale: bool,
     /// In place of [`read`] (tests).
     pub(crate) reader: Option<Reader>,
+    /// Tests: the read's thread that fails to start (`"disk-space"`, `"disk-space-read"`).
+    pub(crate) fail_spawn: Option<&'static str>,
+}
+
+/// Start a named thread; `fail` stands for a system that can't (tests).
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn(name: &str, fail: bool, f: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    if fail {
+        return Err(std::io::Error::other("no thread (test)"));
+    }
+    std::thread::Builder::new().name(name.into()).spawn(f).map(drop)
 }
 
 impl DiskAlertState {
@@ -102,7 +123,7 @@ impl DiskAlertState {
     pub(crate) fn reset(&mut self) {
         let probe = self.probe.take();
         let stale = probe.is_some();
-        *self = DiskAlertState { reader: self.reader.take(), probe, stale, ..Default::default() };
+        *self = DiskAlertState { reader: self.reader.take(), fail_spawn: self.fail_spawn, probe, stale, ..Default::default() };
     }
 }
 
@@ -142,25 +163,26 @@ impl crate::Session {
             // answer, or the cache counted when the drive is low) shows in the activity stack; a quick
             // one, and the quiet periodic ones every few minutes, don't
             let activity = now.then(|| self.activity.clone());
+            let fail = self.disk_alert.fail_spawn;
             let (tx, rx) = std::sync::mpsc::channel();
-            let started = std::thread::Builder::new().name("disk-space".into()).spawn(move || {
+            let started = spawn("disk-space", fail == Some("disk-space"), move || {
                 let answer = match activity {
-                    None => read_now(),
+                    None => Ok(read_now()),
                     Some(activity) => {
                         let (done, answered) = std::sync::mpsc::channel();
-                        let reading = std::thread::Builder::new().name("disk-space-read".into()).spawn(move || {
+                        let reading = spawn("disk-space-read", fail == Some("disk-space-read"), move || {
                             let _ = done.send(read_now());
                         });
                         match reading {
                             Err(e) => {
                                 log::info!("disk space: can't start the free-space read: {e}");
-                                None
+                                Err(NotStarted)
                             }
-                            Ok(_) => match answered.recv_timeout(SHOW_ROW_AFTER) {
-                                Ok(answer) => answer,
+                            Ok(()) => match answered.recv_timeout(SHOW_ROW_AFTER) {
+                                Ok(answer) => Ok(answer),
                                 Err(_) => {
                                     let _row = activity.start("cache", "Checking free disk space", crate::activity::Cancel::No);
-                                    answered.recv().ok().flatten()
+                                    Ok(answered.recv().ok().flatten())
                                 }
                             },
                         }
@@ -169,8 +191,11 @@ impl crate::Session {
                 let _ = tx.send(answer);
             });
             match started {
-                Ok(_) => self.disk_alert.probe = Some(rx),
-                Err(e) => log::info!("disk space: can't start the free-space read: {e}"),
+                Ok(()) => self.disk_alert.probe = Some(rx),
+                Err(e) => {
+                    log::info!("disk space: can't start the free-space read: {e}");
+                    self.retry_disk_space_soon();
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -188,14 +213,28 @@ impl crate::Session {
         let answer = match rx.try_recv() {
             Ok(answer) => answer,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+            // (a worker that ended without answering: tried again soon too)
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(NotStarted),
         };
         self.disk_alert.probe = None;
         if std::mem::take(&mut self.disk_alert.stale) {
             self.check_disk_space(true);
-        } else if let Some((space, cache_bytes)) = answer {
-            self.raise_disk_alert(space, cache_bytes);
+        } else {
+            match answer {
+                Ok(Some((space, cache_bytes))) => {
+                    self.raise_disk_alert(space, cache_bytes);
+                }
+                Ok(None) => {}
+                Err(NotStarted) => self.retry_disk_space_soon(),
+            }
         }
+    }
+
+    /// A read that couldn't start counts as made [`RETRY_AFTER`] less than [`CHECK_EVERY`] ago: the next check
+    /// reads the drive after [`RETRY_AFTER`] (CodeRabbit on #3577: it waited the whole five minutes).
+    fn retry_disk_space_soon(&mut self) {
+        let now = web_time::Instant::now();
+        self.disk_alert.checked_at = Some(now.checked_sub(CHECK_EVERY.saturating_sub(RETRY_AFTER)).unwrap_or(now));
     }
 
     /// Raise the low-disk alert for `space` when it is low and the alert wasn't raised this session
@@ -242,6 +281,14 @@ impl crate::Session {
     /// Whether a free-space read is running on its worker (its answer not taken yet).
     pub fn disk_space_reading(&self) -> bool {
         self.disk_alert.probe.is_some()
+    }
+
+    /// How long the free-space read running on its worker has run (`Duration::MAX` for one started for the
+    /// library before), or `None` when none runs.
+    pub fn disk_space_read_running_for(&self) -> Option<std::time::Duration> {
+        let a = &self.disk_alert;
+        a.probe.as_ref()?;
+        Some(a.checked_at.filter(|_| !a.stale).map_or(std::time::Duration::MAX, |t| t.elapsed()))
     }
 
     /// Whether the low-disk alert was raised since the library opened (`library.info` →
@@ -470,6 +517,46 @@ mod tests {
     fn the_free_space_of_a_real_drive_is_read() {
         let space = super::read(&std::env::temp_dir().join("lc-disk-alert-not-there")).expect("the temp folder's drive says its size");
         assert!(space.total > 0 && space.available <= space.total, "{space:?}");
+    }
+
+    /// A read whose thread can't start is tried again after [`super::RETRY_AFTER`], not after the five minutes
+    /// of [`super::CHECK_EVERY`] (CodeRabbit on #3577); for either of its two threads.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_read_that_could_not_start_is_tried_again_soon() {
+        use std::time::{Duration, Instant};
+        for thread in ["disk-space", "disk-space-read"] {
+            let dir = std::env::temp_dir().join(format!("lc-disk-alert-nothread-{thread}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut s = Session::new().with_fs();
+            s.disk_alert.reader = Some(std::sync::Arc::new(|_: &std::path::Path| Some(DiskSpace { available: GB, total: 500 * GB })));
+            s.disk_alert.fail_spawn = Some(thread);
+            s.open_library(&dir, false).unwrap();
+            let until = Instant::now() + Duration::from_secs(10);
+            while s.disk_space_reading() {
+                assert!(Instant::now() < until, "{thread}: the read never ended");
+                s.poll_disk_space();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let since = s.disk_alert.checked_at.expect("a check was made").elapsed();
+            assert!(
+                since + super::RETRY_AFTER + Duration::from_secs(1) >= super::CHECK_EVERY,
+                "{thread}: next read in {:?}",
+                super::CHECK_EVERY.saturating_sub(since)
+            );
+            // the thread can start again: the retry reads the drive and raises the alert
+            s.disk_alert.fail_spawn = None;
+            s.disk_alert.checked_at = s.disk_alert.checked_at.and_then(|t| t.checked_sub(super::RETRY_AFTER));
+            s.check_disk_space(false);
+            let until = Instant::now() + Duration::from_secs(10);
+            while s.take_disk_space_alert().is_none() {
+                assert!(Instant::now() < until, "{thread}: the retry never read the drive");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            s.close_library().unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
