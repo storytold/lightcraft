@@ -305,5 +305,20 @@
   "Could not read {name}: {e}": "Nepavyko perskaityti {name}: {e}",
   "Added {n} photo{}": "Pridėta nuotraukų: {n}{}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kur įrašyti „Lightroom“ katalogą „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sujungti su atidaryta biblioteka „{library}“ (nuotraukų: {count}{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sujungti su atidaryta biblioteka „{library}“ (nuotraukų: {count}{})",
+  "Collapse {name}": "Sutraukti {name}",
+  "Creates {stacks} stack{} from {photos} of {scope}": "Sukuria {stacks} rietuvę{} iš {photos} nuotraukų ({scope})",
+  "Expand {name}": "Išskleisti {name}",
+  "Import photos with File → Import Photos… ({}), or drop them here": "Importuokite nuotraukas per Failas → Importuoti nuotraukas… ({}), arba nuvilkite jas čia",
+  "{name} value": "{name} reikšmė",
+  "Add Keyword “{keywords}”": "Pridėti raktinį žodį „{keywords}“",
+  "Created folder “{name}” in “{parent}”": "Aplanke „{parent}“ sukurtas aplankas „{name}“",
+  "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} katalogo nuotraukų yra bibliotekos skiltyje „Neseniai ištrinta“ ir jos ten lieka; norėdami jas matyti, atkurkite iš „Neseniai ištrinta“.",
+  "{n} photo{} in view · {slides} slide{} · {time}": "Peržiūroje: {n} nuotraukų{} · {slides} skaidrių{} · {time}",
+  "{n} selected photo{} · {pages} page{}": "Pasirinkta {n} nuotraukų{} · {pages} puslapių{}",
+  "Photo: {name}": "Nuotrauka: {name}",
+  "Panel layout could not be restored: {error}": "Nepavyko atkurti skydelių išdėstymo: {error}",
+  "Panel move was not applied: {error}": "Skydelio perkėlimas neįvykdytas: {error}",
+  "{name} is installed": "{name} įdiegtas",
+  "{name} is installed and in use: face recognition is on": "{name} įdiegtas ir naudojamas: veidų atpažinimas įjungtas"
 }
