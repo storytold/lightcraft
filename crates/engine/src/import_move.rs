@@ -339,19 +339,16 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
 /// SMB, against 17 MB/s in 1 MiB writes (issue #3561).
 pub(crate) const COPY_CHUNK: usize = 1 << 20;
 
-/// Copy `from` into `to` in [`COPY_CHUNK`] writes, however little each read returns: every write
-/// but the last is a full chunk. Returns the number of bytes copied.
-pub(crate) fn copy_in_chunks(from: &mut impl Read, to: &mut impl Write) -> io::Result<u64> {
-    let mut buf = vec![0u8; COPY_CHUNK];
-    let mut total = 0u64;
-    loop {
-        let n = fill(from, &mut buf)?;
-        if n == 0 {
-            return Ok(total);
-        }
-        to.write_all(buf.get(..n).unwrap_or(&[]))?;
-        total = total.saturating_add(n as u64);
-    }
+/// Copy `from` into `to` in writes of about [`COPY_CHUNK`], however little each read returns.
+/// Returns the number of bytes copied. Still `io::copy`, through a [`io::BufWriter`] of that
+/// capacity: on Linux std sees through the `BufWriter` to the files and copies in the kernel
+/// (`copy_file_range`, `sendfile`), and where the kernel declines, the copy std falls back to
+/// fills the buffer, so the writes stay large.
+pub(crate) fn copy_in_chunks<W: Write>(from: &mut impl Read, to: &mut W) -> io::Result<u64> {
+    let mut out = io::BufWriter::with_capacity(COPY_CHUNK, to);
+    let n = io::copy(from, &mut out)?;
+    out.flush()?;
+    Ok(n)
 }
 
 /// [`lightcraft_preview::hash_bytes`] of a file's content, read in chunks.
@@ -387,7 +384,7 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
 }
 
 /// Read until `buf` is full or the file ends.
-fn fill(f: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
+fn fill(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
     let mut n = 0;
     while let Some(rest) = buf.get_mut(n..).filter(|r| !r.is_empty()) {
         match f.read(rest) {
