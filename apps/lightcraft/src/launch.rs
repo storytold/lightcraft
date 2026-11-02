@@ -119,6 +119,24 @@ pub(crate) fn panic_log_path() -> Option<std::path::PathBuf> {
     log_dir().map(|d| d.join("lightcraft-panics.log"))
 }
 
+/// Whether the arguments ask for a `--memory` (or `--demo`) session. Read before they are parsed, so
+/// the panic hook, installed first to catch a panic while parsing, already knows not to keep a log
+/// file: a `--memory` session saves nothing (issue #164). The values of `--control` and `--library`
+/// are skipped, as the parser takes them.
+pub(crate) fn in_memory_session(args: impl IntoIterator<Item = String>) -> bool {
+    let mut args = args.into_iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--control" | "--library" => {
+                args.next();
+            }
+            "--memory" | "--demo" => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// What to tell the user when LightCraft stopped while running (`error`), and why when the GPU
 /// was lost (`lost`): GPU rendering is off from the next start.
 pub(crate) fn stopped_text(error: &str, lost: Option<&str>) -> String {
@@ -167,6 +185,20 @@ pub(crate) fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
 #[cfg(test)]
 mod config_path_tests {
     use super::*;
+
+    /// A `--memory` session keeps no panic log (it saves nothing); an option's value that reads
+    /// `--memory` is not the flag.
+    #[test]
+    fn in_memory_sessions_are_spotted_before_parsing() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(in_memory_session(args(&["--memory"])));
+        assert!(in_memory_session(args(&["photo.jpg", "--demo"])));
+        assert!(in_memory_session(args(&["--control", "7980", "--memory"])));
+        assert!(!in_memory_session(args(&[])));
+        assert!(!in_memory_session(args(&["--no-demo", "photo.jpg"])));
+        assert!(!in_memory_session(args(&["--library", "--memory"])));
+        assert!(!in_memory_session(args(&["--control", "--demo"])));
+    }
 
     /// Issue #2572: the logs, the panic log among them, go to the settings folder (an isolated
     /// profile's too), and nowhere when no logs are kept; no fallback to the shared temp folder.
