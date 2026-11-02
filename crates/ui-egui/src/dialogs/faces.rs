@@ -186,8 +186,9 @@ fn matching_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list
         match app.run("faces.matching", json!({"topFaces": n})) {
             Ok(_) => {
                 app.caches.faces_epoch += 1;
-                // a person's page asks again for the faces that look like them
+                // a person's page asks again for the faces that look like them, and the photo shown for its names
                 app.caches.person_page = None;
+                app.caches.face_hints = None;
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
