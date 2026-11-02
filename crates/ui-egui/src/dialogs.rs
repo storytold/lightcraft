@@ -322,6 +322,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::SaveEffect { .. } => "New Effect Preset",
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
+        Dialog::ConvertNegative { .. } => "Convert Negative",
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
         Dialog::DeleteEffects { .. } => "Delete Effect Presets",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
@@ -421,6 +422,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConvertNegative { .. } => "Convert",
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
         | Dialog::NewSmartAlbum { .. }
@@ -1805,6 +1807,19 @@ fn delete_keyword_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     );
 }
 
+/// The body of the ConvertNegative dialog: which edits the conversion resets, and why.
+fn convert_negative_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
+    let Dialog::ConvertNegative { reset, .. } = dlg else { return };
+    let names: Vec<&str> = reset.iter().map(|n| crate::i18n::tr(n)).collect();
+    ui.label(crate::i18n::tr_format!("Converting resets the edits made on the negative: {list}.", list = names.join(", ")));
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "After the conversion every slider works on the positive, so values set for the negative would act the wrong way. Crop, rotation, lens corrections, retouching, detail, grain and vignette are kept. Edit → Undo brings them back.",
+        ))
+        .color(t.text_dim),
+    );
+}
+
 /// The body of the DeleteEffects dialog.
 fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::DeleteEffects { names } = dlg else { return };
@@ -1979,6 +1994,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             crate::panels::mask_effects::manage_body(app, ui, search, selected, rename, confirm_delete, new_group)
         }
         Dialog::DeleteEffects { .. } => delete_effects_body(ui, t, dlg),
+        Dialog::ConvertNegative { .. } => convert_negative_body(ui, t, dlg),
         Dialog::ConfirmDelete { count } => {
             let what =
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };

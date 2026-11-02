@@ -16,7 +16,8 @@ impl Session {
     /// The settings the "before" side of photo `p` renders with.
     pub fn before_settings(&self, p: &Photo) -> DevelopSettings {
         let base = self.before.get(&p.id).map(|b| (**b).clone()).unwrap_or_else(|| p.import_defaults());
-        DevelopSettings { crop: p.develop.crop, orientation: p.develop.orientation, ..base }
+        // a converted film scan stays converted: Before compares edits, not the negative with the positive
+        DevelopSettings { crop: p.develop.crop, orientation: p.develop.orientation, negative: p.develop.negative, ..base }
     }
 }
 

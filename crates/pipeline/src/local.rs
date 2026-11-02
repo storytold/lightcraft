@@ -28,6 +28,7 @@ pub fn white_balance(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
 /// neutral and saturated colours move as the camera's matrices say); other sources are adapted
 /// with Bradford, luminance-preserving.
 pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]; 3]> {
+    let info = &*wb_source(info, s);
     let (t, tint) = effective_wb(info, s);
     if (t - info.as_shot_temp).abs() < 1e-6 && (tint - info.as_shot_tint).abs() < 1e-6 {
         return None;
@@ -69,12 +70,31 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
 /// Kelvin scale, see [`legacy_to_kelvin`]).
 pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
     use lightcraft_develop::WbMode;
+    let info = &*wb_source(info, s);
     match s.wb.mode {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
         _ if legacy_wb(info, s) => legacy_to_kelvin(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint)),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
         _ => (s.wb.temp, s.wb.tint),
     }
+}
+
+/// The source a white balance is read against: a converted film scan is a positive whose colours the conversion
+/// made, so its white balance is on the relative scale around a neutral (6500 K / 0 = as converted), like a
+/// rendered file's, whatever the scanner or camera's own white was.
+pub fn wb_source<'a>(info: &'a SourceInfo, s: &DevelopSettings) -> std::borrow::Cow<'a, SourceInfo> {
+    if !s.negative_active() {
+        return std::borrow::Cow::Borrowed(info);
+    }
+    std::borrow::Cow::Owned(SourceInfo {
+        raw: false,
+        relative_wb: true,
+        legacy_relative_wb: false,
+        as_shot_temp: 6500.0,
+        as_shot_tint: 0.0,
+        camera_color: None,
+        ..info.clone()
+    })
 }
 
 /// The source white the render adapts from the as-shot white to: [`effective_wb`] as a chromaticity, except that a

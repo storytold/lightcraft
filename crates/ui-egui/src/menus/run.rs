@@ -1089,13 +1089,26 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = tool.into();
                     return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
                 }
-                "wbPicker" => {
+                "wbPicker" | "filmBase" => {
                     app.ui.right = RightPanel::Edit;
                     app.ui.view = ViewMode::Detail;
-                    app.ui.tool = "wbPicker".into();
+                    app.ui.tool = tool.into();
                 }
                 other => return Some(Err(format!("unknown tool `{other}`"))),
             }
+            Ok(Value::Null)
+        }
+        "dialog.convertNegative" => {
+            let film = p.get("film").cloned().unwrap_or(json!("colorNegative"));
+            let reset: Vec<String> = match app.session.execute("negative.conflicts", &json!({})) {
+                Ok(r) => r["reset"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if reset.is_empty() {
+                return Some(app.run("negative.convert", json!({"film": film})));
+            }
+            let film = film.as_str().unwrap_or("colorNegative").to_string();
+            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset });
             Ok(Value::Null)
         }
         "dialog.newFolder" => {

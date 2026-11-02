@@ -214,6 +214,57 @@ fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
 
 pub fn builtin() -> Vec<Preset> {
     vec![
+        // Film Conversion (docs/negative-conversion.md): conversion options only — never a film base or density
+        // range, so applying one keeps each frame's own measured numbers
+        p(
+            "Film Conversion",
+            "neg-standard",
+            "Color Negative · Standard",
+            json!({"negative": {"film": "colorNegative", "tone": "standard", "color_model": "warm"}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-neutral",
+            "Color Negative · Neutral",
+            json!({"negative": {"film": "colorNegative", "tone": "standard", "color_model": "neutral"}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-soft",
+            "Color Negative · Soft",
+            json!({"negative": {"film": "colorNegative", "tone": "soft", "color_model": "warm", "brightness": 8.0, "white_point": -10.0, "saturation": -8.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-vivid",
+            "Color Negative · Vivid",
+            json!({"negative": {"film": "colorNegative", "tone": "hard", "color_model": "warm", "saturation": 20.0, "black_point": 10.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-cool",
+            "Color Negative · Cool Lab",
+            json!({"negative": {"film": "colorNegative", "tone": "standard", "color_model": "cool", "highlight_temp": -10.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-flat",
+            "Color Negative · Flat (for grading)",
+            json!({"negative": {"film": "colorNegative", "tone": "linear", "color_model": "none", "white_point": -15.0, "black_point": -15.0}}),
+        ),
+        p("Film Conversion", "neg-bw", "B&W Negative · Standard", json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "standard"}})),
+        p(
+            "Film Conversion",
+            "neg-bw-hard",
+            "B&W Negative · High Contrast",
+            json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "hard", "black_point": 15.0, "white_point": 10.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "slide-standard",
+            "Slide · Standard",
+            json!({"negative": {"film": "slide", "tone": "standard", "color_model": "neutral"}}),
+        ),
         p(
             "Color",
             "warm-glow",

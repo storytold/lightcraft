@@ -268,6 +268,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let apply = |d: &mut DevelopSettings, info: &lightcraft_pipeline::SourceInfo, dims: (f64, f64)| {
                     let before = d.crop.geometry;
                     if vals.iter().any(|(k, _)| k == "wb.temp" || k == "wb.tint") {
+                        // (a converted film scan: relative to the positive, not the camera's as-shot white)
+                        let info = &*lightcraft_pipeline::local::wb_source(info, d);
                         lightcraft_pipeline::local::normalize_wb(d, info);
                         if d.wb.mode == WbMode::AsShot {
                             d.wb.temp = info.as_shot_temp;
@@ -314,7 +316,8 @@ pub fn specs() -> Vec<CommandSpec> {
             edit(s, "develop.adjust", spec.label, |d| {
                 let before = d.crop.geometry;
                 if c == "wb.temp" || c == "wb.tint" {
-                    lightcraft_pipeline::local::normalize_wb(d, &info);
+                    let info = &*lightcraft_pipeline::local::wb_source(&info, d);
+                    lightcraft_pipeline::local::normalize_wb(d, info);
                     if d.wb.mode == WbMode::AsShot {
                         d.wb.temp = info.as_shot_temp;
                         d.wb.tint = info.as_shot_tint;
@@ -448,8 +451,11 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| {
                 let id = active(s, "develop.autoBwMix")?;
                 let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.autoBwMix", e))?;
-                let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
+                // a converted film scan is analysed as its positive
+                let info = s.source_info(id);
+                let info = lightcraft_pipeline::local::wb_source(&info, &d);
+                let src = lightcraft_pipeline::negative::positive_source(&src, &d);
                 let m = lightcraft_pipeline::auto::auto_bw_mix(&src, &info, &d);
                 edit(s, "develop.autoBwMix", "Auto B&W Mix", |d| {
                     d.treatment = Treatment::Bw;
@@ -463,8 +469,11 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_active, |s, _| {
             let id = active(s, "develop.auto")?;
             let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
-            let info = s.source_info(id);
             let d = s.develop_of(id).unwrap_or_default();
+            // a converted film scan is analysed as its positive
+            let info = s.source_info(id);
+            let info = lightcraft_pipeline::local::wb_source(&info, &d);
+            let src = lightcraft_pipeline::negative::positive_source(&src, &d);
             let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
             edit(s, "develop.auto", "Auto", |d| {
                 d.light.exposure = a.exposure;
@@ -490,12 +499,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mode: WbMode =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("custom"))).map_err(|e| bad("develop.wb", e.to_string()))?;
                 let id = active(s, "develop.wb")?;
-                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                // a converted film scan's white balance is relative to the positive (as converted = neutral)
+                let raw_info = s.source_info(id);
+                let info = lightcraft_pipeline::local::wb_source(&raw_info, &d).into_owned();
                 let (mut t, mut tint) = match mode {
                     WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
                     WbMode::Auto => {
                         let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wb", e))?;
-                        lightcraft_pipeline::auto::auto_wb(&src, &info)
+                        lightcraft_pipeline::auto::auto_wb(&lightcraft_pipeline::negative::positive_source(&src, &d), &info)
                     }
                     m => m
                         .preset()
@@ -523,8 +535,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let (x, y) = (f64_req(p, "x", "develop.wbPick")?, f64_req(p, "y", "develop.wbPick")?);
             let id = active(s, "develop.wbPick")?;
             let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wbPick", e))?;
-            let info = s.source_info(id);
             let d = s.develop_of(id).unwrap_or_default();
+            // a converted film scan is picked on its positive, on the relative scale
+            let info = s.source_info(id);
+            let info = lightcraft_pipeline::local::wb_source(&info, &d).into_owned();
+            let src = lightcraft_pipeline::negative::positive_source(&src, &d);
             // Sample a small neighbourhood in the oriented source.
             let o = src.oriented(d.orientation);
             let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);

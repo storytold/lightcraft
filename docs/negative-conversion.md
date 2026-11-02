@@ -1,6 +1,6 @@
 # Film negative conversion: development plan
 
-> **Status:** plan, nothing built yet · **Last updated:** 2026-10-25 · **Owner decision needed:** see
+> **Status:** v1 built (see [What v1 has](#what-v1-has)) · **Last updated:** 2026-11-02 · **Owner decision needed:** see
 > [Open questions](#open-questions)
 
 Lots of people scan film by photographing it with a digital camera, or use a film scanner, and then invert the
@@ -9,6 +9,37 @@ negative in Lightroom with the Negative Lab Pro (NLP) plug-in. LightCraft has no
 Lightroom's SDK API. So this plan builds negative conversion **into the develop pipeline**: good automatic defaults,
 and conversion presets you can configure, save and share, in the style of NLP's. It does better than a plug-in in
 one important way: after conversion, every normal slider works the right way round.
+
+## What v1 has
+
+Built against this plan (milestones N0–N3, N5 and N6 in full or in part; N4 and N7 partly):
+
+- **Settings and stage (N1):** the `negative` group (film type, tone, colour model, stored analysis, 13 `negative.*`
+  sliders), converted first in the scene-linear stage. Working space is the source's linear Rec.2020 (open
+  question 1 stays open: camera-native RGB isn't built). GPU renders run the film stage on the CPU (N4: no WGSL
+  kernel yet); the result is the same on both.
+- **Analysis (N2):** film base found on the film's unexposed edge anywhere around the picture, also on uncropped
+  camera scans in a holder (tiles that are uniform, clearer than the picture in every channel, one colour along the
+  edge and shaped like an edge; light clipped at the scan's own white level is rejected); else estimated, and the
+  panel says so. Range measured inside the crop (or the frame the found edge outlines); per-channel balance at nine
+  tone levels; auto exposure anchors the frame's median at mid grey. Roll analysis / sync is not built.
+- **Commands (N3):** `negative.convert`, `negative.conflicts`, `negative.analyze`, `negative.sampleBase`,
+  `negative.set`, `negative.reset`; CLI and MCP get them as usual.
+- **UI (N5):** the Negative section (at the top for converted photos, last otherwise), Film Base Selector
+  eyedropper (`tool.filmBase`), Re-analyze hint when the crop changed, and a dialog before Convert resets edits made
+  on the negative (`dialog.convertNegative`, Photo ▸ Convert Negative…). No analysis-area overlay; no batch convert.
+- **Presets (N6):** nine Film Conversion presets that carry options only, never a frame's base or range. Apply on
+  import is not built.
+- **After conversion** every slider, Auto, Auto White Balance and the white balance selector work on the positive;
+  white balance is relative (as converted = neutral); converted photos use the scene tone map (raw and rendered
+  scans of one negative convert alike) and skip the camera's own local tone map.
+- **Defaults** were fitted on one maintainer-supplied 6×6 colour negative (a Fuji RAF camera scan and two JPEG scans)
+  against a positive the maintainer made from the same frame with Negative Lab Pro, used only as a visual target:
+  mean L* within 0.5 of it on all three scans, greys neutral. No NLP data, curves or code are used.
+- **Tests:** synthetic negatives (orange mask, rebate, holder, bare light, raw white-balance gains) in
+  `crates/pipeline/src/negative.rs` and `tests_negative.rs`; command tests in `crates/engine/src/tests/negative.rs`;
+  UI tests in `crates/ui-egui/src/tests/negative.rs`; and an opt-in test of real scans named by a manifest
+  (`LC_NEGATIVE_SCANS`, `crates/engine/tests/it/negative_scans.rs`), since real scans can't be committed.
 
 ## Goals
 

@@ -35,6 +35,7 @@ mod lightroom_folder;
 mod mask_effects;
 mod merge;
 mod move_to_share;
+mod negative;
 mod organize;
 mod persist;
 mod prefs;
