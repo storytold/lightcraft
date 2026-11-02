@@ -283,7 +283,7 @@ impl ImportJob {
                     // (here or in a previous batch) counts as the library's from then on
                     if let Some(h) = &hash {
                         if let Some(existing) = self.by_hash.get(h) {
-                            out.items.push(PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash });
+                            out.items.push(PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, file: None });
                             self.done.fetch_add(1, Relaxed);
                             continue;
                         }
