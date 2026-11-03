@@ -7,7 +7,7 @@
 //! mixer, before vibrance, grading, vignette and curves).
 
 use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
-use lightcraft_color::spline::MonotoneCurve;
+use lightcraft_color::spline::PointCurve;
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_color::{REC2020, SRGB};
 use lightcraft_develop::{DevelopSettings, MAX_POINT_COLORS, MIXER_BANDS, PointColor, ToneCurve, Treatment, controls};
@@ -116,7 +116,7 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
                 if pts.is_empty() {
                     *pts = vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)];
                 }
-                let curve = MonotoneCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
+                let curve = PointCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
                 let dy = delta / 255.0;
                 match pts.iter().position(|q| (q.x - v).abs() < 0.03) {
                     Some(i) => pts[i].y = (pts[i].y + dy).clamp(0.0, 1.0),
