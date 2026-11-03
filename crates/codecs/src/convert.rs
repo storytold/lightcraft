@@ -147,9 +147,31 @@ pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u3
             // (Lanczos at 2:1 and more as well: a box average there halves the contrast of
             // detail near the output's resolution limit and aliases what is finer)
             let f = if factor >= 2.0 { Filter::Lanczos3 } else { Filter::Mitchell };
-            let img = fit(&image, mw as usize, mh as usize, f);
-            let alpha = alpha.map(|a| fit(&a, mw as usize, mh as usize, f));
-            (img, alpha)
+            match alpha {
+                // with transparency, the colour is fitted weighted by its alpha (`c·a` and `a`, then
+                // divided): straight colour fitted on its own pulls the colour under transparent
+                // pixels (often black) into every edge
+                Some(a) if a.data.iter().any(|&v| v < 1.0) => {
+                    let mut weighted = image;
+                    for (p, &av) in weighted.data.iter_mut().zip(&a.data) {
+                        *p = p.map(|c| c * av);
+                    }
+                    let mut img = fit(&weighted, mw as usize, mh as usize, f);
+                    let mut a = fit(&a, mw as usize, mh as usize, f);
+                    for (p, av) in img.data.iter_mut().zip(a.data.iter_mut()) {
+                        // (no colour to recover where there's next to no alpha: it stays the weighted value, ~0)
+                        // (clamped at 0: a negative lobe next to an edge, divided by a small alpha, undershoots)
+                        if av.is_finite() && *av >= 1.0 / 1024.0 {
+                            *p = p.map(|c| (c / *av).max(0.0));
+                        }
+                        // the filter rings a little past 0 and 1: the plane is straight alpha 0..1, as
+                        // `to_working` flattens with it and an export carries it
+                        *av = if av.is_finite() { av.clamp(0.0, 1.0) } else { 0.0 };
+                    }
+                    (img, Some(a))
+                }
+                alpha => (fit(&image, mw as usize, mh as usize, f), alpha.map(|a| fit(&a, mw as usize, mh as usize, f))),
+            }
         }
         _ => (image, alpha),
     };

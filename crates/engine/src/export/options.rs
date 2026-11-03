@@ -56,6 +56,12 @@ impl ExportFormat {
     pub fn is_rendered(self) -> bool {
         !matches!(self, Self::Original | Self::Dng)
     }
+
+    /// Formats whose exports keep a transparent source's alpha (straight, unassociated alpha, as
+    /// #1670 writes it); the others composite it onto white (issue #2976).
+    pub fn keeps_alpha(self) -> bool {
+        matches!(self, Self::Png | Self::Tiff | Self::Webp)
+    }
 }
 
 /// How the output size is chosen (see [`Resize`]).

@@ -1,5 +1,5 @@
 use super::encoding::srgb8_in;
-use super::{DeepImage, DeepSamples, Deserialize, OutputSpace, Rgba8, Serialize};
+use super::{DeepImage, DeepSamples, Deserialize, OutputSpace, Plane, Rgba8, Serialize};
 
 /// Where a watermark sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,9 +111,23 @@ fn blend_watermark(img: &mut Rgba8, wm: &Watermark, floor_scale: f32) {
     let width = img.width;
     watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, floor_scale, |x, y, k, col| {
         let p = &mut img.data[y * width + x];
-        for c in 0..3 {
-            p[c] = (p[c] as f32 + (col[c] as f32 - p[c] as f32) * k).round() as u8;
+        if p[3] == 255 {
+            for c in 0..3 {
+                p[c] = (p[c] as f32 + (col[c] as f32 - p[c] as f32) * k).round() as u8;
+            }
+            return;
         }
+        // over a transparent pixel (an export that keeps transparency): the mark composites over
+        // it and raises its alpha, so it shows where the photo is transparent
+        let a = p[3] as f32 / 255.0;
+        let out = k + a * (1.0 - k);
+        if out <= 0.0 {
+            return;
+        }
+        for c in 0..3 {
+            p[c] = ((col[c] as f32 * k + p[c] as f32 * a * (1.0 - k)) / out).round().clamp(0.0, 255.0) as u8;
+        }
+        p[3] = (out * 255.0).round().clamp(0.0, 255.0) as u8;
     });
 }
 
@@ -137,20 +151,48 @@ pub fn draw_watermark_in(img: &mut Rgba8, wm: &Watermark, x0: usize, y0: usize, 
 /// Draw `wm` onto a high-bit-depth image (`wm.color` is in the image's space, 8-bit encoded; float
 /// images are linear and blend in linear light).
 pub fn draw_watermark_deep(img: &mut DeepImage, wm: &Watermark) {
+    draw_watermark_deep_over(img, None, wm);
+}
+
+/// [`draw_watermark_deep`] onto an image with straight alpha `alpha` (its size): the mark
+/// composites over transparent pixels and raises their alpha, as [`draw_watermark`] does.
+pub(super) fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, wm: &Watermark) {
     let (width, trc) = (img.width, img.space.trc());
+    // over a transparent pixel `i`: the weights of the mark and of the pixel, its alpha raised
+    // (`None`: an opaque pixel, blended as without alpha)
+    let mut over = move |i: usize, k: f32| -> Option<(f32, f32)> {
+        let a = alpha.as_deref_mut().and_then(|a| a.data.get_mut(i))?;
+        let before = if a.is_finite() { a.clamp(0.0, 1.0) } else { 1.0 };
+        if before >= 1.0 {
+            return None;
+        }
+        let out = k + before * (1.0 - k);
+        *a = out;
+        Some(if out <= 0.0 { (0.0, 1.0) } else { (k / out, before * (1.0 - k) / out) })
+    };
     match &mut img.samples {
         DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+            let w = over(y * width + x, k);
             let i = (y * width + x) * 3;
             for c in 0..3 {
                 let p = v[i + c] as f32;
-                v[i + c] = (p + (col[c] as f32 * 257.0 - p) * k).round().clamp(0.0, 65535.0) as u16;
+                let t = col[c] as f32 * 257.0;
+                let blended = match w {
+                    Some((wk, wp)) => p * wp + t * wk,
+                    None => p + (t - p) * k,
+                };
+                v[i + c] = blended.round().clamp(0.0, 65535.0) as u16;
             }
         }),
         DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+            let w = over(y * width + x, k);
             let i = (y * width + x) * 3;
             for c in 0..3 {
                 let target = trc.decode(col[c] as f32 / 255.0);
-                v[i + c] += (target - v[i + c]) * k;
+                v[i + c] = match w {
+                    Some((wk, wp)) => v[i + c] * wp + target * wk,
+                    None => v[i + c] + (target - v[i + c]) * k,
+                };
             }
         }),
     }

@@ -85,6 +85,31 @@ impl Format {
     pub fn is_raw(self) -> bool {
         matches!(self, Format::RawTiffLike | Format::RawOther)
     }
+
+    /// Whether a file of this format can come out of [`crate::decode`] with transparency
+    /// ([`crate::Decoded::alpha`]): PNG, TIFF, WebP, GIF, BMP, JPEG XL, HEIF and PSD / PSB (their
+    /// merged transparency). AVIF is left out while it can't be decoded.
+    pub fn can_carry_alpha(self) -> bool {
+        matches!(self, Format::Png | Format::Tiff | Format::WebP | Format::Gif | Format::Bmp | Format::Jxl | Format::Heif | Format::Psd)
+    }
+
+    /// The image format a file name extension (without the dot, any case) stands for; `None` for
+    /// camera raws and anything else.
+    pub fn from_extension(ext: &str) -> Option<Format> {
+        Some(match ext.to_ascii_lowercase().as_str() {
+            "jpg" | "jpeg" | "jpe" => Format::Jpeg,
+            "png" => Format::Png,
+            "tif" | "tiff" => Format::Tiff,
+            "webp" => Format::WebP,
+            "avif" => Format::Avif,
+            "heic" | "heif" | "hif" => Format::Heif,
+            "jxl" => Format::Jxl,
+            "gif" => Format::Gif,
+            "bmp" => Format::Bmp,
+            "psd" | "psb" => Format::Psd,
+            _ => return None,
+        })
+    }
 }
 
 /// Detect the format from the first bytes of a file (a few KiB suffices; TIFF raw detection walks IFDs

@@ -69,7 +69,7 @@ impl QuickJob {
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
-            Ok(Rendered { image, histogram, deep: None })
+            Ok(Rendered { image, histogram, deep: None, alpha: None })
         };
         for (cache, k) in &self.cached {
             if let Some(img) = cache.get(*k) {

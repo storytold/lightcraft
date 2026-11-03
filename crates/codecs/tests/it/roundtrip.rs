@@ -534,8 +534,26 @@ fn psd_composite() {
             assert!((q[0] - Trc::Gamma(1.8).to_linear(20.0 / 255.0)).abs() < 1e-4);
             if alpha {
                 assert!((d.alpha.as_ref().unwrap().get(2, 1) - 1.0).abs() < 1e-6);
+                // a decode that gives it alpha is one `can_carry_alpha` counts (PSD and PSB alike)
+                assert!(Format::Psd.can_carry_alpha());
             }
         }
+    }
+}
+
+/// The formats whose decodes can carry transparency, by file name extension (the export memory
+/// estimate charges their alpha planes, issue #2976).
+#[test]
+fn formats_that_can_carry_alpha() {
+    for ext in ["png", "TIF", "tiff", "webp", "gif", "bmp", "jxl", "HEIC", "heif", "hif", "psd", "PSB"] {
+        let f = Format::from_extension(ext).unwrap_or_else(|| panic!("{ext} is an image format"));
+        assert!(f.can_carry_alpha(), "{ext}");
+    }
+    for ext in ["jpg", "JPEG", "avif"] {
+        assert!(!Format::from_extension(ext).unwrap().can_carry_alpha(), "{ext}");
+    }
+    for ext in ["nef", "dng", "cr3", "txt", ""] {
+        assert_eq!(Format::from_extension(ext), None, "{ext}");
     }
 }
 

@@ -123,6 +123,7 @@ impl WireJob {
             proof: None,
             window: self.window.map(|[x, y, w, h]| lightcraft_engine::pipeline::PixelWindow { x, y, w, h }),
             display: None,
+            alpha: false,
         }
     }
 

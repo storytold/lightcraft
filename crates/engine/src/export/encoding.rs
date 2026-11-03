@@ -1,8 +1,8 @@
 use super::options::{ExportFormat, MetadataPolicy, SharpenAmount, SharpenFor};
-use super::watermark::{Watermark, draw_watermark, draw_watermark_deep};
+use super::watermark::{Watermark, draw_watermark, draw_watermark_deep_over};
 use super::{
     ChromaSubsampling, DateTime, DeepImage, DeepSamples, EncodeImage, EncodeMeta, ExportOptions, Gps, Metadata, NamedSpace, OutputDepth, OutputSpace,
-    Rgba8, Samples, encode, icc,
+    Plane, Rgba8, Samples, encode, icc,
 };
 use std::borrow::Cow;
 
@@ -176,6 +176,12 @@ fn finish_8bit<'a>(img: &'a Rgba8, o: &ExportOptions) -> Cow<'a, Rgba8> {
 
 /// Output sharpening and the watermark on a high-bit-depth render (the render itself when there is neither).
 fn finish_deep<'a>(img: &'a DeepImage, o: &ExportOptions) -> Cow<'a, DeepImage> {
+    finish_deep_over(img, None, o)
+}
+
+/// [`finish_deep`] of an image with straight alpha `alpha`, which the watermark raises (and leaves
+/// alone when there is no watermark).
+fn finish_deep_over<'a>(img: &'a DeepImage, alpha: Option<&mut Plane>, o: &ExportOptions) -> Cow<'a, DeepImage> {
     if o.watermark.is_none() && !sharpens(img.width, img.height, o.sharpen) {
         return Cow::Borrowed(img);
     }
@@ -183,7 +189,7 @@ fn finish_deep<'a>(img: &'a DeepImage, o: &ExportOptions) -> Cow<'a, DeepImage> 
     output_sharpen_deep(&mut img, o.sharpen, o.sharpen_amount);
     if let Some(wm) = &o.watermark {
         let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
-        draw_watermark_deep(&mut img, &wm);
+        draw_watermark_deep_over(&mut img, alpha, &wm);
     }
     Cow::Owned(img)
 }
@@ -242,17 +248,50 @@ pub fn srgb8_in(space: OutputSpace, c: [u8; 3]) -> [u8; 3] {
 
 /// Encode a render according to `o`: its high-bit-depth samples when it has them (16-bit PNG/TIFF,
 /// 10-bit AVIF, 32-bit float linear TIFF), else its 8-bit image.
+///
+/// A render with alpha ([`lightcraft_pipeline::Rendered::alpha`]) keeps it in the formats that
+/// can ([`ExportFormat::keeps_alpha`]) when it is not opaque everywhere (issue #2976).
 pub fn encode_rendered(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    let alpha = r.alpha.as_ref().filter(|_| o.format.keeps_alpha());
     match &r.deep {
-        Some(d) if o.effective_depth() != OutputDepth::U8 => encode_deep(d, o, meta),
-        _ => encode_with_metadata(&r.image, o, meta),
+        Some(d) if o.effective_depth() != OutputDepth::U8 => encode_deep_with_alpha(d, alpha, o, meta),
+        _ => match alpha {
+            Some(a) => encode_with_metadata(&with_alpha(&r.image, a)?, o, meta),
+            None => encode_with_metadata(&r.image, o, meta),
+        },
     }
+}
+
+/// `img` with straight alpha `a` (its size) in its fourth channel.
+fn with_alpha(img: &Rgba8, a: &Plane) -> Result<Rgba8, String> {
+    if (a.width, a.height) != (img.width, img.height) || a.data.len() != img.data.len() {
+        return Err("export: the transparency does not match the rendered image".into());
+    }
+    let mut out = img.clone();
+    for (p, &av) in out.data.iter_mut().zip(&a.data) {
+        p[3] = if av.is_finite() { (av.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 255 };
+    }
+    Ok(out)
 }
 
 /// Encode a high-bit-depth image (see [`encode_rendered`]).
 pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    encode_deep_with_alpha(img, None, o, meta)
+}
+
+/// [`encode_deep`] keeping straight alpha `alpha` (the image's size) in PNG and TIFF when it is
+/// not opaque everywhere.
+fn encode_deep_with_alpha(img: &DeepImage, alpha: Option<&Plane>, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
     let meta_src = meta;
-    let img = finish_deep(img, o);
+    let mut alpha = match alpha {
+        Some(a) if (a.width, a.height) != (img.width, img.height) => return Err("export: the transparency does not match the rendered image".into()),
+        a => a.cloned(),
+    };
+    let img = finish_deep_over(img, alpha.as_mut(), o);
+    let alpha = alpha.filter(|a| match img.samples {
+        DeepSamples::U16(_) => a.data.iter().any(|&v| (v.clamp(0.0, 1.0) * 65535.0).round() < 65535.0),
+        DeepSamples::F32(_) => a.data.iter().any(|&v| v < 1.0),
+    });
     let profile = match img.samples {
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
@@ -261,9 +300,27 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let (w, h) = (img.width as u32, img.height as u32);
-    let e = match &img.samples {
-        DeepSamples::U16(v) => EncodeImage::new(w, h, 3, Samples::U16(v)),
-        DeepSamples::F32(v) => EncodeImage::new(w, h, 3, Samples::F32(v)),
+    // RGB plus the alpha as a fourth sample
+    fn rgba<T: Copy>(v: &[T], a: &Plane, alpha: impl Fn(f32) -> T) -> Vec<T> {
+        v.as_chunks::<3>()
+            .0
+            .iter()
+            .zip(&a.data)
+            .flat_map(|(p, &av)| [p[0], p[1], p[2], alpha(if av.is_finite() { av.clamp(0.0, 1.0) } else { 1.0 })])
+            .collect()
+    }
+    let (rgba16, rgba32);
+    let e = match (&img.samples, alpha.as_ref().filter(|_| matches!(o.format, ExportFormat::Png | ExportFormat::Tiff))) {
+        (DeepSamples::U16(v), Some(a)) => {
+            rgba16 = rgba(v, a, |av| (av * 65535.0).round() as u16);
+            EncodeImage::new(w, h, 4, Samples::U16(&rgba16))
+        }
+        (DeepSamples::F32(v), Some(a)) => {
+            rgba32 = rgba(v, a, |av| av);
+            EncodeImage::new(w, h, 4, Samples::F32(&rgba32))
+        }
+        (DeepSamples::U16(v), None) => EncodeImage::new(w, h, 3, Samples::U16(v)),
+        (DeepSamples::F32(v), None) => EncodeImage::new(w, h, 3, Samples::F32(v)),
     };
     let r = match (o.format, &img.samples) {
         (ExportFormat::Png, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => lightcraft_codecs::encode_png_pq(w, h, v, &meta),

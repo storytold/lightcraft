@@ -8,7 +8,7 @@ use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, JxlColour, J
 pub use lightcraft_codecs::{JxlEffort, TiffCompression};
 use lightcraft_meta::{DateTime, Gps, Metadata};
 pub use lightcraft_pipeline::{DeepImage, DeepSamples, OutputDepth, OutputSpace};
-use lightcraft_raster::Rgba8;
+use lightcraft_raster::{Plane, Rgba8};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -44,11 +44,11 @@ pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };
 #[cfg(test)]
-use prepare::{render_weight, too_big_for_memory};
-#[cfg(test)]
-use watermark::watermark_coverage;
+use prepare::{can_carry_alpha, render_weight, too_big_for_memory};
 pub(crate) use watermark::watermark_logo;
 pub use watermark::{Anchor, Watermark, draw_watermark, draw_watermark_deep, draw_watermark_in, draw_watermark_preview, read_graphic};
+#[cfg(test)]
+use watermark::{draw_watermark_deep_over, watermark_coverage};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

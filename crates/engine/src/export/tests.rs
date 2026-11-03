@@ -47,6 +47,29 @@ fn eight_bit_exports_preserve_real_alpha() {
     }
 }
 
+/// Issue #2976: on a transparent area of an export that keeps alpha, the watermark composites
+/// over it and raises the alpha, so it shows; opaque pixels blend as before.
+#[test]
+fn watermark_shows_over_transparency() {
+    let wm = Watermark { text: "LC".into(), size: 0.3, opacity: 1.0, shadow: false, color: [255, 255, 255], ..Default::default() };
+    let mut clear = Rgba8::from_fn(200, 100, |_, _| [0, 0, 0, 0]);
+    draw_watermark(&mut clear, &wm);
+    let marked: Vec<&[u8; 4]> = clear.data.iter().filter(|p| p[3] > 0).collect();
+    assert!(!marked.is_empty(), "the mark raises the alpha");
+    assert!(marked.iter().all(|p| p[0] == 255 && p[1] == 255 && p[2] == 255), "in its own colour, not faded towards black");
+    assert!(marked.iter().any(|p| p[3] == 255));
+    let mut opaque = Rgba8::from_fn(200, 100, |_, _| [0, 0, 0, 255]);
+    draw_watermark(&mut opaque, &wm);
+    assert!(opaque.data.iter().all(|p| p[3] == 255));
+    let lit = |i: &Rgba8| i.data.iter().filter(|p| p[0] > 128).count();
+    assert!(lit(&opaque) > 0);
+    // straight-alpha deep images: the plane is raised the same way
+    let mut deep = DeepImage { width: 200, height: 100, space: OutputSpace::Srgb, samples: DeepSamples::U16(vec![0; 200 * 100 * 3]) };
+    let mut alpha = Plane::new(200, 100);
+    draw_watermark_deep_over(&mut deep, Some(&mut alpha), &wm);
+    assert!(alpha.data.iter().any(|&a| a > 0.99) && alpha.data.contains(&0.0));
+}
+
 #[test]
 fn formats_have_magic() {
     let img = test_image();
@@ -1508,6 +1531,34 @@ fn side_by_side_batches_report_failures_in_order() {
     let (r, written, _) = lanes_batch(&mut s, &ids, &o, 3, true, usize::MAX);
     assert!(r.is_err());
     assert_eq!(written.len(), 1, "only the photo before the failure");
+}
+
+/// Issue #2976: a file that can carry transparency, exported to a format that keeps it, has its
+/// alpha planes counted; any other export weighs what it did.
+#[test]
+fn alpha_planes_are_counted_only_where_transparency_can_be_kept() {
+    let dir = crate::tests_xmp::temp_dir("export-alpha-weight");
+    let img = Rgba8::from_fn(120, 80, |x, y| [(x * 2) as u8, (y * 3) as u8, 90, 255]);
+    let png = dir.join("logo.png");
+    std::fs::write(&png, encode_image(&img, &ExportOptions { format: ExportFormat::Png, ..Default::default() }).unwrap()).unwrap();
+    let jpg = dir.join("photo.jpg");
+    std::fs::write(&jpg, encode_image(&img, &ExportOptions::default()).unwrap()).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [png.to_string_lossy(), jpg.to_string_lossy()]})).unwrap();
+    let id_of = |s: &crate::Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (logo, photo) = (id_of(&s, "logo.png"), id_of(&s, "photo.jpg"));
+    let weight = |s: &mut crate::Session, id, format| prepare_export(s, id, &ExportOptions { format, ..Default::default() }, 1).unwrap().weight;
+    // the same output size in each format: the difference is the alpha planes alone
+    let (logo_png, logo_tiff, logo_jpeg) =
+        (weight(&mut s, logo, ExportFormat::Png), weight(&mut s, logo, ExportFormat::Tiff), weight(&mut s, logo, ExportFormat::Jpeg));
+    assert!(logo_png > logo_jpeg, "a PNG exported as PNG counts its alpha: {logo_png} vs {logo_jpeg}");
+    assert_eq!(logo_png, logo_tiff);
+    let (photo_png, photo_jpeg) = (weight(&mut s, photo, ExportFormat::Png), weight(&mut s, photo, ExportFormat::Jpeg));
+    assert_eq!(photo_png, photo_jpeg, "a JPEG source weighs the same in any format");
+    assert!(can_carry_alpha("png") && can_carry_alpha("TIF") && !can_carry_alpha("JPG") && !can_carry_alpha("NEF"));
+    // Photoshop files keep their merged transparency when decoded
+    assert!(can_carry_alpha("PSD") && can_carry_alpha("psb"), "PSD and PSB can carry transparency");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

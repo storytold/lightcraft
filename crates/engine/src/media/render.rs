@@ -1,7 +1,8 @@
 use super::quick::QuickSource;
 use super::source::{DecodedSource, SourceLevel, SourceRef};
 use super::{
-    Arc, DevelopSettings, Hash128, Histogram, PhotoId, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo, StageCache,
+    Arc, DevelopSettings, Hash128, Histogram, PhotoId, Plane, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo,
+    StageCache,
 };
 
 /// Everything needed to render one photo, detached from the session.
@@ -227,7 +228,7 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
-                rendered: Ok(Rendered { image, histogram, deep: None }),
+                rendered: Ok(Rendered { image, histogram, deep: None, alpha: None }),
                 gpu_fallback: None,
                 loaded: None,
                 quick: None,
@@ -247,7 +248,7 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
-                rendered: Ok(Rendered { image, histogram, deep: None }),
+                rendered: Ok(Rendered { image, histogram, deep: None, alpha: None }),
                 gpu_fallback: None,
                 loaded: None,
                 quick: None,
@@ -266,15 +267,33 @@ impl RenderJob {
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
+                // (the result if the transparency can't follow the render, made before `self.info` moves)
+                let alpha_failed = self.request.alpha.then(|| self.failed("the transparency did not follow the render".into()));
                 let info = source.info_or(self.info);
-                // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
-                // the GPU when there is one.
-                let gpu = self.cache.is_none();
+                // an export that keeps transparency, of a source that has some: the render resamples
+                // the pixels with their alpha and develops the colour without the white they were
+                // flattened onto (issue #2976); every other render is the one it always was
                 // a clipping preview tests sRGB values, like the histogram: rendered in sRGB, then
                 // converted for the display below
                 let clip_view = self.request.overlay.is_clipping();
-                let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
+                let request = RenderRequest {
+                    alpha: self.request.alpha && info.alpha.is_some(),
+                    display: if clip_view { None } else { self.request.display },
+                    ..self.request
+                };
+                // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
+                // the GPU when there is one.
+                let gpu = self.cache.is_none();
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu);
+                // a plane that doesn't fit the pixels or the render fails the export: written without
+                // its alpha, the file would be wrong at every soft edge
+                let fits = |a: &Plane| (a.width, a.height) == (rendered.image.width, rendered.image.height);
+                if request.alpha
+                    && !rendered.alpha.as_ref().is_some_and(fits)
+                    && let Some(failed) = alpha_failed
+                {
+                    return failed;
+                }
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -370,8 +389,10 @@ fn develop_image(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    // LUT profiles have no GPU stage: they render on the CPU
+    // LUT profiles have no GPU stage: they render on the CPU, and so does a render that keeps
+    // transparency (the GPU stages don't sample the alpha yet: issue #2976)
     let fallback = if gpu
+        && !req.alpha
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()

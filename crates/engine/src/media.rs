@@ -23,7 +23,7 @@ use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
-use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
+use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 mod cache;
