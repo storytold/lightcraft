@@ -75,6 +75,10 @@ fn survey_filmstrip_size_keeps_canvas_in_a_short_window() {
     assert_eq!(r["ok"], true, "{r}");
     let canvas = h.app.canvas_rect.expect("Survey canvas");
     assert!(canvas.height().is_finite() && canvas.height() >= 120.0, "filmstrip leaves usable canvas space: {canvas:?}");
+    assert!(
+        (canvas.height() - 120.0).abs() < 1.0,
+        "maximum Survey filmstrip uses the available height down to the 120-point canvas floor: {canvas:?}"
+    );
     let strip = h.app.widgets.iter().find(|(w, _)| w == "filmstrip").map(|(_, r)| *r).expect("filmstrip is visible in a 1200×350 window");
     assert!(strip.height().is_finite() && strip.height() <= 240.0, "allocated strip is bounded: {strip:?}");
     assert!(canvas.bottom() <= strip.top(), "canvas and strip do not overlap: {canvas:?}, {strip:?}");
