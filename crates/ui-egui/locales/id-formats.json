@@ -320,5 +320,9 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "Converting resets the edits made on the negative: {list}.": "Konversi mengatur ulang editan yang dibuat pada negatif: {list}.",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Sinkronkan rol mengonversi bingkai yang belum dikonversi ({n} dipilih) dan mengatur ulang editan mereka yang dibuat pada negatif: {list}.",
+  "Roll synced: {n} frames share one film base and range": "Rol disinkronkan: {n} bingkai berbagi satu dasar film dan rentang",
+  "Roll synced: {n} frames ({m} could not be read)": "Rol disinkronkan: {n} bingkai ({m} tidak dapat dibaca)"
 }

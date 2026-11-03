@@ -320,5 +320,9 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  "Converting resets the edits made on the negative: {list}.": "კონვერტაცია ჩამოყრის ნეგატივზე გაკეთებულ რედაქტირებებს: {list}.",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "„ფირის სინქრონიზაცია“ აკონვერტირებს ჯერ არაკონვერტირებულ კადრებს (არჩეულია: {n}) და ჩამოყრის მათ ნეგატივზე გაკეთებულ რედაქტირებებს: {list}.",
+  "Roll synced: {n} frames share one film base and range": "ფირი სინქრონიზებულია: კადრები ({n}) იზიარებს ერთ ფირის ფუძეს და დიაპაზონს",
+  "Roll synced: {n} frames ({m} could not be read)": "ფირი სინქრონიზებულია, კადრები: {n} (ვერ წაიკითხა: {m})"
 }

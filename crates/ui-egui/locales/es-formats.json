@@ -317,5 +317,9 @@
   "Panel layout could not be restored: {error}": "No se pudo restablecer la disposición de paneles: {error}",
   "Panel move was not applied: {error}": "No se aplicó el movimiento del panel: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
+  "Converting resets the edits made on the negative: {list}.": "Convertir restablece las ediciones hechas en el negativo: {list}.",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Sincronizar carrete convierte los fotogramas aún no convertidos ({n} seleccionados) y restablece sus ediciones hechas en el negativo: {list}.",
+  "Roll synced: {n} frames share one film base and range": "Carrete sincronizado: {n} fotogramas comparten una base de película y un rango",
+  "Roll synced: {n} frames ({m} could not be read)": "Carrete sincronizado: {n} fotogramas ({m} no se pudieron leer)"
 }

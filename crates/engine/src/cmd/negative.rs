@@ -19,6 +19,7 @@ fn targets(s: &Session, p: &Value, c: &str) -> Result<Vec<PhotoId>> {
     }
 }
 
+/// `p[key]` read as the enum `T` by its JSON name; `None` when absent or null, an error naming the bad value.
 fn enum_param<T: serde::de::DeserializeOwned>(p: &Value, key: &str, c: &str) -> Result<Option<T>> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -52,6 +53,8 @@ fn commit_each(
     Ok(done)
 }
 
+/// The command result for the photos `done`: each one's id and its conversion (film type, tone, colour model, lock
+/// and stored analysis), as agents read it back.
 fn report(done: &[(PhotoId, DevelopSettings)]) -> Value {
     let photos: Vec<Value> = done
         .iter()
@@ -70,6 +73,9 @@ fn reset_wb(d: &mut DevelopSettings) {
     d.wb.tint = 0.0;
 }
 
+/// `negative.convert`: switch the target photos to `film` (default colour negative), measure and store each one's
+/// analysis, and, unless `keepEdits`, reset the edits made on the negative ([`DevelopSettings::reset_negative_conflicts`])
+/// on a photo not converted before. One undo step.
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.convert";
     let ids = targets(s, p, C)?;
@@ -142,6 +148,8 @@ fn conflicts(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"reset": reset}))
 }
 
+/// `negative.analyze` (Re-analyze): measure each converted target again on its current crop and store the result;
+/// a roll-synced (locked) photo keeps the roll's analysis while it still fits its film type.
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.analyze";
     let ids = targets(s, p, C)?;
@@ -164,6 +172,8 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(report(&done))
 }
 
+/// `p.rect` as a normalised rectangle of the uncropped photo: finite, put in order and clipped to the photo; an error
+/// when nothing of it is left.
 fn rect_param(p: &Value, c: &str) -> Result<Rect> {
     let r = p.get("rect").ok_or_else(|| bad(c, "missing `rect` {x0, y0, x1, y1} (0..1 of the uncropped photo)"))?;
     let r: Rect = serde_json::from_value(r.clone()).map_err(|e| bad(c, format!("invalid `rect`: {e}")))?;
@@ -177,6 +187,8 @@ fn rect_param(p: &Value, c: &str) -> Result<Rect> {
     Ok(r)
 }
 
+/// `negative.sampleBase` (Film Base Selector): take the film base from `rect` on each converted target and measure the
+/// range again with it, so the sampled base is stored and kept until the type changes to slide or the photo is reset.
 fn sample_base(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.sampleBase";
     let ids = targets(s, p, C)?;
@@ -199,6 +211,9 @@ fn sample_base(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(report(&done))
 }
 
+/// `negative.set`: change the conversion options (film type, tone, colour model) of the targets. Switching a photo on
+/// resets its negative-only edits and measures it; a change of film type measures it again for the new type (a
+/// sampled base is kept, except for slide film).
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.set";
     let ids = targets(s, p, C)?;
@@ -261,6 +276,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// `negative.reset`: the targets' conversion back to its defaults (off, no options or stored analysis).
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.reset";
     let ids = targets(s, p, C)?;
@@ -272,6 +288,7 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(report(&done))
 }
 
+/// `negative.unlock`: drop the roll lock on the targets, so Re-analyze measures each frame on its own again.
 fn unlock(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.unlock";
     let ids = targets(s, p, C)?;
@@ -464,6 +481,7 @@ fn sync_roll(s: &mut Session, p: &Value) -> Result<Value> {
     roll_apply(s, plan, measured)
 }
 
+/// The `negative.*` commands, as the command palette, CLI, control channel and MCP list them.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

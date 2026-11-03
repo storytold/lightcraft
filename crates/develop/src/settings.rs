@@ -1253,6 +1253,7 @@ pub enum FilmType {
 
 impl FilmType {
     pub const ALL: [FilmType; 4] = [FilmType::Off, FilmType::ColorNegative, FilmType::BwNegative, FilmType::Slide];
+    /// The name shown in the Negative panel and its menus (translated by the UI).
     pub fn label(self) -> &'static str {
         match self {
             FilmType::Off | FilmType::Unknown => "Off",
@@ -1279,6 +1280,7 @@ pub enum FilmTone {
 
 impl FilmTone {
     pub const ALL: [FilmTone; 4] = [FilmTone::Linear, FilmTone::Soft, FilmTone::Standard, FilmTone::Hard];
+    /// The name shown in the Tone menu (translated by the UI).
     pub fn label(self) -> &'static str {
         match self {
             FilmTone::Linear => "Linear",
@@ -1318,6 +1320,7 @@ pub enum FilmColorModel {
 
 impl FilmColorModel {
     pub const ALL: [FilmColorModel; 4] = [FilmColorModel::Warm, FilmColorModel::Neutral, FilmColorModel::Cool, FilmColorModel::None];
+    /// The name shown in the Color menu (translated by the UI).
     pub fn label(self) -> &'static str {
         match self {
             FilmColorModel::None => "None",
@@ -1386,6 +1389,7 @@ impl BaseSource {
 }
 
 impl Default for FilmAnalysis {
+    /// A placeholder that measured nothing: unit base, the full 0..1 range, medians halfway, no tone samples.
     fn default() -> Self {
         Self {
             base: [1.0; 3],
@@ -1402,7 +1406,6 @@ impl Default for FilmAnalysis {
 }
 
 impl FilmAnalysis {
-    /// Every number finite, the base positive and each range ordered: anything else renders unconverted.
     /// Largest magnitude a stored base or density may have: transmittances and densities of real scans are tiny next
     /// to it, and it is far inside `f32`'s range.
     pub const LIMIT: f64 = 1.0e6;
@@ -1415,6 +1418,8 @@ impl FilmAnalysis {
         self.is_valid() && self.film.is_none_or(|f| f == film)
     }
 
+    /// Every number finite and within [`Self::LIMIT`], the base at least [`Self::MIN_BASE`], each range ordered and the
+    /// tone samples rising: anything else is measured again instead of rendered.
     pub fn is_valid(&self) -> bool {
         // finite and within what a film can measure (and an f32 can hold): a damaged or hand-edited sidecar with values
         // past that is measured again instead of rendering a channel black or flat

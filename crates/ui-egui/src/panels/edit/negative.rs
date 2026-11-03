@@ -45,6 +45,9 @@ fn choice<T: Copy + PartialEq + serde::Serialize>(
     });
 }
 
+/// The Negative section of the Edit panel: the film type buttons on a scan not converted yet; on a converted one the
+/// film type, preset groups, tone and colour model, where the film base came from, the eyedropper, Re-analyze /
+/// Unlock, Sync Roll and Reset, and the sliders.
 pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     section(app, ui, d, "negative", "Negative", |app, ui, d| {
         let t = Tokens::get(ui.ctx());

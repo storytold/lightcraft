@@ -523,6 +523,7 @@ pub fn resolve(src: &Rgb32f, s: &DevelopSettings) -> Option<Film> {
     Some(film_for(n, &a))
 }
 
+/// `v`, or `d` when `v` is NaN or infinite (a hand-edited setting).
 fn finite_or(v: f64, d: f64) -> f64 {
     if v.is_finite() { v } else { d }
 }
