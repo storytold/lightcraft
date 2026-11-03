@@ -304,3 +304,191 @@ fn a_photo_named_twice_is_merged_once() {
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Five, three or six 24 MP photos (6000 × 4000), as the catalog knows them.
+fn photos_24mp(n: usize) -> Vec<(u32, u32)> {
+    vec![(6000, 4000); n]
+}
+
+fn panorama() -> crate::merge::MergeKind {
+    crate::merge::MergeKind::Panorama { pano: lightcraft_merge::PanoOptions::default() }
+}
+
+fn hdr() -> crate::merge::MergeKind {
+    crate::merge::MergeKind::Hdr { hdr: lightcraft_merge::HdrOptions::default() }
+}
+
+fn hdr_panorama(bracket: usize) -> crate::merge::MergeKind {
+    crate::merge::MergeKind::HdrPanorama { hdr: lightcraft_merge::HdrOptions::default(), pano: lightcraft_merge::PanoOptions::default(), bracket }
+}
+
+/// Issue #3708: a panorama is planned before its photos are decoded. Five 24 MP photos need ~1.9 GB
+/// to decode (12 bytes a pixel held, 20 more for the one decoding): with 2 GB they run at full
+/// size; with 1.5 GB they are decoded smaller, as large as fits beside a panorama as large as they
+/// are; with 400 MB not even one decodes, and the merge is refused with the memory it needs and has.
+#[test]
+fn a_panorama_is_planned_before_its_photos_are_decoded() {
+    use crate::merge::{MIN_PLANNED_EDGE, plan_memory};
+    let photos = photos_24mp(5);
+    assert_eq!(plan_memory(&panorama(), &photos, 2e9), Ok(None), "fits: full size, as before");
+    assert_eq!(plan_memory(&panorama(), &photos, 1e12), Ok(None));
+    let edge = plan_memory(&panorama(), &photos, 1.5e9).unwrap().expect("made smaller");
+    // 1.5 GB / 68 bytes = 22 MP of frames: 6000 × √(22 / 120) ≈ 2569 px
+    assert!((2500..2600).contains(&edge), "{edge}");
+    let e = plan_memory(&panorama(), &photos, 0.4e9).unwrap_err();
+    assert!(e.starts_with("not enough memory for this panorama"), "{e}");
+    assert!(e.contains(&format!("made {MIN_PLANNED_EDGE} px on the long side")), "{e}");
+    assert!(e.contains("needs about 498 MB") && e.contains("may use 381 MB"), "{e}");
+    // photos no larger than the smallest frames can't be made smaller
+    let small = vec![(1000, 800); 3];
+    assert_eq!(plan_memory(&panorama(), &small, 1e9), Ok(None));
+    let e = plan_memory(&panorama(), &small, 20e6).unwrap_err();
+    assert!(e.contains("even at its least") && e.contains("may use 19 MB"), "{e}");
+    for room in [0.0, -1.0, f64::NAN] {
+        assert!(plan_memory(&panorama(), &photos, room).unwrap_err().contains("may use 0 MB"), "{room}");
+    }
+}
+
+/// An HDR is planned before its photos are decoded too, and keeps their resolution: three 24 MP
+/// photos (14 bytes a pixel each, 20 of one: ~1.42 GB) run with 1.5 GB and are refused with 1.4 GB.
+#[test]
+fn an_hdr_is_planned_before_its_photos_are_decoded_and_never_made_smaller() {
+    use crate::merge::plan_memory;
+    let photos = photos_24mp(3);
+    assert_eq!(plan_memory(&hdr(), &photos, 1.5e9), Ok(None));
+    let e = plan_memory(&hdr(), &photos, 1.4e9).unwrap_err();
+    assert!(e.starts_with("not enough memory for this HDR merge: with its 3 photos at full size,"), "{e}");
+    assert!(e.contains("needs about 1420 MB") && e.contains("may use 1335 MB"), "{e}");
+}
+
+/// An HDR panorama holds every bracket's photos before it merges them: six 24 MP photos need
+/// ~2.5 GB. With 1.5 GB they are decoded smaller (two brackets of three: each merge is a stitch
+/// frame), with 400 MB the merge is refused; a bracket left to EXIF is planned as pairs.
+#[test]
+fn an_hdr_panorama_is_planned_before_its_photos_are_decoded() {
+    use crate::merge::plan_memory;
+    let photos = photos_24mp(6);
+    for bracket in [0, 3] {
+        assert_eq!(plan_memory(&hdr_panorama(bracket), &photos, 2.5e9), Ok(None), "{bracket}");
+        let edge = plan_memory(&hdr_panorama(bracket), &photos, 1.5e9).unwrap().expect("made smaller");
+        assert!((1024..6000).contains(&edge), "{bracket}: {edge}");
+        let e = plan_memory(&hdr_panorama(bracket), &photos, 0.4e9).unwrap_err();
+        assert!(e.starts_with("not enough memory for this HDR panorama") && e.contains("needs about 514 MB"), "{bracket}: {e}");
+    }
+    // pairs make more stitch frames than threes: the frames are made no larger
+    let pairs = plan_memory(&hdr_panorama(2), &photos, 1.5e9).unwrap().unwrap();
+    let threes = plan_memory(&hdr_panorama(3), &photos, 1.5e9).unwrap().unwrap();
+    assert!(pairs <= threes, "{pairs} {threes}");
+}
+
+/// A merge job whose photos are `sizes` (the catalog's), with `room` bytes, reading through a
+/// counter: a merge the plan refuses reads (so decodes) no photo.
+fn counted_job(
+    kind: crate::merge::MergeKind,
+    sizes: Vec<Option<(u32, u32)>>,
+    room: f64,
+) -> (crate::merge::MergeJob, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counter = reads.clone();
+    let read: crate::merge::ByteReader = Arc::new(move |path: &str| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Err(format!("{path}: read"))
+    });
+    let sources = (0..sizes.len()).map(|i| (lightcraft_catalog::PhotoId(i as u64 + 1), format!("/photos/{i}.ARW"))).collect();
+    let job = crate::merge::MergeJob { kind, finish: Default::default(), sources, preview: None, read, sizes, memory: Some(room) };
+    (job, reads)
+}
+
+/// No photo is read, let alone decoded, when the plan refuses the merge (issue #3708: the decode
+/// ran first and could run out of memory before the merge was sized).
+#[test]
+fn a_refused_merge_decodes_nothing() {
+    use std::sync::atomic::Ordering;
+    for kind in [panorama(), hdr(), hdr_panorama(3)] {
+        let (job, reads) = counted_job(kind.clone(), photos_24mp(6).into_iter().map(Some).collect(), 0.3e9);
+        let e = job.run(&|_, _| true).err().unwrap_or_default();
+        assert!(e.starts_with("not enough memory"), "{kind:?}: {e}");
+        assert_eq!(reads.load(Ordering::SeqCst), 0, "{kind:?}: no photo read");
+        // with the memory, the photos are read (and here can't be)
+        let (job, reads) = counted_job(kind.clone(), photos_24mp(6).into_iter().map(Some).collect(), 1e12);
+        assert_eq!(job.run(&|_, _| true).err().as_deref(), Some("/photos/0.ARW: read"), "{kind:?}");
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "{kind:?}");
+    }
+}
+
+/// A photo the catalog has no size for is sized from its file's header, read but not decoded, and
+/// the merge is planned with it; a file whose header can't be read leaves the merge unplanned,
+/// decoded as before (where such a file fails).
+#[test]
+fn a_photo_of_unknown_size_is_sized_from_its_header() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = temp_dir("unknown-size");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids: Vec<_> = import(&mut s, paths).into_iter().map(lightcraft_catalog::PhotoId).collect();
+    let job = s.plan_merge(hdr(), Default::default(), &ids, false).unwrap();
+    assert_eq!(job.sizes, vec![Some((480, 320)); 3], "the catalog's sizes");
+    let counted = |job: &crate::merge::MergeJob, garbage: bool| {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (inner, counter) = (job.read.clone(), reads.clone());
+        let read: crate::merge::ByteReader = Arc::new(move |path: &str| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            if garbage { Ok(b"not a photo".to_vec()) } else { inner(path) }
+        });
+        (crate::merge::MergeJob { read, sizes: vec![None, Some((0, 0)), Some((1, 1))], ..job.clone() }, reads)
+    };
+    // three 480 × 320 photos need ~9.5 MB: refused with 4 MB after reading only the headers
+    let (mut small, reads) = counted(&job, false);
+    small.memory = Some(4e6);
+    let e = small.run(&|_, _| true).err().unwrap_or_default();
+    assert!(e.starts_with("not enough memory for this HDR merge: with its 3 photos") && e.contains("needs about 10 MB"), "{e}");
+    assert_eq!(reads.load(Ordering::SeqCst), 3, "headers only");
+    // with the memory: headers, then the photos
+    let (mut fits, reads) = counted(&job, false);
+    fits.memory = Some(1e9);
+    assert!(fits.run(&|_, _| true).is_ok());
+    assert_eq!(reads.load(Ordering::SeqCst), 6);
+    // no header: unplanned, decoded as before, and that fails as before
+    let (mut unreadable, reads) = counted(&job, true);
+    unreadable.memory = Some(4e6);
+    let e = unreadable.run(&|_, _| true).err().unwrap_or_default();
+    assert!(!e.contains("not enough memory") && e.contains("IMG_0.dng"), "{e}");
+    assert_eq!(reads.load(Ordering::SeqCst), 2, "the first header, then its decode");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A panorama whose photos don't fit at full size is stitched from smaller frames: the result says
+/// memory held it and names the photos' own resolution.
+#[test]
+fn a_panorama_of_photos_too_large_for_memory_is_made_from_smaller_frames() {
+    let dir = temp_dir("pano-reduced");
+    let mut paths = Vec::new();
+    for (i, v) in lightcraft_merge::synth::pano_views(1600, 1200, 1400.0, &[-25.0, 0.0, 25.0]).unwrap().into_iter().enumerate() {
+        let png =
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&v.to_srgb8()), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let p = dir.join(format!("P_{i}.png"));
+        std::fs::write(&p, png).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids: Vec<_> = import(&mut s, paths).into_iter().map(lightcraft_catalog::PhotoId).collect();
+    let mut job = s.plan_merge(panorama(), Default::default(), &ids, false).unwrap();
+    // three 1.9 MP photos need ~108 MB at full size; with 100 MB they are made 1024 px long
+    assert_eq!(crate::merge::plan_memory(&job.kind, &[(1600, 1200); 3], 100e6), Ok(Some(1024)));
+    job.memory = Some(100e6);
+    let r = job.run(&|_, _| true).unwrap().info;
+    assert_eq!(r["used"].as_array().map(Vec::len), Some(3), "{r}");
+    assert_eq!(r["limit"], "memory", "{r}");
+    let (mp, native) = (r["megapixels"].as_f64().unwrap(), r["nativeMegapixels"].as_f64().unwrap());
+    // 100 MB / 68 bytes: at most 1.47 MP; the photos' own resolution is ~2.4 × the frames'
+    assert!(mp <= 1.48 && native > 2.0 * mp, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

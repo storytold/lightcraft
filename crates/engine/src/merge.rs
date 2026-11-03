@@ -85,6 +85,12 @@ pub struct MergeJob {
     /// `Some(edge)`: preview at that frame size; `None`: the full-resolution merge.
     pub preview: Option<usize>,
     pub read: ByteReader,
+    /// Each source's pixel size as the catalog has it (read from the file's header at import), so a
+    /// full-size merge is planned against its memory before a photo is decoded ([`plan_memory`]);
+    /// `None` (or a size of a pixel): read from the file's header when the merge starts.
+    pub sizes: Vec<Option<(u32, u32)>>,
+    /// The memory the merge may use (bytes); `None`: [`merge_memory`] of this computer (tests set it).
+    pub(crate) memory: Option<f64>,
 }
 
 /// What a merge produced.
@@ -106,14 +112,15 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 impl MergeJob {
-    fn load(&self, orient: bool, progress: &ProgressFn, span: (f32, f32)) -> std::result::Result<Vec<Frame>, String> {
+    /// Decode the sources, each held to `edge` on its long side (`None`: full size).
+    fn load(&self, edge: Option<usize>, orient: bool, progress: &ProgressFn, span: (f32, f32)) -> std::result::Result<Vec<Frame>, String> {
         use rayon::prelude::*;
         let done = std::sync::atomic::AtomicUsize::new(0);
         let n = self.sources.len();
         let one = |(_, path): &(PhotoId, String)| {
             let bytes = (self.read)(path)?;
             // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
-            let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
+            let f = lightcraft_merge::load_frame_with(&bytes, edge, orient, &crate::camera_preview::starting_colour_tags)
                 .map_err(|e| format!("{path}: {e}"));
             let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
@@ -122,6 +129,22 @@ impl MergeJob {
         // Full-size photos are decoded one at a time (the demosaic is parallel inside): decoding several 60 MP raws at
         // once multiplied the decoders' scratch memory, and a 7-frame bracket ran out of memory.
         if self.preview.is_some() { self.sources.par_iter().map(one).collect() } else { self.sources.iter().map(one).collect() }
+    }
+
+    /// The sources' pixel sizes: the catalog's, else the file's header (read, not decoded). `None`
+    /// when a header can't be read either: the merge then runs unplanned, as it did before it was
+    /// planned (such a file usually fails to decode as well, before it takes much memory).
+    fn known_sizes(&self) -> std::result::Result<Option<Vec<(u32, u32)>>, String> {
+        let mut sizes = Vec::with_capacity(self.sources.len());
+        for (i, (_, path)) in self.sources.iter().enumerate() {
+            let size = match self.sizes.get(i).copied().flatten().filter(|&(w, h)| u64::from(w) * u64::from(h) > 1) {
+                Some(s) => Some(s),
+                None => header_size(&(self.read)(path)?),
+            };
+            let Some(size) = size else { return Ok(None) };
+            sizes.push(size);
+        }
+        Ok(Some(sizes))
     }
 
     /// Run the merge. `progress(fraction, stage)` returns false to cancel.
@@ -133,11 +156,26 @@ impl MergeJob {
             return Err("cancelled".into());
         }
         let sub = |a: f32, b: f32| move |f: f32, s: &str| progress(a + (b - a) * f, s);
+        let room = self.memory.unwrap_or_else(|| merge_memory(crate::memory::total_ram()));
+        // a full-size merge is planned before anything is decoded: it runs as it is, with smaller
+        // frames (panoramas), or is refused; a preview's frames are small already
+        let (edge, full_px) = match self.preview {
+            Some(edge) => (Some(edge), None),
+            None => match self.known_sizes()? {
+                Some(sizes) => (plan_memory(&self.kind, &sizes, room)?, Some(sizes.iter().map(|&s| size_px(s)).sum::<f64>())),
+                None => (None, None),
+            },
+        };
+        // how many times the photos' pixels the frames have, when the plan made them smaller
+        let shrunk = |frames: &[Frame]| match (self.preview, edge, full_px) {
+            (None, Some(_), Some(full)) => (full / pixels(frames).max(1.0)).max(1.0),
+            _ => 1.0,
+        };
         // the reference frame's lens corrections (HDR); panoramas carry none
         let mut lens = Vec::new();
         let (image, color, orientation, metadata, baseline, samples, crop, mut info, ghost) = match &self.kind {
             MergeKind::Hdr { hdr } => {
-                let frames = self.load(false, progress, (0.0, 0.3))?;
+                let frames = self.load(edge, false, progress, (0.0, 0.3))?;
                 let p = sub(0.3, 0.9);
                 let mut r = lightcraft_merge::merge_hdr(frames, hdr, &p).map_err(err)?;
                 lens = std::mem::take(&mut r.lens);
@@ -150,11 +188,12 @@ impl MergeJob {
                 (r.radiance, r.color, r.orientation, r.metadata, r.baseline_exposure, lightcraft_merge::DngSamples::Half, None, info, ghost)
             }
             MergeKind::Panorama { pano } => {
-                let frames = self.load(true, progress, (0.0, 0.25))?;
+                let frames = self.load(edge, true, progress, (0.0, 0.25))?;
                 let p = sub(0.25, 0.9);
-                let fit = fit_in_memory(pano, pixels(&frames), merge_memory(crate::memory::total_ram()))?;
+                let scale = shrunk(&frames);
+                let fit = fit_in_memory(pano, pixels(&frames), room)?;
                 let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
-                let info = pano_info(&r, &self.sources, pano, &fit);
+                let info = pano_info(&r, &self.sources, pano, &fit, scale);
                 (
                     r.image,
                     r.color,
@@ -168,7 +207,8 @@ impl MergeJob {
                 )
             }
             MergeKind::HdrPanorama { hdr, pano, bracket } => {
-                let frames = self.load(false, progress, (0.0, 0.2))?;
+                let frames = self.load(edge, false, progress, (0.0, 0.2))?;
+                let scale = shrunk(&frames);
                 let b =
                     if *bracket >= 2 { *bracket } else { detect_bracket(&frames).ok_or("could not detect the bracket size from EXIF; set it")? };
                 if !frames.len().is_multiple_of(b) || frames.len() / b < 2 {
@@ -197,9 +237,9 @@ impl MergeJob {
                     merged.push(f);
                 }
                 let p = sub(0.6, 0.9);
-                let fit = fit_in_memory(pano, pixels(&merged), merge_memory(crate::memory::total_ram()))?;
+                let fit = fit_in_memory(pano, pixels(&merged), room)?;
                 let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
-                let mut info = pano_info(&r, &self.sources, pano, &fit);
+                let mut info = pano_info(&r, &self.sources, pano, &fit, scale);
                 info["bracket"] = json!(b);
                 (
                     r.image,
@@ -238,11 +278,17 @@ impl MergeJob {
 
 /// `asked` is what the command asked for, `fit` what ran (held to memory): when the panorama came
 /// out smaller than the photos' own resolution, `limit` says why (`memory`, `size`: Lightroom's
-/// 512 MP / 65,000 px, or `asked`).
-fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], asked: &PanoOptions, fit: &PanoOptions) -> Value {
+/// 512 MP / 65,000 px, or `asked`). `shrunk`: how many times the photos' pixels the stitched
+/// frames had (more than 1 when [`plan_memory`] decoded them smaller, which memory decided).
+fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], asked: &PanoOptions, fit: &PanoOptions, shrunk: f64) -> Value {
     let megapixels = (r.image.width * r.image.height) as f64 / 1e6;
-    let native = r.native_megapixels;
-    let limit = size_limit(asked.max_megapixels, fit.max_megapixels, native, megapixels);
+    // the resolution of the photos themselves, and (smaller frames) memory held it to the frames'
+    let (native, fit_mp) = if shrunk > 1.0 {
+        (r.native_megapixels * shrunk, fit.max_megapixels.min(r.native_megapixels))
+    } else {
+        (r.native_megapixels, fit.max_megapixels)
+    };
+    let limit = size_limit(asked.max_megapixels, fit_mp, native, megapixels);
     json!({
         "projection": r.projection,
         "used": r.used.iter().filter_map(|&i| sources.get(i).map(|s| s.0.0)).collect::<Vec<_>>(),
@@ -277,6 +323,127 @@ pub(crate) fn size_limit(asked: f64, fit: f64, native: f64, megapixels: f64) -> 
 const PANO_TILE_BYTES: f64 = 36.0;
 const PANO_BLEND_BYTES: f64 = 68.0;
 
+/// Bytes per pixel of a photo held as a frame (32-bit float RGB).
+const FRAME_BYTES: f64 = 12.0;
+/// What decoding one photo adds per pixel beside the frames already held (photos are decoded one
+/// at a time, always at full size: a raw is demosaiced whole, then made smaller): its file, raw
+/// samples and normalised mosaic, a turned copy. Also the share of the largest frame an HDR merge
+/// adds to its frames (below), which covers its last decode.
+const DECODE_BYTES: f64 = 20.0;
+/// Peak memory of an HDR merge per pixel of its frames, measured on 67 MP raws (3, 4, 5 frames
+/// peak at 3.8, 4.7, 5.5 GB, docs/merge.md: ~0.86 GB a frame, ~1.2 GB besides), rounded up to
+/// GiB: 14 bytes a pixel of every frame, and [`DECODE_BYTES`] of the largest.
+const HDR_FRAME_BYTES: f64 = 14.0;
+
+/// The smallest long edge [`plan_memory`] decodes a panorama's photos to (a preview's frames: its
+/// features are still found); a merge that doesn't fit with them is refused.
+pub(crate) const MIN_PLANNED_EDGE: usize = PREVIEW_EDGE;
+
+/// Plan a full-size merge of photos of `sizes` against `room` bytes (the merge's memory,
+/// [`merge_memory`]) before any is decoded (issue #3708: decoding them could run out of memory
+/// before the panorama was sized). `Ok(None)`: it fits at full size, and runs as it always did.
+/// `Ok(Some(edge))`: a panorama's (or HDR panorama's) photos are decoded at most `edge` px on their
+/// long side, as large as fits beside a panorama as large as they are (the result says
+/// `limit: "memory"`, like one [`fit_in_memory`] holds); an HDR keeps its photos' resolution or is
+/// refused. Refused when not even [`MIN_PLANNED_EDGE`] fits, naming the memory needed and allowed.
+/// The panorama's own size is still set after decoding, by [`fit_in_memory`] on the real frames.
+pub(crate) fn plan_memory(kind: &MergeKind, sizes: &[(u32, u32)], room: f64) -> std::result::Result<Option<usize>, String> {
+    let long = sizes.iter().map(|&(w, h)| w.max(h) as usize).max().unwrap_or(0);
+    let largest = sizes.iter().map(|&s| size_px(s)).fold(0.0, f64::max);
+    let held = |edge: Option<usize>| sizes.iter().map(|&s| decoded_px(s, edge)).sum::<f64>();
+    // the bracket an HDR panorama is merged in (from EXIF when not given: at least 2 photos)
+    let bracket = match kind {
+        MergeKind::HdrPanorama { bracket, .. } => (*bracket).max(2),
+        _ => 1,
+    };
+    // the pixels of the frames the stitch gets: the photos, or each bracket's merge (its largest)
+    let stitched =
+        |edge: Option<usize>| -> f64 { sizes.chunks(bracket.max(1)).map(|set| set.iter().map(|&s| decoded_px(s, edge)).fold(0.0, f64::max)).sum() };
+    // the memory at the peak with the photos decoded to `edge`, and whether the stitch still fits
+    let need = |edge: Option<usize>| -> (f64, Option<f64>) {
+        let decode = largest * DECODE_BYTES;
+        match kind {
+            MergeKind::Hdr { .. } => (held(edge) * HDR_FRAME_BYTES + decode, None),
+            MergeKind::Panorama { .. } => (held(edge) * FRAME_BYTES + decode, Some(stitched(edge))),
+            MergeKind::HdrPanorama { .. } => (held(edge) * HDR_FRAME_BYTES + decode, Some(stitched(edge))),
+        }
+    };
+    let pano = match kind {
+        MergeKind::Hdr { .. } => None,
+        MergeKind::Panorama { pano } | MergeKind::HdrPanorama { pano, .. } => Some(pano),
+    };
+    let fits = |edge: Option<usize>| {
+        let (bytes, stitch) = need(edge);
+        bytes <= room && stitch.zip(pano).is_none_or(|(px, pano)| fit_in_memory(pano, px, room).is_ok())
+    };
+    if fits(None) {
+        return Ok(None);
+    }
+    let what = match kind {
+        MergeKind::Hdr { .. } => "HDR merge",
+        MergeKind::Panorama { .. } => "panorama",
+        MergeKind::HdrPanorama { .. } => "HDR panorama",
+    };
+    let Some(pano) = pano else {
+        // an HDR is its photos' resolution: not made smaller than them
+        return Err(not_enough(what, &format!("with its {} photos at full size,", sizes.len()), need(None).0, room));
+    };
+    let least = MIN_PLANNED_EDGE.min(long);
+    if least >= long || !fits(Some(least)) {
+        // at the smallest frames: the decode, or the stitch at its least ([`fit_in_memory`]'s refusal)
+        let (bytes, stitch) = need(Some(least));
+        let at_least = MIN_PANORAMA_MEGAPIXELS.min(pano.max_megapixels).max(0.1) * 1e6;
+        let stitch = stitch.map_or(0.0, |px| (px * FRAME_BYTES + at_least * PANO_TILE_BYTES).max(at_least * PANO_BLEND_BYTES));
+        let how = if least < long { format!("even with its photos made {least} px on the long side,") } else { "even at its least,".to_owned() };
+        return Err(not_enough(what, &how, bytes.max(stitch), room));
+    }
+    // the largest edge whose frames fit beside a panorama as large as they are, else the smallest
+    let (mut lo, mut hi) = (least, long);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if fits(Some(mid)) && stitched(Some(mid)) * PANO_BLEND_BYTES <= room { lo = mid } else { hi = mid }
+    }
+    Ok(Some(lo))
+}
+
+/// "not enough memory for this `what`: `how` it needs about N MB, and the merge may use M MB; …"
+fn not_enough(what: &str, how: &str, need: f64, room: f64) -> String {
+    format!(
+        "not enough memory for this {what}: {how} it needs about {:.0} MB, and the merge may use {:.0} MB; merge fewer or smaller photos, or close other apps",
+        mb(need).ceil(),
+        mb(room.max(0.0)).floor()
+    )
+}
+
+/// Bytes in MB (MiB).
+fn mb(bytes: f64) -> f64 {
+    bytes / (1u64 << 20) as f64
+}
+
+/// The pixels of a photo of `size`.
+fn size_px((w, h): (u32, u32)) -> f64 {
+    f64::from(w) * f64::from(h)
+}
+
+/// The pixels of a photo of `size` decoded at most `edge` px on its long side.
+fn decoded_px((w, h): (u32, u32), edge: Option<usize>) -> f64 {
+    let long = f64::from(w.max(h)).max(1.0);
+    let k = edge.map_or(1.0, |e| (e as f64 / long).min(1.0));
+    size_px((w, h)) * k * k
+}
+
+/// A photo's pixel size from its header, without decoding it (as an import reads it).
+fn header_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = if lightcraft_raw::probe(bytes).is_some() {
+        let (w, h) = lightcraft_raw::probe_info(bytes).ok()?.developed_size();
+        (u32::try_from(w).ok()?, u32::try_from(h).ok()?)
+    } else {
+        let h = lightcraft_codecs::read_header(bytes).ok()?;
+        (h.width, h.height)
+    };
+    (u64::from(w) * u64::from(h) > 1).then_some((w, h))
+}
+
 /// What a merge may use of the computer's memory: three quarters of it (the rest is the system's
 /// and the other apps'), less the app's own memory budget (its caches).
 fn merge_memory(ram: Option<usize>) -> f64 {
@@ -294,12 +461,11 @@ fn merge_memory(ram: Option<usize>) -> f64 {
 /// to a panorama quietly far below it). Between the floor and the full size the result says
 /// `limit: "memory"`. Never above what was asked.
 pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std::result::Result<PanoOptions, String> {
-    let fits = ((room - frame_px * 12.0) / PANO_TILE_BYTES).min(room / PANO_BLEND_BYTES) / 1e6;
+    let fits = ((room - frame_px * FRAME_BYTES) / PANO_TILE_BYTES).min(room / PANO_BLEND_BYTES) / 1e6;
     let floor = panorama_floor(pano.max_megapixels, frame_px);
     // a NaN `fits` (a NaN `room`) is refused too
     if fits.is_nan() || fits < floor {
-        let need = (frame_px * 12.0 + floor * 1e6 * PANO_TILE_BYTES).max(floor * 1e6 * PANO_BLEND_BYTES);
-        let mb = |b: f64| b / (1u64 << 20) as f64;
+        let need = (frame_px * FRAME_BYTES + floor * 1e6 * PANO_TILE_BYTES).max(floor * 1e6 * PANO_BLEND_BYTES);
         return Err(format!(
             "not enough memory for this panorama: at {} MP, the smallest it is made, it needs about {:.0} MB, its photos included, and the merge may use {:.0} MB; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
             round_megapixels(floor),
@@ -460,11 +626,15 @@ impl Session {
     /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
         let mut sources = Vec::new();
+        let mut sizes = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for id in ids.iter().filter(|id| seen.insert(**id)) {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
             match &p.source {
-                Source::File { path } => sources.push((*id, path.clone())),
+                Source::File { path } => {
+                    sources.push((*id, path.clone()));
+                    sizes.push(Some((p.width, p.height)));
+                }
                 Source::Demo { .. } => return Err(EngineError::Other(format!("{} is a demo photo; Photo Merge needs photo files", p.file_name))),
             }
         }
@@ -475,7 +645,7 @@ impl Session {
             Some(r) => r.clone(),
             None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
         };
-        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
+        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read, sizes, memory: None })
     }
 
     /// Write a finished (non-preview) merge next to its first source, import it, select it and
