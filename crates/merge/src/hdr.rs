@@ -119,6 +119,10 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
     if frames.iter().any(|f| f.width() != w || f.height() != h) {
         return Err(MergeError::Mismatch("HDR merge needs photos of the same size".into()));
     }
+    // every buffer must hold exactly its frame's pixels before anything is sized from the dimensions
+    if frames.iter().any(|f| w.checked_mul(h) != Some(f.image.data.len())) {
+        return Err(MergeError::Mismatch("an HDR frame's pixels do not match its size".into()));
+    }
     if frames.iter().any(|f| f.orientation != frames[0].orientation) {
         for f in frames.iter_mut() {
             f.orient();

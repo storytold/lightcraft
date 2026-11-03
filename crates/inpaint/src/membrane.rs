@@ -169,6 +169,10 @@ pub fn membrane_fill(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool]) 
     if Some(hole.len()) != w.checked_mul(h) || Some(img.len()) != hole.len().checked_mul(ch) {
         return img.to_vec();
     }
+    // no pixels: nothing to fill (and `ch` would otherwise size one plane per channel, whatever it claims)
+    if hole.is_empty() {
+        return img.to_vec();
+    }
     per_channel(w, h, ch, |c| {
         let mut v: Vec<f32> = (0..w * h).map(|i| if hole[i] { 0.0 } else { img[i * ch + c] }).collect();
         solve_membrane(w, h, hole, &mut v);
@@ -181,6 +185,12 @@ mod tests {
 
     fn disc(w: usize, h: usize, cx: f32, cy: f32, r: f32) -> Vec<bool> {
         (0..w * h).map(|i| ((i % w) as f32 - cx).hypot((i / w) as f32 - cy) < r).collect()
+    }
+
+    #[test]
+    fn a_zero_area_image_comes_back_unchanged_whatever_its_channel_count() {
+        assert!(membrane_fill(0, 5, usize::MAX, &[], &[]).is_empty());
+        assert!(membrane_fill(3, 0, 1 << 40, &[], &[]).is_empty());
     }
 
     #[test]

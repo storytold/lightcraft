@@ -401,6 +401,12 @@ fn encode_with(
     app_segments: &[(u8, Vec<u8>)],
     optimize: bool,
 ) -> Vec<u8> {
+    // The public entry takes caller-sized dimensions: refuse (an empty output) what would size an allocation from
+    // them or index past `data`, rather than panic or allocate for them.
+    let fits = width.checked_mul(height).and_then(|n| n.checked_mul(channels)).is_some_and(|n| n <= data.len());
+    if !fits || width == 0 || height == 0 || width > 65_535 || height > 65_535 || !matches!(channels, 1 | 3 | 4) {
+        return Vec::new();
+    }
     let gray = channels == 1;
     let (hs, vs) = match (gray, sub) {
         (true, _) | (false, ChromaSubsampling::S444) => (1usize, 1usize),
@@ -585,6 +591,13 @@ fn encode_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_dimensions_give_no_output_instead_of_a_panic_or_allocation() {
+        for (w, h, c) in [(1usize << 40, 1usize << 40, 3usize), (0, 8, 3), (70_000, 2, 3), (8, 8, 7), (8, 8, 3)] {
+            assert!(encode(&[0u8; 16], w, h, c, 90, ChromaSubsampling::S444, &[]).is_empty(), "{w} x {h} x {c}");
+        }
+    }
 
     fn test_rgb(w: usize, h: usize) -> Vec<u8> {
         let mut v = Vec::with_capacity(w * h * 3);
