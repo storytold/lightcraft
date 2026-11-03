@@ -383,6 +383,29 @@ fn calibrations_past_the_shared_copy_budget_are_left_out() {
     assert!(db.lenses.len() * 400_000 <= MAX_PROFILE_COPY_BYTES);
 }
 
+/// Unusable calibrations (nothing to apply) are not copied or charged, so they can't use up the
+/// budget a later usable one of the same lens needs.
+#[test]
+fn unusable_calibrations_do_not_spend_the_copy_budget() {
+    let name = "x".repeat(8 << 20);
+    let empty = "<calibration focal=\"50\"></calibration>";
+    let good = "<calibration focal=\"50\"><distortion model=\"poly3\" focal=\"50\" k1=\"0.01\"/></calibration>";
+    let xml = format!("<lensdatabase><lens><maker>M</maker><model>{name}</model>{}{good}</lens></lensdatabase>", empty.repeat(4));
+    let db = LensDb::parse(&xml).unwrap();
+    assert_eq!(db.lenses.len(), 1, "the usable calibration after the empty ones is kept");
+}
+
+/// Many tiny names cost their allocations, not only their bytes.
+#[test]
+fn many_tiny_names_are_charged_their_allocations() {
+    let models = "<model>a</model>".repeat(400_000);
+    let good = "<calibration focal=\"50\"><distortion model=\"poly3\" focal=\"50\" k1=\"0.01\"/></calibration>";
+    let xml = format!("<lensdatabase><lens><maker>M</maker>{models}{good}{good}{good}{good}</lens></lensdatabase>");
+    let db = LensDb::parse(&xml).unwrap();
+    let names: usize = db.lenses.iter().map(|p| p.models.len()).sum();
+    assert!(db.lenses.len() < 4 && names * std::mem::size_of::<String>() <= MAX_PROFILE_COPY_BYTES, "{} profiles", db.lenses.len());
+}
+
 #[cfg(unix)]
 #[test]
 fn load_dir_refuses_a_non_regular_xml_entry() {
