@@ -220,7 +220,9 @@ impl Warp {
         // desired pixel even when manual or embedded lens corrections are on.
         let mut p = self.from_corrected(src);
         let h = (self.w.max(self.h) * 1e-5).clamp(0.001, 0.1);
-        for _ in 0..24 {
+        // Check the initial guess and every candidate after each of the 24
+        // updates; the final candidate must not be silently discarded.
+        for iteration in 0..=24 {
             let sampled = self.to_source(p, ch);
             let err = (sampled.x - src.x, sampled.y - src.y);
             let distance = err.0.hypot(err.1);
@@ -242,6 +244,9 @@ impl Warp {
             }
             if distance < 1e-5 {
                 return Some(p);
+            }
+            if iteration == 24 {
+                return None;
             }
             let (dx, dy) = ((d * err.0 - b * err.1) / det, (-c * err.0 + a * err.1) / det);
             if !dx.is_finite() || !dy.is_finite() {
