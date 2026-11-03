@@ -33,8 +33,9 @@
 //! another process in between is never signalled. Once no new one turns up they are killed with
 //! SIGKILL; one it fails for is tried again and then continued with SIGCONT rather than left
 //! stopped, and the report says how many were killed and names any that failed or are still alive.
-//! Without pidfds (Unix other than Linux, Linux before 5.3) only the binary itself is killed and
-//! the report says what it started may still run; Windows uses `taskkill /T /F` (bounded). Only a
+//! Without pidfds (Unix other than Linux, Linux before 5.3) only xtask's own child is killed (the
+//! test binary, or under the full `ci` cargo, whose test binary may then keep running) and the
+//! report says what it started may still run; Windows uses `taskkill /T /F` (bounded). Only a
 //! process that clears its environment and leaves the tree escapes on Linux. The child stays in
 //! xtask's process group rather than one of its own, so Ctrl-C in the terminal still reaches the
 //! test binaries as before.
@@ -1095,9 +1096,7 @@ mod tests {
     /// Whether process `pid` is gone (or a zombie no one has reaped yet).
     #[cfg(target_os = "linux")]
     fn gone(pid: &str) -> bool {
-        let out = Command::new("ps").args(["-o", "stat=", "-p", pid]).output().unwrap();
-        let stat = String::from_utf8_lossy(&out.stdout);
-        stat.trim().is_empty() || stat.trim().starts_with('Z')
+        pid.parse().map_or(true, |pid| kill::tests::state(pid).is_none_or(|s| s == 'Z'))
     }
 
     #[cfg(target_os = "linux")]

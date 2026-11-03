@@ -422,8 +422,8 @@ names the run holding the slot. The build isn't timed (a first build can rightly
 test binaries are: each may run for `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30, timed from
 cargo's `Running` line for it; `0` for no limit). One that runs longer, a test hung on a GPU device say, is killed with the
 processes it started (on Linux found by an environment variable they inherit, so those that outlived
-their parent too, unless they cleared their environment; on macOS and the BSDs only the binary itself is
-killed), and the run reports it as `timed out after 30 min` with the tests still running
+their parent too, unless they cleared their environment; on macOS and the BSDs only the process xtask
+started is killed, which under the full `ci` is cargo, so a hung test binary may keep running), and the run reports it as `timed out after 30 min` with the tests still running
 and those that never reported a result. Under `LIGHTCRAFT_NEXTEST=1`, `.config/nextest.toml` kills a
 test after 30 minutes instead. After a timeout, `ci` skips its GPU probe and translation gaps report.
 

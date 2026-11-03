@@ -5,21 +5,25 @@
 //! **No signal by a pid that may name another process by now.** A pid read from `/proc` passes to
 //! another process as soon as its process exits and is reaped, and a parent that ignores `SIGCHLD`
 //! has its children reaped by the kernel even while it is stopped. So the only process signalled
-//! by its pid is the direct child, which xtask hasn't reaped yet. On Linux every other one is held
-//! by a pidfd ([`Held`]), opened *before* what makes it ours is read again, and signalled only
-//! through it, so if its pid passed to another process in between, the signal fails as "gone" and
-//! reaches no one. What makes a process ours: the run's marker in its environment, or a parent
-//! that is one of the held processes and hasn't exited (checked through the parent's pidfd after
-//! the child's parent pid is read, so that pid can't have passed to another process meanwhile).
-//! Where there are no pidfds (Unix other than Linux, a Linux kernel before 5.3), the processes the
-//! child started aren't signalled, and the report says they may still run.
+//! by its pid is the direct child, which xtask hasn't reaped yet, and only while xtask doesn't
+//! ignore `SIGCHLD` itself (inherited from whatever started it; then the kernel reaps xtask's
+//! children too, and on Linux the direct child is treated like the others below). On Linux every
+//! other one is held by a pidfd ([`Held`]), opened *before* what makes it ours is read again, and
+//! signalled only through it, so if its pid passed to another process in between, the signal fails
+//! as "gone" and reaches no one. What makes a process ours: the run's marker in its environment, or
+//! a parent that is one of the held processes and that its pidfd says hasn't exited (asked after
+//! the child's parent pid is read, so that pid can't have passed to another process meanwhile; when
+//! it can't be asked, the child isn't trusted). Where there are no pidfds (Unix other than Linux, a
+//! Linux kernel before 5.3), only the direct child is killed; under the full `ci` that is cargo,
+//! so the test binary it started may keep running, and the report says so.
 //!
-//! **Nothing is left frozen, and nothing waits without a bound.** Every signal's result is kept. A
-//! process whose SIGKILL fails is sent it once more, and if that fails too it is sent SIGCONT, so
-//! it runs on rather than staying stopped (it was frozen only so it couldn't start more processes
-//! while the others were found); the report names it either way, and says when the processes
-//! couldn't all be looked for or held (out of file descriptors, say). The direct child (and
-//! `taskkill` on Windows) is waited for a bounded time.
+//! **Nothing waits without a bound, and a frozen process is continued if it can't be killed.**
+//! Every signal's result is kept. A process whose SIGKILL fails is sent it once more, and if that
+//! fails too it is sent SIGCONT so that it runs on rather than staying stopped (it was frozen only
+//! so it couldn't start more processes while the others were found); the report names it either
+//! way, says if SIGCONT failed too, and says when the processes couldn't all be looked at or held
+//! (out of file descriptors, say). The direct child (and `taskkill` on Windows) is waited for a
+//! bounded time.
 
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
@@ -41,14 +45,18 @@ const ROUNDS: usize = 64;
 /// it is signalled, plus what it started. `None` once it has been reaped: then only processes
 /// carrying the marker are, never the old pid, which may belong to another process by now.
 pub(super) fn kill_run(child: Option<&mut Child>, marker: &Marker) -> String {
+    // whether the direct child is unreaped until xtask waits for it, so its pid is its own
     #[cfg(target_os = "linux")]
-    let mut note = kill_all(child.as_ref().map(|c| c.id()), marker, &mut Real);
+    let own = !sigchld_ignored().unwrap_or(false);
+    #[cfg(target_os = "linux")]
+    let mut note = kill_all(child.as_ref().map(|c| c.id()), own, marker, &mut Real);
     #[cfg(not(target_os = "linux"))]
-    let mut note = kill_all(child.as_ref().map(|c| c.id()), marker);
+    let (own, mut note) = (true, kill_all(child.as_ref().map(|c| c.id()), marker));
     if let Some(child) = child {
-        // unreaped until the wait below succeeds: its pid is still its own
-        let _ = child.kill();
-        if wait_for(child, AFTER_KILL).is_none() {
+        if own {
+            let _ = child.kill();
+        }
+        if wait_for(child, AFTER_KILL).is_none() && own {
             note.push_str(&format!("; it was still running {} s after the kill (pid {})", AFTER_KILL.as_secs(), child.id()));
         }
     }
@@ -67,6 +75,22 @@ fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     }
 }
 
+/// Whether xtask ignores `SIGCHLD` (so the kernel reaps its children without a wait), from
+/// `/proc/self/status`; `None` when that can't be read.
+#[cfg(target_os = "linux")]
+fn sigchld_ignored() -> Option<bool> {
+    ignores_sigchld(&std::fs::read_to_string("/proc/self/status").ok()?)
+}
+
+/// Whether a `/proc/<pid>/status` text's `SigIgn` mask holds `SIGCHLD`.
+#[cfg(target_os = "linux")]
+fn ignores_sigchld(status: &str) -> Option<bool> {
+    let mask = status.lines().find_map(|l| l.strip_prefix("SigIgn:"))?;
+    let mask = u64::from_str_radix(mask.trim(), 16).ok()?;
+    let bit = u32::try_from(rustix::process::Signal::CHILD.as_raw()).ok()?.checked_sub(1)?;
+    Some(mask.checked_shr(bit).is_some_and(|m| m & 1 == 1))
+}
+
 /// What the kill says when it can signal only the direct child.
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 fn child_only(root: Option<u32>, why: &str) -> String {
@@ -78,7 +102,10 @@ fn child_only(root: Option<u32>, why: &str) -> String {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(super) fn kill_all(root: Option<u32>, _marker: &Marker) -> String {
-    child_only(root, "this OS has no pidfds, and a bare pid may name another process by the time it is signalled")
+    child_only(
+        root,
+        "this OS has no pidfds, and a bare pid may name another process by the time it is signalled; under cargo, the test binary is one of them",
+    )
 }
 
 #[cfg(windows)]
@@ -148,10 +175,17 @@ pub(super) enum Hold {
     Unheld(String),
 }
 
-/// A look through `/proc`: the process table (pid, parent pid) and the pids whose environment
-/// holds the run's marker.
+/// A look through `/proc`.
 #[cfg(target_os = "linux")]
-pub(super) type Scan = (Vec<(u32, u32)>, BTreeSet<u32>);
+#[derive(Default)]
+pub(super) struct Scan {
+    /// The process table: pid, parent pid.
+    table: Vec<(u32, u32)>,
+    /// The pids whose environment holds the run's marker.
+    marked: BTreeSet<u32>,
+    /// The processes that couldn't be looked at, and why.
+    failed: Vec<String>,
+}
 
 /// Where the kill looks for processes and how it signals them; tests replace a part.
 #[cfg(target_os = "linux")]
@@ -165,7 +199,7 @@ pub(super) trait Os {
         hold(pid, entry)
     }
 
-    /// Hold the direct child (unreaped, so its pid is its own).
+    /// Hold the direct child while it is unreaped, so its pid is its own.
     fn hold_root(&mut self, pid: u32) -> Held {
         Held { pid, frozen: false, fd: open_pidfd(pid).ok() }
     }
@@ -174,8 +208,9 @@ pub(super) trait Os {
         send(held, sig)
     }
 
-    /// Whether the process has exited (`None`: no pidfd to tell, so it's the unreaped child).
-    fn exited(&mut self, held: &Held) -> Option<bool> {
+    /// Whether the process has exited (`Ok(None)`: no pidfd to ask, so it's the unreaped child;
+    /// an error when its pidfd can't be asked).
+    fn exited(&mut self, held: &Held) -> Result<Option<bool>, String> {
         exited(held)
     }
 }
@@ -187,30 +222,40 @@ pub(super) struct Real;
 #[cfg(target_os = "linux")]
 impl Os for Real {}
 
-/// Freeze and kill `root` (unreaped) and what it started (see [`kill_run`]); what was done.
+/// Freeze and kill `root` and what it started (see [`kill_run`]); what was done. `own`: `root` is
+/// unreaped until xtask waits for it, so its pid is its own; else it is held only by its marker.
 ///
 /// Everything found is frozen with SIGSTOP until no new one turns up, a level of the tree a round,
 /// then killed with SIGKILL, the last found first. Then the failures are dealt with (module docs).
 #[cfg(target_os = "linux")]
-pub(super) fn kill_all(root: Option<u32>, marker: &Marker, os: &mut dyn Os) -> String {
+pub(super) fn kill_all(root: Option<u32>, own: bool, marker: &Marker, os: &mut dyn Os) -> String {
     if !std::path::Path::new("/proc/self/environ").exists() {
         return child_only(root, "no /proc to find them in");
     }
     let entry = marker.entry();
     let mut end = Ending::default();
-    let rounds = freeze(root, &entry, os, &mut end);
+    if !own && root.is_some() {
+        end.problems.push("xtask ignores SIGCHLD, so its child's pid was trusted only with the run's marker".to_owned());
+    }
+    let rounds = freeze(root.map(|pid| (pid, own)), &entry, os, &mut end);
     let kill_failed = kill(os, &end.held);
     end.problems.extend(thaw(os, &end.held, &kill_failed));
-    let mut alive = wait_exited(os, &end.held, &entry);
+    let mut alive = wait_exited(os, &end.held, &entry, &mut end.problems);
     // those are told of above
     alive.retain(|p| !kill_failed.iter().any(|(i, _)| end.held.get(*i).is_some_and(|h| h.pid == *p)));
     let started = end.held.iter().filter(|h| Some(h.pid) != root).count();
     let mut note = summary(root, started);
+    if let Some(root) = root.filter(|r| !end.held.iter().any(|h| h.pid == *r)) {
+        note.push_str(&format!("; but pid {root} wasn't signalled: it no longer named the run's process (it may have exited and been reaped)"));
+    }
     if rounds == ROUNDS {
         note.push_str(&format!("; it kept starting processes, so xtask stopped looking after {ROUNDS} rounds"));
     }
     if let Some((n, why)) = end.unheld.first().map(|why| (end.unheld.len(), why)) {
         note.push_str(&format!("; {n} process(es) it started couldn't be held by a pidfd or looked at ({why}), so they weren't signalled"));
+    }
+    if let Some((n, why)) = end.unseen.first().map(|why| (end.unseen.len(), why)) {
+        note.push_str(&format!("; {n} process(es) of this user couldn't be looked at ({why}); any of them it started weren't signalled"));
     }
     if !alive.is_empty() {
         let pids: Vec<String> = alive.iter().map(u32::to_string).collect();
@@ -231,12 +276,25 @@ struct Ending {
     problems: Vec<String>,
     /// Why each process found that couldn't be held wasn't.
     unheld: Vec<String>,
+    /// Why each process the scans couldn't look at couldn't be.
+    unseen: BTreeSet<String>,
 }
 
-/// Hold and stop `root` and then, a round at a time, every new process found; how many rounds ran.
+/// Hold and stop `root` (with whether its pid is its own) and then, a round at a time, every new
+/// process found; how many rounds ran.
 #[cfg(target_os = "linux")]
-fn freeze(root: Option<u32>, entry: &str, os: &mut dyn Os, end: &mut Ending) -> usize {
-    let mut fresh: Vec<Held> = root.map(|pid| os.hold_root(pid)).into_iter().collect();
+fn freeze(root: Option<(u32, bool)>, entry: &str, os: &mut dyn Os, end: &mut Ending) -> usize {
+    let mut fresh: Vec<Held> = Vec::new();
+    match root {
+        Some((pid, true)) => fresh.push(os.hold_root(pid)),
+        // reaped by the kernel perhaps, so its pid may be another's: held only as a marked process
+        Some((pid, false)) => match os.hold(pid, entry) {
+            Hold::Held(held, _, true) => fresh.push(held),
+            Hold::Held(..) | Hold::Not => {}
+            Hold::Unheld(why) => end.unheld.push(why),
+        },
+        None => {}
+    }
     // the stopped ones, whose children are looked for, and every pid already dealt with
     let (mut stopped, mut seen) = (BTreeSet::new(), BTreeSet::from([std::process::id()]));
     for round in 1..=ROUNDS {
@@ -254,15 +312,16 @@ fn freeze(root: Option<u32>, entry: &str, os: &mut dyn Os, end: &mut Ending) -> 
             seen.insert(held.pid);
             end.held.push(held);
         }
-        let (table, marked) = match os.scan(entry) {
+        let scan = match os.scan(entry) {
             Ok(scan) => scan,
             Err(e) => {
                 end.problems.push(format!("could not look for the processes it started ({e}), so some may still run"));
                 return round;
             }
         };
-        let mut found = children_of(&table, &stopped);
-        found.extend(marked);
+        end.unseen.extend(scan.failed);
+        let mut found = children_of(&scan.table, &stopped);
+        found.extend(scan.marked);
         found.retain(|p| !seen.contains(p));
         for pid in found {
             match os.hold(pid, entry) {
@@ -283,12 +342,13 @@ fn freeze(root: Option<u32>, entry: &str, os: &mut dyn Os, end: &mut Ending) -> 
 }
 
 /// Whether `ppid`, read from a child's `/proc` after the child was held, is one of the held
-/// processes: one that hasn't exited now, so it held that pid when it was read (a pid passes to
-/// another process only once its process has exited and been reaped). The direct child, held
-/// without a pidfd, is unreaped, so its pid is its own.
+/// processes: one whose pidfd says it hasn't exited now, so it held that pid when it was read (a
+/// pid passes to another process only once its process has exited and been reaped). The direct
+/// child is held without a pidfd only while it is unreaped, so its pid is its own. A pidfd that
+/// can't be asked proves nothing.
 #[cfg(target_os = "linux")]
 fn has_live_parent(os: &mut dyn Os, held: &[Held], ppid: u32) -> bool {
-    held.iter().filter(|h| h.pid == ppid).any(|h| os.exited(h) != Some(true))
+    held.iter().filter(|h| h.pid == ppid).any(|h| matches!(os.exited(h), Ok(None | Some(false))))
 }
 
 /// SIGKILL every held process, the last found first, and once more those it failed for; the
@@ -333,13 +393,24 @@ fn thaw(os: &mut dyn Os, held: &[Held], failed: &[(usize, String)]) -> Vec<Strin
 /// Wait at most [`AFTER_KILL`] for the held processes to exit; the pids still alive then (held ones
 /// that haven't exited, and any that still carry `entry`: a killed process loses its environment
 /// as it dies, before it is reaped).
+/// A held process that can't be asked counts as alive; a look that fails is added to `problems`.
 #[cfg(target_os = "linux")]
-fn wait_exited(os: &mut dyn Os, held: &[Held], entry: &str) -> Vec<u32> {
+fn wait_exited(os: &mut dyn Os, held: &[Held], entry: &str, problems: &mut Vec<String>) -> Vec<u32> {
     let until = Instant::now() + AFTER_KILL;
     loop {
-        let mut alive: BTreeSet<u32> = held.iter().filter(|h| os.exited(h) == Some(false)).map(|h| h.pid).collect();
-        alive.extend(os.scan(entry).map(|(_, marked)| marked).unwrap_or_default());
+        let mut alive: BTreeSet<u32> = held.iter().filter(|h| matches!(os.exited(h), Ok(Some(false)) | Err(_))).map(|h| h.pid).collect();
+        let scan = os.scan(entry);
+        if let Ok(scan) = &scan {
+            alive.extend(&scan.marked);
+        }
         if alive.is_empty() || Instant::now() >= until {
+            match scan {
+                Err(e) => problems.push(format!("could not check that they are gone ({e})")),
+                Ok(scan) if !scan.failed.is_empty() => {
+                    problems.push(format!("could not check that they are gone ({})", scan.failed.join(", ")));
+                }
+                Ok(_) => {}
+            }
             return alive.into_iter().collect();
         }
         std::thread::sleep(TICK);
@@ -377,14 +448,18 @@ fn send(held: &Held, sig: Sig) -> Result<(), Unsent> {
 }
 
 #[cfg(target_os = "linux")]
-fn exited(held: &Held) -> Option<bool> {
+fn exited(held: &Held) -> Result<Option<bool>, String> {
     use rustix::event::{PollFd, PollFlags, Timespec};
-    let fd = held.fd.as_ref()?;
+    let Some(fd) = held.fd.as_ref() else { return Ok(None) };
     let mut fds = [PollFd::new(fd, PollFlags::IN)];
     // a pidfd is readable once its process has exited
     let now = Timespec { tv_sec: 0, tv_nsec: 0 };
-    rustix::event::poll(&mut fds, Some(&now)).ok()?;
-    Some(fds.first().is_some_and(|f| !f.revents().is_empty()))
+    rustix::event::poll(&mut fds, Some(&now)).map_err(|e| format!("poll: {e}"))?;
+    let revents = fds.first().map_or(PollFlags::empty(), PollFd::revents);
+    if revents.intersects(PollFlags::ERR | PollFlags::NVAL) {
+        return Err(format!("poll: {revents:?}"));
+    }
+    Ok(Some(revents.contains(PollFlags::IN)))
 }
 
 #[cfg(target_os = "linux")]
@@ -421,17 +496,28 @@ pub(super) fn children_of(table: &[(u32, u32)], parents: &BTreeSet<u32>) -> BTre
 /// for a reason other than its exit (out of file descriptors, say).
 #[cfg(target_os = "linux")]
 fn proc_scan(entry: &str) -> Result<Scan, String> {
-    let (mut table, mut marked) = (Vec::new(), BTreeSet::new());
-    let dir = std::fs::read_dir("/proc").map_err(|e| format!("/proc: {e}"))?;
-    for pid in dir.filter_map(Result::ok).filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok()) {
-        if let Some((ppid, has)) = about(pid, entry)? {
-            table.push((pid, ppid));
-            if has {
-                marked.insert(pid);
+    let mut scan = Scan::default();
+    for e in std::fs::read_dir("/proc").map_err(|e| format!("/proc: {e}"))? {
+        let e = match e {
+            Ok(e) => e,
+            Err(e) => {
+                scan.failed.push(format!("/proc: {e}"));
+                continue;
             }
+        };
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        match about(pid, entry) {
+            Ok(Some((ppid, has))) => {
+                scan.table.push((pid, ppid));
+                if has {
+                    scan.marked.insert(pid);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => scan.failed.push(e),
         }
     }
-    Ok((table, marked))
+    Ok(scan)
 }
 
 /// Whether an error reading a process's `/proc` files means it has gone (or is another user's).
@@ -454,11 +540,14 @@ fn about(pid: u32, entry: &str) -> Result<Option<(u32, bool)>, String> {
         Ok(_) => return Ok(None),
         Err(e) => return failed(e),
     }
-    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+    // bytes: the command name in it is the process's to choose, and needn't be UTF-8
+    let stat = match std::fs::read(format!("/proc/{pid}/stat")) {
         Ok(s) => s,
         Err(e) => return failed(e),
     };
     let Some(ppid) = parent_in_stat(&stat) else { return Ok(None) };
+    // a process that made itself undumpable (as ssh-agent does) can't have its environment read:
+    // counted as unmarked, else every kill would report those of the user's session
     let marked = match std::fs::read(format!("/proc/{pid}/environ")) {
         Ok(env) => super::has_entry(&env, entry),
         Err(e) if gone(&e) => false,
@@ -470,27 +559,46 @@ fn about(pid: u32, entry: &str) -> Result<Option<(u32, bool)>, String> {
 /// The parent pid in a `/proc/<pid>/stat` line: `pid (comm) state ppid …`, where `comm` may hold
 /// spaces and parentheses.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(super) fn parent_in_stat(stat: &str) -> Option<u32> {
-    let (_, rest) = stat.rsplit_once(')')?;
+pub(super) fn parent_in_stat(stat: &[u8]) -> Option<u32> {
+    let close = stat.iter().rposition(|b| *b == b')')?;
+    let rest = std::str::from_utf8(stat.get(close.checked_add(1)?..)?).ok()?;
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// This user's processes whose environment holds exactly `entry`.
 #[cfg(all(test, target_os = "linux"))]
 pub(super) fn marked(entry: &str) -> Vec<u32> {
-    proc_scan(entry).map(|(_, m)| m.into_iter().collect()).unwrap_or_default()
+    proc_scan(entry).map(|s| s.marked.into_iter().collect()).unwrap_or_default()
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
     fn the_parent_is_read_past_any_parenthesis_in_the_command_name() {
-        assert_eq!(parent_in_stat("42 (sleep) S 7 42 42 0 -1"), Some(7));
-        assert_eq!(parent_in_stat("42 (a) b) (c) R 9 1"), Some(9));
-        assert_eq!(parent_in_stat("42 (sh) Z"), None);
-        assert_eq!(parent_in_stat("garbage"), None);
+        assert_eq!(parent_in_stat(b"42 (sleep) S 7 42 42 0 -1"), Some(7));
+        assert_eq!(parent_in_stat(b"42 (a) b) (c) R 9 1"), Some(9));
+        assert_eq!(parent_in_stat(b"42 (\xff\xfe x) S 8 1"), Some(8), "a command name that isn't UTF-8");
+        assert_eq!(parent_in_stat(b"42 (sh) Z"), None);
+        assert_eq!(parent_in_stat(b"garbage"), None);
+    }
+
+    /// The `SigIgn` mask read for `SIGCHLD`, from a real process that ignores it (an ignored
+    /// signal stays ignored across exec) and one that doesn't.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_that_ignores_sigchld_is_told_from_one_that_does_not() {
+        let status = |trap: &str| {
+            // bash: dash keeps SIGCHLD for itself and doesn't ignore it for `trap ''`
+            let out = std::process::Command::new("bash").args(["-c", &format!("{trap} exec cat /proc/self/status")]).output().unwrap();
+            ignores_sigchld(&String::from_utf8_lossy(&out.stdout))
+        };
+        assert_eq!(status("trap '' CHLD;"), Some(true));
+        assert_eq!(status(""), Some(false));
+        assert_eq!(ignores_sigchld("Name: x\nSigIgn:\t0000000000010000\n"), Some(true), "SIGCHLD is 17 on Linux");
+        assert_eq!(ignores_sigchld("SigIgn: zz"), None);
+        assert_eq!(ignores_sigchld(""), None);
     }
 
     #[cfg(target_os = "linux")]
@@ -505,18 +613,26 @@ mod tests {
 
     /// The state letter of a process, or `None` once it is gone.
     #[cfg(target_os = "linux")]
-    fn state(pid: u32) -> Option<char> {
+    pub(in crate::deadline) fn state(pid: u32) -> Option<char> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         stat.rsplit_once(')')?.1.split_whitespace().next()?.chars().next()
     }
 
     /// Kills (through a pidfd) and reaps what a test started when it drops, also when it fails.
     #[cfg(target_os = "linux")]
-    #[derive(Default)]
     struct Cleanup {
         children: Vec<Child>,
         others: Vec<Held>,
         dir: Option<std::path::PathBuf>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Cleanup {
+        /// Before the test starts anything: these tests need pidfds (Linux 5.3).
+        fn new() -> Self {
+            assert!(open_pidfd(std::process::id()).is_ok(), "this kernel has pidfds (Linux 5.3)");
+            Self { children: Vec::new(), others: Vec::new(), dir: None }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -558,8 +674,9 @@ mod tests {
             std::thread::sleep(TICK);
         };
         let held = Real.hold_root(pid);
-        assert!(held.fd.is_some(), "this kernel has pidfds (Linux 5.3)");
+        let fd = held.fd.is_some();
         cleanup.others.push(held);
+        assert!(fd, "the grandchild is held by a pidfd");
         (root, marker, pid)
     }
 
@@ -595,10 +712,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_process_whose_kill_fails_is_not_left_stopped() {
-        let mut cleanup = Cleanup::default();
+        let mut cleanup = Cleanup::new();
         let (root, marker, grandchild) = marked_sh("sleep 300 & echo $! > PIDFILE; wait", "thaw", &mut cleanup);
         let mut os = KillFails { root, refused: Vec::new() };
-        let note = kill_all(Some(root), &marker, &mut os);
+        let note = kill_all(Some(root), true, &marker, &mut os);
         let s = state(grandchild);
         assert!(s.is_some_and(|s| s != 'T'), "the grandchild was continued, not left stopped: state {s:?}");
         assert_eq!(os.refused.iter().filter(|p| **p == grandchild).count(), 2, "tried twice: {:?}", os.refused);
@@ -620,9 +737,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     impl Os for PidReused {
         fn scan(&mut self, entry: &str) -> Result<Scan, String> {
-            let (table, mut marked) = proc_scan(entry)?;
-            marked.extend(self.decoy.take());
-            Ok((table, marked))
+            let mut scan = proc_scan(entry)?;
+            scan.marked.extend(self.decoy.take());
+            Ok(scan)
         }
     }
 
@@ -632,10 +749,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_pid_that_passed_to_another_process_is_not_signalled() {
-        let mut cleanup = Cleanup::default();
+        let mut cleanup = Cleanup::new();
         let decoy = decoy(&mut cleanup);
         let (root, marker, grandchild) = marked_sh("sleep 300 & echo $! > PIDFILE; wait", "reused", &mut cleanup);
-        let note = kill_all(Some(root), &marker, &mut PidReused { decoy: Some(decoy) });
+        let note = kill_all(Some(root), true, &marker, &mut PidReused { decoy: Some(decoy) });
         let s = state(decoy);
         assert!(s.is_some_and(|s| s != 'T' && s != 'Z'), "the decoy runs on: state {s:?}");
         assert!(state(grandchild).is_none_or(|s| s == 'Z'), "the run's own processes were killed");
@@ -643,22 +760,31 @@ mod tests {
     }
 
     /// The real OS, except that the first scan also reports `decoy` as a child of `parent`, as if
-    /// `parent` (held, then exited) had been reaped and its pid passed to the decoy's parent.
+    /// `parent` (held, then exited) had been reaped and its pid passed to the decoy's parent; and,
+    /// with `poll_fails`, no pidfd can be asked whether its process has exited.
     #[cfg(target_os = "linux")]
     struct ParentReused {
         decoy: u32,
         parent: u32,
         once: bool,
+        poll_fails: bool,
     }
 
     #[cfg(target_os = "linux")]
     impl Os for ParentReused {
         fn scan(&mut self, entry: &str) -> Result<Scan, String> {
-            let (mut table, marked) = proc_scan(entry)?;
+            let mut scan = proc_scan(entry)?;
             if std::mem::take(&mut self.once) {
-                table.push((self.decoy, self.parent));
+                scan.table.push((self.decoy, self.parent));
             }
-            Ok((table, marked))
+            Ok(scan)
+        }
+
+        fn exited(&mut self, held: &Held) -> Result<Option<bool>, String> {
+            if self.poll_fails && held.fd.is_some() {
+                return Err("poll refused by the test".to_owned());
+            }
+            exited(held)
         }
 
         fn hold(&mut self, pid: u32, entry: &str) -> Hold {
@@ -675,7 +801,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn the_children_of_a_parent_that_exited_are_not_trusted() {
-        let mut cleanup = Cleanup::default();
+        let mut cleanup = Cleanup::new();
         let decoy = decoy(&mut cleanup);
         // a direct child that has exited but isn't reaped: a zombie, held by its pidfd
         let mut c = std::process::Command::new("true");
@@ -687,10 +813,48 @@ mod tests {
             assert!(Instant::now() < until, "`true` didn't exit");
             std::thread::sleep(TICK);
         }
-        let note = kill_all(Some(root), &marker, &mut ParentReused { decoy, parent: root, once: true });
+        let note = kill_all(Some(root), true, &marker, &mut ParentReused { decoy, parent: root, once: true, poll_fails: false });
         let s = state(decoy);
         assert!(s.is_some_and(|s| s != 'T' && s != 'Z'), "the decoy runs on: state {s:?}");
         assert!(note.starts_with("killed it; it had started no other process"), "{note}");
+    }
+
+    /// A parent whose pidfd can't be asked whether it has exited vouches for no child: the poll
+    /// failing proves nothing (its own marked processes are still found by the marker).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_parent_that_cannot_be_asked_vouches_for_no_child() {
+        let mut cleanup = Cleanup::new();
+        let decoy = decoy(&mut cleanup);
+        let (root, marker, grandchild) = marked_sh("sleep 300 & echo $! > PIDFILE; wait", "poll", &mut cleanup);
+        // the root's pidfd is the one asked: held through the marker path, it has one
+        let mut os = ParentReused { decoy, parent: root, once: true, poll_fails: true };
+        let note = kill_all(Some(root), true, &marker, &mut os);
+        let s = state(decoy);
+        assert!(s.is_some_and(|s| s != 'T' && s != 'Z'), "the decoy runs on: state {s:?}");
+        let until = Instant::now() + Duration::from_secs(5);
+        while state(grandchild).is_some_and(|s| s != 'Z') && Instant::now() < until {
+            std::thread::sleep(TICK);
+        }
+        assert!(state(grandchild).is_none_or(|s| s == 'Z'), "the marked grandchild was killed: {note}");
+    }
+
+    /// When xtask ignores SIGCHLD the kernel may have reaped the direct child, so its pid is
+    /// trusted only with the run's marker: a pid that names an unmarked process is left alone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_that_may_have_been_reaped_is_trusted_only_with_the_marker() {
+        let mut cleanup = Cleanup::new();
+        let decoy = decoy(&mut cleanup);
+        let note = kill_all(Some(decoy), false, &Marker::new(), &mut Real);
+        let s = state(decoy);
+        assert!(s.is_some_and(|s| s != 'T' && s != 'Z'), "an unmarked process under the child's pid runs on: state {s:?}");
+        assert!(note.contains("xtask ignores SIGCHLD"), "{note}");
+        // and a marked child is still killed
+        let (root, marker, grandchild) = marked_sh("sleep 300 & echo $! > PIDFILE; wait", "sigign", &mut cleanup);
+        let note = kill_all(Some(root), false, &marker, &mut Real);
+        assert!(note.starts_with("killed it and the 1 process(es) it started"), "{note}");
+        assert!(state(grandchild).is_none_or(|s| s == 'Z'));
     }
 
     /// A pidfd refers to its process alone: once that process has exited and been reaped, a
@@ -698,15 +862,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_held_process_that_was_reaped_gets_no_signal() {
-        let mut cleanup = Cleanup::default();
+        let mut cleanup = Cleanup::new();
         let pid = decoy(&mut cleanup);
         let held = Real.hold_root(pid);
-        assert!(held.fd.is_some(), "this kernel has pidfds (Linux 5.3)");
-        assert_eq!(exited(&held), Some(false));
-        let mut c = cleanup.children.pop().unwrap();
-        c.kill().unwrap();
-        c.wait().unwrap();
-        assert_eq!(exited(&held), Some(true));
+        assert!(held.fd.is_some(), "held by a pidfd");
+        assert_eq!(exited(&held), Ok(Some(false)));
+        if let Some(c) = cleanup.children.last_mut() {
+            c.kill().unwrap();
+            c.wait().unwrap();
+        }
+        assert_eq!(exited(&held), Ok(Some(true)));
         assert_eq!(send(&held, Sig::Stop), Err(Unsent::Gone));
     }
 }
