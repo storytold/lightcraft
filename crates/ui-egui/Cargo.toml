@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
+craft-window = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-color = { workspace = true }
@@ -30,6 +31,11 @@ log = { workspace = true }
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+# The model-setup tests install and resume a real denoise model. Without this the engine's
+# `default_loader` is the "this build cannot run denoise models" stub when the package is tested
+# on its own (`cargo test -p lightcraft-ui-egui`); a workspace test only passed by feature
+# unification with the desktop app's default `denoise` feature.
+lightcraft-engine = { workspace = true, features = ["denoise"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 lightcraft-denoise = { workspace = true, features = ["runtime"] }
 lightcraft-codecs = { workspace = true }
@@ -39,3 +45,6 @@ lightcraft-merge = { workspace = true }
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }

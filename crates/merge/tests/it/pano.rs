@@ -246,6 +246,18 @@ fn unrelated_photos_do_not_stitch() {
     assert!(stitch(frames, &PanoOptions::default(), &no_progress).is_err());
 }
 
+/// Pair matching compares every pair of frames before anything is known about them: an unbounded
+/// photo count is quadratic CPU and memory (issue #1519). More than `MAX_FRAMES` is refused at once,
+/// before any frame is worked on.
+#[test]
+fn a_stitch_of_more_than_the_frame_cap_is_refused_up_front() {
+    let frames: Vec<Frame> = (0..lightcraft_merge::pano::MAX_FRAMES + 1)
+        .map(|i| Frame::from_linear_rec2020(Rgb32f::from_fn(8, 8, |_, _| [(i % 255) as f32 / 255.0, 0.0, 0.0]), None))
+        .collect();
+    let err = stitch(frames, &PanoOptions::default(), &no_progress).unwrap_err();
+    assert!(err.to_string().contains("refused"), "the frame cap errors, it does not begin the quadratic match: {err}");
+}
+
 /// Issue #1455: a panorama came out at 40 MP whatever its photos' resolution. It now keeps their
 /// own resolution unless a size is asked for (up to Lightroom's 512 MP); a size scales it down,
 /// and a NaN one (from an agent) is no size at all, not a 0.1 MP thumbnail.
