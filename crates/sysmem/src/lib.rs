@@ -135,7 +135,7 @@ mod tests {
     /// set (a nested job reports only its own). The limits are far above any machine's RAM, so they
     /// constrain nothing; the child keeps this process out of any job it makes.
     #[test]
-    #[cfg(windows)]
+    #[cfg(all(windows, target_pointer_width = "64"))] // the limits don't fit a 32-bit `usize`
     #[allow(unsafe_code)]
     fn a_job_with_known_limits_is_read_back_exactly() {
         use windows_sys::Win32::System::JobObjects::{
