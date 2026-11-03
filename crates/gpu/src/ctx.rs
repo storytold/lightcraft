@@ -1257,7 +1257,8 @@ mod tests {
             .spawn()
             .unwrap();
         // a driver that stalls must fail the test, not hang CI
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(120));
+        let deadline = std::time::Instant::now() + limit;
         let status = loop {
             if let Some(status) = proc.try_wait().unwrap() {
                 break status;
@@ -1265,7 +1266,7 @@ mod tests {
             if std::time::Instant::now() > deadline {
                 let _ = proc.kill();
                 let _ = proc.wait();
-                panic!("{child}: still running after 120 s");
+                panic!("{child}: still running after {limit:?}");
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
