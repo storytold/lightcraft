@@ -748,7 +748,8 @@ fn jpeg_develop_packet(extra: &str) -> String {
 
 /// #2993: a JPEG carrying its develop settings in embedded XMP, with no sidecar, imports with
 /// them, as Read Metadata from File reads them; settings marked as already applied to the pixels
-/// (an exported file) are not applied again, and a sidecar still wins over the embedded packet.
+/// (an exported file) are not applied again, and a sidecar still wins over the embedded packet, even
+/// one that can't be read.
 #[test]
 fn embedded_jpeg_develop_settings_apply_on_import() {
     let src = temp_dir("jpeg-xmp-import-develop");
@@ -757,9 +758,11 @@ fn embedded_jpeg_develop_settings_apply_on_import() {
     // Distinct bytes, so the import doesn't skip it as a copy of `edited.jpg`.
     write_jpeg_xmp(&src.join("both.jpg"), &jpeg_develop_packet(r#"xmp:Label="Red""#));
     std::fs::write(src.join("both.xmp"), jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-20""#)).unwrap();
+    write_jpeg_xmp(&src.join("unreadable.jpg"), &jpeg_develop_packet(r#"xmp:Label="Blue""#));
+    std::fs::write(src.join("unreadable.xmp"), [0xff, 0xfe, 0xfd]).unwrap();
     let mut s = Session::new().with_fs();
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
-    assert_eq!(r["imported"].as_array().unwrap().len(), 3, "{r}");
+    assert_eq!(r["imported"].as_array().unwrap().len(), 4, "{r}");
     let by_name = |name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
 
     let edited = by_name("edited.jpg");
@@ -772,6 +775,12 @@ fn embedded_jpeg_develop_settings_apply_on_import() {
     assert_eq!(rendered.rating, 3, "its metadata still reads");
 
     assert_eq!(by_name("both.jpg").develop.light.contrast, -20.0, "the sidecar wins over the embedded packet");
+    let unreadable = by_name("unreadable.jpg");
+    assert_eq!(
+        (unreadable.develop.light.contrast, unreadable.rating),
+        (0.0, 0),
+        "a sidecar that can't be read still wins: nothing embedded applies, as on a manual reread"
+    );
     let _ = std::fs::remove_dir_all(&src);
 }
 

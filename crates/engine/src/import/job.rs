@@ -341,11 +341,14 @@ impl ImportJob {
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or the XMP embedded in a raw or a JPEG, as the probe found it), read
             // before copying: its capture time files and names the copy when the file itself has none
-            // (a duplicate needs only that time)
+            // (a duplicate needs only that time). A sidecar found keeps precedence even when it can't
+            // be read, as on a manual reread (`sidecar::read_packet`): the embedded values don't apply.
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
+            } else if let Some(f) = found_sidecar {
+                std::fs::read_to_string(&f).inspect_err(|e| log::warn!("import {path}: sidecar {}: {e}", f.display())).ok()
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone())
+                info.xmp.clone()
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
