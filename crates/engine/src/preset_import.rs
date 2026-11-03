@@ -91,9 +91,15 @@ pub(crate) fn read_zip_spending(bytes: &[u8], max_entry: usize, max_total: usize
         let content = match method {
             0 if data.len() > limit => return Err(too_big()),
             0 => data.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(data, usize_.max(1).saturating_mul(2).saturating_add(1024).min(limit)).map_err(
-                |e| if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) { too_big() } else { format!("{name}: {:?}", e.status) },
-            )?,
+            8 => match miniz_oxide::inflate::decompress_to_vec_with_limit(data, usize_.max(1).saturating_mul(2).saturating_add(1024).min(limit)) {
+                Ok(v) => v,
+                Err(e) if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) => return Err(too_big()),
+                Err(e) => {
+                    // what a corrupt stream unpacked before failing was still unpacked: charge it
+                    *total = total.saturating_add(e.output.len());
+                    return Err(format!("{name}: {:?}", e.status));
+                }
+            },
             m => return Err(format!("{name}: unsupported compression method {m}")),
         };
         *total = total.saturating_add(content.len());
@@ -815,6 +821,22 @@ text]], z = ZSTR "loc" }"#,
         let first = crate::preset_luminar::read_mplumpack_within("one.mplumpack", &pack, &mut budget).unwrap_err();
         assert!(first.contains("too much"), "{first}");
         assert_eq!(budget, 0);
+    }
+
+    #[test]
+    fn a_corrupt_deflate_entry_spends_what_it_unpacked() {
+        // 2 MB declared, the stream cut in half: it unpacks a part, then fails; the budget keeps the part
+        let pad = vec![b' '; 2 << 20];
+        let deflated = miniz_oxide::deflate::compress_to_vec(&pad, 6);
+        let mut pack = zip(&[("a.txt", &deflated[..deflated.len() / 2])], false);
+        let central = 30 + "a.txt".len() + deflated.len() / 2;
+        pack[8] = 8; // local header: method deflate
+        pack[central + 10] = 8; // central header: method deflate
+        pack[central + 24..central + 28].copy_from_slice(&(pad.len() as u32).to_le_bytes());
+        let mut budget = 3 << 20;
+        let err = crate::preset_luminar::read_mplumpack_within("one.mplumpack", &pack, &mut budget).unwrap_err();
+        assert!(!err.contains("too much"), "{err}");
+        assert!(budget < 3 << 20, "{budget}");
     }
 
     #[test]
