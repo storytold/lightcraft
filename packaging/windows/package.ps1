@@ -158,6 +158,8 @@ $Portable = Join-Path $TargetDir "windows-package\lightcraft-$Version-windows-$A
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+# The ZIP is portable by default; keep the marker out of the MSI staging directory.
+Set-Content -LiteralPath (Join-Path $Portable 'portable.txt') -Encoding Ascii -Value 'LightCraft portable mode: settings and logs are stored in LightCraftData beside the executable.'
 Copy-Item (Join-Path $Stage 'FONT-LICENCES.txt') $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
   $p = Join-Path $Root $f
