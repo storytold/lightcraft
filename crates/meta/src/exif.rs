@@ -74,6 +74,7 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     if m.lens_spec.is_none() {
         m.lens_spec = nikon_lens_spec(exif, m.make.as_deref(), tiff.order);
     }
+    m.film_simulation = crate::film_simulation::read(exif, m.make.as_deref());
     m.orientation = ifd0.and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif);
     m.rating = ifd0.and_then(|i| i.i64(t::RATING)).map(|r| r.clamp(-1, 5) as i8);
 

@@ -17,6 +17,7 @@ mod container;
 pub mod cr3;
 mod datetime;
 mod exif;
+mod film_simulation;
 pub mod focus;
 mod focus_read;
 mod gpx;
@@ -153,6 +154,9 @@ pub struct Metadata {
     /// Where the camera focused, from its maker notes ([`focus`]; Sony only for now), on the upright photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<FocusPoint>,
+    /// The film simulation a Fujifilm camera recorded in its maker note (e.g. "Classic Chrome", "Acros + R Filter").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub film_simulation: Option<String>,
 }
 
 macro_rules! fill {
@@ -190,7 +194,8 @@ impl Metadata {
             orientation,
             gps,
             width,
-            height
+            height,
+            film_simulation
         );
         self.fill_missing_descriptive(other);
     }
