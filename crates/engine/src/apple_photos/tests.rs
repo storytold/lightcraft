@@ -293,11 +293,7 @@ fn a_panicking_runner_frees_the_slot() {
     assert!(imports.running().is_none());
     // on a worker
     let job = import_job(&panicky, &imports, paths.clone(), "", true, None).unwrap();
-    let t0 = std::time::Instant::now();
-    while !job.finished() {
-        assert!(t0.elapsed() < Duration::from_secs(20));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    lightcraft_testkit::wait_until(Duration::from_secs(20), "the worker's import ends", || job.finished());
     assert!(stopped(&job), "{}", job.json());
     // an export's reservation, waiting and not
     let out = imports.reserve(panicky.clone(), "").unwrap().run(&[json!({"path": paths[0]})], false);
@@ -305,10 +301,7 @@ fn a_panicking_runner_frees_the_slot() {
     assert!(imports.running().is_none());
     let started = imports.reserve(panicky, "").unwrap().start(&[json!({"path": paths[0]})]);
     let job = imports.get(started["job"].as_u64().unwrap()).unwrap();
-    while !job.finished() {
-        assert!(t0.elapsed() < Duration::from_secs(20));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    lightcraft_testkit::wait_until(Duration::from_secs(20), "the reservation's import ends", || job.finished());
     assert!(stopped(&job));
     // the slot is free: the next import runs
     assert_eq!(import_job(&good, &imports, paths, "", false, None).unwrap().json()["imported"], 1);
@@ -478,17 +471,13 @@ fn imports_of_their_own_show_in_the_activity_stack() {
     let (a, rows) = (activity.clone(), seen.clone());
     let runner: Runner = Arc::new(move |args: &[String], _| {
         rows.lock().unwrap().push(a.list());
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        let _ = wait.lock().unwrap().recv_timeout(hold());
         let n = args.len() - args.iter().position(|x| x == MARKER).unwrap() - 2;
         Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     });
     let imports = Imports::default();
     let ended = |job: &ImportJob| {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while !(job.finished() && activity.list().is_empty()) {
-            assert!(std::time::Instant::now() < deadline, "the import ends and its row goes");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(20), "the import ends and its row goes", || job.finished() && activity.list().is_empty());
     };
     // waiting for Photos here
     go.send(()).unwrap();

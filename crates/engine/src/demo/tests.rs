@@ -27,13 +27,15 @@ fn concurrent_requests_wait_for_one_generation() {
     assert!(got.windows(2).all(|w| Arc::ptr_eq(&w[0], &w[1])), "every request got the same pixels");
 }
 
-/// Run `f` on a thread of its own and wait for it at most `secs`: a deadlock fails the test instead of hanging it.
+/// Run `f` on a thread of its own and wait for it at most `secs` (stretched by
+/// `LIGHTCRAFT_TIME_SCALE`): a deadlock fails the test instead of hanging it.
+#[track_caller]
 fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
     });
-    rx.recv_timeout(std::time::Duration::from_secs(secs)).expect("deadlocked")
+    lightcraft_testkit::recv_within(&rx, std::time::Duration::from_secs(secs), "the requests finish (not deadlocked)")
 }
 
 /// Wait (at most ten seconds, stretched by `LIGHTCRAFT_TIME_SCALE`) until `n` callers wait for `slot`'s generation.
