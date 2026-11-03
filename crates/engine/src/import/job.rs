@@ -486,7 +486,7 @@ impl Session {
         p.develop = std::sync::Arc::new(p.import_defaults());
         let edge = edge.clamp(64, 1024);
         let level = crate::media::SourceLevel::for_size(edge);
-        let source = self.media.origin_ref(&p.source, level.max_edge());
+        let source = self.media.origin_ref(&p.source, level.max_edge(), crate::media::LoadOptions::of(&p.develop));
         let key = candidate_thumb_key(c, edge);
         // A small original already supplies all its detail; do not enlarge it to the bucket.
         let native_edge = c.width.max(c.height) as usize;

@@ -532,7 +532,11 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| {
+            // (with the photo's Camera colour, as Build Smart Previews made it)
+            let source = s.media.origin_ref(&p.source, max_edge, crate::media::LoadOptions::of(&p.develop));
+            (p.id, crate::smart::sharded_file_path(&dir, p), Some(source), preview_fitted_look(p))
+        })
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())

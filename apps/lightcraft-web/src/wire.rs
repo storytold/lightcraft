@@ -15,7 +15,7 @@ use std::sync::{Arc, Weak};
 
 use lightcraft_engine::catalog::Source;
 use lightcraft_engine::develop::{DevelopSettings, EmbeddedLens};
-use lightcraft_engine::media::{DecodedSource, MediaCache, RenderJob, SourceLevel, SourceRef};
+use lightcraft_engine::media::{DecodedSource, LoadOptions, MediaCache, RenderJob, SourceLevel, SourceRef};
 use lightcraft_engine::pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Lru, PreviewCache};
 use serde::{Deserialize, Serialize};
@@ -126,10 +126,12 @@ impl WireJob {
         }
     }
 
-    /// Identifies the decoded source this job needs.
+    /// Identifies the decoded source this job needs (a file's includes the Camera colour it is decoded with).
     fn source_key(&self) -> String {
         match &self.origin {
-            Source::File { path } => format!("{}:{:?}:{}:{path}", self.cache_generation, self.source_identity, self.max_edge),
+            Source::File { path } => {
+                format!("{}:{:?}:{}:{path}:{:?}", self.cache_generation, self.source_identity, self.max_edge, LoadOptions::of(&self.settings).colour)
+            }
             Source::Demo { scene } => format!("{}:{:?}:{}:demo:{scene}", self.cache_generation, self.source_identity, self.max_edge),
         }
     }
@@ -181,11 +183,13 @@ impl WorkerCore {
             None => {
                 let src = match (&job.origin, original) {
                     (Source::File { .. }, Some(bytes)) => {
-                        let (image, info) = lightcraft_engine::files::load_bytes(bytes, job.max_edge)?;
-                        DecodedSource::new(Arc::new(image), Some(info))
+                        // (decoded for the settings it renders with, as the desktop's `SourceRef::File`)
+                        let options = LoadOptions::of(&job.settings);
+                        let (image, info) = lightcraft_engine::files::load_bytes_with(bytes, job.max_edge, options)?;
+                        DecodedSource { options, ..DecodedSource::new(Arc::new(image), Some(info)) }
                     }
                     (Source::File { path }, None) => return Err(format!("{path}: original not found in browser storage")),
-                    (origin @ Source::Demo { .. }, _) => self.media.origin_ref(origin, job.max_edge).load_source()?,
+                    (origin @ Source::Demo { .. }, _) => self.media.origin_ref(origin, job.max_edge, LoadOptions::default()).load_source()?,
                 };
                 let cost = src.image.width * src.image.height * 12 + 64;
                 self.sources.insert(key, src.clone(), cost);
@@ -435,6 +439,34 @@ mod tests {
         v.as_object_mut().unwrap().remove("window");
         let old: WireJob = serde_json::from_value(v).unwrap();
         assert_eq!(old.request().window, None);
+    }
+
+    // A file is decoded with the Camera colour of the settings the job renders with, and a source decoded with one is
+    // not reused for a job with the other (as the desktop's `SourceRef::File`)
+    #[test]
+    fn a_file_source_is_decoded_for_the_jobs_camera_colour() {
+        use lightcraft_engine::develop::CameraColour;
+        // a 1 × 1 PNG
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01,
+            0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        let mut s = Session::with_demo();
+        let id = s.visible_cloned()[0];
+        let mut auto = WireJob::from_job(&s.thumb_job(id, 64).unwrap(), false, "Thumb");
+        auto.origin = Source::File { path: "web/hash/photo.png".into() };
+        let mut calibrated = auto.clone();
+        let mut d = (*auto.settings).clone();
+        d.profile.camera_colour = CameraColour::Colorimetric;
+        calibrated.settings = Arc::new(d);
+        assert_ne!(auto.source_key(), calibrated.source_key());
+
+        let mut core = WorkerCore::default();
+        core.render(&calibrated, Some(PNG)).unwrap();
+        assert_eq!(core.sources.get(&calibrated.source_key()).map(|s| s.options.colour), Some(CameraColour::Colorimetric));
+        assert!(core.needs_original(&auto).is_some(), "the Auto job decodes its own source");
+        assert!(core.needs_original(&calibrated).is_none());
     }
 
     #[test]

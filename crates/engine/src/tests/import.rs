@@ -2135,6 +2135,42 @@ fn smart_look_refresh_for(format: &str) {
     let _ = std::fs::remove_dir_all(&case.lib);
 }
 
+/// The opening refresh rebuilds a stale proxy with the photo's Camera colour, as Build Smart Previews made it: a
+/// photo set to Calibrated camera colour does not get an Auto proxy back.
+#[test]
+fn smart_preview_refresh_decodes_with_the_photos_camera_colour() {
+    use lightcraft_develop::CameraColour;
+    let mut case = SmartLookCase::in_dirs("ARW", "ARW-colour");
+    let mut d = (*case.session.catalog.photo(case.id).unwrap().develop).clone();
+    d.profile.camera_colour = CameraColour::Colorimetric;
+    case.session
+        .catalog
+        .apply(lightcraft_catalog::Op::SetDevelop { id: case.id, settings: std::sync::Arc::new(d), label: "edit".into(), edited: None })
+        .unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (log, plain) = (seen.clone(), look_loader(case.plain_loader.clone(), case.new, case.calls.clone()));
+    case.session.media.file_loader = Some(std::sync::Arc::new(move |path: &str, max_edge, options: crate::media::LoadOptions| {
+        // (the raw's decodes: the PNG beside it keeps Auto)
+        if path.ends_with("a.png") {
+            log.lock().unwrap().push(options.colour);
+        }
+        plain(path, max_edge, options)
+    }));
+    case.session.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!(*seen.lock().unwrap(), [CameraColour::Colorimetric], "Build Smart Previews decodes with the photo's option");
+
+    // a proxy from an older fit, in a folder not checked at this version: the opening refresh rebuilds it
+    edit_smart_header(&case.file, |h| h["look_version"] = json!(0));
+    std::fs::write(case.dir.join("look-version"), b"0\n").unwrap();
+    case.session.media.forget(case.id);
+    seen.lock().unwrap().clear();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(!crate::smart::is_stale(&case.file), "rebuilt");
+    assert_eq!(*seen.lock().unwrap(), [CameraColour::Colorimetric], "with the photo's option, not Auto");
+    let _ = std::fs::remove_dir_all(&case.src);
+    let _ = std::fs::remove_dir_all(&case.lib);
+}
+
 struct SmartLookCase {
     src: PathBuf,
     lib: PathBuf,
@@ -2151,8 +2187,13 @@ struct SmartLookCase {
 
 impl SmartLookCase {
     fn new(format: &str) -> Self {
-        let src = temp_dir(&format!("smartlook-src-{format}"));
-        let lib = temp_dir(&format!("smartlook-lib-{format}"));
+        Self::in_dirs(format, format)
+    }
+
+    /// [`Self::new`] in folders of its own (`tag`), for a test running beside another of the same format.
+    fn in_dirs(format: &str, tag: &str) -> Self {
+        let src = temp_dir(&format!("smartlook-src-{tag}"));
+        let lib = temp_dir(&format!("smartlook-lib-{tag}"));
         write_png(&src.join("a.png"), 3);
         write_png(&src.join("b.png"), 9);
         let mut session = Session::new().with_fs();

@@ -304,9 +304,6 @@ impl MediaCache {
 
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
         let mut r = self.source_ref_plain(p, level, cached, wanted);
-        if let SourceRef::File { options, .. } = &mut r {
-            *options = wanted;
-        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
@@ -349,18 +346,19 @@ impl MediaCache {
             if self.availability.is_offline(path) && self.availability.exists(&sp.to_string_lossy()) == Some(true) {
                 return SourceRef::Smart { path: sp };
             }
-            let mut r = self.origin_ref(&p.source, max_edge);
+            let mut r = self.origin_ref(&p.source, max_edge, wanted);
             if let SourceRef::File { fallback, .. } = &mut r {
                 *fallback = Some(sp);
             }
             return r;
         }
-        self.origin_ref(&p.source, max_edge)
+        self.origin_ref(&p.source, max_edge, wanted)
     }
 
-    /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a
-    /// render worker in another wasm instance builds its sources from this).
-    pub fn origin_ref(&mut self, origin: &Source, max_edge: usize) -> SourceRef {
+    /// How to load `origin` at most `max_edge` pixels long with `options` (the settings it renders with:
+    /// [`LoadOptions::of`]), ignoring decoded sources in memory (a render worker in another wasm instance
+    /// builds its sources from this).
+    pub fn origin_ref(&mut self, origin: &Source, max_edge: usize, options: LoadOptions) -> SourceRef {
         match origin {
             Source::Demo { scene } => {
                 if self.scenes.is_empty() {
@@ -386,7 +384,7 @@ impl MediaCache {
                 fallback: None,
                 denoise: None,
                 reduced: None,
-                options: LoadOptions::default(),
+                options,
             },
         }
     }

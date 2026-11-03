@@ -126,9 +126,15 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
     assert_eq!(seen.lock().unwrap()[1].colour, CameraColour::Colorimetric, "with the option");
     render(&mut s);
     assert_eq!(seen.lock().unwrap().len(), 2, "and the new source is reused");
-    // the late job re-decodes with the old option (its source was the cached one: decode it from the file)
+    // the late job re-decodes with the option it captured, the old one (its source was the cached one: decode it from
+    // the file)
+    let captured = match &late.source {
+        SourceRef::Loaded(d) => d.options,
+        _ => panic!("the late job took the cached source"),
+    };
+    assert_eq!(captured.colour, CameraColour::Auto, "the late job captured the old option");
     let mut late = late;
-    late.source = s.media.origin_ref(&Source::File { path: "hash-fixture.jpg".into() }, 64);
+    late.source = s.media.origin_ref(&Source::File { path: "hash-fixture.jpg".into() }, 64, captured);
     let late = late.run();
     assert_eq!(late.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
     s.accept(&late);
@@ -145,6 +151,11 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
     let n = seen.lock().unwrap().len();
     render(&mut s);
     assert_eq!(seen.lock().unwrap().len(), n, "the photo's Colorimetric source is still the cached one");
+    // …and so are the loupe's preview while hovering that preset, and Before (the import settings: Auto)
+    let hover = s.preview_job(PhotoId(1), 64, 64, true, &auto).unwrap().run();
+    assert_eq!(hover.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto), "the hovered preset's option");
+    let before = s.render_job(PhotoId(1), 64, 64, true, true).unwrap().run();
+    assert_eq!(before.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto), "the Before settings' option");
 
     // a camera without measured colour: the option changes nothing, so the source is kept
     let mut s = session();
