@@ -1817,6 +1817,21 @@ fn return_confirms_the_one_field_dialogs() {
     assert_eq!(album(&h, "Botanical"), Some(garden), "the text prompt");
 }
 
+/// Issue #3653: in these tests the harness's own limits stretch with `LIGHTCRAFT_TIME_SCALE` and
+/// never shrink, so the ~2,500 `settle` / `step_until` / `request` calls get more time on a slow
+/// machine without each test scaling its constants.
+#[test]
+fn the_harness_limits_stretch_with_the_time_scale_and_never_shrink() {
+    for d in [Duration::from_millis(30), SETTLE] {
+        assert_eq!(super::limit(d), lightcraft_testkit::scaled(d).max(d), "{d:?}");
+    }
+    let mut h = demo([400.0, 300.0]);
+    let given = Duration::from_millis(30);
+    let t0 = Instant::now();
+    assert!(!h.step_until(given, |_| false));
+    assert!(t0.elapsed() >= super::limit(given), "gave up after {:?} (limit {:?})", t0.elapsed(), super::limit(given));
+}
+
 /// The sidebar's file-system checks run on worker threads and add rows when they land, which
 /// moves every row below them: `busy()` counts them, so `settle` waits for them before a test
 /// reads widget positions (a click aimed at a stale rect hits the neighbouring row).

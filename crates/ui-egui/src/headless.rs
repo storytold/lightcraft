@@ -414,8 +414,10 @@ impl Headless {
     }
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
-    /// a row, or `timeout` passes. Returns whether it settled.
+    /// a row, or `timeout` passes (in ui-egui's tests, stretched: [`limit`]). Returns whether it
+    /// settled.
     pub fn settle(&mut self, timeout: Duration) -> bool {
+        let timeout = limit(timeout);
         let t0 = Instant::now();
         let mut quiet = 0;
         loop {
@@ -437,8 +439,10 @@ impl Headless {
     }
 
     /// Run frames until `done` holds or `timeout` passes (a render that finishes on a busy machine
-    /// after a quiet spell, where [`Self::settle`] alone would stop too early). Returns `done`.
+    /// after a quiet spell, where [`Self::settle`] alone would stop too early). In ui-egui's tests
+    /// `timeout` is stretched ([`limit`]). Returns `done`.
     pub fn step_until(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
+        let timeout = limit(timeout);
         let t0 = Instant::now();
         while !done(self) {
             if t0.elapsed() > timeout {
@@ -482,8 +486,10 @@ impl Headless {
     }
 
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
-    /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
+    /// answered, then until its input has been consumed, each for at most `timeout` (in ui-egui's
+    /// tests, stretched: [`limit`]). Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
+        let timeout = limit(timeout);
         let rx = match self.send(method, params) {
             Ok(rx) => rx,
             Err(e) => return e,
@@ -509,6 +515,23 @@ impl Headless {
         self.step();
         reply
     }
+}
+
+/// How long [`Headless::settle`], [`Headless::step_until`] and [`Headless::request`] wait when
+/// they are given `timeout`.
+///
+/// In ui-egui's own tests (`cfg(test)`) it is stretched by `LIGHTCRAFT_TIME_SCALE`
+/// ([`lightcraft_testkit::scaled`]) and never shrunk below `timeout`, so a slow or shared machine
+/// can give every harness wait more time at once. Never shrunk, because these limits are also how
+/// long a test lets the app run: many tests ignore what `settle` returns and go on to check what
+/// the frames did, so a shorter limit would only move the failure to a later, misleading assert.
+///
+/// Everywhere else (`lightcraft-cli snapshot`, ui-egui's integration tests under `tests/`, other
+/// crates) it is exactly `timeout`: the variable changes nothing outside these tests.
+fn limit(timeout: Duration) -> Duration {
+    #[cfg(test)]
+    let timeout = lightcraft_testkit::scaled(timeout).max(timeout);
+    timeout
 }
 
 /// For tests, a render offload: renders wait (stay queued) until `open` is set, then run; those
