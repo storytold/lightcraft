@@ -117,14 +117,14 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
     let held = Mutex::new(held);
     f.app.services.open_model_folder = Some(Arc::new(move |path| {
         started.send(path.to_string()).map_err(|e| e.to_string())?;
-        held.lock().unwrap().recv_timeout(T).map_err(|e| e.to_string())?
+        held.lock().unwrap().recv_timeout(lightcraft_testkit::scaled(T).max(T)).map_err(|e| e.to_string())?
     }));
     let app = std::mem::replace(&mut f.app, LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()));
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.step();
     let reply = h.app.run("app.openSamModelFolder", json!({})).unwrap();
     assert_eq!(reply, json!({"path": dir.to_str().unwrap(), "background": true}));
-    assert_eq!(entered.recv_timeout(T).unwrap(), dir.to_str().unwrap());
+    assert_eq!(lightcraft_testkit::recv_within(&entered, T, "the folder opener is called"), dir.to_str().unwrap());
     let frames = h.frames();
     h.step();
     assert_eq!(h.frames(), frames + 1, "the worker is still held while the UI advances");
@@ -146,7 +146,7 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
 
     let reply = h.app.run("app.openSamModelFolder", json!({})).unwrap();
     assert_eq!(reply, json!({"path": dir.to_str().unwrap(), "background": true}));
-    assert_eq!(entered.recv_timeout(T).unwrap(), dir.to_str().unwrap());
+    assert_eq!(lightcraft_testkit::recv_within(&entered, T, "the folder opener is called"), dir.to_str().unwrap());
     assert_eq!(h.app.tasks.labels(), vec!["Show in File Manager"]);
     let prior_error = h.app.ui.toast.clone();
     release.send(Ok(())).unwrap();

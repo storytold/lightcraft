@@ -750,7 +750,10 @@ fn one_hung_drive_doesnt_hold_the_other_libraries() {
         if p == h_path {
             let (lock, cv) = &*g;
             let open = lock.lock().unwrap();
-            let _unused = cv.wait_timeout_while(open, Duration::from_secs(10), |open| !*open).unwrap();
+            // (bounded, and stretched, never shrunk: it outlasts the test's own wait for the
+            // other library, `T`, so the hung one is still checking when the test looks)
+            let hold = T * 3;
+            let _unused = cv.wait_timeout_while(open, lightcraft_testkit::scaled(hold).max(hold), |open| !*open).unwrap();
         }
         None
     });
@@ -796,7 +799,7 @@ fn opening_a_library_clears_an_old_missing_answer() {
     app.recent_checks = crate::panels::library_problem::RecentChecks::with_check(|_| Some(crate::panels::library_problem::Unavailable::NotFound));
     let ctx = egui::Context::default();
     crate::panels::library_problem::logic(&mut app, &ctx);
-    assert!(crate::tasks::wait(&mut app, &ctx, T), "checked");
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(T)), "checked");
     assert_eq!(app.recent_checks.exists(&a), Some(false), "found missing (the drive was disconnected)");
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
     h.app.run("app.openLibrary", json!({"path": a})).unwrap();

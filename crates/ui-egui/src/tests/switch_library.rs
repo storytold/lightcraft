@@ -178,7 +178,7 @@ fn missing_recent_libraries_are_greyed_out_and_pruned_and_the_list_is_capped() {
     // the menu takes what a background check found (issue #1290 review): let it answer first
     let ctx = egui::Context::default();
     crate::panels::library_problem::logic(&mut app, &ctx);
-    assert!(crate::tasks::wait(&mut app, &ctx, std::time::Duration::from_secs(20)), "the check answered");
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(std::time::Duration::from_secs(20))), "the check answered");
     let disabled = recent_submenu(&app)
         .iter()
         .any(|n| matches!(n, crate::menubar::MenuNode::Item { params, enabled: false, .. } if params["path"] == gone.as_str()));

@@ -17,7 +17,8 @@ const T: Duration = Duration::from_secs(60);
 const PHOTOS: u64 = 40;
 
 /// Photos `IMG_0000` … on a share; the first ten are gone. The existence check waits for `open`
-/// (a share that answers slowly), at most `guard`, and counts its calls, and those made on the UI thread.
+/// (a share that answers slowly), at most [`held`]`(guard)`, and counts its calls, and those made on
+/// the UI thread.
 struct Share {
     open: Arc<AtomicBool>,
     on_ui: Arc<AtomicUsize>,
@@ -33,7 +34,7 @@ fn app_on_a_slow_share(guard: Duration) -> (Headless, Share) {
     }
     let share = Share { open: Arc::new(AtomicBool::new(false)), on_ui: Arc::new(AtomicUsize::new(0)), calls: Arc::new(AtomicUsize::new(0)) };
     let (ui, open, on_ui, calls) = (std::thread::current().id(), share.open.clone(), share.on_ui.clone(), share.calls.clone());
-    let deadline = Instant::now() + guard;
+    let deadline = Instant::now() + held(guard);
     app.session.media.availability.set_probe(Arc::new(move |f| {
         calls.fetch_add(1, Ordering::SeqCst);
         if std::thread::current().id() == ui {
@@ -48,6 +49,13 @@ fn app_on_a_slow_share(guard: Duration) -> (Headless, Share) {
     (Headless::new(app, [1200.0, 800.0], 1.0), share)
 }
 
+/// How long [`app_on_a_slow_share`]'s share holds its answers: `guard` stretched by
+/// `LIGHTCRAFT_TIME_SCALE`, never shrunk, so a slow test thread never sees the share answer before
+/// it opens it.
+fn held(guard: Duration) -> Duration {
+    lightcraft_testkit::scaled(guard).max(guard)
+}
+
 fn ask(h: &mut Headless) -> Receiver<Value> {
     h.send("engine.execute", json!({"command": "library.missing"})).unwrap()
 }
@@ -60,7 +68,7 @@ fn answer(h: &mut Headless, rx: &Receiver<Value>) -> Value {
         if let Ok(v) = rx.try_recv() {
             return v;
         }
-        assert!(t0.elapsed() < T, "never answered");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(T), "never answered");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -71,15 +79,19 @@ fn missing_rows(h: &Headless) -> Vec<lightcraft_engine::activity::TaskInfo> {
 
 #[test]
 fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let guard = Duration::from_secs(3);
+    let (mut h, share) = app_on_a_slow_share(guard);
     let t0 = Instant::now();
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
     }
-    // the share is still answering nothing: the window took its frames all the same
-    assert!(t0.elapsed() < Duration::from_secs(2), "the frames waited for the files: {:?}", t0.elapsed());
+    // the share is still answering nothing: the window took its frames all the same, well inside
+    // the share's hold (both stretch with LIGHTCRAFT_TIME_SCALE: 2 s of 3 s at a scale of 1)
+    let hold = held(guard);
+    assert!(t0.elapsed() < hold * 2 / 3, "the frames waited for the files: {:?} (hold {hold:?})", t0.elapsed());
     assert!(rx.try_recv().is_err(), "no answer before the files are checked");
+    assert_eq!(share.on_ui.load(Ordering::SeqCst), 0, "no file was looked at on the UI thread");
     let rows = missing_rows(&h);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].cancellable, "the row can stop the check");

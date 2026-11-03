@@ -166,7 +166,7 @@ fn offline_originals_never_block_a_frame() {
     frames_while_asleep(&mut h, &nas, 20, "Missing Photos");
     // the probe runs on the background worker: give it time to start on a loaded machine
     let asked = std::time::Instant::now();
-    while calls.n.load(Ordering::SeqCst) == 0 && asked.elapsed() < std::time::Duration::from_secs(5) {
+    while calls.n.load(Ordering::SeqCst) == 0 && asked.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(5)) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(calls.n.load(Ordering::SeqCst) > 0, "the probe was asked");
@@ -175,7 +175,7 @@ fn offline_originals_never_block_a_frame() {
     // the drive answers: the view fills in as the background checks find the files gone
     nas.wake();
     let t0 = Instant::now();
-    while h.app.session.visible().len() < N as usize && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.session.visible().len() < N as usize && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -232,7 +232,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     let batch = lightcraft_engine::import::batch_size();
     nas.let_through(batch);
     let t0 = Instant::now();
-    while h.app.import.as_ref().is_some_and(|t| t.imported < batch) && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.import.as_ref().is_some_and(|t| t.imported < batch) && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
         assert!(!nas.forced(), "an import frame waited for the sleeping drive");
         std::thread::sleep(Duration::from_millis(5));
@@ -245,7 +245,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert_eq!(r["ok"], true, "{r}");
     nas.wake();
     let t0 = Instant::now();
-    while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.import.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
         std::thread::sleep(Duration::from_millis(5));
     }

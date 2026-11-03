@@ -398,7 +398,7 @@ fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     s.catalog.apply(Op::AddPhoto { photo: Box::new((*photo()).clone()) }).unwrap();
     let mut r = Renderer::with_worker_threads(1);
     let ctx = egui::Context::default();
-    let budget = std::time::Duration::from_secs(10);
+    let budget = lightcraft_testkit::scaled(std::time::Duration::from_secs(10));
     // the last loupe render took longer than the budget (a CPU render): not waited for
     r.last_main_ms = 1e6;
     r.request(Slot::Main, s.render_job(PhotoId(1), 64, 64, false, true).unwrap(), 100);
@@ -838,7 +838,7 @@ fn a_test_app_renders_on_two_workers() {
     assert_eq!(app.renderer.live_workers(), TEST_WORKERS, "the pool starts all its workers with its first job");
     let t0 = std::time::Instant::now();
     while app.renderer.is_pending(slot) {
-        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the render never answered");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the render never answered");
         std::thread::sleep(std::time::Duration::from_millis(5));
         app.renderer.poll(&ctx, &mut app.session);
     }
