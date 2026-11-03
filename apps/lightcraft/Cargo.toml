@@ -10,7 +10,8 @@ default-run = "lightcraft"
 workspace = true
 
 [features]
-default = ["denoise"]
+# rawnind-model offers the RawNIND download (CC BY 4.0, terms shown first); nothing is bundled
+default = ["denoise", "rawnind-model"]
 denoise = ["lightcraft-engine/denoise"]
 rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose

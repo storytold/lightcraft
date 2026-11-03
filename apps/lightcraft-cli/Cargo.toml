@@ -29,7 +29,8 @@ dhat = { workspace = true, optional = true }
 lightcraft-testkit = { workspace = true }
 
 [features]
-default = ["denoise"]
+# rawnind-model offers the RawNIND download (CC BY 4.0, terms shown first); nothing is bundled
+default = ["denoise", "rawnind-model"]
 denoise = ["lightcraft-engine/denoise"]
 rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
 # Heap profiling: `cargo run --release -p lightcraft-cli --features dhat-heap -- snapshot …` counts
