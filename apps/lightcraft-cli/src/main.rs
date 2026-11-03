@@ -218,7 +218,7 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
         path,
         None,
         lightcraft_engine::walk::Limits::default(),
-        |p| is_raw(p) && !nas_metadata(p),
+        |p| is_raw(p) && !nas_metadata(p) && p.is_file(),
         |p| !nas_metadata(p),
     );
     if walked.truncated {
@@ -1096,6 +1096,8 @@ mod raw_files_tests {
         for i in 0..8 {
             std::os::unix::fs::symlink(&dir, a.join(format!("up{i}"))).unwrap();
         }
+        // a named pipe with a raw extension: not a file, so never opened (a read would block)
+        assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
         let started = std::time::Instant::now();
         let mut files = Vec::new();
         raw_files(&dir, &mut files);
