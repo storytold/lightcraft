@@ -402,8 +402,10 @@ mod tests {
     fn a_request_to_an_app_drawing_no_frames_is_given_up_with_a_reason() {
         let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
         // The overall timeout and the bound on giving up both stretch with LIGHTCRAFT_TIME_SCALE,
-        // so the bound stays half the timeout on a loaded machine.
-        let timeout = lightcraft_testkit::scaled(Duration::from_secs(10));
+        // so the bound stays half the timeout on a loaded machine. Neither shrinks below its
+        // unscaled value: at LIGHTCRAFT_TIME_SCALE=0.1 the bound would be 0.5 s, which a loaded
+        // machine can miss even when the 50 ms frame window works.
+        let timeout = lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10));
         let t0 = std::time::Instant::now();
         let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), timeout);
         // Given up by the frame window (50 ms), not the timeout, which answers "timeout". The
