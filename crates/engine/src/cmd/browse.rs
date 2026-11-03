@@ -433,6 +433,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut plans: Vec<crate::rename::RenamePlan> = Vec::new();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut moving: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut clashes: Vec<String> = Vec::new();
     for id in ids {
         let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
@@ -442,7 +443,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         let lightcraft_catalog::Source::File { path } = &ph.source else {
             return Err(bad(C, format!("{} has no file on disk", ph.file_name)));
         };
-        if plans.iter().any(|pl| pl.from_path.as_deref() == Some(path.as_str())) {
+        if !moving.insert(path.as_str()) {
             continue; // a virtual copy of a photo already moving
         }
         let src = Path::new(path);
