@@ -265,10 +265,12 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
         }),
         cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — set the memory budget shared by the caches (default: a quarter of RAM, at most 1536 MB); returns the report", always, |s, p| {
-            if let Some(mb) = p.get("mb").and_then(Value::as_f64) {
-                if !(64.0..=1_048_576.0).contains(&mb) {
-                    return Err(bad("app.memoryBudget", "mb must be 64..1048576"));
-                }
+            // missing or null: the report only; anything else must be a number in range (issue #3706)
+            if let Some(v) = p.get("mb").filter(|v| !v.is_null()) {
+                let mb = v
+                    .as_f64()
+                    .filter(|mb| (64.0..=1_048_576.0).contains(mb))
+                    .ok_or_else(|| bad("app.memoryBudget", "`mb` must be a number of megabytes from 64 to 1048576, or null"))?;
                 s.set_memory_budget((mb * 1048576.0) as usize);
             }
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
@@ -292,5 +294,49 @@ mod pagination_tests {
         assert_eq!(pagination_usize(u64::MAX), usize::MAX);
         #[cfg(target_pointer_width = "32")]
         assert_eq!(pagination_usize(u64::from(u32::MAX) + 1), usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use serde_json::json;
+
+    use crate::{EngineError, Session};
+
+    /// Issue #3706: an `mb` that is there but isn't a number is refused, not taken as "report only".
+    #[test]
+    fn a_memory_budget_that_is_not_a_number_is_refused() {
+        let mut s = Session::new();
+        let before = crate::memory::budget();
+        for mb in [json!("512"), json!(true), json!([512]), json!({"mb": 512})] {
+            let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
+            assert!(
+                matches!(&r, Err(EngineError::BadParams { cmd, msg }) if cmd == "app.memoryBudget" && msg.contains("64") && msg.contains("1048576")),
+                "{mb}: {r:?}"
+            );
+        }
+        assert_eq!(crate::memory::budget(), before, "a refused call changes nothing");
+    }
+
+    /// Missing or null `mb`: the report only; numbers out of 64..1048576 (0 included) are refused,
+    /// and one in range is applied.
+    #[test]
+    fn a_memory_budget_number_or_none_works_as_before() {
+        let mut s = Session::new();
+        let before = crate::memory::budget();
+        for p in [json!({}), json!({"mb": null})] {
+            let r = s.execute("app.memoryBudget", &p).unwrap();
+            assert_eq!(r["budget"].as_u64(), Some(before as u64), "{p}: {r}");
+        }
+        for mb in [json!(0), json!(63), json!(1_048_577), json!(-1)] {
+            let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
+            assert!(matches!(&r, Err(EngineError::BadParams { cmd, .. }) if cmd == "app.memoryBudget"), "{mb}: {r:?}");
+        }
+        // the budget the process has already (exact in MB as a float): other tests running beside
+        // this one see no change
+        let mb = before as f64 / 1_048_576.0;
+        let r = s.execute("app.memoryBudget", &json!({ "mb": mb })).unwrap();
+        assert_eq!(r["budget"].as_u64(), Some(before as u64), "{r}");
+        assert_eq!(r["cacheBudget"].as_u64(), Some(crate::memory::cache_share(before) as u64), "{r}");
     }
 }
