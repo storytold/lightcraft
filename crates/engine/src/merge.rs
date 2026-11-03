@@ -300,11 +300,11 @@ pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std
     // a NaN `fits` (a NaN `room`) is refused too
     if fits.is_nan() || fits < least {
         let need = (frame_px * 12.0 + least * 1e6 * PANO_TILE_BYTES).max(least * 1e6 * PANO_BLEND_BYTES);
-        let gb = |b: f64| b / (1u64 << 30) as f64;
+        let mb = |b: f64| b / (1u64 << 20) as f64;
         return Err(format!(
-            "not enough memory for this panorama: even at {least} MP it needs about {:.1} GB beside its photos, and the merge may use {:.1} GB; merge fewer or smaller photos, or close other apps",
-            gb(need),
-            gb(room.max(0.0))
+            "not enough memory for this panorama: even at {least} MP it needs about {:.0} MB, its photos included, and the merge may use {:.0} MB; merge fewer or smaller photos, or close other apps",
+            mb(need).ceil(),
+            mb(room.max(0.0)).floor()
         ));
     }
     Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(fits), ..pano.clone() })
