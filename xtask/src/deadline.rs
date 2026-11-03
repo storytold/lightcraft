@@ -25,15 +25,19 @@
 //! Containment, and never a process xtask didn't start: every process xtask watches gets an
 //! environment variable of its own ([`Marker`], `LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`, the
 //! nonce random per xtask process so an earlier xtask with the same pid had another) that
-//! everything it starts inherits. On timeout the binary (while unreaped, so its pid is its own) and
-//! its process tree are frozen with SIGSTOP level by level, a process only once its parent is
-//! stopped and so can't reap it and free its pid; on Linux also every process of this user whose
-//! `/proc/<pid>/environ` holds the exact entry, which finds those that outlived their parent. Once
-//! no new one turns up they are killed with SIGKILL; the report says how many, names any still
-//! alive, and says when the OS doesn't allow looking for the reparented ones (Unix other than
-//! Linux: only the tree; Windows: `taskkill /T /F`). Only a process that clears its environment
-//! escapes. The child stays in xtask's process group rather than one of its own, so Ctrl-C in the
-//! terminal still reaches the test binaries as before.
+//! everything it starts inherits. On timeout ([`kill`]) the binary (while unreaped, so its pid is
+//! its own) and its process tree are frozen with SIGSTOP level by level; on Linux also every
+//! process of this user whose `/proc/<pid>/environ` holds the exact entry, which finds those that
+//! outlived their parent. On Linux each one is held by a pidfd, opened before what makes it ours is
+//! read again, and signalled only through it, so a pid that passed to another process in between
+//! is never signalled; elsewhere on Unix a process is signalled by its pid only once its parent is
+//! stopped and can't reap it. Once no new one turns up they are killed with SIGKILL; one it fails
+//! for is tried again and then continued with SIGCONT rather than left stopped, and the report says
+//! how many were killed and names any that failed or are still alive. It also says when the OS
+//! doesn't allow looking for the reparented ones (Unix other than Linux: only the tree; Windows:
+//! `taskkill /T /F`). Only a process that clears its environment and leaves the tree escapes. The
+//! child stays in xtask's process group rather than one of its own, so Ctrl-C in the terminal
+//! still reaches the test binaries as before.
 //!
 //! A timeout also turns off the optional probes after it in the same run ([`any_timed_out`]): the
 //! GPU probe, which runs bounded too ([`capture_cargo`], [`probe_limit`]), and the translation
@@ -47,6 +51,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod kill;
+use kill::kill_run;
 
 /// The limit, in minutes, on each test binary's run.
 pub const TEST_BINARY_TIMEOUT_ENV: &str = "LIGHTCRAFT_TEST_BINARY_TIMEOUT";
@@ -590,164 +597,11 @@ fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: O
     }
 }
 
-/// Kill everything a run started, reap its direct child, and say what was done.
-///
-/// `child` is the run's direct child while it hasn't been reaped (so its pid is still its own):
-/// it and its process tree are signalled, plus every process carrying the run's `marker`. `None`
-/// once it has been reaped: then only processes carrying the marker are, never the old pid, which
-/// may belong to another process by now.
-fn kill_run(child: Option<&mut Child>, marker: &Marker) -> String {
-    let root = child.as_ref().map(|c| c.id());
-    let note = kill_all(root, marker);
-    if let Some(child) = child {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    note
-}
-
-/// Whether this OS lets xtask find a run's processes by their marker (Linux: `/proc/*/environ`).
-#[cfg_attr(not(unix), allow(dead_code))]
-fn can_find_marked() -> bool {
-    cfg!(target_os = "linux") && Path::new("/proc/self/environ").exists()
-}
-
-/// Freeze and kill `root` (unreaped) and what it started (see [`kill_run`]); what was done.
-///
-/// Only processes xtask started are signalled. One found through the process tree is signalled only
-/// once its parent is stopped: a stopped parent can't reap it, so its pid can't pass to another
-/// process meanwhile. One found by its marker carries this run's exact entry, which nothing else
-/// has. Everything found is frozen with SIGSTOP until no new one turns up, then killed with
-/// SIGKILL, the last found first.
-#[cfg(unix)]
-fn kill_all(root: Option<u32>, marker: &Marker) -> String {
-    let me = std::process::id();
-    let entry = marker.entry();
-    let by_marker = can_find_marked();
-    let mut order: Vec<u32> = Vec::new();
-    let mut stopped: BTreeSet<u32> = BTreeSet::new();
-    let mut fresh: Vec<u32> = root.into_iter().collect();
-    for _ in 0..64 {
-        signal("STOP", &fresh);
-        stopped.extend(&fresh);
-        order.extend(&fresh);
-        let mut found = children_of(&process_table(), &stopped);
-        if by_marker {
-            found.extend(marked(&entry));
-        }
-        found.retain(|p| *p != me && !stopped.contains(p));
-        if found.is_empty() {
-            break;
-        }
-        fresh = found.into_iter().collect();
-    }
-    signal("KILL", &order.iter().rev().copied().collect::<Vec<_>>());
-    let started = order.len().saturating_sub(usize::from(root.is_some()));
-    if !by_marker {
-        return match root {
-            Some(_) => format!(
-                "killed it and the {started} process(es) it started that were still its descendants; on this OS processes that \
-                 outlived their parent can't be found, and may still run"
-            ),
-            None => "on this OS the processes it started that outlived it can't be found, and may still run".to_owned(),
-        };
-    }
-    // a killed process loses its environment as it dies, before it is reaped
-    let until = Instant::now() + Duration::from_secs(2);
-    let mut alive = marked(&entry);
-    while !alive.is_empty() && Instant::now() < until {
-        std::thread::sleep(TICK);
-        alive = marked(&entry);
-    }
-    let mut note = match (root, started) {
-        (Some(_), 0) => "killed it; it had started no other process (looked for in its process tree and by the run's environment marker)".to_owned(),
-        (Some(_), n) => format!(
-            "killed it and the {n} process(es) it started (found in its process tree and by the run's environment marker, so reparented ones too)"
-        ),
-        (None, 0) => "no process it started was left (looked for by the run's environment marker)".to_owned(),
-        (None, n) => format!("killed the {n} process(es) it started that outlived it (found by the run's environment marker)"),
-    };
-    if !alive.is_empty() {
-        let pids: Vec<String> = alive.iter().map(u32::to_string).collect();
-        note.push_str(&format!("; still alive after the kill: pid {} (they carry {})", pids.join(", "), marker.key));
-    }
-    note
-}
-
-#[cfg(windows)]
-fn kill_all(root: Option<u32>, _marker: &Marker) -> String {
-    let Some(root) = root else {
-        return "on this OS the processes it started that outlived it can't be found, and may still run".to_owned();
-    };
-    let _ = Command::new("taskkill").args(["/PID", &root.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    "killed it and its process tree (taskkill /T); processes that outlived their parent may still run".to_owned()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn kill_all(_root: Option<u32>, _marker: &Marker) -> String {
-    "killed it; processes it started may still run".to_owned()
-}
-
-#[cfg(unix)]
-fn signal(name: &str, pids: &[u32]) {
-    if pids.is_empty() {
-        return;
-    }
-    let _ = Command::new("kill").arg(format!("-{name}")).args(pids.iter().map(u32::to_string)).stdout(Stdio::null()).stderr(Stdio::null()).status();
-}
-
-/// Every process's pid and parent pid, from `ps` (empty if it fails).
-#[cfg(unix)]
-fn process_table() -> Vec<(u32, u32)> {
-    let Ok(out) = Command::new("ps").args(["-A", "-o", "pid=", "-o", "ppid="]).stderr(Stdio::null()).output() else {
-        return Vec::new();
-    };
-    parse_process_table(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// The `pid ppid` pairs of a process table, one process per line.
-#[cfg_attr(not(unix), allow(dead_code))]
-fn parse_process_table(table: &str) -> Vec<(u32, u32)> {
-    table
-        .lines()
-        .filter_map(|l| {
-            let mut w = l.split_whitespace();
-            Some((w.next()?.parse().ok()?, w.next()?.parse().ok()?))
-        })
-        .collect()
-}
-
-/// The direct children of `parents` in a process table.
-#[cfg_attr(not(unix), allow(dead_code))]
-fn children_of(table: &[(u32, u32)], parents: &BTreeSet<u32>) -> BTreeSet<u32> {
-    table.iter().filter(|(pid, ppid)| parents.contains(ppid) && !parents.contains(pid)).map(|(pid, _)| *pid).collect()
-}
-
 /// Whether a NUL-separated environment block holds exactly `entry` (`KEY=VALUE`), not as part of
 /// another variable's name or value.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn has_entry(environ: &[u8], entry: &str) -> bool {
     environ.split(|b| *b == 0).any(|var| var == entry.as_bytes())
-}
-
-/// This user's processes whose environment holds exactly `entry` (`/proc/<pid>/environ`; a
-/// process that can't be read is skipped, and zombies have no environment).
-#[cfg(target_os = "linux")]
-fn marked(entry: &str) -> Vec<u32> {
-    use std::os::unix::fs::MetadataExt;
-    let (Ok(me), Ok(dir)) = (std::fs::metadata("/proc/self"), std::fs::read_dir("/proc")) else {
-        return Vec::new();
-    };
-    dir.filter_map(Result::ok)
-        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|pid| std::fs::metadata(format!("/proc/{pid}")).is_ok_and(|m| m.uid() == me.uid()))
-        .filter(|pid| std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| has_entry(&env, entry)))
-        .collect()
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn marked(_entry: &str) -> Vec<u32> {
-    Vec::new()
 }
 
 /// A copy of `cmd`: its program, arguments, directory and environment changes.
@@ -1148,12 +1002,12 @@ mod tests {
 
     #[test]
     fn finds_the_children_of_stopped_processes_in_a_process_table() {
-        let table = parse_process_table("  1 0\n 10 1\n 11 10\n 12 11\n 13 10\n 20 1\n 21 20\n junk\n 14 12");
+        let table = kill::parse_process_table("  1 0\n 10 1\n 11 10\n 12 11\n 13 10\n 20 1\n 21 20\n junk\n 14 12");
         assert_eq!(table.len(), 8);
-        assert_eq!(children_of(&table, &BTreeSet::from([10])), BTreeSet::from([11, 13]), "only direct children: their parent is stopped");
-        assert_eq!(children_of(&table, &BTreeSet::from([10, 11, 13])), BTreeSet::from([12]));
-        assert!(children_of(&table, &BTreeSet::from([99])).is_empty());
-        assert!(children_of(&parse_process_table("5 6\n6 5"), &BTreeSet::from([5, 6])).is_empty(), "a cycle ends");
+        assert_eq!(kill::children_of(&table, &BTreeSet::from([10])), BTreeSet::from([11, 13]), "only direct children: their parent is stopped");
+        assert_eq!(kill::children_of(&table, &BTreeSet::from([10, 11, 13])), BTreeSet::from([12]));
+        assert!(kill::children_of(&table, &BTreeSet::from([99])).is_empty());
+        assert!(kill::children_of(&kill::parse_process_table("5 6\n6 5"), &BTreeSet::from([5, 6])).is_empty(), "a cycle ends");
     }
 
     #[test]
@@ -1196,12 +1050,12 @@ mod tests {
             spawn(&[], Some((&marker.key, "2"))),
         ];
         let until = Instant::now() + Duration::from_secs(10);
-        while marked(&marker.entry()).is_empty() && Instant::now() < until {
+        while kill::marked(&marker.entry()).is_empty() && Instant::now() < until {
             std::thread::sleep(TICK);
         }
         // give the decoys time to start too, then look again
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(marked(&marker.entry()), [ours.id()]);
+        assert_eq!(kill::marked(&marker.entry()), [ours.id()]);
         for c in decoys.iter_mut().chain([&mut ours]) {
             let _ = c.kill();
             let _ = c.wait();

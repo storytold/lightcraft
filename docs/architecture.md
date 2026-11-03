@@ -88,12 +88,15 @@ for none): timed from its start when xtask runs it (`test::run_binary`), and fro
 full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
 `CARGO_TERM_QUIET=false` and without `-q` so it prints those lines). The output streams through and is
 read for libtest's lines, keeping a bounded amount. On timeout the binary and the processes it started
-that xtask can find are killed, and no process xtask didn't start: the binary and its process tree (a process only once
-its parent is frozen, so its pid can't be reused meanwhile), and on Linux every process whose
-`/proc/<pid>/environ` holds the run's exact marker entry (`LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`,
+that xtask can find are killed, and no process xtask didn't start: the binary and its process tree, and on Linux every
+process whose `/proc/<pid>/environ` holds the run's exact marker entry (`LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`,
 inherited by all it starts; the nonce is random per xtask process), which finds those that outlived
-their parent (one that also cleared its environment isn't found and may keep running). They are frozen with SIGSTOP, then killed (`taskkill /T` on Windows; elsewhere the
-report says reparented ones can't be found). The child stays in xtask's process group, so Ctrl-C
+their parent (one that also cleared its environment isn't found and may keep running). On Linux each
+is held by a pidfd and signalled only through it, so a pid reused meanwhile is never signalled;
+elsewhere on Unix a process is signalled only once its parent is frozen and can't reap it. They are
+frozen with SIGSTOP, then killed; one whose SIGKILL fails twice is continued with SIGCONT rather than
+left stopped, and the report names it (`taskkill /T` on Windows; elsewhere the report says
+reparented ones can't be found). The child stays in xtask's process group, so Ctrl-C
 still reaches it. The run reports `timed out after N min: <binary>`, what
 the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
 or the test a single-threaded run started) and those that never reported a result (`--list`, itself
@@ -125,6 +128,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid), and one that can't be killed is continued rather than left stopped |
 | 2026-10-26 | minor | Quality gates: each test binary's run (`LIGHTCRAFT_TEST_BINARY_TIMEOUT`) and the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) have a time limit |
 | 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |
 | 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |

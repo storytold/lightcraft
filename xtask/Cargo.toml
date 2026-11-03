@@ -15,3 +15,9 @@ sha2 = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
 flate2 = "1"
 brotli = { version = "9", default-features = false, features = ["std"] }
+
+# ending a timed-out test run (deadline/kill.rs): signals through pidfds on Linux, so a pid that
+# passed to another process is never signalled, and kill(2) with its error elsewhere; no unsafe
+# here, pure Rust on Linux (already in the lock through tempfile and wayland)
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["std", "process", "event"] }
