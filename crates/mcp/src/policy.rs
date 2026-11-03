@@ -214,6 +214,16 @@ impl Policy {
             // The call's own params override a preset's, so this beats a preset that sets it.
             obj.insert("addToPhotos".into(), Value::Bool(false));
         }
+        // What is checked below is what the exporter must receive: write the trimmed `path` and `dir` back,
+        // or `" C:\x"` is absolute for the check and relative for the writer.
+        for key in ["path", "dir"] {
+            if let Some(Value::String(v)) = obj.get_mut(key) {
+                let trimmed = v.trim();
+                if trimmed.len() != v.len() {
+                    *v = trimmed.to_string();
+                }
+            }
+        }
         if self.export_root.is_some() && obj.contains_key("preset") {
             // A preset may carry `destinationMode` / `subfolder`; pin them unless the call gives its own (checked below).
             obj.entry("destinationMode").or_insert_with(|| Value::String("specificFolder".into()));
@@ -404,6 +414,39 @@ mod tests {
         assert!(p.deny.contains("photo.rate") && p.deny.contains("app.quit"));
     }
 
+    /// Runs in a child process (see [`from_env_reads_the_process_environment`]): the real
+    /// `Policy::from_env`, with `LIGHTCRAFT_MCP_SAFE=1` set by the parent.
+    #[test]
+    #[ignore = "subprocess helper for from_env_reads_the_process_environment"]
+    fn from_env_child() {
+        if std::env::var_os("LC_POLICY_FROM_ENV_CHILD").is_none() {
+            return; // started by hand with --ignored: nothing to check without the parent's environment
+        }
+        let p = Policy::from_env();
+        assert!(p.safe, "LIGHTCRAFT_MCP_SAFE=1 turns safe mode on: {p:?}");
+        assert!(SAFE_DENY.iter().all(|id| p.deny.contains(*id)), "{:?}", p.deny);
+        assert!(p.allow_tools.is_none() && p.export_root.is_none(), "{p:?}");
+        println!("FROM-ENV-CHILD-CHECKED");
+    }
+
+    /// `from_env` itself reads the real environment: run it in a child, so the test never changes this process's.
+    #[test]
+    fn from_env_reads_the_process_environment() {
+        let _serial = crate::serial_sockets_and_children();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "policy::tests::from_env_child", "--ignored", "--nocapture"])
+            .env("LC_POLICY_FROM_ENV_CHILD", "1")
+            .env("LIGHTCRAFT_MCP_SAFE", "1")
+            .env_remove("LIGHTCRAFT_MCP_DENY")
+            .env_remove("LIGHTCRAFT_MCP_ALLOW_TOOLS")
+            .env_remove("LIGHTCRAFT_MCP_EXPORT_ROOT")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains("FROM-ENV-CHILD-CHECKED"), "the child did not run its checks: {stdout}");
+    }
+
     #[test]
     fn the_export_root_is_trimmed_and_empty_means_none() {
         assert_eq!(from_vars(&[("LIGHTCRAFT_MCP_EXPORT_ROOT", " /srv/out ")]).export_root, Some(PathBuf::from("/srv/out")));
@@ -472,6 +515,7 @@ mod tests {
         // every helper maps to the ids it dispatches
         for (tool, id) in [
             ("select_photos", "library.select"),
+            ("set_develop", "library.select"),
             ("list_controls", "develop.controls"),
             ("get_develop", "develop.get"),
             ("set_develop", "develop.set"),
@@ -543,6 +587,22 @@ mod tests {
         assert!(call(&p, "export", json!({"dir": inside, "subfolder": "..\\x"})).is_err());
         // `:` becomes `_`, which is an ordinary name
         assert!(call(&p, "export", json!({"dir": inside, "subfolder": "a:b"})).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_exporter_receives_the_trimmed_path_and_dir_that_were_checked() {
+        let root = temp_root("trim");
+        let p = Policy { export_root: Some(root.clone()), ..Policy::default() };
+        let out = root.join("out").to_string_lossy().to_string();
+        let file = root.join("out").join("a.jpg").to_string_lossy().to_string();
+        let args = call(&p, "export", json!({"dir": format!(" {out}\t")})).unwrap();
+        assert_eq!(args["dir"], out.as_str(), "the checked value is the one passed on");
+        let args = call(&p, "run_command", json!({"command": "app.export", "params": {"path": format!("  {file} ")}})).unwrap();
+        assert_eq!(args["params"]["path"], file.as_str());
+        // trimmed, it is relative: refused (not absolute for the check and relative for the writer)
+        assert!(call(&p, "export", json!({"dir": " relative"})).is_err());
+        assert!(call(&p, "export", json!({"path": " relative/a.jpg"})).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
