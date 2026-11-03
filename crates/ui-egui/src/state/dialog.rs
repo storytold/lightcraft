@@ -218,6 +218,10 @@ pub enum Dialog {
         /// "Delete unticked in every group" was pressed once: the window asks before doing it.
         #[serde(default)]
         armed: bool,
+        /// The library the window was opened on (`Session::library_generation`): its photo ids mean nothing in
+        /// another, so a switch ends the window's run and takes its groups away.
+        #[serde(default)]
+        library: u64,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {

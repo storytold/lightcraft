@@ -115,7 +115,7 @@ impl Drop for Job {
 
 /// Find Duplicates' state in the session.
 pub(crate) struct Dupes {
-    /// Signatures by content key: a photo's hash never changes while its file doesn't.
+    /// Signatures by [`sig_key`]: a photo's hash changes only when its file or its edits do.
     sigs: HashMap<String, Sig>,
     job: Option<Job>,
     /// The last run's result (`duplicates.pump` → `last`, `library.findDuplicates {wait}`).
@@ -129,6 +129,16 @@ pub(crate) struct Dupes {
 impl Default for Dupes {
     fn default() -> Self {
         Dupes { sigs: HashMap::new(), job: None, last: None, library: None, pace: Pace::Normal }
+    }
+}
+
+/// What a signature is kept under: the photo's content key and, when it is edited, the edit's time stamp — the
+/// thumbnail that is hashed shows the photo as edited (its crop, its tones), so an edit makes another picture of it,
+/// and a photo matches as it looks now, not as it was shot.
+fn sig_key(p: &Photo) -> String {
+    match &p.edited {
+        Some(edited) => format!("{}|{edited}", content_key(p)),
+        None => content_key(p),
     }
 }
 
@@ -203,7 +213,7 @@ impl Row {
     fn of(p: &Photo, sig: Option<Sig>) -> Row {
         Row {
             id: p.id,
-            key: content_key(p),
+            key: sig_key(p),
             hash: p.content_hash.clone(),
             sig,
             moment: p.captured.as_deref().map(|c| c.chars().take(19).collect()),
@@ -472,10 +482,13 @@ fn finish(s: &mut Session, job: &Job) -> Value {
             // an empty `only` means "no constraint": no duplicates is its own state that shows no photos
             s.filter.only_none = only.is_empty();
         }
-        // (also when there are none: a selection the empty view doesn't show must not be what Delete acts on)
+        // (also when there are none: a selection the empty view doesn't show must not be what Delete acts on; and
+        // only the extras the view shows: a facet already on — a rating, a keyword — hides the rest from Delete too)
         if o.select_extras {
-            s.selection.ids.clone_from(&extras);
-            s.selection.active = extras.first().copied();
+            let visible: HashSet<PhotoId> = s.visible_cloned().into_iter().collect();
+            let shown: Vec<PhotoId> = extras.iter().copied().filter(|id| visible.contains(id)).collect();
+            s.selection.active = shown.first().copied();
+            s.selection.ids = shown;
         }
     }
     json!({
@@ -542,6 +555,11 @@ fn near_pairs(rows: &[Row], m: Matching, cancel: &AtomicBool) -> Option<Vec<(u32
                         return None;
                     }
                     let (Some(a), Some(b)) = (rows.get(i), rows.get(j)) else { continue };
+                    // (byte-identical files are grouped by their hash in `members`; their pairs would only pile up,
+                    // N²/2 of them for N copies of one file)
+                    if a.hash.is_some() && a.hash == b.hash {
+                        continue;
+                    }
                     if pair_matches(a, b, m) && seen.insert((i.min(j), i.max(j))) {
                         let d = match (a.sig, b.sig) {
                             (Some(sa), Some(sb)) => cull::hamming(sa.dct, sb.dct),
@@ -564,9 +582,11 @@ fn fits_all(rows: &[Row], i: usize, members: &[usize], m: Matching) -> bool {
     members.iter().all(|&j| j == i || rows.get(j).is_some_and(|b| b.hash.is_some() && b.hash == a.hash || pair_matches(a, b, m)))
 }
 
-/// The members of each duplicate group: byte-identical files first, then the matching pairs closest first, each
-/// photo joining a group only when it fits every member (and two groups merging only when every cross pair fits).
-fn members(rows: &[Row], pairs: &[(u32, usize, usize)], m: Matching) -> Vec<Vec<usize>> {
+/// The members of each duplicate group: byte-identical files first (the same bytes carry the same capture time, so
+/// `sameMoment` is not asked of them: it only tells copies from burst frames, and a byte-identical file is a copy),
+/// then the matching pairs closest first, each photo joining a group only when it fits every member (and two groups
+/// merging only when every cross pair fits). `None` when stopped.
+fn members(rows: &[Row], pairs: &[(u32, usize, usize)], m: Matching, cancel: &AtomicBool) -> Option<Vec<Vec<usize>>> {
     let mut group_of: Vec<Option<usize>> = vec![None; rows.len()];
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut by_hash: HashMap<&str, usize> = HashMap::new();
@@ -586,7 +606,10 @@ fn members(rows: &[Row], pairs: &[(u32, usize, usize)], m: Matching) -> Vec<Vec<
             }
         }
     }
-    for &(_, i, j) in pairs {
+    for (n, &(_, i, j)) in pairs.iter().enumerate() {
+        if n.is_multiple_of(CANCEL_EVERY) && cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         match (group_of.get(i).copied().flatten(), group_of.get(j).copied().flatten()) {
             (None, None) => {
                 group_of[i] = Some(groups.len());
@@ -617,13 +640,13 @@ fn members(rows: &[Row], pairs: &[(u32, usize, usize)], m: Matching) -> Vec<Vec<
             _ => {}
         }
     }
-    groups.into_iter().filter(|g| g.len() > 1).collect()
+    Some(groups.into_iter().filter(|g| g.len() > 1).collect())
 }
 
 /// The duplicate groups among `rows`, largest first; `None` when stopped.
 fn group(rows: &[Row], m: Matching, cancel: &AtomicBool) -> Option<Vec<Group>> {
     let pairs = near_pairs(rows, m, cancel)?;
-    let mut groups: Vec<Group> = members(rows, &pairs, m).into_iter().map(|g| group_of(rows, g)).collect();
+    let mut groups: Vec<Group> = members(rows, &pairs, m, cancel)?.into_iter().map(|g| group_of(rows, g)).collect();
     groups.sort_by_key(|g| (std::cmp::Reverse(g.extras.len()), g.keep));
     Some(groups)
 }
@@ -686,6 +709,9 @@ pub(crate) fn find(s: &mut Session, p: &Value) -> Result<Value> {
     follow_library(s);
     let wait = p.get("wait").and_then(Value::as_bool) == Some(true);
     let replace = p.get("replace").and_then(Value::as_bool) == Some(true);
+    // (the parameters are checked first: a bad `replace` call must not stop the run that goes)
+    let ids = crate::cmd::photo_ids(p, C)?;
+    let options = options(p, C)?;
     if s.dupes.job.is_some() {
         if replace {
             // start over with these parameters: what the run hashed so far is taken in and kept, the rest is
@@ -700,15 +726,14 @@ pub(crate) fn find(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(json!({"queued": 0, "running": true, "status": status(s)}));
         }
     }
-    let ids = crate::cmd::photo_ids(p, C)?;
-    let options = options(p, C)?;
     let candidates = candidates(s, ids.as_deref());
-    // the catalog's facts now, and a thumbnail job for what still needs hashing (the rest is known by content)
+    // the catalog's facts now, and a thumbnail job for what still needs hashing (the rest is known by content and
+    // edits)
     let mut rows: Vec<Row> = Vec::with_capacity(candidates.len());
     let mut todo: Vec<Work> = Vec::new();
     for id in &candidates {
         let Some(ph) = s.catalog.photo(*id).cloned() else { continue };
-        let row = Row::of(&ph, s.dupes.sigs.get(&content_key(&ph)).copied());
+        let row = Row::of(&ph, s.dupes.sigs.get(&sig_key(&ph)).copied());
         if row.sig.is_none()
             && let Some(job) = s.thumb_job(*id, HASH_EDGE)
         {
@@ -791,6 +816,21 @@ mod tests {
         assert_eq!(groups[0].keep, PhotoId(3));
         assert_eq!(groups[0].extras, vec![(PhotoId(7), "the same; the earlier import is kept".to_string())]);
         assert_eq!(groups[0].max_distance, 0);
+    }
+
+    /// Byte-identical files are grouped by their hash alone: no pair is stored for them (a thousand copies of one
+    /// file would otherwise store half a million), and `sameMoment` is not asked of them.
+    #[test]
+    fn byte_identical_files_group_by_hash_without_pairs() {
+        let mut rows: Vec<Row> = (1..=4).map(|i| row(i, 0, Some(if i == 4 { "2026-10-31T10:00:09" } else { "2026-10-31T10:00:00" }))).collect();
+        for r in &mut rows {
+            r.hash = Some("same-bytes".into());
+        }
+        let m = Matching { distance: 6, same_moment: true };
+        let never = AtomicBool::new(false);
+        assert!(near_pairs(&rows, m, &never).unwrap().is_empty(), "no pair between byte-identical files");
+        let groups = group(&rows, m, &never).unwrap();
+        assert_eq!((groups.len(), groups[0].extras.len(), groups[0].exact), (1, 3, true));
     }
 
     /// A group's distance counts both hashes: DCT hashes alike with difference hashes 3 bits apart are 3 apart.

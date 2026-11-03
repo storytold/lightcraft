@@ -71,6 +71,7 @@ fn delete_duplicates(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "`delete` names no photo"));
     }
     let before = s.visible_cloned();
+    let active = s.selection.active;
     // an open drag ends first, as its own undo step (as `photo.delete` does)
     s.end_interaction()?;
     let mut ops = Vec::new();
@@ -113,6 +114,11 @@ fn delete_duplicates(s: &mut Session, p: &Value) -> Result<Value> {
     ops.extend(s.catalog.remove_from_stacks_ops(&deleted));
     s.commit("Delete Duplicates", Op::Batch { ops })?;
     super::library::selection::select_after_deletion(s, &before);
+    // (the mask or spot picked on the deleted photo must not stand for the one the selection moved to)
+    if s.selection.active != active {
+        s.active_mask = None;
+        s.active_spot = None;
+    }
     Ok(json!({"deleted": deleted.len(), "kept": kept, "keywords": added_keywords, "ratings": ratings, "flags": flags, "labels": labels}))
 }
 
@@ -125,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Duplicate Photos",
             [],
             None,
-            "{ids?, distance?: 0..16 (6), sameMoment?: bool (false), filter?: bool (true), selectExtras?: bool (true), wait?: bool (false), replace?: bool (false)} → {queued, running, last?: {groups: [{exact, keep: id, delete: [id], maxDistance, photos: [{id, keep, why?}]}], photos, decoded, unreadable, duplicates, seconds, cancelled}} — photos that are the same picture (the same file twice, an export beside its raw, a resized or re-saved copy): byte-identical files, and files whose perceptual hashes differ by at most `distance` bits with aspect ratios within 3 %; a photo joins a group only when it is within `distance` of every member, so a burst can't chain into one group (`maxDistance`: the most bits two of the group's hashes differ in, over both hashes). `sameMoment` also requires the same capture time (to the second) when both photos have one: copies keep the original's, the next frame of a burst doesn't. Each group is ranked by quality — raw over rendered, lossless over lossy, more pixels, a larger file, then edits and rating; the earlier import wins a tie — and its best photo is kept. Without `ids`, every photo in the library (videos and virtual copies left out). Hashes come from each photo's grid thumbnail (the cached one where the grid has rendered it, else rendered now and cached) on a background job with a row in the activity stack (✕ stops it), on up to half the machine's cores at normal pace; a second run only renders photos not seen this session. When it ends, `filter` shows the groups alone (Clear Filters to go back) and `selectExtras` selects every photo that isn't its group's keeper, so Delete removes them; library.deleteDuplicates removes a group's copies and keeps their metadata. No catalog change and no undo step of its own. `wait: true` returns when the run is done (scripts); while a run goes, a call without `replace` only reports it, with `replace: true` it starts over with the new parameters, keeping the hashes made so far",
+            "{ids?, distance?: 0..16 (6), sameMoment?: bool (false), filter?: bool (true), selectExtras?: bool (true), wait?: bool (false), replace?: bool (false)} → {queued, running, last?: {groups: [{exact, keep: id, delete: [id], maxDistance, photos: [{id, keep, why?}]}], photos, decoded, unreadable, duplicates, seconds, cancelled}} — photos that are the same picture (the same file twice, an export beside its raw, a resized or re-saved copy): byte-identical files, and files whose perceptual hashes differ by at most `distance` bits with aspect ratios within 3 %; a photo joins a group only when it is within `distance` of every member, so a burst can't chain into one group (`maxDistance`: the most bits two of the group's hashes differ in, over both hashes). `sameMoment` also requires the same capture time (to the second) when both photos have one: copies keep the original's, the next frame of a burst doesn't (byte-identical files are not asked: the same bytes are a copy by definition). A photo is hashed as it looks now, edits included: an edited photo no longer matches the original it came from, and a photo edited since the last run is hashed again. Each group is ranked by quality — raw over rendered, lossless over lossy, more pixels, a larger file, then edits and rating; the earlier import wins a tie — and its best photo is kept. Without `ids`, every photo in the library (videos and virtual copies left out). Hashes come from each photo's grid thumbnail (the cached one where the grid has rendered it, else rendered now and cached) on a background job with a row in the activity stack (✕ stops it), on up to half the machine's cores at normal pace; a second run only renders photos not seen this session. When it ends, `filter` shows the groups alone (Clear Filters to go back) and `selectExtras` selects every photo that isn't its group's keeper, so Delete removes them; library.deleteDuplicates removes a group's copies and keeps their metadata. No catalog change and no undo step of its own. `wait: true` returns when the run is done (scripts); while a run goes, a call without `replace` only reports it, with `replace: true` it starts over with the new parameters, keeping the hashes made so far",
             super::always,
             find
         ),

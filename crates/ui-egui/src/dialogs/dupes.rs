@@ -50,6 +50,7 @@ pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
         same_moment: true,
         started: false,
         armed: false,
+        library: app.session.library_generation(),
     });
     Ok(Value::Null)
 }
@@ -61,7 +62,11 @@ fn search(app: &mut LightcraftApp, dlg: &mut Dialog) {
     *done = false;
     *error = None;
     *started = true;
-    match app.run("library.findDuplicates", json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false})) {
+    // (`replace`: a run a script started with other settings is stopped for this one, not waited on)
+    match app.run(
+        "library.findDuplicates",
+        json!({"distance": *distance, "sameMoment": *same_moment, "filter": false, "selectExtras": false, "replace": true}),
+    ) {
         // (nothing to render and no worker: the result came at once)
         Ok(r) => {
             if let Some(last) = r.get("last").filter(|l| !l.is_null()) {
@@ -172,6 +177,17 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Di
     // the window is resizable: the cards wrap to whatever width it has
     let width = ui.available_width().max(MIN_WIDTH);
     ui.set_min_width(MIN_WIDTH);
+    // another library under the window: its groups name photos of the old one, so they go, and so do the settings
+    // (the run they would start would look at the new library under the old window)
+    if let Dialog::Duplicates { library, groups, done, started, error, .. } = dlg
+        && *library != app.session.library_generation()
+        && !(groups.is_empty() && *done && error.is_some())
+    {
+        groups.clear();
+        *done = true;
+        *started = true;
+        *error = Some(crate::i18n::tr("The library was switched while this window was open; close it and search the new library.").to_string());
+    }
     if controls(ui, t, dlg) {
         search(app, dlg);
     }
@@ -459,7 +475,45 @@ mod tests {
 
     /// A window whose Find was pressed and whose run is still going.
     fn fresh() -> Dialog {
-        Dialog::Duplicates { groups: Vec::new(), done: false, photos: 0, error: None, distance: 6, same_moment: true, started: true, armed: false }
+        Dialog::Duplicates {
+            groups: Vec::new(),
+            done: false,
+            photos: 0,
+            error: None,
+            distance: 6,
+            same_moment: true,
+            started: true,
+            armed: false,
+            library: 0,
+        }
+    }
+
+    /// A library switch while the window shows its groups takes them away, says so, and leaves nothing to delete;
+    /// the window still closes.
+    #[test]
+    fn a_library_switch_takes_a_finished_windows_groups_away() {
+        let (mut h, _) = app_with_duplicates("switch");
+        open_and_wait(&mut h);
+        assert_eq!(groups(&h).len(), 1);
+        let other = std::env::temp_dir().join(format!("lc-ui-dupes-switch-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        std::fs::create_dir_all(&other).expect("temp dir");
+        h.app.run("app.openLibrary", json!({"path": other.to_string_lossy()})).expect("opens the other library");
+        h.step();
+        h.step();
+        match &h.app.ui.dialog {
+            Some(Dialog::Duplicates { groups, done: true, error: Some(e), .. }) => {
+                assert!(groups.is_empty(), "{groups:?}");
+                assert!(e.contains("switched"), "{e}");
+            }
+            d => panic!("{d:?}"),
+        }
+        for w in ["button:dupesGroupDelete:1", "button:dupesDeleteAll", "button:dupesFind"] {
+            assert!(!h.app.widgets.iter().any(|(id, _)| id == w), "{w} is gone");
+        }
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.dialog.is_none());
     }
 
     fn in_library(h: &Headless) -> Vec<u64> {
@@ -670,7 +724,11 @@ mod tests {
         let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
         let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
         h.step();
-        h.app.ui.dialog = Some(fresh());
+        let mut dlg = fresh();
+        if let Dialog::Duplicates { library, .. } = &mut dlg {
+            *library = h.app.session.library_generation();
+        }
+        h.app.ui.dialog = Some(dlg);
         h.step();
         h.step();
         match &h.app.ui.dialog {

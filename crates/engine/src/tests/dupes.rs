@@ -290,6 +290,63 @@ fn deleting_duplicates_carries_their_metadata_onto_the_kept_photo() {
     assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 4);
 }
 
+/// A photo edited since the last run is hashed again, as it looks now: a strong edit takes it out of its group.
+#[test]
+fn an_edited_photo_is_hashed_again_and_matches_as_it_looks_now() {
+    let (mut s, ids) = library("edited");
+    s.execute("library.findDuplicates", &json!({"wait": true})).unwrap();
+    s.execute("library.clearFilter", &json!({})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids["a_small.jpg"]]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 5.0})).unwrap();
+    let r = s.execute("library.findDuplicates", &json!({"wait": true, "filter": false, "selectExtras": false})).unwrap();
+    assert_eq!(r["queued"], 1, "only the edited photo is rendered again: {r}");
+    let g = &r["last"]["groups"][0];
+    assert!(!ids_of(&g["delete"]).contains(&ids["a_small.jpg"]), "blown out, it is another picture now: {g}");
+}
+
+/// With `selectExtras`, a facet already on (a rating here) keeps the extras it hides out of the selection, so a
+/// Delete after the run can't reach photos the view doesn't show.
+#[test]
+fn extras_a_facet_hides_are_not_selected() {
+    let (mut s, ids) = library("facet");
+    s.execute("photo.rate", &json!({"rating": 3, "ids": [ids["a.jpg"], ids["a_small.jpg"]]})).unwrap();
+    s.execute("library.filter", &json!({"rating": 3, "ratingOp": "atLeast"})).unwrap();
+    let r = s.execute("library.findDuplicates", &json!({"wait": true})).unwrap();
+    assert_eq!(ids_of(&r["last"]["groups"][0]["delete"]).len(), 2, "{r}");
+    let sel: Vec<u64> = s.selection.ids.iter().map(|p| p.0).collect();
+    assert_eq!(sel, vec![ids["a_small.jpg"]], "the unrated copy is hidden by the facet, so it is not selected");
+    assert_eq!(s.selection.active.map(|p| p.0), Some(ids["a_small.jpg"]));
+}
+
+/// A `replace` call with a bad parameter is refused before it stops the run that goes.
+#[test]
+fn a_bad_replace_call_leaves_the_running_job_alone() {
+    let (mut s, _) = library("replace-bad");
+    s.execute("library.findDuplicates", &json!({})).unwrap();
+    assert!(s.execute("library.findDuplicates", &json!({"replace": true, "distance": 99})).is_err());
+    assert_eq!(s.execute("duplicates.pump", &json!({})).unwrap()["active"], true, "the run still goes");
+    let v = pump_until_idle(&mut s);
+    assert_eq!(v["last"]["groups"].as_array().map(Vec::len), Some(1), "{v}");
+}
+
+/// Deleting the active photo through `library.deleteDuplicates` moves the selection on and drops the mask and spot
+/// picked on it, as the Delete key does.
+#[test]
+fn deleting_the_active_photo_drops_its_mask_and_spot_selection() {
+    let (mut s, ids) = library("mask");
+    s.execute("library.select", &json!({"ids": [ids["a_small.jpg"]]})).unwrap();
+    s.active_mask = Some(0);
+    s.active_spot = Some(0);
+    s.execute("library.deleteDuplicates", &json!({"keep": [ids["a.jpg"]], "delete": [ids["a_small.jpg"]]})).unwrap();
+    assert_ne!(s.selection.active.map(|p| p.0), Some(ids["a_small.jpg"]));
+    assert_eq!((s.active_mask, s.active_spot), (None, None));
+    // a deletion that leaves the active photo alone keeps them
+    s.execute("library.select", &json!({"ids": [ids["a.jpg"]]})).unwrap();
+    s.active_mask = Some(1);
+    s.execute("library.deleteDuplicates", &json!({"keep": [ids["a.jpg"]], "delete": [ids["a_resaved.jpg"]]})).unwrap();
+    assert_eq!(s.active_mask, Some(1));
+}
+
 /// `library.deleteDuplicates` refuses a photo named twice, one not in the library, and a call that deletes nothing;
 /// a refused call changes nothing.
 #[test]

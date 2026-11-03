@@ -695,6 +695,7 @@
   "Find Duplicate Photos…": "查找重复照片…",
   "Keep": "保留",
   "Looking for duplicate photos…": "正在查找重复照片…",
+  "The library was switched while this window was open; close it and search the new library.": "此窗口打开期间图库已切换；请关闭它并在新图库中重新查找。",
   "the same picture at another size or compression": "尺寸或压缩不同的同一张图片",
   "also small edits: a light crop, sharpening, mild colour or exposure changes": "也包括轻微编辑：轻微裁剪、锐化、轻微的颜色或曝光改动",
   "also heavier edits, with more chance of pairing two frames of a burst": "也包括较大编辑，更可能把连拍的两张配成一对",
