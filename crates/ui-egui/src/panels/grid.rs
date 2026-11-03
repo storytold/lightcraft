@@ -814,7 +814,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         paint_copy_tag(p, &t, name, img_rect, square);
     }
     if let Some(why) = &photo.preview_only {
-        paint_preview_pill(ui, p, &t, id, why, img_rect);
+        paint_preview_pill(ui, p, &t, id, why, photo_rect);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
@@ -954,11 +954,11 @@ fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, squ
     p.galley(pos2(br.left() + 22.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
 }
 
-fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, img_rect: Rect) {
-    // a raw shown from its embedded JPEG: a small amber "Preview" pill at the image's bottom
+fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, photo_rect: Rect) {
+    // a raw shown from its embedded JPEG: a small amber "Preview" pill at the photo's bottom
     // left, above the badge bar (always shown: it changes what editing does)
     let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
-    let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
+    let at = pos2(photo_rect.left() + 6.0, photo_rect.bottom() - 30.0 - 16.0);
     let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
     p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
     paint(p, Rect::from_center_size(pos2(br.left() + 9.0, br.center().y), vec2(12.0, 12.0)), Icon::Info, t.caution);
