@@ -1,17 +1,34 @@
 use super::*;
 
-/// The draws [`hold_for_waiters`] holds, by cache, and how many renders wait for each.
-static HOLDS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+/// The draws [`hold_for_waiters`] holds, by cache: how many renders wait for each, and how many
+/// draws are left to hold.
+static HOLDS: Mutex<Vec<(usize, usize, usize)>> = Mutex::new(Vec::new());
 
 /// Holds the draw of `d` until the renders [`HOLDS`] names for its cache are waiting for it (each
 /// holds a clone of its slot, as do the drawing and its in-flight entry), so a test can make
 /// renders miss a tile together.
 pub(super) fn hold_for_waiters(d: &Drawing) {
-    let held = HOLDS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(c, _)| *c == d.id.0).map(|h| h.1);
-    let Some(waiters) = held else { return };
+    let waiters = {
+        let mut holds = HOLDS.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(h) = holds.iter_mut().find(|h| h.0 == d.id.0 && h.2 > 0) else { return };
+        h.2 -= 1;
+        h.1
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while Arc::strong_count(&d.done) < 2 + waiters && std::time::Instant::now() < deadline {
+    while Arc::strong_count(&d.done) < 2 + waiters {
+        assert!(std::time::Instant::now() < deadline, "the renders never waited");
         std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// The caches [`evict_before_waking`] empties.
+static EVICTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// Empties `cache` if [`EVICTS`] names it, after its drawer `d` has cached its tile and before it
+/// wakes the renders waiting for it, as other renders' tiles can push it out in that gap.
+pub(super) fn evict_before_waking(cache: &Cache, d: &Drawing) {
+    if EVICTS.lock().unwrap_or_else(PoisonError::into_inner).contains(&d.id.0) {
+        cache.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 }
 
@@ -239,13 +256,31 @@ fn a_waiting_render_gets_the_tile_the_cache_evicted() {
     marker.finish(&drawn);
     keep(&OWN, key, drawn.clone());
     // other renders' tiles push it out of the cache before the waiter wakes
+    // (each its own tile: a waiter that took another key's would fail the check below)
     for other in 1..=CACHE as u32 {
-        keep(&OWN, key_of(look, seed + other), drawn.clone());
+        keep(&OWN, key_of(look, seed + other), Arc::new(CrystalTile::new(look, seed + other).expect("tile")));
     }
     assert!(cached(&OWN, key).is_none(), "the tile is still cached");
     drop(marker);
     let got = render.join().expect("render thread").expect("tile");
     assert!(Arc::ptr_eq(&got, &drawn), "the render drew the tile again");
+}
+
+/// A render waiting for a tile another render is drawing gets the drawer's tile even when the
+/// cache drops it before the waiter wakes.
+#[test]
+fn a_render_drawing_a_tile_hands_it_to_its_waiter() {
+    static OWN: Cache = Mutex::new(Vec::new());
+    let id = std::ptr::from_ref(&OWN) as usize;
+    // the first render's draw (only: a second would be the waiter drawing it again) waits for the
+    // second render to wait for it, and the cache empties before the second wakes
+    HOLDS.lock().unwrap_or_else(PoisonError::into_inner).push((id, 1, 1));
+    EVICTS.lock().unwrap_or_else(PoisonError::into_inner).push(id);
+    let (look, seed) = (CrystalLook::new(0.0, 50.0), 0x0d4a_0005);
+    let renders: Vec<_> = (0..2).map(|_| std::thread::spawn(move || tile_in(&OWN, look, seed, true))).collect();
+    let got: Vec<_> = renders.into_iter().map(|r| r.join().expect("render thread").expect("tile")).collect();
+    assert!(cached(&OWN, key_of(look, seed)).is_none(), "the cache kept the tile");
+    assert!(Arc::ptr_eq(&got[0], &got[1]), "the waiter drew the tile again");
 }
 
 /// Renders that miss the same tile together draw it once: the first registers the draw and the
@@ -256,9 +291,10 @@ fn renders_that_miss_a_tile_together_draw_it_once() {
     static OWN: Cache = Mutex::new(Vec::new());
     const N: usize = 8;
     // the first render's draw waits for the other seven to miss the tile too
-    HOLDS.lock().unwrap_or_else(PoisonError::into_inner).push((std::ptr::from_ref(&OWN) as usize, N - 1));
+    const SEEDS: u32 = 40;
+    HOLDS.lock().unwrap_or_else(PoisonError::into_inner).push((std::ptr::from_ref(&OWN) as usize, N - 1, SEEDS as usize));
     let look = CrystalLook::new(0.0, 50.0);
-    for seed in 0x0d4a_1000..0x0d4a_1000 + 40 {
+    for seed in 0x0d4a_1000..0x0d4a_1000 + SEEDS {
         let start = Arc::new(std::sync::Barrier::new(N));
         let renders: Vec<_> = (0..N)
             .map(|_| {

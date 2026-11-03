@@ -932,6 +932,10 @@ fn tile_in(cache: &'static Cache, look: CrystalLook, seed: u32, wait: bool) -> O
         d.finish(&t);
     }
     keep(cache, key, t.clone());
+    #[cfg(test)]
+    if let Some(d) = &drawing {
+        tests::evict_before_waking(cache, d);
+    }
     Some(t)
 }
 
