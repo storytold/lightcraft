@@ -37,7 +37,6 @@ mod grading;
 mod grid;
 mod grid_drag;
 mod guided_guides;
-mod hide_rejected;
 mod histogram_drag;
 mod import_thumbnails;
 mod info_dialogs;

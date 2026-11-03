@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::{Result, Session};
 
+/// Five photos: 1 picked, 2 and 5 rejected, 3 and 4 unflagged; 1, 2 and 4 have five stars.
 fn session() -> Result<Session> {
     let mut s = Session::new();
     for (id, rating, flag) in [(1, 5, Flag::Pick), (2, 5, Flag::Reject), (3, 2, Flag::None), (4, 5, Flag::None), (5, 1, Flag::Reject)] {
@@ -23,6 +24,7 @@ fn session() -> Result<Session> {
     Ok(s)
 }
 
+/// The ids of the photos shown, sorted.
 fn shown(s: &mut Session) -> Vec<u64> {
     let mut ids: Vec<u64> = s.visible().iter().map(|p| p.0).collect();
     ids.sort();
