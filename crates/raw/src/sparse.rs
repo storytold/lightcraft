@@ -201,11 +201,14 @@ struct Want<'a> {
     /// What is missing, as found; merged once into the plan (merging each find into the ranges so
     /// far was a copy of them per find: quadratic over a file of many out-of-line values).
     need: Vec<(u64, u64)>,
+    /// `need` is merged when it reaches this long, so repeated finds of one gap stay bounded by
+    /// the distinct gaps (merging when it doubles keeps the cost linear).
+    compact_at: usize,
 }
 
 impl<'a> Want<'a> {
     fn new(bytes: &[u8], loaded: &'a Ranges) -> Self {
-        Self { len: bytes.len() as u64, loaded, need: Vec::new() }
+        Self { len: bytes.len() as u64, loaded, need: Vec::new(), compact_at: 64 }
     }
 
     /// Whether `[start, end)` (clipped to the file) is loaded; asks for what isn't.
@@ -215,6 +218,12 @@ impl<'a> Want<'a> {
             return true;
         }
         self.need.extend(self.loaded.gaps(start, end).0);
+        if self.need.len() >= self.compact_at {
+            let mut merged = Ranges::new();
+            merged.extend(std::mem::take(&mut self.need));
+            self.need = merged.spans().to_vec();
+            self.compact_at = (self.need.len() * 2).max(64);
+        }
         false
     }
 
@@ -572,6 +581,19 @@ mod tests {
         assert_eq!(need.spans().len(), 20_000);
         assert_eq!(need.total(), 20_000);
         assert_eq!(loaded.gaps(0, 12).spans(), &[(3, 4), (7, 8), (11, 12)]);
+    }
+
+    #[test]
+    fn repeated_wants_of_one_gap_keep_the_buffer_bounded() {
+        let loaded = Ranges::new();
+        let bytes = vec![0u8; 1000];
+        let mut w = Want::new(&bytes, &loaded);
+        for _ in 0..100_000 {
+            assert!(!w.want(10, 20));
+            assert!(w.need.len() <= 64);
+        }
+        let Some(HeaderPlan::Need(need)) = w.into_plan() else { panic!("a plan") };
+        assert_eq!(need.spans(), &[(10, 20)]);
     }
 
     #[test]

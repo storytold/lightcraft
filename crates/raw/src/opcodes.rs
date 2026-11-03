@@ -587,6 +587,12 @@ fn op_cost(op: &Opcode, w: usize, h: usize, cpp: usize) -> usize {
         | Opcode::DeltaPerColumn { area, .. }
         | Opcode::ScalePerRow { area, .. }
         | Opcode::ScalePerColumn { area, .. } => visits(area),
+        // `apply_list` does nothing for these, so they spend none of the budget
+        Opcode::Unknown { .. }
+        | Opcode::TrimBounds { .. }
+        | Opcode::WarpFisheye { .. }
+        | Opcode::WarpRectilinear { .. }
+        | Opcode::WarpRectilinear2 { .. } => 0,
         _ => w.saturating_mul(h).saturating_mul(cpp),
     }
 }
