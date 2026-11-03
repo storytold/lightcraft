@@ -602,6 +602,9 @@ fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<Exa
 }
 
 fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> String {
+    if multiplier == 0 {
+        return "0".to_owned();
+    }
     let mut digits = Vec::with_capacity(value.len().saturating_add(10));
     let mut carry = 0u64;
     for digit in value.bytes().rev() {
@@ -615,6 +618,17 @@ fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> String {
     }
     digits.reverse();
     digits.into_iter().map(char::from).collect()
+}
+
+fn decimal_significand(value: &str) -> Option<f64> {
+    let mut prefix = 0u64;
+    let mut digits = 0u32;
+    for digit in value.bytes().take(17) {
+        prefix = prefix.checked_mul(10)?.checked_add(u64::from(digit.checked_sub(b'0')?))?;
+        digits = digits.checked_add(1)?;
+    }
+    let exponent = i32::try_from(digits.checked_sub(1)?).ok()?;
+    Some(prefix as f64 / 10.0_f64.powi(exponent))
 }
 
 fn compare_scaled_decimal(left: &str, left_exponent: i64, right: &str, right_exponent: i64) -> Option<std::cmp::Ordering> {
@@ -650,29 +664,31 @@ fn exact_ratio_to_u32(value: ExactRatio) -> Option<u32> {
     if value.exponent < -128 || value.exponent > 128 {
         return None;
     }
-    let mut low = 0;
-    let mut high = u32::MAX;
-    while low <= high {
-        let integer = low + (high - low) / 2;
-        let product = multiply_decimal_by_u32(&value.denominator, integer);
-        let ordering = if product == "0" {
-            compare_scaled_decimal(&value.numerator, value.exponent, "0", 0)?
-        } else {
-            let trailing_zeroes = product.bytes().rev().take_while(|digit| *digit == b'0').count();
-            let product_exponent = i64::try_from(trailing_zeroes).ok()?;
-            compare_scaled_decimal(&value.numerator, value.exponent, product.trim_end_matches('0'), product_exponent)?
-        };
-        match ordering {
-            std::cmp::Ordering::Equal => return Some(integer),
-            std::cmp::Ordering::Less => high = integer.checked_sub(1)?,
-            std::cmp::Ordering::Greater => low = integer.checked_add(1)?,
-        }
+    let numerator_length = i128::try_from(value.numerator.len()).ok()?;
+    let denominator_length = i128::try_from(value.denominator.len()).ok()?;
+    let decimal_scale = numerator_length.checked_add(i128::from(value.exponent))?.checked_sub(denominator_length)?;
+    if !(0..=10).contains(&decimal_scale) {
+        return None;
     }
-    None
+    // The prefix only estimates a candidate. Acceptance compares the full exact coefficients below.
+    let approximate =
+        decimal_significand(&value.numerator)? / decimal_significand(&value.denominator)? * 10.0_f64.powi(i32::try_from(decimal_scale).ok()?);
+    if !approximate.is_finite() {
+        return None;
+    }
+    let integer = approximate.round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    let product = multiply_decimal_by_u32(&value.denominator, integer);
+    let ordering = if product == "0" {
+        compare_scaled_decimal(&value.numerator, value.exponent, "0", 0)?
+    } else {
+        let trailing_zeroes = product.bytes().rev().take_while(|digit| *digit == b'0').count();
+        let product_exponent = i64::try_from(trailing_zeroes).ok()?;
+        compare_scaled_decimal(&value.numerator, value.exponent, product.trim_end_matches('0'), product_exponent)?
+    };
+    (ordering == std::cmp::Ordering::Equal).then_some(integer)
 }
 
 fn exact_u32_from_text(value: &str) -> Option<u32> {
-    parse_number(value)?;
     let value = value.trim();
     let ratio = if let Some((numerator, denominator)) = value.split_once('/') {
         exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
