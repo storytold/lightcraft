@@ -138,12 +138,23 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Most bytes of alpha planes a render keeps at once, and the fewest masks it always keeps: every evaluated mask
+/// retains a full-size `f32` plane, so a sidecar listing thousands of masks must not multiply the output size.
+const MAX_ALPHA_BYTES: usize = 8 << 30;
+const MIN_MASKS: usize = 16;
+
+/// How many masks of a `w` × `h` render are evaluated (the first ones, in order).
+fn max_masks(w: usize, h: usize) -> usize {
+    (MAX_ALPHA_BYTES / w.saturating_mul(h).saturating_mul(4).max(1)).max(MIN_MASKS)
+}
+
 /// The visible masks with components, evaluated in order (`mattes`: the source's, see [`Mattes`]).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Vec<Evaluated> {
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
+        .take(max_masks(w, h))
         .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
         .collect()
 }
