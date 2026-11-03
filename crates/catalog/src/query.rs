@@ -213,6 +213,13 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             Some((_, v)) => x == v as f32,
             None => false,
         };
+        let boolean = |s: &str| -> Option<bool> {
+            match s {
+                "true" | "yes" => Some(true),
+                "false" | "no" => Some(false),
+                _ => None,
+            }
+        };
         return match field {
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
@@ -225,9 +232,9 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "keyword" | "kw" => p.meta.keywords.iter().any(|k| crate::keywords::is_under(k, val)),
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
-            "edited" => (val == "true" || val == "yes") == p.is_edited(),
+            "edited" => boolean(val).is_some_and(|edited| edited == p.is_edited()),
             "date" => p.captured.as_deref().is_some_and(|c| c.get(..val.len()).is_some_and(|h| h.eq_ignore_ascii_case(val))),
-            "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
+            "copy" | "virtual" => boolean(val).is_some_and(|copy| copy == p.copy_of.is_some()),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
             // Not a known field: the colon is part of a plain word ("10:30", "Re:"), its value unquoted
             // (`re:"a b"` is the text `re:a b`).

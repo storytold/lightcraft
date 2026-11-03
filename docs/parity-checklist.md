@@ -147,7 +147,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `rating:>=3` / `iso:<=400`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
+| LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `rating:>=3` / `iso:<=400`, `camera:…`); `edited:` accepts true/yes and false/no, as do `copy:` / `virtual:`; other boolean values match nothing; plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
 | LR-FILT-SEARCH-AI | Natural-language search | P2 | ⬜ | | |
 | LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`) |
 | LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`, `flags`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged, toggled on and off like Classic's Attribute flag buttons: several at once show any of them (Picked + Unflagged hides only the rejects, issue #2588; `flags`, one chip); the single `flag` of saved filters, smart albums and agents still filters |
@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | patch | LR-FILT-SEARCH-META: `edited:`, `copy:` and `virtual:` reject empty or invalid boolean values instead of treating them as false; accepted values and search behavior otherwise unchanged; readiness and roadmap counts unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-28 | minor | KEY-HIDEPINS ✅ → 🟡: in the Masking panel an unmodified H toggles the mask pins (`view.maskPins`, the View ▸ Show Mask Pins switch) instead of opening Remove; the toggle yields only to an explicit assignment of H itself, a Remove key reassigned to anything else still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default). Remove's spot pins keep ⇧H as their only hide toggle (`tests/keymap` `h_toggles_the_mask_pins_while_masking`, `a_remapped_remove_key_still_opens_remove_while_masking`, `h_still_toggles_the_pins_when_remove_moves_to_another_key`) |
