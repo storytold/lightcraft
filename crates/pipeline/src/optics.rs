@@ -635,8 +635,11 @@ fn min_filter(p: &Plane, r: usize, max: bool) -> Plane {
     for (i, v) in tmp.data.iter().enumerate() {
         t[(i % w) * h + i / w] = *v;
     }
+    // each buffer goes once the next is built, so no more than three planes are alive at once
+    drop(tmp);
     let mut tt = vec![0f32; w * h];
     for_rows(&mut tt, h, |x, col| extreme_1d(&t[x * h..(x + 1) * h], r, max, col));
+    drop(t);
     let mut out = Plane::new(w, h);
     for (i, v) in tt.iter().enumerate() {
         out.data[(i % h) * w + i / h] = *v;
