@@ -30,6 +30,9 @@ pub use model::{Distortion, Tca, Vignetting};
 const MAX_FILE_BYTES: u64 = 16 << 20;
 /// Most files read from one directory.
 const MAX_FILES: usize = 2000;
+/// Most bytes of lens names that profiles may copy per parsed document (each calibration owns a copy): a real
+/// database copies about a megabyte.
+const MAX_PROFILE_COPY_BYTES: usize = 32 << 20;
 /// Largest radial error (half-diagonal units) accepted when converting a distortion to the DNG polynomial.
 pub const MAX_WARP_ERROR: f64 = 0.001;
 /// Largest relative error accepted when converting vignetting to the DNG polynomial.
@@ -144,7 +147,8 @@ impl LensDb {
         let root = xml::parse(xml)?;
         let Some(top) = root.kid("lensdatabase") else { return Err(Error::Xml("no <lensdatabase> element".into())) };
         let cameras = top.kids("camera").filter_map(camera).collect();
-        let lenses = top.kids("lens").flat_map(lens).collect();
+        let mut budget = MAX_PROFILE_COPY_BYTES;
+        let lenses = top.kids("lens").flat_map(|n| lens(n, &mut budget)).collect();
         Ok(LensDb { cameras, lenses })
     }
 
@@ -272,11 +276,22 @@ fn exif_focal_range(exif: &[String]) -> Option<(f64, f64)> {
 }
 
 fn read_capped(path: &Path) -> Result<String, Error> {
-    let len = std::fs::metadata(path).map_err(|e| Error::Io(e.to_string()))?.len();
-    if len > MAX_FILE_BYTES {
+    use std::io::Read;
+    let io = |e: std::io::Error| Error::Io(e.to_string());
+    // the opened file is checked, not the pathname: a link or FIFO swapped in after a pathname check is refused too
+    let file = std::fs::File::open(path).map_err(io)?;
+    let meta = file.metadata().map_err(io)?;
+    if !meta.is_file() {
+        return Err(Error::Io(format!("{}: not a regular file", path.display())));
+    }
+    if meta.len() > MAX_FILE_BYTES {
         return Err(Error::TooLarge);
     }
-    let bytes = std::fs::read(path).map_err(|e| Error::Io(e.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(Error::TooLarge);
+    }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -369,7 +384,7 @@ fn positive(v: Option<f64>) -> Option<f64> {
 }
 
 /// One `<lens>` element → one profile per `<calibration>` (newer files give each its own crop factor and aspect).
-fn lens(n: &xml::Node) -> Vec<Profile> {
+fn lens(n: &xml::Node, copy_budget: &mut usize) -> Vec<Profile> {
     let Some(maker) = n.kid_text("maker") else { return Vec::new() };
     let models: Vec<String> = n.kids("model").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect();
     if models.is_empty() {
@@ -379,7 +394,12 @@ fn lens(n: &xml::Node) -> Vec<Profile> {
     let aspect = aspect_of(n.kid_text("aspect-ratio")).unwrap_or(1.5);
     let rectilinear = n.kid_text("type").is_none_or(|t| t.eq_ignore_ascii_case("rectilinear"));
     let mounts = n.kids("mount").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect::<Vec<_>>();
+    // every calibration owns a copy of the lens's names: calibrations past the document's shared copy budget are left out
+    let meta_bytes = maker.len() + models.iter().chain(&mounts).map(|m| m.len() + 1).sum::<usize>() + 1;
+    let take = n.kids("calibration").count().min(*copy_budget / meta_bytes);
+    *copy_budget -= take * meta_bytes;
     n.kids("calibration")
+        .take(take)
         .map(|cal| {
             let mut p = Profile {
                 maker: maker.to_string(),

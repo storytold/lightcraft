@@ -232,7 +232,8 @@ fn fisheyes_get_no_rectilinear_warp_and_bad_shots_none() {
 #[test]
 fn load_dir_reads_xml_files_and_reports_bad_ones() {
     let dir = std::env::temp_dir().join(format!("lensdb-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // exclusive: an existing (possibly planted) entry fails the test instead of being written through
+    std::fs::create_dir(&dir).unwrap();
     std::fs::write(dir.join("a.xml"), DB).unwrap();
     std::fs::write(dir.join("b.xml"), "<lensdatabase").unwrap();
     std::fs::write(dir.join("c.txt"), "ignored").unwrap();
@@ -370,4 +371,26 @@ fn hostile_numbers_give_finite_corrections_or_none() {
     }
     assert!(db.find_camera("", "").is_none());
     assert!(db.find_lens(None, "  ", None).is_none());
+}
+
+#[test]
+fn calibrations_past_the_shared_copy_budget_are_left_out() {
+    let name = "x".repeat(400_000);
+    let cal = "<calibration focal=\"50\"><distortion model=\"poly3\" focal=\"50\" k1=\"0.01\"/></calibration>";
+    let xml = format!("<lensdatabase><lens><maker>M</maker><model>{name}</model>{}</lens></lensdatabase>", cal.repeat(2000));
+    let db = LensDb::parse(&xml).unwrap();
+    assert!(!db.lenses.is_empty());
+    assert!(db.lenses.len() * 400_000 <= MAX_PROFILE_COPY_BYTES);
+}
+
+#[cfg(unix)]
+#[test]
+fn load_dir_refuses_a_non_regular_xml_entry() {
+    let dir = std::env::temp_dir().join(format!("lensdb-test-dev-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    std::os::unix::fs::symlink("/dev/zero", dir.join("z.xml")).unwrap();
+    let (db, errs) = LensDb::load_dir(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(db.is_empty());
+    assert_eq!(errs.len(), 1, "{errs:?}");
 }
