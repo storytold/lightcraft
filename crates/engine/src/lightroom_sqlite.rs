@@ -436,7 +436,7 @@ impl Database {
         let mut tables = Vec::new();
         let mut aliases = HashMap::new();
         let mut roots = HashSet::new();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0, values_total: 0 };
         self.visit_table(1, 5, None, 0, &mut state)?;
         for record in state.out {
             if record.values.len() < 5 {
@@ -725,7 +725,8 @@ fn parse_create_table(sql: &str) -> Result<(Vec<String>, Option<usize>), String>
                 if columns.len() >= MAX_COLUMNS {
                     return Err("CREATE TABLE has too many columns".into());
                 }
-                if !names.insert(name.to_string()) {
+                // SQLite column names are ASCII case-insensitive, so "a" and "A" clash
+                if !names.insert(name.to_ascii_lowercase()) {
                     return Err("duplicate SQLite column name".into());
                 }
                 let index = columns.len();

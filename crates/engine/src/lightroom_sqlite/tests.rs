@@ -144,6 +144,7 @@ fn a_create_table_past_the_column_limit_is_refused_while_parsing() {
     let sql = format!("CREATE TABLE t ({})", cols.join(", "));
     assert!(parse_create_table(&sql).unwrap_err().contains("too many columns"));
     assert!(parse_create_table("CREATE TABLE t (a TEXT, a INTEGER)").unwrap_err().contains("duplicate"));
+    assert!(parse_create_table("CREATE TABLE t (a TEXT, A INTEGER)").unwrap_err().contains("duplicate"));
 }
 
 /// A database file with no schema yet has schema format 0 in its header (file format
