@@ -531,6 +531,154 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
+// Pixel dimensions are integers. Keep their source text long enough to distinguish a fraction
+// that `f64` rounds to an integer, while bounding any decimal scale work.
+#[derive(Clone, Copy)]
+struct ExactDecimal {
+    negative: bool,
+    coefficient: u128,
+    exponent: i64,
+}
+
+#[derive(Clone, Copy)]
+struct ExactRatio {
+    negative: bool,
+    numerator: u128,
+    denominator: u128,
+    exponent: i64,
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    a
+}
+
+fn exact_decimal(value: &str) -> Option<ExactDecimal> {
+    let value = value.trim();
+    let (negative, value) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    let (mantissa, exponent) = if let Some((mantissa, exponent)) = value.split_once('e').or_else(|| value.split_once('E')) {
+        if exponent.contains('e') || exponent.contains('E') {
+            return None;
+        }
+        (mantissa, exponent.parse::<i64>().ok()?)
+    } else {
+        (value, 0)
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if fraction.contains('.') {
+        return None;
+    }
+    let digits = whole.bytes().chain(fraction.bytes());
+    if !digits.clone().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    let count = whole.len().checked_add(fraction.len())?;
+    if count == 0 {
+        return None;
+    }
+    let leading = digits.clone().take_while(|digit| *digit == b'0').count();
+    if leading == count {
+        return Some(ExactDecimal { negative, coefficient: 0, exponent: 0 });
+    }
+    let trailing = digits.clone().rev().take_while(|digit| *digit == b'0').count();
+    let significant = count.checked_sub(leading)?.checked_sub(trailing)?;
+    let mut coefficient = 0u128;
+    for digit in digits.skip(leading).take(significant) {
+        coefficient = coefficient.checked_mul(10)?.checked_add(u128::from(digit - b'0'))?;
+    }
+    let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing).ok()?)?;
+    Some(ExactDecimal { negative, coefficient, exponent })
+}
+
+fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactRatio> {
+    if denominator.coefficient == 0 {
+        return None;
+    }
+    let divisor = gcd(numerator.coefficient, denominator.coefficient);
+    Some(ExactRatio {
+        negative: numerator.negative ^ denominator.negative,
+        numerator: numerator.coefficient / divisor,
+        denominator: denominator.coefficient / divisor,
+        exponent: numerator.exponent.checked_sub(denominator.exponent)?,
+    })
+}
+
+fn exact_ratio_to_u32(value: ExactRatio) -> Option<u32> {
+    if value.negative || value.denominator == 0 {
+        return None;
+    }
+    let mut numerator = value.numerator;
+    let mut denominator = value.denominator;
+    if value.exponent < 0 {
+        if denominator != 1 {
+            return None;
+        }
+        let scale = u32::try_from(value.exponent.checked_neg()?).ok()?;
+        if scale > 128 {
+            return None;
+        }
+        for _ in 0..scale {
+            if !numerator.is_multiple_of(10) {
+                return None;
+            }
+            numerator /= 10;
+        }
+    } else if value.exponent > 0 {
+        let scale = u32::try_from(value.exponent).ok()?;
+        if scale > 128 {
+            return None;
+        }
+        let mut twos = 0;
+        while denominator.is_multiple_of(2) {
+            denominator /= 2;
+            twos += 1;
+        }
+        let mut fives = 0;
+        while denominator.is_multiple_of(5) {
+            denominator /= 5;
+            fives += 1;
+        }
+        if denominator != 1 || twos > scale || fives > scale {
+            return None;
+        }
+        for _ in twos..scale {
+            numerator = numerator.checked_mul(2)?;
+        }
+        for _ in fives..scale {
+            numerator = numerator.checked_mul(5)?;
+        }
+    } else if denominator != 1 {
+        return None;
+    }
+    u32::try_from(numerator).ok()
+}
+
+fn exact_u32_from_text(value: &str) -> Option<u32> {
+    parse_number(value)?;
+    let value = value.trim();
+    let ratio = if let Some((numerator, denominator)) = value.split_once('/') {
+        exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
+    } else {
+        let value = exact_decimal(value)?;
+        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: 1, exponent: value.exponent }
+    };
+    exact_ratio_to_u32(ratio)
+}
+
+fn dimension_candidate(first: impl Fn(&str) -> Option<String>, key: &str) -> Option<u32> {
+    first(key).and_then(|value| exact_u32_from_text(&value))
+}
+
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
@@ -566,8 +714,8 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         metering_mode: num("exif:MeteringMode").map(|v| v as u16),
         white_balance: num("exif:WhiteBalance").map(|v| v as u16),
         orientation: num("tiff:Orientation").map(|v| v as u16).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif),
-        width: num("tiff:ImageWidth").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelXDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
-        height: num("tiff:ImageLength").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelYDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
+        width: dimension_candidate(first, "tiff:ImageWidth").or_else(|| dimension_candidate(first, "exif:PixelXDimension")),
+        height: dimension_candidate(first, "tiff:ImageLength").or_else(|| dimension_candidate(first, "exif:PixelYDimension")),
         title: first("dc:title"),
         caption: first("dc:description"),
         alt_text: first("Iptc4xmpCore:AltTextAccessibility"),

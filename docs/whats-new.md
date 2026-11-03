@@ -38,6 +38,9 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Invalid XMP pixel dimensions are ignored
+- Fractional and out-of-range dimensions no longer become truncated or saturated pixel sizes. A valid alternate EXIF dimension can still fill the field, while the original XMP property remains available in metadata details.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
@@ -65,7 +68,6 @@
   `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
   gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
   running), and what was read isn't read again.
-
 ## 2026-10-30
 
 ### Lightroom catalogs with a print inside a collection import their collections

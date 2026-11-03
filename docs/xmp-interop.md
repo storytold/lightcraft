@@ -40,6 +40,10 @@ remains available in the raw property map, and does not prevent the next valid c
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 
+XMP pixel dimensions are accepted only when their original numeric text represents a nonnegative integer within
+`u32`. Fractional, malformed and out-of-range values remain available as raw XMP properties but do not populate
+typed dimensions; an invalid TIFF dimension allows the corresponding EXIF dimension property to be tried.
+
 When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
 report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
 unmapped adjustments; they do not change the source packet or become catalog edits.

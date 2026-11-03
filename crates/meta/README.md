@@ -25,6 +25,9 @@ with more than three colon-separated components is rejected as a whole, allowing
 fallback to supply the capture time. The original tag remains available in All Metadata. JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
 malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
+XMP pixel dimensions are projected only from exact, nonnegative integer values representable by `u32`. Invalid
+values remain in the raw property map and allow the alternate dimension property to supply the typed value.
+
 ## XMP namespaces
 
 Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchicalSubject`) and ours,
