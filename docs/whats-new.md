@@ -2,6 +2,12 @@
 
 ## 2026-10-30
 
+### The web version no longer offers a Lightroom catalog import it can't do
+- In LightCraft in the browser, File ▸ Import Lightroom Catalog… did nothing when chosen: the browser build can't read a
+  Lightroom catalog. The item is now left out of its File menu, as it already was from the empty library's buttons,
+  and run any other way (a key you gave it, an agent) without a catalog it says there is no file dialog instead of
+  doing nothing (issue #3655). The desktop app is unchanged.
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 

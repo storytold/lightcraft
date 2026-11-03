@@ -359,12 +359,15 @@ pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
     s.selection.ids.iter().copied().chain(s.selection.active).any(|id| s.catalog.photo(id).is_some_and(|p| p.deleted))
 }
 
-/// Items only some hosts have are left out of the others' menus (the web build's library backup);
+/// Items only some hosts have are left out of the others' menus (the web build's library backup,
+/// the desktop's Lightroom catalog import);
 /// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        // the browser build can't read a Lightroom catalog (its empty library doesn't offer it either, #3655)
+        "file.importLightroom" => !cfg!(target_arch = "wasm32"),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only in an album that holds its photos (not a smart one)

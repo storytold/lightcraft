@@ -1350,6 +1350,11 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                         PickRequest::file(crate::i18n::tr("Import Lightroom Catalog"), crate::i18n::tr("Lightroom Classic Catalog"), &["lrcat"]);
                     match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
                         Picked::Now(v) => v.into_iter().next(),
+                        // a host with no catalog dialog at all (the browser build) says so instead of
+                        // doing nothing (#3655); a dialog that was cancelled stays quiet
+                        Picked::Unavailable if app.services.pick_lightroom_catalog.is_none() => {
+                            return Some(Err("no file dialog on this platform; supply path".into()));
+                        }
                         Picked::Later | Picked::Unavailable => None,
                     }
                 }

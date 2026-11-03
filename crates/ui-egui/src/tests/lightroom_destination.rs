@@ -424,3 +424,23 @@ fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     assert_eq!(open_dir(&h), Some(other));
     assert!(!target.exists(), "no library was made at {}", target.display());
 }
+
+/// Issue #3655: where the host has no Lightroom catalog dialog (the browser build), Import
+/// Lightroom Catalog… without a `path` says so instead of doing nothing; one that was cancelled
+/// stays quiet.
+#[test]
+fn no_catalog_dialog_is_an_error_not_silence() {
+    let services = Services { png: None, ..Default::default() };
+    assert!(services.pick_lightroom_catalog.is_none() && services.picker.is_none());
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let err = app.run("file.importLightroom", json!({})).unwrap_err();
+    assert!(err.contains("no file dialog"), "{err}");
+    assert!(app.lightroom.is_none() && destination_of(&app).is_none());
+    // a dialog that was there but came back empty (cancelled)
+    app.services.pick_lightroom_catalog = Some(Box::new(|| None));
+    assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);
+}
+
+fn destination_of(app: &LightcraftApp) -> Option<()> {
+    matches!(app.ui.dialog, Some(Dialog::LightroomDestination { .. })).then_some(())
+}
