@@ -5,7 +5,8 @@ use lightcraft_denoise::manifest::{Domain, Gain};
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lc-engine-gpu-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    // exclusive: a directory planted at this predictable name fails the test instead of receiving its files
+    std::fs::create_dir(&dir).unwrap();
     dir
 }
 
