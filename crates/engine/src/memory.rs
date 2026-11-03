@@ -21,8 +21,8 @@ use serde::Serialize;
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
 /// batch may, in addition, hold up to twice the budget in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
-/// a quarter of the machine's RAM ([`total_ram`]: a container's or cgroup's memory limit when
-/// smaller), at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
+/// a quarter of the machine's RAM ([`total_ram`]: a container's, cgroup's or Windows job's memory
+/// limit when smaller), at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
     if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
@@ -42,11 +42,13 @@ fn budget_for(total: Option<usize>) -> usize {
     }
 }
 
-/// Memory the process may use (bytes), when the platform tells us without native calls: physical
-/// RAM, held on Linux to the memory limit of the process's cgroup (a container, a Flatpak, a
-/// systemd scope with `MemoryMax`, a CI runner) when that is smaller.
+/// Memory the process may use (bytes), when the platform tells us: physical RAM, held on Linux to
+/// the memory limit of the process's cgroup (a container, a Flatpak, a systemd scope with
+/// `MemoryMax`, a CI runner) and on Windows to the memory limit of its job object (a Windows
+/// container, a CI runner, a launcher that starts it in a job) when that is smaller
+/// (`lightcraft_sysmem::effective_total`, which makes the Windows calls).
 pub(crate) fn total_ram() -> Option<usize> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         lightcraft_sysmem::effective_total().map(|b| usize::try_from(b).unwrap_or(usize::MAX))
     }
@@ -60,7 +62,7 @@ pub(crate) fn total_ram() -> Option<usize> {
         let out = std::process::Command::new("/sbin/sysctl").args(["-n", "hw.physmem"]).output().ok()?;
         String::from_utf8_lossy(&out.stdout).trim().parse().ok()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos", target_os = "freebsd")))]
     {
         None
     }
@@ -364,6 +366,21 @@ mod tests {
             return;
         };
         assert!(ram as u64 <= limit, "total_ram {ram} above the cgroup limit {limit}");
+    }
+
+    /// Windows knows the RAM (the budget used to be the 1.5 GiB cap whatever the machine had), held
+    /// to the job object's memory limit when there is one (#3652).
+    #[test]
+    #[cfg(windows)]
+    fn total_ram_is_known_on_windows_and_honours_the_job_limit() {
+        let ram = total_ram().unwrap();
+        assert!(ram >= 256 << 20, "{ram} bytes");
+        assert_eq!(budget_for(Some(ram)), (ram / 4).min(3 << 29));
+        let Some(limit) = lightcraft_sysmem::job_limit() else {
+            lightcraft_testkit::skip!(System, "this process's job object (if any) sets no memory limit");
+            return;
+        };
+        assert!(ram as u64 <= limit, "total_ram {ram} above the job memory limit {limit}");
     }
 
     /// The budget stays a quarter of a small limit, not raised to a floor above it (#3072).
