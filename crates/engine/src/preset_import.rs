@@ -42,7 +42,7 @@ pub fn read_zip(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     read_zip_limited(bytes, MAX_ZIP_ENTRY, MAX_ZIP_TOTAL)
 }
 
-fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
     let u16_at = |o: usize| bytes.get(o..o.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     let u32_at = |o: usize| bytes.get(o..o.checked_add(4)?).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
     // offsets from the file, added up without overflowing (a 32-bit build reads them too)
@@ -83,7 +83,7 @@ fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize) -> Result<
             0 if data.len() > limit => return Err(too_big()),
             0 => data.to_vec(),
             8 => miniz_oxide::inflate::decompress_to_vec_with_limit(data, usize_.max(1).saturating_mul(2).saturating_add(1024).min(limit)).map_err(
-                |e| if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) { too_big() } else { format!("{name}: {e:?}") },
+                |e| if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) { too_big() } else { format!("{name}: {:?}", e.status) },
             )?,
             m => return Err(format!("{name}: unsupported compression method {m}")),
         };
@@ -139,7 +139,11 @@ impl LuaParser<'_> {
             if self.s[self.i..].starts_with(b"--") {
                 self.i += 2;
                 if let Some(level) = self.long_bracket_level() {
-                    let _ = self.long_string(level);
+                    // an unterminated long comment runs to the end (as in Lua): going on past its
+                    // opening would search the rest of the file again for every such opening
+                    if self.long_string(level).is_err() {
+                        self.i = self.s.len();
+                    }
                 } else {
                     while self.i < self.s.len() && self.s[self.i] != b'\n' {
                         self.i += 1;
@@ -546,14 +550,23 @@ pub fn read_presets(name: &str, bytes: &[u8], group: Option<String>) -> Result<V
         "zip" => {
             let mut out = Vec::new();
             let mut errors = Vec::new();
-            for (inner, data) in read_zip(bytes)? {
+            let entries = read_zip(bytes)?;
+            // what the archive's entries left of the unpack budget: the Luminar packs inside it
+            // (archives themselves) unpack within it, not each with a budget of its own
+            let mut budget = MAX_ZIP_TOTAL.saturating_sub(entries.iter().map(|(_, d)| d.len()).sum());
+            for (inner, data) in entries {
                 let iext = Path::new(&inner).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
                 if !(PRESET_EXTS.contains(&iext.as_str()) || iext == crate::presets::LCPRESET_EXT) || iext == "zip" {
                     continue;
                 }
                 let dir_group =
                     inner.rsplit_once('/').and_then(|(d, _)| group_from_dir(d)).or_else(|| group_from_dir(&stem)).or_else(|| group.clone());
-                match read_presets(&inner, &data, dir_group) {
+                let read = if iext == "mplumpack" {
+                    crate::preset_luminar::read_mplumpack_within(&inner, &data, &mut budget)
+                } else {
+                    read_presets(&inner, &data, dir_group)
+                };
+                match read {
                     Ok(v) => out.extend(v),
                     Err(e) => errors.push(format!("{inner}: {e}")),
                 }
@@ -769,6 +782,29 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(daylight.preset.settings["wb"]["mode"], json!("daylight"));
         assert!(daylight.unmapped.is_empty(), "{:?}", daylight.unmapped);
         assert!(photo(r#"crs:WhiteBalance="As Shot""#).unmapped.is_empty());
+    }
+
+    #[test]
+    fn packs_inside_a_zip_share_its_unpack_budget() {
+        // two packs unpacking to 2 MB each on a 3 MB budget: the first spends it, the second is refused
+        let pad = vec![b' '; 2 << 20];
+        let pack = zip(&[("a.lmp", b"<plist/>"), ("pad.txt", &pad)], true);
+        let mut budget = 3 << 20;
+        let first = crate::preset_luminar::read_mplumpack_within("one.mplumpack", &pack, &mut budget).unwrap_err();
+        assert!(!first.contains("too much"), "{first}");
+        assert_eq!(budget, (1 << 20) - 8);
+        let second = crate::preset_luminar::read_mplumpack_within("two.mplumpack", &pack, &mut budget).unwrap_err();
+        assert!(second.contains("too much"), "{second}");
+    }
+
+    #[test]
+    fn an_unterminated_long_comment_ends_the_template() {
+        // 20 000 openings of a long comment that never closes: each used to search the rest of
+        // the file for its close (seconds to minutes); now the first ends the file
+        let text = format!("s = {{ a = 1 }} {}", "--[==[ ".repeat(20_000));
+        let t = std::time::Instant::now();
+        let _ = parse_lua(&text);
+        assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
     }
 
     #[test]
