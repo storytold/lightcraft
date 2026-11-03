@@ -500,7 +500,9 @@ mod ci_jobs_tests {
         let config = std::fs::read_to_string(super::root().join(".cargo/config.toml")).unwrap();
         let (threads, line) = config_env(&config, "RUST_TEST_THREADS").expect("RUST_TEST_THREADS in [env]");
         assert!(line.contains("force = false"), "an explicit RUST_TEST_THREADS must win: {line}");
-        let (marker, _) = config_env(&config, crate::TEST_THREADS_DEFAULT_MARKER).expect("the marker in [env]");
+        let (marker, marker_line) = config_env(&config, crate::TEST_THREADS_DEFAULT_MARKER).expect("the marker in [env]");
+        // forced, so an inherited marker can't make a caller's equal value look like the default
+        assert!(marker_line.contains("force = true"), "cargo must overwrite an inherited marker: {marker_line}");
         assert_eq!(threads, marker, "xtask tells the default apart by this marker");
         let n: usize = threads.parse().unwrap();
         assert!((1..=4).contains(&n), "{n}");
