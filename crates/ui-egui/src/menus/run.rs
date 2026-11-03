@@ -146,6 +146,9 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if matches!(id, "ui.maskPanel" | "mask.selectComponent" | "mask.brushSettings") {
+        return Some(crate::panels::masking::workspace_command(app, id, p));
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }
@@ -1082,12 +1085,15 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = "brush".into();
+                    if let Err(error) = crate::panels::masking::select_brush(app) {
+                        return Some(Err(error));
+                    }
                 }
                 "linear" | "radial" => {
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = tool.into();
-                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                    return Some(app.run("mask.add", json!({"kind": tool})));
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;

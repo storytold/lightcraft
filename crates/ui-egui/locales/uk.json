@@ -2386,5 +2386,8 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Dock to panel": "Закріпити на правій панелі",
+  "Mask Adjustments": "Коригування маски",
+  "Drag to reorder": "Перетягніть, щоб змінити порядок"
 }

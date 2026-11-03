@@ -270,16 +270,27 @@ fn lookup(
 /// Connect to the first of `addrs` that answers, all of them together within `deadline` (each used to get the whole
 /// connect timeout of its own, issue #1532).
 fn connect_any(host: &str, addrs: &[SocketAddr], deadline: Instant, limits: &Limits) -> Result<TcpStream, HttpError> {
+    connect_any_with(host, addrs, deadline, limits, Instant::now, TcpStream::connect_timeout)
+}
+
+fn connect_any_with(
+    host: &str,
+    addrs: &[SocketAddr],
+    deadline: Instant,
+    limits: &Limits,
+    mut now: impl FnMut() -> Instant,
+    mut connect: impl FnMut(&SocketAddr, Duration) -> std::io::Result<TcpStream>,
+) -> Result<TcpStream, HttpError> {
     let mut last = format!("{host}: no address");
     for a in addrs {
         if limits.cancel.load(Ordering::Relaxed) {
             return Err(HttpError::Cancelled);
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(now());
         if left.is_zero() {
             return Err(HttpError::Connect(format!("{host}: connecting timed out")));
         }
-        match TcpStream::connect_timeout(a, left) {
+        match connect(a, left) {
             Ok(s) => return Ok(s),
             Err(e) => last = format!("{host}: {e}"),
         }
@@ -650,12 +661,26 @@ mod tests_connect {
     #[test]
     fn addresses_share_one_connect_deadline() {
         let cancel = AtomicBool::new(false);
-        // non-routable addresses: each either hangs until the deadline or fails at once, never longer
-        let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
-        let t = Instant::now();
-        let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
-        assert!(r.is_err());
-        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+        // Private addresses can be reachable (including through a VPN). Inject the transport and
+        // clock to check each remaining budget without network access or wall-clock timing races.
+        let addrs = ["127.0.0.1:9".parse().unwrap(); 5];
+        let now = std::cell::Cell::new(Instant::now());
+        let deadline = now.get() + Duration::from_millis(400);
+        let mut budgets = Vec::new();
+        let r = connect_any_with(
+            "blackhole",
+            &addrs,
+            deadline,
+            &limits(&cancel),
+            || now.get(),
+            |_, left| {
+                budgets.push(left.as_millis());
+                now.set(now.get() + Duration::from_millis(100));
+                Err(ErrorKind::TimedOut.into())
+            },
+        );
+        assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
+        assert_eq!(budgets, [400, 300, 200, 100], "all addresses share one deadline; the fifth must not start");
     }
 
     /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.

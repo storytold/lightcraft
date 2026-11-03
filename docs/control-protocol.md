@@ -149,6 +149,12 @@ scrolling pans in both axes and respects the operating system's scrolling direct
 These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
 views, and only apply over their image areas. Panning stops at the image edges.
 
+In the Masking panel, the first mask's creation choices are visible directly. Once a mask exists,
+`icon:maskCreate` opens the Masks header's + dropdown. Both use `maskNew:<kind>` IDs (for example
+`maskNew:brush` and `maskNew:radial`). With existing masks these entries exist only while the
+dropdown is open: a choice closes it; Escape or a click outside dismisses it. Deleting or undoing
+the last mask restores the direct choices.
+
 The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in `photo.inspect`: `{rect: {x0, y0,
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
@@ -419,3 +425,21 @@ A center `move` can include `before` (panel ID or null to append) for tab order.
 The equivalent `{"action": ...}` form accepts a serialized shared docking action;
 this is also the form emitted by the renderer. Protected-canvas and app-specific panel
 rules apply equally to both forms.
+
+### Mask workspace preferences
+
+Through `engine.execute`, `ui.maskPanel {"floating": true|false}` detaches/docks the list.
+`mask.selectComponent {"id": maskId, "component": index}` selects the editable component.
+`mask.brushSettings` takes any of `size` (0.0025–0.25 of the image long edge), `feather`
+(0–100), `flow` (1–100), `density` (0–100), `erase`, `autoMask` and `pressure` (booleans). These UI
+commands do not change photo history. Subsequent `mask.brushStroke` and `mask.objectPoint`
+accept an optional `component` index; omission preserves the last matching component behavior.
+Overlay display still uses `view.maskOverlay`, `view.maskOverlayMode`, `view.maskOverlayColor`
+(`color`, `opacity`) and `view.maskPins`.
+
+Mask/component rows expose `maskDrag:<mask-id>` and `componentDrag:<index>` grips.
+Use `ui.dragWidget` to drag onto the top/bottom half of another row (`maskGroup:<mask-id>`
+or `component:<index>`). Components stay within their parent mask; the list scrolls at its edges.
+A drop dispatches `mask.move {id, to}` or `mask.component {id, component, action:"move", to}`
+as one undoable edit. Component moves also retain the existing `delta: -1|1` form; specify
+either `to` or `delta`. Escape or dropping outside a compatible row cancels.

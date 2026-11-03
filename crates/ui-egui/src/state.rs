@@ -97,6 +97,14 @@ pub struct UiState {
     pub mask_overlay_color: [u8; 3],
     pub mask_overlay_opacity: f32,
     pub mask_pins: bool,
+    /// The mask list is embedded above its settings by default, or detached within the app.
+    pub mask_panel_floating: bool,
+    pub mask_panel_rect: Option<[f32; 4]>,
+    /// Explicit component selection, scoped to photo/mask; None selects the whole active mask.
+    /// Never restore it from preferences.
+    #[serde(skip)]
+    pub mask_component: Option<(lightcraft_catalog::PhotoId, u32, usize)>,
+    pub brush_density: f32,
     /// When the Remove tool's spot pins and the mask pins show (Shift+H cycles). Mask pins also
     /// need [`mask_pins`](Self::mask_pins).
     pub tool_overlay: ToolOverlay,
@@ -410,6 +418,10 @@ impl Default for UiState {
             mask_overlay_color: [230, 30, 40],
             mask_overlay_opacity: 50.0,
             mask_pins: true,
+            mask_panel_floating: false,
+            mask_panel_rect: None,
+            mask_component: None,
+            brush_density: 100.0,
             tool_overlay: ToolOverlay::Auto,
             mask_overlay_all: false,
             crop_overlay: CropOverlay::Thirds,

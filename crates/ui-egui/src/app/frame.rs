@@ -448,6 +448,7 @@ impl LightcraftApp {
         // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
         let chrome = theme::Tokens::get(&ctx).chrome;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        panels::masking::floating(self, &ctx);
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
         if notice_blocks {

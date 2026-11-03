@@ -129,13 +129,9 @@ fn masking_contents_fit_the_right_panel_at_any_width() {
         let (field, go) = (widget(&h, "maskDescribe"), widget(&h, "button:maskDescribeGo"));
         assert!(field.right() <= go.left() && go.right() <= widget(&h, "panel:right_panel").right(), "width {width}: {field:?} {go:?}");
         h.app.ui.describe = None;
-        // the painted text, not just the widgets: tile labels inside their tiles, a long mask
-        // name cut short before the eye
+        // A long mask name is cut short before the eye; creation choices stay in the popup.
         h.step();
-        for (id, r) in h.app.widgets.iter().filter(|(id, _)| id.starts_with("maskNewLabel:")) {
-            let tile = widget(&h, &id.replace("maskNewLabel:", "maskNew:"));
-            assert!(tile.contains_rect(*r), "width {width}: {id} {r:?} outside its tile {tile:?}");
-        }
+        assert!(!h.app.widgets.iter().any(|(id, _)| id.starts_with("maskNew:")));
         let (name, row) = (widget(&h, "maskName:1"), widget(&h, "mask:1"));
         assert!(name.right() <= row.right() - 27.0, "width {width}: the name {name:?} runs under the eye of {row:?}");
         for (selected, tool) in [(false, ""), (true, ""), (true, "brush")] {
@@ -147,7 +143,7 @@ fn masking_contents_fit_the_right_panel_at_any_width() {
             let what = format!("width {width}, mask selected {selected}, tool {tool:?}");
             assert_eq!(widget(&h, "panel:right_panel").width(), width, "{what}");
             if selected {
-                assert!(h.app.widgets.iter().any(|(id, _)| id == "button:maskInvert"), "{what}: no mask actions");
+                assert!(h.app.widgets.iter().any(|(id, _)| id == "button:maskAddComp"), "{what}: no mask actions");
             }
             assert_inside_right_panel(&h, &what);
         }

@@ -25,6 +25,20 @@ impl crate::Session {
         Some(job)
     }
 
+    /// The actual composite coverage of one mask, fitted to the edited photo's aspect ratio.
+    /// Uses the same pipeline as the canvas overlay, including range/AI masks and crop/rotation.
+    /// Its cache is separate from photo thumbnails; hidden masks still show their coverage.
+    pub fn mask_thumbnail_job(&mut self, id: PhotoId, mask: u32, edge: usize) -> Option<RenderJob> {
+        let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
+        let overlay = lightcraft_pipeline::Overlay::MaskThumbnail(mask);
+        let mut job = self.build_job(id, edge, edge, false, true, Some(edge))?.with_overlay(overlay);
+        let (cache, base) = job.cache.take()?;
+        let key = Hasher128::new().str("mask-thumbnail").u64(base.0 as u64).u64((base.0 >> 64) as u64).u64(overlay.key()).finish();
+        job.key = (key.0 as u64) ^ ((key.0 >> 64) as u64);
+        job.cache = Some((cache, key));
+        Some(job)
+    }
+
     fn build_job(
         &mut self,
         id: PhotoId,

@@ -212,7 +212,21 @@ impl LightcraftApp {
         } else {
             params
         };
+        let mask_history_before = if matches!(id, "edit.undo" | "edit.redo") && self.ui.mask_component.is_some() {
+            self.session.active().and_then(|photo| self.session.develop_of(photo))
+        } else {
+            None
+        };
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        match &r {
+            Ok(result) => panels::masking::selection_changed(self, id, &params, result, mask_history_before.as_deref()),
+            Err(error) if error.kind == lightcraft_engine::ErrorKind::NotSaved => {
+                // The edit and history already changed in memory. Keep the save error for the
+                // caller, while making row selection follow the document the user sees.
+                panels::masking::selection_changed(self, id, &params, &Value::Null, mask_history_before.as_deref());
+            }
+            Err(_) => {}
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -231,10 +245,6 @@ impl LightcraftApp {
             // the search field shows the text filter: cleared from anywhere (the loupe's pill, the
             // menu), it must not keep a search that no longer applies (issue #1648)
             self.ui.search.clear();
-        }
-        if r.is_ok() && id == "mask.addComponent" && params.get("kind").and_then(Value::as_str) != Some("colorRange") && self.ui.tool == "colorRange"
-        {
-            self.ui.tool.clear();
         }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
@@ -493,6 +503,9 @@ impl LightcraftApp {
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
     fn ai_mask_detail(&mut self, ctx: &egui::Context, now: f64) {
         let polled = self.session.segment_poll();
+        if let Some((photo, mask, component)) = polled.created {
+            panels::masking::selection_completed(self, photo, mask, component);
+        }
         if polled.changed {
             ctx.request_repaint();
         }
