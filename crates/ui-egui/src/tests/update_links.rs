@@ -18,15 +18,16 @@ fn text_rect(h: &Headless, text: &str) -> Option<egui::Rect> {
     })
 }
 
-#[test]
-fn the_update_prompts_whats_new_opens_through_the_host() {
+/// A headless app whose host `open_url` records each URL and answers with `answer`, showing the
+/// update prompt for [`RELEASE`]; then a click on its What's new link.
+fn click_whats_new(answer: Result<(), String>) -> (Headless, Arc<Mutex<Vec<String>>>) {
     let opened: Arc<Mutex<Vec<String>>> = Arc::default();
     let seen = opened.clone();
     let services = Services {
         png: None,
         open_url: Some(Box::new(move |url: &str| {
             seen.lock().unwrap().push(url.to_string());
-            Ok(())
+            answer.clone()
         })),
         ..Default::default()
     };
@@ -52,5 +53,20 @@ fn the_update_prompts_whats_new_opens_through_the_host() {
     for _ in 0..3 {
         h.step();
     }
+    (h, opened)
+}
+
+#[test]
+fn the_update_prompts_whats_new_opens_through_the_host() {
+    let (_h, opened) = click_whats_new(Ok(()));
     assert_eq!(*opened.lock().unwrap(), vec![RELEASE.to_string()], "the link went to the host's open_url, once");
+}
+
+/// A link the host couldn't open says so, with the link and the host's reason.
+#[test]
+fn a_link_the_host_cant_open_shows_an_error() {
+    let (h, opened) = click_whats_new(Err("no browser".into()));
+    assert_eq!(opened.lock().unwrap().len(), 1);
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains(RELEASE) && toast.contains("no browser"), "{toast:?}");
 }
