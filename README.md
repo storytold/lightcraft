@@ -420,9 +420,9 @@ turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the loc
 gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes (default 120; `0` waits as long as it takes) and
 names the run holding the slot. The build isn't timed (a first build can rightly take long), but the
 test binaries are: each may run for `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30, timed from
-cargo's `Running` line for it; `0` for no limit). One that runs longer, a test hung on a GPU device say, is killed with every
-process it started (on Linux found by an environment variable they inherit, so those that outlived
-their parent too), and the run reports it as `timed out after 30 min` with the tests still running
+cargo's `Running` line for it; `0` for no limit). One that runs longer, a test hung on a GPU device say, is killed with the
+processes it started (on Linux found by an environment variable they inherit, so those that outlived
+their parent too, unless they cleared their environment), and the run reports it as `timed out after 30 min` with the tests still running
 and those that never reported a result. Under `LIGHTCRAFT_NEXTEST=1`, `.config/nextest.toml` kills a
 test after 30 minutes instead. After a timeout, `ci` skips its GPU probe and translation gaps report.
 

@@ -87,12 +87,12 @@ for none): timed from its start when xtask runs it (`test::run_binary`), and fro
 `Doc-tests` line for it, and again from its own `running N tests` line, when `cargo test` runs it (the
 full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
 `CARGO_TERM_QUIET=false` and without `-q` so it prints those lines). The output streams through and is
-read for libtest's lines, keeping a bounded amount. On timeout the binary and every process it started
-are killed, and no process xtask didn't start: the binary and its process tree (a process only once
+read for libtest's lines, keeping a bounded amount. On timeout the binary and the processes it started
+that xtask can find are killed, and no process xtask didn't start: the binary and its process tree (a process only once
 its parent is frozen, so its pid can't be reused meanwhile), and on Linux every process whose
 `/proc/<pid>/environ` holds the run's exact marker entry (`LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`,
 inherited by all it starts; the nonce is random per xtask process), which finds those that outlived
-their parent. They are frozen with SIGSTOP, then killed (`taskkill /T` on Windows; elsewhere the
+their parent (one that also cleared its environment isn't found and may keep running). They are frozen with SIGSTOP, then killed (`taskkill /T` on Windows; elsewhere the
 report says reparented ones can't be found). The child stays in xtask's process group, so Ctrl-C
 still reaches it. The run reports `timed out after N min: <binary>`, what
 the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
