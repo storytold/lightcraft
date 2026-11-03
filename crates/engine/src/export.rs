@@ -114,6 +114,5 @@ pub struct ExportOptions {
     pub hdr_transfer: HdrCurve,
 }
 
-
 #[cfg(test)]
 mod tests;
