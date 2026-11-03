@@ -306,10 +306,20 @@ fn group_header(ui: &mut egui::Ui, t: &Tokens, n: usize, g: &DuplicateGroup) -> 
 }
 
 /// The settings, one to a row with what it does beside it: Strict / Normal / Loose, the same-moment box, then the
-/// Find button. The settings can be changed until Find is pressed and are shown locked from then on. `true` when
-/// Find was pressed.
+/// Find button. The settings can be changed until Find is pressed; from then on one dim line says what the run
+/// used, so the room goes to the groups. `true` when Find was pressed.
 fn controls(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
     let Dialog::Duplicates { distance, same_moment, started, .. } = dlg else { return false };
+    if *started {
+        let level = STRICTNESS.iter().find(|(_, bits, _)| bits == distance).map_or("Normal", |(label, _, _)| label);
+        let mut used = format!("{}: {}", crate::i18n::tr("Match"), crate::i18n::tr(level));
+        if *same_moment {
+            used.push_str(" · ");
+            used.push_str(crate::i18n::tr("Same moment only"));
+        }
+        ui.label(egui::RichText::new(used).color(t.text_dim));
+        return false;
+    }
     let mut find = false;
     // (the description starts at the same column on every row: the gap after the control is measured)
     let column = |ui: &mut egui::Ui, x0: f32| ui.add_space((x0 + CHOICE_W - ui.cursor().min.x).max(ui.spacing().item_spacing.x));
@@ -628,11 +638,11 @@ mod tests {
         // the planted copies are 0–2 bits apart, so Strict finds them
         assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { started: true, distance: 2, same_moment: false, .. })));
         assert_eq!(groups(&h).len(), 1);
-        // locked: the Find button is gone and the settings don't take a click
-        assert!(!h.app.widgets.iter().any(|(w, _)| w == "button:dupesFind"), "Find is gone once pressed");
-        let r = h.request("ui.clickWidget", json!({"id": "button:dupes:loose"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.step();
+        // locked: the Find button and the settings are gone, one line says what the run used
+        for w in ["button:dupesFind", "button:dupes:loose", "check:dupesSameMoment"] {
+            assert!(!h.app.widgets.iter().any(|(id, _)| id == w), "{w} is gone once Find was pressed");
+        }
+        assert!(h.painted_text().iter().any(|t| t == "Match: Strict"), "{:?}", h.painted_text());
         assert!(matches!(&h.app.ui.dialog, Some(Dialog::Duplicates { distance: 2, .. })), "{:?}", h.app.ui.dialog);
     }
 
