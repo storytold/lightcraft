@@ -43,6 +43,12 @@ pub fn read_zip(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 }
 
 pub(crate) fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
+    read_zip_spending(bytes, max_entry, max_total, &mut 0)
+}
+
+/// [`read_zip_limited`] that adds to `spent` the bytes of each entry as it is unpacked, so they
+/// are counted when a later entry fails; an entry that fails for size spends its whole limit.
+pub(crate) fn read_zip_spending(bytes: &[u8], max_entry: usize, max_total: usize, spent: &mut usize) -> Result<Vec<(String, Vec<u8>)>, String> {
     let u16_at = |o: usize| bytes.get(o..o.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     let u32_at = |o: usize| bytes.get(o..o.checked_add(4)?).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
     // offsets from the file, added up without overflowing (a 32-bit build reads them too)
@@ -53,7 +59,7 @@ pub(crate) fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize)
     let count = u16_at(eocd + 10).ok_or("bad zip")?;
     let mut at = u32_at(eocd + 16).ok_or("bad zip")?;
     let mut out = Vec::new();
-    let mut total = 0usize;
+    let total = spent;
     for _ in 0..count {
         if !bytes.get(at..).is_some_and(|b| b.starts_with(b"PK\x01\x02")) {
             return Err("bad zip central directory".into());
@@ -76,9 +82,12 @@ pub(crate) fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize)
         }
         let data_at = add(add(add(local, 30)?, u16_at(add(local, 26)?).ok_or("bad zip")?)?, u16_at(add(local, 28)?).ok_or("bad zip")?)?;
         let data = bytes.get(data_at..add(data_at, csize)?).ok_or_else(|| format!("{name}: truncated"))?;
-        let left = max_total.saturating_sub(total);
+        let left = max_total.saturating_sub(*total);
         let limit = max_entry.min(left);
-        let too_big = || format!("{name}: unpacks to more than {} MB, too much for a preset", limit >> 20);
+        let mut too_big = || {
+            *total = total.saturating_add(limit);
+            format!("{name}: unpacks to more than {} MB, too much for a preset", limit >> 20)
+        };
         let content = match method {
             0 if data.len() > limit => return Err(too_big()),
             0 => data.to_vec(),
@@ -87,7 +96,7 @@ pub(crate) fn read_zip_limited(bytes: &[u8], max_entry: usize, max_total: usize)
             )?,
             m => return Err(format!("{name}: unsupported compression method {m}")),
         };
-        total = total.saturating_add(content.len());
+        *total = total.saturating_add(content.len());
         out.push((name, content));
     }
     Ok(out)
@@ -795,6 +804,17 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(budget, (1 << 20) - 8);
         let second = crate::preset_luminar::read_mplumpack_within("two.mplumpack", &pack, &mut budget).unwrap_err();
         assert!(second.contains("too much"), "{second}");
+    }
+
+    #[test]
+    fn a_pack_that_fails_part_way_still_spends_what_it_unpacked() {
+        // 2 MB unpacks, then an entry that does not fit the 3 MB budget: the next pack gets nothing
+        let pad = vec![b' '; 2 << 20];
+        let pack = zip(&[("a.txt", &pad), ("b.txt", &pad)], true);
+        let mut budget = 3 << 20;
+        let first = crate::preset_luminar::read_mplumpack_within("one.mplumpack", &pack, &mut budget).unwrap_err();
+        assert!(first.contains("too much"), "{first}");
+        assert_eq!(budget, 0);
     }
 
     #[test]

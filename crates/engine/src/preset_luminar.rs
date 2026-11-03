@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::crs::Props;
-use crate::preset_import::{Imported, MAX_ZIP_ENTRY, MAX_ZIP_TOTAL, build, group_from_dir, read_zip_limited};
+use crate::preset_import::{Imported, MAX_ZIP_ENTRY, MAX_ZIP_TOTAL, build, group_from_dir, read_zip_spending};
 
 // ----------------------------------------------------------------------------- property lists
 
@@ -462,8 +462,11 @@ pub fn read_mplumpack(path: &str, bytes: &[u8]) -> Result<Vec<Imported>, String>
 /// [`read_mplumpack`] unpacking at most `budget` bytes, which it spends: packs inside one zip
 /// share the zip's budget.
 pub(crate) fn read_mplumpack_within(path: &str, bytes: &[u8], budget: &mut usize) -> Result<Vec<Imported>, String> {
-    let entries = read_zip_limited(bytes, MAX_ZIP_ENTRY, *budget)?;
-    *budget = budget.saturating_sub(entries.iter().map(|(_, d)| d.len()).sum());
+    // spent as each entry unpacks: a pack that fails part way still used its budget
+    let mut spent = 0;
+    let entries = read_zip_spending(bytes, MAX_ZIP_ENTRY, *budget, &mut spent);
+    *budget = budget.saturating_sub(spent);
+    let entries = entries?;
     let info = entries
         .iter()
         .find(|(n, _)| n.rsplit('/').next().is_some_and(|b| b.eq_ignore_ascii_case("PresetsInfo.plist")))
