@@ -319,7 +319,7 @@ fn cancel_stops_quickly_and_keeps_the_part_for_later() {
     let c = cancel.clone();
     let part = part_path(&dir, "model.bin");
     // cancel once part of the file is written (the slow server takes 6 s for the whole of it)
-    std::thread::spawn(move || {
+    let canceller = std::thread::spawn(move || {
         lightcraft_testkit::wait_until(Duration::from_secs(30), "the first bytes of the part", || {
             std::fs::metadata(&part).is_ok_and(|m| m.len() > 0)
         });
@@ -327,6 +327,10 @@ fn cancel_stops_quickly_and_keeps_the_part_for_later() {
     });
     let t = Instant::now();
     let (r, _) = run(&[pinned()], &[format!("{}/slow", srv.base)], &dir, &cancel);
+    // a part that never got bytes fails the test with the wait's message, not the result's
+    if let Err(panic) = canceller.join() {
+        std::panic::resume_unwind(panic);
+    }
     assert_eq!(r, Err(DownloadError::Cancelled));
     assert!(t.elapsed() < stretched(Duration::from_secs(3)), "{:?}", t.elapsed());
     assert!(!dir.join("model.bin").exists());
