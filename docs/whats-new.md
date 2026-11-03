@@ -2,6 +2,11 @@
 
 ## 2026-10-30
 
+### The update prompt's What's new link opens the release notes
+- In the window that offers a new version, the What's new link (and Download, where the update can't install itself)
+  did nothing on the desktop app: they asked egui to open the page, which this build of the app can't do on its own.
+  They now open in your browser, as LightCraft's other links do (issue #3689).
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 
