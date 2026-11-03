@@ -76,6 +76,9 @@ struct Inner {
     selection: (Vec<lightcraft_engine::catalog::PhotoId>, Option<lightcraft_engine::catalog::PhotoId>),
     /// Bounded metadata for newly imported videos; their originals remain browser Blobs.
     probes: HashMap<String, lightcraft_engine::media::ProbeInfo>,
+    /// The probe of each stored video met since the page loaded (imported, or loaded from
+    /// storage): kept after the import so Reload from Disk can read a clip the byte cache never holds.
+    video_probes: HashMap<String, lightcraft_engine::media::ProbeInfo>,
 }
 
 /// Original bytes in memory, shared between the engine hooks and the host (cheap to clone).
@@ -134,9 +137,15 @@ impl Originals {
         let path = original_path(hash, name);
         let mut g = self.lock();
         g.failed.remove(hash);
+        g.video_probes.insert(hash.to_string(), probe.clone());
         g.probes.insert(hash.to_string(), probe);
         g.pending.push(path.clone());
         path
+    }
+
+    /// A stored video was loaded from browser storage: keep its probe for Reload from Disk.
+    pub fn video_loaded(&self, hash: &str, probe: lightcraft_engine::media::ProbeInfo) {
+        self.lock().video_probes.insert(hash.to_string(), probe);
     }
 
     /// Bytes for a catalog path, if in memory. A miss for a stored original queues its load.
@@ -230,7 +239,7 @@ impl Originals {
                 let mut g = s.lock();
                 // Explicit imports/reloads may retry; ordinary render reads must not.
                 g.failed.remove(hash);
-                if let Some(probe) = g.probes.get(hash).cloned() {
+                if let Some(probe) = g.probes.get(hash).or_else(|| g.video_probes.get(hash)).cloned() {
                     return Ok(probe);
                 }
             }
@@ -269,6 +278,24 @@ pub fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// `work`'s output, or `None` when `timer` finishes first (the browser host's timer: a storage read
+/// that never settles must not hold the loads queued after it).
+pub async fn within<T>(work: impl std::future::Future<Output = T>, timer: impl std::future::Future<Output = ()>) -> Option<T> {
+    use std::task::Poll;
+    let mut work = std::pin::pin!(work);
+    let mut timer = std::pin::pin!(timer);
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(v) = work.as_mut().poll(cx) {
+            return Poll::Ready(Some(v));
+        }
+        if timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 #[cfg(test)]
 pub(crate) fn png_bytes(w: usize, h: usize) -> Vec<u8> {
     let bytes: Vec<u8> = (0..w * h).flat_map(|i| [(i * 7) as u8, 128, 200, 255]).collect();
@@ -280,6 +307,30 @@ pub(crate) fn png_bytes(w: usize, h: usize) -> Vec<u8> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn poll_once<T>(f: impl std::future::Future<Output = T>) -> std::task::Poll<T> {
+        let mut f = std::pin::pin!(f);
+        f.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    }
+
+    #[test]
+    fn a_read_that_never_settles_gives_way_to_its_timer() {
+        let ready = std::future::ready(7);
+        assert_eq!(poll_once(within(ready, std::future::pending::<()>())), std::task::Poll::Ready(Some(7)));
+        assert_eq!(poll_once(within(std::future::pending::<u8>(), std::future::ready(()))), std::task::Poll::Ready(None));
+        assert_eq!(poll_once(within(std::future::pending::<u8>(), std::future::pending::<()>())), std::task::Poll::Pending);
+    }
+
+    #[test]
+    fn a_video_loaded_from_storage_can_be_probed_again() {
+        let originals = Originals::default();
+        let path = original_path("stored-video", "clip.mov");
+        assert!(originals.hooks().1(&path).is_err(), "nothing is known about the clip yet");
+        let mut probe = probe_bytes("tiny.png", &png_bytes(4, 4)).unwrap();
+        probe.kind = lightcraft_engine::catalog::MediaKind::Video;
+        originals.video_loaded("stored-video", probe);
+        assert_eq!(originals.hooks().1(&path).unwrap().kind, lightcraft_engine::catalog::MediaKind::Video);
+    }
 
     #[test]
     fn paths() {
@@ -468,8 +519,11 @@ mod tests {
         assert_eq!(photo.duration, Some(60.0));
         assert_eq!(originals.usage(), (0, 0), "the clip does not enter the whole-buffer cache");
         originals.finish_import();
-        assert!(originals.lock().probes.is_empty());
-        assert!(originals.hooks().1(&path).is_err(), "staged metadata is not retained after import");
+        assert!(originals.lock().probes.is_empty(), "staged metadata is released after the import");
+        // Reload from Disk probes the stored clip again: its probe outlives the import
+        let reprobed = originals.hooks().1(&path).unwrap();
+        assert_eq!((reprobed.kind, reprobed.file_size), (lightcraft_engine::catalog::MediaKind::Video, 5 << 30));
+        assert_eq!(originals.usage(), (0, 0), "nor does a reload buffer it");
     }
 
     #[test]

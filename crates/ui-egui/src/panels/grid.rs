@@ -933,7 +933,9 @@ fn paint_video_badges(
         return;
     }
     if !(square && app.ui.show_filenames) && !photo.format.is_empty() {
-        video_format_badge(ui, p, t, id, &photo.format, img_rect);
+        // a virtual copy's tag holds the top right corner: the container sits just below it
+        let below = if photo.copy_name.is_some() { COPY_TAG_HEIGHT + 4.0 } else { 0.0 };
+        video_format_badge(ui, p, t, id, &photo.format, img_rect, below);
     }
     if let Some(d) = photo.duration {
         video_duration_badge(ui, p, t, id, d, img_rect);
@@ -984,11 +986,14 @@ fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: 
     }
 }
 
+/// The height of [`paint_copy_tag`]'s tag, below its 5–6 point inset from the top.
+const COPY_TAG_HEIGHT: f32 = 20.0;
+
 fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, square: bool) {
     // virtual copy: a folded-corner tag at the top right
     let g = p.layout_no_wrap(name.to_string(), t.semibold(10.5), Color32::WHITE);
     let tr = if square { img_rect.right_top() + vec2(-6.0, 6.0) } else { img_rect.right_top() + vec2(-5.0, 5.0) };
-    let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + 20.0));
+    let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + COPY_TAG_HEIGHT));
     p.rect_filled(br, 10.0, Color32::from_black_alpha(165));
     let c = pos2(br.left() + 13.0, br.center().y);
     let s = 5.0;
@@ -1066,10 +1071,16 @@ struct BadgeFlags {
     hovered: bool,
 }
 
-/// A clip's container (`MP4`, `MOV`) in a dark pill at the thumbnail's top right.
-fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, format: &str, img_rect: Rect) {
+/// A clip's container (`MP4`, `MOV`) in a dark pill at the thumbnail's top right, `below` points
+/// lower when something else holds the corner.
+#[allow(clippy::too_many_arguments)]
+fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, format: &str, img_rect: Rect, below: f32) {
     let g = p.layout_no_wrap(format.to_uppercase(), t.semibold(9.0), Color32::WHITE);
-    let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 14.0, img_rect.top() + 6.0), g.size() + vec2(8.0, 3.0));
+    let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 14.0, img_rect.top() + 6.0 + below), g.size() + vec2(8.0, 3.0));
+    // A pill that doesn't fit the cell would spill over its neighbours: skip it instead.
+    if br.left() < img_rect.left() + 4.0 || br.bottom() > img_rect.bottom() - 4.0 {
+        return;
+    }
     p.rect_filled(br, 3.0, Color32::from_black_alpha(170));
     p.galley(br.min + vec2(4.0, 1.5), g, Color32::WHITE);
     register(ui, format!("badge:videoFormat:{}", id.0), br);
@@ -1084,8 +1095,8 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
     }
     let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
     let w = g.size().x + 26.0;
-    // A pill wider than the cell's margins would spill over its neighbours: skip it instead.
-    if w > img_rect.width() - 10.0 {
+    // A pill wider or taller than the cell's margins would spill over its neighbours: skip it instead.
+    if w > img_rect.width() - 10.0 || img_rect.height() < 21.0 {
         return;
     }
     let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);

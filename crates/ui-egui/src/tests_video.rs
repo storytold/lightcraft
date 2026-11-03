@@ -108,6 +108,32 @@ fn grid_cells_mark_videos_with_their_format_and_running_time() {
     }
 }
 
+/// A virtual copy's tag holds the cell's top right corner: a clip's container pill moves below it
+/// rather than under it, in both grids (the square grid with its filename line hidden).
+#[test]
+fn a_video_copy_keeps_its_format_badge_clear_of_the_copy_tag() {
+    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+        let mut h = video_app(view);
+        h.app.ui.show_filenames = false;
+        let id = PhotoId(1);
+        let mut copy = h.app.session.catalog.photo(id).unwrap().as_ref().clone();
+        copy.id = PhotoId(9);
+        copy.copy_name = Some("Copy 1".into());
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        h.settle(SETTLE);
+        let rect = |name: &str| h.app.widgets.iter().find(|(w, _)| w == name).map(|(_, r)| *r);
+        let (Some(thumb), Some(badge)) = (rect("thumb:9"), rect("badge:videoFormat:9")) else {
+            panic!("{view:?}: the copy's cell and container badge are drawn");
+        };
+        let (thumb1, badge1) = (rect("thumb:1").expect("the original's cell"), rect("badge:videoFormat:1").expect("the original's badge"));
+        // the copy tag is 20 points tall: the copy's pill sits at least that much lower in its cell
+        let lowered = (badge.top() - thumb.top()) - (badge1.top() - thumb1.top());
+        assert!(lowered >= 20.0, "{view:?}: {badge:?} in {thumb:?} vs {badge1:?} in {thumb1:?}");
+        assert!(thumb.contains_rect(badge), "{view:?}: {badge:?} stays on its cell {thumb:?}");
+        shot(&mut h, &format!("video-copy-{view:?}.png"));
+    }
+}
+
 #[test]
 fn grids_announce_video_even_without_a_duration() {
     for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {

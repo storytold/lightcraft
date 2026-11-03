@@ -3984,6 +3984,43 @@ fn all_metadata_on_a_video_reads_only_its_metadata_boxes() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A clip whose name has no video extension takes its format from its bytes (a QuickTime `ftyp`
+/// reads as MOV, not the MP4 default).
+#[test]
+fn a_clip_without_a_video_extension_takes_its_sniffed_format() {
+    let src = temp_dir("video-sniffed-format");
+    let mut bytes = synthetic_mp4(1000, 2_000, 640, 360, 0);
+    bytes[8..12].copy_from_slice(b"qt  ");
+    bytes[16..24].copy_from_slice(b"qt  qt  ");
+    std::fs::write(src.join("clip.jpg"), &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let photo = s.catalog.photos().next().unwrap();
+    assert!(photo.is_video());
+    assert_eq!(photo.format, "MOV");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Only an XMP `uuid` box joins the metadata: another vendor's `uuid` box is skipped like `mdat`.
+#[test]
+fn the_metadata_reader_keeps_only_the_xmp_uuid_box() {
+    const XMP_UUID: [u8; 16] = [0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac];
+    let mut bytes = synthetic_mp4(1000, 2_000, 640, 360, 0);
+    let moov_and_ftyp = bytes.len();
+    let mut vendor = [7u8; 16].to_vec();
+    vendor.extend_from_slice(&[0xAB; 4096]);
+    write_test_box(&mut bytes, b"uuid", &vendor);
+    let mut xmp = XMP_UUID.to_vec();
+    xmp.extend_from_slice(b"<x:xmpmeta/>");
+    write_test_box(&mut bytes, b"uuid", &xmp);
+    let len = bytes.len() as u64;
+    let kept = crate::files::read_video_metadata_from(&mut std::io::Cursor::new(&bytes), len, "clip.mp4").unwrap();
+    assert_eq!(kept.len(), moov_and_ftyp + 8 + xmp.len());
+    assert!(!kept.contains(&0xAB));
+    assert!(kept.windows(16).any(|w| w == XMP_UUID));
+}
+
 /// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {

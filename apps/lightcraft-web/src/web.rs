@@ -162,6 +162,25 @@ async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys
     }
 }
 
+/// How long one original may take to load from browser storage before it counts as failed: a read
+/// that never settles must not hold every load queued after it.
+const ORIGINAL_LOAD_TIMEOUT_MS: i32 = 60_000;
+
+/// Resolves after `ms` (never without a window, where nothing loads either).
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(w) = window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// The error of a storage load that [`ORIGINAL_LOAD_TIMEOUT_MS`] cut short.
+fn timed_out<T>() -> Result<T, String> {
+    Err(format!("reading browser storage took longer than {} s; select the photo again to retry", ORIGINAL_LOAD_TIMEOUT_MS / 1000))
+}
+
 struct BlobOriginal {
     blob: web_sys::Blob,
     location_check: Result<(), String>,
@@ -193,9 +212,11 @@ async fn video_blob_metadata(blob: &web_sys::Blob, include_fragments: bool) -> R
         if at == size {
             return Ok(out);
         }
-        let head = blob_range(blob, at, size.saturating_sub(at).min(16)).await?;
+        let head = blob_range(blob, at, size.saturating_sub(at).min(32)).await?;
         let (kind, len) = lightcraft_engine::files::video_box_info(&head, at, size)?;
-        if lightcraft_engine::files::is_video_metadata_box(&kind) || (include_fragments && &kind == b"moof") {
+        let header_len = lightcraft_engine::files::video_box_header_len(&head);
+        let extended_type = if &kind == b"uuid" && len >= header_len + 16 { head.get(header_len as usize..header_len as usize + 16) } else { None };
+        if lightcraft_engine::files::is_video_metadata_box(&kind, extended_type) || (include_fragments && &kind == b"moof") {
             let new_len = (out.len() as u64).checked_add(len).ok_or("video metadata length overflow")?;
             if new_len > 64 << 20 {
                 return Err("video metadata exceeds the 64 MiB scan budget".into());
@@ -948,7 +969,8 @@ impl WebApp {
         if wanted.is_empty() {
             return;
         }
-        let video_hashes: std::collections::HashSet<String> = self
+        // hash → file name of every stored video (the name picks the probe's format)
+        let video_names: HashMap<String, String> = self
             .app
             .session
             .catalog
@@ -956,7 +978,7 @@ impl WebApp {
             .filter(|p| p.is_video())
             .filter_map(|p| {
                 let Source::File { path } = &p.source else { return None };
-                crate::store::hash_of_path(path).map(str::to_string)
+                crate::store::hash_of_path(path).map(|h| (h.to_string(), p.file_name.clone()))
             })
             .collect();
         let (b, originals, ctx) = (b.clone(), self.originals.clone(), ctx.clone());
@@ -965,17 +987,28 @@ impl WebApp {
         wasm_bindgen_futures::spawn_local(async move {
             let _guard = guard;
             for hash in wanted {
-                if video_hashes.contains(&hash) {
-                    let result = async {
+                if let Some(name) = video_names.get(&hash) {
+                    let load = async {
                         let blob = b.read_original_blob(&storage_key(&hash)).await?.ok_or("original is missing from browser storage")?;
                         let location_check = match video_blob_metadata(&blob, true).await {
-                            Ok(metadata) => lightcraft_meta::verify_video_location_absent(&metadata),
+                            Ok(metadata) => {
+                                // the probe Reload from Disk reads: the byte cache never holds the clip
+                                match lightcraft_engine::files::probe_bytes(name, &metadata) {
+                                    Ok(mut probe) => {
+                                        probe.content_hash = Some(hash.clone());
+                                        probe.file_size = blob.size() as u64;
+                                        originals.video_loaded(&hash, probe);
+                                    }
+                                    Err(e) => log::warn!("probing stored video {hash}: {e}"),
+                                }
+                                lightcraft_meta::verify_video_location_absent(&metadata)
+                            }
                             Err(e) => Err(format!("cannot verify video location: {e}")),
                         };
                         VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob, location_check }));
                         Ok::<(), String>(())
-                    }
-                    .await;
+                    };
+                    let result = crate::store::within(load, sleep_ms(ORIGINAL_LOAD_TIMEOUT_MS)).await.unwrap_or_else(timed_out);
                     match result {
                         Ok(()) => originals.load_finished(&hash),
                         Err(e) => {
@@ -986,7 +1019,7 @@ impl WebApp {
                     ctx.request_repaint();
                     continue;
                 }
-                match b.read(&storage_key(&hash)).await {
+                match crate::store::within(b.read(&storage_key(&hash)), sleep_ms(ORIGINAL_LOAD_TIMEOUT_MS)).await.unwrap_or_else(timed_out) {
                     Ok(Some(bytes)) => {
                         if let Err(e) = originals.insert(&hash, Arc::new(bytes)) {
                             originals.load_failed(&hash);
@@ -1057,6 +1090,8 @@ thread_local! {
     /// Commands waiting for their videos to load from browser storage (an export's Originals).
     static PENDING_COMMANDS: std::cell::RefCell<VecDeque<(String, String, Reply)>> = const { std::cell::RefCell::new(VecDeque::new()) };
     static CTX: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
+    /// When the Original export at the head of [`PENDING_COMMANDS`] started waiting for its videos.
+    static EXPORT_WAITING_SINCE: Cell<Option<f64>> = const { Cell::new(None) };
 }
 
 /// Run a command by id from JavaScript (automation, tests): `await command("library.info", "{}")`
@@ -1147,10 +1182,12 @@ impl WebApp {
         let mut queue = PENDING_COMMANDS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         queue.extend(INBOX.with(|q| std::mem::take(&mut *q.borrow_mut())));
         let mut retry = VecDeque::new();
-        // Exports whose Originals are loading keep their order between themselves (and with the
-        // commands already queued), but a status query such as `web.stats` must not wait for a
-        // storage read to settle.
+        // Exports whose Originals are loading keep their order between themselves and with the
+        // commands that could change what they copy (`photo.deletePermanently` after the export
+        // must not remove a clip before it is copied), but a query such as `web.stats` must not
+        // wait for a storage read to settle. The wait is bounded by `EXPORT_WAIT_MS`.
         let mut export_waiting = false;
+        let now = lightcraft_ui_egui::monotonic_ms();
         for (id, mut params, (resolve, reject)) in queue {
             let parsed = crate::automation::params(&params);
             let mut p = match parsed {
@@ -1160,7 +1197,12 @@ impl WebApp {
                     continue;
                 }
             };
-            if matches!(id.as_str(), "app.export" | "app.exportPrevious") {
+            let is_export = matches!(id.as_str(), "app.export" | "app.exportPrevious");
+            if export_waiting && !is_export && crate::automation::waits_behind_export(&id) {
+                retry.push_back((id, params, (resolve, reject)));
+                continue;
+            }
+            if is_export {
                 // Freeze the targets now: the selection may change while a load finishes.
                 let resolved = self.resolved_export_params(&id, &p);
                 let has_ids =
@@ -1177,11 +1219,20 @@ impl WebApp {
                 let copies_original =
                     resolved.as_ref().is_some_and(|r| ExportOptions::export_format(r, ExportFormat::default()) == ExportFormat::Original);
                 if copies_original && !self.export_videos_loaded(&p) {
-                    retry.push_back((id, params, (resolve, reject)));
-                    export_waiting = true;
-                    ctx.request_repaint();
-                    continue;
+                    let since = EXPORT_WAITING_SINCE.with(|w| {
+                        let since = w.get().unwrap_or(now);
+                        w.set(Some(since));
+                        since
+                    });
+                    if now - since < crate::automation::EXPORT_WAIT_MS {
+                        retry.push_back((id, params, (resolve, reject)));
+                        export_waiting = true;
+                        ctx.request_repaint();
+                        continue;
+                    }
+                    // waited long enough: the export runs and reports the clip still loading
                 }
+                EXPORT_WAITING_SINCE.with(|w| w.set(None));
             }
             let r = if id == "web.stats" { Ok(self.web_stats()) } else { self.app.run(&id, p) };
             let _ = match r {

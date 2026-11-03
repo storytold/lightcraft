@@ -52,7 +52,7 @@ pub(crate) use fs::read_video_metadata_file;
 #[cfg(test)]
 pub(crate) use fs::read_video_metadata_from;
 pub(crate) use fs::read_video_metadata_from_with_fragments;
-pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader, is_video_metadata_box, looks_like_video_container, video_box_info};
+pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader, is_video_metadata_box, looks_like_video_container, video_box_header_len, video_box_info};
 pub(crate) use load::{DngWhite, WbScaleOf, dng_tone_curve};
 pub use load::{load_bytes, load_bytes_decoded, load_bytes_with, load_vec, load_vec_pair, load_vec_reduced};
 #[cfg(test)]
