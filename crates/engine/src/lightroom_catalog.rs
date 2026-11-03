@@ -93,6 +93,13 @@ impl Reader {
     }
 
     fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
+        self.xmp_table_within(MAX_XMP_TOTAL)
+    }
+
+    /// The `Adobe_AdditionalMetadata` rows. Packets past `max_total` decoded bytes together are
+    /// left off their rows, each named in the warnings, so one oversized catalog keeps the
+    /// packets that fit and every row's other columns.
+    fn xmp_table_within(&self, max_total: usize) -> Result<(Vec<Row>, Vec<String>), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
         let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
         let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
@@ -123,11 +130,14 @@ impl Reader {
                     SqlValue::Text(s) => Some(json!(s)),
                     SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
                         Ok(packet) => {
-                            xmp_total = xmp_total.saturating_add(packet.len());
-                            if xmp_total > MAX_XMP_TOTAL {
-                                return Err("Adobe_AdditionalMetadata: the XMP packets together exceed 1 GiB".into());
+                            if xmp_total.saturating_add(packet.len()) > max_total {
+                                warnings
+                                    .push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
+                                None
+                            } else {
+                                xmp_total += packet.len();
+                                Some(Value::String(packet))
                             }
-                            Some(Value::String(packet))
                         }
                         Err(error) => {
                             warnings.push(format!("image {image}: {error}"));
