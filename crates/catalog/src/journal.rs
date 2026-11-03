@@ -351,6 +351,26 @@ struct SnapFile {
     catalog: Catalog,
 }
 
+/// Inspect all remaining lines before deciding whether a damaged record is a torn tail.
+/// A valid record does not end the scan: a later unknown operation must still refuse repair.
+fn has_later_record(log: &[u8]) -> Result<bool> {
+    let mut found = false;
+    for bytes in log.split(|b| *b == b'\n') {
+        let line = std::str::from_utf8(bytes).map_or(Line::Bad, |line| decode_line(line.trim_end_matches('\r')));
+        // A later line may also contain a failed append's fragment and its retried record.
+        let line = match line {
+            Line::Bad => resync(bytes, u64::MAX).map_or(Line::Bad, |(_, record)| record),
+            line => line,
+        };
+        match line {
+            Line::Record(..) => found = true,
+            Line::Newer(seq) => return Err(newer_record(seq)),
+            Line::Bad => {}
+        }
+    }
+    Ok(found)
+}
+
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
     /// tail. Fails only if the snapshot itself is unreadable (then nothing is modified).
@@ -444,22 +464,7 @@ impl Journal {
                 }
                 _ => {
                     // bad record (or a gap): torn tail if nothing good follows, else damage
-                    let mut rest_has_good = false;
-                    for l in log[next..].split(|b| *b == b'\n') {
-                        let line = std::str::from_utf8(l).map_or(Line::Bad, |l| decode_line(l.trim_end_matches('\r')));
-                        // a later line can also be a failed append's fragment and its retried record
-                        let line = match line {
-                            Line::Bad => resync(l, u64::MAX).map_or(Line::Bad, |(_, r)| r),
-                            line => line,
-                        };
-                        match line {
-                            Line::Record(..) => rest_has_good = true,
-                            // refused before anything is modified
-                            Line::Newer(seq) => return Err(newer_record(seq)),
-                            Line::Bad => {}
-                        }
-                    }
-                    if rest_has_good {
+                    if has_later_record(&log[next..])? {
                         damaged_at = Some(pos);
                     }
                     break;

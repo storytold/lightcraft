@@ -40,6 +40,8 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
   A bad CRC or sequence gap still stops replay; if good records follow (a later fragment and its
   retried record count as one), the original log is preserved as damaged rather than replaying past the gap. Out-of-range snapshot counters are
   refused as corrupt, and counter increments are checked for overflow. The catalog format is unchanged.
+  The remainder inspection checks every later line even after finding a valid record, so an
+  unknown operation farther on still refuses repair before any catalog file is modified.
 - **Edits** are a `develop::Settings` value (every slider is a control spec with id, range and
   default), normalized to image coordinates so previews and exports match. Process versions
   (`docs/process-versions.md`) keep old edits rendering the same after a retune.
