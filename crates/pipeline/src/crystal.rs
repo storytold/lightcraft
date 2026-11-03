@@ -29,7 +29,7 @@
 //! GPU kernel (`finish.wgsl`, which reads the same tables).
 
 use std::f64::consts::TAU;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_develop::Grain;
@@ -822,17 +822,40 @@ static TILES: Cache = Mutex::new(Vec::new());
 /// The tile being drawn in the background for a drag ([`tile`]): one at a time.
 static DRAWING: Mutex<Option<Key>> = Mutex::new(None);
 
+/// The tile a drawing hands to the renders waiting for it, set when it is drawn.
+type Slot = Arc<OnceLock<Arc<CrystalTile>>>;
+
 /// The tiles being drawn, by cache and key, and the condition their drawers signal when done: a
-/// render that misses a tile another is drawing waits for it rather than drawing it again.
-static IN_FLIGHT: Mutex<Vec<(usize, Key)>> = Mutex::new(Vec::new());
+/// render that misses a tile another is drawing waits for it rather than drawing it again. The
+/// drawer hands the tile over in its slot, so the waiters get it even if the cache has evicted it
+/// by the time they wake.
+static IN_FLIGHT: Mutex<Vec<((usize, Key), Slot)>> = Mutex::new(Vec::new());
 static DRAWN: Condvar = Condvar::new();
 
 /// Marks a tile drawn (or failed) when dropped and wakes the renders waiting for it.
-struct Drawing((usize, Key));
+struct Drawing {
+    id: (usize, Key),
+    done: Slot,
+}
+
+impl Drawing {
+    /// Registers the draw of `id` in `busy` (the locked [`IN_FLIGHT`]).
+    fn register(busy: &mut Vec<((usize, Key), Slot)>, id: (usize, Key)) -> Drawing {
+        let done = Slot::default();
+        busy.push((id, done.clone()));
+        Drawing { id, done }
+    }
+
+    /// Hands `t` to the renders waiting for it (they wake when this is dropped).
+    fn finish(&self, t: &Arc<CrystalTile>) {
+        // (already set: only the first tile counts, and every drawing draws the same one)
+        let _ = self.done.set(t.clone());
+    }
+}
 
 impl Drop for Drawing {
     fn drop(&mut self) {
-        IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner).retain(|d| *d != self.0);
+        IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner).retain(|(d, _)| *d != self.id);
         DRAWN.notify_all();
     }
 }
@@ -840,11 +863,10 @@ impl Drop for Drawing {
 /// Registers the tile of `id` as being drawn, or `None` if another thread is drawing it.
 fn start_drawing(id: (usize, Key)) -> Option<Drawing> {
     let mut busy = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner);
-    if busy.contains(&id) {
+    if busy.iter().any(|(d, _)| *d == id) {
         return None;
     }
-    busy.push(id);
-    Some(Drawing(id))
+    Some(Drawing::register(&mut busy, id))
 }
 
 /// The tile of `key` in `cache`.
@@ -883,26 +905,32 @@ fn tile_in(cache: &'static Cache, look: CrystalLook, seed: u32, wait: bool) -> O
     let id = (std::ptr::from_ref(cache) as usize, key);
     // a pool worker draws the tile itself: blocked, it could hold up the drawing it waits for
     // (its stack may carry a part of that drawing's parallel work); wasm has no other threads
-    let _drawing = if !cfg!(target_arch = "wasm32") && rayon::current_thread_index().is_none() {
+    let drawing = if !cfg!(target_arch = "wasm32") && rayon::current_thread_index().is_none() {
         // checked, waited for and registered under one lock: two renders that miss the tile
         // together can't both find it neither cached nor being drawn (`cached` takes the cache's
         // lock under this one; nothing takes them the other way round)
         let mut busy = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut waited_for: Option<Slot> = None;
         loop {
-            if let Some(t) = cached(cache, key) {
+            if let Some(t) = waited_for.as_ref().and_then(|done| done.get().cloned()).or_else(|| cached(cache, key)) {
                 return Some(t);
             }
-            if !busy.contains(&id) {
-                break;
-            }
+            let Some((_, done)) = busy.iter().find(|(d, _)| *d == id) else { break };
+            waited_for = Some(done.clone());
             busy = DRAWN.wait(busy).unwrap_or_else(PoisonError::into_inner);
         }
-        busy.push(id);
-        Some(Drawing(id))
+        Some(Drawing::register(&mut busy, id))
     } else {
         start_drawing(id)
     };
+    #[cfg(test)]
+    if let Some(d) = &drawing {
+        tests::hold_for_waiters(d);
+    }
     let t = Arc::new(CrystalTile::new(look, seed)?);
+    if let Some(d) = &drawing {
+        d.finish(&t);
+    }
     keep(cache, key, t.clone());
     Some(t)
 }
@@ -932,7 +960,9 @@ fn draw_in_background(cache: &'static Cache, key: Key, look: CrystalLook, seed: 
     };
     spawn_in_background(move || {
         if let Some(t) = CrystalTile::new(look, seed) {
-            keep(cache, key, Arc::new(t));
+            let t = Arc::new(t);
+            marker.finish(&t);
+            keep(cache, key, t);
         }
         drop(marker);
         *DRAWING.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -950,7 +980,7 @@ fn spawn_in_background(draw: impl FnOnce() + Send + 'static) {
 
 /// Half the cores, for tiles drawn in the background (`None`: the pool couldn't be made).
 fn background_pool() -> Option<&'static rayon::ThreadPool> {
-    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
         let n = std::thread::available_parallelism().map_or(2, |n| n.get()).div_ceil(2);
         rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("grain-tile-{i}")).build().ok()

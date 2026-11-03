@@ -1,5 +1,29 @@
 use super::*;
 
+/// The draws [`hold_for_waiters`] holds, by cache, and how many renders wait for each.
+static HOLDS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Holds the draw of `d` until the renders [`HOLDS`] names for its cache are waiting for it (each
+/// holds a clone of its slot, as do the drawing and its in-flight entry), so a test can make
+/// renders miss a tile together.
+pub(super) fn hold_for_waiters(d: &Drawing) {
+    let held = HOLDS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(c, _)| *c == d.id.0).map(|h| h.1);
+    let Some(waiters) = held else { return };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while Arc::strong_count(&d.done) < 2 + waiters && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Waits until `n` renders wait for the draw of `d`.
+fn until_waiting(d: &Drawing, n: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while Arc::strong_count(&d.done) < 2 + n {
+        assert!(std::time::Instant::now() < deadline, "the renders never waited");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 /// The field rendered at `long` px per long edge on an `n × n` patch starting at pixel `origin`.
 fn patch(tile: &CrystalTile, long: f64, n: usize, origin: usize) -> Vec<f32> {
     let w = (TILE_PER_LONG / long) as f32;
@@ -193,7 +217,7 @@ fn a_render_waits_for_a_tile_being_drawn() {
     let key = key_of(look, seed);
     let marker = start_drawing((std::ptr::from_ref(&OWN) as usize, key)).expect("not drawn yet");
     let render = std::thread::spawn(move || tile_in(&OWN, look, seed, true));
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    until_waiting(&marker, 1);
     let drawn = Arc::new(CrystalTile::new(look, seed).expect("tile"));
     keep(&OWN, key, drawn.clone());
     drop(marker);
@@ -201,12 +225,38 @@ fn a_render_waits_for_a_tile_being_drawn() {
     assert!(Arc::ptr_eq(&got, &drawn), "the render drew the tile again");
 }
 
+/// A render waiting for a tile gets it from its drawer even when the cache evicted it before the
+/// render woke.
+#[test]
+fn a_waiting_render_gets_the_tile_the_cache_evicted() {
+    static OWN: Cache = Mutex::new(Vec::new());
+    let (look, seed) = (CrystalLook::new(40.0, 50.0), 0x0d4a_0004);
+    let key = key_of(look, seed);
+    let marker = start_drawing((std::ptr::from_ref(&OWN) as usize, key)).expect("not drawn yet");
+    let render = std::thread::spawn(move || tile_in(&OWN, look, seed, true));
+    until_waiting(&marker, 1);
+    let drawn = Arc::new(CrystalTile::new(look, seed).expect("tile"));
+    marker.finish(&drawn);
+    keep(&OWN, key, drawn.clone());
+    // other renders' tiles push it out of the cache before the waiter wakes
+    for other in 1..=CACHE as u32 {
+        keep(&OWN, key_of(look, seed + other), drawn.clone());
+    }
+    assert!(cached(&OWN, key).is_none(), "the tile is still cached");
+    drop(marker);
+    let got = render.join().expect("render thread").expect("tile");
+    assert!(Arc::ptr_eq(&got, &drawn), "the render drew the tile again");
+}
+
 /// Renders that miss the same tile together draw it once: the first registers the draw and the
 /// others wait for it, as no gap lets a second render find it neither cached nor being drawn.
+/// The first draw is held until the other renders all wait for it, so the misses overlap.
 #[test]
 fn renders_that_miss_a_tile_together_draw_it_once() {
     static OWN: Cache = Mutex::new(Vec::new());
     const N: usize = 8;
+    // the first render's draw waits for the other seven to miss the tile too
+    HOLDS.lock().unwrap_or_else(PoisonError::into_inner).push((std::ptr::from_ref(&OWN) as usize, N - 1));
     let look = CrystalLook::new(0.0, 50.0);
     for seed in 0x0d4a_1000..0x0d4a_1000 + 40 {
         let start = Arc::new(std::sync::Barrier::new(N));
