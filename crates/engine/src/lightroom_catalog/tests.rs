@@ -516,18 +516,18 @@ fn only_an_import_that_makes_a_record_of_a_content_duplicate_reads_its_sidecar()
     )
     .unwrap();
     let paths = [file.to_string_lossy().into_owned()];
-    for read_duplicates in [false, true] {
+    for same_content in [crate::import::SameContent::Skip, crate::import::SameContent::Create] {
         let mut s = crate::Session::new();
         let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
         s.media.file_probe =
             Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), content_hash: Some("same-bytes".into()), ..Default::default() })));
-        let opts = crate::import::ImportOptions { read_duplicates, ..Default::default() };
+        let opts = crate::import::ImportOptions { same_content, ..Default::default() };
         let r = crate::import::import_with(&mut s, &paths, &opts).unwrap();
-        assert!(r.imported.is_empty() && s.catalog.photos().count() == 1, "{read_duplicates}: {r:?}");
-        let [d] = r.duplicates.as_slice() else { panic!("{read_duplicates}: {r:?}") };
-        assert_eq!((d.reason, d.existing), ("content", Some(other.0)), "{read_duplicates}");
+        assert!(r.imported.is_empty() && s.catalog.photos().count() == 1, "{same_content:?}: {r:?}");
+        let [d] = r.duplicates.as_slice() else { panic!("{same_content:?}: {r:?}") };
+        assert_eq!((d.reason, d.existing), ("content", Some(other.0)), "{same_content:?}");
         let caption = d.file.as_ref().and_then(|f| f.sidecar.as_ref()).and_then(|sc| sc.caption.clone());
-        if read_duplicates {
+        if same_content == crate::import::SameContent::Create {
             assert_eq!(caption.as_deref(), Some("Harbour at dawn"), "the Lightroom import reads it: {r:?}");
         } else {
             assert_eq!(caption, None, "a skipped duplicate's sidecar isn't looked up: {r:?}");

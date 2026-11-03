@@ -8,6 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use crate::import::Origin;
 use crate::lightroom_sqlite::{Database, FileSource, LiveTable, Value as SqlValue};
 use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
 use lightcraft_geom::{Affine, Orientation, Point, Rect};
@@ -1263,7 +1264,7 @@ fn stage_collections(
 /// import doesn't look at, see [`Original::Refused`]: no record) or `incomplete` (`skipped`).
 /// Should they not add up, a warning says by how much.
 pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, context: ApplyPrepared<'_>) -> crate::Result<AppliedImport> {
-    let ApplyPrepared { update_existing, files, index, archive_path, missing_sources, undo0 } = context;
+    let ApplyPrepared { update_existing, mut files, index, archive_path, missing_sources, undo0 } = context;
     // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
     refuse_non_media(&mut data);
     validate(&data).map_err(error)?;
@@ -1279,15 +1280,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     // Normal import counts probed originals; catalog import also adds offline records,
     // distinct originals with identical bytes, and virtual copies.
     let mut imported = files.imported.len();
-    // The records the file import just made: the catalog photo that finds one was added, not
-    // already in the library.
-    let mut fresh: HashSet<u64> = files.imported.iter().copied().collect();
-    // The records the file import just made (a photo browsed in Local that it promoted was there
-    // before). Its XMP sidecar may have given one develop settings, but that is no edit made in
-    // the library: the catalog's settings apply to it (#3707).
-    let was_there: HashSet<u64> = files.promoted.iter().copied().collect();
-    let made: HashSet<u64> = files.imported.iter().copied().filter(|id| !was_there.contains(id)).collect();
-    let mut promoted = HashSet::new();
+    // Where each record this job lands on came from, from the file import on: what the import
+    // does to the record follows from it (its develop settings, the report's breakdown).
+    let mut origins = std::mem::take(&mut files.origins);
+    // The records a catalog photo has landed on so far: the first one counts it as added (or
+    // promotes it), any other catalog photo with the same path finds it already there.
+    let mut claimed = HashSet::new();
     let mut unmapped = BTreeMap::new();
     let mut preserved = 0;
     // Where each catalog photo went (the report's breakdown, see above). A library photo in Recently
@@ -1321,9 +1319,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
         let existing_id = indexed.or_else(|| if master == 0 { by_path.get(&key(&src.path)).copied() } else { None });
         let mut trashed = false;
-        let mut p = if let Some(id) = existing_id.and_then(|id| s.catalog.photo(id)) {
-            trashed = id.deleted;
-            (**id).clone()
+        let (mut p, origin) = if let Some(found) = existing_id.and_then(|id| s.catalog.photo(id)) {
+            trashed = found.deleted;
+            // what the job already says of it (a record its file import made or promoted), else
+            // it was there before the job: browsed in Local or in the library
+            let origin = origins.record(found.id, if found.local { Origin::Promoted } else { Origin::Existing });
+            ((**found).clone(), origin)
         } else if master != 0 {
             let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
             let mut p = planned
@@ -1336,7 +1337,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.copy_name = Some(text(&src.image, "copyName").to_string());
             // a new copy of a master in Recently Deleted is imported, not trashed with it
             p.deleted = false;
-            p
+            (p, Origin::Created)
         } else if let Some((duplicate, file)) =
             duplicates.get(&key(&src.path)).and_then(|(id, meta)| s.catalog.photo(*id).cloned().map(|p| (p, *meta)))
         {
@@ -1385,7 +1386,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // (as-shot white balance, embedded lens corrections, the default preset), its XMP
             // sidecar; the catalog's settings and metadata apply on top
             crate::import::start_from_file(s, &mut p, file, &now);
-            p
+            (p, Origin::Created)
         } else {
             let id = s.catalog.alloc_photo_id();
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
@@ -1401,15 +1402,18 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             if ["RAW", "DNG", "ARW", "CR2", "CR3", "CRW", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
                 p.kind = lightcraft_catalog::MediaKind::Raw;
             }
-            p
+            (p, Origin::Created)
         };
+        let origin = origins.record(p.id, origin);
         // Offline videos bypass file probing; Lightroom's format still identifies their kind.
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lightcraft_catalog::MediaKind::Video;
         }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
-        let keep_develop = existing_id.is_some_and(|id| !made.contains(&id.0)) && p.edited.is_some() && !update_existing;
+        // Only a record that was there before the job can hold an edit made in the library. One the
+        // job made has what its file and XMP sidecar gave it: the catalog's settings apply (#3707).
+        let keep_develop = origin.was_there() && p.edited.is_some() && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
             preserved += 1;
@@ -1481,14 +1485,14 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 repaired.kind = p.kind;
                 ops.extend([Op::RemovePhoto { id: p.id }, Op::AddPhoto { photo: Box::new(repaired) }]);
             }
-            let promote = was_local && promoted.insert(p.id);
-            if promote {
+            let first = claimed.insert(p.id);
+            if was_local && first {
                 imported += 1;
                 ops.push(Op::SetLocal { id: p.id, local: false });
             }
             if trashed {
                 in_trash += 1;
-            } else if promote || fresh.remove(&p.id.0) {
+            } else if first && origin != Origin::Existing {
                 added += 1;
             } else {
                 already += 1;

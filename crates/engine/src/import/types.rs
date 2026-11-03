@@ -1,4 +1,4 @@
-use super::{Deserialize, MediaKind, Photo, Serialize};
+use super::{Deserialize, HashMap, MediaKind, Photo, PhotoId, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImportMode {
@@ -67,10 +67,8 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
-    /// A duplicate by content is read as a new file is, its XMP sidecar included: the Lightroom
-    /// import makes a record of its own from it ([`Duplicate::file`], #2589). Any other import
-    /// skips it without looking up its sidecar (a round trip per name on a network share, #2954).
-    pub read_duplicates: bool,
+    /// What the import makes of a file whose bytes a library photo already has.
+    pub same_content: SameContent,
     /// A batch-edit recipe: develop control id / value pairs (e.g. `light.exposure` → 0.5),
     /// applied to every imported photo *after* its XMP sidecar, camera default and import preset,
     /// as one more History step (`Import adjustments`). Only the named controls change; the recipe
@@ -81,6 +79,65 @@ pub struct ImportOptions {
     /// one skipped as a duplicate, restored from Recently Deleted, or joined from a browsed
     /// folder (Local) is never touched, as the preset and keywords never are.
     pub recipe: Vec<(String, f64)>,
+}
+
+/// What an import makes of a file whose bytes a library photo already has (a duplicate by
+/// content). What is read of the file follows from it: a file the job makes a record of is read in
+/// full, its XMP sidecar included; one it only matches to a library photo needs no more than its
+/// capture time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SameContent {
+    /// No record: the report lists it in [`ImportReport::duplicates`]. Its sidecar is read only for
+    /// the capture time its file lacks, and not looked up otherwise (a round trip per name on a
+    /// network share, #2954).
+    #[default]
+    Skip,
+    /// A record of its own ([`Origin::Created`]), which the Lightroom catalog import makes from
+    /// [`Duplicate::file`] (catalogs hold distinct originals with identical bytes): read as any
+    /// file the job makes a record of, its XMP sidecar included (#2589).
+    Create,
+}
+
+/// Where a library record an import job made or landed on came from. The job keeps one origin per
+/// record ([`Origins`]), set where the record is made or first matched, and what the import does
+/// to a record follows from it: whether its develop settings are an edit to keep, and how the
+/// report counts it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// This job made it, from a file (its metadata, the import defaults, its XMP sidecar) or from a
+    /// Lightroom catalog: nothing in it is an edit made in the library.
+    Created,
+    /// A photo browsed in Local that this job brought into the library: there before the job,
+    /// with whatever was done to it while it was browsed.
+    Promoted,
+    /// In the library before the job.
+    Existing,
+}
+
+impl Origin {
+    /// There before the job: what it has may be the user's own work.
+    pub fn was_there(self) -> bool {
+        self != Origin::Created
+    }
+}
+
+/// The origin of each record an import job made or landed on ([`Origin`]): the file import
+/// records the ones it makes and promotes ([`ImportReport::origins`]), and a Lightroom catalog
+/// import goes on with the same record for the ones it matches and makes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Origins(HashMap<PhotoId, Origin>);
+
+impl Origins {
+    /// `id`'s origin in this job: the one recorded first. A record the job made stays
+    /// [`Origin::Created`] when a later step of the job finds it in the library.
+    pub fn record(&mut self, id: PhotoId, origin: Origin) -> Origin {
+        *self.0.entry(id).or_insert(origin)
+    }
+
+    /// `id`'s origin, if the job recorded one.
+    pub fn get(&self, id: PhotoId) -> Option<Origin> {
+        self.0.get(&id).copied()
+    }
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -185,10 +242,10 @@ pub struct FileFacts {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
-    /// Of `imported`, the photos browsed in Local that joined the library: records that were
-    /// there before the import, unlike the rest, which it made. (Not in the report.)
+    /// The origin of each record in `imported`: made from its file, or a photo browsed in Local
+    /// that joined the library. (Not in the report.)
     #[serde(skip)]
-    pub promoted: Vec<u64>,
+    pub origins: Origins,
     pub duplicates: Vec<Duplicate>,
     /// [`OnDeleted::Restore`]: photos brought back from Recently Deleted instead of imported.
     #[serde(skip_serializing_if = "Vec::is_empty")]
