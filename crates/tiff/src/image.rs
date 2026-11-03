@@ -242,7 +242,9 @@ mod tests {
             let chunks = info.chunks(1000 + n * 2);
             let _ = tx.send(chunks.iter().map(|c| c.len).collect::<Vec<u64>>());
         });
-        let lens = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("chunks() took longer than 20 s");
+        let lens = rx
+            .recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20)))
+            .expect("chunks() took longer than 20 s (stretched by LIGHTCRAFT_TIME_SCALE)");
         assert!(lens.iter().all(|&l| l == 2));
     }
 }

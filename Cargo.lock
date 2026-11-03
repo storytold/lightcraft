@@ -3830,6 +3830,7 @@ dependencies = [
  "lightcraft-codecs",
  "lightcraft-engine",
  "lightcraft-raster",
+ "lightcraft-testkit",
  "log",
  "serde_json",
 ]
@@ -3983,6 +3984,7 @@ version = "0.18.0"
 name = "lightcraft-tiff"
 version = "0.18.0"
 dependencies = [
+ "lightcraft-testkit",
  "proptest",
  "serde",
  "thiserror 2.0.21",
