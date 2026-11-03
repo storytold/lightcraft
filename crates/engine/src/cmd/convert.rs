@@ -211,7 +211,8 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
-        && preview_checked == ph.preview_checked;
+        && preview_checked == ph.preview_checked
+        && info.orientation == ph.file_orientation;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -220,6 +221,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         content_hash: info.content_hash,
         preview_only: info.preview_only,
         preview_checked,
+        file_orientation: info.orientation,
     })
 }
 
@@ -449,6 +451,47 @@ mod tests {
         assert_eq!(meta.focus, Some(fp(0.3)));
         ph.meta.focus = Some(fp(0.1));
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known focus point is kept");
+    }
+
+    /// Reload from Disk stores the orientation the file reads now (rotated by an external editor),
+    /// with its size and hash, instead of keeping the one import read; undo restores it.
+    #[test]
+    fn reload_stores_the_files_new_orientation() {
+        use lightcraft_geom::Orientation;
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.jpg".into() }, "x.jpg", "JPEG", 6000, 4000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.content_hash = Some("old".into());
+        ph.file_orientation = Some(Orientation::Normal);
+        cat.apply(Op::AddPhoto { photo: Box::new(ph.clone()) }).unwrap();
+        // the same bytes and size: nothing to do
+        let same = crate::media::ProbeInfo {
+            width: 6000,
+            height: 4000,
+            file_size: 10,
+            content_hash: Some("old".into()),
+            orientation: Some(Orientation::Normal),
+            ..Default::default()
+        };
+        assert!(content_op(ph.id, &ph, same.clone()).is_none());
+        // turned on disk: new size, hash and orientation
+        let info = crate::media::ProbeInfo {
+            width: 4000,
+            height: 6000,
+            file_size: 11,
+            content_hash: Some("new".into()),
+            orientation: Some(Orientation::Rotate90),
+            ..same
+        };
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, ph.id, &info, &mut ops, &mut changed);
+        assert_eq!(changed, vec![ph.id]);
+        let inv = cat.apply(Op::Batch { ops }).unwrap();
+        let p = cat.photo(ph.id).unwrap();
+        assert_eq!((p.width, p.height, p.file_size, p.content_hash.as_deref()), (4000, 6000, 11, Some("new")));
+        assert_eq!(p.file_orientation, Some(Orientation::Rotate90));
+        cat.apply(inv).unwrap();
+        assert_eq!(cat.photo(ph.id).unwrap().file_orientation, Some(Orientation::Normal), "undo restores it");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {

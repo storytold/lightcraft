@@ -52,7 +52,7 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
-//! | 10 | a rotation made in Lightroom carries over on re-import | `Photo.file_orientation` |
+//! | 10 | a rotation made in Lightroom carries over on re-import | `Photo.file_orientation`, `Op::SetContent.file_orientation` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
