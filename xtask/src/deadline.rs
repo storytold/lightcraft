@@ -26,18 +26,18 @@
 //! environment variable of its own ([`Marker`], `LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`, the
 //! nonce random per xtask process so an earlier xtask with the same pid had another) that
 //! everything it starts inherits. On timeout ([`kill`]) the binary (while unreaped, so its pid is
-//! its own) and its process tree are frozen with SIGSTOP level by level; on Linux also every
-//! process of this user whose `/proc/<pid>/environ` holds the exact entry, which finds those that
-//! outlived their parent. On Linux each one is held by a pidfd, opened before what makes it ours is
-//! read again, and signalled only through it, so a pid that passed to another process in between
-//! is never signalled; elsewhere on Unix a process is signalled by its pid only once its parent is
-//! stopped and can't reap it. Once no new one turns up they are killed with SIGKILL; one it fails
-//! for is tried again and then continued with SIGCONT rather than left stopped, and the report says
-//! how many were killed and names any that failed or are still alive. It also says when the OS
-//! doesn't allow looking for the reparented ones (Unix other than Linux: only the tree; Windows:
-//! `taskkill /T /F`). Only a process that clears its environment and leaves the tree escapes. The
-//! child stays in xtask's process group rather than one of its own, so Ctrl-C in the terminal
-//! still reaches the test binaries as before.
+//! its own) is frozen with SIGSTOP, and on Linux so is everything it started, level by level: its
+//! process tree, and every process of this user whose `/proc/<pid>/environ` holds the exact entry,
+//! which finds those that outlived their parent. Each of those is held by a pidfd, opened before
+//! what makes it ours is read again, and signalled only through it, so a pid that passed to
+//! another process in between is never signalled. Once no new one turns up they are killed with
+//! SIGKILL; one it fails for is tried again and then continued with SIGCONT rather than left
+//! stopped, and the report says how many were killed and names any that failed or are still alive.
+//! Without pidfds (Unix other than Linux, Linux before 5.3) only the binary itself is killed and
+//! the report says what it started may still run; Windows uses `taskkill /T /F` (bounded). Only a
+//! process that clears its environment and leaves the tree escapes on Linux. The child stays in
+//! xtask's process group rather than one of its own, so Ctrl-C in the terminal still reaches the
+//! test binaries as before.
 //!
 //! A timeout also turns off the optional probes after it in the same run ([`any_timed_out`]): the
 //! GPU probe, which runs bounded too ([`capture_cargo`], [`probe_limit`]), and the translation
@@ -422,7 +422,7 @@ impl Marker {
     }
 
     /// The exact environment entry that marks the run's processes.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn entry(&self) -> String {
         format!("{}={MARK_VALUE}", self.key)
     }
@@ -1001,16 +1001,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_children_of_stopped_processes_in_a_process_table() {
-        let table = kill::parse_process_table("  1 0\n 10 1\n 11 10\n 12 11\n 13 10\n 20 1\n 21 20\n junk\n 14 12");
-        assert_eq!(table.len(), 8);
-        assert_eq!(kill::children_of(&table, &BTreeSet::from([10])), BTreeSet::from([11, 13]), "only direct children: their parent is stopped");
-        assert_eq!(kill::children_of(&table, &BTreeSet::from([10, 11, 13])), BTreeSet::from([12]));
-        assert!(kill::children_of(&table, &BTreeSet::from([99])).is_empty());
-        assert!(kill::children_of(&kill::parse_process_table("5 6\n6 5"), &BTreeSet::from([5, 6])).is_empty(), "a cycle ends");
-    }
-
-    #[test]
     fn a_marker_is_an_exact_environment_entry_of_this_process_and_run() {
         let m = Marker::with(42, 0xabc, 3);
         assert_eq!(m.entry(), "LIGHTCRAFT_XTASK_RUN_42_0000000000000abc_3=1");
@@ -1103,14 +1093,14 @@ mod tests {
     }
 
     /// Whether process `pid` is gone (or a zombie no one has reaped yet).
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn gone(pid: &str) -> bool {
         let out = Command::new("ps").args(["-o", "stat=", "-p", pid]).output().unwrap();
         let stat = String::from_utf8_lossy(&out.stdout);
         stat.trim().is_empty() || stat.trim().starts_with('Z')
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("xtask-deadline-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1118,7 +1108,7 @@ mod tests {
         dir
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn wait_gone(pid: &str) -> bool {
         let until = Instant::now() + Duration::from_secs(10);
         while Instant::now() < until {
@@ -1137,7 +1127,8 @@ mod tests {
         c
     }
 
-    #[cfg(unix)]
+    // Linux: elsewhere the processes the binary started aren't signalled (no pidfds)
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_hung_binary_is_killed_with_the_processes_it_started_and_named() {
         let dir = scratch("hung");
@@ -1192,7 +1183,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    // Linux: elsewhere the processes the binary started aren't signalled (no pidfds)
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_list_run_that_hangs_is_bounded_and_killed() {
         let dir = scratch("list");
@@ -1272,7 +1264,8 @@ mod tests {
         assert!(run("kill -9 $$").unwrap_err().contains("SIGKILL"));
     }
 
-    #[cfg(unix)]
+    // Linux: elsewhere the processes the binary started aren't signalled (no pidfds)
+    #[cfg(target_os = "linux")]
     #[test]
     fn under_cargo_each_binary_gets_the_limit_and_the_build_does_not_count() {
         // the "build" outlasts the limit, then each "binary" finishes in time

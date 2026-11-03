@@ -1,6 +1,6 @@
 //! Workspace tooling: `cargo xtask <command>`.
 //!
-//! Pure Rust (std + serde_json; flate2/brotli for the web bundle; rustix on Unix to end a timed-out test run). External tools (`cargo`, `curl`, `tar`) are
+//! Pure Rust (std + serde_json; flate2/brotli for the web bundle; rustix on Linux to end a timed-out test run). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
