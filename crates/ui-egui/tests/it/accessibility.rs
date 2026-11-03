@@ -16,12 +16,9 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
-    let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
-    // text such as "▸" in the Reference view's hint has its glyph only in the craft-fonts faces (releases
-    // always have them): without them it is drawn as a box, which this audit of names doesn't need
-    if lightcraft_engine::CRAFT_FONTS.is_empty() {
-        builder = builder.allow_missing_glyphs();
-    }
+    // This audit checks the AccessKit tree, not font coverage. Some locales and interface symbols
+    // intentionally have no bundled glyph, so do not let unrelated text painting abort the audit.
+    let builder = Harness::builder().with_size(vec2(1500.0, 950.0)).allow_missing_glyphs();
     let mut h = builder.build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
@@ -88,10 +85,6 @@ fn audit(h: &Harness<'_, LightcraftApp>, place: &str) -> Vec<String> {
 
 #[test]
 fn every_interactive_node_has_a_name_in_every_view_and_tool() {
-    // said once per audit, not once per harness
-    if lightcraft_engine::CRAFT_FONTS.is_empty() {
-        lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: glyphs only craft-fonts has are drawn as boxes, not checked");
-    }
     let mut problems = Vec::new();
     for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail, ViewMode::Compare, ViewMode::Survey, ViewMode::Reference] {
         let h = harness(view, RightPanel::None);
