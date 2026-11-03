@@ -32,13 +32,15 @@ says where to turn the question back on. The choice is an app setting (`ui.json`
 `"ask"` or `"alwaysMerge"`); a settings file without it asks.
 
 A session with no library on disk (in memory, e.g. after Continue Without Saving) has nothing to put a new library
-next to: the catalog merges into it without asking, as before.
+next to: the catalog merges into it without asking when it has no network sources. Network sources
+always get a checkbox review before import, including with Always merge.
 
-**Scripts and agents.** The app command `file.importLightroom {path?, into?, name?, location?}` (control channel,
+**Scripts and agents.** The app command `file.importLightroom {path?, into?, name?, location?, networkShares?}` (control channel,
 `lightcraft-cli mcp --connect`) chooses without the window: `into: "open"` merges, `into: "new"` creates the library
 `name` (default: the catalog's name) in the folder `location` (default: the open library's parent folder; a full
-path), opens it and imports. Without `into` it shows the window (and returns `{asking: true, path, into}`, `into`
-being the choice the window opens with) or merges when the setting says so. A catalog path that doesn't exist is
+path), opens it and imports. Without `into` it first returns `{running: true, kind: "sources", path}` while discovering sources.
+Poll `library.importLightroom {status: true}` (or `{wait: true}`) for `{asking: true, path, into}` when
+the window opens, or for the automatic merge result when no network sources require review. A catalog path that doesn't exist is
 refused before a new library is made. The engine command `library.importLightroom` always imports into the library
 open now.
 
@@ -159,13 +161,38 @@ a project folder with its catalog inside it therefore keeps its originals linked
 originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
 
 Original and root folder paths are resolved with the catalog as the document and are looked at
-only when they are on this computer or on the network share the catalog itself is on
+by default only when they are on this computer or on the network share the catalog itself is on
 (`crates/engine/src/doc_path.rs`). An original on another computer (`\\server\share\…`,
 `//server/…`, `file://server/…`), a device path, or one whose folder or file name in the catalog is
 an absolute path is not looked at: the import lists it as missing with a warning and leaves the
 photo and its virtual copies out of the library. To import originals on a share, open the catalog
-from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
+from that share, or explicitly select the share as described below. A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
+
+**Local catalog, NAS originals.** After choosing the `.lrcat`, LightCraft reads its recorded root
+folders in the background and lists **Network sources in this catalog** in the import window.
+Each distinct UNC server/share (for example `\\nas\photos` or `\\archive\old-photos`) gets a checkbox;
+folders and case/separator variants on the same share are grouped. No folder picker is needed.
+Select the sources to import, then confirm the import. All discovered sources start unchecked;
+unchecked network sources are not imported, including the catalog's own share. The catalog,
+LightCraft library and original photos stay at their existing locations.
+
+Example views using synthetic catalogs: [local sources only](images/lightcraft-import-local-sources.png)
+and [two network sources with one selected](images/lightcraft-import-network-sources.png).
+
+Discovery reads only the catalog and its committed WAL, without probing any originals or contacting
+their servers. The network review also appears with **Always merge** or an in-memory library;
+that preference still skips the destination question for catalogs without network sources. Cancel
+grants nothing. Selections apply only to this import and are not remembered on the next one.
+
+The same explicit option is available to `file.importLightroom`, `library.importLightroom` and
+`library.inspectLightroom`: `networkShares: ["\\\\nas\\photos"]` in JSON. At most 32 UNC folder paths
+are accepted, validated before catalog reads or library creation. The resolver checks the full server
+and share names, not a path prefix: selecting `\\nas\photos` does not permit `\\nas\photos-private` or
+another server. Device paths, non-file URLs, invalid paths and remote `file://host/…` URLs remain refused.
+UNC originals work on Windows; on other platforms, use the NAS's locally mounted paths. An allowed but
+offline original stays catalogued as missing for relinking. An explicit empty array allows no UNC shares,
+including the catalog's own share. Without the option, the original restriction remains: a catalog must not make the app contact a server the user has not chosen.
 
 ## Catalog backups
 

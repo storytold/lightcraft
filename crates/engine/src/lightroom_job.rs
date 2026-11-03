@@ -197,6 +197,7 @@ impl LightroomProgress {
 /// A Lightroom import detached from the owner thread.
 pub struct LightroomJob {
     path: PathBuf,
+    network_shares: crate::doc_path::NetworkShares,
     update_existing: bool,
     import: ImportJob,
     token: LightroomLibraryToken,
@@ -218,7 +219,21 @@ impl LightroomJob {
             add_done: Arc::clone(&import.done),
             ..LightroomProgress::default()
         };
-        Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir, progress })
+        Ok(Self {
+            path,
+            network_shares: Default::default(),
+            update_existing,
+            import,
+            token: LightroomLibraryToken::capture(s),
+            archive_dir,
+            progress,
+        })
+    }
+
+    /// Grant only these explicitly chosen network shares for this import.
+    pub fn with_network_shares(mut self, shares: crate::doc_path::NetworkShares) -> Self {
+        self.network_shares = shares;
+        self
     }
 
     /// The job's progress, to watch from another thread while [`LightroomJob::prepare`] runs.
@@ -241,9 +256,10 @@ impl LightroomJob {
             return Err(cancelled());
         }
         // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
-        let mut data = lightroom_catalog::read_source(
+        let mut data = lightroom_catalog::read_source_with_network_shares(
             &self.path,
             self.archive_dir.as_deref(),
+            &self.network_shares,
             cancel,
             &self.progress.catalog_total,
             &self.progress.catalog_done,

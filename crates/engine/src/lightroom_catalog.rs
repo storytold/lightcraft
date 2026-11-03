@@ -8,6 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use crate::doc_path::NetworkShares;
 use crate::lightroom_sqlite::{Database, FileSource, LiveTable, Value as SqlValue};
 use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
 use lightcraft_geom::{Affine, Orientation, Point, Rect};
@@ -47,8 +48,19 @@ fn source_path(p: &Photo) -> Option<&str> {
 struct Reader {
     db: Database,
     tables: Vec<LiveTable>,
+    wal_path: PathBuf,
+    wal_before: Option<(u64, Option<std::time::SystemTime>)>,
 }
 impl Reader {
+    fn ensure_unchanged(&self) -> Result<(), String> {
+        self.db.ensure_unchanged()?;
+        let after = std::fs::metadata(&self.wal_path).ok().map(|m| (m.len(), m.modified().ok()));
+        if self.wal_before != after {
+            return Err("catalog changed during reading; close Lightroom and retry".into());
+        }
+        Ok(())
+    }
+
     fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
             return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
@@ -164,7 +176,7 @@ pub struct CatalogPhoto {
 /// as the document ([`crate::doc_path::resolve`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Original {
-    /// `path` is a local file path, or one on the network share the catalog is on.
+    /// `path` is local, on the catalog's share, or on a share explicitly selected for this import.
     Local,
     /// `path` is not a path on this computer (a catalog made on another system): the photo is
     /// kept as an offline record for later relinking, and the path is not looked at.
@@ -427,11 +439,11 @@ fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
 /// another computer): `relativePathFromCatalog`, which Lightroom records for roots on the
 /// catalog's volume, resolved against the catalog's folder, if that is a folder. Both paths are
 /// looked at only when [`crate::doc_path::resolve`] follows them.
-fn relocated_root(absolute: &str, relative: &str, catalog: &Path) -> Option<PathBuf> {
-    if relative.is_empty() || !Path::new(relative).is_relative() || crate::doc_path::resolve(absolute, Some(catalog)).is_ok_and(|p| p.is_dir()) {
+fn relocated_root(absolute: &str, relative: &str, catalog: &Path, shares: &NetworkShares) -> Option<PathBuf> {
+    if relative.is_empty() || !Path::new(relative).is_relative() || shares.resolve(absolute, Some(catalog)).is_ok_and(|p| p.is_dir()) {
         return None;
     }
-    crate::doc_path::resolve(relative, Some(catalog)).ok().filter(|dir| dir.is_dir())
+    shares.resolve(relative, Some(catalog)).ok().filter(|dir| dir.is_dir())
 }
 
 /// Whether a folder path or file name from the catalog is absolute: `Path::join` would put it in
@@ -445,12 +457,12 @@ fn is_absolute_part(part: &str) -> bool {
 
 /// The path of an original under `root` and whether it may be looked at, resolved with the
 /// catalog at `catalog` as the document.
-fn original_path(root: &str, folder: &str, name: &str, catalog: &Path) -> (String, Original) {
+fn original_path(root: &str, folder: &str, name: &str, catalog: &Path, shares: &NetworkShares) -> (String, Original) {
     let stored = Path::new(root).join(folder).join(name).to_string_lossy().to_string();
     if is_absolute_part(folder) || is_absolute_part(name) {
         return (stored, Original::Refused("its folder or file name is an absolute path".into()));
     }
-    match crate::doc_path::resolve(&stored, Some(catalog)) {
+    match shares.resolve(&stored, Some(catalog)) {
         Ok(found) => (found.to_string_lossy().to_string(), Original::Local),
         Err(crate::doc_path::NotFollowed::NotHere) => (stored, Original::NotHere),
         Err(crate::doc_path::NotFollowed::Refused(why)) => (stored, Original::Refused(why.to_string())),
@@ -459,10 +471,15 @@ fn original_path(root: &str, folder: &str, name: &str, catalog: &Path) -> (Strin
 
 /// Inspect `.lrcat` plus committed WAL pages without modifying either source file.
 pub fn read(path: &Path) -> Result<CatalogImport, String> {
+    read_with_network_shares(path, &NetworkShares::default())
+}
+
+/// Read a catalog with network shares explicitly chosen for this operation.
+pub fn read_with_network_shares(path: &Path, shares: &NetworkShares) -> Result<CatalogImport, String> {
     let cancel = AtomicBool::new(false);
     let total = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
-    read_with_progress(path, &cancel, &total, &done)
+    read_with_network_shares_and_progress(path, shares, &cancel, &total, &done)
 }
 
 /// Read a Lightroom Classic catalog for import, counting the tables read in `total` / `done` and
@@ -489,6 +506,18 @@ pub fn read_source(
     total: &AtomicUsize,
     done: &AtomicUsize,
 ) -> Result<CatalogImport, String> {
+    read_source_with_network_shares(path, temp_root, &NetworkShares::default(), cancel, total, done)
+}
+
+/// Read a catalog or backup using only the network shares selected for this import.
+pub fn read_source_with_network_shares(
+    path: &Path,
+    temp_root: Option<&Path>,
+    shares: &NetworkShares,
+    cancel: &AtomicBool,
+    total: &AtomicUsize,
+    done: &AtomicUsize,
+) -> Result<CatalogImport, String> {
     // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
@@ -497,19 +526,18 @@ pub fn read_source(
         let root = temp_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
         let extracted = crate::lightroom_backup::extract(path, &root, cancel)?;
         let (document, known) = crate::lightroom_backup::original_catalog(path, &extracted.entry);
-        let mut data = read_file(&extracted.catalog, &document, path, cancel, done)?;
+        let mut data = read_file(&extracted.catalog, &document, path, shares, cancel, done)?;
         if !known {
             // only a guess: it resolves relative paths, but never names the catalog
             data.catalog_path = None;
         }
         return Ok(data);
     }
-    read_file(path, path, path, cancel, done)
+    read_file(path, path, path, shares, cancel, done)
 }
 
-/// Read the catalog file `path`, resolving the paths it records with `document` as the catalog's
-/// place and reporting `source` as where it came from.
-fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
+// Shared by source review and full import: same read-only SQLite/WAL view.
+fn open_reader(path: &Path) -> Result<Reader, String> {
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
@@ -520,14 +548,57 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         Err(e) => return Err(e.to_string()),
     };
     let wal_len = committed_wal_len(main.header(), &wal)?;
-    ensure_read_active(cancel)?;
     let db = Database::open_file_with_wal(main, &wal[..wal_len]).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
     let after = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() || wal_before != wal_after {
         return Err("catalog changed during reading; close Lightroom and retry".into());
     }
-    let reader = Reader { tables: db.live_tables()?, db };
+    Ok(Reader { tables: db.live_tables()?, db, wal_path, wal_before })
+}
+
+/// Discover UNC shares from recorded root folders. Reads only catalog/schema/WAL pages;
+/// never resolves, probes or enumerates originals, even when the catalog itself is on a share.
+pub fn network_sources(path: &Path) -> Result<Vec<String>, String> {
+    let reader = open_reader(path)?;
+    let mut shares: BTreeMap<String, String> = BTreeMap::new();
+    for root in reader.table("AgLibraryRootFolder", true)? {
+        let absolute = text(&root, "absolutePath");
+        let relative = text(&root, "relativePathFromCatalog");
+        for (stored, relative_only) in [(absolute, false), (relative, true)] {
+            if stored.is_empty() || (relative_only && !Path::new(stored).is_relative()) {
+                continue;
+            }
+            // Relative roots/fallbacks can be on the catalog's own share. Resolve lexically,
+            // without the existence checks used later by relocated_root during import.
+            let share = crate::doc_path::network_share(stored)
+                .or_else(|| craft_docpath::resolve(stored, Some(path)).ok().and_then(|p| p.to_str().and_then(crate::doc_path::network_share)));
+            if let Some(share) = share {
+                shares.entry(share.to_ascii_lowercase()).or_insert(share);
+            }
+        }
+        if shares.len() > 32 {
+            return Err("Lightroom catalog references more than 32 network shares".into());
+        }
+    }
+    reader.ensure_unchanged()?;
+    Ok(shares.into_values().collect())
+}
+
+/// Progress-aware read with explicitly selected network shares.
+pub fn read_with_network_shares_and_progress(
+    path: &Path,
+    shares: &NetworkShares,
+    cancel: &AtomicBool,
+    total: &AtomicUsize,
+    done: &AtomicUsize,
+) -> Result<CatalogImport, String> {
+    read_source_with_network_shares(path, None, shares, cancel, total, done)
+}
+
+/// Read the extracted file while resolving originals relative to the original catalog location.
+fn read_file(path: &Path, document: &Path, source: &Path, shares: &NetworkShares, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
+    let reader = open_reader(path)?;
     let mut warnings = Vec::new();
     let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
@@ -595,7 +666,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     root_ids.sort_unstable();
     for (id, root) in root_ids.iter().filter_map(|id| Some((*id, roots.get(id)?))) {
         let absolute = text(root, "absolutePath");
-        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), document) {
+        let resolved = match relocated_root(absolute, text(root, "relativePathFromCatalog"), document, shares) {
             Some(found) => {
                 let found = found.to_string_lossy().to_string();
                 warnings.push(format!("root folder {}: {absolute} not found; using {found} (relative to the catalog)", text(root, "name")));
@@ -603,7 +674,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
             }
             None => absolute.to_string(),
         };
-        if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(document)) {
+        if let Err(crate::doc_path::NotFollowed::Refused(why)) = shares.resolve(&resolved, Some(document)) {
             warnings
                 .push(format!("root folder {}: {resolved} is not opened: {why}; its photos are listed as missing and not added", text(root, "name")));
             refused_roots.insert(id);
@@ -652,7 +723,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
             orphans.insert(id);
             continue;
         }
-        let (photo_path, original) = original_path(root_path, folder_path, name, document);
+        let (photo_path, original) = original_path(root_path, folder_path, name, document, shares);
         if let Original::Refused(why) = &original
             && !refused_roots.contains(&root_id)
         {
@@ -681,11 +752,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     drop_copies_of(&mut out, &orphans);
     refuse_non_media(&mut out);
     ensure_read_active(cancel)?;
-    reader.db.ensure_unchanged()?;
-    let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
-    if wal_before != wal_after {
-        return Err("catalog changed during reading; close Lightroom and retry".into());
-    }
+    reader.ensure_unchanged()?;
     Ok(out)
 }
 
@@ -978,7 +1045,12 @@ fn strip_xmp_sentinels(value: &mut Value) {
 /// Import into the current library. Existing edited records are preserved unless explicitly
 /// requested; missing originals remain catalogued for later relinking. The source catalog is read-only.
 pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> crate::Result<Value> {
-    let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?;
+    import_with_network_shares(s, path, update_existing, NetworkShares::default())
+}
+
+/// Import with access to the network shares explicitly selected by the caller.
+pub fn import_with_network_shares(s: &mut crate::Session, path: &Path, update_existing: bool, shares: NetworkShares) -> crate::Result<Value> {
+    let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?.with_network_shares(shares);
     let cancel = AtomicBool::new(false);
     let prepared = job.prepare(&cancel)?;
     let completion = crate::lightroom_job::commit_prepared(s, prepared)?;
