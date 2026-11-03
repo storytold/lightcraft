@@ -109,7 +109,11 @@ fn album_operations_are_live_and_plain_source_clears_them() {
     assert_eq!(app.session.visible_cloned().len(), 2);
     assert!(!crate::album_combination::active(&app));
     app.run("view.combineAlbums", json!({"ids": [a, b]})).unwrap();
+    app.run("library.toggleFilters", json!({})).unwrap();
+    assert!(app.session.filters_off());
     app.run("album.delete", json!({"id": b})).unwrap();
+    app.run("library.toggleFilters", json!({})).unwrap();
+    assert!(!app.session.filters_off());
     assert!(app.ui.album_combination.is_none());
     assert!(app.session.filter.rule_set.is_none());
 }

@@ -17,7 +17,13 @@ impl Request {
     }
 
     pub fn read(self) -> Result<Value, String> {
-        self.read_with_diagnostics().map(|(value, _)| value)
+        let (mut value, warning) = self.read_with_diagnostics()?;
+        if let Some(warning) = warning
+            && let Some(fields) = value.as_object_mut()
+        {
+            fields.insert("warning".into(), Value::String(warning));
+        }
+        Ok(value)
     }
 
     pub fn read_with_diagnostics(self) -> Result<(Value, Option<String>), String> {

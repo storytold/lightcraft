@@ -5,6 +5,7 @@ use serde_json::Value;
 
 const TASK: &str = "Metadata panel";
 const MAX_READS: usize = 4;
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TAGS_PER_PAGE: usize = 100;
 type ReadResult = Result<(Value, Option<String>), String>;
 
@@ -13,6 +14,7 @@ pub(crate) struct Runtime {
     key: Option<(u64, PhotoId, String)>,
     result: Option<ReadResult>,
     page: usize,
+    waiting_since: Option<std::time::Instant>,
 }
 
 fn load(app: &mut LightcraftApp, id: PhotoId) {
@@ -25,11 +27,17 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     if app.metadata_panel.key.as_ref() != Some(&key) {
         app.metadata_panel = Runtime { key: Some(key.clone()), ..Default::default() };
     }
+    if app.metadata_panel.result.is_some() {
+        return;
+    }
+    let since = app.metadata_panel.waiting_since.get_or_insert_with(std::time::Instant::now);
+    if since.elapsed() >= READ_TIMEOUT {
+        // The OS may still own a blocking read. Keep counting that worker until it exits.
+        app.metadata_panel.result = Some(Err(crate::i18n::tr("Metadata read timed out. Try Refresh.").into()));
+        return;
+    }
     let label = format!("{TASK} {}:{}:{}", key.0, id.0, key.2);
-    if app.metadata_panel.result.is_some()
-        || app.tasks.is_running(&label)
-        || app.tasks.labels().iter().filter(|name| name.starts_with(TASK)).count() >= MAX_READS
-    {
+    if app.tasks.is_running(&label) || app.tasks.labels().iter().filter(|name| name.starts_with(TASK)).count() >= MAX_READS {
         return;
     }
     let request = match lightcraft_engine::metadata_read::Request::new(&app.session, id) {
@@ -101,6 +109,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if app.metadata_panel.result.is_some() && ui.button(crate::i18n::tr("Refresh")).clicked() {
             app.metadata_panel.result = None;
             app.metadata_panel.page = 0;
+            app.metadata_panel.waiting_since = None;
             ui.ctx().request_repaint();
         }
         match &app.metadata_panel.result {
@@ -195,6 +204,7 @@ fn is_date_tag(name: &str) -> bool {
                 | "MetadataDate"
                 | "DateCreated"
                 | "GPSDateStamp"
+                | "GPS Date Stamp"
                 | "DateTimeCreated"
         )
     )
@@ -224,8 +234,10 @@ fn numeric_date(value: &str, locale: &str) -> String {
             return time.format(&format!("{date} %H:%M:%S")).to_string();
         }
     }
-    if let Ok(day) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-        return day.format(date).to_string();
+    for pattern in ["%Y-%m-%d", "%Y:%m:%d"] {
+        if let Ok(day) = chrono::NaiveDate::parse_from_str(value, pattern) {
+            return day.format(date).to_string();
+        }
     }
     value.to_string()
 }
@@ -306,6 +318,8 @@ mod tests {
 
     #[test]
     fn dates_follow_locale_with_two_digit_day_and_month() {
+        assert!(super::is_date_tag("GPS Date Stamp"));
+        assert_eq!(numeric_date("2014:01:01", "de_DE"), "01.01.2014");
         assert_eq!(numeric_date("2014-01-01", "de_DE"), "01.01.2014");
         assert_eq!(numeric_date("2014-01-01T11:48:16", "de-DE"), "01.01.2014 11:48:16");
         assert_eq!(numeric_date("2014:01:01 11:48:16", "de_DE"), "01.01.2014 11:48:16");
