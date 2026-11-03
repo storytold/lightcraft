@@ -22,3 +22,7 @@ todo = "warn"
 [target.'cfg(windows)'.dependencies]
 # GlobalMemoryStatusEx and QueryInformationJobObject (`windows` module)
 windows-sys = { workspace = true, features = ["Win32_System_SystemInformation", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+# CreateJobObjectW, for the test that puts a child test process in jobs with known limits
+windows-sys = { workspace = true, features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

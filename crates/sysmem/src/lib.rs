@@ -130,6 +130,68 @@ mod tests {
         assert_eq!(again[again.len() - 1], 7);
     }
 
+    /// The job query reads real limits (#3652): a child copy of this test joins three nested jobs in
+    /// turn, a per-process limit, a whole-job limit, then both, and must read back exactly what each
+    /// set (a nested job reports only its own). The limits are far above any machine's RAM, so they
+    /// constrain nothing; the child keeps this process out of any job it makes.
+    #[test]
+    #[cfg(windows)]
+    #[allow(unsafe_code)]
+    fn a_job_with_known_limits_is_read_back_exactly() {
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        use crate::limits::{JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_PROCESS_MEMORY, effective_total, job_limit};
+
+        const CHILD: &str = "LIGHTCRAFT_SYSMEM_JOB_TEST_CHILD";
+        const PROCESS: u64 = 1 << 45; // 32 TiB
+        const JOB: u64 = 1 << 44; // 16 TiB
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tests::a_job_with_known_limits_is_read_back_exactly", "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            assert!(out.status.success(), "child failed:\n{text}");
+            assert!(text.contains("1 passed"), "the child didn't run the test:\n{text}");
+            return;
+        }
+        let join = |flags: u32, process: u64, job: u64| {
+            // SAFETY: test-only. `CreateJobObjectW` with null attributes and a null name makes an
+            // unnamed job and returns its handle (null on failure, checked). `SetInformationJobObject`
+            // reads one `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` from a live local of that type and the
+            // size passed. `AssignProcessToJobObject` puts this (child) process in the job; the
+            // pseudo-handle from `GetCurrentProcess` needs no closing, and the job handle is left
+            // open until the child exits. Nothing keeps a pointer past the call.
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                assert!(!handle.is_null(), "CreateJobObjectW failed");
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = flags;
+                info.ProcessMemoryLimit = usize::try_from(process).unwrap();
+                info.JobMemoryLimit = usize::try_from(job).unwrap();
+                let len = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap();
+                assert!(
+                    SetInformationJobObject(handle, JobObjectExtendedLimitInformation, (&raw const info).cast(), len) != 0,
+                    "SetInformationJobObject failed"
+                );
+                assert!(AssignProcessToJobObject(handle, GetCurrentProcess()) != 0, "AssignProcessToJobObject failed (nested jobs need Windows 8)");
+            }
+        };
+        let physical = crate::win32::total_physical().unwrap();
+        join(JOB_OBJECT_LIMIT_PROCESS_MEMORY, PROCESS, 0);
+        assert_eq!(job_limit(), Some(PROCESS), "a per-process limit");
+        join(JOB_OBJECT_LIMIT_JOB_MEMORY, 0, JOB);
+        assert_eq!(job_limit(), Some(JOB), "a whole-job limit (the nested job's own)");
+        join(JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY, PROCESS, JOB);
+        assert_eq!(job_limit(), Some(JOB), "both: the smaller");
+        assert_eq!(effective_total(), Some(physical.min(JOB)));
+    }
+
     #[test]
     fn concurrent_calls_are_safe() {
         let handles: Vec<_> = (0..4).map(|_| std::thread::spawn(release_free_memory)).collect();
