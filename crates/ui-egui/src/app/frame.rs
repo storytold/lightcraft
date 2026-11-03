@@ -263,6 +263,7 @@ impl LightcraftApp {
             self.import_dropped_files(ctx);
         }
         self.check_external_editor(ctx);
+        theme::refresh_window_on_first_focus(ctx);
         // Alt (Option on macOS) while a slider is dragged shows its temporary preview
         self.ui.alt_held = ctx.input(|i| i.modifiers.alt);
         // Recent-library checks and launch-list keys read focus/time/keys: they belong to the UI

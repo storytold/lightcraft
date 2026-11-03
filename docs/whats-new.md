@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### The Windows title bar is readable from the moment the window opens
+- When LightCraft's appearance differs from the one set in Windows (the dark default on a light Windows, for one), the
+  title bar kept the system's colour with the title in LightCraft's, so the title looked blank until focus moved to
+  another window. It now takes LightCraft's colours as soon as the window has focus.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
