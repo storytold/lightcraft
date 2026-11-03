@@ -105,18 +105,25 @@ impl Selection {
     pub fn contains(&self, id: PhotoId) -> bool {
         self.ids.contains(&id)
     }
+    /// ⌘/Ctrl-click, as in Lightroom: `id` joins or leaves the selection and the active photo (the
+    /// one the loupe shows) stays. Taking the active photo itself out makes the nearest selected
+    /// photo before it (else after it) the active one; a photo added to an empty selection is it.
     pub fn toggle(&mut self, id: PhotoId) {
         if let Some(i) = self.ids.iter().position(|x| *x == id) {
             self.ids.remove(i);
             if self.active == Some(id) {
-                self.active = self.ids.last().copied();
+                self.active = self.ids.get(i.saturating_sub(1)).or(self.ids.first()).copied();
             }
         } else {
             self.ids.push(id);
-            self.active = Some(id);
+            if self.active.is_none_or(|a| !self.ids.contains(&a)) {
+                self.active = Some(id);
+            }
         }
     }
-    /// Shift-click: select the range between the active photo and `id` in `order`.
+    /// Shift-click, as in Lightroom: the photos between the active one and `id` in `order` join the
+    /// selection, and the active photo stays (the loupe keeps showing it). With no active photo in
+    /// `order`, `id` alone is selected.
     pub fn extend_to(&mut self, id: PhotoId, order: &[PhotoId]) {
         let anchor = self.active.unwrap_or(id);
         let (Some(a), Some(b)) = (order.iter().position(|x| *x == anchor), order.iter().position(|x| *x == id)) else {
@@ -124,12 +131,23 @@ impl Selection {
             return;
         };
         let (lo, hi) = (a.min(b), a.max(b));
-        for x in &order[lo..=hi] {
+        for x in order.get(lo..=hi).unwrap_or_default() {
             if !self.ids.contains(x) {
                 self.ids.push(*x);
             }
         }
-        self.active = Some(id);
+        if self.active.is_none() {
+            self.active = Some(id);
+        }
+    }
+    /// A plain click, as in Lightroom: on a photo of a selection of several it becomes the active
+    /// photo and the selection stays; anywhere else the photo alone is selected.
+    pub fn click(&mut self, id: PhotoId) {
+        if self.ids.len() > 1 && self.contains(id) {
+            self.active = Some(id);
+        } else {
+            *self = Selection::single(id);
+        }
     }
 }
 
@@ -262,5 +280,49 @@ mod selection_state_tests {
         assert_eq!(s.state_of(ids[0]), SelectionState::Active);
         assert_eq!(s.state_of(ids[1]), SelectionState::Selected);
         assert_eq!(s.state_of(PhotoId(9)), SelectionState::NotSelected);
+    }
+
+    fn ids(n: u64) -> Vec<PhotoId> {
+        (1..=n).map(PhotoId).collect()
+    }
+
+    /// Client note 19a: Shift-click selects the range and leaves the active photo where it was.
+    #[test]
+    fn shift_click_extends_the_range_and_keeps_the_active_photo() {
+        let order = ids(10);
+        let mut s = Selection::single(order[2]);
+        s.extend_to(order[6], &order);
+        assert_eq!(s.active, Some(order[2]), "the loupe stays on the photo it showed");
+        assert_eq!(s.ids.len(), 5);
+        assert!(order[2..=6].iter().all(|id| s.contains(*id)));
+    }
+
+    /// Client note 19b: ⌘/Ctrl-click adds and removes photos without changing the active one.
+    #[test]
+    fn ctrl_click_adds_and_removes_without_moving_the_active_photo() {
+        let order = ids(5);
+        let mut s = Selection::single(order[0]);
+        s.toggle(order[3]);
+        assert_eq!(s.active, Some(order[0]));
+        assert!(s.contains(order[3]));
+        s.toggle(order[3]);
+        assert_eq!((s.active, s.ids.len()), (Some(order[0]), 1));
+        // the active photo itself taken out: another selected photo takes its place
+        s.toggle(order[2]);
+        s.toggle(order[0]);
+        assert_eq!(s.active, Some(order[2]));
+    }
+
+    /// Client note 19c: a click inside the selection makes that photo active and keeps the
+    /// selection; a click outside it replaces the selection.
+    #[test]
+    fn a_click_inside_the_selection_keeps_it() {
+        let order = ids(8);
+        let mut s = Selection::single(order[1]);
+        s.extend_to(order[5], &order);
+        s.click(order[3]);
+        assert_eq!((s.active, s.ids.len()), (Some(order[3]), 5), "the whole set stays");
+        s.click(order[7]);
+        assert_eq!(s, Selection::single(order[7]), "a photo outside it replaces the selection");
     }
 }

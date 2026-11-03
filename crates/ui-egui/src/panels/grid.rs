@@ -789,6 +789,21 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
+/// The `library.select` mode of a click on a photo cell, as in Lightroom Classic: Shift = range, ⌘/Ctrl = toggle; a
+/// plain click on the picture of a selected photo makes it the active one and keeps the selection (note 19c), a plain
+/// click on the frame around the picture selects that photo alone (test notes 2026-10-24 note 1).
+pub(crate) fn click_mode(m: egui::Modifiers, on_picture: bool) -> &'static str {
+    if m.shift {
+        "range"
+    } else if m.command {
+        "toggle"
+    } else if on_picture {
+        "click"
+    } else {
+        "replace"
+    }
+}
+
 fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
@@ -806,7 +821,8 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     } else {
         r
     };
-    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
+    // the picture itself: a click on it keeps a selection, a click on the frame around it selects this photo alone (note 1)
+    let picture = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
     paint_cell_badges(app, p, &t, &photo, img_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
@@ -819,7 +835,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
-    cell_interaction(app, ui, &resp, id, &photo);
+    cell_interaction(app, ui, &resp, id, &photo, picture);
 }
 
 pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
@@ -838,7 +854,8 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
     spoken
 }
 
-fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) {
+/// Paints a cell's thumbnail (or its placeholder) in `img_rect`; returns where the picture is.
+fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) -> Rect {
     let ThumbFlags { square, state, onscreen, ppp } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
@@ -848,6 +865,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
         p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         selection_ring(p, t, fit, state);
+        fit
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, t.skeleton);
@@ -857,6 +875,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
+        ph
     }
 }
 
@@ -958,7 +977,14 @@ fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId,
         .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation(why)));
 }
 
-fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, id: PhotoId, photo: &lightcraft_catalog::Photo) {
+fn cell_interaction(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    id: PhotoId,
+    photo: &lightcraft_catalog::Photo,
+    picture: Rect,
+) {
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
         if resp.hovered() {
@@ -971,19 +997,14 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         }
         return;
     }
+    register(ui, format!("thumbpic:{}", id.0), picture);
     if resp.clicked() {
         let m = ui.input(|i| i.modifiers);
-        let mode = if m.shift {
-            "range"
-        } else if m.command {
-            "toggle"
-        } else {
-            "replace"
-        };
-        let _ = app.run("library.select", json!({"ids": [id.0], "mode": mode}));
+        let on_picture = resp.interact_pointer_pos().is_none_or(|at| picture.contains(at));
+        let _ = app.run("library.select", json!({"ids": [id.0], "mode": click_mode(m, on_picture)}));
     }
     if resp.double_clicked() {
-        let _ = app.run("library.select", json!({"ids": [id.0]}));
+        let _ = app.run("library.select", json!({"ids": [id.0], "mode": "click"}));
         let _ = app.run("view.detail", json!({}));
     }
     // only the primary button drags, so a right-button drag leaves the selection alone

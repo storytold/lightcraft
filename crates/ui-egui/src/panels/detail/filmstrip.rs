@@ -119,6 +119,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.semibold(8.5), t.text_dim);
             }
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
+            // the picture: a click outside it (on the frame) selects this photo alone (note 1)
+            let mut picture = img_area;
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             let thumb = app.renderer.thumb(*id);
             if thumb.is_none() {
@@ -131,6 +133,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 let [tw, th] = tex.size;
                 let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
                 let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
+                picture = fr;
                 p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 crate::panels::grid::selection_ring(p, &t, fr, state);
                 if app.ui.settings.film_badges
@@ -162,6 +165,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     }
                 }
             }
+            register(ui, format!("filmpic:{}", id.0), picture);
             if resp.clicked() {
                 let m = ui.input(|i| i.modifiers);
                 let compare = app.ui.view == crate::state::ViewMode::Compare;
@@ -172,14 +176,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     // ⌘/Ctrl- and Shift-clicks change the selection; the pair on screen stays (#187)
                     crate::panels::compare::select_with_modifier(app, *id, !m.command)
                 } else {
-                    let mode = if m.command {
-                        "toggle"
-                    } else if m.shift {
-                        "range"
-                    } else {
-                        "replace"
-                    };
-                    app.run("library.select", json!({"ids": [id.0], "mode": mode}))
+                    // on the picture: the active photo changes, the set stays (note 19c); on the frame: this photo alone
+                    let on_picture = resp.interact_pointer_pos().is_none_or(|at| picture.contains(at));
+                    app.run("library.select", json!({"ids": [id.0], "mode": crate::panels::grid::click_mode(m, on_picture)}))
                 };
                 if compare && let Err(e) = r {
                     app.toast(ui.ctx(), e);
