@@ -482,7 +482,8 @@ mod ci_jobs_tests {
             in_env && l.split('=').next().is_some_and(|k| k.trim() == key)
         })?;
         let value = line.split("value = \"").nth(1)?.split('"').next()?.to_owned();
-        Some((value, line.to_owned()))
+        // without a trailing comment, so a `# force = …` note can't stand in for the setting
+        Some((value, line.split('#').next().unwrap_or(line).to_owned()))
     }
 
     #[test]
@@ -493,6 +494,8 @@ mod ci_jobs_tests {
         assert_eq!(config_env(&format!("[build]\n{}\n[env]\n", line("4")), k), None, "another table's key");
         assert_eq!(config_env(&format!("[env]\n[alias]\n{}\n", line("4")), k), None, "after [env] ends");
         assert_eq!(config_env(&format!("{}\n[env]\nX = 1\n", line("4")), k), None, "before any table");
+        let commented = format!("[env]\n{k} = {{ value = \"4\", force = true }} # force = false\n");
+        assert!(!config_env(&commented, k).unwrap().1.contains("force = false"), "a comment isn't the setting");
     }
 
     #[test]
