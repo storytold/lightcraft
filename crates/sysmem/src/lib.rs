@@ -6,16 +6,19 @@
 //! everything ever decoded. `malloc_zone_pressure_relief` (libSystem) returns those pages now.
 //! Elsewhere (glibc, Windows) blocks this large are unmapped when freed: nothing to do.
 //!
-//! This is LightCraft's only crate allowed `unsafe` (one FFI call, in `macos`). Its API is safe,
-//! and on failure or on other platforms it simply releases nothing.
-//!
 //! It also says how much memory the process may use ([`limits`], safe std-only code): physical RAM
-//! held to the process's cgroup limit on Linux, for the engine's memory budget and `cargo xtask ci`.
+//! held to the process's cgroup limit on Linux, or to its job object's memory limit on Windows, for
+//! the engine's memory budget and `cargo xtask ci`.
+//!
+//! This is LightCraft's only crate allowed `unsafe`: three FFI calls, `malloc_zone_pressure_relief`
+//! (in `macos`), and `GlobalMemoryStatusEx` and `QueryInformationJobObject` (in `win32`, which only
+//! reads the numbers; [`limits`] decides what they mean). Its API is safe, and a call that fails
+//! releases nothing or reports "unknown".
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod limits;
 
-pub use limits::{available, effective_total};
+pub use limits::{available, effective_total, job_limit};
 
 /// Return free allocator pages to the system. Returns the number of bytes released (always 0 on
 /// platforms where freed large blocks are already unmapped). Safe to call at any time, from any
@@ -47,6 +50,56 @@ mod macos {
         // memory we own, takes no pointers we must keep alive, and has no failure mode beyond
         // releasing 0 bytes.
         unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) }
+    }
+}
+
+/// The Windows calls behind [`limits::effective_total`] and [`limits::job_limit`]: each fills a
+/// struct we own and reports failure as `None`.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod win32 {
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    };
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    use crate::limits::JobLimits;
+
+    /// Installed physical memory (bytes): `MEMORYSTATUSEX::ullTotalPhys`. `None` if the call fails.
+    pub fn total_physical() -> Option<u64> {
+        let mut status = MEMORYSTATUSEX { dwLength: u32::try_from(size_of::<MEMORYSTATUSEX>()).ok()?, ..MEMORYSTATUSEX::default() };
+        // SAFETY: `GlobalMemoryStatusEx` (kernel32, sysinfoapi.h) writes one `MEMORYSTATUSEX` through
+        // the pointer, which points to a live, properly aligned local of that type whose `dwLength` is
+        // set to its size as the function requires. It keeps no pointer after returning and has no
+        // other effect; on failure it returns 0 and we don't read the fields.
+        let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+        (ok != 0 && status.ullTotalPhys > 0).then_some(status.ullTotalPhys)
+    }
+
+    /// The memory limits of the job object this process runs in (`None` if it is in none or the call
+    /// fails). The flags say which limits are set ([`crate::limits::job_memory_limit`]).
+    pub fn job_limits() -> Option<JobLimits> {
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        let len = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).ok()?;
+        // SAFETY: `QueryInformationJobObject` (kernel32, jobapi2.h) with a null job handle queries the
+        // job of the calling process; no handle is opened or needs closing. With
+        // `JobObjectExtendedLimitInformation` it writes at most `len` bytes, the size of the live,
+        // properly aligned `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` local the pointer points to. The
+        // returned-length pointer is optional and passed as null. It keeps no pointer after
+        // returning; on failure (e.g. the process is in no job) it returns 0 and we don't read the
+        // fields.
+        let ok = unsafe {
+            QueryInformationJobObject(std::ptr::null_mut(), JobObjectExtendedLimitInformation, (&raw mut info).cast(), len, std::ptr::null_mut())
+        };
+        if ok == 0 {
+            return None;
+        }
+        Some(JobLimits {
+            flags: info.BasicLimitInformation.LimitFlags,
+            // a `usize` fits a `u64` on every Windows target; the fallback is "no limit"
+            process_memory: u64::try_from(info.ProcessMemoryLimit).unwrap_or(u64::MAX),
+            job_memory: u64::try_from(info.JobMemoryLimit).unwrap_or(u64::MAX),
+        })
     }
 }
 

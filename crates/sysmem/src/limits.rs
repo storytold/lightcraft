@@ -1,4 +1,5 @@
-//! How much memory this process may use: physical RAM held to the process's cgroup limit.
+//! How much memory this process may use: physical RAM held to the process's cgroup limit (Linux)
+//! or its job object's memory limit (Windows).
 //!
 //! Inside a container, a Flatpak, a systemd scope or service with `MemoryMax`, or a CI runner with
 //! a memory limit, the process may get far less than the machine has, and is killed when it goes
@@ -7,8 +8,13 @@
 //! ancestor binds too): cgroup v2 `memory.max` / `memory.current`, and v1 `memory.limit_in_bytes` /
 //! `memory.usage_in_bytes` on hosts that still mount it. Usage counts the cgroup's page cache, so
 //! its inactive file pages (`memory.stat`), which the kernel reclaims before it kills anything,
-//! count as room, as `MemAvailable` counts reclaimable cache. Elsewhere they return `None`: callers
-//! keep their platform's own way of asking.
+//! count as room, as `MemAvailable` counts reclaimable cache.
+//!
+//! On Windows, [`effective_total`] is the physical RAM (`GlobalMemoryStatusEx`) held to the memory
+//! limit of the job object the process runs in (`QueryInformationJobObject`: a Windows container, a
+//! CI runner, a launcher or sandbox that starts it in a job), read by the crate's FFI module and
+//! decided here ([`job_memory_limit`]); [`available`] is `None` there. Elsewhere both return
+//! `None`: callers keep their platform's own way of asking.
 //!
 //! Where the cgroups are comes from `/proc/self/mountinfo`: the `cgroup2` mount, and the v1
 //! `cgroup` mount whose super options list `memory` (alone or co-mounted, e.g. `cpuset,memory`).
@@ -17,8 +23,8 @@
 //! layout is assumed (v2 at [`CGROUP_ROOT`], v1 at `CGROUP_ROOT/memory`); when it can be read and
 //! lists no cgroup mount, there is no cgroup file system to read and so no limit.
 //!
-//! Std only, and never panics: a missing, unreadable or malformed file means "no limit known
-//! there". The parsing takes file contents and a root directory, so it is tested on synthetic
+//! Std only, and never panics: a missing, unreadable or malformed file, or a failed Windows call,
+//! means "no limit known there". The parsing takes file contents and a root directory, so it is tested on synthetic
 //! trees ([`cgroup_memory_at`]).
 #![forbid(unsafe_code)]
 
@@ -50,15 +56,63 @@ pub struct CgroupMemory {
     pub headroom: Option<u64>,
 }
 
-/// Memory this process may use at most (bytes): physical RAM, or its cgroup limit when that is
-/// smaller. Linux only; `None` elsewhere or when nothing can be read.
+/// Memory this process may use at most (bytes): physical RAM, or its cgroup limit (Linux) or job
+/// object memory limit (Windows) when that is smaller. `None` on other platforms or when nothing
+/// can be read.
 pub fn effective_total() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let meminfo = read(Path::new("/proc/meminfo")).unwrap_or_default();
         smaller(meminfo_bytes(&meminfo, "MemTotal"), cgroup_limit())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        smaller(crate::win32::total_physical(), job_limit())
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
+    }
+}
+
+/// `JOB_OBJECT_LIMIT_PROCESS_MEMORY` (winnt.h): the job's `ProcessMemoryLimit` applies, the most
+/// memory each process in it may commit.
+pub const JOB_OBJECT_LIMIT_PROCESS_MEMORY: u32 = 0x100;
+/// `JOB_OBJECT_LIMIT_JOB_MEMORY` (winnt.h): the job's `JobMemoryLimit` applies, the most memory
+/// all its processes together may commit.
+pub const JOB_OBJECT_LIMIT_JOB_MEMORY: u32 = 0x200;
+
+/// The memory limits of a Windows job object, as `QueryInformationJobObject` reports them
+/// (`JOBOBJECT_EXTENDED_LIMIT_INFORMATION`). A limit counts only when its flag is set: the
+/// fields of a limit that isn't set hold whatever the job was created with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JobLimits {
+    /// `BasicLimitInformation.LimitFlags`.
+    pub flags: u32,
+    /// `ProcessMemoryLimit` (bytes).
+    pub process_memory: u64,
+    /// `JobMemoryLimit` (bytes).
+    pub job_memory: u64,
+}
+
+/// The memory a job object lets this process commit (bytes): the smaller of its per-process and
+/// whole-job limits among those whose flags are set; `None` when neither is. A limit of 0 or
+/// beyond [`UNLIMITED`] means no limit, as in a cgroup file ([`parse_limit`]).
+pub fn job_memory_limit(job: JobLimits) -> Option<u64> {
+    let limit = |flag: u32, bytes: u64| (job.flags & flag != 0 && bytes > 0 && bytes < UNLIMITED).then_some(bytes);
+    smaller(limit(JOB_OBJECT_LIMIT_PROCESS_MEMORY, job.process_memory), limit(JOB_OBJECT_LIMIT_JOB_MEMORY, job.job_memory))
+}
+
+/// The memory limit of the job object this process runs in (Windows; nothing elsewhere): its own
+/// job, the one a null handle names. Read afresh on each call (one cheap system call), since a
+/// job's limits may be set after the process starts. Not in a job, or the call failing, means no
+/// limit. A nested job reports only its own limits, not a parent's.
+pub fn job_limit() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        crate::win32::job_limits().and_then(job_memory_limit)
+    }
+    #[cfg(not(windows))]
     {
         None
     }
@@ -425,6 +479,50 @@ mod tests {
     }
 
     const GIB: u64 = 1 << 30;
+
+    /// A job's memory limits count only when their flags are set; the smaller wins (#3652).
+    #[test]
+    fn a_job_limit_counts_only_when_its_flag_is_set() {
+        let both = JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY;
+        let job = |flags, process_memory, job_memory| job_memory_limit(JobLimits { flags, process_memory, job_memory });
+        assert_eq!(job(0, 0, 0), None, "not in a job, or a job without limits");
+        assert_eq!(job(0, 2 * GIB, 4 * GIB), None, "values without flags are not limits");
+        assert_eq!(job(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 2 * GIB, 0), Some(2 * GIB));
+        assert_eq!(job(JOB_OBJECT_LIMIT_JOB_MEMORY, 0, 3 * GIB), Some(3 * GIB));
+        assert_eq!(job(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 2 * GIB, GIB), Some(2 * GIB), "the job's value without its flag is ignored");
+        assert_eq!(job(JOB_OBJECT_LIMIT_JOB_MEMORY, GIB, 3 * GIB), Some(3 * GIB), "the process value without its flag is ignored");
+        assert_eq!(job(both, 2 * GIB, 3 * GIB), Some(2 * GIB), "the smaller wins");
+        assert_eq!(job(both, 4 * GIB, 3 * GIB), Some(3 * GIB), "the smaller wins");
+        // other limit flags (working set 0x1, active processes 0x8, kill on close 0x2000) are not memory limits
+        assert_eq!(job(0x1 | 0x8 | 0x2000, 2 * GIB, 3 * GIB), None);
+        assert_eq!(job(both, 0, 0), None, "a limit of 0 is no limit");
+        assert_eq!(job(both, u64::MAX, 3 * GIB), Some(3 * GIB), "an absurd limit is no limit");
+        assert_eq!(job(both, u64::MAX, u64::MAX), None);
+    }
+
+    /// The flag values match the Windows headers' (#3652).
+    #[test]
+    #[cfg(windows)]
+    fn the_job_flags_match_the_windows_headers() {
+        use windows_sys::Win32::System::JobObjects as job;
+        assert_eq!(JOB_OBJECT_LIMIT_PROCESS_MEMORY, job::JOB_OBJECT_LIMIT_PROCESS_MEMORY);
+        assert_eq!(JOB_OBJECT_LIMIT_JOB_MEMORY, job::JOB_OBJECT_LIMIT_JOB_MEMORY);
+    }
+
+    /// Windows reports the RAM, and the total is held to the job limit when there is one (#3652).
+    #[test]
+    #[cfg(windows)]
+    fn windows_reports_the_ram_held_to_the_job_limit() {
+        let physical = crate::win32::total_physical().unwrap();
+        assert!(physical >= 256 << 20, "{physical} bytes of RAM");
+        let total = effective_total().unwrap();
+        assert!(total <= physical);
+        if let Some(limit) = job_limit() {
+            assert_eq!(total, limit.min(physical));
+        } else {
+            assert_eq!(total, physical);
+        }
+    }
 
     #[test]
     fn limit_files_parse_numbers_and_treat_max_and_garbage_as_no_limit() {
