@@ -19,6 +19,8 @@ pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub mod filters;
+#[cfg(not(target_arch = "wasm32"))]
+mod flickr;
 mod focus;
 pub mod geocode;
 pub mod keywords;
@@ -178,6 +180,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
         v.extend(activity::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(flickr::specs());
         v
     })
 }

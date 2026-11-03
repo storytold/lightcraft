@@ -317,5 +317,12 @@
   "Panel layout could not be restored: {error}": "無法還原面板配置：{error}",
   "Panel move was not applied: {error}": "面板移動未套用：{error}",
   "{name} is installed": "{name} 已安裝",
-  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟"
+  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
+  "Signed in as {name}": "已登入：{name}",
+  "Signed in to Flickr as {name}": "已以 {name} 身分登入 Flickr",
+  "Upload {n} photo{} to Flickr as {name}": "以 {name} 身分上傳 {n} 張照片到 Flickr{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "已上傳 {ok}／{total} 張照片到 Flickr{:.0}",
+  " · {} not added to the album": " · {} 張未加入相簿",
+  " · the album couldn't be made: {}": " · 無法建立相簿：{}",
+  " · new album “{}”": " · 新相簿「{}」"
 }

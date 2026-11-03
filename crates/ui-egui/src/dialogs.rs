@@ -11,6 +11,7 @@ use lightcraft_engine::export::{ExportOptions, Resize};
 mod confirm;
 mod cull;
 mod export;
+mod flickr_upload;
 mod frame;
 mod rename;
 mod sam_model;
@@ -23,6 +24,7 @@ use export::{
     LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
     group_checklist, tiff_lzw_note, watermark_preview,
 };
+use flickr_upload::flickr_upload_body;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
     DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
@@ -312,6 +314,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::PasteSettings { .. } => "Paste Selected Settings",
         Dialog::Export { .. } => "Export",
         Dialog::ContactSheet { .. } => "Contact Sheet PDF",
+        Dialog::FlickrUpload { .. } => "Share to Flickr",
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
@@ -413,6 +416,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::Import { .. } | Dialog::Export { .. } | Dialog::SamModel { .. } => "",
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
+        Dialog::FlickrUpload { .. } => "Upload",
         Dialog::SlideshowExport { .. } => "Export…",
         Dialog::Print => "Print to PDF…",
         Dialog::Merge { .. } => "Merge",
@@ -561,6 +565,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                 Dialog::Import { .. }
                     | Dialog::Export { .. }
                     | Dialog::ContactSheet { .. }
+                    | Dialog::FlickrUpload { .. }
                     | Dialog::SlideshowExport { .. }
                     | Dialog::Print
                     | Dialog::NewAlbum { .. }
@@ -1959,6 +1964,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::PasteSettings { .. } => paste_settings_body(app, ui, t, dlg),
         Dialog::SlideshowExport { settings } => slideshow_export_body(app, ui, settings),
         Dialog::ContactSheet { .. } => contact_sheet_body(app, ui, dlg),
+        Dialog::FlickrUpload { opts } => flickr_upload_body(app, ui, t, opts),
         Dialog::Export { .. } => export_body(app, ui, t, dlg),
         Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
         Dialog::Import { opts } => crate::import::body(app, ui, opts),

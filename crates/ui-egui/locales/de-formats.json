@@ -317,5 +317,12 @@
   "Panel layout could not be restored: {error}": "Die Bereichsanordnung konnte nicht wiederhergestellt werden: {error}",
   "Panel move was not applied: {error}": "Das Verschieben des Bereichs wurde nicht ausgeführt: {error}",
   "{name} is installed": "{name} ist installiert",
-  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet"
+  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
+  "Signed in as {name}": "Angemeldet als {name}",
+  "Signed in to Flickr as {name}": "Bei Flickr angemeldet als {name}",
+  "Upload {n} photo{} to Flickr as {name}": "{n} Foto{} als {name} auf Flickr hochladen",
+  "Uploaded {ok} of {total} photo{} to Flickr": "{ok} von {total} Foto{} auf Flickr hochgeladen",
+  " · {} not added to the album": " · {} nicht zum Album hinzugefügt",
+  " · the album couldn't be made: {}": " · das Album konnte nicht erstellt werden: {}",
+  " · new album “{}”": " · neues Album „{}“"
 }

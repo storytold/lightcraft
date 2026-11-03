@@ -317,5 +317,12 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "Signed in as {name}": "Přihlášeno jako {name}",
+  "Signed in to Flickr as {name}": "Přihlášeno k Flickru jako {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Nahrát na Flickr jako {name} – fotografií: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Nahráno na Flickr fotografií: {ok} z {total}{:.0}",
+  " · {} not added to the album": " · nepřidáno do alba: {}",
+  " · the album couldn't be made: {}": " · album se nepodařilo vytvořit: {}",
+  " · new album “{}”": " · nové album „{}“"
 }

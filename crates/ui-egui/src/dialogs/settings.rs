@@ -1,5 +1,5 @@
 //! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Faces,
-//! AI Denoise.
+//! AI Denoise, Accounts (where photos are shared to: Flickr).
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -55,12 +55,13 @@ pub const TABS: &[(&str, &str)] = &[
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("accounts", "Accounts"),
 ];
 
 /// Thumbnail cache sizes offered (MB).
 const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
 
-const LABEL_W: f32 = 150.0;
+pub(crate) const LABEL_W: f32 = 150.0;
 
 /// The page of `tab` (the tab bar in [`window`] switches `tab`).
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
@@ -73,6 +74,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
+        "accounts" => crate::panels::flickr::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }

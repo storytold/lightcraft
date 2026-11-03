@@ -24,6 +24,7 @@ pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
 pub mod export_task;
+pub mod flickr;
 mod focus_scan;
 mod frame_rate;
 pub mod headless;
@@ -336,6 +337,8 @@ pub struct LightcraftApp {
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
+    /// Flickr sign-in steps and uploads (Settings ▸ Accounts, File ▸ Share ▸ Flickr…).
+    pub flickr: flickr::FlickrUi,
     /// The last slideshow export's end has been told (a toast).
     pub slideshow_export_reported: bool,
     /// The look the loupe shows while the pointer rests on a preset or profile (set by the

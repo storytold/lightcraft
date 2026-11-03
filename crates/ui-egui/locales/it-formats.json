@@ -317,5 +317,14 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  "{n} photos in view · {slides} slides · {time}": "{n} photos in view · {slides} slides · {time}",
+  "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
+  "Signed in as {name}": "Accesso eseguito come {name}",
+  "Signed in to Flickr as {name}": "Accesso a Flickr eseguito come {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Carica su Flickr come {name} – foto: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Foto caricate su Flickr: {ok} di {total}{:.0}",
+  " · {} not added to the album": " · non aggiunte all'album: {}",
+  " · the album couldn't be made: {}": " · impossibile creare l'album: {}",
+  " · new album “{}”": " · nuovo album «{}»"
 }

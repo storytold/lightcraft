@@ -146,6 +146,9 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::flickr::command(app, id, p) {
+        return Some(r);
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }

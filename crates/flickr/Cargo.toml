@@ -1,0 +1,19 @@
+[package]
+name = "lightcraft-flickr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft Flickr uploads (L1): OAuth 1.0a sign-in, signed multipart photo uploads and the saved account, in pure Rust"
+
+[lints]
+workspace = true
+
+# uploads run natively only (the web build has no network client)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lightcraft-fetch = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# HMAC-SHA1 request signing (OAuth 1.0a), RustCrypto: pure Rust
+hmac = { version = "0.12", default-features = false }
+sha1 = { version = "0.10", default-features = false, features = ["std"] }

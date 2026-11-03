@@ -70,6 +70,8 @@ impl LightcraftApp {
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        // a finished Flickr upload is reported in full screen too (the window layout isn't drawn then)
+        crate::flickr::poll(self, ctx);
         updates_ui::tick(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
