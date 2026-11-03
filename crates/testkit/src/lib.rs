@@ -112,8 +112,11 @@ fn log_entry(log: Option<&Path>, required: bool, entry: &str) {
     }
 }
 
-/// Append one line in a single write, so lines from parallel tests don't interleave; `create`:
-/// the file may be created (else it must exist).
+/// Append one line with one `write_all` on a file opened for appending; `create`: the file may be
+/// created (else it must exist). On a local file system a line this short lands whole, so lines from
+/// parallel tests don't interleave in practice, but nothing guarantees it: a short write, or a network
+/// file system, can split one. A split line is dropped from the report (`read_skips`), and the
+/// `gpu-software` step reports it as "not a skip record" and fails.
 fn append(path: &Path, line: &str, create: bool) -> Result<(), String> {
     let file = std::fs::OpenOptions::new().create(create).append(true).open(path);
     file.and_then(|mut f| f.write_all(line.as_bytes())).map_err(|e| format!("{SKIP_LOG_ENV}: can't append to {}: {e}", path.display()))
