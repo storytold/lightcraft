@@ -13,6 +13,9 @@ use crate::Session;
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-import-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
+    // Tests that take a folder "offline" rename it to this sibling; a left-over one (from a run
+    // whose process id is reused) is non-empty and would make that rename fail.
+    let _ = std::fs::remove_dir_all(d.with_extension("offline"));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -30,6 +33,34 @@ fn write_png(path: &Path, seed: u8) {
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
+fn exif_clock_block(original: Option<&str>, digitized: Option<&str>) -> Vec<u8> {
+    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    let mut exif = IfdBuilder::new();
+    if let Some(value) = original {
+        exif.set(0x9003, Value::Ascii(value.into()));
+    }
+    if let Some(value) = digitized {
+        exif.set(0x9004, Value::Ascii(value.into()));
+    }
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set_child(0x8769, exif);
+    TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+}
+
+fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Option<&str>) {
+    let (w, h) = (48usize, 32usize);
+    let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
+    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+    let metadata = lightcraft_codecs::EncodeMeta { exif, xmp, ..Default::default() };
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &metadata).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+    // Keep the same known file-date fallback as write_png, distinct from the regression timestamp.
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
+}
+
 fn ids(v: &Value, key: &str) -> usize {
     v[key].as_array().map(Vec::len).unwrap_or(0)
 }
@@ -39,7 +70,9 @@ fn recursive_discovery_includes_sony_sr2_and_srf_case_insensitively() {
     let src = temp_dir("sony-discovery");
     std::fs::create_dir_all(src.join("trip/day2")).unwrap();
     let names = ["r1.SR2", "f828.srf", "trip/r1.sr2", "trip/f828.SRF", "trip/day2/r1.Sr2", "trip/day2/f828.SrF", "control.JPG"];
-    let mut expected: Vec<String> = names.iter().map(|name| src.join(name).to_string_lossy().into_owned()).collect();
+    // one component at a time: `join("trip/r1.sr2")` keeps the `/`, discovery yields the platform's separator
+    let mut expected: Vec<String> =
+        names.iter().map(|name| name.split('/').fold(src.clone(), |p, c| p.join(c)).to_string_lossy().into_owned()).collect();
     for path in &expected {
         std::fs::write(path, b"discovery only, not a decoded photo").unwrap();
     }
@@ -126,6 +159,106 @@ fn civil_dates() {
     assert_eq!(crate::import::civil(0), "1970-01-01T00:00:00");
     assert_eq!(crate::import::civil(951_782_400), "2000-02-29T00:00:00");
     assert_eq!(crate::import::civil(1_790_000_000), "2026-09-21T14:13:20");
+}
+
+#[test]
+fn exif_clock_import_uses_valid_fallback_dates_and_keeps_raw_tags() {
+    const INVALID: &str = "2026:01:01 12:34:56:99";
+    const XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreateDate="2026-01-05T10:00:00Z"/></rdf:RDF></x:xmpmeta>"#;
+    let dir = temp_dir("exif-clock-fallbacks");
+    let digitized_path = dir.join("digitized.png");
+    let digitized_exif = exif_clock_block(Some(INVALID), Some("2026:01:02 10:00:00"));
+    write_png_with_metadata(&digitized_path, 1, Some(&digitized_exif), None);
+    let xmp_path = dir.join("xmp.png");
+    let malformed_only_exif = exif_clock_block(Some(INVALID), None);
+    write_png_with_metadata(&xmp_path, 2, Some(&malformed_only_exif), Some(XMP));
+
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [digitized_path.to_string_lossy(), xmp_path.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&imported, "imported"), 2, "{imported}");
+    let digitized = s.catalog.photos().find(|photo| photo.file_name == "digitized.png").unwrap();
+    let digitized_id = digitized.id.0;
+    assert_eq!(digitized.captured.as_deref(), Some("2026-01-02T10:00:00"));
+    let xmp = s.catalog.photos().find(|photo| photo.file_name == "xmp.png").unwrap();
+    let xmp_id = xmp.id.0;
+    assert_eq!(xmp.captured.as_deref(), Some("2026-01-05T10:00:00+00:00"));
+
+    let all = s.execute("photo.allMetadata", &json!({"id": digitized_id})).unwrap();
+    assert!(all["exif"].as_array().unwrap().iter().any(|row| row["tag"] == json!(0x9003) && row["value"] == INVALID), "{all}");
+    let all = s.execute("photo.allMetadata", &json!({"id": xmp_id})).unwrap();
+    assert!(all["exif"].as_array().unwrap().iter().any(|row| row["tag"] == json!(0x9003) && row["value"] == INVALID), "{all}");
+    assert!(all["xmp"].as_array().unwrap().iter().any(|row| row["name"] == "xmp:CreateDate" && row["value"] == "2026-01-05T10:00:00Z"), "{all}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exif_clock_malformed_capture_cannot_fabricate_tracklog_match() {
+    use lightcraft_catalog::PhotoId;
+
+    const INVALID: &str = "2026:01:01 12:34:56:99";
+    const GPX: &str = r#"<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg><trkpt lat="45" lon="7"><time>2026-01-01T12:34:56Z</time></trkpt></trkseg></trk></gpx>"#;
+    let dir = temp_dir("exif-clock-tracklog");
+    let malformed_path = dir.join("malformed.png");
+    let malformed_exif = exif_clock_block(Some(INVALID), None);
+    write_png_with_metadata(&malformed_path, 3, Some(&malformed_exif), None);
+    let valid_path = dir.join("valid.png");
+    let valid_exif = exif_clock_block(Some("2026:01:01 12:34:56"), None);
+    write_png_with_metadata(&valid_path, 4, Some(&valid_exif), None);
+
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [malformed_path.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&imported, "imported"), 1, "{imported}");
+    let bad_id = imported["imported"][0].as_u64().unwrap();
+    assert_eq!(
+        s.catalog.photo(PhotoId(bad_id)).unwrap().captured.as_deref(),
+        Some("2026-01-14T05:58:48"),
+        "malformed EXIF must leave the normal file-date fallback in effect"
+    );
+    let all = s.execute("photo.allMetadata", &json!({"id": bad_id})).unwrap();
+    assert!(
+        all["exif"].as_array().unwrap().iter().any(|row| row["tag"] == json!(0x9003) && row["value"] == INVALID),
+        "raw EXIF remains available: {all}"
+    );
+
+    // Leave both undo and redo populated so a no-match call must preserve the existing history branch.
+    s.execute("photo.setMeta", &json!({"ids": [bad_id], "title": "history control"})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("library.select", &json!({"ids": [bad_id]})).unwrap();
+    assert!(!s.undo.is_empty() && !s.redo.is_empty());
+    let state = |session: &Session| {
+        (
+            session.catalog.to_snapshot(),
+            session.catalog.revision,
+            session.selection.clone(),
+            session.commits(),
+            session.undo.iter().map(|entry| (entry.label.clone(), entry.op.clone())).collect::<Vec<_>>(),
+            session.redo.iter().map(|entry| (entry.label.clone(), entry.op.clone())).collect::<Vec<_>>(),
+        )
+    };
+    let before = state(&s);
+    let dry = s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [bad_id], "maxGap": 0, "dryRun": true})).unwrap();
+    assert_eq!(dry["tagged"], 0, "{dry}");
+    assert_eq!(dry["skipped"]["outside"], 1, "the file-date fallback is outside the one-point track: {dry}");
+    assert_eq!(state(&s), before, "dry-run changed catalog, selection or history");
+    let actual = s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [bad_id], "maxGap": 0})).unwrap();
+    assert_eq!(actual["tagged"], 0, "{actual}");
+    assert_eq!(actual["skipped"]["outside"], 1, "{actual}");
+    assert_eq!(state(&s), before, "unmatched tracklog call changed catalog, selection or history");
+    assert_eq!(s.catalog.photo(PhotoId(bad_id)).unwrap().meta.gps, None);
+
+    let imported = s.execute("library.import", &json!({"paths": [valid_path.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&imported, "imported"), 1, "{imported}");
+    let valid_id = imported["imported"][0].as_u64().unwrap();
+    assert_eq!(s.catalog.photo(PhotoId(valid_id)).unwrap().captured.as_deref(), Some("2026-01-01T12:34:56"));
+    s.execute("library.select", &json!({"ids": [valid_id]})).unwrap();
+    let undo_before = s.undo.len();
+    let tagged = s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [valid_id], "maxGap": 0})).unwrap();
+    assert_eq!(tagged["tagged"], 1, "{tagged}");
+    assert_eq!(s.catalog.photo(PhotoId(valid_id)).unwrap().meta.gps, Some((45.0, 7.0)));
+    assert_eq!(s.undo.len(), undo_before + 1, "valid tagging is one undo step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(PhotoId(valid_id)).unwrap().meta.gps, None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -463,6 +596,210 @@ fn copy_with_destination_organize_rename_and_metadata_preset() {
     for d in [&src, &dest, &dest2] {
         let _ = std::fs::remove_dir_all(d);
     }
+}
+
+#[test]
+fn import_rename_sequence_uses_the_last_value_once() {
+    let base = temp_dir("rename-sequence-last");
+    let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+    write_png(&src.join("one.png"), 1);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let last = usize::MAX;
+    let r = s
+        .execute(
+            "library.import",
+            &json!({
+                "paths": [src.join("one.png").to_string_lossy()],
+                "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
+                "rename": "Shot-{seq}", "renameStart": last as u64
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(0), "{r}");
+    assert!(dest.join(format!("Shot-{last}.png")).is_file());
+    assert_eq!(s.catalog.len(), 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.len(), 0, "the import remains one undo step");
+    assert!(dest.join(format!("Shot-{last}.png")).is_file(), "undo leaves a successful copy on disk");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn import_rename_sequence_reports_exhaustion_and_keeps_prior_successes() {
+    let base = temp_dir("rename-sequence-exhausted");
+    let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+    let paths: Vec<_> = (1..=3)
+        .map(|i| {
+            let path = src.join(format!("{i:02}.png"));
+            write_png(&path, i as u8);
+            path
+        })
+        .collect();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let start = usize::MAX - 1;
+    let r = s
+        .execute(
+            "library.import",
+            &json!({
+                "paths": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+                "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
+                "rename": "Shot-{seq}", "renameStart": start as u64
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(ids(&r, "imported"), 2, "the final two representable values are used: {r}");
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{r}");
+    let failure = r["failed"][0][1].as_str().unwrap_or_default();
+    assert!(failure.contains("sequence") && failure.contains("renameStart"), "actionable failure: {failure}");
+    assert_eq!(s.catalog.len(), 2);
+    assert!(dest.join(format!("Shot-{start}.png")).is_file());
+    assert!(dest.join(format!("Shot-{}.png", usize::MAX)).is_file());
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 2, "the exhausted file gets no destination entry");
+    assert!(!paths[2].file_name().is_some_and(|name| dest.join(name).exists()), "the exhausted source gets no copy");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn import_rename_sequence_keeps_flushed_copy_and_move_results() {
+    for mode in ["copy", "move"] {
+        let base = temp_dir(&format!("rename-sequence-flush-{mode}"));
+        let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+        let paths: Vec<_> = (1..=4)
+            .map(|i| {
+                let path = src.join(format!("{i:02}.png"));
+                write_png(&path, i as u8);
+                path
+            })
+            .collect();
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+
+        let start = usize::MAX - 2;
+        let r = s
+            .execute(
+                "library.import",
+                &json!({
+                    "paths": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+                    "mode": mode, "destination": dest.to_string_lossy(), "organize": "flat",
+                    "rename": "Holiday", "renameStart": start as u64
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(ids(&r, "imported"), 3, "{mode}: earlier transfers survive sequence exhaustion: {r}");
+        assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{mode}: {r}");
+        assert_eq!(s.catalog.len(), 3, "{mode}: all successful transfers are catalogued");
+        let mut output_names: Vec<_> = std::fs::read_dir(&dest)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        output_names.sort();
+        assert_eq!(output_names, ["Holiday-1.png", "Holiday-2.png", "Holiday.png"], "{mode}");
+        match mode {
+            "copy" => assert!(paths.iter().all(|path| path.is_file()), "copy leaves every source in place"),
+            "move" => {
+                assert!(paths.iter().take(3).all(|path| !path.exists()), "successful moves remove sources after cataloguing");
+                assert!(paths[3].is_file(), "the failed source remains in place");
+                assert_eq!(r["moved"].as_array().map(Vec::len), Some(3), "{r}");
+            }
+            _ => unreachable!(),
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+}
+
+#[test]
+fn import_rename_sequence_exhaustion_persists_across_batches() {
+    let base = temp_dir("rename-sequence-batches");
+    let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+    let first = src.join("one.png");
+    let second = src.join("two.png");
+    write_png(&first, 1);
+    write_png(&second, 2);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let opts = crate::import::ImportOptions {
+        mode: crate::import::ImportMode::Copy,
+        destination: Some(dest.to_string_lossy().into_owned()),
+        organize: crate::import::Organize::Flat,
+        rename: Some("Shot-{seq}".into()),
+        rename_start: usize::MAX,
+        ..Default::default()
+    };
+    let mut job = crate::import::ImportJob::new(&mut s, opts).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+
+    let prepared = job.prepare(std::slice::from_ref(&first.to_string_lossy().to_string()), &cancel);
+    let first_result = crate::import::commit_prepared(&mut s, &job.opts, job.now(), prepared).unwrap();
+    assert_eq!(ids(&serde_json::to_value(first_result).unwrap(), "imported"), 1);
+    let prepared = job.prepare(std::slice::from_ref(&second.to_string_lossy().to_string()), &cancel);
+    let second_result = crate::import::commit_prepared(&mut s, &job.opts, job.now(), prepared).unwrap();
+    let second_result = serde_json::to_value(second_result).unwrap();
+
+    assert_eq!(ids(&second_result, "imported"), 0, "the exhausted job does not restart its sequence");
+    assert_eq!(second_result["failed"].as_array().map(Vec::len), Some(1), "{second_result}");
+    assert_eq!(s.catalog.len(), 1);
+    assert!(dest.join(format!("Shot-{}.png", usize::MAX)).is_file());
+    assert!(!dest.join("Shot-1.png").exists(), "no wraparound or reuse");
+    assert_eq!(
+        (job.done.load(std::sync::atomic::Ordering::Relaxed), job.total.load(std::sync::atomic::Ordering::Relaxed)),
+        (2, 2),
+        "both the copied and exhausted files advance import progress"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn import_rename_sequence_controls_ignore_the_counter_when_not_renaming() {
+    let base = temp_dir("rename-sequence-controls");
+    let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+    let added = src.join("add.png");
+    let copied = src.join("copy.png");
+    write_png(&added, 1);
+    write_png(&copied, 2);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let added_report = s
+        .execute(
+            "library.import",
+            &json!({
+                "paths": [added.to_string_lossy()], "mode": "add", "rename": "Ignored-{seq}", "renameStart": usize::MAX as u64
+            }),
+        )
+        .unwrap();
+    let copied_report = s
+        .execute(
+            "library.import",
+            &json!({
+                "paths": [copied.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
+                "renameStart": usize::MAX as u64
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(ids(&added_report, "imported"), 1, "Add does not use rename numbering: {added_report}");
+    assert_eq!(ids(&copied_report, "imported"), 1, "an empty rename template does not use the counter: {copied_report}");
+    assert!(dest.join("copy.png").is_file());
+    assert_eq!(s.catalog.len(), 2);
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn import_rename_sequence_rejects_a_start_outside_usize() {
+    let s = Session::new();
+    let too_large = u64::from(u32::MAX) + 1;
+    let parsed = crate::cmd::library::import_params(&s, &json!({"paths": ["unused.png"], "renameStart": too_large}));
+    assert!(parsed.is_err(), "32-bit import parameters must not truncate renameStart");
 }
 
 /// Copy with a custom folder template: `{date:%Y}/{date:%Y%m%d}` files a photo under
@@ -1229,6 +1566,11 @@ fn smart_previews_folder_is_chosen_per_library() {
     let r = again.execute("library.smartPreviewsLocation", &json!({"reset": true})).unwrap();
     assert_eq!(r["custom"], false, "{r}");
     assert_eq!(r["path"], lib.join("Smart Previews").to_string_lossy().as_ref());
+    // (the open library's files are removed below: on Windows an open file cannot be)
+    drop(again);
+    for d in [&lib, &away, &src.with_extension("offline")] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
 
 /// Missing Photos covers library photos only: a small library next to many Local browse
@@ -1257,6 +1599,76 @@ fn missing_photos_skip_local_browse_records() {
     assert_eq!(s.execute("library.missing", &json!({})).unwrap().as_array().map(Vec::len), Some(4));
     s.execute("library.source", &json!({"kind": "missing"})).unwrap();
     assert_eq!(s.visible_cloned().len(), 4, "the view lists what the count counts");
+}
+
+/// `library.missing` asks the session's existence check (the one the availability cache and
+/// the tests replace), and a sweep on another thread answers what the command does: the same
+/// files in the same order, progress on the way, and a stop that leaves the rest unchecked.
+#[test]
+fn missing_sweep_answers_what_the_command_does_and_can_stop() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut s = Session::new();
+    let mut ops = Vec::new();
+    for i in 0..200u64 {
+        let path = format!("/share/IMG_{i:04}.jpg");
+        let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:04}.jpg"), "JPEG", 60, 40, "2026-01-01T00:00:00");
+        ops.push(Op::AddPhoto { photo: Box::new(p) });
+    }
+    s.commit("Add", Op::Batch { ops }).unwrap();
+    // the first hundred files are gone
+    s.media.availability.set_probe(std::sync::Arc::new(|f| !f.contains("_00")));
+    let asked = s.execute("library.missing", &json!({})).unwrap();
+    assert_eq!(asked.as_array().map(Vec::len), Some(100), "the command used the session's check: {asked}");
+
+    let files = crate::cmd::missing::checked(&s.catalog);
+    assert_eq!(files.len(), 200);
+    let reports = AtomicUsize::new(0);
+    let probe = s.media.availability.probe();
+    let swept = crate::cmd::missing::sweep(
+        files.clone(),
+        |f| probe(f),
+        || false,
+        |_| {
+            reports.fetch_add(1, Ordering::Relaxed);
+        },
+    );
+    assert_eq!(crate::cmd::missing::missing_json(swept.unwrap()), asked);
+    assert!(reports.load(Ordering::Relaxed) >= 2, "progress is reported on the way");
+
+    // stopped after 10 files: nothing is answered, and the rest is not looked at
+    let looked = AtomicUsize::new(0);
+    let stopped = crate::cmd::missing::sweep(
+        files,
+        |_| {
+            looked.fetch_add(1, Ordering::Relaxed);
+            true
+        },
+        || looked.load(Ordering::Relaxed) >= 10,
+        |_| {},
+    );
+    assert_eq!((stopped, looked.load(Ordering::Relaxed)), (None, 10));
+}
+
+/// A stop that arrives while the last file is being checked is honoured: no answer.
+#[test]
+fn missing_sweep_honours_a_stop_during_the_last_check() {
+    use lightcraft_catalog::PhotoId;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = AtomicBool::new(false);
+    let files = vec![(PhotoId(1), "/a".to_string()), (PhotoId(2), "/b".to_string())];
+    let swept = crate::cmd::missing::sweep(
+        files,
+        |f| {
+            if f == "/b" {
+                stop.store(true, Ordering::Relaxed);
+            }
+            false
+        },
+        || stop.load(Ordering::Relaxed),
+        |_| {},
+    );
+    assert_eq!(swept, None);
 }
 
 /// `library.browse` follows `library.source`'s rule for the active photo (issue #1447): a library
@@ -2050,6 +2462,49 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
         d.image.data.iter().map(|p| p[1]).sum::<f32>() / d.image.data.len() as f32
     };
     assert!(mean(&brighter.bytes) > mean(&plain.bytes) * 1.3, "exposure +1 brightens the HEIC");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Issue #2284: a photo taken at 13:00 in UTC-5 must be catalogued as 13:00. HEICs carried no Exif
+/// (issue #1233), so every one of them fell back to the file's modification time, which the import
+/// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
+#[test]
+fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
+    use lightcraft_heif::testdata::{Spec, build};
+    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    let src = temp_dir("heic-capture-time");
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let mut exif = IfdBuilder::new();
+    exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2026:10:18 13:00:00".into()));
+    exif.set(t::OFFSET_TIME_ORIGINAL, Value::Ascii("-05:00".into()));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set(t::MAKE, Value::Ascii("Apple".into()));
+    ifd0.set(t::MODEL, Value::Ascii("iPhone 15 Pro".into()));
+    // HEIF turns the picture in the container; its Exif Orientation only mirrors that, so reading
+    // the Exif must not turn it a second time.
+    ifd0.set(t::ORIENTATION, Value::Short(vec![6]));
+    ifd0.set_child(t::EXIF_IFD, exif);
+    let exif = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+    let bytes = build(&Spec { exif: Some(exif), ..Spec::new(96, 64, &photo) });
+    let path = src.join("IMG_0002.HEIC");
+    std::fs::write(&path, &bytes).unwrap();
+    // The probe reads the metadata in every build; only decoding the picture needs the feature.
+    let info = crate::files::probe_bytes("IMG_0002.HEIC", &bytes);
+    if lightcraft_codecs::Format::Heif.can_decode() {
+        let info = info.unwrap();
+        assert_eq!(info.captured.as_deref(), Some("2026-10-18T13:00:00-05:00"));
+        assert_eq!(info.meta.camera, "Apple iPhone 15 Pro");
+        let mut s = Session::new().with_fs();
+        let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 0), "{r}");
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!(p.captured.as_deref(), Some("2026-10-18T13:00:00-05:00"), "the time the camera wrote, not the file's");
+        assert_eq!((p.width, p.height), (96, 64), "upright: the container's own transforms, not the Exif tag as well");
+        assert_eq!(lightcraft_catalog::dates::display_time(p.date()), "October 18, 2026 at 1:00:00 PM");
+    } else {
+        assert!(info.is_err(), "without the feature a HEIC cannot be opened at all");
+        assert_eq!(lightcraft_meta::extract(&bytes).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));
+    }
     let _ = std::fs::remove_dir_all(&src);
 }
 

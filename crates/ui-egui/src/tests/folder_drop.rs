@@ -150,6 +150,21 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A selection set with a repeated id holds each photo once, so the drag carries it once.
+#[test]
+fn a_drag_after_selecting_with_a_repeated_id_carries_each_photo_once() {
+    let (root, trip, home) = folders("dedupe");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    h.app.run("library.select", json!({"ids": [beach, garden, beach], "active": beach})).unwrap();
+    let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
+    press(&mut h, from);
+    glide(&mut h, from, from + egui::vec2(60.0, 60.0));
+    assert_eq!(h.app.ui.dragging_photos, Some(vec![beach, garden]));
+    release(&mut h, from);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn local_photos_are_refused_with_the_reason() {
     let (root, trip, home) = folders("local");
@@ -329,6 +344,46 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
 }
 
 #[test]
+fn dont_ask_again_is_kept_only_when_the_move_began() {
+    let (root, trip, home) = folders("dont-ask-refused");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let target = folder_row(&h, &home).unwrap();
+    let beach = id_of(&h, "beach.png");
+    // a file of that name is in the folder already (not in the library): the move is refused
+    std::fs::copy(trip.join("beach.png"), home.join("beach.png")).unwrap();
+    drop_beach(&mut h, beach, target);
+    click(&mut h, "check:moveDontAsk");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { dont_ask: true, .. })), "ticked");
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none(), "the refusal closes the question");
+    assert!(trip.join("beach.png").is_file(), "nothing moved");
+    assert!(h.app.ui.settings.ask_before_move, "a refused move leaves the question on");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A confirmation that finds the photos in the folder already (they were moved there while the question was
+/// open, or a folder synchronization relinked them) moves nothing, so it doesn't turn the question off either.
+#[test]
+fn dont_ask_again_is_kept_only_when_a_photo_moved() {
+    let (root, trip, home) = folders("dont-ask-already");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let target = folder_row(&h, &home).unwrap();
+    let beach = id_of(&h, "beach.png");
+    drop_beach(&mut h, beach, target);
+    click(&mut h, "check:moveDontAsk");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { dont_ask: true, .. })), "ticked");
+    // the photo gets there some other way while the question is open
+    h.app.run("photo.moveToFolder", json!({"folder": home.to_string_lossy(), "ids": [beach]})).unwrap();
+    assert!(home.join("beach.png").is_file());
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none());
+    assert!(h.app.ui.settings.ask_before_move, "nothing moved: the question stays on");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_question_left_open_while_another_library_opens_moves_nothing() {
     let (root, trip, home) = folders("other-library");
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
@@ -344,5 +399,52 @@ fn a_question_left_open_while_another_library_opens_moves_nothing() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["error"].as_str().unwrap_or_default().contains("Another library was opened"), "{r}");
     assert!(trip.join("beach.png").is_file() && !home.join("beach.png").exists(), "nothing moved");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Folders `a/home` and `b/home` (two of one name) and `trip`, with a photo in each.
+fn twin_folders(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let root = std::env::temp_dir().join(format!("lc-folder-twin-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (trip, a, b) = (root.join("trip"), root.join("a").join("home"), root.join("b").join("home"));
+    for (dir, file) in [(&trip, "beach.png"), (&a, "one.png"), (&b, "two.png")] {
+        std::fs::create_dir_all(dir).unwrap();
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 160, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join(file), png).unwrap();
+    }
+    (root, trip, a, b)
+}
+
+#[test]
+fn two_folders_with_one_name_are_told_apart_in_the_label_the_question_and_the_toast() {
+    let (root, trip, a, b) = twin_folders("label");
+    let mut h = app(&[(trip.join("beach.png"), false), (a.join("one.png"), false), (b.join("two.png"), false)]);
+    let toggle = widget(&h, &format!("libraryFolderToggle:{}", folder_key(&root))).unwrap();
+    press(&mut h, toggle.center());
+    release(&mut h, toggle.center());
+    let beach = id_of(&h, "beach.png");
+    let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
+    press(&mut h, from);
+    // When the photo is brought over each of the two: the label names the folder each one is in
+    let (row_a, row_b) = (folder_row(&h, &a).expect("a/home"), folder_row(&h, &b).expect("b/home"));
+    glide(&mut h, from, row_a.center());
+    // (the label is read from the pointer as the frame before saw it)
+    h.step();
+    let label_a = hint(&h).expect("a label over a/home");
+    glide(&mut h, row_a.center(), row_b.center());
+    h.step();
+    let label_b = hint(&h).expect("a label over b/home");
+    assert!(label_a.starts_with("Move 1 photo to “home (") && label_a.ends_with("/a)”"), "{label_a}");
+    assert!(label_b.starts_with("Move 1 photo to “home (") && label_b.ends_with("/b)”"), "{label_b}");
+    // and the question asked on the release says the same
+    release(&mut h, row_b.center());
+    let Some(crate::state::Dialog::MovePhotos { name, .. }) = &h.app.ui.dialog else { panic!("{:?}", h.app.ui.dialog) };
+    assert!(name.starts_with("home (") && name.ends_with("/b)"), "{name}");
+    // and so does the toast
+    h.step();
+    click(&mut h, "button:dialogOk");
+    assert!(toast(&h).starts_with("Moved 1 photo to “home (") && toast(&h).contains("/b)”"), "{}", toast(&h));
+    assert!(b.join("beach.png").is_file(), "moved into the one that was asked about");
     let _ = std::fs::remove_dir_all(&root);
 }

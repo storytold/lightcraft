@@ -146,6 +146,21 @@ pub struct Duplicate {
     /// That photo is in Recently Deleted (see [`OnDeleted`]).
     #[serde(rename = "existingDeleted", skip_serializing_if = "std::ops::Not::not")]
     pub existing_deleted: bool,
+    /// What the file itself says, as a file import reads it; `None` when the file wasn't read (a
+    /// path match). A Lightroom import makes a record of its own for a duplicate by content and
+    /// starts it from these, not from the other photo's record, which may have been edited (#2589).
+    #[serde(skip)]
+    pub file: Option<Box<FileFacts>>,
+}
+
+/// What a file import reads from a file itself, before anything in the library is edited.
+#[derive(Clone, Debug, Default)]
+pub struct FileFacts {
+    /// The metadata the file carries (EXIF, IPTC, embedded XMP).
+    pub meta: lightcraft_catalog::Meta,
+    /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
+    /// file's modification time.
+    pub captured: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

@@ -926,6 +926,63 @@ pub(crate) const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/4204/nice/Leica%20-%20D-Lux%207%20-%204:3.RWL",
         "4f6db6492da83f7f2a5012591e370557249d1ed44d4c948784016605b799327c",
     ),
+    // Canon CRW (CIFF): the clean-room decode's verification corpus (craft-libs crates/crw/clean-room/03-verification.md);
+    // the PowerShot G5 is the documented anomaly the decoder refuses (embedded JPEG preview)
+    (
+        "crw-canon-eos-d30.crw",
+        "https://raw.pixls.us/getfile.php/1307/nice/Canon%20-%20EOS%20D30%20-%20RAW%20(3:2).CRW",
+        "4ee482f2b6f9f1a8d370703ea04e9f2abaa49356973a7f56b229af93a78e8a2e",
+    ),
+    (
+        "crw-canon-eos-d60.crw",
+        "https://raw.pixls.us/getfile.php/2010/nice/Canon%20-%20EOS%20D60%20-%20RAW%20(3:2).CRW",
+        "2b98659ecff170af1dfe44f89b493139e75e995b2979686f6ff0847cfb56b97f",
+    ),
+    (
+        "crw-canon-eos-10d-a.crw",
+        "https://raw.pixls.us/getfile.php/2027/nice/Canon%20-%20EOS%2010D%20-%20RAW%20(3:2).CRW",
+        "b0730eb3a67cc2281a32e0b2ee104199246928d954a68b7e5b72366514c73d02",
+    ),
+    (
+        "crw-canon-eos-10d-b.crw",
+        "https://raw.pixls.us/getfile.php/3164/nice/Canon%20-%20EOS%2010D%20-%20RAW%20(3:2).crw",
+        "e879c94afdc64dabc88b01ce2d02628aa225259303ec71dd61f7fb0322bfea2d",
+    ),
+    (
+        "crw-canon-eos-10d-c.crw",
+        "https://raw.pixls.us/getfile.php/3165/nice/Canon%20-%20EOS%2010D%20-%20RAW%20(3:2).crw",
+        "58144118854657df5cd2185df40fecf6b665fc6754fef0416c2f222b68b025c6",
+    ),
+    (
+        "crw-canon-eos-300d-a.crw",
+        "https://raw.pixls.us/getfile.php/1983/nice/Canon%20-%20EOS%20300D%20-%20RAW%20(3:2).crw",
+        "47da16e1668af5500eea63cf42cf2992d9cb3d32180b8d786f17f1e2a57f39f4",
+    ),
+    (
+        "crw-canon-eos-300d-b.crw",
+        "https://raw.pixls.us/getfile.php/3162/nice/Canon%20-%20EOS%20300D%20-%20RAW%20(3:2).CRW",
+        "9e7f62239fe728046af28d0d4a8a722d35d40146a79794a5bda1775306af4383",
+    ),
+    (
+        "crw-canon-eos-digital-rebel.crw",
+        "https://raw.pixls.us/getfile.php/1308/nice/Canon%20-%20EOS%20Digital%20Rebel%20-%20RAW%20(3:2).CRW",
+        "d6a3131bfac390fde01b96882ec378211f04570c3252708b58f0d05b33a9fdfc",
+    ),
+    (
+        "crw-canon-powershot-g1.crw",
+        "https://raw.pixls.us/getfile.php/2073/nice/Canon%20-%20PowerShot%20G1%20-%20RAW%20(4:3).crw",
+        "f39be5acf14057ce04527fd8d0574e57ec8ed5fed082d7bfaff763075a44ee8a",
+    ),
+    (
+        "crw-canon-powershot-g5.crw",
+        "https://raw.pixls.us/getfile.php/1746/nice/Canon%20-%20PowerShot%20G5%20-%20RAW%20(4:3).CRW",
+        "bb084223d714871b99de4f549eaf00513e30a7080feeead700252c2008060196",
+    ),
+    (
+        "crw-canon-powershot-g6.crw",
+        "https://raw.pixls.us/getfile.php/4226/nice/Canon%20-%20PowerShot%20G6%20-%20RAW%20(4:3).CRW",
+        "244378e1f5660b6cc6cefc93a75ed4928d0b28aa6304ff327b61c748538f4fef",
+    ),
     (
         "mrw-minolta-dimage7hi-words16.mrw",
         "https://raw.pixls.us/data/Minolta/DiMAGE%207Hi/RAW_MINOLTA_DIMAGE_7HI.MRW",
