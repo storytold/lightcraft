@@ -85,6 +85,11 @@ fn parses_cameras_lenses_and_skips_invalid_entries() {
 }
 
 #[test]
+fn rejects_mismatched_xml_closing_tags() {
+    assert!(LensDb::parse("<lensdatabase><lens><maker>X</lensdatabase><model>L</model></lens>").is_err());
+}
+
+#[test]
 fn malformed_documents_are_errors_not_panics() {
     assert!(LensDb::parse("").is_err());
     assert!(LensDb::parse("<lensdatabase><lens><maker>").is_ok_and(|d| d.lenses.is_empty()));
@@ -242,4 +247,127 @@ fn load_dir_reads_xml_files_and_reports_bad_ones() {
 fn tokens_split_names_like_exif_writes_them() {
     assert_eq!(tokens("FE 24-105mm F4.0 G OSS"), ["fe", "24", "105", "mm", "f", "4", "g", "oss"]);
     assert_eq!(tokens("f/2.8"), ["f", "2.8"]);
+}
+
+#[test]
+fn spec_names_read_like_lens_names() {
+    assert_eq!(spec_name([24.0, 70.0, 2.8, 2.8]), "24-70mm f/2.8");
+    assert_eq!(spec_name([18.0, 55.0, 3.5, 5.6]), "18-55mm f/3.5-5.6");
+    assert_eq!(spec_name([85.0, 85.0, 1.8, 1.8]), "85mm f/1.8");
+    assert_eq!(spec_name([10.5, 10.5, 2.8, 2.8]), "10.5mm f/2.8");
+}
+
+#[test]
+fn spec_names_need_an_exact_profile_name() {
+    let db = db();
+    let lens = db.find_lens(None, "24-70mm f/2.8", None).expect("a partial match");
+    // the profile's names carry more words than the specification, so the maker-less name is not confirmed
+    assert!(!lens.names_exactly("24-70mm f/2.8"));
+    assert!(lens.names_exactly("testcam 24-70MM F/2.8 zoom"), "case and punctuation don't matter");
+    assert!(!lens.names_exactly("24-70mm f/2.8 Zoom"), "the maker's words count: another maker's lens isn't this one");
+    let mut aliased = lens.clone();
+    aliased.models.push("24-70mm f/2.8".into());
+    assert!(aliased.names_exactly(&spec_name([24.0, 70.0, 2.8, 2.8])));
+    assert!(!aliased.names_exactly("24-105mm f/4"));
+}
+
+/// Another maker's lens with the same specification scores as high as the aliased one; coming first in the
+/// database it must not hide the profile named for the specification.
+#[test]
+fn a_named_profile_is_found_behind_a_tie() {
+    let lens = |maker: &str, models: &str| {
+        format!(
+            r#"<lens><maker>{maker}</maker>{models}<mount>Test Mount</mount><cropfactor>1</cropfactor>
+              <calibration><distortion model="poly3" focal="18" k1="-0.01" /></calibration></lens>"#
+        )
+    };
+    let xml = format!(
+        r#"<lensdatabase version="2">{}{}</lensdatabase>"#,
+        lens("Otherco", "<model>Otherco 18-55mm f/3.5-5.6</model>"),
+        lens("Testcam", "<model>Testcam 18-55mm f/3.5-5.6 VR</model><model>18-55mm f/3.5-5.6</model>"),
+    );
+    let db = LensDb::parse(&xml).unwrap();
+    let name = spec_name([18.0, 55.0, 3.5, 5.6]);
+    assert_eq!(db.find_lens(None, &name, None).unwrap().maker, "Otherco", "a plain lookup keeps the first of a tie");
+    assert_eq!(db.find_lens_named(None, &name, None).unwrap().maker, "Testcam");
+    assert!(db.find_lens_named(None, "70-200mm f/4", None).is_none());
+}
+
+#[test]
+fn built_in_lens_matches_by_camera_mount_and_focal_range() {
+    let xml = r#"<lensdatabase>
+  <camera><maker>Canon</maker><model>Canon PowerShot S5 IS</model><model lang="en">PowerShot S5 IS</model><mount>canonS5</mount><cropfactor>6.0</cropfactor></camera>
+  <lens><maker>Canon</maker><model>Canon PowerShot S5 IS &amp; compatibles</model><mount>canonS5</mount><cropfactor>6.0</cropfactor>
+    <calibration><distortion model="poly3" focal="6" k1="0.01" /><distortion model="poly3" focal="72" k1="0.0" /></calibration></lens>
+  <lens><maker>Canon</maker><model>Canon EF 50mm f/1.8</model><mount>Canon EF</mount>
+    <calibration><distortion model="poly3" focal="50" k1="0.01" /></calibration></lens>
+</lensdatabase>"#;
+    let db = LensDb::parse(xml).unwrap();
+    let cam = db.find_camera("Canon", "Canon PowerShot S5 IS");
+    assert!(cam.is_some());
+    assert!(db.find_camera("Canon", "PowerShot S5 IS").is_some());
+    let l = db.find_lens(None, "6.0-72.0 mm f/2.7-3.5", cam).unwrap();
+    assert_eq!(l.mounts, ["canonS5"]);
+    assert!(db.find_lens(None, "6.0-72.0 mm f/2.7-3.5", None).is_none());
+    // a file with no make still finds the camera by its full model name
+    assert!(db.find_camera("", "Canon PowerShot S5 IS").is_some());
+    // the exact-name lookup never falls back to the camera's mount
+    assert!(db.find_lens_named(None, "6.0-72.0 mm f/2.7-3.5", cam).is_none());
+    // a focal length that overflows to infinity is ignored, not taken as an unbounded range
+    let huge = format!("6.0-{}9 mm f/2.7-3.5", "9".repeat(400));
+    assert_eq!(db.find_lens(None, &huge, cam).unwrap().mounts, ["canonS5"]);
+    assert_eq!(exif_focal_range(&tokens(&huge)), Some((6.0, 6.0)));
+}
+
+/// A hand-edited or corrupt database may carry any number: infinities, NaN, enormous or negative
+/// coefficients, absurd crop factors and aspect ratios. Whatever loads must give corrections that
+/// are `None` or entirely finite, for any shot including nonsense ones; names of any shape find
+/// nothing rather than panic.
+#[test]
+fn hostile_numbers_give_finite_corrections_or_none() {
+    let values = ["inf", "-inf", "NaN", "1e300", "-1e300", "1e-300", "0", "-1", "1e6", "99999"];
+    let mut cases = 0;
+    for v in values {
+        for xml in [
+            format!(
+                r#"<lens><maker>M</maker><model>M 1</model><cropfactor>{v}</cropfactor><aspect-ratio>{v}</aspect-ratio><calibration><distortion model="poly3" focal="24" k1="0.01"/><vignetting model="pa" focal="24" aperture="2.8" k1="-0.3"/></calibration></lens>"#
+            ),
+            format!(
+                r#"<lens><maker>M</maker><model>M 1</model><calibration cropfactor="{v}" aspect-ratio="{v}"><distortion model="ptlens" focal="24" a="{v}" b="{v}" c="{v}"/><tca model="poly3" focal="24" vr="{v}" vb="{v}" cr="{v}" cb="{v}" br="{v}" bb="{v}"/></calibration></lens>"#
+            ),
+            format!(
+                r#"<lens><maker>M</maker><model>M 1</model><calibration><distortion model="poly5" focal="{v}" k1="{v}" k2="{v}"/><distortion model="poly3" focal="50" k1="{v}"/><vignetting model="pa" focal="{v}" aperture="{v}" distance="{v}" k1="{v}" k2="{v}" k3="{v}"/><tca model="linear" focal="{v}" kr="{v}" kb="{v}"/></calibration></lens>"#
+            ),
+        ] {
+            let Ok(db) = LensDb::parse(&format!("<lensdatabase>{xml}</lensdatabase>")) else { continue };
+            for p in &db.lenses {
+                for focal in [f64::NAN, f64::INFINITY, -1.0, 0.0, 1e-9, 8.0, 24.0, 50.0, 1e9] {
+                    for (w, h) in [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (6000.0, 4000.0), (1e9, 1.0), (f64::NAN, 10.0), (f64::INFINITY, 4000.0)] {
+                        for aperture in [None, Some(f64::NAN), Some(-2.0), Some(0.0), Some(2.8), Some(1e9)] {
+                            for crop in [None, Some(0.0), Some(f64::NAN), Some(-1.0), Some(1.5), Some(1e9)] {
+                                let shot = Shot { focal, aperture, distance: Some(f64::NAN), crop_factor: crop, width: w, height: h };
+                                cases += 1;
+                                let Some(c) = p.correction(&shot) else { continue };
+                                let planes =
+                                    c.warp.iter().flat_map(|wp| wp.planes.iter().flatten().copied().chain([wp.radius, wp.center.x, wp.center.y]));
+                                let vig = c.vignette.iter().flat_map(|vg| vg.k.iter().copied().chain([vg.radius, vg.center.x, vg.center.y]));
+                                assert!(planes.chain(vig).all(f64::is_finite), "{v}: focal {focal} {w}x{h} {aperture:?} {crop:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(cases > 1000);
+
+    let db = db();
+    let long = "x".repeat(100_000);
+    for s in ["", " ", "\t\n", "\0", "ß İ ǅ", "....", "1.2.3.4mm", "-mm", long.as_str()] {
+        let _ = db.find_camera(s, s);
+        let _ = db.find_lens(Some(s), s, db.cameras.first());
+        let _ = db.find_lens(None, s, None);
+    }
+    assert!(db.find_camera("", "").is_none());
+    assert!(db.find_lens(None, "  ", None).is_none());
 }

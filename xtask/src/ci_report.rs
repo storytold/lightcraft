@@ -307,8 +307,16 @@ pub fn seconds(s: f64) -> String {
     if s < 60.0 { format!("{s:.1} s") } else { format!("{}m {:02}s", (s / 60.0).floor() as u64, (s % 60.0).floor() as u64) }
 }
 
+/// `binary::test`, or the binary and the location when the test's name is unknown (thread
+/// `main`). A crate's integration tests share one binary, `it`, named here after the crate's
+/// directory: `gpu/it::equivalence::camera_tone`.
 fn test_name(s: &Skip) -> String {
-    if s.test.is_empty() || s.test == "main" { format!("{} ({})", s.binary, s.location) } else { format!("{}::{}", s.binary, s.test) }
+    let mut dirs = s.location.split('/');
+    let binary = match (s.binary.as_str(), dirs.next(), dirs.next()) {
+        ("it", Some("crates" | "apps"), Some(dir)) => format!("{dir}/it"),
+        _ => s.binary.clone(),
+    };
+    if s.test.is_empty() || s.test == "main" { format!("{binary} ({})", s.location) } else { format!("{binary}::{}", s.test) }
 }
 
 fn adapter_line(a: &Value) -> String {
@@ -505,9 +513,8 @@ mod tests {
     fn skips_are_read_per_step_deduplicated_and_cut_free_of_the_root() {
         let root = Path::new("/work/lightcraft");
         let dir = tmp("skips");
-        let gpu =
-            r#"{"need":"gpu","reason":"no GPU adapter","test":"camera_tone","binary":"equivalence","location":"crates/gpu/tests/equivalence.rs:22"}"#;
-        let corpus = r#"{"need":"corpus","reason":"skip /work/lightcraft/crates/raw/../../corpus/raw absent","test":"decodes","binary":"corpus","location":"crates/raw/tests/corpus.rs:28"}"#;
+        let gpu = r#"{"need":"gpu","reason":"no GPU adapter","test":"equivalence::camera_tone","binary":"it","location":"crates/gpu/tests/it/equivalence.rs:22"}"#;
+        let corpus = r#"{"need":"corpus","reason":"skip /work/lightcraft/crates/raw/../../corpus/raw absent","test":"corpus::decodes","binary":"it","location":"crates/raw/tests/it/corpus.rs:28"}"#;
         std::fs::write(dir.join("skips-heif.jsonl"), format!("{corpus}\n")).unwrap();
         std::fs::write(dir.join("skips-test.jsonl"), format!("{gpu}\n{corpus}\nnot json\n")).unwrap();
         std::fs::write(dir.join("other.jsonl"), format!("{gpu}\n")).unwrap();
@@ -519,6 +526,25 @@ mod tests {
         assert_eq!(skips[1].steps, ["test"]);
         assert_eq!(counts_by_need(&skips), [("corpus".to_owned(), 1), ("gpu".to_owned(), 1)]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn integration_test_skips_are_named_after_their_crate() {
+        let skip = |test: &str, binary: &str, location: &str| Skip {
+            need: "gpu".into(),
+            reason: String::new(),
+            test: test.into(),
+            binary: binary.into(),
+            location: location.into(),
+            steps: Vec::new(),
+        };
+        assert_eq!(test_name(&skip("equivalence::camera_tone", "it", "crates/gpu/tests/it/equivalence.rs:22")), "gpu/it::equivalence::camera_tone");
+        assert_eq!(
+            test_name(&skip("main", "it", "apps/lightcraft-cli/tests/it/cli.rs:9")),
+            "lightcraft-cli/it (apps/lightcraft-cli/tests/it/cli.rs:9)"
+        );
+        assert_eq!(test_name(&skip("memory", "memory", "crates/gpu/tests/memory.rs:12")), "memory::memory");
+        assert_eq!(test_name(&skip("tests::a", "lightcraft_engine", "crates/engine/src/tests.rs:3")), "lightcraft_engine::tests::a");
     }
 
     #[test]

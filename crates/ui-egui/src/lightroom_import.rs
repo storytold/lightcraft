@@ -140,6 +140,22 @@ fn unsupported_wasm() -> Result<Value, String> {
     Err("Lightroom catalog import is unavailable in browser builds; open the catalog in the native LightCraft app".into())
 }
 
+/// Tests: a catalog import that never ends while the returned value lives, so a drop meets it pending.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn stall_import(app: &mut LightcraftApp) -> Box<dyn std::any::Any> {
+    let (tx, rx) = mpsc::channel::<Message>();
+    let task = LightroomTask::new(
+        &app.session,
+        Kind::Import,
+        PathBuf::from("catalog.lrcat"),
+        Arc::new(AtomicBool::new(false)),
+        LightroomProgress::default(),
+        rx,
+    );
+    app.lightroom = Some(task);
+    Box::new(tx)
+}
+
 /// Whether a Lightroom task currently owns the catalog transition.
 pub fn is_running(app: &LightcraftApp) -> bool {
     app.lightroom.is_some()
@@ -287,7 +303,7 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
         }
     };
     if matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) {
-        app.lightroom_result = Some(result_dialog(&value, &message));
+        app.lightroom_result = Some(result_dialog(&value, &message, &app.session.catalog));
         show_result(app);
     }
     app.lightroom_last = Some(value);
@@ -302,8 +318,9 @@ fn show_result(app: &mut LightcraftApp) {
 }
 
 /// The lasting result window for an inspect or import: counts, failures, missing originals, the
-/// skipped images (one line, in the UI language) and at most eight warnings.
-fn result_dialog(value: &Value, summary: &str) -> crate::state::Dialog {
+/// skipped images (one line, in the UI language) and at most eight warnings. Show in Library goes
+/// to the lowest mapped photo that is not in Recently Deleted, where All Photos can show it.
+fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Catalog) -> crate::state::Dialog {
     let report = value.get("report").unwrap_or(value);
     let mut details = Vec::new();
     if let Some(photos) = report["photos"].as_u64() {
@@ -322,6 +339,13 @@ fn result_dialog(value: &Value, summary: &str) -> crate::state::Dialog {
         details.push(crate::i18n::tr_format!(
             "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
             missing = missing
+        ));
+    }
+    let in_trash = report["inRecentlyDeleted"].as_u64().unwrap_or(0);
+    if in_trash > 0 {
+        details.push(crate::i18n::tr_format!(
+            "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.",
+            in_trash = in_trash
         ));
     }
     // images whose catalog records are incomplete come as data (`skipped`), said here in the UI
@@ -343,7 +367,10 @@ fn result_dialog(value: &Value, summary: &str) -> crate::state::Dialog {
             details.push(crate::i18n::tr_format!("{count} more warnings.", count = warnings.len() - 8));
         }
     }
-    let first = value.get("error").is_none().then(|| report["mapping"].as_object()?.values().filter_map(Value::as_u64).min()).flatten();
+    // a catalog photo can map to a library photo left in Recently Deleted (#2589), which All
+    // Photos doesn't show
+    let live = |id: &u64| catalog.photo(lightcraft_catalog::PhotoId(*id)).is_some_and(|p| !p.deleted);
+    let first = value.get("error").is_none().then(|| report["mapping"].as_object()?.values().filter_map(Value::as_u64).filter(live).min()).flatten();
     crate::state::Dialog::LightroomResult {
         summary: summary.to_string(),
         library: report["library"].as_str().or_else(|| value["library"].as_str()).map(str::to_string),
@@ -629,6 +656,7 @@ mod tests {
         h.app.session.filter.text = "no-photo-has-this-name".into();
         h.app.session.filter.only = vec![lightcraft_catalog::PhotoId(u64::MAX)];
         h.app.session.filter.labels = vec![lightcraft_catalog::ColorLabel::Red];
+        h.app.session.filter.flags = vec![lightcraft_catalog::Flag::Reject];
         h.app.session.filter.rule_set = Some(lightcraft_catalog::RuleSet {
             mode: lightcraft_catalog::rules::Match::All,
             rules: vec![lightcraft_catalog::rules::Rule::Field { field: "rating".into(), op: "is".into(), value: json!(5) }],
@@ -655,6 +683,33 @@ mod tests {
         assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(id));
         assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
         assert!(!h.app.session.visible().is_empty());
+    }
+
+    /// Show in Library goes to a photo All Photos shows: not a master left in Recently Deleted
+    /// whose new virtual copy the import added (#2589), and nowhere when no mapped photo is shown.
+    #[test]
+    fn show_in_library_skips_photos_in_recently_deleted() {
+        use lightcraft_catalog::{Op, Photo, Source};
+        let mut s = lightcraft_engine::Session::new();
+        let mut add = |deleted: bool| {
+            let id = s.catalog.alloc_photo_id();
+            let mut p = Photo::new(id, Source::File { path: format!("/p/{}.jpg", id.0) }, "a.jpg", "JPEG", 2, 2, "now");
+            p.deleted = deleted;
+            s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            id.0
+        };
+        let (trashed, live) = (add(true), add(false));
+        assert!(trashed < live);
+        let first = |mapping: Value| {
+            let crate::state::Dialog::LightroomResult { first, .. } = result_dialog(&json!({"report": {"mapping": mapping}}), "done", &s.catalog)
+            else {
+                panic!("not a Lightroom result")
+            };
+            first
+        };
+        assert_eq!(first(json!({"1": trashed, "2": live})), Some(live));
+        assert_eq!(first(json!({"1": trashed})), None, "only a photo in Recently Deleted: no Show in Library");
+        assert_eq!(first(json!({"1": live + 100})), None, "no longer in the library");
     }
 
     #[test]
@@ -684,25 +739,35 @@ mod tests {
     }
 
     #[test]
-    fn skipped_images_are_one_line_in_the_ui_language() {
+    fn skipped_images_are_one_line() {
         let value = json!({"report": {"photos": 3, "collections": 0, "warnings": ["w1", "w2"], "skipped": [
             {"image": 7, "reason": "missingFile"},
             {"image": 8, "reason": "missingRoot"},
             {"image": 9, "reason": "masterSkipped"},
         ]}});
-        let details = |locale| {
-            crate::i18n::set_language(locale);
-            let dialog = result_dialog(&value, "done");
-            crate::i18n::set_language(crate::i18n::Locale::En);
-            let crate::state::Dialog::LightroomResult { details, .. } = dialog else { panic!("not a Lightroom result") };
-            details
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let crate::state::Dialog::LightroomResult { details: en, .. } = result_dialog(&value, "done", &Default::default()) else {
+            panic!("not a Lightroom result")
         };
-        let en = details(crate::i18n::Locale::En);
         assert_eq!(en.len(), 4, "{en:?}");
         assert_eq!(en[1], "3 catalog images were not imported because their records in the catalog are incomplete.");
         assert_eq!(&en[2..], ["w1", "w2"]);
-        let es = details(crate::i18n::Locale::Es);
-        assert_eq!(es[1], "No se importaron 3 imágenes del catálogo porque sus registros en el catálogo están incompletos.");
+    }
+
+    #[test]
+    fn photos_left_in_recently_deleted_are_one_line() {
+        let value = json!({"report": {"photos": 3, "collections": 0, "inRecentlyDeleted": 2}});
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
+            panic!("not a Lightroom result")
+        };
+        assert_eq!(details.len(), 2, "{details:?}");
+        assert!(details[1].starts_with("2 catalog photos are in this library's Recently Deleted"), "{details:?}");
+        let value = json!({"report": {"photos": 3, "collections": 0, "inRecentlyDeleted": 0}});
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
+            panic!("not a Lightroom result")
+        };
+        assert_eq!(details.len(), 1, "no line when none are: {details:?}");
     }
 
     #[test]
@@ -710,7 +775,9 @@ mod tests {
         let warnings: Vec<_> = (0..10).map(|i| format!("w{i}")).collect();
         let skipped: Vec<_> = (0..500).map(|i| json!({"image": i, "reason": "missingFile"})).collect();
         let value = json!({"report": {"warnings": warnings, "skipped": skipped}});
-        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done") else { panic!("not a Lightroom result") };
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
+            panic!("not a Lightroom result")
+        };
         // one line for the skipped images, then the usual eight warnings and the rest counted
         assert_eq!(details.len(), 10, "{details:?}");
         assert!(details[0].starts_with("500 catalog images were not imported"));

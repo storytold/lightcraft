@@ -66,7 +66,7 @@ fn median(v: &mut [f64]) -> Option<f64> {
 
 fn from_preview(bytes: &[u8], f: &Frame) -> Option<[f32; 3]> {
     let jpeg = crate::preview::embedded_preview(bytes)?;
-    let (px, pw, ph, ch) = crate::tiffraw::lossy_jpeg(&jpeg, 3).ok()?;
+    let (px, pw, ph, ch) = crate::tiffraw::lossy_jpeg(&jpeg, 3, crate::tiffraw::MAX_JPEG_SAMPLES).ok()?;
     if ch != 3 {
         return None;
     }

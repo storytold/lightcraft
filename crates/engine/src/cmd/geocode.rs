@@ -63,6 +63,13 @@ impl PlaceNames {
         self.lock().running
     }
 
+    /// Whether a place names download has been started in this session (running, or ended).
+    #[cfg(test)]
+    pub(crate) fn download_started(&self) -> bool {
+        let sh = self.lock();
+        sh.running || sh.last.is_some()
+    }
+
     /// The gazetteer in `dir`, parsed once and re-read only when the cities file's size or time changes.
     fn load(&mut self, dir: &Path) -> std::result::Result<Arc<GeoNames>, lightcraft_geocode::GeocodeError> {
         let file = dir.join(GEONAMES_FILES[0]);
@@ -181,7 +188,10 @@ mod download {
 
     use lightcraft_geocode::{GEONAMES_BASE, GEONAMES_ZIP};
 
-    use super::*;
+    use super::{
+        Cancel, DownloadOutcome, GEONAMES_ATTRIBUTION, GEONAMES_FILES, GeoNames, PoisonError, Result, Session, Value, bad, dataset_dir, json,
+        str_param,
+    };
     use crate::activity::Unit;
 
     const MAX_ZIP: u64 = 64 * 1024 * 1024;

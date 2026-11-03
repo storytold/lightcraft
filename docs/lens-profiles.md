@@ -21,6 +21,15 @@ length is used when the camera isn't listed) and the lens model string. Lens nam
 number (focal lengths, apertures) in the database name must appear in the EXIF name, and the lens maker must agree
 when the file names one.
 
+Some cameras record no lens model at all, only the lens specification: Nikon DSLRs write the lens's focal range and
+maximum apertures in their maker note (tag `0x0084`) and no Exif `LensModel`, whatever lens is mounted. For such a
+file the lens is looked up by a name built from the specification, `24-70mm f/2.8` (`18-55mm f/3.5-5.6`,
+`85mm f/1.8`), and a profile is used only when one of its names is exactly that (ignoring case and punctuation).
+The specification fits every maker's lens with that range (a Nikkor, a Sigma, a Tamron), so neither a partial match
+nor a name with a maker in it ("Samyang 85mm f/1.4" for "85mm f/1.4") is taken; a database that should correct such
+files names its profile that way, e.g. a lensfun entry with an extra `<model>24-70mm f/2.8</model>` for the one
+24-70 f/2.8 the photographer owns. lensfun's own database has no such names, so it doesn't correct these files.
+
 | Correction | Models | Interpolated over |
 |---|---|---|
 | Distortion | `poly3`, `poly5`, `ptlens` | focal length |
