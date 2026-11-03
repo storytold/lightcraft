@@ -30,8 +30,14 @@ const THUMB_PRIORITY: u32 = 20;
 const MIN_WIDTH: f32 = 560.0;
 /// What the button row under the list takes.
 const BUTTON_ROW: f32 = 52.0;
-/// The strictness choices: bits of hash distance.
-const STRICTNESS: [(&str, u32); 3] = [("Strict", 2), ("Normal", 6), ("Loose", 10)];
+/// The strictness choices: bits of hash distance, and what each takes in (the next line of the window).
+const STRICTNESS: [(&str, u32, &str); 3] = [
+    ("Strict", 2, "the same picture at another size or compression"),
+    ("Normal", 6, "also small edits: a light crop, sharpening, mild colour or exposure changes"),
+    ("Loose", 10, "also heavier edits, with more chance of pairing two frames of a burst"),
+];
+/// The column the choice buttons and the same-moment box take, so their descriptions line up.
+const CHOICE_W: f32 = 170.0;
 
 /// `dialog.findDuplicates`: open the window with its settings; nothing runs until Find is pressed.
 pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
@@ -299,42 +305,47 @@ fn group_header(ui: &mut egui::Ui, t: &Tokens, n: usize, g: &DuplicateGroup) -> 
     action
 }
 
-/// The strictness and same-moment settings and the Find button. The settings can be changed until Find is pressed
-/// and are shown locked from then on. `true` when Find was pressed.
+/// The settings, one to a row with what it does beside it: Strict / Normal / Loose, the same-moment box, then the
+/// Find button. The settings can be changed until Find is pressed and are shown locked from then on. `true` when
+/// Find was pressed.
 fn controls(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) -> bool {
     let Dialog::Duplicates { distance, same_moment, started, .. } = dlg else { return false };
     let mut find = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Match")).color(t.text_label));
-        for (label, bits) in STRICTNESS {
-            // (`text_button` translates the label itself)
-            let r = ui
-                .add_enabled_ui(!*started, |ui| {
-                    crate::widgets::text_button(ui, &format!("dupes:{}", label.to_ascii_lowercase()), label, *distance == bits)
-                })
-                .inner;
+    // (the description starts at the same column on every row: the gap after the control is measured)
+    let column = |ui: &mut egui::Ui, x0: f32| ui.add_space((x0 + CHOICE_W - ui.cursor().min.x).max(ui.spacing().item_spacing.x));
+    ui.label(egui::RichText::new(crate::i18n::tr("Match")).color(t.text_label));
+    for (label, bits, what) in STRICTNESS {
+        ui.horizontal(|ui| {
+            let x0 = ui.cursor().min.x;
+            let r = ui.add_enabled(!*started, egui::RadioButton::new(*distance == bits, crate::i18n::tr(label)));
+            crate::widgets::register(ui, format!("button:dupes:{}", label.to_ascii_lowercase()), r.rect);
             if r.clicked() && !*started {
                 *distance = bits;
             }
-        }
-        ui.add_space(12.0);
+            column(ui, x0);
+            ui.label(egui::RichText::new(crate::i18n::tr(what)).color(t.text_dim));
+        });
+    }
+    ui.horizontal(|ui| {
+        let x0 = ui.cursor().min.x;
         let r = ui.add_enabled(!*started, egui::Checkbox::new(same_moment, crate::i18n::tr("Same moment only")));
         crate::widgets::register(ui, "check:dupesSameMoment", r.rect);
-        r.on_hover_text(crate::i18n::tr("Copies keep the original's capture time; the next frame of a burst has its own."));
-        if !*started {
-            ui.add_space(12.0);
-            if crate::button::Button::new("Find").primary().widget("button:dupesFind").min_width(96.0).show(ui).clicked() {
-                find = true;
-            }
-        }
-    });
-    if !*started {
+        column(ui, x0);
         ui.label(
             egui::RichText::new(crate::i18n::tr(
-                "Strict finds the same picture at another size or compression; Loose also takes mild edits. Find looks through the whole library.",
+                "Only photos taken in the same second can pair: copies keep the original's capture time, the next frame of a burst has its own. Photos without a capture time still match.",
             ))
             .color(t.text_dim),
         );
+    });
+    if !*started {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if crate::button::Button::new("Find").primary().widget("button:dupesFind").min_width(96.0).show(ui).clicked() {
+                find = true;
+            }
+            ui.label(egui::RichText::new(crate::i18n::tr("Find looks through the whole library.")).color(t.text_dim));
+        });
     }
     find
 }
