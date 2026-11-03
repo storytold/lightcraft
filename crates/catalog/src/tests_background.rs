@@ -109,7 +109,8 @@ fn assert_recovers(g: &Gated, live: &Catalog) -> LoadReport {
 }
 
 fn wait_written(j: &Journal) {
-    for _ in 0..20_000 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(20_000));
+    while std::time::Instant::now() < deadline {
         if j.snapshot_written() {
             return;
         }
