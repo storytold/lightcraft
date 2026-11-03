@@ -26,7 +26,7 @@ mod corpus;
 mod raw_samples;
 mod wasm;
 
-use ci::{available_ram_mb, ci_jobs, cmd_ci, total_ram_gb};
+use ci::{available_ram_mb, ci_jobs, ci_ram_mb, cmd_ci, total_ram_gb};
 use corpus::cmd_corpus;
 use layers::cmd_layers;
 use wasm::cmd_wasm;
@@ -145,7 +145,7 @@ pub fn cargo() -> Command {
     if std::env::args().nth(1).as_deref() == Some("ci") {
         static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
         let (build, threads) = JOBS.get_or_init(|| {
-            let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
+            let ram_mb = ci_ram_mb(available_ram_mb(), total_ram_gb);
             let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
             // More test threads barely shorten CI (a few heavy tests dominate) but make the
             // wall-clock frame-budget tests flaky on a loaded machine.
