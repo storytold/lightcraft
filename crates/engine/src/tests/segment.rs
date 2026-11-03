@@ -78,6 +78,8 @@ fn status_and_model_commands_without_the_model() {
 #[test]
 fn a_failing_download_ends_with_an_error_and_never_blocks() {
     use std::io::{BufRead, BufReader, Write};
+    // the mirror's hold, and the bound on a request that must not wait for it, from one scale
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30));
     // a local mirror that has nothing; its first answer waits until the test has made its second
     // request, so the download is still running then however the threads are scheduled (a 404 at
     // once could end it before, and the second request would rightly start a new one)
@@ -93,7 +95,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
                 line.clear();
             }
             if let Some(released) = first.take() {
-                let _ = released.recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30)));
+                let _ = released.recv_timeout(hold);
             }
             let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<h1>404</h1>\n");
         }
@@ -112,7 +114,9 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     let again = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert!(again["started"] == false || again["downloading"] == false);
     // AI mask requests meanwhile: an error while the mirror still holds the download, never a wait for it
+    let q = Instant::now();
     let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
+    assert!(q.elapsed() < hold / 4, "the AI mask request waited {:?} (bound {:?})", q.elapsed(), hold / 4);
     assert!(e.contains(NOT_INSTALLED), "{e}");
     assert!(s.segmenter.download_status().running, "the AI mask request did not wait for the download");
     let _ = release.send(());

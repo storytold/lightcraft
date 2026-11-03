@@ -492,8 +492,8 @@ GPU tests on every backend that has a hardware adapter. Nothing is uploaded.
 libtest has no per-test timeout either, so test waits go through `lightcraft_testkit::wait_until` and
 `recv_within`, which fail the test with what it waited for. `LIGHTCRAFT_TIME_SCALE=3` gives their limits, and
 those built with `lightcraft_testkit::scaled`, three times as long on a slow or shared machine; the headless
-harness's own timeouts (`Headless::request`, `settle`, `step_until`) don't scale. A watchdog ends a test
-binary (exit status 124) when a watched test has run for `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30,
+harness's own timeouts (`Headless::request`, `settle`, `step_until`) stretch too in ui-egui's unit tests, never
+shrinking. A watchdog ends a test binary (exit status 124) when a watched test has run for `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30,
 times the time scale; `0` turns it off), printing the watched tests still running. The headless tests in
 ui-egui's unit tests are watched; any other test, including ui-egui's integration tests in
 `crates/ui-egui/tests/`, is watched only when it calls `lightcraft_testkit::watch()`.
