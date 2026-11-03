@@ -525,6 +525,21 @@ mod tests {
         }
     }
 
+    /// The `SetTheme(Light)` commands one frame of `ctx` sends the window, with or without
+    /// [`refresh_window_on_first_focus`] in it.
+    #[cfg(target_os = "windows")]
+    fn light_theme_commands(ctx: &egui::Context, focused: bool, refresh: bool) -> usize {
+        let raw = egui::RawInput { focused, ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| {
+            if refresh {
+                refresh_window_on_first_focus(ui.ctx());
+            }
+        });
+        out.textures_delta.clear();
+        let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        commands.iter().filter(|c| matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::Light))).count()
+    }
+
     /// #3381: egui sends the theme with the first frame, and the window hears it once more the
     /// first time it has focus, not on every later focus.
     #[cfg(target_os = "windows")]
@@ -532,19 +547,27 @@ mod tests {
     fn the_window_hears_its_theme_again_the_first_time_it_has_focus() {
         let ctx = egui::Context::default();
         apply_kind(&ctx, ThemeKind::Silver);
-        let sent = |focused: bool| {
-            let raw = egui::RawInput { focused, ..Default::default() };
-            let mut out = ctx.run_ui(raw, |ui| refresh_window_on_first_focus(ui.ctx()));
-            out.textures_delta.clear();
-            let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
-            commands.iter().filter(|c| matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::Light))).count()
-        };
+        let sent = |focused: bool| light_theme_commands(&ctx, focused, true);
         assert_eq!(sent(false), 1, "egui's own, with the first frame");
         assert_eq!(sent(false), 0, "no focus yet");
         assert_eq!(sent(true), 1, "the first frame with focus");
         assert_eq!(sent(true), 0, "still focused");
         assert_eq!(sent(false), 0, "focus lost");
         assert_eq!(sent(true), 0, "focus back: Windows repaints this by itself");
+    }
+
+    /// #3381: a window that has focus from its very first frame hears the theme once more in that
+    /// frame, on top of egui's own command. (In the app the first frame never gets here: `ui`
+    /// returns before the fonts are ready, so egui's command always goes a frame earlier.)
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_window_focused_from_its_first_frame_hears_its_theme_again_in_that_frame() {
+        let first_frame = |refresh: bool| {
+            let ctx = egui::Context::default();
+            apply_kind(&ctx, ThemeKind::Silver);
+            light_theme_commands(&ctx, true, refresh)
+        };
+        assert_eq!(first_frame(true), first_frame(false) + 1);
     }
 
     /// Every theme scrolls 100 points a wheel notch, and a zoom notch stays egui's stock ~1.22x
