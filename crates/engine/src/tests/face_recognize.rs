@@ -298,7 +298,7 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     assert_eq!(s.faces.index.len(), 0);
     s.execute("faces.enable", &json!({"enabled": true})).unwrap();
     // `enabled` is looked up at most once a second, so the first pump may still see "off"
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
     let mut last = json!(null);
     while std::time::Instant::now() < deadline {
         last = s.execute("faces.pump", &json!({})).unwrap();
@@ -310,7 +310,7 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     assert_eq!((last["active"].clone(), last["pendingPhotos"].clone(), last["indexedFaces"].clone()), (json!(true), json!(0), json!(3)), "{last}");
     // a new face is picked up (the catalog changed), and suggestions use what the pump embedded
     set_regions(&mut s, b, vec![region(0.3, None), region(0.6, None)]);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
     while std::time::Instant::now() < deadline && s.faces.index.len() < 4 {
         s.execute("faces.pump", &json!({})).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -337,7 +337,7 @@ fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     assert_eq!(photos, 3, "a fresh library holds only the three imported photos");
     // only the one photo without a face region is searched when the optional detector is installed
     let searched_photos = usize::from(searching);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(120));
     let (mut last, mut embedded) = (json!(null), 0u64);
     while std::time::Instant::now() < deadline {
         last = s.execute("faces.pump", &json!({})).unwrap();
@@ -573,7 +573,7 @@ fn face_scan_row_follows_pending_photos() {
     set_regions(&mut s, a, vec![region(0.1, None), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
     let faces_rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
     let (mut last, mut shown) = (json!(null), false);
     while std::time::Instant::now() < deadline {
         last = s.execute("faces.pump", &json!({})).unwrap();

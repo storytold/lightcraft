@@ -254,7 +254,7 @@ fn slideshow_export_wait_budget_only_expands_for_llvm_coverage_runs() {
 }
 
 fn wait_for(s: &Session) -> Value {
-    let deadline = Instant::now() + wait_timeout();
+    let deadline = Instant::now() + lightcraft_testkit::scaled(wait_timeout());
     loop {
         let run = s.slideshow_export.clone().unwrap();
         if !run.running() {

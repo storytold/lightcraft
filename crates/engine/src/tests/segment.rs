@@ -26,7 +26,8 @@ pub(super) fn damaged_model(name: &str) -> std::path::PathBuf {
     d
 }
 
-/// Poll until the worker is idle (or `limit` passes), collecting messages.
+/// Poll until the worker is idle (or `limit`, stretched by `LIGHTCRAFT_TIME_SCALE`, passes),
+/// collecting messages.
 fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
     let t = Instant::now();
     let mut messages = Vec::new();
@@ -37,7 +38,7 @@ fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
             messages.extend(s.segment_poll().messages);
             return messages;
         }
-        assert!(t.elapsed() < limit, "the worker never finished");
+        assert!(t.elapsed() < lightcraft_testkit::scaled(limit), "the worker never finished");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -298,7 +299,7 @@ fn a_running_model_download_shows_in_activity_and_cancels() {
     s.execute("activity.cancel", &json!({"id": rows[0].id})).unwrap();
     let t = Instant::now();
     while s.segmenter.download_status().running || !s.activity.list().is_empty() {
-        assert!(t.elapsed() < Duration::from_secs(10), "the download never stopped");
+        assert!(t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(10)), "the download never stopped");
         std::thread::sleep(Duration::from_millis(10));
     }
     let st = s.segmenter.download_status();
