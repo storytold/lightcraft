@@ -182,8 +182,9 @@ of it.
 ## Running tests
 - **Run tests through xtask:** `cargo xtask test [-p PKG]… [-- FILTER]` (`--keep-going` runs every test binary and
   names each that fails, instead of stopping at the first) or `cargo xtask ci --quick`. Both take the machine's CI slot
-  and `ci`'s RAM-aware build caps, and run at most 4 tests at once in each binary; README → Quick start describes them
-  and the settings that change them. Plain `cargo test -p PKG` on a small crate is fine while you iterate.
+  and `ci`'s RAM-aware caps: build jobs and test threads sized by the memory available, at most 4 tests at once in
+  each binary. README → Quick start describes them and the settings that change them. Plain `cargo test -p PKG` on a
+  small crate is fine while you iterate.
 - **Never run plain `cargo test --workspace`**, with or without `--no-fail-fast`. It takes no CI slot, so it runs on
   top of every other agent's tests, and gets none of `ci`'s caps (`.cargo/config.toml` only limits it to 4 tests at
   once in each binary).
