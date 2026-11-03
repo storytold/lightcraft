@@ -61,6 +61,14 @@ fn small_render_matches_the_downscaled_large_render() {
         let small = luma(&src, &s, w / k, h / k);
         let ratio = std(&small) / std(&down);
         assert!((0.95..1.05).contains(&ratio), "size {size}: preview / export grain {ratio:.3}");
+        // and the same grain pixel by pixel, not just as strong: the preview's grain (less its
+        // no-grain render) against the downscaled export's
+        let small_base = luma(&src, &on(Process::V3, 0.0), w / k, h / k);
+        let delta: Vec<f64> = small.iter().zip(&small_base).map(|(a, b)| a - b).collect();
+        // (measured: at most 0.003 of 255 levels apart, the 16-bit output's rounding; the grain's
+        // standard deviation is 1.4–2.9 levels, so a shifted or reseeded pattern is far outside)
+        let worst = delta.iter().zip(&down).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+        assert!(worst < 0.01, "size {size}: preview grain {worst:.4} levels from the downscaled export's");
     }
 }
 

@@ -158,7 +158,9 @@ fn seed_picks_the_pattern() {
 /// waits always gets the exact tile, as does a draft for a seed with no tile yet.
 #[test]
 fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
-    // seeds of their own: other tests share the cache (which they may also evict from)
+    // a cache of its own: other tests' tiles (through any V3 render) would evict from the shared one
+    static OWN: Cache = Mutex::new(Vec::new());
+    let tile = |look, seed, wait| tile_in(&OWN, look, seed, wait);
     let (seed, fresh) = (0x0d4a_0001, 0x0d4a_0002);
     let (a, b) = (CrystalLook::new(30.0, 50.0), CrystalLook::new(31.0, 50.0));
     let exact = |look: CrystalLook, seed: u32| patch(&CrystalTile::new(look, seed).expect("tile"), REF_LONG, 32, 0);

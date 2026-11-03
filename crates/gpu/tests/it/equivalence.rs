@@ -257,6 +257,19 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.grain.size = 40.0;
             s.grain.roughness = 60.0;
         }),
+        // the frozen value-noise grain of the earlier processes (the default is V3's crystals)
+        ("grain, process V1", |s| {
+            s.process = Process::V1.version();
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+        }),
+        ("grain, process V2", |s| {
+            s.process = Process::V2.version();
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+        }),
         ("dehaze -", |s| s.effects.dehaze = -50.0),
         ("dehaze +", |s| s.effects.dehaze = 60.0),
         ("clarity/texture -", |s| {

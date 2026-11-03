@@ -131,6 +131,10 @@ pub(crate) struct Cx<'a> {
     enc: Option<wgpu::CommandEncoder>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
+    /// Buffers shared with other renders that recorded commands read from (the resident grain
+    /// tables): kept until those commands are submitted. Declared after `enc`, so an unsubmitted
+    /// encoder is dropped before them.
+    held: Vec<std::sync::Arc<Buf>>,
 }
 
 /// Kernel invocations recorded before a render submits them (under one full-size pass over a
@@ -142,7 +146,7 @@ const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), pending: 0, held: Vec::new() }
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -166,7 +170,7 @@ impl<'a> Cx<'a> {
             self.gpu.queue.write_buffer(out.raw(), 0, bytemuck::cast_slice(aux));
         }
         let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
-        self.gpu.grain_tables(enc, &g.tile, &out, aux.len());
+        self.held.extend(self.gpu.grain_tables(enc, &g.tile, &out, aux.len()));
         out
     }
 
@@ -174,7 +178,9 @@ impl<'a> Cx<'a> {
     pub fn read<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize) -> Vec<T> {
         self.pending = 0;
         let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
-        self.gpu.finish_and_read(enc, b, len)
+        let out = self.gpu.finish_and_read(enc, b, len);
+        self.held.clear();
+        out
     }
 
     /// Submit what is recorded so far without waiting. Renders submit stage by stage and every
@@ -186,6 +192,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
+        self.held.clear();
     }
 
     /// Submit what is recorded and wait for it (profiling only: stage timings).
@@ -194,6 +201,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
+        self.held.clear();
         let _ = self.gpu.poll(wgpu::PollType::wait_indefinitely());
     }
 

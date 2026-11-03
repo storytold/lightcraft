@@ -44,6 +44,11 @@ the export's grain box-downscaled to its size, and an export larger than 6000 px
 still shows crystals rather than enlarged pixels. The tori share no small factor: the two patterns
 only line up again after 362,880 reference pixels, so the grain has no visible period.
 
+In a rotated frame (a straightened or rotated crop) the footprint is approximated: each pixel takes
+the mean over an axis-aligned square of its size centred on it, not over the rotated pixel (summed
+area tables only give axis-aligned boxes). The grain strength is the same; the exact match with a
+box-downscaled export holds for unrotated frames in any orientation.
+
 Measured on the comparison renders (four photos, six regions each, 1500 px preview against the
 6000 px export box-downscaled to 1500 px): preview / export grain strength **1.00–1.04** at the
 default, finest and coarsest settings. `crystal::tests::small_render_is_the_downscaled_reference`
@@ -109,7 +114,7 @@ curtain; #1060: −9.3). Fine detail under the grain is kept (detail gain
   full-quality render when the drag ends waits for the exact tile. A Size drag on the Ryzen with its
   Radeon 740M (GPU, 2.5 MP preview): 13–14 ms a frame instead of 62–66 ms. (On wasm, without
   threads, drafts wait.)
-- **Drag benchmark** (`cargo run --release -p lightcraft-gpu --example grain_drag_bench`: GPU
+- **Drag benchmark** (`FRAMES=100 cargo run --release -p lightcraft-gpu --example grain_drag_bench`: GPU
   draft renders of the 1936 × 1290 demo photo, median ms per frame of 100; the example has no
   dependency on this model, so it can be copied unchanged into another branch). Ryzen 5 7545U /
   Radeon 740M:

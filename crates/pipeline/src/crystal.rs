@@ -18,7 +18,8 @@
 //! **Resolution independence.** The emulsion is drawn once per setting on two periodic tiles
 //! (tori) in frame coordinates, at twice the resolution of a 6000 px export ([`PITCH`]). Each
 //! output pixel takes the exact mean of the emulsion under its footprint from the tiles' summed
-//! area tables, so a preview shows exactly the export's grain box-downscaled to its size, and an
+//! area tables (a rotated frame's pixel: of an axis-aligned square of its size), so a preview
+//! shows exactly the export's grain box-downscaled to its size, and an
 //! export larger than 6000 px still has crystals rather than enlarged pixels. The layers are
 //! split between two tori of different sizes ([`TORI`]); their pattern only repeats as a whole
 //! after tens of thousands of pixels.
@@ -809,7 +810,9 @@ pub struct CrystalGrain {
 }
 
 type Key = (u64, u64, u32);
-static TILES: Mutex<Vec<(Key, Arc<CrystalTile>)>> = Mutex::new(Vec::new());
+/// Recently drawn tiles (the most recent last).
+type Cache = Mutex<Vec<(Key, Arc<CrystalTile>)>>;
+static TILES: Cache = Mutex::new(Vec::new());
 
 /// The tile being drawn in the background for a drag ([`tile`]): one at a time.
 static DRAWING: Mutex<Option<Key>> = Mutex::new(None);
@@ -819,41 +822,46 @@ static DRAWING: Mutex<Option<Key>> = Mutex::new(None);
 /// Size or Roughness drag doesn't wait for every step's tile (tens of milliseconds on a slow
 /// CPU), and the full-quality render when it ends waits for the exact one.
 fn tile(look: CrystalLook, seed: u32, wait: bool) -> Option<Arc<CrystalTile>> {
+    tile_in(&TILES, look, seed, wait)
+}
+
+/// [`tile`] with the tiles cached in `cache` (a test's own, which other tests can't evict from).
+fn tile_in(cache: &'static Cache, look: CrystalLook, seed: u32, wait: bool) -> Option<Arc<CrystalTile>> {
     let key = (look.width.to_bits(), look.spread.to_bits() ^ (look.layers as u64).rotate_left(40), seed);
     {
-        let cache = TILES.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((_, t)) = cache.iter().find(|(k, _)| *k == key) {
+        let tiles = cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((_, t)) = tiles.iter().find(|(k, _)| *k == key) {
             return Some(t.clone());
         }
         // (wasm has no threads to draw on)
         if !wait
             && !cfg!(target_arch = "wasm32")
-            && let Some((_, stand_in)) = cache.iter().rev().find(|(k, _)| k.2 == seed)
+            && let Some((_, stand_in)) = tiles.iter().rev().find(|(k, _)| k.2 == seed)
         {
             let stand_in = stand_in.clone();
-            drop(cache);
-            draw_in_background(key, look, seed);
+            drop(tiles);
+            draw_in_background(cache, key, look, seed);
             return Some(stand_in);
         }
     }
     let t = Arc::new(CrystalTile::new(look, seed)?);
-    keep(key, t.clone());
+    keep(cache, key, t.clone());
     Some(t)
 }
 
-/// Adds `t` to the cache (the most recent last).
-fn keep(key: Key, t: Arc<CrystalTile>) {
-    let mut cache = TILES.lock().unwrap_or_else(PoisonError::into_inner);
-    cache.retain(|(k, _)| *k != key);
-    if cache.len() >= CACHE {
-        cache.remove(0);
+/// Adds `t` to `cache` (the most recent last).
+fn keep(cache: &Cache, key: Key, t: Arc<CrystalTile>) {
+    let mut tiles = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    tiles.retain(|(k, _)| *k != key);
+    if tiles.len() >= CACHE {
+        tiles.remove(0);
     }
-    cache.push((key, t));
+    tiles.push((key, t));
 }
 
 /// Draws the tile of `key` on the thread pool unless another is being drawn (the next render
 /// asks again for what it needs then).
-fn draw_in_background(key: Key, look: CrystalLook, seed: u32) {
+fn draw_in_background(cache: &'static Cache, key: Key, look: CrystalLook, seed: u32) {
     {
         let mut drawing = DRAWING.lock().unwrap_or_else(PoisonError::into_inner);
         if drawing.is_some() {
@@ -863,7 +871,7 @@ fn draw_in_background(key: Key, look: CrystalLook, seed: u32) {
     }
     let draw = move || {
         if let Some(t) = CrystalTile::new(look, seed) {
-            keep(key, Arc::new(t));
+            keep(cache, key, Arc::new(t));
         }
         *DRAWING.lock().unwrap_or_else(PoisonError::into_inner) = None;
     };
@@ -923,7 +931,8 @@ impl CrystalGrain {
     }
 
     /// Display-encoded colour `e` with grain, at frame position (`gx`, `gy`) (fractions of the
-    /// frame's long edge).
+    /// frame's long edge): the mean over an axis-aligned square footprint centred there, which
+    /// for a rotated frame's pixel stands in for its rotated footprint (`docs/grain.md`).
     #[inline]
     pub fn apply(&self, e: [f32; 3], gx: f32, gy: f32) -> [f32; 3] {
         if !(gx.is_finite() && gy.is_finite()) {
