@@ -26,9 +26,10 @@
 //! hard deadline and does no I/O: it aborts the process if it still runs [`ABORT_AFTER_EXIT`]
 //! later, or at once if the helper thread can't be started.
 //!
-//! For testkit's own tests only, `LIGHTCRAFT_TEST_WATCHDOG_GRACE_MS` replaces that grace period
-//! (whole milliseconds, held to 100 ms..=10 min; anything else keeps [`ABORT_AFTER_EXIT`]), so
-//! the test of the abort doesn't wait ten seconds.
+//! `LIGHTCRAFT_TEST_WATCHDOG_GRACE_MS` replaces that grace period (whole milliseconds, held to
+//! 100 ms..=10 min; anything else keeps [`ABORT_AFTER_EXIT`]). It exists so testkit's own test of
+//! the abort doesn't wait ten seconds, but the watchdog reads it in every watched binary: set in
+//! the environment of another test run, it shortens or lengthens that run's grace period too.
 //!
 //! The report goes straight to the process's stderr: libtest captures the output of a test's
 //! threads (the watchdog's thread starts from the first watched test's), and a captured report
@@ -52,7 +53,7 @@ pub const WATCHDOG_EXIT_CODE: i32 = 124;
 /// How long printing the report and exiting may take before the watchdog aborts the process.
 pub const ABORT_AFTER_EXIT: Duration = Duration::from_secs(10);
 
-/// Replaces [`ABORT_AFTER_EXIT`], for testkit's own tests (milliseconds).
+/// Replaces [`ABORT_AFTER_EXIT`] in any watched binary (milliseconds); testkit's own tests set it.
 const GRACE_ENV: &str = "LIGHTCRAFT_TEST_WATCHDOG_GRACE_MS";
 
 /// The grace period `LIGHTCRAFT_TEST_WATCHDOG_GRACE_MS=value` means: whole milliseconds held to
