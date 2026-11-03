@@ -132,7 +132,7 @@ fn lock_held_by_another_process_is_released_when_it_dies() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
     while !dir.join("child-locked").exists() {
         assert!(child.try_wait().unwrap().is_none(), "child exited before locking");
         assert!(std::time::Instant::now() < deadline, "child never locked");
