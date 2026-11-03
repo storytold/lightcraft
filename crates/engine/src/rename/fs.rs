@@ -46,6 +46,9 @@ pub(crate) trait MoveFs {
     fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
         use std::io::Read;
         let mut file = std::fs::File::open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+        }
         let mut hash = lightcraft_preview::Hasher128::new();
         let mut len = 0u64;
         let mut buffer = [0u8; 16 * 1024];
@@ -141,6 +144,11 @@ impl MoveFs for RealFs {
             .map(|k| b.with_file_name(format!(".{name}.lc-partial-{}-{k}", std::process::id())))
             .find(|p| !self.exists(p))
             .ok_or_else(|| std::io::Error::other(format!("no free temporary name beside {}", b.display())))?;
+        // a sidecar found beside the photo by its name is copied only when it is a plain file: a
+        // link there would have its target's contents copied into a new, readable file
+        if !std::fs::symlink_metadata(a)?.is_file() {
+            return Err(std::io::Error::other(format!("{} is not a regular file", a.display())));
+        }
         let copied = (|| {
             let mut from = std::fs::File::open(a)?;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
