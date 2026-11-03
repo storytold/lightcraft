@@ -101,6 +101,9 @@ pub struct FlickrUi {
     /// The sign-in the album list (and a read in progress) belongs to: its token's public half.
     /// When the signed-in account changes, the list is dropped and a late answer is ignored.
     pub albums_account: Option<String>,
+    /// Counts album reads: only the answer to the latest one is kept. Clearing the list (another
+    /// account) or adding a just-made album moves it on, so an older read never overwrites them.
+    pub albums_read: u64,
     /// Counts sign-in attempts: Cancel moves it on, so a request-token answer that arrives after
     /// it neither resumes the sign-in nor opens the browser.
     pub sign_in_attempt: u64,
@@ -253,6 +256,8 @@ mod native {
                 if app.flickr.uploading() {
                     return Err(crate::i18n::tr("Wait for the upload to Flickr to finish (or stop it) first").to_string());
                 }
+                // a request-token answer still on its way belongs to the old sign-in (or key)
+                app.flickr.sign_in_attempt = app.flickr.sign_in_attempt.wrapping_add(1);
                 app.session.execute(id, p).map_err(|e| e.to_string())
             }
             "flickr.cancelSignIn" => {
@@ -279,14 +284,17 @@ mod native {
         let account = token.token.clone();
         app.flickr.albums_account = Some(account.clone());
         app.flickr.albums_loading = true;
+        app.flickr.albums_read = app.flickr.albums_read.wrapping_add(1);
+        let read = app.flickr.albums_read;
         let r = crate::tasks::spawn(
             app,
             "Reading Flickr albums",
             None,
             move || lightcraft_engine::flickr::list_albums(&client, &token, &AtomicBool::new(false)),
             move |app, _, r| {
-                // another account signed in meanwhile: this list isn't its list
-                if current_account(app).as_deref() != Some(account.as_str()) {
+                // a newer read (or a newer list) replaced this one, or another account signed in
+                // meanwhile: this answer is out of date
+                if app.flickr.albums_read != read || current_account(app).as_deref() != Some(account.as_str()) {
                     return;
                 }
                 app.flickr.albums_loading = false;
@@ -320,6 +328,7 @@ mod native {
             app.flickr.albums_error = None;
             app.flickr.albums_loading = false;
             app.flickr.albums_account = current;
+            app.flickr.albums_read = app.flickr.albums_read.wrapping_add(1);
         }
     }
 
@@ -484,6 +493,9 @@ mod native {
                     let photos = r["uploaded"].as_u64().unwrap_or(0).saturating_sub(album_failed);
                     if app.flickr.albums_account.as_deref() == Some(account.as_str()) {
                         app.flickr.albums.get_or_insert_with(Vec::new).insert(0, (id.to_string(), title.to_string(), photos));
+                        // a read that started before the album existed must not drop it
+                        app.flickr.albums_read = app.flickr.albums_read.wrapping_add(1);
+                        app.flickr.albums_loading = false;
                     }
                 }
                 if r["cancelled"] == true {

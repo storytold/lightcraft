@@ -603,22 +603,15 @@ fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u
     req.push_str("\r\n");
     let mut stream = Stream::connect(url, limits)?;
     stream.write_all(req.as_bytes(), limits)?;
-    if let Some(body) = body {
-        stream.write_all(body, limits)?;
-    }
+    let sent = body.map_or(Ok(()), |body| stream.write_all(body, limits));
     let mut conn = Conn { stream, buf: Vec::new(), pos: 0 };
-    // interim answers (`100 Continue`, `103 Early Hints`) come before the real one: skip them,
-    // a bounded number of times. `101 Switching Protocols` is final (nothing here upgrades).
-    let mut interim = 0;
-    let (status, headers) = loop {
-        let (status, headers) = read_head(&mut conn, limits)?;
-        if !(100..200).contains(&status) || status == 101 {
-            break (status, headers);
-        }
-        interim += 1;
-        if interim > MAX_INTERIM {
-            return Err(HttpError::Protocol(format!("more than {MAX_INTERIM} interim (1xx) responses")));
-        }
+    let (status, headers) = match sent {
+        Ok(()) => read_final_head(&mut conn, limits)?,
+        // the server may have answered (413 Payload Too Large…) and stopped reading before the
+        // whole body went: its answer says more than the broken send. When none can be read (a
+        // reset can drop it), the send's own error stands. A cancel is never read past.
+        Err(HttpError::Cancelled) => return Err(HttpError::Cancelled),
+        Err(e) => read_final_head(&mut conn, limits).map_err(|_| e)?,
     };
     let find = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
     let body = if status == 204 || status == 304 || (100..200).contains(&status) {
@@ -638,6 +631,19 @@ fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u
 
 /// Most interim (1xx) responses skipped before the final one.
 const MAX_INTERIM: usize = 8;
+
+/// The final status and its headers. Interim answers (`100 Continue`, `103 Early Hints`) come
+/// before it and are skipped, a bounded number of times; `101 Switching Protocols` is final
+/// (nothing here upgrades).
+fn read_final_head(conn: &mut Conn, limits: &Limits) -> Result<(u16, Vec<(String, String)>), HttpError> {
+    for _ in 0..=MAX_INTERIM {
+        let (status, headers) = read_head(conn, limits)?;
+        if !(100..200).contains(&status) || status == 101 {
+            return Ok((status, headers));
+        }
+    }
+    Err(HttpError::Protocol(format!("more than {MAX_INTERIM} interim (1xx) responses")))
+}
 
 /// One status line and its headers.
 fn read_head(conn: &mut Conn, limits: &Limits) -> Result<(u16, Vec<(String, String)>), HttpError> {
@@ -900,6 +906,37 @@ mod tests {
         let (addr, server) = serve_once(Box::leak(endless.into_boxed_str()));
         let url = Url::parse(&format!("{addr}/upload")).unwrap();
         assert!(matches!(post(&url, &[], b"x", &limits), Err(HttpError::Protocol(_))), "a server that never answers is refused");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_refusal_sent_while_the_body_was_going_is_the_answer() {
+        // the server refuses as soon as it has the head, and reads no further
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", l.local_addr().unwrap());
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = s.read(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 8\r\n\r\ntoo big!").unwrap();
+            // hold the connection open (unread) until the client has its answer
+            let _ = done_rx.recv_timeout(Duration::from_secs(30));
+        });
+        let cancel = AtomicBool::new(false);
+        let limits = Limits { connect: Duration::from_secs(5), stall: Duration::from_millis(500), cancel: &cancel };
+        // far more than the socket buffers hold: the send stalls once the server stops reading
+        let body = vec![0u8; 64 * 1024 * 1024];
+        let url = Url::parse(&format!("{addr}/upload")).unwrap();
+        let r = post(&url, &[], &body, &limits);
+        let _ = done_tx.send(());
+        let mut r = r.expect("the server's answer, not the stalled send");
+        assert_eq!(r.status, 413);
+        assert_eq!(r.read_to_end(64, &limits).unwrap(), b"too big!");
         server.join().unwrap();
     }
 

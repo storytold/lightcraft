@@ -198,6 +198,38 @@ fn only_you_uploads_private_on_the_wire() {
 }
 
 #[test]
+fn family_only_uploads_send_is_family_alone_on_the_wire() {
+    let (base, seen) = fake(flickr_ok);
+    let mut s = signed_in(&base);
+    let id = s.catalog.photos().next().unwrap().id.0;
+    let r = s.execute("flickr.upload", &json!({"ids": [id], "longEdge": 128, "privacy": "family"})).unwrap();
+    assert_eq!(r["uploaded"].as_u64(), Some(1), "{r}");
+    let seen = seen.lock().unwrap();
+    let body = String::from_utf8_lossy(&seen[0].body).to_string();
+    for (field, want) in [("is_public", "0"), ("is_friend", "0"), ("is_family", "1")] {
+        assert!(body.contains(&format!("name=\"{field}\"\r\n\r\n{want}\r\n")), "{field} should be {want} for Family");
+    }
+}
+
+#[test]
+fn a_change_that_cannot_be_saved_is_undone() {
+    let d = tmp("unsaved");
+    std::fs::create_dir_all(&d).unwrap();
+    let mut s = session("http://127.0.0.1:9");
+    s.set_flickr_account_file(d.join("flickr.json"));
+    s.execute("flickr.setApiKey", &json!({"key": "k", "secret": "s"})).unwrap();
+    // the folder becomes a file: nothing can be saved there any more
+    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::write(&d, b"not a folder").unwrap();
+    let token = lightcraft_flickr::Token { token: "acc".into(), secret: "accsecret".into(), ..Default::default() };
+    assert!(s.flickr_finish_sign_in(token).is_err());
+    assert_eq!(s.flickr_status()["signedIn"], false, "a sign-in the file doesn't have isn't kept");
+    assert!(s.execute("flickr.setApiKey", &json!({"key": "other", "secret": "key"})).is_err());
+    assert_eq!(s.flickr_status()["apiKey"], "k", "nor a key");
+    let _ = std::fs::remove_file(&d);
+}
+
+#[test]
 fn a_refused_sign_in_stops_the_upload_and_signs_out() {
     let (base, seen) = fake(|_, _| (200, "<rsp stat=\"fail\"><err code=\"98\" msg=\"Invalid auth token\" /></rsp>".into()));
     let mut s = signed_in(&base);
