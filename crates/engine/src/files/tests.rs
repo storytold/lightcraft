@@ -67,11 +67,11 @@ fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
         let (t, tint) = xy_to_temp_tint(d65);
         (t.round(), tint.round())
     });
-    // a camera without measured matrices: relative, whatever the multipliers
-    let a7m2 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCE-7M2"));
-    assert!(a7m2.relative && !a7m2.legacy_relative && a7m2.scale_white.is_none());
-    assert_eq!(a7m2.as_shot(d65), (6500.0, 0.0));
-    assert!(lightcraft_catalog::relative_wb_camera("ARW", "SONY ILCE-7M2"));
+    // a camera without measured matrices: relative, whatever the multipliers (SR2 decodes as Arw)
+    let r1 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "DSC-R1"));
+    assert!(r1.relative && !r1.legacy_relative && r1.scale_white.is_none());
+    assert_eq!(r1.as_shot(d65), (6500.0, 0.0));
+    assert!(lightcraft_catalog::relative_wb_camera("SR2", "SONY DSC-R1"));
     // a camera without matrices whose presets give the scale: Kelvin through them, Sony's daylight preset as
     // 5500 K or so; without presets in the file the scale is Kelvin still, the white the tags' (D65)
     let g = |r: f32, b: f32| [r / 1024.0, 1.0, b / 1024.0];
@@ -106,7 +106,7 @@ fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
     let bare = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCA-99M2"));
     assert!(bare.legacy_relative && bare.scale_white.is_none());
     // presets in a file of a camera not listed: relative, as the catalog decides from the camera alone
-    let other = WbScaleOf::new(RawFormat::Arw, &with, mul, &meta("SONY", "ILCE-1"));
+    let other = WbScaleOf::new(RawFormat::Arw, &with, mul, &meta("SONY", "DSC-R1"));
     assert!(other.relative && other.scale_white.is_none());
     let unknown = WbScaleOf::new(RawFormat::Nef, &ColorData::default(), mul, &lightcraft_meta::Metadata::default());
     assert!(unknown.relative && unknown.as_shot(d65) == (6500.0, 0.0));
@@ -141,7 +141,7 @@ fn a_fujifilm_x_trans_iii_raf_reads_kelvin_through_its_neutral_pair() {
 
 /// A merged DNG (Photo Merge) of a raw without colour matrices shows the As Shot temperature and tint its source
 /// shows, on every scale: through the measured matrices (ILCE-7M3), through the presets (ILCA-99M2), the relative
-/// scale's 6500 K / 0 (ILCE-7M2) and a file's own white (an unfitted format). Merges of real ILCE-7M3 brackets
+/// scale's 6500 K / 0 (DSC-R1) and a file's own white (an unfitted format). Merges of real ILCE-7M3 brackets
 /// opened at 6113–7307 K / +115 where the ARWs show 3932–5268 K / +7.
 #[test]
 fn a_merged_dng_shows_the_white_balance_its_source_shows() {
@@ -159,7 +159,7 @@ fn a_merged_dng_shows_the_white_balance_its_source_shows() {
     let cases = [
         (RawFormat::Arw, ColorData::default(), [2.5039f32, 1.0, 1.5078], meta("SONY", "ILCE-7M3")),
         (RawFormat::Arw, with_presets, g(2500.0, 1668.0), meta("SONY", "ILCA-99M2")),
-        (RawFormat::Arw, ColorData::default(), [2.2, 1.0, 1.6], meta("SONY", "ILCE-7M2")),
+        (RawFormat::Arw, ColorData::default(), [2.2, 1.0, 1.6], meta("SONY", "DSC-R1")),
         (RawFormat::Rw2, ColorData::default(), [2.0, 1.0, 1.4], meta("Panasonic", "DC-G9")),
     ];
     for (format, color, mul, meta) in cases {

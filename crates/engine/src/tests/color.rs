@@ -147,7 +147,7 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
         id
     };
     let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", (4986.0, -2.0));
-    let relative = add(&mut s, "b.arw", "SONY ILCE-7M2", (6500.0, 0.0));
+    let relative = add(&mut s, "b.arw", "SONY DSC-R1", (6500.0, 0.0));
     let dev = |s: &Session, id| (*s.develop_of(id).unwrap()).clone();
     assert_eq!((dev(&s, kelvin).wb.scale, dev(&s, relative).wb.scale), (WbScale::Kelvin, WbScale::Legacy));
 
@@ -236,9 +236,9 @@ fn one_field_wb_partial_merge_keeps_the_other_field_on_its_scale() {
     use lightcraft_catalog::{MediaKind, Op, Photo, Source};
     use lightcraft_develop::{DevelopSettings, WbMode, WbScale};
     let mut s = Session::new();
-    let add = |s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)| {
+    let add = |s: &mut Session, name: &str, format: &str, camera: &str, as_shot: (f64, f64)| {
         let id = s.catalog.alloc_photo_id();
-        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, "ARW", 64, 64, "2026-01-01T00:00:00");
+        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, format, 64, 64, "2026-01-01T00:00:00");
         p.kind = MediaKind::Raw;
         p.meta.camera = camera.into();
         p.as_shot_wb = Some(as_shot);
@@ -247,8 +247,8 @@ fn one_field_wb_partial_merge_keeps_the_other_field_on_its_scale() {
         id
     };
     let as_shot = (4986.0, -2.0);
-    let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", as_shot);
-    let relative = add(&mut s, "b.arw", "SONY ILCE-200", (6500.0, 0.0));
+    let kelvin = add(&mut s, "a.arw", "ARW", "SONY ILCE-7M3", as_shot);
+    let relative = add(&mut s, "b.sr2", "SR2", "SONY DSC-R1", (6500.0, 0.0));
     let dev = |s: &Session, id| (*s.develop_of(id).unwrap()).clone();
     let l2k = |t, ti| lightcraft_pipeline::local::legacy_to_kelvin(t, ti, as_shot);
     let k2l = |t, ti| lightcraft_pipeline::local::kelvin_to_legacy(t, ti, as_shot).unwrap();

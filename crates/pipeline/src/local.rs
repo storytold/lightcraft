@@ -130,6 +130,11 @@ pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<lightcr
 /// to the slider's blue end lands beyond, and clamps), to the precision of the Kelvin / tint parametrisation
 /// (better than 0.01 % away from its 4000 K seam). Unchanged when the arithmetic has nowhere to go.
 pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64) {
+    // With the relative reference as the source white, the two scales coincide.
+    // Avoid a lossy trip through chromaticity for an identity conversion.
+    if identity_wb_reference(temp, tint, as_shot) {
+        return (temp, tint);
+    }
     if temp == 6500.0 && tint == 0.0 && as_shot.0.is_finite() && as_shot.1.is_finite() {
         // the relative scale's as-shot reference, exactly (a Custom value left where As Shot was stays as shot)
         return as_shot;
@@ -138,6 +143,16 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
         Some((t, tint)) if t.is_finite() && tint.is_finite() => (t, tint),
         _ => (temp, tint),
     }
+}
+
+/// The neutral reference makes the scales identical, within the Kelvin parametrisation's range.
+/// Keep invalid whites and out-of-range inputs on the existing checked/clamped path.
+fn identity_wb_reference(temp: f64, tint: f64, as_shot: (f64, f64)) -> bool {
+    if as_shot != (6500.0, 0.0) || !(1000.0..=50000.0).contains(&temp) || !tint.is_finite() {
+        return false;
+    }
+    let white = temp_tint_to_xy(temp, tint);
+    white.x.is_finite() && white.y.is_finite() && white.y > 0.0
 }
 
 /// The relative-scale `(temp, tint)` that [`legacy_to_kelvin`] would read as the Kelvin `(temp, tint)` on a source
@@ -150,6 +165,9 @@ pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f6
     use lightcraft_color::{BRADFORD, Xy};
     if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
         return None;
+    }
+    if identity_wb_reference(temp, tint, as_shot) {
+        return Some((temp, tint));
     }
     if (temp - as_shot.0).abs() < 1e-9 && (tint - as_shot.1).abs() < 1e-9 {
         // the source's own white: the relative scale's as-shot reference, exactly
@@ -838,6 +856,18 @@ mod tests {
 
     /// [`kelvin_to_legacy`] inverts [`legacy_to_kelvin`] over the whole relative slider range and back: the
     /// round trip returns the start, in both directions, to the precision of the Kelvin / tint parametrisation.
+    #[test]
+    fn neutral_reference_scale_conversions_are_exact() {
+        for temp in [2000.0, 4000.0, 5800.0, 6500.0, 13550.0] {
+            for tint in [-100.0, 0.0, 12.0, 100.0] {
+                assert_eq!(legacy_to_kelvin(temp, tint, (6500.0, 0.0)), (temp, tint));
+                assert_eq!(kelvin_to_legacy(temp, tint, (6500.0, 0.0)), Some((temp, tint)));
+            }
+        }
+        assert!(legacy_to_kelvin(100.0, 0.0, (6500.0, 0.0)).0 >= 999.0);
+        assert!(kelvin_to_legacy(60000.0, 0.0, (6500.0, 0.0)).unwrap().0 <= 50000.0);
+    }
+
     #[test]
     fn kelvin_to_legacy_inverts_legacy_to_kelvin() {
         for as_shot in [(4986.0, -2.0), (6500.0, 0.0), (3200.0, 14.0), (9500.0, -12.0)] {

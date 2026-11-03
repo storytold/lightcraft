@@ -18,7 +18,7 @@
 //! store the whole image.
 //! Unknown camera metadata versions are ignored rather than assigned a guessed white balance.
 
-use super::{black_from_columns, crx, white_from_data};
+use super::{black_from_columns, cr2, crx, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_meta::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
 use lightcraft_tiff::{Ifd, Tiff};
@@ -166,6 +166,23 @@ fn camera_levels(maker: Option<&Ifd>, bits: u8) -> CameraLevels {
     CameraLevels { wb, black, white }
 }
 
+/// The Kelvin scale of a body without colour matrices, from the presets in `ColorData` (see [`super::cr2`] for the
+/// record layout): Daylight, Shade, Cloudy, Tungsten and Flash at their stated temperatures. Word positions from
+/// `exiftool -v3` run as a black-box tool on files of each version: versions 16-19 Daylight at word 136, 32 and 33 at
+/// 150, 34 and 48 at 205 (each with Flash thirty words after Daylight), 64 to 66 at 110 with Flash twenty-five
+/// after (no Auto / Measured / Kelvin records in these). Other versions give none.
+fn kelvin_presets(maker: Option<&Ifd>) -> Option<crate::kelvin_presets::KelvinPresets> {
+    let v = maker?.u64s(COLOR_DATA)?;
+    let rows = match v.first().copied()? {
+        16..=19 => cr2::preset_records(136, 166),
+        32 | 33 => cr2::preset_records(150, 180),
+        34 | 48 => cr2::preset_records(205, 235),
+        64..=66 => cr2::preset_records(110, 135),
+        _ => return None,
+    };
+    cr2::presets_at(&v, &rows)
+}
+
 fn black_at_active(levels: [f32; 4], pattern: u8, active: Rect) -> BlackLevel {
     // Convert Canon's channel order to full-sensor site order, then shift to the active origin.
     let sites = match pattern {
@@ -250,7 +267,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: active,
         crop,
         orientation: metadata.orientation.unwrap_or_default(),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: kelvin_presets(color_maker), ..Default::default() },
         wb_multipliers: levels.wb,
         linearized: false,
         pixel_aspect: 1.0,
@@ -517,6 +534,35 @@ mod tests {
         let mut missing = bytes;
         missing[at - 4..at].copy_from_slice(b"free");
         assert!(matches!(decode(&missing, Mode::Header), Err(RawError::Corrupt(_))));
+    }
+
+    /// The presets of each verified `ColorData` version read back at their stated temperatures; other versions, short
+    /// arrays and records that don't make a curve give none.
+    #[test]
+    fn color_data_presets_by_version() {
+        let records = [(2013u16, 1479u16, 5200u16), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, 6156)];
+        for (version, daylight, flash) in
+            [(16, 136, 166), (19, 136, 166), (32, 150, 180), (33, 150, 180), (34, 205, 235), (48, 205, 235), (64, 110, 135), (66, 110, 135)]
+        {
+            let mut words = vec![0u16; 300];
+            words[0] = version;
+            for (i, (r, b, k)) in records.into_iter().enumerate() {
+                let at = if i == 4 { flash } else { daylight + 5 * i };
+                words[at..at + 5].copy_from_slice(&[r, 1024, 1024, b, k]);
+            }
+            let ifd = |w: Vec<u16>| {
+                let b = IfdBuilder::new().with(COLOR_DATA, Value::Short(w));
+                let bytes = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[b]).unwrap();
+                Tiff::parse(&bytes).unwrap().ifds.remove(0)
+            };
+            let p = kelvin_presets(Some(&ifd(words.clone()))).unwrap_or_else(|| panic!("{version}"));
+            let (t, tint) = p.temp_tint([2300.0 / 1024.0, 1.0, 1280.0 / 1024.0]).unwrap();
+            assert!((t - 7000.0).abs() < 1.0 && tint.abs() < 0.1, "{version}: {t} {tint}");
+            assert!(kelvin_presets(Some(&ifd(words[..flash].to_vec()))).is_none(), "{version}: short");
+            words[0] = 255;
+            assert!(kelvin_presets(Some(&ifd(words))).is_none(), "{version}: unknown");
+        }
+        assert!(kelvin_presets(None).is_none());
     }
 
     #[test]

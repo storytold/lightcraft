@@ -122,6 +122,8 @@ const LINEARITY_LIMIT: [u16; 3] = [0x000e, 0x000f, 0x0010];
 const ISO: u16 = 0x0017;
 const BLACK_RGB: [u16; 3] = [0x001c, 0x001d, 0x001e];
 const WB_RGB: [u16; 3] = [0x0024, 0x0025, 0x0026];
+/// The table of the white balance types (see [`panasonic_kelvin_presets`]).
+const WB_TABLE: u16 = 0x0027;
 const RAW_FORMAT: u16 = 0x002d;
 /// The in-camera aspect-ratio crop: top, left, bottom, right in sensor coordinates.
 const CROP: [u16; 4] = [0x002f, 0x0030, 0x0031, 0x0032];
@@ -349,6 +351,23 @@ fn u16_array(ifd: &Ifd, tag: u16, order: ByteOrder) -> Option<Vec<u16>> {
         Value::Short(v) => Some(v.clone()),
         other => Some(other.to_u64_vec().into_iter().map(|v| v.min(u16::MAX as u64) as u16).collect()),
     }
+}
+
+/// The Kelvin scale of a body without colour matrices, from tag `0x0027` (`WBInfo2`; tag number and entry layout
+/// from `exiftool -v3` run as a black-box tool on the files): a count, then that many entries of the white
+/// balance type and the camera's red, green and blue multipliers for it. Types 20 and 24 are the cameras' "D55" and
+/// "ISO studio tungsten" whites: CIE daylight D55 (5500 K) and the ISO 7589 studio tungsten lamp, a 3200 K
+/// Planckian light. Those two give the line of [`crate::kelvin_presets::KelvinPresets::from_neutral_lights`].
+fn panasonic_kelvin_presets(ifd: &Ifd, order: ByteOrder) -> Option<crate::kelvin_presets::KelvinPresets> {
+    use lightcraft_color::{Xy, cct};
+    let v = u16_array(ifd, WB_TABLE, order)?;
+    let n = (*v.first()? as usize).min(v.len() / 4);
+    let entry = |code: u16| {
+        let e = v.get(1..)?.as_chunks::<4>().0.iter().take(n).find(|e| e[0] == code)?;
+        Some([e[1] as f32, e[2] as f32, e[3] as f32])
+    };
+    let (tungsten, d55) = (entry(24)?, entry(20)?);
+    crate::kelvin_presets::KelvinPresets::from_neutral_lights([cct::temp_tint_to_xy(3200.0, 0.0), Xy::new(0.33242, 0.34743)], [tungsten, d55])
 }
 
 /// The format-8 tile origins (tag `0x0045`): a count, then (x, y) pairs of `u16`.
@@ -650,7 +669,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: panasonic_kelvin_presets(ifd0, tiff.order), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
         pixel_aspect: 1.0,
@@ -918,6 +937,37 @@ mod tests {
             RawData::U16(d) => d,
             RawData::F32(_) => panic!("float samples"),
         }
+    }
+
+    #[test]
+    fn white_balance_table_gives_kelvin_presets() {
+        let (w, h) = (70usize, 20usize);
+        let target = image(w, h, 200, 4000);
+        let mut stream = vec![];
+        for px in target.chunks(14) {
+            stream.extend_from_slice(&encode_block(px, None).0);
+        }
+        let payload = rotate(stream);
+        let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 4)];
+        tags.extend(BLACK_RGB.iter().map(|&tag| short(tag, 128)));
+        tags.extend(WB_RGB.iter().zip([512, 256, 384]).map(|(&tag, v)| short(tag, v)));
+        let decode = |table: Option<Vec<u16>>| {
+            let mut tags = tags.clone();
+            tags.extend(table.map(|t| (WB_TABLE, Value::Short(t))));
+            crate::decode(&file(w as u16, h as u16, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])).unwrap()
+        };
+        assert!(decode(None).color.kelvin_presets.is_none());
+        // three entries: Fine Weather (ignored), D55 and ISO studio tungsten, as red/green/blue multipliers
+        let table = vec![3, 9, 480, 256, 400, 20, 380, 256, 500, 24, 250, 256, 700];
+        let p = decode(Some(table.clone())).color.kelvin_presets.unwrap();
+        // the stored lights read back at their own temperatures
+        let (t, _) = p.temp_tint([380.0 / 256.0, 1.0, 500.0 / 256.0]).unwrap();
+        assert!((t - 5500.0).abs() < 60.0, "{t}");
+        let (t, _) = p.temp_tint([250.0 / 256.0, 1.0, 700.0 / 256.0]).unwrap();
+        assert!((t - 3200.0).abs() < 60.0, "{t}");
+        // a missing light, or a count beyond the data, gives none
+        assert!(decode(Some(vec![1, 20, 500, 256, 380])).color.kelvin_presets.is_none());
+        assert!(decode(Some(vec![9, 20, 500, 256, 380, 24, 700, 256])).color.kelvin_presets.is_none());
     }
 
     #[test]
