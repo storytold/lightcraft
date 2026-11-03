@@ -32,10 +32,11 @@ const QUIT: &str = "app.quit";
 /// Settings… (the app menu on macOS; Edit elsewhere).
 const SETTINGS: &str = "app.settings";
 const SETTINGS_KEY: &str = "Cmd+,";
-/// Keys whose meaning depends on the panel (X = reject or swap crop aspect, ⌫ = delete the photo
-/// or the active mask; ⌘↑/⌘↓ flag status follows Compare/Survey's active photo): left to the egui
-/// handler, which knows the context.
-const CONTEXTUAL: &[&str] = &["X", "Delete", "Cmd+Up", "Cmd+Down"];
+/// Keys whose meaning depends on the panel (⌫ = delete the photo or the active mask; ⌘↑/⌘↓ flag
+/// status follows Compare/Survey's active photo): left to the egui handler, which knows the
+/// context. X (reject, or swap the crop aspect under the Crop panel) isn't listed: as a plain key
+/// it never reaches the menu bar, so its accelerator only shows next to Reject.
+const CONTEXTUAL: &[&str] = &["Delete", "Cmd+Up", "Cmd+Down"];
 /// Shortcuts text fields need while they have focus.
 const TEXT_EDIT: &[&str] = &["Cmd+A", "Cmd+C", "Cmd+V", "Cmd+X", "Cmd+Z", "Cmd+Shift+Z"];
 
@@ -739,6 +740,10 @@ mod tests {
         // A repeated row is installed without its key (AppKit would list one key twice).
         assert_eq!(row_accelerator(Some("G"), false), accelerator("G"));
         assert_eq!(row_accelerator(Some("G"), true), None);
+        // Reject shows its X; context-dependent keys the menu bar would consume stay with egui.
+        assert_eq!(row_accelerator(Some("X"), false), accelerator("X"));
+        assert!(accelerator("X").is_some() && !menu_delivers("X"));
+        assert_eq!(row_accelerator(Some("Cmd+Up"), false), None);
         let mut ids = RowIds::default();
         assert_eq!(ids.next("view.layoutImage", &Value::Null), ("view.layoutImage".to_string(), false));
         assert_eq!(ids.next("view.layoutImage", &Value::Null), ("view.layoutImage#2".to_string(), true));
