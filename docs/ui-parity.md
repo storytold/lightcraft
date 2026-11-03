@@ -162,9 +162,10 @@ Switching to a photo with no native source at Fit therefore keeps affordable pre
 thumbnails instead of repeatedly evicting them. Leaving Detail releases originals that cannot
 fit the budget; recent originals that fit remain reusable across views.
 
-Detail prepares adjacent native sources only when a sharp zoom window is needed and the cache
-budget can accommodate the current photo, neighbours and preview rendering. Prefetched views
-remain preview-sized, and tight crops cannot force native preparation at Fit or a low budget.
+Detail prepares adjacent native sources only while no editing interaction is active, when a sharp
+zoom window is needed and the cache budget can accommodate the current photo, neighbours and
+preview rendering. Prefetched views remain preview-sized; tight crops cannot force native
+preparation at Fit or a low budget.
 The memory settings and automatic budget policy are unchanged. Reusing a cached original
 avoids decoding it again; first uncached RAW development and uninterrupted rapid scrolling
 still require development. This neighbour policy does not add idle preparation of the current

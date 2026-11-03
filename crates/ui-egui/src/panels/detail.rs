@@ -241,9 +241,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if plan.window_edge.is_none() {
         app.session.media.foreground_fits(id);
     }
-    if !interacting {
-        prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool, plan.window_edge.is_some());
-    }
+    prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool, plan.window_edge.is_some());
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     request_stand_in(app, id, want, !crop_tool);
     let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
@@ -458,11 +456,13 @@ fn draw_wipe_before(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rec
     }
 }
 
-/// Prepare neighbours in filmstrip order after the foreground is shown. Native sources are
-/// warmed only for sharp zoom windows with enough cache budget; view renders stay small.
+/// Prepare neighbours in filmstrip order after the foreground is shown and no edit is active.
+/// Native sources are warmed only for sharp zoom windows with enough budget; views stay small.
 fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, ppp: f32, texture_side: usize, with_crop: bool, warm_full: bool) {
-    // only once this photo is on screen
-    if app.renderer.is_pending(Slot::Main) || app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id) {
+    if app.session.interaction.is_some()
+        || app.renderer.is_pending(Slot::Main)
+        || app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
+    {
         return;
     }
     let ids = app.session.visible_cloned();
