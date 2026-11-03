@@ -74,7 +74,10 @@ pub fn try_acquire(dir: &Path, slots: usize, owner: &str) -> Result<Option<Held>
             Ok(()) => {
                 // a sidecar file, not the lock file: Windows locks are mandatory, so others couldn't read it
                 let owner_file = owner_path(&path);
-                let _ = std::fs::File::create(&owner_file).and_then(|mut f| f.write_all(owner.as_bytes()));
+                // a new file: an entry left under the name (a link planted in a shared lock folder)
+                // is removed, never written through
+                let _ = std::fs::remove_file(&owner_file);
+                let _ = OpenOptions::new().write(true).create_new(true).open(&owner_file).and_then(|mut f| f.write_all(owner.as_bytes()));
                 return Ok(Some(Held { _file: file, owner: owner_file }));
             }
             Err(TryLockError::WouldBlock) => continue,
