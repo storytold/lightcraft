@@ -258,6 +258,8 @@ fn xmp_dimensions_preserve_valid_values() {
     for (field, value, expected) in [
         ("tiff:ImageWidth", "0", 0),
         ("tiff:ImageWidth", "0/1e-129", 0),
+        ("tiff:ImageWidth", "1e-400/1e-400", 1),
+        ("tiff:ImageWidth", "1e400/1e400", 1),
         ("tiff:ImageWidth", "4294967295", u32::MAX),
         ("exif:PixelXDimension", "640.0", 640),
         ("tiff:ImageLength", "960/2", 480),
@@ -279,9 +281,14 @@ fn xmp_dimensions_preserve_valid_values() {
 
 #[test]
 fn xmp_dimensions_preserve_large_exact_ratio() {
-    let coefficient = "999999999999999999999999999999999999999";
-    let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{coefficient}/{coefficient}""#));
-    assert_eq!(data.metadata.width, Some(1));
+    for coefficient in ["999999999999999999999999999999999999999".to_owned(), "9".repeat(1024)] {
+        let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{coefficient}/{coefficient}""#));
+        assert_eq!(data.metadata.width, Some(1), "coefficient length {}", coefficient.len());
+    }
+    let denominator = "9".repeat(1024);
+    let numerator = format!("1{}8", "9".repeat(1023));
+    let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{numerator}/{denominator}""#));
+    assert_eq!(data.metadata.width, Some(2));
 }
 
 #[test]
