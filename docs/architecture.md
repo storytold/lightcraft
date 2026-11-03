@@ -81,8 +81,8 @@ runs each test binary, or the `-p` packages' binaries, itself (`test::run_binary
 uses too); `--keep-going` runs every binary and names each that failed instead of stopping at the
 first.
 
-Nothing these runs wait on is unbounded (`xtask/src/deadline.rs`, #3060). Stable libtest has no
-per-test timeout, so each test binary gets `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30; `0`
+What these runs wait on after the build is bounded (`xtask/src/deadline.rs`, #3060). Stable libtest
+has no per-test timeout, so each test binary gets `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30; `0`
 for none): timed from its start when xtask runs it (`test::run_binary`), and from cargo's `Running` /
 `Doc-tests` line for it, and again from its own `running N tests` line, when `cargo test` runs it (the
 full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
