@@ -404,13 +404,19 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     let hdr = HdrOptions { align: p.get("align").and_then(Value::as_bool).unwrap_or(true), deghost };
     let projection: Projection =
         serde_json::from_value(p.get("projection").cloned().unwrap_or(json!("auto"))).map_err(|e| bad(format!("projection: {e}")))?;
+    // the stitch makes at least 0.1 MP, so a smaller cap couldn't be kept: refused, not exceeded
+    let max_megapixels = match p.get("maxMegapixels").and_then(Value::as_f64) {
+        Some(v) if v > 0.0 && v < 0.1 => return Err(bad(format!("maxMegapixels: {v} is below the 0.1 MP a panorama has at the least"))),
+        Some(v) if v > 0.0 => v.min(MAX_MEGAPIXELS),
+        _ => MAX_MEGAPIXELS,
+    };
     let pano = PanoOptions {
         projection,
         boundary_warp: p.get("boundaryWarp").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 100.0),
         auto_crop: p.get("autoCrop").and_then(Value::as_bool).unwrap_or(false),
         fill_edges: p.get("fillEdges").and_then(Value::as_bool).unwrap_or(false),
         // the photos' own resolution unless asked (held to what fits in memory when it runs)
-        max_megapixels: p.get("maxMegapixels").and_then(Value::as_f64).filter(|v| *v > 0.0).unwrap_or(MAX_MEGAPIXELS).min(MAX_MEGAPIXELS),
+        max_megapixels,
     };
     let kind = match id {
         "merge.hdr" => MergeKind::Hdr { hdr },
@@ -502,5 +508,25 @@ mod tests {
     #[test]
     fn unknown_memory_is_taken_as_8_gb() {
         assert_eq!(super::merge_memory(None), super::merge_memory(Some(8 << 30)));
+    }
+
+    /// A cap below the 0.1 MP the stitch makes at the least is refused, not exceeded (#3708).
+    #[test]
+    fn a_max_megapixels_below_the_stitch_minimum_is_refused() {
+        use super::{MergeKind, parse};
+        use serde_json::json;
+        let cap = |p: serde_json::Value| match parse("merge.panorama", &p).map(|(kind, _)| kind) {
+            Ok(MergeKind::Panorama { pano }) => Ok(pano.max_megapixels),
+            Ok(_) => Err("not a panorama".to_owned()),
+            Err(e) => Err(e.to_string()),
+        };
+        let refused = cap(json!({"maxMegapixels": 0.05})).unwrap_err();
+        assert!(refused.contains("maxMegapixels") && refused.contains("0.1 MP"), "{refused}");
+        assert_eq!(cap(json!({"maxMegapixels": 0.1})), Ok(0.1));
+        assert_eq!(cap(json!({"maxMegapixels": 24.0})), Ok(24.0));
+        let max = lightcraft_merge::pano::MAX_MEGAPIXELS;
+        assert_eq!(cap(json!({})), Ok(max), "missing: the default");
+        assert_eq!(cap(json!({"maxMegapixels": 0})), Ok(max), "0: the default, as before");
+        assert_eq!(cap(json!({"maxMegapixels": 1e9})), Ok(max), "held to the maximum");
     }
 }
