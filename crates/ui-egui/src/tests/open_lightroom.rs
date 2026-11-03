@@ -40,7 +40,7 @@ fn setup() -> (Headless, Fx) {
     std::fs::create_dir_all(lr.join("Lightroom Catalog.lrcat-data")).unwrap();
     std::fs::create_dir_all(lr.join("Backups")).unwrap();
     let lrcat = lr.join("Lightroom Catalog.lrcat");
-    std::fs::write(&lrcat, b"not really SQLite").unwrap();
+    std::fs::write(&lrcat, super::lightroom_destination::root_catalog(&[])).unwrap();
     let before = names(&lr);
 
     let mut session = lightcraft_engine::Session::new().with_fs();
@@ -104,7 +104,7 @@ fn reoffer_import_and_merge(h: &mut Headless, fx: &Fx) {
     // Import Lightroom Catalog…: no file dialog, the window that asks where that catalog goes
     // (#2672) takes its place, as File ▸ Import Lightroom Catalog… does
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
-    h.step();
+    assert!(h.step_until(T, |h| matches!(h.app.ui.dialog, Some(Dialog::LightroomDestination { .. }))));
     assert!(
         matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { catalog, .. }) if *catalog == lrcat.to_string_lossy()),
         "{:?}",

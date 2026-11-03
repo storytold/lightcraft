@@ -3535,5 +3535,7 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Network sources in this catalog": "Netzwerkquellen in diesem Katalog",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "Wähle die Freigaben, auf die LightCraft für diesen Import zugreifen darf. Katalog und Fotos bleiben an ihrem bisherigen Ort. Nicht angehakte Quellen werden nicht importiert."
 }

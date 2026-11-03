@@ -1657,6 +1657,67 @@ fn a_root_missing_here_is_found_relative_to_the_catalog() {
 }
 
 #[test]
+fn discovers_distinct_network_sources_without_reading_originals() {
+    use SqlValue::{Integer as I, Text as T};
+    let paths = [
+        r"\\192.0.2.1\Photos\Trip",
+        "//192.0.2.1/photos/Family",
+        r"\\?\UNC\192.0.2.1\Photos\Other",
+        r"\\192.0.2.2\archive\Old",
+        r"\\192.0.2.1\photos-private",
+        "C:/Local",
+        r"\\.\COM1",
+        "file://192.0.2.3/photos/a.jpg",
+    ];
+    let roots = paths.iter().enumerate().map(|(i, path)| vec![I(i as i64 + 1), T((*path).into())]).collect();
+    let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "id_local INTEGER PRIMARY KEY, absolutePath TEXT", roots)], None);
+    let source = std::env::temp_dir().join(format!("lightcraft-discover-shares-{}.lrcat", std::process::id()));
+    std::fs::write(&source, &bytes).unwrap();
+    let expected = vec![r"\\192.0.2.1\Photos", r"\\192.0.2.1\photos-private", r"\\192.0.2.2\archive"];
+    assert_eq!(network_sources(&source).unwrap(), expected);
+    let mut session = crate::Session::new();
+    let before = session.catalog.to_snapshot();
+    let result = session.execute("library.lightroomNetworkSources", &json!({"path":source})).unwrap();
+    assert_eq!(result["networkSources"], json!(expected));
+    assert_eq!(session.catalog.to_snapshot(), before);
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    std::fs::remove_file(source).unwrap();
+}
+
+/// Selecting a NAS share changes only this read's path policy; the local catalog is untouched.
+/// `relativePathFromCatalog` is empty, so this reader test performs no network filesystem calls.
+#[test]
+fn a_local_catalog_can_reference_an_explicitly_selected_network_share() {
+    let source = std::env::temp_dir().join(format!("lightcraft-selected-share-{}.lrcat", std::process::id()));
+    let bytes = native_catalog(&photo_tables((r"\\192.0.2.1\photos\", "")));
+    std::fs::write(&source, &bytes).unwrap();
+    let chosen = NetworkShares::new(vec![r"\\192.0.2.1\photos\chosen-folder".into()]).unwrap();
+    let catalog = read_with_network_shares(&source, &chosen).unwrap();
+    assert_eq!(catalog.photos.len(), 1);
+    #[cfg(windows)]
+    assert_eq!(catalog.photos[0].original, Original::Local);
+    #[cfg(not(windows))]
+    assert_eq!(catalog.photos[0].original, Original::NotHere);
+    assert!(!catalog.warnings.iter().any(|w| w.contains("not opened")), "{:?}", catalog.warnings);
+    let other = NetworkShares::new(vec![r"\\192.0.2.1\photos-private".into()]).unwrap();
+    assert!(matches!(read_with_network_shares(&source, &other).unwrap().photos[0].original, Original::Refused(_)));
+    assert!(matches!(read(&source).unwrap().photos[0].original, Original::Refused(_)), "permission must not persist in the catalog");
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    std::fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn invalid_network_share_options_fail_before_reading_or_changing_the_library() {
+    let mut session = crate::Session::new();
+    let before = session.catalog.to_snapshot();
+    for command in ["library.inspectLightroom", "library.importLightroom"] {
+        let error = session.execute(command, &json!({"path":"missing.lrcat", "networkShares":true})).unwrap_err();
+        assert!(error.to_string().contains("networkShares"), "{error}");
+    }
+    assert_eq!(session.catalog.to_snapshot(), before);
+}
+
+#[test]
 fn originals_on_other_computers_are_never_looked_at_or_added() {
     let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-remote-roots-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1726,7 +1787,12 @@ fn oversized_optional_table_warns_and_is_skipped() {
     page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
     page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
     let db = Database::open_with_wal(main, &[]).unwrap();
-    let reader = Reader { db, tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }] };
+    let reader = Reader {
+        db,
+        tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }],
+        wal_path: PathBuf::new(),
+        wal_before: None,
+    };
     let mut warnings = Vec::new();
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
