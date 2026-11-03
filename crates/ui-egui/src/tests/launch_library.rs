@@ -607,8 +607,10 @@ fn slow_checks() -> (
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let (lock, cv) = &*g;
         let open = lock.lock().unwrap();
-        // (bounded: a test that forgets to release still ends)
-        let _unused = cv.wait_timeout_while(open, Duration::from_secs(10), |open| !*open).unwrap();
+        // (bounded: a test that forgets to release still ends; stretched by LIGHTCRAFT_TIME_SCALE,
+        // never shrunk, so a slow machine doesn't let a check answer before the test releases it)
+        let hold = Duration::from_secs(10);
+        let _unused = cv.wait_timeout_while(open, lightcraft_testkit::scaled(hold).max(hold), |open| !*open).unwrap();
         (!Path::new(p).exists()).then_some(crate::panels::library_problem::Unavailable::NotFound)
     });
     (checks, gate, calls)
@@ -636,11 +638,10 @@ fn a_slow_check_never_holds_the_launch_window() {
     app.recent_checks = checks;
     app.library_problem = Some(LibraryProblem::choose_later(&app.ui.settings));
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
-    let t0 = std::time::Instant::now();
     settle(&mut h);
-    assert!(t0.elapsed() < Duration::from_secs(5), "frames went on while the check waited: {:?}", t0.elapsed());
+    // the checks are held until `release`: had the frames waited for them, they would have answered
     let c = h.app.library_problem.as_ref().and_then(|p| p.chooser.clone()).unwrap();
-    assert!(c.libraries.iter().all(|l| l.checking && l.unavailable.is_none()), "{c:?}");
+    assert!(c.libraries.iter().all(|l| l.checking && l.unavailable.is_none()), "frames went on while the check waited: {c:?}");
     assert_eq!(c.selected, Some(0), "the last library opened, until the answers say otherwise");
     assert!(h.painted_text().iter().any(|t| t == "Checking…"), "{:?}", h.painted_text());
     assert!(h.app.session.activity.list().iter().any(|t| t.label == "Checking recent libraries"), "the activity stack lists the check");

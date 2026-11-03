@@ -2136,16 +2136,22 @@ fn a_slow_photos_import_never_blocks_the_window() {
     h.app.services.write = Some(Box::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = std::sync::Mutex::new(wait);
+    // how many imports Photos has answered: it answers each only after `go`
+    let answered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let a = answered.clone();
     h.app.session.apple_photos_background = true; // as the desktop app sets it
     h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
-        // a regression (Photos on the UI thread) fails the timing below instead of hanging
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        // a regression (Photos on the UI thread) answers only once this runs out, and fails the
+        // checks below instead of hanging (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk)
+        let hold = Duration::from_secs(20);
+        let _ = wait.lock().unwrap().recv_timeout(lightcraft_testkit::scaled(hold).max(hold));
         let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 2;
+        a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     }));
     let t0 = Instant::now();
     let r = h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "album": "Slow"}}), t);
-    assert!(t0.elapsed() < Duration::from_secs(5), "answered at once: {r}");
+    assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 0, "answered before Photos did: {r}");
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
     while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
@@ -2157,7 +2163,7 @@ fn a_slow_photos_import_never_blocks_the_window() {
         let t1 = Instant::now();
         let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
         let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
-        assert!(t1.elapsed() < Duration::from_secs(10), "the export answers without waiting for Photos: {r}");
+        assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 1, "the export answers without waiting for Photos: {r}");
         assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
