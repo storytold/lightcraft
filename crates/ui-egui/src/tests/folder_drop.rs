@@ -530,8 +530,8 @@ fn two_folders_with_one_name_are_told_apart_in_the_label_the_question_and_the_to
     glide(&mut h, row_a.center(), row_b.center());
     h.step();
     let label_b = hint(&h).expect("a label over b/home");
-    assert!(label_a.starts_with("Move 1 photo to “home (") && label_a.ends_with("/a)”"), "{label_a}");
-    assert!(label_b.starts_with("Move 1 photo to “home (") && label_b.ends_with("/b)”"), "{label_b}");
+    assert!(label_a.starts_with("Move 1 file to “home (") && label_a.ends_with("/a)”"), "{label_a}");
+    assert!(label_b.starts_with("Move 1 file to “home (") && label_b.ends_with("/b)”"), "{label_b}");
     // and the question asked on the release says the same
     release(&mut h, row_b.center());
     let Some(crate::state::Dialog::MovePhotos { name, .. }) = &h.app.ui.dialog else { panic!("{:?}", h.app.ui.dialog) };
@@ -539,7 +539,7 @@ fn two_folders_with_one_name_are_told_apart_in_the_label_the_question_and_the_to
     // and so does the toast
     h.step();
     click(&mut h, "button:dialogOk");
-    assert!(toast(&h).starts_with("Moved 1 photo to “home (") && toast(&h).contains("/b)”"), "{}", toast(&h));
+    assert!(toast(&h).starts_with("Moved 1 file to “home (") && toast(&h).contains("/b)”"), "{}", toast(&h));
     assert!(b.join("beach.png").is_file(), "moved into the one that was asked about");
     let _ = std::fs::remove_dir_all(&root);
 }
