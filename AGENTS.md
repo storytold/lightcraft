@@ -189,8 +189,9 @@ of it.
   top of every other agent's tests, and gets none of `ci`'s caps (`.cargo/config.toml` only limits it to 4 tests at
   once in each binary).
 - **When `ci` fails on a test your change doesn't touch,** rerun only that package's tests: `cargo xtask test -p PKG`
-  (`-- TEST_NAME` narrows it to the one test). If it's intermittent, or fails without your change too, say so in the
-  PR and link its issue, or file one. Don't widen the run or bypass xtask to get past it. `ci` stops at the first
+  (`-- --exact TEST_PATH` narrows it to the one test; a bare `-- NAME` runs every test whose path contains it). If
+  it's intermittent, or fails without your change too, say so in the PR and link its issue, or file
+  one. Don't widen the run or bypass xtask to get past it. `ci` stops at the first
   failing binary, so cover what it didn't reach: `cargo xtask test --keep-going --doc -p …` for the packages you
   changed and those that depend on them (`--doc` adds the doctests, which `ci` runs after the test binaries), and
   `cargo xtask parity`, `layers`, `assets` and `wasm` for the steps after `test`.
