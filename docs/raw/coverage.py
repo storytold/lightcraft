@@ -32,6 +32,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ORF_DECODED = re.compile(r"^(E-1|E-10|E-20|EVOLT E-300|EVOLT E-330|EVOLT E-400|EVOLT E-500|E-300|E-330|E-500|Camedia C-\S.*|Stylus XZ-2 iHS)$")
 # Samsung SRW bodies with compressed raw data (crates/raw/src/vendor/srw.rs refuses 32770 / 32772 / 32773).
 SRW_COMPRESSED = re.compile(r"(^|\W)(NX1|NX30|NX300|NX300M|NX500|NX2000|NX3000|NX3300|NX mini|EK-GN\d+|EK-KN\d+)(\W|$)")
+
+# CIFF-container CRW bodies (crates/raw/src/vendor/crw.rs): every CRW EOS and the CIFF PowerShots
+# (the G and S series and the Pro 1).
+CRW_DECODED = re.compile(r"^EOS |^PowerShot (G[1-6]$|Pro ?1$|S[34567]0$|S45$)")
 # Fujifilm bodies before the X series whose RAF has no raw IFD (crates/raw/src/vendor/raf.rs).
 RAF_OLD = re.compile(r"^(FinePix (E|F|S\d|S\d{3,4}|IS)|IS Pro|S5Pro|S3Pro|S2Pro)", re.I)
 
@@ -89,9 +93,16 @@ def classify(maker, camera, ext_field):
         return "unverified", "MEF", "MEF decoder (uncompressed 12-bit)"
     if e == "ERF":
         return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks)"
+    if e == "CRW":
+        # CIFF-era bodies decode (craft-libs crates/crw/clean-room/02-crw-format.md): EOS D30/D60/10D/300D and
+        # the CIFF PowerShots; the pre-CIFF compacts (PowerShot 600, A5, A50, Pro70) and the
+        # unprobed Pro90 IS stay preview. The G5 is preview by evidence (entropy anomaly).
+        if CRW_DECODED.search(camera):
+            return "unverified", "CRW", "CRW decoder (CIFF; selector 0-2 tables)"
+        return "preview", "CRW", "pre-CIFF CRW is not decoded"
     if e == "MRW":
         return "unverified", "MRW", "MRW decoder (12-bit packed, 16-bit words)"
-    if e in ("CRW", "3FR", "FFF", "IIQ", "MOS", "KDC", "X3F", "RAW", "ORI"):
+    if e in ("3FR", "FFF", "IIQ", "MOS", "KDC", "X3F", "RAW", "ORI"):
         return "preview", e, f"{e} is opened from its embedded JPEG only"
     return "unsupported", e, f"{e or 'unknown'} is not imported"
 
