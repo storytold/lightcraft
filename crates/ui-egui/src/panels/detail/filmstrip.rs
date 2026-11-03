@@ -195,7 +195,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     crate::panels::grid::begin_photo_drag(app, *id);
                 }
             }
-            // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
+            // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted); in
+            // Compare and Survey the right-clicked photo is the one the rating rows judge
+            crate::panels::compare::activate_on_right_click(app, &resp, *id);
             crate::widgets::context_menu(&resp, |ui| crate::panels::grid::context_menu(app, ui, *id));
         }
     });

@@ -700,3 +700,71 @@ mod issue1771 {
         assert_eq!(h.app.session.selection.ids.len(), 3);
     }
 }
+
+/// Press P or U with the Crop panel open and Auto Advance on, in the grid or in Compare, on photos 1 and 2 selected.
+/// Gives the app and the flag the photos had before (P: none, U: pick) and the one the key sets.
+fn crop_open_flag_key(compare: bool, k: &str) -> (crate::headless::Headless, lightcraft_catalog::Flag, lightcraft_catalog::Flag) {
+    use crate::state::RightPanel;
+    use lightcraft_catalog::Flag;
+    let (start, end) = if k == "P" { (Flag::None, Flag::Pick) } else { (Flag::Pick, Flag::None) };
+    let mut h = library();
+    h.app.ui.right = RightPanel::Crop;
+    h.app.ui.auto_advance = true;
+    h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 1})).unwrap();
+    h.app.session.execute("photo.flag", &json!({"flag": if start == Flag::Pick { "pick" } else { "none" }})).unwrap();
+    if compare {
+        crate::panels::compare::enter_compare(&mut h.app).unwrap();
+    }
+    key(&mut h, k, false);
+    (h, start, end)
+}
+
+/// With the Crop panel open P and U are still the culling keys: Auto Advance moves on once. (They skipped `cull`,
+/// so the plain command ran and the photo stayed.)
+#[test]
+fn pick_and_unflag_with_crop_open_auto_advance_once_in_the_grid() {
+    use lightcraft_catalog::PhotoId;
+    for k in ["P", "U"] {
+        let (h, _, end) = crop_open_flag_key(false, k);
+        let flag = |id: u64| h.app.session.catalog.photo(PhotoId(id)).unwrap().flag;
+        assert_eq!((flag(1), flag(2)), (end, end), "{k}: the whole selection in the grid");
+        assert_eq!(h.app.session.active(), Some(PhotoId(2)), "{k}: Auto Advance moves on once");
+    }
+}
+
+/// In Compare, with the Crop panel open, P and U flag the active photo only (the candidate) and Auto Advance goes to
+/// the next candidate.
+#[test]
+fn pick_and_unflag_with_crop_open_target_the_active_photo_in_compare() {
+    use lightcraft_catalog::PhotoId;
+    for k in ["P", "U"] {
+        let (h, start, end) = crop_open_flag_key(true, k);
+        let flag = |id: u64| h.app.session.catalog.photo(PhotoId(id)).unwrap().flag;
+        assert_eq!((flag(1), flag(2)), (start, end), "{k}: only the active photo in Compare");
+        assert_eq!(h.app.session.active(), Some(PhotoId(3)), "{k}: the next candidate");
+        assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);
+    }
+}
+
+/// X with the Crop panel open stays Swap Crop Aspect (#1866): it never rejects, and being no culling key it never
+/// advances either, in the grid or in Compare.
+#[test]
+fn reject_key_with_crop_open_is_not_a_culling_key() {
+    use crate::state::RightPanel;
+    use lightcraft_catalog::{Flag, PhotoId};
+    for compare in [false, true] {
+        let mut h = library();
+        h.app.ui.right = RightPanel::Crop;
+        h.app.ui.auto_advance = true;
+        h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 1})).unwrap();
+        if compare {
+            crate::panels::compare::enter_compare(&mut h.app).unwrap();
+        }
+        let active = h.app.session.active();
+        key(&mut h, "X", false);
+        for id in [1, 2] {
+            assert_eq!(h.app.session.catalog.photo(PhotoId(id)).unwrap().flag, Flag::None, "photo {id} stays unflagged (compare: {compare})");
+        }
+        assert_eq!(h.app.session.active(), active, "no Auto Advance (compare: {compare})");
+    }
+}
