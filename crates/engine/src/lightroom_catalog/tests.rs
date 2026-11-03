@@ -1320,3 +1320,18 @@ fn xmp_packets_past_the_total_cap_are_left_out_one_by_one() {
     assert!(warnings[0].starts_with("image 3:"), "{warnings:?}");
     assert!(warnings[1].starts_with("image 4:") && warnings[1].contains("exceed"), "{warnings:?}");
 }
+
+#[test]
+fn text_xmp_counts_toward_the_total_cap_too() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let rows = vec![vec![N, I(1), T("<x:xmpmeta/>".into())], vec![N, I(2), T("<x:xmpmeta/>".into())]];
+    let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", rows)], None);
+    let path = std::env::temp_dir().join(format!("lightcraft-xmp-text-{}.lrcat", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let db = Database::open_file_with_wal(FileSource::open(&path).unwrap(), &[]).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let reader = Reader { tables: db.live_tables().unwrap(), db };
+    let (rows, warnings) = reader.xmp_table_within(12 + 5).unwrap();
+    assert_eq!(rows.iter().filter(|r| r.contains_key("xmp")).count(), 1);
+    assert!(!rows[1].contains_key("xmp") && warnings.len() == 1 && warnings[0].starts_with("image 2:"), "{warnings:?}");
+}

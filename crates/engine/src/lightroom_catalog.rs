@@ -127,7 +127,17 @@ impl Reader {
                     SqlValue::Null => Some(Value::Null),
                     SqlValue::Integer(n) => Some(json!(n)),
                     SqlValue::Real(n) => Some(json!(n)),
-                    SqlValue::Text(s) => Some(json!(s)),
+                    // a text packet counts toward the total like a decoded one
+                    SqlValue::Text(s) if column == "xmp" && xmp_total.saturating_add(s.len()) > max_total => {
+                        warnings.push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
+                        None
+                    }
+                    SqlValue::Text(s) => {
+                        if column == "xmp" {
+                            xmp_total += s.len();
+                        }
+                        Some(json!(s))
+                    }
                     SqlValue::Blob(bytes) if column == "xmp" => {
                         // the declared size (the decode checks it) against what is left, before inflating
                         let declared = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map_or(0, |s| u32::from_be_bytes(s) as usize);
