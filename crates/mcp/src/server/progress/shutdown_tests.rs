@@ -121,7 +121,7 @@ fn run_shutdown_case(mode: &str) {
         input.write_all(requests.as_bytes()).unwrap();
         input.flush().unwrap();
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(5));
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;

@@ -1185,7 +1185,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
             // wait as take() does, and again only after a spurious wakeup that changed nothing
             loop {
-                let (next, r) = ws.wake.wait_timeout(s, Duration::from_secs(10)).unwrap_or_else(|e| e.into_inner());
+                let (next, r) = ws.wake.wait_timeout(s, lightcraft_testkit::scaled(Duration::from_secs(10))).unwrap_or_else(|e| e.into_inner());
                 assert!(!r.timed_out(), "the caller missed the workspace being forgotten");
                 s = next;
                 if s.made != ws.cap {
@@ -1211,12 +1211,12 @@ mod tests {
         let rx = caller(1);
         assert!(rx.recv_timeout(Duration::from_millis(50)).is_err(), "took a workspace while none was free");
         ws.forget();
-        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap(), 1);
+        assert_eq!(lightcraft_testkit::recv_within(&rx, Duration::from_secs(10), "the waiting caller's workspace").unwrap(), 1);
         // or until it comes back, and takes that one
         let rx = caller(2);
         assert!(rx.recv_timeout(Duration::from_millis(50)).is_err(), "took a workspace while none was free");
         ws.give(1);
-        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap(), 1);
+        assert_eq!(lightcraft_testkit::recv_within(&rx, Duration::from_secs(10), "the waiting caller's workspace").unwrap(), 1);
         // a workspace that could not be made leaves room for the next try
         ws.forget();
         assert!(ws.take(fail).is_err());

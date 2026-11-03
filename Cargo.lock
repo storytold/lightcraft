@@ -4187,6 +4187,7 @@ dependencies = [
  "lightcraft-codecs",
  "lightcraft-engine",
  "lightcraft-raster",
+ "lightcraft-testkit",
  "log",
  "serde_json",
 ]

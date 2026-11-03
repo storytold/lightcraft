@@ -11,7 +11,7 @@ fn broken_stdout_exits_with_stdin_still_open() {
     drop(child.stdout.take());
     input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n{\"jsonrpc\":").unwrap();
     input.flush().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(10));
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
