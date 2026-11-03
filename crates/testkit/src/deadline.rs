@@ -71,6 +71,9 @@ fn parse_time_scale(value: Option<&str>) -> (f64, Option<String>) {
 ///
 /// Also bounds waits on other threads (a gated worker job, an injected probe): the panic ends
 /// that thread's job instead of leaving it spinning after the test is gone.
+///
+/// The limit is checked between calls to `cond`, so `cond` must return promptly: one that blocks
+/// (on a lock a deadlocked worker holds, say) isn't interrupted, and the wait runs past its limit.
 #[track_caller]
 pub fn wait_until(timeout: Duration, what: &str, cond: impl FnMut() -> bool) {
     poll(scaled(timeout), &format!("{timeout:?} × {TIME_SCALE_ENV} {}", time_scale()), what, cond);
