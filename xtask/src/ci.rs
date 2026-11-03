@@ -12,6 +12,13 @@ pub(crate) fn ci_jobs(available_mb: Option<u64>, cpus: usize) -> usize {
     available_mb.map_or(4, |mb| usize::try_from(mb / 1536).unwrap_or(usize::MAX)).clamp(1, cpus.max(1))
 }
 
+/// The RAM (MB) CI sizes its jobs from ([`ci_jobs`]): the available RAM, or when that can't be read
+/// half the total (GB), which on Linux and Windows is already held to a cgroup or job limit.
+/// `total_gb` is read only when needed.
+pub(crate) fn ci_ram_mb(available_mb: Option<u64>, total_gb: impl FnOnce() -> Option<u64>) -> Option<u64> {
+    available_mb.or_else(|| total_gb().map(|gb| gb.saturating_mul(1024) / 2))
+}
+
 /// RAM the OS could hand out now (free plus reclaimable cache) in MB, if it reports it. On Linux,
 /// held to the room left under the process's cgroup memory limit (a container, a CI runner, a
 /// systemd scope with `MemoryMax`): `lightcraft_sysmem::available`. On Windows, the machine's
@@ -497,6 +504,22 @@ mod ci_jobs_tests {
         assert_eq!(held_to_limit(Some(40 * 1024), Some(100 << 20)), Some(100), "a limit under 1.5 GB");
         assert_eq!(ci_jobs(held_to_limit(Some(40 * 1024), Some(100 << 20)), 32), 1, "still one job");
         assert_eq!(held_to_limit(Some(u64::MAX), Some(u64::MAX)), Some(u64::MAX >> 20), "no overflow");
+    }
+
+    /// Available RAM unknown (PowerShell failing): CI falls back to half the total, which is held to
+    /// the job limit, not to the job limit itself (#3705).
+    #[test]
+    fn unknown_available_ram_falls_back_to_half_the_limited_total() {
+        use super::{ci_ram_mb, held_to_limit, whole_gb};
+        const GB: u64 = 1 << 30;
+        let total = || Some(8); // total_ram_gb: effective_total = min(64 GB of RAM, the 8 GB job limit)
+        assert_eq!(ci_ram_mb(held_to_limit(None, Some(8 * GB)), total), Some(4 * 1024), "an 8 GB job on a 64 GB machine");
+        assert_eq!(ci_jobs(ci_ram_mb(held_to_limit(None, Some(8 * GB)), total), 32), 2);
+        assert_eq!(ci_ram_mb(Some(3 * 1024), || panic!("the total isn't read when available RAM is known")), Some(3 * 1024));
+        assert_eq!(ci_ram_mb(None, || Some(whole_gb(400 << 20))), Some(0), "a sub-GB limit rounds to 0 GB");
+        assert_eq!(ci_jobs(ci_ram_mb(None, || Some(whole_gb(400 << 20))), 32), 1, "still one job");
+        assert_eq!(ci_jobs(ci_ram_mb(None, || None), 32), 4, "both unknown: the old default");
+        assert_eq!(ci_ram_mb(None, || Some(u64::MAX)), Some(u64::MAX / 2), "no overflow");
     }
 
     #[test]
