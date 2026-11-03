@@ -40,6 +40,21 @@ fn with_effect(s: &mut Session, name: &str, values: Value) {
 }
 
 #[test]
+fn sky_effect_is_remembered_for_sam_masks_and_background_results() {
+    let mut s = Session::with_demo();
+    with_effect(&mut s, "Dark sky", json!({"exposure": -1}));
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    s.execute("mask.add", &json!({"kind": "sky", "seg": seg})).unwrap();
+    s.execute("mask.applyEffect", &json!({"name": "Dark sky"})).unwrap();
+    assert_eq!(s.mask_tool_effects.get("sky").map(String::as_str), Some("Dark sky"));
+    for kind in ["sky", "prompt"] {
+        // Background SAM results are committed as stored Prompt shapes.
+        s.execute("mask.add", &json!({"kind": kind, "text": "sky", "seg": seg})).unwrap();
+        assert_eq!(mask_adjust(&s, s.active_mask.unwrap()).exposure, -1.0);
+    }
+}
+
+#[test]
 fn managing_effects() {
     let mut s = Session::with_demo();
     with_effect(&mut s, "Lift", json!({"shadows": 30}));

@@ -53,6 +53,7 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
         MaskShape::Sky => ("Sky", Icon::Sky),
         MaskShape::Background => ("Background", Icon::Subject),
         MaskShape::Object { .. } => ("Object", Icon::Subject),
+        MaskShape::Prompt { text, .. } if text == "sky" => ("Sky", Icon::Sky),
         MaskShape::Prompt { .. } => ("Describe", Icon::Subject),
         MaskShape::People { .. } => ("People", Icon::Subject),
         MaskShape::Landscape { .. } => ("Landscape", Icon::Sky),

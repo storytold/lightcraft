@@ -295,6 +295,9 @@ fn selected_mask(s: &Session, p: &Value, c: &str) -> Result<Mask> {
 /// The kind of a mask's first component (`brush`, `linear`, `radial`, `subject`…): the tool the
 /// effect is remembered for.
 pub fn mask_tool(m: &Mask) -> Option<String> {
+    if matches!(&m.components.first()?.shape, lightcraft_develop::MaskShape::Prompt { text, .. } if text == "sky") {
+        return Some("sky".into());
+    }
     m.components.first().and_then(|c| serde_json::to_value(&c.shape).ok()).and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_string))
 }
 

@@ -77,7 +77,8 @@ fn mask_coverage(h: &Headless, mask: usize, x: usize, y: usize) -> f32 {
 #[test]
 fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     let mut h = detail("panel.masking");
-    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    exec(&mut h, "mask.add", json!({"kind": "sky", "seg": seg}));
     let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     click(&mut h, "button:maskMinus:1");
@@ -112,7 +113,8 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
 #[test]
 fn new_brush_starts_a_separate_mask_in_paint_mode() {
     let mut h = detail("panel.masking");
-    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    exec(&mut h, "mask.add", json!({"kind": "sky", "seg": seg}));
     let original = develop(&h).masks[0].clone();
     h.app.ui.brush_erase = true;
     h.app.ui.mask_overlay = false;
@@ -1791,6 +1793,29 @@ fn ai_masks_without_the_model_offer_the_download() {
     assert!(e.starts_with(lightcraft_engine::segment::NOT_INSTALLED), "{e}");
     assert!(develop(&h).masks.is_empty());
     assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
+}
+
+#[test]
+fn sky_without_the_model_uses_legacy_detection_without_a_setup_dialog() {
+    let mut h = detail("panel.masking");
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-missing-{}", std::process::id())));
+    click(&mut h, "maskNew:sky");
+    assert_eq!(h.app.ui.dialog, None);
+    assert_eq!(develop(&h).masks[0].components[0].shape, MaskShape::Sky);
+    for (button, op) in [("button:maskPlus:1", "add"), ("button:maskMinus:1", "subtract")] {
+        h.step();
+        click(&mut h, button);
+        click(&mut h, &format!("maskComp:{op}:sky"));
+        assert_eq!(h.app.ui.dialog, None);
+        let d = develop(&h);
+        let c = d.masks[0].components.last().unwrap();
+        assert_eq!(c.shape, MaskShape::Sky);
+        assert_eq!(serde_json::to_value(c.op).unwrap(), json!(op));
+    }
+    assert_eq!(develop(&h).masks[0].components.len(), 3);
+    assert!(!h.app.session.segmenter.busy());
+    assert!(!h.app.session.segmenter.download_status().running);
+    assert_eq!(h.app.ui.describe, None);
 }
 
 fn color_samples(h: &Headless) -> serde_json::Value {
