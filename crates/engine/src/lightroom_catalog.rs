@@ -749,32 +749,22 @@ const ALL_ORIENTATIONS: [Orientation; 8] = [
     Orientation::Rotate270,
 ];
 
-/// A master's file's own orientation, when this import read the file: a photo it added (`added`,
-/// the record the file import made), else a new record for a file with the same bytes as a library
-/// photo. `None` for a photo the library already had and an offline original.
-fn read_file_orientation(
-    files: &crate::import::ImportReport,
-    duplicates: &HashMap<String, (PhotoId, Option<&crate::import::FileFacts>)>,
-    added: Option<PhotoId>,
-    path: &str,
-) -> Option<Orientation> {
-    match added {
-        Some(id) => files.file_orientations.get(&id.0).copied(),
-        None => duplicates.get(&key(path)).and_then(|(_, file)| file.and_then(|f| f.orientation)),
-    }
-}
-
-/// A turn made in Lightroom (`code`, the catalog's orientation, against `file`, the file's own)
-/// becomes the photo's own rotation, so it shows as it did there. Returns the catalog's orientation
-/// and the rotation to put the catalog's masks through after it: none for a photo turned here (its
-/// frame is then the catalog's), else the rotation it already has in LightCraft.
-fn take_lightroom_turn(p: &mut Photo, file: Option<Orientation>, code: &str) -> (Orientation, Orientation) {
+/// A turn made in Lightroom (`code`, the catalog's orientation, against [`Photo::file_orientation`],
+/// the file's own) becomes the photo's own rotation, so it shows as it did there. A photo whose
+/// rotation may be the user's (`keep_own`: one the library already had, with edits of its own)
+/// keeps it. Returns the orientation to put the catalog's crop and masks through (they are on the
+/// stored image) and the rotation to put the masks through after it: with the file's orientation
+/// known, the frame the photo shows in here and none; without it, the catalog's orientation taken
+/// for the file's and the rotation the photo has.
+///
+/// [`Photo::file_orientation`]: lightcraft_catalog::Photo::file_orientation
+fn take_lightroom_turn(p: &mut Photo, keep_own: bool, code: &str) -> (Orientation, Orientation) {
     let shown = lightroom_orientation(code);
-    if let (Some(file), Some(shown)) = (file, shown) {
+    let Some(file) = p.file_orientation else { return (shown.unwrap_or_default(), p.develop.orientation) };
+    if let (false, Some(shown)) = (keep_own, shown) {
         Arc::make_mut(&mut p.develop).orientation = user_turn(file, shown);
-        return (shown, Orientation::Normal);
     }
-    (shown.unwrap_or_default(), p.develop.orientation)
+    (in_photo_frame(file, p.develop.orientation), Orientation::Normal)
 }
 
 /// The photo's own rotation in LightCraft (Rotate Left / Right, Flip) that shows a file whose own
@@ -1081,8 +1071,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let refused: HashSet<_> = data.photos.iter().filter(|p| matches!(p.original, Original::Refused(_))).map(|p| p.source_id).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
-    // the own orientation of each master's file this import read, by catalog image id
-    let mut file_orientations: HashMap<i64, Orientation> = HashMap::new();
+    // the photos the file import before this one added (not ones the library already had)
+    let added: HashSet<u64> = files.imported.iter().copied().collect();
     for src in photos {
         let master = number(&src.image, "masterImage");
         if master == 0 && missing_sources.contains(&key(&src.path)) {
@@ -1145,6 +1135,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.embedded_lens = duplicate.embedded_lens;
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
+            // the same bytes: the same orientation of its own
+            p.file_orientation = file.and_then(|f| f.orientation).or(duplicate.file_orientation);
             if let Some(file) = file {
                 p.meta = file.meta.clone();
                 p.captured = file.captured.clone();
@@ -1186,15 +1178,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lightcraft_catalog::MediaKind::Video;
         }
-        // the file's own orientation when this import read the file (a virtual copy: its master's)
-        let file_orientation = match master {
-            0 => read_file_orientation(&files, &duplicates, existing_id.map(|_| p.id), &src.path),
-            _ => file_orientations.get(&master).copied(),
-        };
-        if let (0, Some(o)) = (master, file_orientation) {
-            file_orientations.insert(src.source_id, o);
-        }
-        let (orientation, mask_user) = take_lightroom_turn(&mut p, file_orientation, text(&src.image, "orientation"));
+        // (a new virtual copy has its master's file orientation; a photo the file import just
+        // added, even with edits from its sidecar, takes the turn too)
+        let keep_own = existing_id.is_some() && !added.contains(&p.id.0) && p.edited.is_some();
+        let (orientation, mask_user) = take_lightroom_turn(&mut p, keep_own, text(&src.image, "orientation"));
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
         let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;

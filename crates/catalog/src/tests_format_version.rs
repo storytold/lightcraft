@@ -97,6 +97,37 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v9 library (before photos kept their file's own orientation) opens with none, so a Lightroom
+/// catalog import treats its photos as before, and is rewritten in the current format; a photo
+/// that has one keeps it across a save and reload.
+#[test]
+fn v9_photo_loads_without_a_file_orientation_and_is_upgraded() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    c.apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: "/p/a.crw".into() }, "a.crw", "CRW", 160, 120, "2026-01-01")) })
+        .unwrap();
+    let turned = c.alloc_photo_id();
+    let mut p = Photo::new(turned, Source::File { path: "/p/b.jpg".into() }, "b.jpg", "JPEG", 120, 160, "2026-01-01");
+    p.file_orientation = Some(lightcraft_geom::Orientation::Rotate90);
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let snap = c.to_snapshot();
+    assert_eq!(snap.matches("file_orientation").count(), 1, "an unknown orientation isn't written");
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!(
+            "{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":1,\"catalog\":{snap}}}
+"
+        )
+        .into_bytes(),
+    );
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(loaded.photo(id).unwrap().file_orientation, None);
+    assert_eq!(loaded.photo(turned).unwrap().file_orientation, Some(lightcraft_geom::Orientation::Rotate90));
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,8 +269,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `Photo.file_orientation` (v9: `Photo.preview_checked` and
+    /// `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -188,10 +188,6 @@ pub struct ImportReport {
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
-    /// The own orientation of each file this import added (by photo id), where it is known: a
-    /// Lightroom catalog import turns the photo from it to the orientation the catalog shows.
-    #[serde(skip)]
-    pub file_orientations: std::collections::HashMap<u64, lightcraft_geom::Orientation>,
 }
 
 /// A structured diagnostic from foreign XMP develop settings.

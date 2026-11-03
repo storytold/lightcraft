@@ -243,9 +243,6 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
                 placed.extend(pl);
                 let id = s.catalog.alloc_photo_id();
-                if let Some(o) = info.orientation {
-                    report.file_orientations.insert(id.0, o);
-                }
                 if let Some(h) = &info.content_hash {
                     new_hash.insert(h.clone(), id);
                 }
@@ -265,6 +262,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
+                p.file_orientation = info.orientation;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
