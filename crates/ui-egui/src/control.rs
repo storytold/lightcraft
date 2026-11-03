@@ -401,6 +401,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             lightcraft_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {
                 Ok(mut u) => {
+                    u.normalize_survey_filmstrip_size();
                     if let Err(error) = crate::docking::set_widths(&mut u, p) {
                         return err(error);
                     }

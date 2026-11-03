@@ -17,11 +17,9 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     app.ui.view = view;
     app.ui.right = right;
     let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
-    // text such as "▸" in the Reference view's hint has its glyph only in the craft-fonts faces (releases
-    // always have them): without them it is drawn as a box, which this audit of names doesn't need
-    if lightcraft_engine::CRAFT_FONTS.is_empty() {
-        builder = builder.allow_missing_glyphs();
-    }
+    // This audit checks accessible names, not font coverage. The optional font set may be absent
+    // or partial (e.g. missing the triangle in the Reference view's hint).
+    builder = builder.allow_missing_glyphs();
     let mut h = builder.build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
