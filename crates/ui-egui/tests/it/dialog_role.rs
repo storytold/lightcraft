@@ -4,12 +4,33 @@ use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::{Harness, kittest::NodeT};
 use lightcraft_ui_egui::{LightcraftApp, Services};
+use std::collections::BTreeSet;
+
+fn missing_language_picker_glyphs() -> Vec<char> {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(lightcraft_ui_egui::theme::font_definitions(lightcraft_engine::CRAFT_FONTS));
+    let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+    output.textures_delta.clear();
+
+    let labels = lightcraft_ui_egui::i18n::Locale::for_picker().into_iter().flat_map(|language| language.name().chars());
+    ctx.fonts_mut(|fonts| {
+        labels
+            .filter(|ch| {
+                !ch.is_whitespace()
+                    && [egui::FontFamily::Proportional, egui::FontFamily::Name(lightcraft_ui_egui::theme::FONT_SEMIBOLD.into())]
+                        .into_iter()
+                        .any(|family| !fonts.has_glyph(&egui::FontId::new(13.0, family), *ch))
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    })
+}
 
 fn harness() -> Harness<'static, LightcraftApp> {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    // These tests assert dialog semantics, not font coverage. Endonyms can use scripts that are
-    // not part of the local craft-fonts checkout, so allow their glyphs to be absent here.
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).allow_missing_glyphs().build_ui_state(
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.language = lightcraft_ui_egui::i18n::Locale::En;
+    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
@@ -48,6 +69,11 @@ fn every_dialog_is_a_modal_dialog_with_its_title() {
 
 #[test]
 fn settings_is_a_dialog_too() {
+    let missing = missing_language_picker_glyphs();
+    if !missing.is_empty() {
+        lightcraft_testkit::skip!(Fonts, "Settings language picker needs unavailable glyphs: {}", missing.iter().collect::<String>());
+        return;
+    }
     let mut h = harness();
     h.state_mut().run("app.settings", serde_json::json!({})).expect("Settings opens");
     h.run_steps(6);

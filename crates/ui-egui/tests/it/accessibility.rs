@@ -11,12 +11,11 @@ use lightcraft_ui_egui::{
 
 fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.language = lightcraft_ui_egui::i18n::Locale::En;
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
-    // This audit checks the AccessKit tree, not font coverage. Some locales and interface symbols
-    // intentionally have no bundled glyph, so do not let unrelated text painting abort the audit.
-    let builder = Harness::builder().with_size(vec2(1500.0, 950.0)).allow_missing_glyphs();
+    let builder = Harness::builder().with_size(vec2(1500.0, 950.0));
     let mut h = builder.build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
