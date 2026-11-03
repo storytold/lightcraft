@@ -228,6 +228,8 @@ fn xmp_dimensions_reject_out_of_range_values() {
         ("tiff:ImageLength", "4294967296"),
         ("exif:PixelYDimension", "4294967296"),
         ("tiff:ImageWidth", "-1"),
+        ("tiff:ImageWidth", "-0"),
+        ("tiff:ImageWidth", "0/0"),
         ("exif:PixelXDimension", "-1"),
         ("tiff:ImageLength", "-1"),
         ("exif:PixelYDimension", "-1"),
@@ -255,6 +257,7 @@ fn xmp_dimensions_invalid_primary_allows_fallback() {
 fn xmp_dimensions_preserve_valid_values() {
     for (field, value, expected) in [
         ("tiff:ImageWidth", "0", 0),
+        ("tiff:ImageWidth", "0/1e-129", 0),
         ("tiff:ImageWidth", "4294967295", u32::MAX),
         ("exif:PixelXDimension", "640.0", 640),
         ("tiff:ImageLength", "960/2", 480),
@@ -272,6 +275,13 @@ fn xmp_dimensions_preserve_valid_values() {
     assert_eq!(element.metadata.height, Some(480));
     let sequence = xmp_dimensions(r#"|<tiff:ImageWidth><rdf:Seq><rdf:li>640</rdf:li></rdf:Seq></tiff:ImageWidth>"#);
     assert_eq!(sequence.metadata.width, Some(640));
+}
+
+#[test]
+fn xmp_dimensions_preserve_large_exact_ratio() {
+    let coefficient = "999999999999999999999999999999999999999";
+    let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{coefficient}/{coefficient}""#));
+    assert_eq!(data.metadata.width, Some(1));
 }
 
 #[test]

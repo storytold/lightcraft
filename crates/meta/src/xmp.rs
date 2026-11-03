@@ -531,30 +531,19 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
-// Pixel dimensions are integers. Keep their source text long enough to distinguish a fraction
-// that `f64` rounds to an integer, while bounding any decimal scale work.
-#[derive(Clone, Copy)]
+// Pixel dimensions are integers. Keep decimal coefficients as digits so wide rational components
+// remain exact and fractions that `f64` rounds to an integer can still be rejected.
 struct ExactDecimal {
     negative: bool,
-    coefficient: u128,
+    coefficient: String,
     exponent: i64,
 }
 
-#[derive(Clone, Copy)]
 struct ExactRatio {
     negative: bool,
-    numerator: u128,
-    denominator: u128,
+    numerator: String,
+    denominator: String,
     exponent: i64,
-}
-
-fn gcd(mut a: u128, mut b: u128) -> u128 {
-    while b != 0 {
-        let remainder = a % b;
-        a = b;
-        b = remainder;
-    }
-    a
 }
 
 fn exact_decimal(value: &str) -> Option<ExactDecimal> {
@@ -588,79 +577,98 @@ fn exact_decimal(value: &str) -> Option<ExactDecimal> {
     }
     let leading = digits.clone().take_while(|digit| *digit == b'0').count();
     if leading == count {
-        return Some(ExactDecimal { negative, coefficient: 0, exponent: 0 });
+        return Some(ExactDecimal { negative, coefficient: "0".to_owned(), exponent: 0 });
     }
     let trailing = digits.clone().rev().take_while(|digit| *digit == b'0').count();
     let significant = count.checked_sub(leading)?.checked_sub(trailing)?;
-    let mut coefficient = 0u128;
+    let mut coefficient = String::with_capacity(significant);
     for digit in digits.skip(leading).take(significant) {
-        coefficient = coefficient.checked_mul(10)?.checked_add(u128::from(digit - b'0'))?;
+        coefficient.push(char::from(digit));
     }
     let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing).ok()?)?;
     Some(ExactDecimal { negative, coefficient, exponent })
 }
 
 fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactRatio> {
-    if denominator.coefficient == 0 {
+    if denominator.coefficient == "0" {
         return None;
     }
-    let divisor = gcd(numerator.coefficient, denominator.coefficient);
     Some(ExactRatio {
         negative: numerator.negative ^ denominator.negative,
-        numerator: numerator.coefficient / divisor,
-        denominator: denominator.coefficient / divisor,
+        numerator: numerator.coefficient,
+        denominator: denominator.coefficient,
         exponent: numerator.exponent.checked_sub(denominator.exponent)?,
     })
 }
 
+fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> String {
+    let mut digits = Vec::with_capacity(value.len().saturating_add(10));
+    let mut carry = 0u64;
+    for digit in value.bytes().rev() {
+        let product = u64::from(digit - b'0') * u64::from(multiplier) + carry;
+        digits.push(b'0' + (product % 10) as u8);
+        carry = product / 10;
+    }
+    while carry != 0 {
+        digits.push(b'0' + (carry % 10) as u8);
+        carry /= 10;
+    }
+    digits.reverse();
+    digits.into_iter().map(char::from).collect()
+}
+
+fn compare_scaled_decimal(left: &str, left_exponent: i64, right: &str, right_exponent: i64) -> Option<std::cmp::Ordering> {
+    if left == "0" {
+        return Some(if right == "0" { std::cmp::Ordering::Equal } else { std::cmp::Ordering::Less });
+    }
+    if right == "0" {
+        return Some(std::cmp::Ordering::Greater);
+    }
+    let left_magnitude = i128::try_from(left.len()).ok()?.checked_add(i128::from(left_exponent))?;
+    let right_magnitude = i128::try_from(right.len()).ok()?.checked_add(i128::from(right_exponent))?;
+    match left_magnitude.cmp(&right_magnitude) {
+        std::cmp::Ordering::Equal => {}
+        ordering => return Some(ordering),
+    }
+    let length = left.len().max(right.len());
+    for (left_digit, right_digit) in left.bytes().chain(std::iter::repeat(b'0')).zip(right.bytes().chain(std::iter::repeat(b'0'))).take(length) {
+        match left_digit.cmp(&right_digit) {
+            std::cmp::Ordering::Equal => {}
+            ordering => return Some(ordering),
+        }
+    }
+    Some(std::cmp::Ordering::Equal)
+}
+
 fn exact_ratio_to_u32(value: ExactRatio) -> Option<u32> {
-    if value.negative || value.denominator == 0 {
+    if value.negative || value.denominator == "0" {
         return None;
     }
-    let mut numerator = value.numerator;
-    let mut denominator = value.denominator;
-    if value.exponent < 0 {
-        if denominator != 1 {
-            return None;
-        }
-        let scale = u32::try_from(value.exponent.checked_neg()?).ok()?;
-        if scale > 128 {
-            return None;
-        }
-        for _ in 0..scale {
-            if !numerator.is_multiple_of(10) {
-                return None;
-            }
-            numerator /= 10;
-        }
-    } else if value.exponent > 0 {
-        let scale = u32::try_from(value.exponent).ok()?;
-        if scale > 128 {
-            return None;
-        }
-        let mut twos = 0;
-        while denominator.is_multiple_of(2) {
-            denominator /= 2;
-            twos += 1;
-        }
-        let mut fives = 0;
-        while denominator.is_multiple_of(5) {
-            denominator /= 5;
-            fives += 1;
-        }
-        if denominator != 1 || twos > scale || fives > scale {
-            return None;
-        }
-        for _ in twos..scale {
-            numerator = numerator.checked_mul(2)?;
-        }
-        for _ in fives..scale {
-            numerator = numerator.checked_mul(5)?;
-        }
-    } else if denominator != 1 {
+    if value.numerator == "0" {
+        return Some(0);
+    }
+    if value.exponent < -128 || value.exponent > 128 {
         return None;
     }
-    u32::try_from(numerator).ok()
+    let mut low = 0;
+    let mut high = u32::MAX;
+    while low <= high {
+        let integer = low + (high - low) / 2;
+        let product = multiply_decimal_by_u32(&value.denominator, integer);
+        let ordering = if product == "0" {
+            compare_scaled_decimal(&value.numerator, value.exponent, "0", 0)?
+        } else {
+            let trailing_zeroes = product.bytes().rev().take_while(|digit| *digit == b'0').count();
+            let product_exponent = i64::try_from(trailing_zeroes).ok()?;
+            compare_scaled_decimal(&value.numerator, value.exponent, product.trim_end_matches('0'), product_exponent)?
+        };
+        match ordering {
+            std::cmp::Ordering::Equal => return Some(integer),
+            std::cmp::Ordering::Less => high = integer.checked_sub(1)?,
+            std::cmp::Ordering::Greater => low = integer.checked_add(1)?,
+        }
+    }
+    None
 }
 
 fn exact_u32_from_text(value: &str) -> Option<u32> {
@@ -670,7 +678,7 @@ fn exact_u32_from_text(value: &str) -> Option<u32> {
         exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
     } else {
         let value = exact_decimal(value)?;
-        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: 1, exponent: value.exponent }
+        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: "1".to_owned(), exponent: value.exponent }
     };
     exact_ratio_to_u32(ratio)
 }
