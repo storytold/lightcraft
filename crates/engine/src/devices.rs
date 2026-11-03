@@ -304,7 +304,9 @@ mod tests {
         gate.store(false, Ordering::SeqCst);
         mounted.lock().unwrap().push(card("EOS_DIGITAL"));
         std::thread::sleep(Duration::from_millis(40));
+        let t = std::time::Instant::now();
         assert!(watch.get().is_empty(), "the old list is served while rescanning");
+        assert!(t.elapsed() < bound, "the warm get() took {:?} (limit {bound:?})", t.elapsed());
         assert_eq!(finished.load(Ordering::SeqCst), 1, "warm get() waited for the rescan");
         gate.store(true, Ordering::SeqCst);
         assert!(until(|| changes.load(Ordering::SeqCst) == 1), "a changed scan notifies");
