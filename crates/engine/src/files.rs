@@ -48,6 +48,7 @@ pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
 #[cfg(test)]
 use fs::quick_image_srgb;
+pub(crate) use fs::read_video_metadata_file;
 #[cfg(test)]
 pub(crate) use fs::read_video_metadata_from;
 pub(crate) use fs::read_video_metadata_from_with_fragments;

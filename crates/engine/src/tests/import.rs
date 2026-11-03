@@ -3939,6 +3939,51 @@ fn a_clip_carries_its_top_level_xmp_into_the_catalog() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// All Metadata on a clip reads its metadata boxes, never the whole file: a 256 MiB `mdat` (sparse
+/// on disk) sits before the `moov`, and a whole-file reader would go through the byte hook, which fails.
+#[test]
+fn all_metadata_on_a_video_reads_only_its_metadata_boxes() {
+    use std::io::{Seek, SeekFrom, Write};
+    let src = temp_dir("video-all-metadata");
+    let file = synthetic_mp4(1000, 84_500, 640, 360, 0);
+    let ftyp_len = u32::from_be_bytes([file[0], file[1], file[2], file[3]]) as usize;
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">"#,
+        r#"<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Sunset clip</rdf:li></rdf:Alt></dc:title>"#,
+        r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    const XMP_UUID: [u8; 16] = [0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac];
+    let mdat_len: u64 = 256 * 1024 * 1024;
+    let path = src.join("clip.mp4");
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(&file[..ftyp_len]).unwrap();
+    f.write_all(&1u32.to_be_bytes()).unwrap();
+    f.write_all(b"mdat").unwrap();
+    f.write_all(&mdat_len.to_be_bytes()).unwrap();
+    f.seek(SeekFrom::Start(ftyp_len as u64 + mdat_len)).unwrap();
+    f.write_all(&file[ftyp_len..]).unwrap();
+    f.write_all(&((8 + 16 + xmp.len()) as u32).to_be_bytes()).unwrap();
+    f.write_all(b"uuid").unwrap();
+    f.write_all(&XMP_UUID).unwrap();
+    f.write_all(xmp.as_bytes()).unwrap();
+    drop(f);
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let id = s.catalog.photos().next().unwrap().id;
+    assert!(s.catalog.photo(id).unwrap().is_video());
+    s.media.file_bytes = Some(std::sync::Arc::new(|path: &str| Err(format!("{path}: read whole"))));
+
+    let r = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    let row = |name: &str| r["exif"].as_array().unwrap().iter().find(|row| row["name"] == name).map(|row| row["value"].as_str().unwrap().to_string());
+    assert_eq!(row("Duration").as_deref(), Some("84.50 s"), "{r}");
+    assert_eq!(row("Width").as_deref(), Some("640"), "{r}");
+    assert!(r["xmp"].as_array().unwrap().iter().any(|x| x["value"] == "Sunset clip"), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {

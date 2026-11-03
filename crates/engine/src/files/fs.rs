@@ -181,6 +181,16 @@ pub(crate) fn read_video_metadata_from_with_fragments(
     Ok(out)
 }
 
+/// A video's metadata boxes, read box by box under the memory gate as the import probe reads them:
+/// never the whole clip, however large it is.
+pub(crate) fn read_video_metadata_file(path: &str) -> Result<Vec<u8>, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let len = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
+    let weight = usize::try_from(len).unwrap_or(usize::MAX).min(64 * 1024 * 1024);
+    let _permit = crate::memory::work_gate().acquire_urgent(weight);
+    read_video_metadata_from(&mut file, len, path)
+}
+
 /// Compute the content hash incrementally in 64 KB chunks, matching `lightcraft_preview::hash_bytes`.
 fn hash_file_stream(f: &mut std::fs::File, path: &str) -> Result<String, String> {
     use std::io::{Read, Seek, SeekFrom};
