@@ -66,10 +66,22 @@ impl Shared {
     }
 }
 
+/// How long dropping [`Downloads`] (quitting) waits for its running downloads to notice the cancel.
+const QUIT_WAIT: Duration = Duration::from_secs(1);
+
 /// The downloads of one session, by model id.
-#[derive(Default)]
 pub struct Downloads {
     jobs: HashMap<String, Arc<Shared>>,
+    /// How long dropping it waits for running downloads to stop: [`QUIT_WAIT`]. Tests give it a longer
+    /// one, so that a check that quitting doesn't wait it out can't be failed by a slow machine.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    quit_wait: Duration,
+}
+
+impl Default for Downloads {
+    fn default() -> Self {
+        Self { jobs: HashMap::new(), quit_wait: QUIT_WAIT }
+    }
 }
 
 impl Downloads {
@@ -188,7 +200,7 @@ impl Drop for Downloads {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let started = std::time::Instant::now();
-            while self.running() && started.elapsed() < Duration::from_secs(1) {
+            while self.running() && started.elapsed() < self.quit_wait {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
@@ -328,12 +340,18 @@ mod tests {
     /// wait for running threads is the only part that takes time, and the web has no threads.
     #[test]
     fn dropping_idle_downloads_returns_at_once() {
+        // each may wait 20 s (stretched, never shrunk) for a running download: returning well inside that shows
+        // nothing was waited for
+        let quit_wait = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
         let t = std::time::Instant::now();
-        drop(Downloads::default());
+        let mut idle = Downloads::default();
+        idle.quit_wait = quit_wait;
+        drop(idle);
         let mut d = Downloads::default();
+        d.quit_wait = quit_wait;
         d.set_outcome("m", State::Failed("x".into()));
         drop(d);
-        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+        assert!(t.elapsed() < quit_wait / 4, "{:?} (limit {quit_wait:?})", t.elapsed());
     }
 
     #[test]
@@ -436,9 +454,14 @@ mod tests {
         let mut d = Downloads::default();
         d.jobs.insert("m".into(), shared.clone());
         assert!(d.running());
+        // quitting may wait 20 s here (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk): returning well inside
+        // that shows it waited only for the stand-in to stop, not out its limit
+        let quit_wait = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
+        d.quit_wait = quit_wait;
         let started = std::time::Instant::now();
         drop(d);
-        assert!(started.elapsed() < Duration::from_millis(900), "quitting must not wait for a transfer to finish");
+        let waited = started.elapsed();
+        assert!(waited < quit_wait / 4, "quitting must not wait for a transfer to finish: {waited:?} (limit {quit_wait:?})");
         assert_eq!(shared.get(), State::Cancelled);
         handle.join().unwrap();
     }
