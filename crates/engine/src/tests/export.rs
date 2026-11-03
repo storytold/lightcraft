@@ -1347,7 +1347,7 @@ mod apple_photos {
         }
         go.send(()).unwrap();
         while status(&mut s)["running"] == true {
-            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the import finishes");
+            assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the import finishes");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let done = status(&mut s);

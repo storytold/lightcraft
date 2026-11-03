@@ -1334,7 +1334,7 @@ fn build_previews_fills_the_cache() {
     assert_eq!((r["total"].as_u64(), r["done"].as_u64(), r["failed"].as_u64(), r["running"].as_bool()), (Some(2), Some(2), Some(0), Some(false)));
     // view previews are written to the cache in the background
     let t0 = std::time::Instant::now();
-    while cached(&mut s, ids[1]) != (true, true) && t0.elapsed().as_secs() < 20 {
+    while cached(&mut s, ids[1]) != (true, true) && t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)) {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(cached(&mut s, ids[0]), (true, true), "thumbnail and loupe view are ready");
@@ -1349,17 +1349,17 @@ fn build_previews_fills_the_cache() {
             assert_eq!(p["done"], 1);
             break;
         }
-        assert!(t0.elapsed().as_secs() < 60, "build finishes");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(60)), "build finishes");
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(s.execute("library.buildPreviews", &json!({"size": "huge"})).is_err());
 }
 
-/// Wait (at most a minute) until no background task is listed.
+/// Wait (at most a minute, stretched by `LIGHTCRAFT_TIME_SCALE`) until no background task is listed.
 fn wait_activity_empty(s: &Session) {
     let t0 = std::time::Instant::now();
     while !s.activity.list().is_empty() {
-        assert!(t0.elapsed().as_secs() < 60, "tasks still listed: {:?}", s.activity.list());
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(60)), "tasks still listed: {:?}", s.activity.list());
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }

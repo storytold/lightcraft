@@ -491,13 +491,13 @@ mod tests {
         loop {
             if let Some(o) = s.place_names.take_outcome() {
                 // the activity row ends with the thread
-                while !s.activity.list().is_empty() && started.elapsed().as_secs() < 30 {
+                while !s.activity.list().is_empty() && started.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(30)) {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 assert!(s.activity.list().is_empty());
                 return o;
             }
-            assert!(started.elapsed().as_secs() < 60, "the download never ended");
+            assert!(started.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(60)), "the download never ended");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
