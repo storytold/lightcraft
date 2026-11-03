@@ -363,7 +363,7 @@ fn template_import(s: &mut Session, p: &Value) -> Result<Value> {
     if meta.len() > MAX_FILE {
         return Err(bad(ID, format!("{}: {} bytes is too large for a print template (at most {} KB)", path.display(), meta.len(), MAX_FILE / 1024)));
     }
-    let bytes = std::fs::read(path).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    let bytes = crate::read_file::read_regular(path, MAX_FILE).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
     let mut t = PrintTemplate::from_file(&bytes).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
     if s.print_templates.len() >= MAX_TEMPLATES {
         return Err(bad(ID, format!("at most {MAX_TEMPLATES} templates; delete one first")));
