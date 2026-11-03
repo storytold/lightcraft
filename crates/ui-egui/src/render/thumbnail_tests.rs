@@ -399,8 +399,9 @@ fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     let mut r = Renderer::with_worker_threads(1);
     let ctx = egui::Context::default();
     let budget = lightcraft_testkit::scaled(std::time::Duration::from_secs(10));
-    // the last loupe render took longer than the budget (a CPU render): not waited for
-    r.last_main_ms = 1e6;
+    // the last loupe render took longer than the budget (a CPU render): not waited for (ten
+    // budgets, whatever LIGHTCRAFT_TIME_SCALE made of it)
+    r.last_main_ms = budget.as_secs_f64() * 1e4;
     r.request(Slot::Main, s.render_job(PhotoId(1), 64, 64, false, true).unwrap(), 100);
     r.wait_for_draft(&ctx, &mut s, budget);
     assert!(r.is_pending(Slot::Main) && !r.textures.contains_key(&Slot::Main));

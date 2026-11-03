@@ -304,7 +304,7 @@ mod tests {
         fn new(open: &Arc<AtomicUsize>, idle: Duration, before: impl FnOnce(&mut TcpStream)) -> Self {
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-            client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            client.set_read_timeout(Some(lightcraft_testkit::scaled(Duration::from_secs(3)).max(Duration::from_secs(3)))).unwrap();
             let (stream, _) = listener.accept().unwrap();
             // Small test messages must not wait for Nagle's algorithm or a delayed ACK.
             client.set_nodelay(true).unwrap();
@@ -428,7 +428,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
             let _ = reply.send(json!({"ok": true, "result": 1}));
         });
-        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(20), Duration::from_secs(10));
+        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(20), lightcraft_testkit::scaled(Duration::from_secs(10)));
         assert_eq!(r["ok"], true, "{r}");
         worker.join().unwrap();
     }
@@ -444,7 +444,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(150));
             let _ = reply.send(json!({"ok": true, "result": 2}));
         });
-        let r = await_reply(&rrx, &state, || n.fetch_add(1, Ordering::SeqCst), || {}, Duration::from_millis(30), Duration::from_secs(10));
+        let r = await_reply(
+            &rrx,
+            &state,
+            || n.fetch_add(1, Ordering::SeqCst),
+            || {},
+            Duration::from_millis(30),
+            lightcraft_testkit::scaled(Duration::from_secs(10)),
+        );
         assert_eq!(r["ok"], true, "{r}");
         worker.join().unwrap();
     }
@@ -577,7 +584,7 @@ mod tests {
             serve_stream(s, |_, _| Some(json!({"ok": true})));
         });
         let mut c = TcpStream::connect(addr).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        c.set_read_timeout(Some(lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10)))).unwrap();
         c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n").unwrap();
         let mut replies = BufReader::new(c.try_clone().unwrap());
         let (mut first, mut second) = (String::new(), String::new());
