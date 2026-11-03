@@ -18,6 +18,10 @@ type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
 /// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
 const MAX_FILE: u64 = 1 << 32;
+/// Expanded XMP packets kept from one catalog, all rows together (each is bounded on its own).
+const MAX_XMP_TOTAL: usize = 1 << 30;
+/// Keyword paths kept for the photos of one catalog, all together.
+const MAX_KEYWORD_BYTES: usize = 256 << 20;
 
 fn error(why: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
@@ -97,6 +101,7 @@ impl Reader {
         }
         let mut warnings = Vec::new();
         let mut out = Vec::with_capacity(rows.len());
+        let mut xmp_total = 0usize;
         for row in rows {
             let image = row
                 .values
@@ -117,7 +122,13 @@ impl Reader {
                     SqlValue::Real(n) => Some(json!(n)),
                     SqlValue::Text(s) => Some(json!(s)),
                     SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
-                        Ok(packet) => Some(Value::String(packet)),
+                        Ok(packet) => {
+                            xmp_total = xmp_total.saturating_add(packet.len());
+                            if xmp_total > MAX_XMP_TOTAL {
+                                return Err("Adobe_AdditionalMetadata: the XMP packets together exceed 1 GiB".into());
+                            }
+                            Some(Value::String(packet))
+                        }
                         Err(error) => {
                             warnings.push(format!("image {image}: {error}"));
                             None
@@ -495,25 +506,42 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let metadata: HashMap<_, _> = metadata_rows.into_iter().map(|r| (number(&r, "image"), r)).collect();
     let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
+    // each keyword's path is resolved once, however many photos carry it
+    let mut paths: HashMap<i64, Option<String>> = HashMap::new();
+    let mut keyword_bytes = 0usize;
     for r in optional_table("AgLibraryKeywordImage", &mut warnings)? {
         ensure_read_active(cancel)?;
-        let mut parts = Vec::new();
-        let mut at = number(&r, "tag");
-        let mut seen = HashSet::new();
-        while at != 0 {
-            if parts.len() >= 64 || !seen.insert(at) {
-                return Err("cyclic or overly deep keyword hierarchy".into());
+        let tag = number(&r, "tag");
+        let path = match paths.get(&tag) {
+            Some(p) => p.clone(),
+            None => {
+                let mut parts = Vec::new();
+                let mut at = tag;
+                let mut seen = HashSet::new();
+                while at != 0 {
+                    // every ancestor visited counts towards the depth, named or not
+                    if seen.len() >= 64 || !seen.insert(at) {
+                        return Err("cyclic or overly deep keyword hierarchy".into());
+                    }
+                    let Some(k) = keyword_rows.get(&at) else { break };
+                    let name = text(k, "name");
+                    if !name.is_empty() {
+                        parts.push(name.to_string());
+                    }
+                    at = number(k, "parent");
+                }
+                parts.reverse();
+                let p = (!parts.is_empty()).then(|| parts.join("|"));
+                paths.insert(tag, p.clone());
+                p
             }
-            let Some(k) = keyword_rows.get(&at) else { break };
-            let name = text(k, "name");
-            if !name.is_empty() {
-                parts.push(name.to_string());
+        };
+        if let Some(p) = path {
+            keyword_bytes = keyword_bytes.saturating_add(p.len());
+            if keyword_bytes > MAX_KEYWORD_BYTES {
+                return Err("the catalog's keyword assignments together exceed 256 MB".into());
             }
-            at = number(k, "parent");
-        }
-        parts.reverse();
-        if !parts.is_empty() {
-            keywords.entry(number(&r, "image")).or_default().push(parts.join("|"));
+            keywords.entry(number(&r, "image")).or_default().push(p);
         }
     }
     let group = |rows: Vec<Row>| {
