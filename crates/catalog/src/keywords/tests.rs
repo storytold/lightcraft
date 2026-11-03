@@ -556,6 +556,17 @@ fn the_keyword_list_is_written_as_tab_indented_text() {
     assert_eq!(c.keyword_list_text().text, "beach\nEvents\n\tWeddings\n[Places]\n\tLisbon\n\t\t{Lisboa}\n");
 }
 
+/// The path budget the reader enforces holds for the writer too: a keyword past it, and its
+/// subtree, is named unwritable instead of making a file `keyword.import` rejects.
+#[test]
+fn the_keyword_list_written_stays_within_the_path_budget() {
+    let (c, _) = lib(&[&["Places|Lisbon", "beach"], &["Events|Weddings"]]);
+    let file = c.keyword_list_text_within(17);
+    assert_eq!(file.text, "beach\nEvents\nPlaces\n");
+    assert_eq!(file.unwritable, ["Events|Weddings", "Places|Lisbon"]);
+    assert_eq!(c.keyword_list_text().unwritable, Vec::<String>::new());
+}
+
 /// Reading a list gives each keyword's path and attributes: what was written comes back, and a
 /// file from elsewhere (Windows line ends, a byte-order mark, blank lines) reads too.
 #[test]

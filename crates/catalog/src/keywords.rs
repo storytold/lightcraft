@@ -529,6 +529,13 @@ impl Catalog {
     /// keyword, a keyword left out of export in square brackets; by name. What the format can't hold
     /// is left out and named, so the file always reads back.
     pub fn keyword_list_text(&self) -> KeywordListFile {
+        self.keyword_list_text_within(MAX_LIST_PATH_BYTES)
+    }
+
+    /// [`keyword_list_text`](Self::keyword_list_text) with the full paths written held to
+    /// `max_path_bytes` as [`parse_keyword_list`] holds them: a keyword past it is named
+    /// unwritable, with its subtree, so the file reads back.
+    fn keyword_list_text_within(&self, max_path_bytes: usize) -> KeywordListFile {
         // a name the list would read as something else, or not at all
         fn unwritable(name: &str) -> bool {
             name.trim().is_empty()
@@ -539,14 +546,16 @@ impl Catalog {
                 || (name.starts_with('[') && name.ends_with(']'))
                 || (name.starts_with('{') && name.ends_with('}'))
         }
-        fn write(c: &Catalog, nodes: &[KeywordNode], depth: usize, file: &mut KeywordListFile) {
+        fn write(c: &Catalog, nodes: &[KeywordNode], depth: usize, file: &mut KeywordListFile, path_bytes: &mut usize, max_path_bytes: usize) {
             let tabs = "\t".repeat(depth);
             for n in nodes {
                 // the keywords inside go with it: under its parent they'd be other keywords
-                if depth >= MAX_LEVELS || unwritable(&n.name) {
+                // (a line's full path is what the reader counts against its path budget)
+                if depth >= MAX_LEVELS || unwritable(&n.name) || path_bytes.saturating_add(n.path.len()) > max_path_bytes {
                     file.unwritable.push(n.path.clone());
                     continue;
                 }
+                *path_bytes += n.path.len();
                 let info = c.keyword_info(&n.path).cloned().unwrap_or_default();
                 if info.include_on_export {
                     file.text.push_str(&format!("{tabs}{}\n", n.name));
@@ -570,7 +579,7 @@ impl Catalog {
                         file.text.push_str(&format!("{tabs}\t{{{s}}}\n"));
                     }
                 }
-                write(c, &n.children, depth + 1, file);
+                write(c, &n.children, depth + 1, file, path_bytes, max_path_bytes);
             }
         }
         let mut file = KeywordListFile::default();
@@ -590,7 +599,7 @@ impl Catalog {
                 }
             }
         }
-        write(self, &self.keyword_tree(), 0, &mut file);
+        write(self, &self.keyword_tree(), 0, &mut file, &mut 0, max_path_bytes);
         file.unwritable.extend(over_deep);
         file
     }
