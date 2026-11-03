@@ -175,6 +175,7 @@ fn busy(app: &LightcraftApp) -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_inspect(
     path: PathBuf,
+    temp: Option<PathBuf>,
     cancel: Arc<AtomicBool>,
     progress: LightroomProgress,
     tx: mpsc::Sender<Message>,
@@ -184,7 +185,7 @@ fn spawn_inspect(
         .name("lc-lightroom-inspect".into())
         .spawn(move || {
             let result = lightcraft_engine::guard::catch("Lightroom inspect", || {
-                lightcraft_engine::lightroom_catalog::read_with_progress(&path, &cancel, &progress.catalog_total, &progress.catalog_done)
+                lightcraft_engine::lightroom_catalog::read_source(&path, temp.as_deref(), &cancel, &progress.catalog_total, &progress.catalog_done)
             })
             .and_then(|r| r.map(inspect_report));
             let _ = tx.send(Message::Inspected(result));
@@ -385,7 +386,8 @@ fn start_inspect(app: &mut LightcraftApp, path: PathBuf, ctx: &egui::Context) ->
     let cancel = Arc::new(AtomicBool::new(false));
     let progress = LightroomProgress::default();
     let (tx, rx) = mpsc::channel();
-    spawn_inspect(path.clone(), cancel.clone(), progress.clone(), tx, ctx.clone())?;
+    let temp = lightcraft_engine::lightroom_catalog::backup_temp_root(&app.session);
+    spawn_inspect(path.clone(), temp, cancel.clone(), progress.clone(), tx, ctx.clone())?;
     app.lightroom_last = None;
     app.lightroom = Some(LightroomTask::new(&app.session, Kind::Inspect, path.clone(), cancel, progress, rx));
     Ok(json!({"running": true, "kind": "inspect", "path": path}))
@@ -788,6 +790,8 @@ mod tests {
     fn inspect_report_keeps_empty_catalog_shape() {
         let report = inspect_report(CatalogImport {
             source: "synthetic.lrcat".into(),
+            catalog_id: None,
+            catalog_path: None,
             photos: Vec::new(),
             collections: Vec::new(),
             members: Vec::new(),
