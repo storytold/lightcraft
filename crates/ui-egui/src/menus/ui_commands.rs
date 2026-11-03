@@ -282,4 +282,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
+    // the rating keys (0–5) and the color-label keys (6–9), a command each so each can have another key in Help ▸ Keyboard
+    // Shortcuts; they run `photo.rate` / `photo.label` as the Photo menu's rows do (`crate::shortcuts::culling_command`)
+    ("photo.rate0", "Clear rating", Some("0"), ""),
+    ("photo.rate1", "Rate ★", Some("1"), ""),
+    ("photo.rate2", "Rate ★★", Some("2"), ""),
+    ("photo.rate3", "Rate ★★★", Some("3"), ""),
+    ("photo.rate4", "Rate ★★★★", Some("4"), ""),
+    ("photo.rate5", "Rate ★★★★★", Some("5"), ""),
+    ("photo.labelRed", "Red label", Some("6"), ""),
+    ("photo.labelYellow", "Yellow label", Some("7"), ""),
+    ("photo.labelGreen", "Green label", Some("8"), ""),
+    ("photo.labelBlue", "Blue label", Some("9"), ""),
 ];

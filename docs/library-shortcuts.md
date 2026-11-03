@@ -32,6 +32,18 @@ Select Only Active Photo (Edit menu) narrows the selection to the active photo. 
 the photo, its edits or the last edit Undo step, and it works in any view that has an active photo.
 It can be reassigned or disabled in Help → Keyboard Shortcuts; text fields and dialogs keep the key.
 
+The rating keys `0`–`5` and the colour-label keys `6`–`9` are the default keys of commands of their own
+(Clear rating, Rate ★ to Rate ★★★★★, and the Red, Yellow, Green and Blue labels). Help → Keyboard Shortcuts
+lists each as a row, so any of them can have another key, and Photo → Set Rating and Set Color Label show
+the key each row has. A moved rating or label answers to its new key alone and its digit stops; a digit
+given to another command is taken from its rating or label, and ↺ gives it back (taking it from that
+command). The key does what the digit did: it acts on all selected photos in the grids and on the active
+photo in Compare and Survey, and Auto Advance follows. `Shift` with a digit is not a row: `Shift+0`–`Shift+5`
+and `Shift+6`–`Shift+9` stay fixed keys that apply the action and select the next photo, whatever key the
+plain action has (Help → Keyboard Shortcuts lists them under Fixed keys, as "Rate ★★ and advance" or "Red
+label and advance"), and like every fixed key they give way to a key you gave to a command. Keymaps saved
+before these rows existed keep working unchanged.
+
 Purple and clearing a colour label are available in Photo → Set Color Label and the photo context
 menu. Purple has no default number key, matching Lightroom Classic. Clear Color Label has none either,
 but it is a command of its own: give it a key in Help → Keyboard Shortcuts and the key clears the label of
@@ -72,11 +84,22 @@ keyboard input, and `X` in the Crop panel swaps the crop aspect.
 Shifted number keys also use the physical number key when the keyboard reports punctuation
 (for example, `Shift+1` as `!`). Letter shortcuts continue to follow the keyboard layout.
 
+The plain digit keys follow the physical key too on layouts that type punctuation on the digit row (French
+AZERTY types `&é"'(-è_çà`), within limits: a key counts as its digit when egui names the typed character as
+punctuation, no ⌘, ⌥ or ⌃ is held, the rating or label is still on its digit and no command has the typed
+key. French `'` (the 4 key) rates ★★★★, and the `!` of macOS's French layout (the 8 key) sets the green
+label, without Shift and without advancing, as the digits do on a US keyboard. `-` (the 6 key on a French PC
+keyboard) and `+` (the 1 key on Czech and Slovak keyboards) stay Decrease / Increase Grid Thumbnail Size, so
+those layouts give Red label or Rate ★ another key in Help → Keyboard Shortcuts. The keypad's arrow keys with
+Num Lock off are never digits.
+
 `Shift+P` picks and advances in the two library grids. In other views it retains LightCraft's
 Presets-panel binding. `Shift+Z` remains an alternative pick-and-advance key in all views.
 
 The macOS native menu displays plain-key bindings but leaves execution to egui; only shortcuts
-AppKit delivers to the menu (Command, Control or function keys) are skipped by egui. The native
+AppKit delivers to the menu (Command, Control or function keys) are skipped by egui; a rating or label given
+such a key runs from its Set Rating or Set Color Label menu row, which applies Auto Advance and the Compare
+rule as the digit does. The native
 menu correction is adapted from [PR #261](https://github.com/storytold/lightcraft/pull/261),
 commit `4e012a59a6d2442ba749f109ea27aadb5c0b11a5` by Gardy, and addresses the cause reported in
 [issue #283](https://github.com/storytold/lightcraft/issues/283). That PR was open when checked

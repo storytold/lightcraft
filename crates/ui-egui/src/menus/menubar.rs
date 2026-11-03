@@ -529,8 +529,8 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
         "Set Rating" => (0..=5u8)
             .map(|r| {
                 let label = if r == 0 { "None".to_string() } else { "★".repeat(r as usize) };
-                let sc = ["0", "1", "2", "3", "4", "5"][r as usize];
-                item("photo.rate", json!({"rating": r}), label, Some(sc), has, Some(active.as_ref().is_some_and(|p| p.rating == r)))
+                let sc = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, &format!("photo.rate{r}"));
+                item("photo.rate", json!({"rating": r}), label, sc, has, Some(active.as_ref().is_some_and(|p| p.rating == r)))
             })
             .collect(),
         "Set Flag" => [
@@ -546,8 +546,9 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
         "Set Color Label" => {
             let mut v: Vec<MenuNode> = lightcraft_catalog::ColorLabel::ALL
                 .iter()
-                .zip([Some("6"), Some("7"), Some("8"), Some("9"), None])
-                .map(|(l, sc)| {
+                .zip([Some("photo.labelRed"), Some("photo.labelYellow"), Some("photo.labelGreen"), Some("photo.labelBlue"), None])
+                .map(|(l, key)| {
+                    let sc = key.and_then(|id| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, id));
                     let name = format!("{l:?}");
                     let label = match app.session.catalog.custom_label_name(*l) {
                         Some(custom) => format!("{custom} ({})", crate::i18n::tr(&name)),

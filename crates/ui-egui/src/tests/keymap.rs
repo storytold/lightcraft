@@ -693,3 +693,53 @@ fn h_keeps_its_binding_when_the_masking_panel_is_not_exposed() {
     assert_eq!(h.app.ui.tool, "remove");
     assert!(h.app.ui.mask_pins, "the pins are untouched");
 }
+
+/// The rating keys (0–5) are rows of the editor like any other command: a key recorded for one rates with it
+/// and the digit it had stops, and Reset All gives the digit back.
+#[test]
+fn a_rating_row_records_a_key_that_rates_and_the_digit_stops() {
+    use crate::shortcuts::shortcut_of;
+    let mut h = demo();
+    let id = h.app.session.active().expect("the demo has an active photo");
+    let rating = |h: &Headless| h.app.session.catalog.photo(id).unwrap().rating;
+    record(&mut h, "photo.rate3", "photo.rate3");
+    key(&mut h, "F3", false);
+    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.rate3"), Some("F3"));
+    key(&mut h, "Escape", false);
+    assert!(h.app.ui.dialog.is_none());
+    // F3 rates; the 3 is free
+    h.app.run("photo.rate", json!({"rating": 1})).unwrap();
+    key(&mut h, "3", false);
+    assert_eq!(rating(&h), 1);
+    key(&mut h, "F3", false);
+    assert_eq!(rating(&h), 3);
+    // Reset All gives the 3 back and takes F3 away
+    h.app.run("app.resetShortcuts", json!({})).unwrap();
+    h.app.run("photo.rate", json!({"rating": 1})).unwrap();
+    key(&mut h, "F3", false);
+    assert_eq!(rating(&h), 1);
+    key(&mut h, "3", false);
+    assert_eq!(rating(&h), 3);
+}
+
+/// The color-label keys (6–9) are rows of the editor too.
+#[test]
+fn a_label_row_records_a_key_that_labels_and_the_digit_stops() {
+    use crate::shortcuts::shortcut_of;
+    use lightcraft_catalog::ColorLabel;
+    let mut h = demo();
+    let id = h.app.session.active().expect("the demo has an active photo");
+    let label = |h: &Headless| h.app.session.catalog.photo(id).unwrap().label;
+    record(&mut h, "photo.labelRed", "photo.labelRed");
+    press(&mut h, "6", &["alt"]);
+    h.step();
+    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.labelRed"), Some("Alt+6"));
+    key(&mut h, "Escape", false);
+    assert!(h.app.ui.dialog.is_none());
+    // Alt+6 labels (and takes the key from the sixth keyword); the 6 is free
+    h.app.run("photo.label", json!({"label": "blue"})).unwrap();
+    key(&mut h, "6", false);
+    assert_eq!(label(&h), Some(ColorLabel::Blue));
+    press(&mut h, "6", &["alt"]);
+    assert_eq!(label(&h), Some(ColorLabel::Red));
+}

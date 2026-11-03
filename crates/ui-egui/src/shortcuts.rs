@@ -208,6 +208,54 @@ pub fn format(m: Modifiers, k: Key) -> Option<String> {
     (back.1 == want).then_some(s)
 }
 
+/// What a rating or color-label key sets.
+#[derive(Clone, Copy)]
+enum Cull {
+    Rating(u8),
+    Label(&'static str),
+}
+
+/// The rating keys (0–5) and the color-label keys (6–9) are commands of their own, so Help ▸ Keyboard Shortcuts can give each
+/// another key; the digits are the declared keys of these ids in `UI_COMMANDS`. The keys with Shift (rate or label and advance)
+/// stay fixed keys: [`ALIASES`] and [`fixed_photo_keys`].
+const CULLING_KEYS: [(&str, Cull); 10] = [
+    ("photo.rate0", Cull::Rating(0)),
+    ("photo.rate1", Cull::Rating(1)),
+    ("photo.rate2", Cull::Rating(2)),
+    ("photo.rate3", Cull::Rating(3)),
+    ("photo.rate4", Cull::Rating(4)),
+    ("photo.rate5", Cull::Rating(5)),
+    ("photo.labelRed", Cull::Label("red")),
+    ("photo.labelYellow", Cull::Label("yellow")),
+    ("photo.labelGreen", Cull::Label("green")),
+    ("photo.labelBlue", Cull::Label("blue")),
+];
+
+fn culling_key(id: &str) -> Option<Cull> {
+    CULLING_KEYS.iter().find(|(key, _)| *key == id).map(|(_, cull)| *cull)
+}
+
+/// The command a rating or color-label key runs, with its parameters: what the Photo menu's rows run too.
+pub(crate) fn culling_command(id: &str) -> Option<(&'static str, Value)> {
+    Some(match culling_key(id)? {
+        Cull::Rating(rating) => ("photo.rate", json!({"rating": rating})),
+        Cull::Label(label) => ("photo.label", json!({"label": label})),
+    })
+}
+
+/// Whether `id` is a rating or color-label key's command: no allocation, for the per-frame enabled check.
+pub(crate) fn is_culling_command(id: &str) -> bool {
+    culling_key(id).is_some()
+}
+
+/// What the press of a rating or color-label key fires: the ids [`fire_rating_key`] runs through the culling path.
+fn culling_fire(id: &str) -> Option<String> {
+    Some(match culling_key(id)? {
+        Cull::Rating(rating) => format!("rate:{rating}:0"),
+        Cull::Label(label) => format!("label:{label}"),
+    })
+}
+
 /// Secondary key bindings for commands that already exist: `(shortcut, command id, params JSON)`.
 /// They complement the primary shortcut declared on the command (Lightroom-desktop keys that our
 /// primary keymap assigns elsewhere, see docs/ui-parity.md → Shortcuts). Shown in Help → Keyboard Shortcuts.
@@ -314,6 +362,63 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
             && modifiers.shift == m.shift
             && modifiers.alt == m.alt
     })
+}
+
+/// The keys egui names for the punctuation a layout types: the ones a digit-row key can type instead of its digit.
+fn is_symbol(k: Key) -> bool {
+    matches!(
+        k,
+        Key::Colon
+            | Key::Comma
+            | Key::Backslash
+            | Key::Slash
+            | Key::Pipe
+            | Key::Questionmark
+            | Key::Exclamationmark
+            | Key::OpenBracket
+            | Key::CloseBracket
+            | Key::OpenCurlyBracket
+            | Key::CloseCurlyBracket
+            | Key::Backtick
+            | Key::Minus
+            | Key::Period
+            | Key::Plus
+            | Key::Equals
+            | Key::Semicolon
+            | Key::Quote
+    )
+}
+
+/// Whether a command has the plain key `k` as its shortcut or as an alias.
+fn claimed(keymap: &Keymap, k: Key) -> bool {
+    let plain = (Modifiers::NONE, k);
+    bindable().iter().any(|b| binding(keymap, b.id, b.default).and_then(parse) == Some(plain))
+        || ALIASES.iter().any(|(sc, ..)| parse(sc) == Some(plain))
+}
+
+/// A rating or color-label key at its digit, pressed on a layout that types punctuation there: French AZERTY types
+/// `&é"'(-è_çà` on the digit row and needs Shift for the digits. egui-winit names the typed character as the key when egui
+/// has a key for it (`'`, `-`, `!`, `+`) and keeps the key's place in `physical_key`, so the digit shortcut also matches
+/// the key by its place. Not when another command has the typed key (`-` is Decrease Grid Thumbnail Size's), when ⌘, ⌥ or ⌃
+/// is held, or for a key the user moved: only the digit defaults. A key whose character is no punctuation stays what it is:
+/// the numpad's arrows and Home with Num Lock off, over the 4 and the 7. On Windows and Linux AltGr reaches egui without ⌃ or
+/// ⌥ (winit drops them), so AltGr+4 (`{`) rates there too, as AltGr with the digit-row keys egui has no key for already did.
+fn digit_by_place(i: &egui::InputState, keymap: &Keymap, b: &Bindable, sc: &str, digit: Key) -> bool {
+    // the cheap checks first: this runs for every bound command, every frame
+    if b.default != Some(sc) || culling_key(b.id).is_none() {
+        return false;
+    }
+    let Some(typed) = i.events.iter().find_map(|e| match e {
+        egui::Event::Key { key, physical_key: Some(place), pressed: true, modifiers, .. }
+            if *place == digit && modifiers.is_none() && is_symbol(*key) =>
+        {
+            Some(*key)
+        }
+        _ => None,
+    }) else {
+        return false;
+    };
+    !claimed(keymap, typed)
 }
 
 /// Default brackets rate in grids, and the default backslash shows / hides the Filter Bar there
@@ -449,7 +554,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
-                && matches(i, m, k)
+                && (matches(i, m, k) || digit_by_place(i, keymap, b, sc, k))
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 if id == "view.zoomToggle" && k == Key::Space {
@@ -459,7 +564,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                         aliased.push(("view.zoomToggle", json!({})));
                     }
                 } else {
-                    fire.push(id.to_string());
+                    fire.push(culling_fire(id).unwrap_or_else(|| id.to_string()));
                 }
             }
         }
@@ -473,27 +578,18 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }
         }
-        fixed_photo_keys(i, &native, &taken, grid_navigation, &mut fire);
+        fixed_photo_keys(i, &taken, grid_navigation, &mut fire);
         h_press = matches(i, Modifiers::NONE, Key::H) && !native("H") && !taken.contains(&(Modifiers::NONE, Key::H));
     });
     (fire, aliased, h_press)
 }
 
-/// The fixed photo keys pressed: ratings 0-5, colour labels 6-9 (with Shift: and advance), and in a grid the
-/// navigation keys. Keys the user gave to a command (`taken`) and the native menu's (`native`) are left alone.
-fn fixed_photo_keys(i: &egui::InputState, native: &dyn Fn(&str) -> bool, taken: &[(Modifiers, Key)], grid_navigation: bool, fire: &mut Vec<String>) {
-    // rating 0-5, colour labels 6-9 (with Shift: and advance)
+/// The fixed photo keys pressed: the rating keys with Shift (rate and advance) and, in a grid, the navigation keys. The plain
+/// rating and color-label keys are commands of their own ([`CULLING_KEYS`]). Keys the user gave to a command (`taken`) are left alone.
+fn fixed_photo_keys(i: &egui::InputState, taken: &[(Modifiers, Key)], grid_navigation: bool, fire: &mut Vec<String>) {
     for (n, key) in [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5].iter().enumerate() {
-        if matches(i, Modifiers::NONE, *key) && !native(&n.to_string()) && !taken.contains(&(Modifiers::NONE, *key)) {
-            fire.push(format!("rate:{n}:0"));
-        }
         if matches(i, Modifiers::SHIFT, *key) && !taken.contains(&(Modifiers::SHIFT, *key)) {
             fire.push(format!("rate:{n}:1"));
-        }
-    }
-    for (label, key, sc) in [("red", Key::Num6, "6"), ("yellow", Key::Num7, "7"), ("green", Key::Num8, "8"), ("blue", Key::Num9, "9")] {
-        if matches(i, Modifiers::NONE, key) && !native(sc) && !taken.contains(&(Modifiers::NONE, key)) {
-            fire.push(format!("label:{label}"));
         }
     }
     if !grid_navigation {
@@ -845,3 +941,7 @@ mod enable_filters_tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_filter_bar_key.rs"]
 mod filter_bar_key_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_culling_keys.rs"]
+mod culling_key_tests;
