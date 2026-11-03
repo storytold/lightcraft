@@ -264,7 +264,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "library.memory", "Memory Usage", [], None, "{} — bytes held by each cache (decoded sources, rendered previews, GPU buffers; heap when instrumented)", always, |s, _| {
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
         }),
-        cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — the process's memory budget shared by the caches, in MB; returns the memory report. Missing: report only. 0: automatic, a quarter of RAM or of the cgroup memory limit, at most 1536 MB (under a small limit it can be below 64 MB). 64..1048576: that many MB", always, |s, p| {
+        cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — the process's memory budget shared by the caches, in MB; returns the memory report. Missing: report only. 0: automatic, a quarter of the lower of RAM and the cgroup or Windows job memory limit, at most 1536 MB (under a small limit it can be below 64 MB). 64..1048576: that many MB", always, |s, p| {
             if let Some(mb) = p.get("mb").and_then(Value::as_f64) {
                 if mb == 0.0 {
                     s.reset_memory_budget();
