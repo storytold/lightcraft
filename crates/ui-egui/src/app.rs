@@ -186,6 +186,19 @@ impl LightcraftApp {
         }
     }
 
+    /// End a Brush stroke being painted, if one is: what already went to the photo stays (its undo step is
+    /// closed), what didn't is dropped. The pointer still held paints nothing more until it is let go.
+    /// Other gestures are left alone.
+    pub(crate) fn cancel_brush_gesture(&mut self) {
+        let Some(crate::panels::detail::Gesture::Brush { live, .. }) = &self.gesture else { return };
+        let went_live = live.is_some();
+        self.gesture = None;
+        self.brush_live = None;
+        if went_live {
+            let _ = self.session.execute("develop.endInteraction", &serde_json::json!({}));
+        }
+    }
+
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.run_typed(id, params).map_err(|e| e.message)
@@ -194,6 +207,11 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        // a brush stroke being painted belongs to the mask and photo it started on: picking another ends it
+        // first, so its next live update or its release can't land on the one picked
+        if matches!(id, "mask.select" | "library.select") {
+            self.cancel_brush_gesture();
+        }
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }
@@ -236,15 +254,12 @@ impl LightcraftApp {
         {
             self.ui.tool.clear();
         }
-        if r.is_ok() && id == "mask.adjust" {
-            // Judge local adjustments on the photo, without the selection overlay obscuring them.
-            // Keep it hidden after release; O / the overlay eye can show it again.
-            self.ui.mask_overlay = false;
-        }
-        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select") {
-            // A new or newly picked mask shows its overlay again, as in Lightroom: hidden by a slider
-            // drag above, it stayed hidden while the Overlay menu still named a mode (issue #1800).
-            self.ui.mask_overlay = true;
+        // (a mask's sliders don't switch the overlay off, and creating or picking a mask doesn't
+        // switch it on: one rule decides when it shows, see `panels::detail::overlay_mask`)
+        if r.is_ok() && !self.ui.mask_overlay_hidden.is_empty() {
+            // a mask an undo, a history step or pasted settings took away frees its id for the next new
+            // mask: whether O hid its overlay goes with it
+            crate::panels::masking::forget_missing_overlays(self);
         }
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise
@@ -497,8 +512,8 @@ impl LightcraftApp {
             ctx.request_repaint();
         }
         if let Some(mask) = polled.refine {
-            // a new selection from a click or a description: show it, as `run` does for new masks
-            self.ui.mask_overlay = true;
+            // (a new selection from a click or a description shows by the overlay rule while its
+            // mask has no settings: `panels::detail::overlay_mask`)
             self.ui.detail_due = Some((now + 0.3, mask));
         }
         if let Some(e) = polled.messages.into_iter().last() {

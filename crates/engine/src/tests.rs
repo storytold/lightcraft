@@ -415,6 +415,24 @@ fn connected_brush_strokes_start_where_the_last_one_ended() {
     assert_eq!(strokes(&s).len(), 2);
 }
 
+/// A stroke sent again as it grows (its effect shows while painting) replaces itself; earlier strokes stay.
+#[test]
+fn a_stroke_sent_again_as_it_grows_replaces_itself() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+    s.execute("mask.brushStroke", &json!({"points": [[0.1, 0.1]]})).unwrap();
+    s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.2]]})).unwrap();
+    for n in [3, 4] {
+        let pts: Vec<[f64; 2]> = (0..n).map(|i| [0.2 + 0.1 * i as f64, 0.2]).collect();
+        s.execute("mask.brushStroke", &json!({"points": pts, "continue": true})).unwrap();
+    }
+    let dev = active_dev(&s);
+    let Some(lightcraft_develop::MaskShape::Brush { strokes }) = dev.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) else {
+        panic!("a brush mask")
+    };
+    assert_eq!(strokes.iter().map(|s| s.points.len()).collect::<Vec<_>>(), vec![1, 4], "the earlier stroke stays, the live one is replaced");
+}
+
 #[test]
 fn a_mask_id_at_the_limit_does_not_overflow_the_next_masks() {
     let mut s = demo();

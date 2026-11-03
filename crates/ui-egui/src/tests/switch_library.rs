@@ -87,6 +87,20 @@ fn switching_libraries_restarts_the_brief_info_overlay() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Masks hidden with O are keyed by photo and mask ID, both local to a library: a mask in the new
+/// library with the same IDs is not hidden by them.
+#[test]
+fn switching_libraries_forgets_the_masks_hidden_with_o() {
+    let dir = temp("switch-hidden-masks");
+    let mut app = app_in(&dir);
+    app.ui.mask_overlay_hidden = vec![(lightcraft_catalog::PhotoId(1), 1)];
+    app.ui.mask_hover = Some((lightcraft_catalog::PhotoId(1), 1));
+    app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Second"})).unwrap();
+    assert!(app.ui.mask_overlay_hidden.is_empty());
+    assert_eq!(app.ui.mask_hover, None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn recent_submenu(app: &LightcraftApp) -> Vec<crate::menubar::MenuNode> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(app);
