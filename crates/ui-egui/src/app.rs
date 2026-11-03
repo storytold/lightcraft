@@ -38,6 +38,7 @@ impl LightcraftApp {
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
+            metadata_panel: Default::default(),
             text_focus: false,
             headless_host: false,
             notices: vec![],
@@ -212,7 +213,16 @@ impl LightcraftApp {
         } else {
             params
         };
-        let r = self.session.execute(id, &params).map_err(CommandError::from);
+        let combined = crate::album_combination::active(self);
+        let mut r = self.session.execute(id, &params).map_err(CommandError::from);
+        if r.is_ok() && id == "library.source" && combined {
+            self.session.filter.rule_set = None;
+            self.ui.album_combination = None;
+            self.session.keep_active_in_view();
+            if let Ok(result) = &mut r {
+                *result = serde_json::json!({"count": self.session.visible().len()});
+            }
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))

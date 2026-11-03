@@ -60,19 +60,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     app.ui.dialog = Some(crate::state::Dialog::About);
                 }
             });
-            // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
+            // bottom icons: three buttons and two gaps tall, so Info ends at the bottom margin as
             // Presets starts at the top one
             let bottom = ui.max_rect().bottom();
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)),
-                    ui.max_rect().right_bottom(),
-                )));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
+                egui::pos2(ui.max_rect().left(), bottom - (3.0 * BUTTON_H + 2.0 * GAP)),
+                ui.max_rect().right_bottom(),
+            )));
             child.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
                 if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
                     let _ = app.run("panel.keywords", json!({}));
+                }
+                if icon_button(ui, "metadata", Icon::Album, sz, app.ui.right == RightPanel::Metadata, has_photo, "Metadata").clicked() {
+                    let _ = app.run("panel.metadata", json!({}));
                 }
                 if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
                     let _ = app.run("panel.info", json!({}));
@@ -103,9 +105,10 @@ mod tests {
             widgets = crate::widgets::take_registry(&view.ctx);
         }
         let rect = |id: &str| widgets.iter().find(|(w, _)| w == id).unwrap_or_else(|| panic!("{id} not registered")).1;
-        let (presets, keywords, info) = (rect("icon:presets"), rect("icon:keywords"), rect("icon:info"));
+        let (presets, keywords, metadata, info) = (rect("icon:presets"), rect("icon:keywords"), rect("icon:metadata"), rect("icon:info"));
         let (top, bottom) = (presets.top(), 700.0 - info.bottom());
         assert!((top - bottom).abs() < 0.5, "Presets starts {top} below the top, Info ends {bottom} above the bottom");
-        assert_eq!(info.top() - keywords.bottom(), GAP, "the bottom buttons are spaced like the top ones");
+        assert_eq!(metadata.top() - keywords.bottom(), GAP);
+        assert_eq!(info.top() - metadata.bottom(), GAP, "the bottom buttons are spaced like the top ones");
     }
 }

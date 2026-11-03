@@ -393,11 +393,12 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.font = t.font(12.0);
     // Tool and preset panels publish hover previews before the photo consumes them.
     let mut canvas = None;
+    let tools_label = if app.ui.right == crate::state::RightPanel::Metadata { "Metadata" } else { "Tools" };
     let output = DockArea::new(egui::Id::unique("lightcraft-docking")).locked(workspace.locked).show_with_limits(
         ui,
         &workspace.layout,
         &style,
-        |panel| crate::i18n::tr(panel.label()).into(),
+        |panel| crate::i18n::tr(if *panel == Panel::Tools { tools_label } else { panel.label() }).into(),
         permissions,
         panel_limits,
         |ui, panel| match panel {
@@ -412,7 +413,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
                 crate::panels::left::show(app, ui);
             }
             Panel::Tools => {
-                crate::widgets::announce_region(ui, egui::accesskit::Role::Complementary, crate::i18n::tr(Panel::Tools.label()));
+                crate::widgets::announce_region(ui, egui::accesskit::Role::Complementary, crate::i18n::tr(tools_label));
                 crate::widgets::register(ui, "panel:right_panel", ui.max_rect());
                 crate::panels::right::show(app, ui);
             }

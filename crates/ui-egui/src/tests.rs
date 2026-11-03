@@ -16,6 +16,7 @@ mod copy_paste_dialogs;
 mod crop_rotate;
 mod crop_tool;
 mod curve;
+mod custom_workflow;
 mod date_picker;
 mod dialog_copy;
 mod dialog_fit;

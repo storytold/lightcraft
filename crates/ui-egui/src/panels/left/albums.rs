@@ -5,6 +5,7 @@ use super::{Album, AlbumId, Align2, Icon, LibrarySource, LightcraftApp, Rect, Se
 /// Albums: the tree of albums and the folders they are sorted into. `reveal`: an album just made,
 /// whose folders open down to it.
 pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Option<u64>) {
+    crate::album_combination::controls(app, ui);
     let kids: AlbumKids = app.session.catalog.album_children_by_parent().into_iter().map(|(k, v)| (k, v.into_iter().cloned().collect())).collect();
     let cat = &app.session.catalog;
     let mut open_to = Vec::new();
@@ -61,7 +62,8 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
             }
         } else {
-            let sel = app.session.source == LibrarySource::Album(a.id);
+            let sel = app.session.source == LibrarySource::Album(a.id)
+                || (crate::album_combination::active(app) && app.ui.album_combination.as_ref().is_some_and(|(ids, _)| ids.contains(&a.id.0)));
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
             // cached: a smart album's count scans the catalog
             let now = (app.session.clock)();
@@ -78,7 +80,8 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 .selected(sel)
                 .indent(indent)
                 .sense(Sense::click_and_drag())
-                .show(app, ui);
+                .show(app, ui)
+                .on_hover_text(crate::i18n::tr("Cmd/Ctrl-click albums to combine. A plain click shows one album."));
             if !problems.is_empty() {
                 crate::widgets::register(ui, format!("albumProblem:{}", a.id.0), resp.rect);
             }
@@ -103,7 +106,11 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 resp = resp.on_hover_text(tip);
             }
             if resp.clicked() {
-                let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+                if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
+                    crate::album_combination::toggle(app, a.id.0);
+                } else {
+                    let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+                }
             }
             folder_menu(app, &resp, a);
         }

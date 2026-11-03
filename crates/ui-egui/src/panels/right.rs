@@ -15,6 +15,8 @@ mod crop;
 mod history;
 mod info;
 mod keywords;
+mod metadata;
+pub(crate) use metadata::Runtime as MetadataRuntime;
 
 #[cfg(test)]
 use crop::aspect_label;
@@ -87,6 +89,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Masking => super::masking::show(app, ui, id),
                 RightPanel::RedEye => red_eye(app, ui, id),
                 RightPanel::Info => info(app, ui, id),
+                RightPanel::Metadata => metadata::show(app, ui, id),
                 RightPanel::Keywords => keywords(app, ui, id),
                 RightPanel::Versions => versions(app, ui, id),
                 RightPanel::Activity => activity(app, ui, id),

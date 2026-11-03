@@ -33,6 +33,8 @@ pub enum RightPanel {
     Activity,
     Keywords,
     Info,
+    /// Compact, read-only metadata for the active photo.
+    Metadata,
     /// The profile browser (part of Edit).
     Profiles,
 }
