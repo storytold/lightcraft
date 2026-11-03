@@ -109,6 +109,16 @@ pub(crate) fn control_port_from(what: &str, value: Option<String>) -> Option<u16
     port
 }
 
+/// The value after `--control-token`: an error when it is missing or looks like the next option
+/// (`--control-token --library x` would otherwise take `--library` as the token and drop the option).
+/// A token that really starts with `--` goes in `LIGHTCRAFT_CONTROL_TOKEN`.
+pub(crate) fn control_token_value(next: Option<String>) -> Result<Option<String>, &'static str> {
+    match next {
+        Some(v) if !v.starts_with("--") => Ok(crate::control_server::clean_token(Some(v))),
+        _ => Err("--control-token needs a value (a token starting with `--` can be given in LIGHTCRAFT_CONTROL_TOKEN)"),
+    }
+}
+
 /// An isolated profile keeps the emergency crash log with its other app data. With no
 /// override (or an empty override), retain the historical system-temp location.
 pub(crate) fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: std::path::PathBuf) -> std::path::PathBuf {

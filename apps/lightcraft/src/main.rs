@@ -170,7 +170,13 @@ fn main() -> eframe::Result {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = control_port_from("--control", Some(args.next().unwrap_or_default())),
-            "--control-token" => control_token = control_server::clean_token(args.next()),
+            "--control-token" => match launch::control_token_value(args.next()) {
+                Ok(token) => control_token = token,
+                Err(e) => {
+                    eprintln!("lightcraft: {e}\n\n{HELP}");
+                    std::process::exit(2);
+                }
+            },
             "--library" => library_dir = args.next().map(std::path::PathBuf::from),
             "--no-demo" => seed_demo = false,
             "--memory" | "--demo" => in_memory = true,
@@ -339,14 +345,17 @@ fn main() -> eframe::Result {
                     app.notices.push(notice);
                 }
                 if let Some(port) = control_port {
-                    // bind first: the token file is written only for a port this run really holds
-                    match control_server::bind(port) {
-                        Ok(listener) => {
-                            let no_auth = matches!(std::env::var("LIGHTCRAFT_CONTROL_NO_AUTH").as_deref(), Ok("1") | Ok("true"));
-                            let token = control_server::prepare_token(port, control_token.take(), no_auth, in_memory);
-                            let rx = control_server::start(listener, cc.egui_ctx.clone(), token);
-                            app = app.with_control(rx);
-                        }
+                    // binds first: the token file is written only for a port this run really holds
+                    let no_auth = matches!(std::env::var("LIGHTCRAFT_CONTROL_NO_AUTH").as_deref(), Ok("1") | Ok("true"));
+                    match control_server::start_control(
+                        port,
+                        control_token.take(),
+                        no_auth,
+                        in_memory,
+                        control_server::token_file(port),
+                        cc.egui_ctx.clone(),
+                    ) {
+                        Ok(rx) => app = app.with_control(rx),
                         Err(e) => log::error!("control server failed to bind 127.0.0.1:{port}: {e}"),
                     }
                 }

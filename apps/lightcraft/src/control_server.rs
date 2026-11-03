@@ -50,17 +50,34 @@ pub fn clean_token(token: Option<String>) -> Option<String> {
     token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
 }
 
-/// The token the control channel on `port` will require (`None`: authentication is off, and the
-/// token file of an earlier run is removed). Without `explicit` a random one is generated. It is
-/// also written to the token file for `lightcraft-cli`; call this only after [`bind`] succeeded.
+/// Bind `port`, then decide the token and write it to `token_path`, then serve: the order matters, so
+/// that a port already held by another run leaves that run's token file alone (the error is returned
+/// before anything is touched). `main.rs` passes [`token_file`]`(port)`; tests pass a temp path.
+/// `ephemeral` is `--memory` (see [`prepare_token`]).
+pub fn start_control(
+    port: u16,
+    explicit: Option<String>,
+    no_auth: bool,
+    ephemeral: bool,
+    token_path: Option<std::path::PathBuf>,
+    ctx: egui::Context,
+) -> std::io::Result<Receiver<ControlRequest>> {
+    let listener = bind(port)?;
+    let token = prepare_token(token_path.as_deref(), explicit, no_auth, ephemeral);
+    Ok(start(listener, ctx, token))
+}
+
+/// The token the control channel will require (`None`: authentication is off, and the token file of
+/// an earlier run at `token_path` is removed). Without `explicit` a random one is generated. It is
+/// also written to `token_path` for `lightcraft-cli`; call this only after [`bind`] succeeded.
 ///
 /// `ephemeral` (a `--memory` session, which saves nothing): no file is written or removed. A
 /// generated token is logged once instead, because that is the only way a client can learn it.
-pub fn prepare_token(port: u16, explicit: Option<String>, no_auth: bool, ephemeral: bool) -> Option<String> {
+pub fn prepare_token(token_path: Option<&std::path::Path>, explicit: Option<String>, no_auth: bool, ephemeral: bool) -> Option<String> {
     if no_auth {
         log::warn!("control channel started WITHOUT authentication (LIGHTCRAFT_CONTROL_NO_AUTH)");
-        if !ephemeral {
-            remove_token_file(port);
+        if !ephemeral && let Some(path) = token_path {
+            remove_file_if_present(path);
         }
         return None;
     }
@@ -73,7 +90,10 @@ pub fn prepare_token(port: u16, explicit: Option<String>, no_auth: bool, ephemer
         );
         return Some(token);
     }
-    match write_token_file(port, &token) {
+    let written = token_path
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory"))
+        .and_then(|path| write_token_at(path, &token).map(|()| path));
+    match written {
         Ok(path) => log::info!("control token written to {} (lightcraft-cli reads it from there)", path.display()),
         Err(e) if generated => log::warn!(
             "could not write the control token file: {e}. This app generated its own token, so no client can learn it: \
@@ -121,14 +141,7 @@ pub fn token_file(port: u16) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".lightcraft").join(format!("control-{port}.token")))
 }
 
-/// Delete the token file of an earlier run on `port`: an app started without authentication must
-/// not leave one behind, or `lightcraft-cli` keeps sending `auth` to it.
-pub fn remove_token_file(port: u16) {
-    if let Some(path) = token_file(port) {
-        remove_file_if_present(&path);
-    }
-}
-
+/// Delete `path` if it exists (an earlier run's token file); other errors are logged, not fatal.
 fn remove_file_if_present(path: &std::path::Path) {
     match std::fs::remove_file(path) {
         Ok(()) => {}
@@ -150,13 +163,6 @@ pub fn random_token() -> String {
         out.push_str(&format!("{:016x}", h.finish()));
     }
     out
-}
-
-/// Write `token` to [`token_file`] with owner-only permissions; returns the path.
-pub fn write_token_file(port: u16, token: &str) -> std::io::Result<std::path::PathBuf> {
-    let path = token_file(port).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory"))?;
-    write_token_at(&path, token)?;
-    Ok(path)
 }
 
 /// Write `token` to `path` (creating its folder), readable by the owner only on Unix, whether or not
@@ -662,26 +668,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A fresh folder for a token file; the caller removes it.
+    fn temp_token_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-token-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn a_memory_session_generates_a_token_but_writes_no_file() {
-        // a port nothing here uses; the real token file path is only checked, not written
-        let port = 65_531;
-        let existed = token_file(port).is_some_and(|p| p.exists());
-        let token = prepare_token(port, None, false, true).expect("a token is generated");
+        let dir = temp_token_dir("memory");
+        let path = dir.join("control-1.token");
+        let token = prepare_token(Some(&path), None, false, true).expect("a token is generated");
         assert_eq!(token.len(), 32);
-        assert_eq!(token_file(port).is_some_and(|p| p.exists()), existed, "no token file written");
-        if !existed {
-            remove_token_file(port); // clean up if the assertion above ever fails
-        }
-        // with authentication off there is no token, in memory or not
-        assert_eq!(prepare_token(port, Some("given".into()), true, true), None, "no_auth still means no token");
+        assert!(!path.exists(), "--memory writes no token file");
+        // with authentication off nothing is removed either: nothing of ours is on disk
+        std::fs::write(&path, "someone else's").unwrap();
+        assert_eq!(prepare_token(Some(&path), None, true, true), None);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "someone else's");
+        // a normal run writes the token, and without authentication removes the file again
+        let token = prepare_token(Some(&path), None, false, false).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
+        assert_eq!(prepare_token(Some(&path), None, true, false), None);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_taken_port_is_reported_before_any_token_is_written() {
         let held = bind(0).unwrap();
         let port = held.local_addr().unwrap().port();
-        assert!(bind(port).is_err(), "the second bind fails, so main writes no token file");
+        assert!(bind(port).is_err(), "the second bind fails");
+        // the startup sequence main.rs runs: another run's token file must survive a failed bind
+        let dir = temp_token_dir("taken");
+        let path = dir.join(format!("control-{port}.token"));
+        std::fs::write(&path, "sentinel").unwrap();
+        let result = std::panic::catch_unwind(|| {
+            for (explicit, no_auth, memory) in [(None, false, false), (Some("t".to_string()), false, false), (None, true, false), (None, false, true)]
+            {
+                let err = start_control(port, explicit, no_auth, memory, Some(path.clone()), egui::Context::default());
+                assert!(err.is_err(), "the port is held");
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "sentinel", "no_auth={no_auth} memory={memory}");
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_ok(), "a failed bind touched the token file");
     }
 
     #[test]
