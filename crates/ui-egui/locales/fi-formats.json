@@ -22,7 +22,6 @@
   "+{} more": "+{} lisää",
   ", {failed} file{} not readable": ", ei luettavissa olevia tiedostoja: {failed}{:.0}",
   ", {} label": ", {} merkintä",
-  ", {} star{}": ", tähtiä {}{:.0}",
   "1 task is still running: {names}. Quitting stops it.": "1 tehtävä on yhä käynnissä: {names}. Lopettaminen pysäyttää sen.",
   "; {kept} already had a location": "; jo sijaintitiedolliset: {kept}",
   "; {n} gained synonyms": "; {n} sai synonyymejä",
@@ -317,5 +316,6 @@
   "Panel layout could not be restored: {error}": "Paneelien asettelua ei voitu palauttaa: {error}",
   "Panel move was not applied: {error}": "Paneelin siirtoa ei otettu käyttöön: {error}",
   "{name} is installed": "{name} on asennettu",
-  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä"
+  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä",
+  ", rating {} of 5": ", luokitus: {} / 5"
 }

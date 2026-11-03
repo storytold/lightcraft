@@ -199,7 +199,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Foto simili: {n}{:.0} · Visualizza → Cancella filtri per vederle tutte",
   "Moved; {} photo(s) relinked": "Spostata; foto ricollegate: {}",
   "{} label (click more labels to show any of them)": "Etichetta {} (fai clic su altre etichette per mostrarne una qualsiasi)",
-  ", {} star{}": ", stelle: {}{:.0}",
   ", {} label": ", etichetta {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Scaricato da {host}. Quando è arrivato ed è stato verificato, LightCraft lo installa e {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -317,5 +316,6 @@
   "Panel layout could not be restored: {error}": "Non è stato possibile ripristinare la disposizione dei pannelli: {error}",
   "Panel move was not applied: {error}": "Lo spostamento del pannello non è stato applicato: {error}",
   "{name} is installed": "{name} è installato",
-  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo"
+  "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
+  ", rating {} of 5": ", valutazione: {} su 5"
 }

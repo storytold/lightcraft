@@ -49,5 +49,5 @@ fn the_photo_in_detail_says_its_rating_and_flag_as_the_grid_does() {
     h.state_mut().run("photo.flag", serde_json::json!({"flag": "pick"})).expect("flags");
     h.run_steps(4);
     let names = photo_names(&h);
-    assert!(names.len() == 1 && names[0].ends_with(", 4 stars, picked"), "{names:?}");
+    assert!(names.len() == 1 && names[0].ends_with(", rating 4 of 5, picked"), "{names:?}");
 }

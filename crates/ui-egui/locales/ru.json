@@ -1556,7 +1556,8 @@
   "Watermark": "Водяной знак",
   "Wednesday": "Среда",
   "What's New": "Что нового",
-  "When rated or hovered": "При оценке или наведении",
+  "Stars on hover": "Звёзды при наведении",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Звёзды при наведении: флаги и цветные метки видны всегда; звёзды и значок правки появляются, пока фото под курсором или выбрано.",
   "White Balance": "Баланс белого",
   "White Balance Selector": "Пипетка баланса белого",
   "White Balance Selector (W)": "Пипетка баланса белого (W)",
@@ -2596,5 +2597,10 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "Stack — click to expand (S)": "Стопка — щёлкните, чтобы развернуть (S)",
+  "Stack — click to collapse (S)": "Стопка — щёлкните, чтобы свернуть (S)",
+  "Virtual copy": "Виртуальная копия",
+  "Right-click ▸ Locate Missing File… to find it again.": "Щёлкните правой кнопкой → Указать отсутствующий файл…, чтобы найти его снова.",
+  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку."
 }
