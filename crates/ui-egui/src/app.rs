@@ -10,6 +10,7 @@ use super::{
 };
 
 mod control;
+mod cull_toast;
 mod frame;
 mod input;
 mod prefs;
@@ -217,6 +218,8 @@ impl LightcraftApp {
         } else {
             params
         };
+        // the photos a rating, flag or label command acts on, read before it moves the selection on
+        let cull_targets = cull_toast::targets(self, id, &params);
         let r = self.session.execute(id, &params).map_err(CommandError::from);
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
@@ -265,19 +268,12 @@ impl LightcraftApp {
                 self.ui.toast = Some((message, now + TOAST_SECONDS, None));
             }
         }
-        if r.is_ok() && matches!(id, "photo.label" | "photo.clearLabel") {
-            // Clear Color Label takes no colour: whatever `label` it is given, the photo's label is cleared
-            let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse).filter(|_| id == "photo.label");
-            let text = match label {
-                Some(label) => {
-                    let name =
-                        self.session.catalog.custom_label_name(label).map(str::to_owned).unwrap_or_else(|| i18n::tr(&format!("{label:?}")).into());
-                    i18n::tr_format!("{name} Label", name = name)
-                }
-                None => i18n::tr("Color label cleared").into(),
-            };
+        if r.is_ok()
+            && let Some(targets) = cull_targets
+            && let Some((text, color)) = cull_toast::feedback(self, id, &params, &targets)
+        {
             let now = self.tick_now();
-            self.ui.toast = Some((text, now + TOAST_SECONDS, label));
+            self.ui.toast = Some((text, now + TOAST_SECONDS, color));
         }
         match &r {
             Err(e) => {
