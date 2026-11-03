@@ -95,8 +95,8 @@ process), which finds those that outlived their parent (one that also cleared it
 found and may keep running). Each is held by a pidfd and signalled only through it, so a pid reused
 meanwhile is never signalled. They are frozen with SIGSTOP, then killed; one whose SIGKILL fails twice
 is continued with SIGCONT rather than left stopped, and the report names it. Without pidfds (other
-Unix, Linux before 5.3) only the binary is killed and the report says what it started may still run;
-Windows uses `taskkill /T`. The child stays in xtask's process group, so Ctrl-C
+Unix, Linux before 5.3) only xtask's own child is killed (the test binary, or under the full `ci`
+cargo, whose test binary may then keep running) and the report says so; Windows uses `taskkill /T`. The child stays in xtask's process group, so Ctrl-C
 still reaches it. The run reports `timed out after N min: <binary>`, what
 the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
 or the test a single-threaded run started) and those that never reported a result (`--list`, itself
@@ -128,7 +128,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid; without pidfds only the binary is killed), and one that can't be killed is continued rather than left stopped |
+| 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid; without pidfds only xtask's own child is killed), and one that can't be killed is continued rather than left stopped |
 | 2026-10-26 | minor | Quality gates: each test binary's run (`LIGHTCRAFT_TEST_BINARY_TIMEOUT`) and the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) have a time limit |
 | 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |
 | 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |
