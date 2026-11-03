@@ -66,7 +66,8 @@ commands:
                   LIGHTCRAFT_CI_LOCK=off to skip the lock)
   test [-p PKG]... [--keep-going] [--doc] [-- ARGS]
                   the workspace's tests (or PKG's) with ci's caps (build jobs by free RAM, at most 4 test
-                  threads, line-table debuginfo) in ci's machine-wide slot, instead of `cargo test`:
+                  threads, line-table debuginfo; a CARGO_BUILD_JOBS or RUST_TEST_THREADS you set wins)
+                  in ci's machine-wide slot, instead of `cargo test`:
                   builds every test target once, then runs each test binary with ARGS (a filter,
                   --exact, --skip, --nocapture); stops at the first failing binary unless --keep-going
                   (alias --no-fail-fast), which runs them all and names each that failed; --doc runs the
