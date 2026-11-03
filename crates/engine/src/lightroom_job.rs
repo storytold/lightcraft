@@ -600,4 +600,73 @@ mod tests {
         assert_eq!(std::fs::read(&sidecar).unwrap(), original);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    /// A catalog photo whose file this same import adds gets the catalog's develop settings, even
+    /// though the file's XMP sidecar gave the new record develop settings of its own: nothing was
+    /// in the library before, so there is no edit to keep. A record that was there before the
+    /// import, in the library or browsed in Local (which the import promotes), keeps its edit.
+    #[test]
+    fn the_catalog_develops_a_record_this_import_made_from_a_file_with_a_sidecar() {
+        // what the library had at the photo's path before the import: nothing, a photo in the
+        // library, a photo browsed in Local
+        for before in [None, Some(false), Some(true)] {
+            let dir = crate::tests_xmp::temp_dir(&format!("lr-job-made-{before:?}"));
+            let file = dir.join("made.jpg");
+            std::fs::write(&file, b"made bytes").unwrap();
+            std::fs::write(
+                dir.join("made.xmp"),
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+2.00" crs:Vibrance="+30"/>
+</rdf:RDF></x:xmpmeta>"#,
+            )
+            .unwrap();
+            let path = file.to_string_lossy().into_owned();
+            let mut session = crate::Session::new();
+            session.media.file_probe = Some(Arc::new(|_| {
+                Ok(crate::media::ProbeInfo {
+                    format: "JPEG".into(),
+                    width: 20,
+                    height: 10,
+                    content_hash: Some("made-bytes".into()),
+                    ..Default::default()
+                })
+            }));
+            let personal = before.map(|local| {
+                let id = session.catalog.alloc_photo_id();
+                let mut photo =
+                    lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: path.clone() }, "made.jpg", "JPEG", 20, 10, "before");
+                photo.local = local;
+                session.commit("Before", crate::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+                let mut settings = lightcraft_develop::DevelopSettings::default();
+                settings.light.exposure = 0.75;
+                session.set_develop(id, settings, "Personal edit").unwrap();
+                id
+            });
+            let options = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
+            let mut import = ImportJob::new(&mut session, options).unwrap();
+            let mut prepared = prepared_for(&session, &path, 3);
+            prepared.normal = import.prepare_files(vec![path.clone()], &AtomicBool::new(false));
+            prepared.missing_sources.clear();
+            prepared.data.photos[0].settings = "s = { Exposure2012 = -1.0 }".into();
+            let report = commit_prepared(&mut session, prepared).unwrap().report;
+            let id = lightcraft_catalog::PhotoId(report["mapping"]["1"].as_u64().unwrap());
+            let photo = session.catalog.photo(id).unwrap();
+            assert_eq!(session.catalog.len(), 1, "{before:?}");
+            assert!(!photo.local, "{before:?}");
+            assert_eq!(photo.rating, 3, "{before:?}: the catalog's rating applies either way");
+            match personal {
+                None => {
+                    assert_eq!(photo.develop.light.exposure, -1.0, "the catalog's exposure, not the sidecar's +2");
+                    assert_eq!(report["preservedExistingEdits"], 0, "nothing existed to preserve: {report}");
+                    assert_eq!(report["imported"], 1);
+                }
+                Some(personal) => {
+                    assert_eq!(id, personal, "{before:?}");
+                    assert_eq!(photo.develop.light.exposure, 0.75, "{before:?}: the edit made before the import stays");
+                    assert_eq!(report["preservedExistingEdits"], 1, "{before:?}: {report}");
+                }
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
 }

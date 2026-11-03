@@ -185,6 +185,10 @@ pub struct FileFacts {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
+    /// Of `imported`, the photos browsed in Local that joined the library: records that were
+    /// there before the import, unlike the rest, which it made. (Not in the report.)
+    #[serde(skip)]
+    pub promoted: Vec<u64>,
     pub duplicates: Vec<Duplicate>,
     /// [`OnDeleted::Restore`]: photos brought back from Recently Deleted instead of imported.
     #[serde(skip_serializing_if = "Vec::is_empty")]

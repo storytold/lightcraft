@@ -1282,6 +1282,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     // The records the file import just made: the catalog photo that finds one was added, not
     // already in the library.
     let mut fresh: HashSet<u64> = files.imported.iter().copied().collect();
+    // The records the file import just made (a photo browsed in Local that it promoted was there
+    // before). Its XMP sidecar may have given one develop settings, but that is no edit made in
+    // the library: the catalog's settings apply to it (#3707).
+    let was_there: HashSet<u64> = files.promoted.iter().copied().collect();
+    let made: HashSet<u64> = files.imported.iter().copied().filter(|id| !was_there.contains(id)).collect();
     let mut promoted = HashSet::new();
     let mut unmapped = BTreeMap::new();
     let mut preserved = 0;
@@ -1404,7 +1409,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
-        let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
+        let keep_develop = existing_id.is_some_and(|id| !made.contains(&id.0)) && p.edited.is_some() && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
             preserved += 1;
