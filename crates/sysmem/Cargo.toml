@@ -3,10 +3,10 @@ name = "lightcraft-sysmem"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft sysmem (L0): returns freed allocator memory to the OS and reads the memory the process may use (cgroup limits). The workspace's only crate allowed `unsafe` (one FFI call)."
+description = "LightCraft sysmem (L0): returns freed allocator memory to the OS and reads the memory the process may use (cgroup limits, Windows job limits). The workspace's only crate allowed `unsafe` (three FFI calls)."
 
-# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the single FFI
-# module below; every other crate root has `#![forbid(unsafe_code)]`. See AGENTS.md.
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the FFI
+# modules (`macos`, `win32`); every other crate root has `#![forbid(unsafe_code)]`. See AGENTS.md.
 [lints.rust]
 unsafe_code = "deny"
 
@@ -18,3 +18,7 @@ dbg_macro = "warn"
 todo = "warn"
 
 [dependencies]
+
+[target.'cfg(windows)'.dependencies]
+# GlobalMemoryStatusEx and QueryInformationJobObject (`windows` module)
+windows-sys = { workspace = true, features = ["Win32_System_SystemInformation", "Win32_System_JobObjects", "Win32_System_Threading"] }
