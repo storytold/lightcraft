@@ -2139,12 +2139,13 @@ fn a_slow_photos_import_never_blocks_the_window() {
     // how many imports Photos has answered: it answers each only after `go`
     let answered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let a = answered.clone();
+    // how long Photos is held at most: 20 s, stretched by LIGHTCRAFT_TIME_SCALE, never shrunk
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
     h.app.session.apple_photos_background = true; // as the desktop app sets it
     h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
         // a regression (Photos on the UI thread) answers only once this runs out, and fails the
-        // checks below instead of hanging (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk)
-        let hold = Duration::from_secs(20);
-        let _ = wait.lock().unwrap().recv_timeout(lightcraft_testkit::scaled(hold).max(hold));
+        // checks below instead of hanging
+        let _ = wait.lock().unwrap().recv_timeout(hold);
         let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 2;
         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
@@ -2152,6 +2153,8 @@ fn a_slow_photos_import_never_blocks_the_window() {
     let t0 = Instant::now();
     let r = h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "album": "Slow"}}), t);
     assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 0, "answered before Photos did: {r}");
+    // nor after waiting a while for it first: well inside the hold (both stretch alike)
+    assert!(t0.elapsed() < hold / 4, "answered at once: {:?} (hold {hold:?}): {r}", t0.elapsed());
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
     while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
@@ -2164,6 +2167,8 @@ fn a_slow_photos_import_never_blocks_the_window() {
         let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
         let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
         assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 1, "the export answers without waiting for Photos: {r}");
+        // the export renders first, so it gets half the hold
+        assert!(t1.elapsed() < hold / 2, "the export answers at once: {:?} (hold {hold:?}): {r}", t1.elapsed());
         assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
