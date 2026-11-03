@@ -227,14 +227,19 @@ impl Preset {
             by_name.entry(q.name.clone()).or_default().push(i);
         }
         let mut next_id = out.next_mask_id();
+        let mut used: std::collections::HashSet<u32> = out.masks.iter().map(|q| q.id).collect();
         for m in masks {
             let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
             if by_name.get(&m.name).is_some_and(|ix| ix.iter().any(|&i| out.masks.get(i).is_some_and(|q| q.components == m.components))) {
                 continue;
             }
+            // ids run on from the first free one, past any a mask already has (a scan for the
+            // next free id per mask would be another pass over them)
+            while used.contains(&next_id) {
+                next_id = next_id.checked_add(1).unwrap_or(1);
+            }
             m.id = next_id;
-            // ids run on from the first free one (a scan for the next free id per mask would be another pass over them)
-            next_id = next_id.checked_add(1).unwrap_or_else(|| out.next_mask_id());
+            used.insert(next_id);
             m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
             by_name.entry(m.name.clone()).or_default().push(out.masks.len());
             out.masks.push(m);
@@ -319,5 +324,23 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), 3, "{:?}", out.masks);
+    }
+
+    #[test]
+    fn preset_masks_skip_ids_an_existing_mask_has_after_the_first_free_one() {
+        // the first free id is 1, and 2 is taken: the second added mask must not get 2
+        let theirs = |id| crate::Mask { id, name: format!("T{id}"), ..Default::default() };
+        let s = DevelopSettings { masks: vec![theirs(u32::MAX), theirs(2)], ..Default::default() };
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "User".into(),
+            settings: json!({"masks": [{"name": "A"}, {"name": "B"}]}),
+            favorite: false,
+            builtin: false,
+        };
+        let mut ids: Vec<u32> = p.apply(&s, 1.0).masks.iter().map(|m| m.id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [1, 2, 3, u32::MAX]);
     }
 }

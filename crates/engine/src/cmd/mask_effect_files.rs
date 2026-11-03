@@ -398,8 +398,11 @@ pub fn add_found(s: &mut Session, found: Vec<Found>, group: Option<&str>, dry: b
     }
     s.mask_effects.retain(|e| !(e.is_empty() && dividers.iter().any(|(d, _)| d.effect.name.eq_ignore_ascii_case(&e.name))));
     // as `upsert`, with the names indexed once: a file of many effects doesn't scan the list per effect
-    let mut by_name: std::collections::HashMap<String, usize> =
-        s.mask_effects.iter().enumerate().map(|(i, x)| (x.name.trim().to_ascii_lowercase(), i)).collect();
+    // (the first of two same-named effects, as `upsert` and readers find it)
+    let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in s.mask_effects.iter().enumerate() {
+        by_name.entry(x.name.trim().to_ascii_lowercase()).or_insert(i);
+    }
     for f in effects {
         let e = f.effect;
         let key = e.name.trim().to_ascii_lowercase();

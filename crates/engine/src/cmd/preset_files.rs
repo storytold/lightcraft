@@ -75,12 +75,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let ids = if dry {
-        pending.iter().map(|(p, _)| Some(p.id.clone())).collect()
-    } else {
-        s.add_presets_each(pending.iter().map(|(p, _)| p.clone()).collect())
-    };
-    for ((_, mut row), id) in pending.into_iter().zip(ids) {
+    // split, not cloned: a large import holds one copy of the parsed presets
+    let (presets, rows): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
+    let ids = if dry { presets.iter().map(|p| Some(p.id.clone())).collect() } else { s.add_presets_each(presets) };
+    for (mut row, id) in rows.into_iter().zip(ids) {
         match id {
             Some(id) => {
                 row["id"] = json!(id);
