@@ -1696,4 +1696,3 @@ mod tests {
         assert!(bar.bottom() <= wide.bottom() + 0.01);
     }
 }
-
