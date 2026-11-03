@@ -107,6 +107,7 @@ pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'s
         None => None,
         Some(s) => {
             let key = parse(s).ok_or_else(|| format!("not a shortcut: {s}"))?;
+            // Store the canonical spelling so equal keys compare equal (menus, native accelerators).
             let canonical = format(key.0, key.1).unwrap_or_else(|| s.to_string());
             if RESERVED.iter().any(|r| parse(r) == Some(key)) {
                 return Err(format!("{canonical} is reserved for the app menu"));
@@ -288,7 +289,8 @@ fn matches_without_repeat(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 
 fn matches_key(i: &egui::InputState, m: Modifiers, k: Key, ignore_repeat: bool) -> bool {
     // the windowing layer turns ⌘C / ⌘X / ⌘V (with any other modifiers held) and the keyboard's
-    // Copy / Cut / Paste keys into these on Windows and Linux (macOS's menu bar takes them first);
+    // Copy / Cut / Paste keys into these on Windows and Linux (mac 
+    // OS's menu bar takes them first);
     // without ⌘/Ctrl held they came from a key that is the plain command (Windows' ⇧Insert pastes)
     let clipboard = if i.modifiers.command { i.modifiers } else { Modifiers::COMMAND };
     i.events.iter().any(|e| {

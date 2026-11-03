@@ -9,7 +9,7 @@ Select photos in Photo Grid or Square Grid, then use:
 | `0` | Clear the star rating |
 | `1`–`5` | Set the star rating |
 | `[` / `]` | Decrease / increase each selected photo's rating by one, within 0–5 |
-| `6`, `7`, `8`, `9` | Set a red, yellow, green or blue label |
+| `6`, `7`, `8`, `9` | Toggle a red, yellow, green or blue label |
 | `P` | Flag as a pick |
 | `X` | Flag as rejected |
 | `U` | Clear the flag |
@@ -31,6 +31,9 @@ It can be reassigned or disabled in Help → Keyboard Shortcuts; text fields and
 Purple and clearing a colour label are available in Photo → Set Color Label and the photo context
 menu. Purple has no default number key, matching Lightroom Classic. Rejection marks a photo for
 culling; it does not delete the original or remove it from the library.
+Label shortcuts affect the whole selection: they clear a label only when every selected photo
+already has that colour; otherwise they apply it to all selected photos. A saved shortcut
+assignment takes precedence over a fixed label key.
 Setting a colour label shows the same brief bottom toast as a rating, using the colour or your
 custom label name. Clearing it shows a confirmation too, whether applied by a key, menu or swatch.
 Labelled thumbnails have a translucent matching colour on the square-grid surround, photo-grid

@@ -317,6 +317,58 @@ fn shift_label_shortcut_toggles_off_and_still_advances() {
 }
 
 #[test]
+fn label_default_chords_do_not_conflict_with_bindings_or_rating_digits() {
+    let keymap = super::Keymap::new();
+    for (shortcut, label) in [("6", "red"), ("7", "yellow"), ("8", "green"), ("9", "blue")] {
+        assert!(super::parse(shortcut).is_some(), "{label} shortcut must parse");
+        assert!(super::conflicts(&keymap, "photo.label", shortcut).is_empty(), "{label} shortcut {shortcut} conflicts");
+        assert!(!["0", "1", "2", "3", "4", "5"].contains(&shortcut), "{label} shortcut overlaps a rating");
+    }
+}
+
+#[test]
+fn label_shortcut_toggles_a_single_photo() {
+    use lightcraft_catalog::{ColorLabel, PhotoId};
+    let mut h = library();
+    h.app.session.execute("library.select", &json!({"ids": [2]})).unwrap();
+
+    key(&mut h, "6", false);
+    assert_eq!(h.app.session.catalog.photo(PhotoId(2)).unwrap().label, Some(ColorLabel::Red));
+    key(&mut h, "6", false);
+    assert_eq!(h.app.session.catalog.photo(PhotoId(2)).unwrap().label, None);
+}
+
+#[test]
+fn label_shortcut_adds_to_mixed_selection_and_clears_when_all_match() {
+    use lightcraft_catalog::{ColorLabel, PhotoId};
+    let mut h = library();
+    h.app.session.execute("library.select", &json!({"ids": [1, 2]})).unwrap();
+    h.app.run("photo.label", json!({"ids": [1], "label": "red"})).unwrap();
+
+    key(&mut h, "6", false);
+    for id in [1, 2] {
+        assert_eq!(h.app.session.catalog.photo(PhotoId(id)).unwrap().label, Some(ColorLabel::Red));
+    }
+    key(&mut h, "6", false);
+    for id in [1, 2] {
+        assert_eq!(h.app.session.catalog.photo(PhotoId(id)).unwrap().label, None);
+    }
+}
+
+#[test]
+fn user_binding_takes_precedence_over_a_fixed_label_shortcut() {
+    use lightcraft_catalog::PhotoId;
+    let mut h = library();
+    h.app.session.execute("library.select", &json!({"ids": [1]})).unwrap();
+    super::assign(&mut h.app.ui.settings.keymap, "photo.increaseRating", Some("6")).unwrap();
+
+    key(&mut h, "6", false);
+    let photo = h.app.session.catalog.photo(PhotoId(1)).unwrap();
+    assert_eq!(photo.rating, 1, "the remapped command ran");
+    assert_eq!(photo.label, None, "the fixed label action yielded to the user's binding");
+}
+
+#[test]
 fn repeated_label_key_event_does_not_toggle_again() {
     for (modifiers, shortcut_modifiers) in [(Modifiers::NONE, Modifiers::NONE), (Modifiers::SHIFT, Modifiers::SHIFT)] {
         let mut view = crate::headless::HeadlessView::new();
