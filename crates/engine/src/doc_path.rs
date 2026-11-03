@@ -3,13 +3,104 @@
 //!
 //! Such a path reaches the file system only through [`resolve`]: a relative path is taken from the
 //! document's folder, and only local files, or files on the network share the document itself is
-//! on, are looked at (see `craft_docpath`). A path that is not followed is handled like a missing
+//! on, are looked at (see `craft_docpath`). An operation may also use [`NetworkShares`] for UNC
+//! shares explicitly chosen by the user. A path that is not followed is handled like a missing
 //! file.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use craft_docpath::Refused;
+
+/// Network shares explicitly selected by the caller for this operation. This is not saved in
+/// documents or global settings. Construction and resolution are lexical and perform no I/O.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkShares {
+    paths: Vec<String>,
+    explicit: bool,
+}
+
+impl NetworkShares {
+    /// A folder on each allowed UNC share. Access is granted to the whole server/share pair,
+    /// using craft-docpath's normalisation and comparison, never a string-prefix comparison.
+    pub fn new(paths: Vec<String>) -> Result<Self, String> {
+        if paths.len() > 32 {
+            return Err("networkShares: at most 32 network shares may be selected".into());
+        }
+        for path in &paths {
+            if path.len() > 32_768
+                || craft_docpath::classify(path) != craft_docpath::PathKind::Network
+                || craft_docpath::resolve(path, Some(Path::new(path))).is_err()
+            {
+                return Err("networkShares: choose a UNC network folder such as \\\\server\\share\\Photos".into());
+            }
+        }
+        Ok(Self { paths, explicit: true })
+    }
+
+    /// Parse the explicit command option before reading any catalog or original.
+    pub fn from_params(params: &serde_json::Value) -> Result<Self, String> {
+        match params.get("networkShares") {
+            None | Some(serde_json::Value::Null) => Ok(Self::default()),
+            Some(serde_json::Value::Array(values)) if values.len() > 32 => Err("networkShares: at most 32 network shares may be selected".into()),
+            Some(serde_json::Value::Array(values)) => Self::new(
+                values
+                    .iter()
+                    .map(|v| v.as_str().map(str::to_string).ok_or_else(|| "networkShares must be an array of UNC folder paths".to_string()))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Some(_) => Err("networkShares must be an array of UNC folder paths".into()),
+        }
+    }
+
+    pub fn paths(&self) -> &[String] {
+        &self.paths
+    }
+
+    /// Preserve the distinction between the default document policy and an explicit empty selection.
+    pub fn param_value(&self) -> serde_json::Value {
+        if self.explicit { serde_json::json!(self.paths) } else { serde_json::Value::Null }
+    }
+
+    /// Resolve against the real document first. Only a network refusal can be retried using
+    /// an explicitly chosen share; device, URL and invalid-path refusals remain refusals.
+    pub fn resolve(&self, stored: &str, document: Option<&Path>) -> Result<PathBuf, NotFollowed> {
+        // Resolve relative originals against the real catalog too: a relative path inside a
+        // network catalog must not bypass an unchecked share via the document's implicit grant.
+        let network_path = self
+            .explicit
+            .then(|| craft_docpath::resolve(stored, document).ok())
+            .flatten()
+            .filter(|p| p.to_str().is_some_and(|s| craft_docpath::classify(s) == craft_docpath::PathKind::Network));
+        let stored = network_path.as_deref().and_then(Path::to_str).unwrap_or(stored);
+        let result = if network_path.is_some() { Err(NotFollowed::Refused(Refused::Network)) } else { resolve(stored, document) };
+        if result != Err(NotFollowed::Refused(Refused::Network)) {
+            return result;
+        }
+        for share in &self.paths {
+            match resolve(stored, Some(Path::new(share))) {
+                Err(NotFollowed::Refused(Refused::Network)) => {}
+                allowed => return allowed,
+            }
+        }
+        result
+    }
+}
+
+/// Canonical UNC server/share of a stored path, without accessing that server.
+/// Validation uses the same parser as import; remote URLs and device paths are not offers.
+pub fn network_share(path: &str) -> Option<String> {
+    if path.len() > 32_768 || craft_docpath::classify(path) != craft_docpath::PathKind::Network {
+        return None;
+    }
+    let normalized = craft_docpath::resolve(path, Some(Path::new(path))).ok()?;
+    let normalized = normalized.to_str()?;
+    let tail = normalized.strip_prefix(r"\\?\UNC\").or_else(|| normalized.strip_prefix(r"\\"))?;
+    let mut parts = tail.split('\\');
+    let host = parts.next()?;
+    let share = parts.next()?;
+    Some(format!(r"\\{host}\{share}"))
+}
 
 /// Why a stored path is not followed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +141,70 @@ pub fn resolve(stored: &str, document: Option<&Path>) -> Result<PathBuf, NotFoll
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_network_shares_allow_only_the_chosen_server_and_share() {
+        let catalog = std::env::temp_dir().join("local.lrcat");
+        let selected = NetworkShares::new(vec![r"\\nas\other\folder".into(), r"\\NAS\Photos\chosen-folder".into()]).unwrap();
+        let allowed = [r"\\nas\photos\trip\a.jpg", "//nas/photos/trip/a.jpg", r"\\?\UNC\nas\photos\trip\a.jpg"];
+        for path in allowed {
+            assert_eq!(NetworkShares::default().resolve(path, Some(&catalog)), Err(NotFollowed::Refused(Refused::Network)));
+            let found = selected.resolve(path, Some(&catalog));
+            #[cfg(windows)]
+            assert!(found.is_ok(), "{path}: {found:?}");
+            #[cfg(not(windows))]
+            assert_eq!(found, Err(NotFollowed::NotHere), "UNC paths are not native Unix paths");
+        }
+        for path in [r"\\other\photos\a.jpg", r"\\nas\photos-private\a.jpg", "file://nas/private/a.jpg", "file://nas/photos/trip/a.jpg"] {
+            assert_eq!(selected.resolve(path, Some(&catalog)), Err(NotFollowed::Refused(Refused::Network)), "{path}");
+        }
+        for path in
+            [r"\\.\COM1", r"\\nas\photos\NUL", "https://nas/photos/a.jpg", r"\\nas\photos\..\private\a.jpg", "file://nas/photos/%2e%2e/private/a.jpg"]
+        {
+            assert!(matches!(selected.resolve(path, Some(&catalog)), Err(NotFollowed::Refused(_))), "{path}");
+        }
+        assert_eq!(
+            selected.resolve("local.jpg", Some(&catalog)),
+            resolve("local.jpg", Some(&catalog)),
+            "local paths stay relative to the real catalog"
+        );
+    }
+
+    #[test]
+    fn network_sources_are_canonical_and_an_explicit_empty_selection_denies_the_document_share() {
+        for path in [r"\\nas\photos\Trip", "//nas/photos/Trip", r"\\?\UNC\nas\photos\Trip"] {
+            assert_eq!(network_share(path).as_deref(), Some(r"\\nas\photos"));
+        }
+        for path in ["C:/Photos", r"\\.\COM1", "file://nas/photos/a.jpg", r"\\nas\photos\..\other"] {
+            assert_eq!(network_share(path), None, "{path}");
+        }
+        let document = Path::new(r"\\nas\photos\catalog.lrcat");
+        let empty = NetworkShares::new(Vec::new()).unwrap();
+        assert_eq!(empty.resolve(r"\\nas\photos\a.jpg", Some(document)), Err(NotFollowed::Refused(Refused::Network)));
+        assert_eq!(empty.resolve("a.jpg", Some(document)), Err(NotFollowed::Refused(Refused::Network)));
+        assert_eq!(NetworkShares::default().resolve(r"\\nas\photos\a.jpg", Some(document)), resolve(r"\\nas\photos\a.jpg", Some(document)));
+    }
+
+    #[test]
+    fn network_share_options_are_explicit_bounded_and_validated() {
+        use serde_json::json;
+        assert_eq!(NetworkShares::from_params(&json!({})).unwrap(), NetworkShares::default());
+        for option in [
+            json!(true),
+            json!("\\\\nas\\photos"),
+            json!([1]),
+            json!(["C:/Photos"]),
+            json!(["https://nas/photos"]),
+            json!([r"\\.\COM1"]),
+            json!(["file://nas/photos"]),
+            json!([r"\\nas\photos\..\other"]),
+            json!(vec![r"\\nas\photos"; 33]),
+        ] {
+            assert!(NetworkShares::from_params(&json!({"networkShares": option})).is_err(), "{option}");
+        }
+        let paths = vec![r"\\nas\photos".to_string()];
+        assert_eq!(NetworkShares::from_params(&json!({"networkShares": paths})).unwrap().paths(), paths);
+    }
 
     #[test]
     fn relative_paths_are_taken_from_the_document_folder_and_other_computers_are_refused() {

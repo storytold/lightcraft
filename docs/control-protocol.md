@@ -245,20 +245,34 @@ places (`EngineError::LightroomCatalog`, so `lightcraft-cli --library` and `mcp 
 
 ### Import Lightroom Catalog: where the catalog goes
 
-`file.importLightroom {path?, into?, name?, location?}` (File ▸ Import Lightroom Catalog…, issue #2672). With `into`
+`file.importLightroom {path?, into?, name?, location?, networkShares?}` (File ▸ Import Lightroom Catalog…, issue #2672). With `into`
 it acts without asking: `"open"` imports into the library open now (`library.importLightroom`); `"new"` creates the
 library `name` (default: the catalog's file name without `.lrcat`, or `Travel 2`… when taken) in the folder
 `location` (a full path; default: the open library's parent folder) under `app.newLibrary`'s rules, opens it and
 imports there, returning the import's start with `library: {path, name, photos}`. A catalog file that isn't there is
-refused before anything is made; so is a new library while an import runs. Without `into`, a library on disk with
-`settings.lightroomImport` `"ask"` (the default) opens a window and returns `{asking: true, path, into}` (`into`: the
-choice it opens with, `"open"` when the library is empty, else `"new"`). Its widgets:
+refused before anything is made; so is a new library while an import runs. Without `into`, it first returns `{running: true, kind: "sources", path}` while reading the catalog's
+root folders on a worker, without probing originals. Poll `library.importLightroom {status: true}`
+(or `{wait: true}`) for completion; cancellation uses `{cancel: true}`. Once read, a library on disk with
+`settings.lightroomImport` `"ask"` (the default) opens a window with status `{asking: true, path, into}`
+(`into`: the choice it opens with, `"open"` when the library is empty, else `"new"`). Its widgets:
 `radio:lightroomDestination-open`, `radio:lightroomDestination-new`, `field:lightroomLibraryName`,
 `field:lightroomLibraryLocation`, `button:lightroomLibraryChoose` (where there is a folder dialog), `check:lightroomDontAsk` (with Merge only; sets
 `"alwaysMerge"`), `button:dialogOk` / `ui.dialog.confirm` (which stays open on an error such as a folder that isn't
 empty) and `button:dialogCancel`. With `"alwaysMerge"` (`ui.set {"settings": {"lightroomImport": "alwaysMerge"}}`,
 or Settings ▸ General `button:settingsLightroomImport-0|1`), or in a session in memory, it imports into the open
-library without asking.
+library without asking, unless the catalog contains network sources: those always get a review.
+
+`networkShares` is an explicit array of UNC folders allowed for this import, also accepted by
+`library.inspectLightroom` and `library.importLightroom` (including their background workers).
+Example: `{"networkShares":["\\\\nas\\photos"]}` permits the whole selected server/share while the
+catalog stays local. The destination window automatically lists distinct catalog shares with
+`check:lightroomNetworkSource-0` (zero-based source index) to select each one. All start unchecked
+unless explicitly supplied in the request; the choice is not remembered for the next import, even
+with Always merge. An explicit empty `networkShares: []` refuses all UNC originals, including the
+catalog's own share; omitting the option retains the default document-share policy. Invalid options
+are refused before a library is created or a worker starts. The read-only engine command
+`library.lightroomNetworkSources {path}` returns `{networkSources: [UNC share]}` without probing
+originals. See [catalog import](lightroom-catalog-import.md).
 
 ## External controllers
 

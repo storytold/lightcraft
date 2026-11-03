@@ -5,12 +5,13 @@
 //! to the open one. The new library is made and opened as File ▸ New Library… does
 //! (`app.newLibrary`: refused in a folder that isn't empty, or while another import runs), then the
 //! catalog is imported into it. Settings ▸ General ▸ Library (or the window's "Don't ask again")
-//! turns the question off: the catalog then merges into the open library, as it always did.
+//! turns the destination question off. Catalogs with network sources still show their checkbox
+//! review; those sources are discovered from catalog records on a background worker.
 //!
 //! Only the app command `file.importLightroom` changes: it takes `{into?: "open" | "new", name?,
 //! location?}` so the control channel can make the choice without the window. The import itself
 //! (`library.importLightroom`, [`crate::lightroom_import`]) is unchanged. A session with no
-//! library on disk (in memory) has nothing to put a new library next to: it merges without asking.
+//! library on disk (in memory) merges without asking unless network sources require review.
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +38,8 @@ pub struct Request {
     pub name: Option<String>,
     /// `location`: the folder the new library goes in (default: the open library's parent folder).
     pub location: Option<String>,
+    /// Network shares explicitly allowed for this import only.
+    pub network_shares: lightcraft_engine::doc_path::NetworkShares,
 }
 
 impl Request {
@@ -54,7 +57,12 @@ impl Request {
             Some(Value::String(s)) => Ok(Some(s.clone())),
             Some(v) => Err(format!("file.importLightroom: `{key}` must be a string, not {v}")),
         };
-        Ok(Request { into, name: text("name")?, location: text("location")? })
+        Ok(Request {
+            into,
+            name: text("name")?,
+            location: text("location")?,
+            network_shares: lightcraft_engine::doc_path::NetworkShares::from_params(p)?,
+        })
     }
 }
 
@@ -124,15 +132,34 @@ fn busy(app: &LightcraftApp) -> Result<(), String> {
 /// `file.importLightroom` once the catalog `path` is known: merge, make a new library first, or
 /// ask, as [`decide`] says. Returns the import's start (`{running, kind, path}`), with
 /// `library: {path, name, photos}` when a new library was made, or `{asking: true, path, into}`
-/// while the window asks (`into`: the choice it opens with).
+/// while the window asks (`into`: the choice it opens with). Interactive requests first return
+/// `{running: true, kind: "sources", path}` while the background source review is prepared.
 pub fn import(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Value, String> {
     // the browser build can't import a catalog at all: the import says so (and no library is made)
     if cfg!(target_arch = "wasm32") {
-        return app.run("library.importLightroom", json!({"path": path}));
+        return app.run("library.importLightroom", json!({"path": path, "networkShares": req.network_shares.param_value()}));
     }
+    if req.into.is_none() {
+        return crate::lightroom_import::start_sources(app, path, req);
+    }
+    after_sources(app, path, req, Vec::new())
+}
+
+/// Complete the catalog-only review. Even "Always merge" asks when network sources are present.
+pub fn after_sources(app: &mut LightcraftApp, path: &str, req: &Request, mut network_sources: Vec<String>) -> Result<Value, String> {
     let on_disk = library_dir(app).is_some();
-    match decide(app.ui.settings.lightroom_import, on_disk, library_photos(app), req.into) {
-        Plan::Merge => app.run("library.importLightroom", json!({"path": path})),
+    let mut plan = decide(app.ui.settings.lightroom_import, on_disk, library_photos(app), req.into);
+    if req.into.is_none() && !network_sources.is_empty() && plan == Plan::Merge {
+        plan = Plan::Ask { new_library: false };
+    }
+    let network_shares: Vec<_> = req.network_shares.paths().iter().filter_map(|p| lightcraft_engine::doc_path::network_share(p)).collect();
+    for share in &network_shares {
+        if !network_sources.iter().any(|s| s.eq_ignore_ascii_case(share)) {
+            network_sources.push(share.clone());
+        }
+    }
+    match plan {
+        Plan::Merge => app.run("library.importLightroom", json!({"path": path, "networkShares": req.network_shares.param_value()})),
         Plan::NewLibrary => into_new_library(app, path, req),
         Plan::Ask { new_library } => {
             busy(app)?;
@@ -149,6 +176,8 @@ pub fn import(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Valu
                 name,
                 location,
                 dont_ask: false,
+                network_shares,
+                network_sources,
                 generation: app.session.library_generation(),
             });
             Ok(json!({"asking": true, "path": path, "into": if new_library { "new" } else { "open" }}))
@@ -174,7 +203,7 @@ fn into_new_library(app: &mut LightcraftApp, path: &str, req: &Request) -> Resul
     }
     let name = req.name.clone().unwrap_or_else(|| default_name(Path::new(path), Some(&location)));
     let library = app.run("app.newLibrary", json!({"path": location.to_string_lossy(), "name": name}))?;
-    let mut started = app.run("library.importLightroom", json!({"path": path}))?;
+    let mut started = app.run("library.importLightroom", json!({"path": path, "networkShares": req.network_shares.param_value()}))?;
     if let Some(o) = started.as_object_mut() {
         o.insert("library".into(), library);
     }
@@ -182,8 +211,12 @@ fn into_new_library(app: &mut LightcraftApp, path: &str, req: &Request) -> Resul
 }
 
 /// The window's choice as `file.importLightroom` params.
-fn params(catalog: &str, new_library: bool, name: &str, location: &str) -> Value {
-    if new_library { json!({"path": catalog, "into": "new", "name": name, "location": location}) } else { json!({"path": catalog, "into": "open"}) }
+fn params(catalog: &str, new_library: bool, name: &str, location: &str, network_shares: &[String]) -> Value {
+    if new_library {
+        json!({"path": catalog, "into": "new", "name": name, "location": location, "networkShares": network_shares})
+    } else {
+        json!({"path": catalog, "into": "open", "networkShares": network_shares})
+    }
 }
 
 /// The window's confirm button: import as chosen. "Don't ask again" is kept once a merge has
@@ -191,13 +224,13 @@ fn params(catalog: &str, new_library: bool, name: &str, location: &str) -> Value
 /// agent, the control channel) makes the window stale for both choices: nothing is merged into
 /// it, and no new library is made from defaults that described the library it replaced.
 pub fn confirm(app: &mut LightcraftApp, dialog: &Dialog) -> Result<Value, String> {
-    let Dialog::LightroomDestination { catalog, new_library, name, location, dont_ask, generation, .. } = dialog else {
+    let Dialog::LightroomDestination { catalog, new_library, name, location, dont_ask, network_shares, generation, .. } = dialog else {
         return Err("not the Lightroom catalog destination window".into());
     };
     if *generation != app.session.library_generation() {
         return Err(crate::i18n::tr("Another library was opened since this window appeared: nothing was imported").to_string());
     }
-    let r = app.run("file.importLightroom", params(catalog, *new_library, name, location))?;
+    let r = app.run("file.importLightroom", params(catalog, *new_library, name, location, network_shares))?;
     if !*new_library && *dont_ask {
         app.ui.settings.lightroom_import = LightroomImport::AlwaysMerge;
     }
@@ -220,7 +253,11 @@ pub fn ok_label(dialog: &Dialog) -> &'static str {
 
 /// The window's body: the two choices, the new library's name and location, and "Don't ask again".
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
-    let Dialog::LightroomDestination { catalog, library, photos, new_library, name, location, dont_ask, .. } = dialog else { return };
+    let Dialog::LightroomDestination { catalog, library, photos, new_library, name, location, dont_ask, network_shares, network_sources, .. } =
+        dialog
+    else {
+        return;
+    };
     let t = crate::theme::Tokens::get(ui.ctx());
     let tr = crate::i18n::tr;
     let file = Path::new(catalog.as_str()).file_name().map_or_else(|| catalog.clone(), |n| n.to_string_lossy().into_owned());
@@ -294,6 +331,24 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         });
         note(ui, tr("LightCraft opens the new library, then imports the catalog into it. Its folder must be new or empty."));
     });
+    if !network_sources.is_empty() {
+        ui.add_space(4.0);
+        ui.label(tr("Network sources in this catalog"));
+        ui.add(egui::Label::new(tr("Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.")).wrap());
+        egui::ScrollArea::vertical().id_salt("lightroom-network-sources").max_height(140.0).show(ui, |ui| {
+            for (i, source) in network_sources.iter().enumerate() {
+                let mut selected = network_shares.iter().any(|s| s.eq_ignore_ascii_case(source));
+                let response = ui.checkbox(&mut selected, source);
+                crate::widgets::register(ui, format!("check:lightroomNetworkSource-{i}"), response.rect);
+                if response.changed() {
+                    network_shares.retain(|s| !s.eq_ignore_ascii_case(source));
+                    if selected {
+                        network_shares.push(source.clone());
+                    }
+                }
+            }
+        });
+    }
     ui.add_space(4.0);
     // (it only speaks of merging: unticked and greyed out while a new library is chosen)
     let mut ticked = *dont_ask && !*new_library;
@@ -340,7 +395,15 @@ mod tests {
         assert_eq!(Request::parse(&json!({})).unwrap(), Request::default());
         assert_eq!(Request::parse(&json!({"into": null})).unwrap(), Request::default());
         let r = Request::parse(&json!({"into": "new", "name": "Travel", "location": "/photos"})).unwrap();
-        assert_eq!(r, Request { into: Some(Destination::New), name: Some("Travel".into()), location: Some("/photos".into()) });
+        assert_eq!(
+            r,
+            Request {
+                into: Some(Destination::New),
+                name: Some("Travel".into()),
+                location: Some("/photos".into()),
+                network_shares: Default::default()
+            }
+        );
         assert_eq!(Request::parse(&json!({"into": "open"})).unwrap().into, Some(Destination::Open));
         for bad in [json!({"into": "elsewhere"}), json!({"into": 1}), json!({"name": 3}), json!({"location": ["a"]})] {
             let err = Request::parse(&bad).unwrap_err();
