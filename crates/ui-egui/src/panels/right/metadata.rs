@@ -2,6 +2,7 @@
 
 use super::{LightcraftApp, PhotoId, Tokens, header, padded, register};
 use serde_json::Value;
+use std::sync::Arc;
 
 const TASK: &str = "Metadata panel";
 const MAX_READS: usize = 4;
@@ -14,7 +15,8 @@ pub(crate) struct Runtime {
     key: Option<(u64, PhotoId, String)>,
     result: Option<ReadResult>,
     page: usize,
-    waiting_since: Option<std::time::Instant>,
+    started_at: Option<web_time::Instant>,
+    attempt: Arc<()>,
 }
 
 fn load(app: &mut LightcraftApp, id: PhotoId) {
@@ -30,8 +32,7 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     if app.metadata_panel.result.is_some() {
         return;
     }
-    let since = app.metadata_panel.waiting_since.get_or_insert_with(std::time::Instant::now);
-    if since.elapsed() >= READ_TIMEOUT {
+    if app.metadata_panel.started_at.is_some_and(|start| start.elapsed() >= READ_TIMEOUT) {
         // The OS may still own a blocking read. Keep counting that worker until it exits.
         app.metadata_panel.result = Some(Err(crate::i18n::tr("Metadata read timed out. Try Refresh.").into()));
         return;
@@ -47,19 +48,24 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
             return;
         }
     };
+    let attempt = Arc::clone(&app.metadata_panel.attempt);
     let result = crate::tasks::spawn(
         app,
         &label,
         None,
         move || request.read_with_diagnostics(),
         move |app, _, result| {
-            if app.metadata_panel.key.as_ref() == Some(&key) && app.session.library_generation() == key.0 {
+            if Arc::ptr_eq(&app.metadata_panel.attempt, &attempt)
+                && app.metadata_panel.key.as_ref() == Some(&key)
+                && app.session.library_generation() == key.0
+            {
                 app.metadata_panel.result = Some(result);
             }
         },
     );
-    if let Err(error) = result {
-        app.metadata_panel.result = Some(Err(error));
+    match result {
+        Ok(()) => app.metadata_panel.started_at = Some(web_time::Instant::now()),
+        Err(error) => app.metadata_panel.result = Some(Err(error)),
     }
 }
 
@@ -109,7 +115,8 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if app.metadata_panel.result.is_some() && ui.button(crate::i18n::tr("Refresh")).clicked() {
             app.metadata_panel.result = None;
             app.metadata_panel.page = 0;
-            app.metadata_panel.waiting_since = None;
+            app.metadata_panel.started_at = None;
+            app.metadata_panel.attempt = Arc::new(());
             ui.ctx().request_repaint();
         }
         match &app.metadata_panel.result {
@@ -142,7 +149,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     let group = tag["group"].as_str().unwrap_or("XMP");
                     let name = tag["name"].as_str().unwrap_or("");
                     let value = tag["value"].as_str().unwrap_or("");
-                    let value = if is_date_tag(name) { date_value(value) } else { value.to_owned() };
+                    let value = tag_value(name, value, system_locale());
                     row(ui, &format!("{group} · {name}"), &value, &t);
                 }
                 if let Some(note) = data["note"].as_str() {
@@ -210,9 +217,17 @@ fn is_date_tag(name: &str) -> bool {
     )
 }
 
-fn date_value(value: &str) -> String {
+fn system_locale() -> &'static str {
     static LOCALE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    numeric_date(value, LOCALE.get_or_init(|| sys_locale::get_locale().unwrap_or_default()))
+    LOCALE.get_or_init(|| sys_locale::get_locale().unwrap_or_default())
+}
+
+fn tag_value(name: &str, value: &str, locale: &str) -> String {
+    if is_date_tag(name) { numeric_date(value, locale) } else { value.to_owned() }
+}
+
+fn date_value(value: &str) -> String {
+    numeric_date(value, system_locale())
 }
 
 fn numeric_date(value: &str, locale: &str) -> String {
@@ -318,8 +333,8 @@ mod tests {
 
     #[test]
     fn dates_follow_locale_with_two_digit_day_and_month() {
-        assert!(super::is_date_tag("GPS Date Stamp"));
-        assert_eq!(numeric_date("2014:01:01", "de_DE"), "01.01.2014");
+        assert_eq!(super::tag_value("GPS Date Stamp", "2014:01:01", "de_DE"), "01.01.2014");
+        assert_eq!(super::tag_value("dc:title", "2014:01:01", "de_DE"), "2014:01:01");
         assert_eq!(numeric_date("2014-01-01", "de_DE"), "01.01.2014");
         assert_eq!(numeric_date("2014-01-01T11:48:16", "de-DE"), "01.01.2014 11:48:16");
         assert_eq!(numeric_date("2014:01:01 11:48:16", "de_DE"), "01.01.2014 11:48:16");
