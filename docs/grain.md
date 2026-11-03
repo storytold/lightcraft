@@ -131,8 +131,9 @@ curtain; #1060: −9.3). Fine detail under the grain is kept (detail gain
   between renders, for the last tile used (`Gpu::grain_tables`), and are copied after the finish
   kernel's other tables in its `aux` buffer on the GPU: an Amount drag uploads nothing. On the
   Radeon 740M an Amount drag frame (2.5 MP) went from 16.9 to 11–15 ms (no grain: 8 ms).
-- **24 MP NEF → PNG** (`lightcraft-cli render`, M2 Max, median of three): no grain 1.10 s, grain
-  50 / 25 / 50 1.10 s on the GPU; 1.33 s and 1.47 s CPU-only (the finish stage 0.26 → 0.42 s).
+- **24 MP NEF → PNG** (`lightcraft-cli render`, M2 Max, median of three): no grain 1.06 s, grain
+  50 / 25 / 50 1.05 s on the GPU; 1.28 s and 1.43 s CPU-only (the finish stage 0.26 → 0.42 s).
+  Grain costs main ≈ 0 on the GPU and +0.08 s CPU-only, #1060 +0.29 s and +1.71 s.
 - **24 MP NEF → PNG on the Ryzen 5 7545U / Radeon 740M** (median of three): no grain 2.07 s, grain
   50 / 25 / 50 2.10 s on the GPU; 2.72 s and 2.88 s CPU-only. Grain costs main +0.03 s on the GPU
   and +0.10 s CPU-only, #1060 +1.81 s and +3.54 s.
