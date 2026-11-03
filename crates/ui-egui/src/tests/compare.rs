@@ -405,6 +405,22 @@ fn survey_command_click_takes_the_photo_out() {
     assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
 
+/// The × in a survey tile's corner takes the photo out of the survey. It shows while the pointer is
+/// over the tile, and it must stay while the pointer is on the × itself (#1639, #3614): the tile
+/// loses its hover to the ×, and an × tied to that hover vanished before the click landed.
+#[test]
+fn survey_x_takes_the_photo_out() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let tile = h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{c}")).map(|(_, r)| *r).expect("the tile is laid out");
+    // hover the tile first, as a person does, so the × appears; then click the × in its corner
+    h.app.synthetic.push(egui::Event::PointerMoved(tile.center()));
+    h.settle(SETTLE);
+    click_with(&mut h, egui::pos2(tile.right() - 16.0, tile.top() + 16.0), egui::Modifiers::NONE);
+    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
+    assert_eq!(sel, vec![a, b], "the photo whose × was clicked left the survey");
+}
+
 /// ⌘/Ctrl-click on the active survey photo while others remain: it leaves, and the last
 /// remaining photo becomes active, so the keys still act on a photo on screen.
 #[test]
