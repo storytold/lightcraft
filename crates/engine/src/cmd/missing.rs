@@ -139,12 +139,14 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let abs = abs.to_string_lossy().to_string();
     // the file may differ from the one imported (another export, a raw that decodes now or not):
-    // its size, dimensions and preview-only state follow it
+    // its size, dimensions and preview-only state follow it, and so does its film recipe
     let mut ops = vec![relink_op(id, &abs)];
-    if s.media.file_probe.is_some()
-        && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
-    {
-        ops.extend(crate::cmd::convert::content_op(id, ph, info));
+    let probed = s.media.file_probe.is_some().then(|| crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop()).flatten();
+    if let Some(ph) = s.catalog.photo(id) {
+        if let Some(Ok(info)) = probed.as_ref() {
+            ops.extend(crate::cmd::convert::content_op(id, ph, info.clone()));
+        }
+        crate::cmd::convert::push_recipe_for_new_file(&mut ops, ph, probed.as_ref());
     }
     let op = match <[Op; 1]>::try_from(ops) {
         Ok([op]) => op,
@@ -279,6 +281,9 @@ pub struct FoundFile {
     pub from: String,
     pub to: String,
     pub by: MatchBy,
+    /// The found file's bytes matched the stored hash when planned. This is only a hint when
+    /// submitted later: recipes are invalidated rather than trusting it as current proof.
+    pub same_bytes: bool,
 }
 
 /// A missing photo with several look-alike files (same name and size, no hash to tell them
@@ -300,10 +305,12 @@ pub struct FindPlan {
 }
 
 impl FindPlan {
-    /// `{found: [{id, from, to, by}], missing, ambiguous: [{id, from, candidates}]}` — the
-    /// command's result, and what `library.findMissing {found, …}` takes back.
+    /// `{found: [{id, from, to, by, sameBytes}], missing, ambiguous: [{id, from, candidates}]}` — the
+    /// command's result, and what `library.findMissing {found, …}` takes back. `sameBytes` is false
+    /// when a plan from an older build omits it.
     pub fn to_json(&self) -> Value {
-        let found: Vec<Value> = self.found.iter().map(|f| json!({"id": f.id.0, "from": f.from, "to": f.to, "by": f.by.as_str()})).collect();
+        let found: Vec<Value> =
+            self.found.iter().map(|f| json!({"id": f.id.0, "from": f.from, "to": f.to, "by": f.by.as_str(), "sameBytes": f.same_bytes})).collect();
         let ambiguous: Vec<Value> = self.ambiguous.iter().map(|a| json!({"id": a.id.0, "from": a.from, "candidates": a.candidates})).collect();
         json!({"found": found, "missing": self.missing, "ambiguous": ambiguous})
     }
@@ -320,6 +327,7 @@ impl FindPlan {
                     from: str_param(f, "from")?.to_string(),
                     to: str_param(f, "to")?.to_string(),
                     by,
+                    same_bytes: f.get("sameBytes").and_then(Value::as_bool).unwrap_or(false),
                 })
             })
             .collect();
@@ -397,8 +405,8 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
             .map(|v| v.iter().filter(|f| !used.contains(*f) && (size == 0 || size_of(f) == Some(size))).collect())
             .unwrap_or_default();
         // 1. same name and size, confirmed by the content hash
-        let mut hit: Option<(String, MatchBy)> =
-            hash.and_then(|h| named.iter().find(|f| hash_of(f).as_deref() == Some(h))).map(|f| (f.to_string(), MatchBy::Name));
+        let mut hit: Option<(String, MatchBy, bool)> =
+            hash.and_then(|h| named.iter().find(|f| hash_of(f).as_deref() == Some(h))).map(|f| (f.to_string(), MatchBy::Name, true));
         // 2. renamed: same size and content
         if hit.is_none()
             && let Some(h) = hash
@@ -416,13 +424,14 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
             hit = sizes
                 .get(&size)
                 .and_then(|v| v.iter().find(|f| !used.contains(*f) && hash_of(f).as_deref() == Some(h)))
-                .map(|f| (f.clone(), MatchBy::Content));
+                .map(|f| (f.clone(), MatchBy::Content, true));
         }
         // 3. same name and size only (no hash, or the file was edited in place): one candidate
-        //    is taken, several are ambiguous and skipped rather than guessed
+        //    is taken, several are ambiguous and skipped rather than guessed. The bytes were not
+        //    confirmed, so a stored film recipe must not be kept.
         if hit.is_none() {
             match named.as_slice() {
-                [one] => hit = Some(((*one).clone(), MatchBy::Name)),
+                [one] => hit = Some(((*one).clone(), MatchBy::Name, false)),
                 [] => {}
                 _ => {
                     plan.ambiguous.push(AmbiguousFile { id: c.id, from: c.path.clone(), candidates: named.iter().map(|f| (*f).clone()).collect() });
@@ -430,9 +439,9 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
                 }
             }
         }
-        let Some((path, by)) = hit else { continue };
+        let Some((path, by, same_bytes)) = hit else { continue };
         used.insert(path.clone());
-        plan.found.push(FoundFile { id: c.id, from: c.path.clone(), to: path, by });
+        plan.found.push(FoundFile { id: c.id, from: c.path.clone(), to: path, by, same_bytes });
     }
     plan.missing = lost.len() - plan.found.len();
     Ok(plan)
@@ -443,19 +452,26 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
 /// photo that no longer points at the path it was missing from (relinked, removed) is left
 /// alone, and a file that is now some photo's original — or that the plan names twice — is not
 /// used (that photo stays missing). `missing` is the plan's count, corrected for what changed
-/// among the photos the plan names.
-fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
+/// among the photos the plan names. Only synchronous folder searches verify recipe hashes;
+/// submitted plans invalidate recipes without reading whole files on the UI thread.
+fn commit_find(s: &mut Session, plan: FindPlan, verify_recipes: bool) -> Result<Value> {
     let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
     let mut in_use: HashSet<String> = candidates(&s.catalog).into_iter().collect();
     let mut found = Vec::new();
     let mut missing = plan.missing;
-    for f in plan.found {
+    for mut f in plan.found {
         if !still_at(&s.catalog, f.id, &f.from) {
             continue;
         }
         if in_use.contains(&f.to) {
             missing += 1;
             continue;
+        }
+        // Only the synchronous command may read whole files here. The UI submits a worker's
+        // plan on its drawing thread: it must invalidate recipes instead of blocking on I/O.
+        if verify_recipes {
+            f.same_bytes =
+                f.same_bytes && s.catalog.photo(f.id).and_then(|p| stored_hash(p)).is_some_and(|hash| file_hash(&f.to).as_deref() == Some(hash));
         }
         in_use.insert(f.to.clone());
         found.push(f);
@@ -465,7 +481,18 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
     // ambiguous photos relinked meanwhile aren't missing any more
     missing = missing.saturating_sub(planned - ambiguous.len());
     if !found.is_empty() {
-        s.commit("Find Missing Photos", Op::Batch { ops: found.iter().map(|f| relink_op(f.id, &f.to)).collect() })?;
+        let mut ops = Vec::new();
+        for f in &found {
+            ops.push(relink_op(f.id, &f.to));
+            // Submitted sameBytes is only a planning hint, not proof of current contents.
+            // The Info panel reads invalidated recipes on its worker, and undo restores them.
+            if (!verify_recipes || !f.same_bytes)
+                && let Some(ph) = s.catalog.photo(f.id)
+            {
+                ops.extend(crate::cmd::convert::forget_fuji_recipe_op(ph));
+            }
+        }
+        s.commit("Find Missing Photos", Op::Batch { ops })?;
         for f in &found {
             s.media.forget(f.id);
         }
@@ -479,11 +506,11 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
 fn find_missing(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.findMissing";
     if p.get("found").is_some_and(Value::is_array) {
-        return commit_find(s, FindPlan::from_json(p));
+        return commit_find(s, FindPlan::from_json(p), false);
     }
     let folder = str_param(p, "folder").ok_or_else(|| bad(C, "missing `folder`"))?;
     let plan = plan_find_missing(&find_candidates(&s.catalog), folder).map_err(|e| bad(C, e))?;
-    commit_find(s, plan)
+    commit_find(s, plan, true)
 }
 
 pub fn specs() -> Vec<CommandSpec> {

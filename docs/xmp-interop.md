@@ -106,7 +106,9 @@ first).
 With stem naming, `IMG_0001.CR3` and `IMG_0001.JPG` map to the same `IMG_0001.xmp`. When two or more files in the
 library share a stem, the stem sidecar belongs to one of them — a raw first, otherwise the first by file name — and
 the others write and read `<file>.xmp` (`IMG_0001.JPG.xmp`), falling back to the stem sidecar for reading when they
-have none. So saving one photo never overwrites the other's metadata (`Session::sidecar_naming`).
+have none. So saving one photo never overwrites the other's metadata (`Session::sidecar_naming`). When RAW+JPEG metadata
+sync is on, a rating or flag is written into both sidecars: the raw keeps `IMG_0001.xmp` and the JPEG gets
+`IMG_0001.JPG.xmp`.
 
 An import ranks the files it is adding the same way, before they are catalogued: a TIFF or JPEG arriving beside a
 raw of its stem reads its own `<file>.xmp` and takes nothing from the raw's `IMG_0001.xmp`, whether it arrives

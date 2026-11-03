@@ -118,3 +118,19 @@ Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyw
 - [Lightroom Classic flagging, labelling and rating](https://helpx.adobe.com/lightroom-classic/help/flag-label-rate-photos.html)
 
 Only public descriptions were consulted. No Adobe assets or application data are included.
+
+## RAW+JPEG pairs
+
+`library.pairPreferences` turns on two independent switches, both off until asked. `syncPairMetadata` makes
+ratings and pick/reject flags (`0`–`5`, `[` `]`, `P`, `X`, `U`, flag cycling and raising/lowering) land on the other file of a joined pair as one
+Undo step. `syncPairLabels` does the same for colour labels, and only while metadata sync is on. Delete,
+Restore and Delete Permanently stay on the selected file. The **Both / JPEG** switch on the bottom bar turns
+`pairedCulling` and `syncPairMetadata` on together, joins detected pairs, and shows the JPEG. The
+RAW+JPEG badge switches to the raw with `photo.pairFocus`. If that file is excluded by the current
+view, clear the filter or show both first. Navigation finishes any pending edit and keeps the other
+file's develop settings independent. Reopening restores the active RAW/JPEG member from the saved
+selection. Choosing Both shows both files again.
+Splitting the pair (`photo.splitPair`) keeps both photos and both files.
+
+This build uses catalog format 11, extending #1209's format 10 with pair links. Older builds refuse it;
+existing format-10 libraries retain their Fujifilm recipes when upgraded.

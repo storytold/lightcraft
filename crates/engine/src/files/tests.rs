@@ -1809,3 +1809,15 @@ fn existing_photo_settings_are_not_rewritten() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_probe_keeps_the_fuji_recipe_it_already_parsed() {
+    let recipe =
+        lightcraft_meta::FujiRecipe { rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Eterna".into() }] };
+    let found = lightcraft_meta::Metadata { fuji_recipe: Some(recipe), ..Default::default() };
+    let meta = super::meta_of(&found).0;
+    assert!(meta.fuji_recipe_known);
+    assert_eq!(meta.fuji_recipe.as_ref().map(|r| r.rows[0].value.as_str()), Some("Eterna"));
+    let empty = super::meta_of(&lightcraft_meta::Metadata::default()).0;
+    assert!(empty.fuji_recipe_known && empty.fuji_recipe.is_none(), "a file with no recipe is not read again later");
+}

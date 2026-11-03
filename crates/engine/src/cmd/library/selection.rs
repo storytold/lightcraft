@@ -78,7 +78,22 @@ pub(super) fn mark_deleted(s: &mut Session, ids: &[PhotoId], label: &str) -> Res
 
 /// Apply one op per target as a single undo step.
 pub(super) fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
-    let targets = s.targets(p)?;
+    commit_ops(s, label, s.targets(p)?, f)
+}
+
+/// Ratings, flags and (when asked) labels also land on a RAW+JPEG partner. Delete does not use this.
+pub(super) fn for_cull(s: &mut Session, p: &Value, label: &str, labels: bool, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
+    let (targets, skipped) = expand_pair_targets(s, s.targets(p)?, labels);
+    let mut v = commit_ops(s, label, targets, f)?;
+    if skipped > 0
+        && let Some(obj) = v.as_object_mut()
+    {
+        obj.insert("skipped".into(), json!(skipped));
+    }
+    Ok(v)
+}
+
+fn commit_ops(s: &mut Session, label: &str, targets: Vec<PhotoId>, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
     let ops: Vec<Op> = targets.iter().filter_map(|id| f(*id)).collect();
     let n = ops.len();
     if n > 0 {
@@ -87,14 +102,41 @@ pub(super) fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(Ph
     Ok(json!({"changed": n}))
 }
 
-/// Adjust each target's own rating; unchanged bounds do not create an undo step.
+/// Partner ids when metadata sync is on. `labels` also requires label sync. Missing partners are counted and skipped.
+fn expand_pair_targets(s: &Session, mut ids: Vec<PhotoId>, labels: bool) -> (Vec<PhotoId>, usize) {
+    if !s.sync_pair_metadata || (labels && !s.sync_pair_labels) {
+        return (ids, 0);
+    }
+    let mut skipped = 0usize;
+    let extra: Vec<Option<PhotoId>> = ids.iter().map(|id| s.catalog.pair_partner(*id)).collect();
+    for partner in extra.into_iter().flatten() {
+        if s.catalog.photo(partner).is_none() {
+            skipped += 1;
+            continue;
+        }
+        if !ids.contains(&partner) {
+            ids.push(partner);
+        }
+    }
+    (ids, skipped)
+}
+
+/// Adjust selected ratings and copy their results to unselected partners when sync is on.
 pub(super) fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<Value> {
     let mut ops = Vec::new();
-    for id in s.targets(p)? {
+    let targets = s.targets(p)?;
+    for &id in &targets {
         let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.rating;
         let rating = (i16::from(old) + i16::from(delta)).clamp(0, 5) as u8;
         if rating != old {
             ops.push(Op::SetRating { id, rating });
+        }
+        if s.sync_pair_metadata
+            && let Some(partner) = s.catalog.pair_partner(id)
+            && !targets.contains(&partner)
+            && s.catalog.photo(partner).is_some_and(|photo| photo.rating != rating)
+        {
+            ops.push(Op::SetRating { id: partner, rating });
         }
     }
     let n = ops.len();
@@ -108,11 +150,19 @@ pub(super) fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) 
 /// raising/lowering clamps on reject < unflagged < pick. Unchanged photos make no history step.
 pub(super) fn change_flag(s: &mut Session, p: &Value, label: &str, step: impl Fn(Flag) -> Flag) -> Result<Value> {
     let mut ops = Vec::new();
-    for id in s.targets(p)? {
+    let targets = s.targets(p)?;
+    for &id in &targets {
         let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.flag;
         let flag = step(old);
         if flag != old {
             ops.push(Op::SetFlag { id, flag });
+        }
+        if s.sync_pair_metadata
+            && let Some(partner) = s.catalog.pair_partner(id)
+            && !targets.contains(&partner)
+            && s.catalog.photo(partner).is_some_and(|photo| photo.flag != flag)
+        {
+            ops.push(Op::SetFlag { id: partner, flag });
         }
     }
     let n = ops.len();

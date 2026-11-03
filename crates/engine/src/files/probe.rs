@@ -31,6 +31,9 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         keywords: lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords),
         regions: m.regions.clone(),
         focus: m.focus.clone(),
+        // The probe already parsed the MakerNote; Info must not reopen the file.
+        fuji_recipe: m.fuji_recipe.clone(),
+        fuji_recipe_known: true,
     };
     (meta, m.capture_time.as_ref().map(|d| d.to_iso()))
 }

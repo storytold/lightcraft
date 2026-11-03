@@ -290,6 +290,15 @@ struct PrefsFile {
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
+    /// One grid cell per RAW+JPEG pair.
+    #[serde(default)]
+    paired_culling: bool,
+    /// Ratings and flags follow the other file of a pair.
+    #[serde(default)]
+    sync_pair_metadata: bool,
+    /// Colour labels follow too, when metadata sync is on.
+    #[serde(default)]
+    sync_pair_labels: bool,
     /// Slideshow playback settings.
     slideshow: crate::slideshow::PlaybackSettings,
     /// Slideshow slide layout (margins, options, backdrop).
@@ -533,6 +542,8 @@ impl Session {
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
+        self.pair_show_raw.clear();
+        self.pair_focus_gen = self.pair_focus_gen.saturating_add(1);
         self.source = LibrarySource::All;
         self.library_folder = None;
         if report.created && seed_demo {
@@ -565,6 +576,9 @@ impl Session {
         self.slide_overlays = prefs.slide_overlays.sanitized();
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
+        self.paired_culling = prefs.paired_culling;
+        self.sync_pair_metadata = prefs.sync_pair_metadata;
+        self.sync_pair_labels = prefs.sync_pair_labels;
         self.hold_view = prefs.hold_view;
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
@@ -604,6 +618,18 @@ impl Session {
             self.selection = v.selection;
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
             self.selection.active = self.selection.active.filter(|id| self.catalog.photo(*id).is_some());
+        }
+        // Rebuild transient pair focus so the saved active photo stays visible.
+        if self.paired_culling {
+            let active = self.selection.active;
+            let selected: std::collections::HashSet<_> = self.selection.ids.iter().copied().chain(active).collect();
+            self.pair_show_raw.extend(
+                self.catalog
+                    .pairs()
+                    .filter(|pair| selected.contains(&pair.raw) && (active == Some(pair.raw) || !selected.contains(&pair.jpeg)))
+                    .map(|pair| pair.id),
+            );
+            self.pair_focus_gen = self.pair_focus_gen.saturating_add(1);
         }
         // not on Missing Photos: working that view out checks every original (minutes on a
         // sleeping NAS), and the app checks them in the background once it runs
@@ -841,6 +867,9 @@ impl Session {
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
+            paired_culling: self.paired_culling,
+            sync_pair_metadata: self.sync_pair_metadata,
+            sync_pair_labels: self.sync_pair_labels,
             slideshow: self.slideshow.clone(),
             slide_layout: self.slide_layout.clone(),
             slide_overlays: self.slide_overlays.clone(),

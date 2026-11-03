@@ -21,6 +21,7 @@ pub mod keywords;
 pub mod local;
 pub mod lock;
 pub mod model;
+pub mod pairs;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
@@ -28,7 +29,7 @@ pub mod stacks;
 pub mod store;
 pub mod tally;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 pub use dates::{DateRun, GroupBy};
@@ -256,6 +257,20 @@ pub enum Op {
         folder: String,
         record: Option<FolderRecord>,
     },
+    /// Link a raw and the JPEG shot beside it. Format version 11. Both photos stay in the catalog.
+    AddPair {
+        pair: RawJpegPair,
+    },
+    /// Drop a RAW+JPEG link. The photos stay.
+    RemovePair {
+        id: PairId,
+    },
+    /// Remember (`rejected`) or forget a directory and stem the user does not want joined.
+    RejectPair {
+        directory: String,
+        stem: String,
+        rejected: bool,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -284,6 +299,14 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
+    /// Camera RAW+JPEG links (format version 11).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pairs: BTreeMap<PairId, RawJpegPair>,
+    #[serde(default)]
+    next_pair: u64,
+    /// Stems the user split, so a scan does not join them again.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pair_rejections: BTreeSet<PairRejection>,
     /// Increments on every applied op, and when a batch fails and its rollback cannot undo it whole (the catalog
     /// changed, so what is keyed by the revision is out of date).
     #[serde(skip)]
@@ -392,7 +415,7 @@ impl PartialEq for Changes {
 
 impl Catalog {
     pub fn new() -> Catalog {
-        Catalog { next_photo: 1, next_album: 1, next_stack: 1, ..Default::default() }
+        Catalog { next_photo: 1, next_album: 1, next_stack: 1, next_pair: 1, ..Default::default() }
     }
 
     // ---- ids
@@ -412,6 +435,11 @@ impl Catalog {
     pub fn alloc_stack_id(&mut self) -> StackId {
         let id = StackId(self.next_stack.max(1));
         self.next_stack = id.0.saturating_add(1);
+        id
+    }
+    pub fn alloc_pair_id(&mut self) -> PairId {
+        let id = PairId(self.next_pair.max(1));
+        self.next_pair = id.0.saturating_add(1);
         id
     }
 
@@ -692,6 +720,80 @@ impl Catalog {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))
     }
 
+    /// RAW+JPEG links.
+    pub fn pairs(&self) -> impl Iterator<Item = &RawJpegPair> {
+        self.pairs.values()
+    }
+    pub fn pair(&self, id: PairId) -> Option<&RawJpegPair> {
+        self.pairs.get(&id)
+    }
+    /// The pair a photo belongs to.
+    pub fn pair_of(&self, photo: PhotoId) -> Option<&RawJpegPair> {
+        self.pairs.values().find(|p| p.raw == photo || p.jpeg == photo)
+    }
+    /// The other file in `photo`'s pair.
+    pub fn pair_partner(&self, photo: PhotoId) -> Option<PhotoId> {
+        self.pair_of(photo).map(|p| if p.raw == photo { p.jpeg } else { p.raw })
+    }
+    /// Photo → pair id, for every paired photo.
+    pub fn pair_index(&self) -> HashMap<PhotoId, PairId> {
+        self.pairs.values().flat_map(|p| [(p.raw, p.id), (p.jpeg, p.id)]).collect()
+    }
+    pub(crate) fn rejections(&self) -> &BTreeSet<PairRejection> {
+        &self.pair_rejections
+    }
+    /// Candidates, ambiguous stems and export hints. See [`pairs::scan`].
+    pub fn scan_pairs(&self) -> pairs::PairScan {
+        pairs::scan(self)
+    }
+
+    fn validate_pair(&self, pair: &RawJpegPair) -> Result<()> {
+        if pair.raw == pair.jpeg {
+            return Err(CatalogError::Invalid("a pair needs two photos".into()));
+        }
+        if self.pairs.contains_key(&pair.id) {
+            return Err(CatalogError::Invalid(format!("pair {:?} exists", pair.id)));
+        }
+        let raw = self.photo(pair.raw).ok_or(CatalogError::NoPhoto(pair.raw))?;
+        let jpeg = self.photo(pair.jpeg).ok_or(CatalogError::NoPhoto(pair.jpeg))?;
+        if self.pair_of(pair.raw).is_some() || self.pair_of(pair.jpeg).is_some() {
+            return Err(CatalogError::Invalid("a photo can be in only one raw/JPEG pair".into()));
+        }
+        if !pairs::photos_match(raw, jpeg) {
+            return Err(CatalogError::Invalid("these photos are not a raw and JPEG pair".into()));
+        }
+        Ok(())
+    }
+
+    fn pair_matches(&self, pair: &RawJpegPair) -> bool {
+        match (self.photo(pair.raw), self.photo(pair.jpeg)) {
+            (Some(raw), Some(jpeg)) => pairs::photos_match(raw, jpeg),
+            _ => false,
+        }
+    }
+
+    /// Inverses of removing links whose files no longer form a pair. The removals are applied.
+    fn take_stale_pairs(&mut self) -> Result<Vec<Op>> {
+        let stale: Vec<PairId> = self.pairs.values().filter(|p| !self.pair_matches(p)).map(|p| p.id).collect();
+        let mut inv = Vec::new();
+        for id in stale {
+            inv.push(self.apply_inner(Op::RemovePair { id })?);
+        }
+        Ok(inv)
+    }
+
+    fn finish_path_change(&mut self, inv: Op) -> Result<Op> {
+        let mut ops = vec![inv];
+        ops.extend(self.take_stale_pairs()?);
+        if ops.len() == 1 { ops.pop().ok_or_else(|| CatalogError::Invalid("empty inverse".into())) } else { Ok(Op::Batch { ops }) }
+    }
+
+    /// `RemovePair` for every link that touches one of `ids`.
+    pub fn remove_pair_ops(&self, ids: &[PhotoId]) -> Vec<Op> {
+        let gone: HashSet<PhotoId> = ids.iter().copied().collect();
+        self.pairs.values().filter(|p| gone.contains(&p.raw) || gone.contains(&p.jpeg)).map(|p| Op::RemovePair { id: p.id }).collect()
+    }
+
     /// Apply an op; returns its inverse. On error the catalog is as it was, the revision included, and nothing is
     /// remembered of the op in what the latest ops touched. The one exception is a batch whose rollback fails: the
     /// catalog did change, so the revision advances and anything may be taken to have changed.
@@ -813,6 +915,9 @@ impl Catalog {
             | Op::SetLabelName { .. }
             | Op::SetBrowsed { .. }
             | Op::SetKeyword { .. }
+            | Op::AddPair { .. }
+            | Op::RemovePair { .. }
+            | Op::RejectPair { .. }
             | Op::SetFolderRecord { .. } => self.changes.broad = self.revision.saturating_add(1),
         }
         Ok(match op {
@@ -1040,7 +1145,8 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
-                Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
+                let inv = Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format };
+                self.finish_path_change(inv)?
             }
             Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
                 let p = self.photo_mut(id)?;
@@ -1071,7 +1177,8 @@ impl Catalog {
                 }
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
-                Op::SetFile { id, file_name: old_name, source: std::mem::replace(&mut p.source, source) }
+                let inv = Op::SetFile { id, file_name: old_name, source: std::mem::replace(&mut p.source, source) };
+                self.finish_path_change(inv)?
             }
             Op::SetLabelName { label, name } => {
                 let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
@@ -1112,6 +1219,30 @@ impl Catalog {
                 };
                 Op::SetFolderRecord { folder: key, record: old }
             }
+            Op::AddPair { pair } => {
+                self.validate_pair(&pair)?;
+                let id = pair.id;
+                self.next_pair = self.next_pair.max(id.0.saturating_add(1));
+                self.pairs.insert(id, pair);
+                Op::RemovePair { id }
+            }
+            Op::RemovePair { id } => {
+                let pair = self.pairs.remove(&id).ok_or_else(|| CatalogError::Invalid(format!("no such pair {id:?}")))?;
+                Op::AddPair { pair }
+            }
+            Op::RejectPair { directory, stem, rejected } => {
+                let key = PairRejection { directory: pairs::normalize_dir(&directory), stem: stem.to_lowercase() };
+                if key.stem.is_empty() {
+                    return Err(CatalogError::Invalid("a pair rejection needs a file stem".into()));
+                }
+                let present = self.pair_rejections.contains(&key);
+                if rejected {
+                    self.pair_rejections.insert(key.clone());
+                } else {
+                    self.pair_rejections.remove(&key);
+                }
+                Op::RejectPair { directory: key.directory, stem: key.stem, rejected: present }
+            }
             Op::Batch { ops } => {
                 let mut inverses = Vec::with_capacity(ops.len());
                 for op in ops {
@@ -1144,6 +1275,7 @@ impl Catalog {
             .map(|a| Op::SetAlbumPhotos { id: a.id, photos: a.photos.iter().copied().filter(|p| *p != id).collect() })
             .collect();
         ops.extend(self.remove_from_stacks_ops(&[id]));
+        ops.extend(self.remove_pair_ops(&[id]));
         ops.push(Op::RemovePhoto { id });
         Op::Batch { ops }
     }
@@ -1160,6 +1292,7 @@ impl Catalog {
             .map(|a| Op::SetAlbumPhotos { id: a.id, photos: a.photos.iter().copied().filter(|p| !gone.contains(p)).collect() })
             .collect();
         ops.extend(self.remove_from_stacks_ops(ids));
+        ops.extend(self.remove_pair_ops(ids));
         ops.extend(gone.iter().map(|id| Op::RemovePhoto { id: *id }));
         Op::Batch { ops }
     }
@@ -1353,7 +1486,10 @@ fn changes_what_albums_test(op: &Op) -> bool {
         | Op::SetLabelName { .. }
         | Op::SetBrowsed { .. }
         | Op::SetKeyword { .. }
-        | Op::SetFolderRecord { .. } => false,
+        | Op::SetFolderRecord { .. }
+        | Op::AddPair { .. }
+        | Op::RemovePair { .. }
+        | Op::RejectPair { .. } => false,
     }
 }
 
@@ -1490,6 +1626,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_pairs;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]
