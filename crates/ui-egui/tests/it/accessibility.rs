@@ -10,15 +10,18 @@ use lightcraft_ui_egui::{
 };
 
 fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp> {
+    harness_in_language(view, right, lightcraft_ui_egui::i18n::Locale::En)
+}
+
+fn harness_in_language(view: ViewMode, right: RightPanel, language: lightcraft_ui_egui::i18n::Locale) -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     // a headless host never gains the first-run tour: its modal would take the Tab focus under test
     app.headless_host = true;
+    app.ui.language = language;
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
-    // This audit checks the AccessKit tree, not font coverage. Some locales and interface symbols
-    // intentionally have no bundled glyph, so do not let unrelated text painting abort the audit.
-    let builder = Harness::builder().with_size(vec2(1500.0, 950.0)).allow_missing_glyphs();
+    let builder = Harness::builder().with_size(vec2(1500.0, 950.0));
     let mut h = builder.build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
@@ -143,6 +146,22 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
     problems.sort();
     problems.dedup();
     assert!(problems.is_empty(), "{} accessibility problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+#[test]
+fn localized_accessibility_smoke_keeps_controls_named() {
+    let mut problems = Vec::new();
+    for (view, right) in [
+        (ViewMode::PhotoGrid, RightPanel::None),
+        (ViewMode::Detail, RightPanel::Info),
+        (ViewMode::Survey, RightPanel::None),
+    ] {
+        let h = harness_in_language(view, right, lightcraft_ui_egui::i18n::Locale::De);
+        problems.extend(audit(&h, &format!("German/{view:?}/{right:?}")));
+    }
+    problems.sort();
+    problems.dedup();
+    assert!(problems.is_empty(), "{} localized accessibility problems:\n{}", problems.len(), problems.join("\n"));
 }
 
 fn slider_value(h: &Harness<'_, LightcraftApp>, name: &str) -> Option<f64> {

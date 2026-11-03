@@ -4,10 +4,10 @@ use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::{Harness, kittest::NodeT};
 use lightcraft_ui_egui::{LightcraftApp, Services};
-
 fn harness() -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.headless_host = true;
+    app.ui.language = lightcraft_ui_egui::i18n::Locale::En;
     let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
