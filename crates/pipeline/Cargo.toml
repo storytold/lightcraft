@@ -19,6 +19,8 @@ rayon = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+# time guards stretched by LIGHTCRAFT_TIME_SCALE
+lightcraft-testkit = { workspace = true }
 dhat = { workspace = true }
 lightcraft-scenes = { workspace = true }
 proptest = { workspace = true }

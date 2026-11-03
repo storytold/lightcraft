@@ -3,7 +3,7 @@
 //! doesn't compare every preset with every other.
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use lightcraft_develop::Preset;
 use serde_json::json;
@@ -90,8 +90,10 @@ fn importing_thousands_of_presets_is_not_quadratic() {
     let id = s.add_presets(vec![clash]).remove(0);
     assert_ne!(id, "user.coll-0.look-0");
     assert_eq!(s.presets.iter().filter(|p| p.id == id).count(), 1);
-    // quadratic was ~200 M comparisons here (tens of seconds in debug builds)
-    assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+    // quadratic was ~200 M comparisons here (tens of seconds in debug builds); stretched on a slow
+    // machine, never shrunk
+    let limit = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
+    assert!(t.elapsed() < limit, "took {:?} (limit {limit:?})", t.elapsed());
 }
 
 #[test]

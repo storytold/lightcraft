@@ -745,7 +745,9 @@ fn degenerate_crops_render_with_spots_and_masks() {
         let t = std::time::Instant::now();
         let r = s.render_now(id, 700, 450).unwrap();
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
-        assert!(t.elapsed().as_secs_f64() < 60.0, "{rect:?}: {:?}", t.elapsed());
+        // stretched on a slow machine, never shrunk
+        let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(60)).max(std::time::Duration::from_secs(60));
+        assert!(t.elapsed() < limit, "{rect:?}: {:?}", t.elapsed());
     }
 }
 
@@ -2087,7 +2089,9 @@ fn oversized_spots_render() {
             let t = std::time::Instant::now();
             let r = s.render_now(id, 300, 200).unwrap();
             assert!(r.image.width >= 1 && r.image.height >= 1, "{size} {mode:?}");
-            assert!(t.elapsed().as_secs_f64() < 60.0, "{size} {mode:?}: {:?}", t.elapsed());
+            // stretched on a slow machine, never shrunk
+            let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(60)).max(std::time::Duration::from_secs(60));
+            assert!(t.elapsed() < limit, "{size} {mode:?}: {:?}", t.elapsed());
         }
     }
 }

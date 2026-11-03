@@ -244,7 +244,9 @@ mod tests {
             let b = gaussian(&p, sigma);
             assert!(b.data.iter().all(|v| v.is_finite()), "{sigma}");
         }
-        assert!(t.elapsed().as_secs_f64() < 30.0, "a huge sigma's blur is bounded");
+        // stretched on a slow machine, never shrunk: it stops a blur that grows with sigma, not a slow one
+        let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(30)).max(std::time::Duration::from_secs(30));
+        assert!(t.elapsed() < limit, "a huge sigma's blur is bounded");
         let mut s = 0.0f32;
         while s < 23_000.0 {
             assert_eq!(box_radii(s), box_radii_before(s), "sigma {s}");
