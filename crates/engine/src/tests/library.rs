@@ -86,7 +86,8 @@ fn threshold_compaction_runs_in_the_background() {
         }
     }
     assert!(background > 0, "compactions ran in the background");
-    for _ in 0..10_000 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(10_000));
+    while std::time::Instant::now() < deadline {
         s.persist_if_dirty();
         if !s.library.as_ref().unwrap().journal().snapshot_running() {
             break;

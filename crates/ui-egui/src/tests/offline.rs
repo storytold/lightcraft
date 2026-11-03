@@ -58,7 +58,7 @@ impl Nas {
         let dog = nas.clone();
         std::thread::spawn(move || {
             let state = dog.state.lock().unwrap();
-            let (mut state, _) = dog.changed.wait_timeout_while(state, lightcraft_testkit::scaled(WATCHDOG), |s| !s.0).unwrap();
+            let (mut state, _) = dog.changed.wait_timeout_while(state, lightcraft_testkit::scaled(WATCHDOG).max(WATCHDOG), |s| !s.0).unwrap();
             if !state.0 {
                 dog.forced.store(true, Ordering::SeqCst);
                 state.0 = true;
@@ -71,7 +71,7 @@ impl Nas {
         let state = self.state.lock().unwrap();
         // bounded without the watchdog thread too, should it be gone: it wakes the drive after
         // WATCHDOG, so only a call nothing will ever wake gets to twice that
-        let limit = lightcraft_testkit::scaled(WATCHDOG * 2);
+        let limit = lightcraft_testkit::scaled(WATCHDOG * 2).max(WATCHDOG * 2);
         let (mut state, waited) = self.changed.wait_timeout_while(state, limit, |s| !s.0 && s.1 == 0).unwrap();
         if waited.timed_out() {
             // wake the drive as the watchdog would have, so the calls after this one don't each

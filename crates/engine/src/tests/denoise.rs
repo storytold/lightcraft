@@ -117,7 +117,8 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
     assert!(x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).is_err());
     release_tx.send(()).unwrap();
-    for _ in 0..600 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(3_000));
+    while std::time::Instant::now() < deadline {
         let v = x.s.execute("denoise.models.downloads", &json!({})).unwrap();
         if v["downloads"][0]["state"] == "installed" {
             break;
@@ -199,7 +200,7 @@ fn denoise_pump_budget_only_expands_for_llvm_coverage_runs() {
 }
 
 fn pump_until_ready(s: &mut Session, n: u64) -> Value {
-    let deadline = std::time::Instant::now() + denoise_ready_timeout();
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(denoise_ready_timeout());
     while std::time::Instant::now() < deadline {
         let r = s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
         if r["ready"].as_u64() >= Some(n) {
@@ -452,7 +453,8 @@ fn a_model_that_fails_fails_the_export_and_is_not_retried_by_the_queue() {
     let e = export_photo(&mut x.s, id, &o, 1).err().unwrap();
     assert!(e.contains("ramp.dng") && e.contains("the model went away"), "{e}");
     // the background job fails too, says why once and does not try again every frame
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(4_000));
+    while std::time::Instant::now() < deadline {
         x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
         if matches!(x.s.denoise_photo_state(id), PhotoState::Failed { .. }) {
             break;
@@ -861,7 +863,8 @@ fn denoise_row_while_queue_is_busy() {
     assert!(rows(&x.s).is_empty(), "nothing to make, no row: {r}");
     set_amount(&mut x.s, 100.0);
     let mut shown = false;
-    for _ in 0..600 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(30_000));
+    while std::time::Instant::now() < deadline {
         let r = x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
         let rows = rows(&x.s);
         // (what the pump left running or queued is what the row reflects until the next pump)
