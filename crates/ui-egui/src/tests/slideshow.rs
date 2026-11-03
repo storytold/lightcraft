@@ -196,7 +196,7 @@ fn a_fade_only_runs_between_rendered_slides() {
     run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0.4, "preparePreviews": false}));
     let mut fades = 0;
     let t0 = std::time::Instant::now();
-    while fades < 20 && t0.elapsed() < SETTLE {
+    while fades < 20 && t0.elapsed() < lightcraft_testkit::scaled(SETTLE) {
         h.step();
         let f = play(&h).frame(h.time());
         if let Some(from) = f.from {
@@ -651,7 +651,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
         let img = h.paint();
         let c = painted(&img, (rect.left() + 3.0) as usize, (rect.center().y) as usize);
-        if (c[1] > 200 && c[0] < 60) || t0.elapsed() > T {
+        if (c[1] > 200 && c[0] < 60) || t0.elapsed() > lightcraft_testkit::scaled(T) {
             break c;
         }
         h.step();

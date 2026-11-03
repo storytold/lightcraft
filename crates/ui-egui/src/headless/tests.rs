@@ -1306,7 +1306,7 @@ fn a_screenful_of_small_faces_is_not_evicted_and_left_blank() {
     // the pictures are made and kept, well beyond the old budget (a few demo photos share a scene, so two faces can share a
     // picture: the count is a little under the number of tiles)
     let started = Instant::now();
-    let timeout = Duration::from_secs(300);
+    let timeout = lightcraft_testkit::scaled(Duration::from_secs(300));
     while h.app.renderer.variant_textures() < drawn - 20 {
         let left = timeout.saturating_sub(started.elapsed());
         assert!(
@@ -1826,7 +1826,9 @@ fn settle_waits_for_file_system_checks() {
     static RELEASE: AtomicBool = AtomicBool::new(false);
     fn slow_check(_: &str) -> bool {
         let t0 = Instant::now();
-        while !RELEASE.load(Ordering::Acquire) && t0.elapsed() < Duration::from_secs(60) {
+        // a hold the test lets go of: never shorter than 60 s, whatever the scale
+        let hold = lightcraft_testkit::scaled(Duration::from_secs(60)).max(Duration::from_secs(60));
+        while !RELEASE.load(Ordering::Acquire) && t0.elapsed() < hold {
             std::thread::sleep(Duration::from_millis(1));
         }
         true
@@ -1919,7 +1921,7 @@ fn export_dialog_previews_the_watermark() {
         opts.watermark = Some(lightcraft_engine::export::Watermark { text: "© LightCraft".into(), ..Default::default() });
     }
     let t0 = Instant::now();
-    while preview(&mut h).is_none() && t0.elapsed() < Duration::from_secs(30) {
+    while preview(&mut h).is_none() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)) {
         h.step();
     }
     let rect = preview(&mut h).expect("the watermark preview is shown");
@@ -2002,7 +2004,7 @@ fn export_dialog_runs_in_the_background() {
     // …and as a row in the activity stack (issue #345)
     assert_eq!(running["result"]["activity"][0]["kind"], "export", "{}", running["result"]["activity"]);
     let t0 = Instant::now();
-    while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.export.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
     }
     assert!(h.app.export.is_none(), "finished");
@@ -2053,7 +2055,7 @@ fn export_dialog_adds_to_apple_photos_on_macos() {
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
     let t0 = Instant::now();
-    while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.export.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
     }
     let last = h.request("ui.inspect", json!({}), t)["result"]["export"]["last"].clone();
@@ -2091,7 +2093,7 @@ fn the_photos_progress_line_is_in_the_users_language() {
     let entered = std::sync::Mutex::new(entered);
     h.app.session.apple_photos = Some(Arc::new(move |_: &[String], _| {
         let _ = entered.lock().unwrap().send(());
-        let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(30));
+        let _ = held.lock().unwrap().recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30)));
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
     }));
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(1).map(|p| p.0).collect();
@@ -2100,7 +2102,7 @@ fn the_photos_progress_line_is_in_the_users_language() {
     assert_eq!(r["ok"], true, "{r}");
     // Photos has been asked, and the window hasn't drawn a frame since (Codex review of #643):
     // the export's row already has no ✕, and a cancel is refused rather than half-honoured
-    photos_asked.recv_timeout(Duration::from_secs(60)).expect("the export asks Photos");
+    lightcraft_testkit::recv_within(&photos_asked, Duration::from_secs(60), "the export asks Photos");
     let row = h.app.session.activity.list().into_iter().find(|r| r.kind == "export").expect("the export's row");
     assert!(!row.cancellable, "{row:?}");
     assert!(h.app.session.activity.cancel(row.id).is_err(), "Photos can't be stopped once asked");
@@ -2112,7 +2114,7 @@ fn the_photos_progress_line_is_in_the_users_language() {
     assert_eq!((row.detail.as_str(), row.cancellable), ("Wird zu Apple Fotos hinzugefügt…", false), "{row:?}");
     release.send(()).unwrap();
     let t0 = Instant::now();
-    while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(90) {
+    while h.app.export.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(90)) {
         h.step();
     }
     let last = h.app.last_export_result.clone().expect("the export reports");
@@ -2195,11 +2197,12 @@ fn a_headless_run_waits_for_its_photos_import_before_ending() {
     std::fs::write(&file, b"jpeg").unwrap();
     let marker = dir.join("imported");
     let m = marker.clone();
-    // Photos "imports" when `go` arrives (at most 20 s): released 0.8 s into the drop below
+    // Photos "imports" when `go` arrives (at most 20 s, stretched, never less): released 0.8 s
+    // into the drop below
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = std::sync::Mutex::new(wait);
     h.app.session.apple_photos = Some(Arc::new(move |_: &[String], _| {
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        let _ = wait.lock().unwrap().recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20)));
         std::fs::write(&m, b"done").unwrap();
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
     }));
@@ -3772,7 +3775,7 @@ fn import_review_offers_recently_deleted_files() {
         assert_eq!(r["ok"], true, "{r}");
         // frames until the import has finished, so its (timed) toast is read before it expires
         let t0 = std::time::Instant::now();
-        while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(30) {
+        while h.app.import.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)) {
             h.step();
         }
         assert!(h.app.import.is_none(), "finished");
@@ -3845,7 +3848,7 @@ fn import_review_checks_a_recently_deleted_file_by_hand() {
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
     let t0 = std::time::Instant::now();
-    while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(30) {
+    while h.app.import.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)) {
         h.step();
     }
     assert!(h.app.import.is_none(), "finished");
@@ -3929,7 +3932,7 @@ fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
     // frames until the import has finished, so its (timed) toast is read before it expires
     let finish_import = |h: &mut Headless| {
         let t0 = std::time::Instant::now();
-        while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(30) {
+        while h.app.import.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)) {
             h.step();
         }
         assert!(h.app.import.is_none(), "import finished");

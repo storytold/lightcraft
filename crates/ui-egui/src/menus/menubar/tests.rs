@@ -554,7 +554,7 @@ fn find_missing_waited_structured_results_and_background_mode() {
 
     // Wait for background task to complete
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
-    assert!(crate::tasks::wait(&mut app, &ctx, std::time::Duration::from_secs(5)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(std::time::Duration::from_secs(5))));
     let last = app.ui.last_find_missing.as_ref().unwrap();
     assert_eq!(last["found"].as_array().map(Vec::len), Some(1));
 
@@ -591,7 +591,7 @@ fn find_missing_waited_timeout_behavior() {
 
     // Clean up the running task so no worker hangs
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
-    assert!(crate::tasks::wait_for(&mut app, &ctx, "Find Missing Photos", std::time::Duration::from_secs(5)));
+    assert!(crate::tasks::wait_for(&mut app, &ctx, "Find Missing Photos", lightcraft_testkit::scaled(std::time::Duration::from_secs(5))));
     assert!(!app.tasks.is_running("Find Missing Photos"));
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -637,7 +637,7 @@ fn find_missing_waited_completes_while_unrelated_task_remains_active() {
     // Clean up the blocked background task
     let _ = tx_unblock.send(());
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
-    assert!(crate::tasks::wait(&mut app, &ctx, std::time::Duration::from_secs(5)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(std::time::Duration::from_secs(5))));
     assert!(app.tasks.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);

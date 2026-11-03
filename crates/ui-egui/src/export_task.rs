@@ -348,7 +348,7 @@ mod contact_sheet_tests {
         assert!(app.export.is_some(), "picker did not start export: {:?}", app.ui.toast);
         // a hang guard, not a speed check: the render queues behind other tests' demo scenes (generated one at a
         // time process-wide), which on a loaded machine takes minutes
-        let deadline = Instant::now() + Duration::from_secs(300);
+        let deadline = Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(300));
         loop {
             // Poll the real worker without starting unrelated gallery renders each frame.
             poll(&mut app, &ctx);
@@ -384,7 +384,10 @@ mod contact_sheet_tests {
         app.session.activity.cancel(rows[0].id).unwrap();
         assert!(app.export.as_ref().unwrap().cancel.load(Ordering::Relaxed), "the stack's ✕ stops the sheet");
         let task = app.export.take().unwrap();
-        assert!(task.rx.recv_timeout(Duration::from_secs(20)).unwrap().is_err(), "a stopped sheet is not written");
+        assert!(
+            lightcraft_testkit::recv_within(&task.rx, Duration::from_secs(20), "the stopped sheet's outcome").is_err(),
+            "a stopped sheet is not written"
+        );
         drop(task);
         assert!(app.session.activity.list().is_empty(), "the row goes with the export");
     }
@@ -399,7 +402,7 @@ mod contact_sheet_tests {
         start_contact_sheet(&mut app, &json!({"path": "Cancelled.pdf", "ids": ids})).unwrap();
         app.export.as_ref().unwrap().cancel.store(true, Ordering::Relaxed);
         let task = app.export.take().unwrap();
-        assert!(task.rx.recv_timeout(Duration::from_secs(20)).unwrap().is_err());
+        assert!(lightcraft_testkit::recv_within(&task.rx, Duration::from_secs(20), "the cancelled sheet's outcome").is_err());
     }
 }
 
