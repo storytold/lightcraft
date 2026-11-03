@@ -367,7 +367,6 @@ pub struct UiState {
     pub print: crate::print_view::PrintUi,
 }
 
-
 impl Default for UiState {
     /// Initialize the library and import review sizes as independent app preferences.
     fn default() -> Self {
