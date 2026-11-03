@@ -432,3 +432,26 @@ fn survey_up_and_down_step_through_its_photos() {
     }
     assert_eq!(h.app.ui.view, crate::state::ViewMode::Survey);
 }
+
+/// The same keys in Compare: ↓ / ↑ change the candidate as → / ← do, and the select stays (#3640).
+#[test]
+fn compare_up_and_down_step_the_candidate() {
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
+    h.settle(SETTLE);
+    let press = |h: &mut Headless, key: &str| {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        h.app.ui.compare
+    };
+    let after_right = press(&mut h, "right");
+    assert!(after_right.is_some_and(|(s, c)| s == sel && c != cand), "{after_right:?}");
+    assert_eq!(press(&mut h, "left"), Some((sel, cand)));
+    assert_eq!(press(&mut h, "down"), after_right, "↓ steps like →");
+    assert_eq!(press(&mut h, "up"), Some((sel, cand)), "↑ steps like ←");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);
+}
