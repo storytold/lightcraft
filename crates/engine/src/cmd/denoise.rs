@@ -129,16 +129,18 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
 
 /// Install the model in `src`. A model that passes its self-test becomes the one in use (`activate`, the default): installing
 /// a model is how someone says they want it. `verified` is for a download whose hash was already checked.
-fn install_file(
-    dir: &Path,
-    loader: &crate::denoise::Loader,
+struct InstallFile<'a> {
+    dir: &'a Path,
     run_on: RunOn,
     accepted_at: String,
-    c: &str,
-    src: &Path,
+    command: &'a str,
+    src: &'a Path,
     acknowledged: bool,
     verified: bool,
-) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
+}
+
+fn install_file(loader: &crate::denoise::Loader, request: InstallFile<'_>) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
+    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified } = request;
     let ident = identify(src, c, None)?;
     let m = ident.manifest.clone();
     manifest::validate(&m).map_err(|e| bad(c, e.to_string()))?;
@@ -262,7 +264,8 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _held = crate::memory::work_gate().acquire(512 * 1024 * 1024);
-                install_file(&dir, &loader, run_on, at, C, &src, true, verified).map_err(|e| plain(&e))
+                install_file(&loader, InstallFile { dir: &dir, run_on, accepted_at: at, command: C, src: &src, acknowledged: true, verified })
+                    .map_err(|e| plain(&e))
             }))
             .unwrap_or_else(|_| Err("the model installation stopped unexpectedly".into()));
             if verified {
@@ -290,8 +293,18 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     if s.denoise.install.is_some() {
         return Err(bad(C, "another model is being installed"));
     }
-    let (result, model) =
-        install_file(&models_dir(s, C)?, &s.denoise.loader, s.denoise.settings.run_on(), (s.clock)(), C, Path::new(path), acknowledged, false)?;
+    let (result, model) = install_file(
+        &s.denoise.loader,
+        InstallFile {
+            dir: &models_dir(s, C)?,
+            run_on: s.denoise.settings.run_on(),
+            accepted_at: (s.clock)(),
+            command: C,
+            src: Path::new(path),
+            acknowledged,
+            verified: false,
+        },
+    )?;
     activate_install(s, &result, model, activate)
 }
 

@@ -8,8 +8,9 @@
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
 //! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193).
 //! Strips labelled 34713 without a `0x0096`
-//! linearization table are packed uncompressed data in several measured layouts ([`PackedLayout`]); Nikon small raw
-//! (sRAW) and the D1X's genuinely Huffman-coded strip stay refused.
+//! linearization table are packed uncompressed data in several measured layouts ([`PackedLayout`]) or, when the strip
+//! is exactly three bytes per pixel, Nikon small raw ([`small_raw`]); the D1X's genuinely Huffman-coded strip stays
+//! refused.
 
 use super::{nefc, white_from_data};
 use crate::tiffraw::{Packing, check_image, read_image};
@@ -233,6 +234,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let make = ifd0.string(t::MAKE).unwrap_or_default();
     let mn =
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
+    if let Some(strip) = small_raw_strip(&info, bytes.len(), mn.as_ref()) {
+        return small_raw(bytes, &tiff, &info, strip, mode);
+    }
     // the header probe reads only the rows the masked-column test needs
     let rows = match mode {
         Mode::Full => h,
@@ -494,14 +498,7 @@ fn packed(bytes: &[u8], info: &ImageInfo, rows: usize) -> Result<RawData> {
         _ => None,
     };
     let (Some(layout), [c]) = (layout, chunks.as_slice()) else {
-        let small = bits == 12
-            && chunks.len() == 1
-            && w.checked_mul(h).and_then(|n| n.checked_mul(3)).is_some_and(|n| u64::try_from(n).ok() == Some(chunks[0].len));
-        return Err(RawError::Unsupported(if small {
-            "Nikon small raw (sRAW) not decoded yet".into()
-        } else {
-            "Nikon compressed NEF without a linearization table (maker note 0x96)".into()
-        }));
+        return Err(RawError::Unsupported("Nikon compressed NEF without a linearization table (maker note 0x96)".into()));
     };
     let src = lightcraft_tiff::image::chunk_bytes(bytes, c)
         .filter(|src| u64::try_from(src.len()).ok() == Some(c.len))
@@ -510,6 +507,128 @@ fn packed(bytes: &[u8], info: &ImageInfo, rows: usize) -> Result<RawData> {
         return Err(RawError::Limit("image too large"));
     }
     Ok(RawData::U16(unpack_packed(src, w, rows.min(h), bits, layout)))
+}
+
+/// Nikon small raw (sRAW), measured clean-room from the CC0 raw.pixls.us D810 (2036) and D4S (2227) samples. The raw SubIFD is labelled compression 34713,
+/// 12 bits, one CFA sample per pixel, but it carries no linearization table (maker note `0x0096`) and its single strip
+/// is exactly `3 * width * height` bytes. It holds a YCbCr 4:2:2 image of the IFD size, not a CFA mosaic (the CFA
+/// tags are dummies):
+///
+/// - the strip is an LSB-first 12-bit stream (`s0 = b0 | (b1 & 0x0f) << 8`, `s1 = b1 >> 4 | b2 << 4`), a row is `3 * width`
+///   bytes with no padding, i.e. `2 * width` samples;
+/// - the samples come in groups of four, `[Y_left, Y_right, Cb, Cr]`, for the pixel pair `(2k, 2k + 1)`: chroma is
+///   halved horizontally and not vertically;
+/// - luma is linear and already black-subtracted (the darkest samples are near 0) and never uses the top two bits
+///   (maxima 873 and 1004 of 4095), so the white level is 1023; chroma is centred on 2048 (fitted neutral 2045-2049).
+///
+/// The chroma is a camera colour-difference scale, not JFIF Cb/Cr. In linear terms the stored values behave as
+/// `R - Y = R_GAIN * (Cr - 2048)` and `B - Y = B_GAIN * (Cb - 2048)` on the luma scale: regressing the camera JPEG's
+/// linear `(R - Y) / Y` and `(B - Y) / Y` on `(Cr - 2048) / Y` and `(Cb - 2048) / Y` over mid-tone pixels gave slopes
+/// 4.92 / 5.09 (D810, correlation 0.94 / 0.88) and 3.52 / 3.73 (D4S, 0.98 / 0.97); the gains below are the rounded
+/// means. They are approximate (the two bodies differ by about 30 %), the luma is not tone-mapped, and the data is
+/// treated as already white balanced (neutral D4S areas have `Cb`, `Cr` within 2 of 2048 and equal JPEG R, G, B). G
+/// follows from the luma equation with the BT.601 weights. The chroma is upsampled horizontally with linear
+/// interpolation, centred between the two pixels of a pair. Output is linear RGB scaled by 16 (to a 14-bit range),
+/// like Sony's downsized ARWs.
+const SMALL_RAW_WHITE: f32 = 1023.0;
+const SMALL_RAW_SCALE: f32 = 16.0;
+const SMALL_RAW_CHROMA_ZERO: f32 = 2048.0;
+const SMALL_RAW_R_GAIN: f32 = 4.2;
+const SMALL_RAW_B_GAIN: f32 = 4.4;
+
+/// The strip of a small raw: compression 34713, 12 bits, no maker note `0x0096`, one strip of exactly
+/// `3 * width * height` bytes (even width).
+fn small_raw_strip(info: &ImageInfo, file_len: usize, mn: Option<&makernote::MakerNote>) -> Option<lightcraft_tiff::image::Chunk> {
+    if info.compression != t::compression::NIKON || info.bits() != 12 || info.samples_per_pixel != 1 {
+        return None;
+    }
+    if mn.is_some_and(|m| m.ifd.bytes(LINEARIZATION_TABLE).is_some()) {
+        return None;
+    }
+    let (w, h) = (info.width as u64, info.height as u64);
+    let chunks = info.chunks(file_len as u64);
+    match chunks.as_slice() {
+        [c] if w.is_multiple_of(2) && w > 0 && h > 0 && w.checked_mul(h).and_then(|n| n.checked_mul(3)) == Some(c.len) => Some(*c),
+        _ => None,
+    }
+}
+
+/// Decode one row of a small raw (`3 * width` bytes) into `3 * width` linear RGB values on the 14-bit scale.
+/// Short input reads as zero bytes.
+fn small_raw_row(src: &[u8], w: usize, out: &mut [u16]) {
+    let Some(n) = w.checked_mul(3).filter(|n| *n <= out.len() && *n <= crate::MAX_SAMPLES) else { return };
+    if w == 0 || !w.is_multiple_of(2) {
+        return;
+    }
+    let mut s = vec![0u16; 2 * w];
+    crate::unpack::unpack_lsb(&src[..src.len().min(n)], 12, &mut s);
+    let pairs = w / 2;
+    let chroma = |k: usize| {
+        let g = &s[4 * k + 2..4 * k + 4];
+        (f32::from(g[0]) - SMALL_RAW_CHROMA_ZERO, f32::from(g[1]) - SMALL_RAW_CHROMA_ZERO)
+    };
+    for k in 0..pairs {
+        let (cb, cr) = chroma(k);
+        for side in 0..2 {
+            let (nb, nr) = if side == 0 { chroma(k.saturating_sub(1)) } else { chroma((k + 1).min(pairs - 1)) };
+            let (u, v) = (0.75 * cb + 0.25 * nb, 0.75 * cr + 0.25 * nr);
+            let y = f32::from(s[4 * k + side]);
+            let r = y + SMALL_RAW_R_GAIN * v;
+            let b = y + SMALL_RAW_B_GAIN * u;
+            let g = (y - 0.299 * r - 0.114 * b) / 0.587;
+            let dst = (2 * k + side) * 3;
+            for (i, value) in [r, g, b].into_iter().enumerate() {
+                out[dst + i] = (value * SMALL_RAW_SCALE).round().clamp(0.0, 65535.0) as u16;
+            }
+        }
+    }
+}
+
+fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: lightcraft_tiff::image::Chunk, mode: Mode) -> Result<RawImage> {
+    use rayon::prelude::*;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let stride = w.checked_mul(3).ok_or(RawError::Limit("image too large"))?;
+    let count = stride.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
+    let src = lightcraft_tiff::image::chunk_bytes(bytes, &strip)
+        .filter(|src| u64::try_from(src.len()).ok() == Some(strip.len))
+        .ok_or_else(|| RawError::Corrupt("NEF: incomplete image strip".into()))?;
+    let data = match mode {
+        Mode::Full => {
+            let mut data = vec![0u16; count];
+            data.par_chunks_mut(stride).enumerate().for_each(|(y, out)| {
+                small_raw_row(src.get(y * stride..).unwrap_or(&[]), w, out);
+            });
+            data
+        }
+        Mode::Header => Vec::new(),
+    };
+    let mut metadata = lightcraft_meta::from_tiff(tiff);
+    metadata.width = Some(w as u32);
+    metadata.height = Some(h as u32);
+    let img = RawImage {
+        format: RawFormat::Nef,
+        width: w,
+        height: h,
+        cpp: 3,
+        data: RawData::U16(data),
+        cfa: None,
+        bits: 14,
+        black: BlackLevel::uniform(0.0),
+        white: vec![SMALL_RAW_WHITE * SMALL_RAW_SCALE],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(0, 0, w, h),
+        orientation: Orientation::from_exif(tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION)).unwrap_or(1)),
+        color: ColorData::default(),
+        // the stored colour is already white balanced (see above)
+        wb_multipliers: Some([1.0; 3]),
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: OpcodeLists::default(),
+        metadata,
+        lens_metadata: Default::default(),
+    };
+    img.validate_for(mode)?;
+    Ok(img)
 }
 
 #[cfg(test)]
@@ -1089,9 +1208,119 @@ mod tests {
         // 14-bit rows must be padded to 16 bytes
         let d14 = samples(40 * 6, 14);
         assert!(matches!(decoded(strip(&d14, 40, 0, |r| pack_lsb(r, 14)), 14, 40, 6), Err(RawError::Unsupported(_))));
-        // 3 bytes per IFD-width pixel is a Nikon small raw: still refused, with its own reason
-        let Err(RawError::Unsupported(why)) = decoded(vec![0; 3 * 40 * 6], 12, 40, 6) else { panic!("small raw decoded") };
-        assert!(why.contains("sRAW"), "{why}");
+    }
+
+    /// A small raw strip of `[Y0 Y1 Cb Cr]` groups, rows of `3 * w` bytes, LSB-first 12-bit.
+    fn small_strip(groups: &[[u16; 4]], w: usize) -> Vec<u8> {
+        let flat: Vec<u16> = groups.iter().flatten().copied().collect();
+        assert_eq!(flat.len() % (2 * w), 0);
+        flat.chunks(2 * w).flat_map(|r| pack_lsb(r, 12)).collect()
+    }
+
+    fn small(strip: Vec<u8>, bits: u16, w: u32, h: u32) -> Result<RawImage> {
+        crate::decode(&nef(34713, bits, vec![strip], w, h, h))
+    }
+
+    #[test]
+    fn small_raw_422_round_trips() {
+        let (w, h) = (8usize, 3usize);
+        // flat chroma per row so the interpolation is exact; distinct luma everywhere
+        let mut groups = Vec::new();
+        for y in 0..h {
+            for k in 0..w / 2 {
+                let (cb, cr) = (2048 + 10 * y as u16, 2048 - 5 * y as u16);
+                groups.push([100 + (y * w + 2 * k) as u16, 100 + (y * w + 2 * k + 1) as u16, cb, cr]);
+            }
+        }
+        let raw = small(small_strip(&groups, w), 12, w as u32, h as u32).unwrap();
+        assert_eq!((raw.width, raw.height, raw.cpp, raw.cfa.is_none()), (w, h, 3, true));
+        assert_eq!(raw.wb_multipliers, Some([1.0; 3]));
+        let RawData::U16(d) = &raw.data else { panic!() };
+        for y in 0..h {
+            for x in 0..w {
+                let luma = (100 + y * w + x) as f32;
+                let (u, v) = (10.0 * y as f32, -5.0 * y as f32);
+                let (r, b) = (luma + SMALL_RAW_R_GAIN * v, luma + SMALL_RAW_B_GAIN * u);
+                let g = (luma - 0.299 * r - 0.114 * b) / 0.587;
+                for (i, want) in [r, g, b].into_iter().enumerate() {
+                    let got = f32::from(d[(y * w + x) * 3 + i]) / SMALL_RAW_SCALE;
+                    assert!((got - want).abs() < 0.1, "({x},{y}) channel {i}: {got} vs {want}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn small_raw_neutral_chroma_is_grey_and_chroma_is_interpolated() {
+        let w = 8usize;
+        let groups: Vec<[u16; 4]> = (0..w / 2).map(|k| [200 + 40 * k as u16, 200 + 40 * k as u16, 2048, 2048]).collect();
+        let raw = small(small_strip(&groups, w), 12, w as u32, 1).unwrap();
+        let RawData::U16(d) = &raw.data else { panic!() };
+        for x in 0..w {
+            let px = &d[x * 3..x * 3 + 3];
+            assert!(px.iter().all(|&v| v == px[0]), "{px:?}");
+            assert_eq!(f32::from(px[0]), (200 + 40 * (x / 2)) as f32 * SMALL_RAW_SCALE);
+        }
+        // a step in Cb between the first two pairs is shared 3:1 by the pixels next to the boundary
+        let mut groups = groups;
+        groups[1][2] = 2048 + 100;
+        let raw = small(small_strip(&groups, w), 12, w as u32, 1).unwrap();
+        let RawData::U16(d) = &raw.data else { panic!() };
+        let blue_minus_luma = |x: usize, luma: f32| f32::from(d[x * 3 + 2]) / SMALL_RAW_SCALE - luma;
+        assert!((blue_minus_luma(1, 200.0) - SMALL_RAW_B_GAIN * 25.0).abs() < 0.1);
+        assert!((blue_minus_luma(2, 240.0) - SMALL_RAW_B_GAIN * 75.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn small_raw_wrong_sizes_and_depths_are_refused() {
+        let (w, h) = (8usize, 3usize);
+        let good = small_strip(&vec![[100, 100, 2048, 2048]; w / 2 * h], w);
+        assert!(small(good.clone(), 12, w as u32, h as u32).is_ok());
+        for len in [good.len() - 1, good.len() + 1] {
+            let mut s = good.clone();
+            s.resize(len, 0);
+            assert!(matches!(small(s, 12, w as u32, h as u32), Err(RawError::Unsupported(_))), "len {len}");
+        }
+        assert!(matches!(small(good.clone(), 14, w as u32, h as u32), Err(RawError::Unsupported(_))));
+        // odd width: 3 bytes per pixel does not split into pixel pairs
+        assert!(matches!(small(vec![0; 3 * 7 * 3], 12, 7, 3), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn small_raw_short_input_does_not_panic() {
+        for len in [0, 1, 2, 3, 5, 11, 12, 13] {
+            let mut out = vec![0u16; 12];
+            small_raw_row(&vec![0xFF; len], 4, &mut out);
+        }
+        let mut bytes = nef(34713, 12, vec![vec![0x55; 3 * 8 * 3]], 8, 3, 3);
+        bytes.truncate(bytes.len() - 40);
+        assert!(crate::decode(&bytes).is_err(), "a truncated small-raw strip is corrupt");
+    }
+
+    #[test]
+    fn small_raw_header_has_full_geometry_without_allocating_pixels() {
+        let (w, h) = (8usize, 3usize);
+        let bytes = nef(34713, 12, vec![small_strip(&vec![[100, 110, 2048, 2048]; w / 2 * h], w)], w as u32, h as u32, h as u32);
+        let header = decode(&bytes, Mode::Header).unwrap();
+        let full = decode(&bytes, Mode::Full).unwrap();
+        assert_eq!(header.info(), full.info());
+        assert!(matches!(header.data, RawData::U16(ref samples) if samples.is_empty()));
+        assert!(matches!(full.data, RawData::U16(ref samples) if samples.len() == 3 * w * h));
+    }
+
+    #[test]
+    fn small_raw_rejects_excessive_dimensions_before_allocation() {
+        let bytes = nef(34713, 12, vec![vec![0; 72]], 8, 3, 3);
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let mut info = raw_ifd(&tiff).unwrap().image().unwrap();
+        let strip = info.chunks(bytes.len() as u64)[0];
+        info.width = u32::MAX - 1;
+        info.height = u32::MAX;
+        assert!(matches!(small_raw(&bytes, &tiff, &info, strip, Mode::Header), Err(RawError::Limit(_))));
+        let mut out = [0; 12];
+        small_raw_row(&[], usize::MAX, &mut out);
+        small_raw_row(&[], 3, &mut out);
+        assert_eq!(out, [0; 12]);
     }
 
     /// Big-endian 16-bit words holding the 12-bit samples in their upper bits.
@@ -1180,6 +1409,17 @@ mod tests {
     fn packed_rejects_tail_truncation_with_intact_directories() {
         let bytes = nef(34713, 12, vec![vec![0x55; 360]], 40, 6, 6);
         for keep in [0, 60, 359] {
+            let short = truncated_tail_strip(bytes.clone(), keep);
+            for mode in [Mode::Header, Mode::Full] {
+                assert!(matches!(decode(&short, mode), Err(RawError::Corrupt(_))));
+            }
+        }
+    }
+
+    #[test]
+    fn small_raw_rejects_tail_truncation_with_intact_directories() {
+        let bytes = nef(34713, 12, vec![vec![0x55; 72]], 8, 3, 3);
+        for keep in [0, 24, 71] {
             let short = truncated_tail_strip(bytes.clone(), keep);
             for mode in [Mode::Header, Mode::Full] {
                 assert!(matches!(decode(&short, mode), Err(RawError::Corrupt(_))));

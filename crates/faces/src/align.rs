@@ -19,6 +19,14 @@ pub struct Rgb<'a> {
     pub height: usize,
 }
 
+/// Face bounds, padding factor, and output dimensions for box-based alignment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FaceCrop {
+    pub bounds: (f32, f32, f32, f32),
+    pub padding: f32,
+    pub output_size: (usize, usize),
+}
+
 impl Rgb<'_> {
     fn valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.width.checked_mul(self.height).and_then(|n| n.checked_mul(3)) == Some(self.data.len())
@@ -145,7 +153,10 @@ pub fn align_to_template(img: &Rgb, landmarks: &[(f32, f32); 5], out_w: usize, o
 }
 
 /// A square around a face box (pixels of `img`), `pad` times its larger side, as `out_w` × `out_h`.
-pub fn crop_box(img: &Rgb, x0: f32, y0: f32, x1: f32, y1: f32, pad: f32, out_w: usize, out_h: usize) -> Option<Vec<u8>> {
+pub fn crop_box(img: &Rgb, crop: FaceCrop) -> Option<Vec<u8>> {
+    let (x0, y0, x1, y1) = crop.bounds;
+    let pad = crop.padding;
+    let (out_w, out_h) = crop.output_size;
     if ![x0, y0, x1, y1, pad].iter().all(|v| v.is_finite()) {
         return None;
     }
@@ -247,16 +258,16 @@ mod tests {
             }
         }
         let img = Rgb { data: &data, width: w, height: h };
-        let out = crop_box(&img, 90.0, 40.0, 110.0, 60.0, 2.0, 64, 64).unwrap();
+        let out = crop_box(&img, FaceCrop { bounds: (90.0, 40.0, 110.0, 60.0), padding: 2.0, output_size: (64, 64) }).unwrap();
         // the 20 px block fills the middle half of the 64 px output
         let at = |x: usize, y: usize| out[(y * 64 + x) * 3 + 1];
         assert!(at(32, 32) > 250 && at(20, 20) > 250 && at(44, 44) > 250 && at(5, 5) < 5 && at(60, 32) < 5);
-        assert!(crop_box(&img, 5.0, 5.0, 5.0, 5.0, 2.0, 64, 64).is_none(), "an empty box");
-        assert!(crop_box(&img, f32::NAN, 0.0, 10.0, 10.0, 2.0, 64, 64).is_none());
-        assert!(crop_box(&img, 0.0, 0.0, 10.0, 10.0, 2.0, 0, 64).is_none());
-        assert!(crop_box(&img, 0.0, 0.0, 10.0, 10.0, 2.0, 100_000, 64).is_none());
+        assert!(crop_box(&img, FaceCrop { bounds: (5.0, 5.0, 5.0, 5.0), padding: 2.0, output_size: (64, 64) }).is_none(), "an empty box");
+        assert!(crop_box(&img, FaceCrop { bounds: (f32::NAN, 0.0, 10.0, 10.0), padding: 2.0, output_size: (64, 64) }).is_none());
+        assert!(crop_box(&img, FaceCrop { bounds: (0.0, 0.0, 10.0, 10.0), padding: 2.0, output_size: (0, 64) }).is_none());
+        assert!(crop_box(&img, FaceCrop { bounds: (0.0, 0.0, 10.0, 10.0), padding: 2.0, output_size: (100_000, 64) }).is_none());
         let bad = Rgb { data: &data[..10], width: w, height: h };
-        assert!(crop_box(&bad, 0.0, 0.0, 10.0, 10.0, 2.0, 64, 64).is_none(), "wrong data length");
+        assert!(crop_box(&bad, FaceCrop { bounds: (0.0, 0.0, 10.0, 10.0), padding: 2.0, output_size: (64, 64) }).is_none(), "wrong data length");
     }
 
     #[test]
@@ -264,7 +275,7 @@ mod tests {
         let data = vec![80u8; 50 * 50 * 3];
         let img = Rgb { data: &data, width: 50, height: 50 };
         // a box mostly outside the picture is padded by clamping, not an error
-        assert!(crop_box(&img, -30.0, -30.0, 20.0, 20.0, 1.5, 32, 32).is_some());
+        assert!(crop_box(&img, FaceCrop { bounds: (-30.0, -30.0, 20.0, 20.0), padding: 1.5, output_size: (32, 32) }).is_some());
         let far: [(f32, f32); 5] = [(1e6, 1e6), (1e6 + 5.0, 1e6), (1e6 + 2.0, 1e6 + 3.0), (1e6, 1e6 + 6.0), (1e6 + 5.0, 1e6 + 6.0)];
         let _ = align_to_template(&img, &far, 112, 112);
         let tiny: [(f32, f32); 5] = [(1.0, 1.0), (1.01, 1.0), (1.0, 1.01), (1.01, 1.01), (1.005, 1.005)];

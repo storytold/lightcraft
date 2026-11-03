@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-20 · **Change:** minor (German form of address: *du*; Indonesian and Finnish interface catalogs added; Italian: every interface string translated, native-speaker corrections; Vietnamese shipped; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-24 · **Change:** minor (German: interface strings and formats messages reviewed, terms fixed in localization-de.md; German form of address: *du*; Indonesian and Finnish interface catalogs added; Italian: every interface string translated, native-speaker corrections; Vietnamese shipped; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How far each interface language is from `full`. How to add or maintain a language is in
 [localization.md](localization.md); per-language notes are in `localization-<code>.md`
@@ -37,7 +37,7 @@ scripts `Latn`, `Cyrl`, `Hans`, `Hant`, `Jpan` only. The UI is egui, which has n
 and no complex-script shaping, so Arabic (RTL, joining) and Devanagari (conjuncts, reordering) cannot
 render correctly today.
 
-Native-speaker review: no catalog has had a formal review. Several catalogs have edits from community
+Native-speaker review: no catalog has had a full formal review; German's interface strings and formats messages have (2026-10-24, What's New not). Several catalogs have edits from community
 contributors whose commits only touch that language (ja, zh-hans, zh-hant, fr, de, ru, uk, pt-br);
 that is promising but is not recorded as review, so the column says `no (community edits)`.
 
@@ -58,9 +58,9 @@ string follows that.
 | 7 | Portuguese (Brazil) | `pt-br` | 1,966 / 2,304 (85%) | as zh-hans | Latin | no (community edits) | partial | 6–10 h |
 | 8 | Indonesian | `id` | 2,555 / 2,555 (100%; 2026-10-19: every plain and formats message any catalog has, plus 69 command labels; What's New left in English) | as zh-hans | Latin (Inter covers it) | no (written with an agent; native-speaker pass pending) | partial (target: not shipped) | 2–4 h (native review, lower-layer errors) |
 | 9 | Japanese | `ja` | 2,383 / 2,398 (99%; 2026-10-12) | as zh-hans; vertical export watermarks | Jpan via craft-fonts (BIZ UDPGothic / UDMincho); IME through winit | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
-| 10 | German | `de` | 3,644 / 3,754 (97%; 2026-10-16: every interface message and every What's New line except 59: the distinct What's New lines whose English text has a ▸ menu path have no German entry yet and wait for #2016; the rest are words spelled the same) | as zh-hans; What's New translated line by line | Latin | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
+| 10 | German | `de` | 3,644 / 3,754 (97%; 2026-10-16: every interface message and every What's New line except 59: the distinct What's New lines whose English text has a ▸ menu path have no German entry yet and wait for #2016; the rest are words spelled the same) | as zh-hans; What's New translated line by line | Latin | partly (2026-10-24: every interface string and formats message, reviewed with an agent and spot-checked by a native speaker; What's New lines not reviewed) | partial | 1–2 h (What's New review, lower-layer errors) |
 | 11 | Korean | `ko` | 0 (0%) | none | **no Korean (Hangul) face**: needs a non-Adobe OFL face in craft-fonts (Noto CJK is allowed only for Chinese) | no | none | 14–22 h |
-| 12 | Vietnamese | `vi` | 2,471 / 2,471 (100% key coverage of current union; intentional English like `ISO`/`OK` kept) | menus, panels, dialogs, presets, profiles, dates, formats; lower-layer errors English | Latin with stacked diacritics (Inter) | no (community contribution) | partial (catalog complete; lower-layer errors English) | 1–3 h |
+| 12 | Vietnamese | `vi` | 2,965 / 2,965 (2,658 plain + 307 formats; 100% of every non-What's New plain and format message across all catalogs) | menus, panels, dialogs, presets, profiles, dates, formats; lower-layer errors English | Latin with stacked diacritics (Inter) | no (community contribution) | partial (catalog complete; lower-layer errors English) | 1–3 h |
 
 ## Other languages LightCraft ships (7)
 
@@ -99,6 +99,7 @@ Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Vietnamese (`vi`): 421 missing plain interface messages translated (2,658 plain + 307 formats = 2,965 messages; 0 missing non-What's New plain or format messages in `translation_gaps_report`) |
 | 2026-10-19 | minor | Indonesian interface catalog (`id`): every plain and formats message any catalog has, plus 69 command labels; What's New left in English |
 | 2026-10-17 | minor | Finnish interface catalog (`fi`): 2,610 of 3,308 messages (2,313 plain + 297 formats), What's New left in English |
 | 2026-10-15 | minor | Polish row added: the format messages still in English translated, counts made right for every number, dates day.month.year ([localization-pl.md](localization-pl.md)) |
@@ -110,4 +111,5 @@ Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
 | 2026-10-10 | major | Created: per-language counts measured from the catalogs, the twelve key languages, script support, estimates |
 | 2026-10-12 | minor | de, es, fr, ja and uk catalogs filled to every message another catalog knows (agent translations, native review welcome); those rows re-measured against the current 2,398 messages. Other rows keep their 2026-10-10 counts (open PRs for pt-BR, ru, zh) |
 | 2026-10-16 | minor | German (`de`): 217 interface strings and 862 What's New lines added (agent translations, native review welcome); re-measured 2,572 → 3,644 of 3,754 messages (80% → 97%). The denominator grew because German now translates What's New lines no other catalog has; other rows keep their earlier counts |
+| 2026-10-24 | minor | German (`de`): interface strings and formats messages reviewed (agent-prepared, spot-checked by a native speaker); 108 messages corrected (Tönung, Beschneidung, Farbmarkierung vs. Markierung, Bedienfeld, Begleitdatei, Dia, en dash and ellipsis spacing, ambiguous *Ihre*); terms listed in localization-de.md; native review column `partly`, estimate 1–2 h |
 | 2026-10-20 | minor | German (`de`) speaks to the user with *du*; the 11 messages that used *Sie* changed, no count changes |

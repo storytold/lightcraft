@@ -129,7 +129,8 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
         .or_else(|| {
             page.more.iter().filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index))).find(|f| {
                 ctx.memory(|m| {
-                    m.has_focus(egui::Id::new(("more-face", f.photo, f.index))) || m.has_focus(egui::Id::new(("more-face-above", f.photo, f.index)))
+                    m.has_focus(egui::Id::unique(("more-face", f.photo, f.index)))
+                        || m.has_focus(egui::Id::unique(("more-face-above", f.photo, f.index)))
                 })
             })
         });
@@ -148,13 +149,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     ui.horizontal(|ui| {
         ui.add_space(PAD - 4.0);
         let back = crate::widgets::arrow_button(ui, crate::i18n::tr("People"), crate::icons::Icon::ChevronLeft, true);
-        register(ui.ctx(), "person:back", back.rect);
+        register(ui, "person:back", back.rect);
         if back.clicked() {
             let _ = app.run("view.people", json!({}));
         }
         ui.label(RichText::new(&shown_name).font(t.semibold(15.0)).color(t.text));
         let rename = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui.ctx(), "person:rename", rename.rect);
+        register(ui, "person:rename", rename.rect);
         if rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
@@ -163,7 +164,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
             let photos = ui.button(crate::i18n::tr("Show photos")).on_hover_text(crate::i18n::tr("Their photos in the grid"));
-            register(ui.ctx(), "person:photos", photos.rect);
+            register(ui, "person:photos", photos.rect);
             if photos.clicked() {
                 let _ = app.run("library.filter", json!({"person": shown_name}));
                 let _ = app.run("view.photoGrid", json!({}));
@@ -220,7 +221,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 let Some(f) = page.confirmed.get(row * cols + col) else { break };
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), PAD + row as f32 * row_h);
-                if let Hit::Open = tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, false, &shown_name, 0) {
+                if let Hit::Open =
+                    tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: false, name: &shown_name, above_count: 0 })
+                {
                     hit = Some((Hit::Open, f.clone()));
                 }
             }
@@ -237,7 +240,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             let r = Rect::from_min_size(pos2(area.left() + PAD + 330.0, area.top() + more_top + 8.0), vec2(120.0, 24.0));
             let label = if step == super::faces::Setup::TurnOn { "Turn on" } else { "Open Settings" };
             let b = ui.put(r, egui::Button::new(label));
-            register(ui.ctx(), "faces:setup", b.rect);
+            register(ui, "faces:setup", b.rect);
             if b.clicked() {
                 if step == super::faces::Setup::TurnOn {
                     super::faces::take_step(app, ui.ctx(), step);
@@ -253,7 +256,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), grid_top + row as f32 * row_h);
                 let above_count = more.iter().filter(|candidate| candidate.score >= f.score).count();
-                match tile(app, ui, Rect::from_min_size(min, vec2(edge, edge)), f, ppp, true, &shown_name, above_count) {
+                match tile(app, ui, &TileSpec { r: Rect::from_min_size(min, vec2(edge, edge)), f, ppp, more: true, name: &shown_name, above_count }) {
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
                     Hit::ConfirmAbove => hit = Some((Hit::ConfirmAbove, (*f).clone())),
                     Hit::Dismiss => hit = Some((Hit::Dismiss, (*f).clone())),
@@ -286,21 +289,37 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     }
 }
 
+/// What one face tile shows.
+struct TileSpec<'a> {
+    /// where it is drawn
+    r: Rect,
+    f: &'a Face,
+    /// pixels per point, for the size of the face picture
+    ppp: f32,
+    /// a "More" tile (a face that looks like the person) rather than a confirmed one
+    more: bool,
+    /// the person's name
+    name: &'a str,
+    /// how many shown faces look at least as much like the person (for a "More" tile)
+    above_count: usize,
+}
+
 /// One face tile. A confirmed one opens its photo when clicked; a "More" one is confirmed when clicked, and has a × that
 /// hides it.
-fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: bool, name: &str, above_count: usize) -> Hit {
+fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
+    let TileSpec { r, f, ppp, more, name, above_count } = *spec;
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
-    let resp = ui.interact(r, egui::Id::new((salt, f.photo, f.index)), Sense::click());
+    let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());
     crate::widgets::announce(&resp, name.to_string());
-    register(ui.ctx(), format!("{salt}:{}:{}", f.photo, f.index), r);
+    register(ui, format!("{salt}:{}:{}", f.photo, f.index), r);
     // the × is added after the tile, so it wins where they overlap
     let x_rect = Rect::from_min_size(pos2(r.right() - 24.0, r.top() + 4.0), vec2(20.0, 20.0));
-    let x_resp = more.then(|| ui.interact(x_rect, egui::Id::new(("more-face-x", f.photo, f.index)), Sense::click()));
+    let x_resp = more.then(|| ui.interact(x_rect, egui::Id::unique(("more-face-x", f.photo, f.index)), Sense::click()));
     let above_rect = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(24.0, 20.0));
-    let above_resp = more.then(|| ui.interact(above_rect, egui::Id::new(("more-face-above", f.photo, f.index)), Sense::click()));
+    let above_resp = more.then(|| ui.interact(above_rect, egui::Id::unique(("more-face-above", f.photo, f.index)), Sense::click()));
     if more {
-        register(ui.ctx(), format!("more-face-above:{}:{}", f.photo, f.index), above_rect);
+        register(ui, format!("more-face-above:{}:{}", f.photo, f.index), above_rect);
     }
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
