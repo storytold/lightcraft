@@ -2149,7 +2149,7 @@ fn a_slow_photos_import_never_blocks_the_window() {
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
     while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
-        assert!(t0.elapsed() < Duration::from_secs(20), "the outcome is announced");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)), "the outcome is announced");
         h.step();
     }
     assert_eq!(h.app.ui.toast.as_ref().unwrap().0, "1 added to Apple Photos album “Slow”");
@@ -2162,7 +2162,7 @@ fn a_slow_photos_import_never_blocks_the_window() {
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
         while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("1 added to Apple Photos") && !t.0.contains("Slow")) {
-            assert!(t1.elapsed() < Duration::from_secs(20), "the outcome is announced");
+            assert!(t1.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)), "the outcome is announced");
             h.step();
         }
     }
@@ -2273,7 +2273,7 @@ fn a_background_export_holds_photos_while_it_writes() {
     go.send(()).unwrap();
     let t0 = Instant::now();
     while h.app.export.is_some() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "the export finishes");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)), "the export finishes");
         h.step();
     }
     let last = h.app.last_export_result.clone().unwrap();

@@ -811,7 +811,7 @@ fn a_panicking_render_is_a_failure_not_a_dead_worker() {
     ask(&mut app);
     let t0 = std::time::Instant::now();
     while app.renderer.is_pending(slot) {
-        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the render never answered");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the render never answered");
         std::thread::sleep(std::time::Duration::from_millis(5));
         app.renderer.poll(&ctx, &mut app.session);
     }
@@ -873,7 +873,7 @@ fn raw_quick_path_frames_build_no_jobs() {
     drop(held);
     let t0 = std::time::Instant::now();
     while !app.renderer.textures.contains_key(&quick) {
-        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the embedded preview never arrived");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the embedded preview never arrived");
         std::thread::sleep(std::time::Duration::from_millis(5));
         app.renderer.poll(&ctx, &mut app.session);
     }
