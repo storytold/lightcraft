@@ -160,22 +160,28 @@ pub fn last_options(app: &LightcraftApp, command: &str) -> MergeDialog {
     MergeDialog { command: command.into(), ..saved.unwrap_or_default() }
 }
 
-/// Open the merge dialog for the selection, with the options of the last merge of this kind.
-pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    let ids = app.session.selected();
-    if ids.len() < 2 {
-        return Err("select at least 2 photos to merge".into());
-    }
+/// Set the photos the dialog merges. A preview of other photos is dropped and its task cancelled: the dialog compares
+/// a preview's options only, so it would go on describing the photos it was made from.
+fn set_ids(app: &mut LightcraftApp, ids: Vec<PhotoId>) {
     app.merge.ids = ids;
-    app.merge.error = None;
-    // a preview that failed before is tried again, or the dialog would show neither a preview nor its error (#2708)
-    app.merge.failed_options = None;
     app.merge.preview = None;
     app.merge.preview_pixels = None;
     app.merge.zoom = None;
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// Open the merge dialog for the selection, with the options of the last merge of this kind.
+pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
+    let ids = app.session.selected();
+    if ids.len() < 2 {
+        return Err("select at least 2 photos to merge".into());
+    }
+    set_ids(app, ids);
+    app.merge.error = None;
+    // a preview that failed before is tried again, or the dialog would show neither a preview nor its error (#2708)
+    app.merge.failed_options = None;
     app.ui.dialog = Some(crate::state::Dialog::Merge { opts: last_options(app, command) });
     Ok(json!({"photos": app.merge.ids.len()}))
 }
@@ -209,7 +215,7 @@ pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, Strin
     if ids.len() < 2 {
         return Err("select at least 2 photos to merge".into());
     }
-    app.merge.ids = ids;
+    set_ids(app, ids);
     let opts = last_options(app, command);
     start_final(app, &opts)
 }
@@ -234,7 +240,7 @@ pub fn start_batch(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
 /// Start the next bracket set of a batch, if any.
 fn next_in_batch(app: &mut LightcraftApp) -> Result<(), String> {
     let Some(ids) = app.merge.batch.pop_front() else { return Ok(()) };
-    app.merge.ids = ids;
+    set_ids(app, ids);
     let opts = last_options(app, "merge.hdr");
     start_final(app, &opts).map(|_| ())
 }
