@@ -17,6 +17,8 @@ pub(crate) struct Runtime {
     page: usize,
     started_at: Option<web_time::Instant>,
     attempt: Arc<()>,
+    locale: String,
+    queued: bool,
 }
 
 fn load(app: &mut LightcraftApp, id: PhotoId) {
@@ -27,7 +29,7 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     };
     let key = (app.session.library_generation(), id, path);
     if app.metadata_panel.key.as_ref() != Some(&key) {
-        app.metadata_panel = Runtime { key: Some(key.clone()), ..Default::default() };
+        app.metadata_panel = Runtime { key: Some(key.clone()), locale: sys_locale::get_locale().unwrap_or_default(), ..Default::default() };
     }
     if app.metadata_panel.result.is_some() {
         return;
@@ -37,8 +39,11 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
         app.metadata_panel.result = Some(Err(crate::i18n::tr("Metadata read timed out. Try Refresh.").into()));
         return;
     }
-    let label = format!("{TASK} {}:{}:{}", key.0, id.0, key.2);
-    if app.tasks.is_running(&label) || app.tasks.labels().iter().filter(|name| name.starts_with(TASK)).count() >= MAX_READS {
+    if app.metadata_panel.started_at.is_some() {
+        return;
+    }
+    app.metadata_panel.queued = app.tasks.labels().iter().filter(|name| name.starts_with(TASK)).count() >= MAX_READS;
+    if app.metadata_panel.queued {
         return;
     }
     let request = match lightcraft_engine::metadata_read::Request::new(&app.session, id) {
@@ -51,7 +56,7 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     let attempt = Arc::clone(&app.metadata_panel.attempt);
     let result = crate::tasks::spawn(
         app,
-        &label,
+        TASK,
         None,
         move || request.read_with_diagnostics(),
         move |app, _, result| {
@@ -75,7 +80,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "Metadata");
     padded(ui, |ui| {
         let t = Tokens::get(ui.ctx());
-        for (section, rows) in sections(&photo) {
+        for (section, rows) in sections(&photo, &app.metadata_panel.locale) {
             ui.add_space(6.0);
             ui.label(egui::RichText::new(crate::i18n::tr(section)).font(t.semibold(12.5)).color(t.text));
             ui.add_space(4.0);
@@ -117,9 +122,13 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.metadata_panel.page = 0;
             app.metadata_panel.started_at = None;
             app.metadata_panel.attempt = Arc::new(());
+            app.metadata_panel.locale = sys_locale::get_locale().unwrap_or_default();
             ui.ctx().request_repaint();
         }
         match &app.metadata_panel.result {
+            None if app.metadata_panel.queued => {
+                ui.label(crate::i18n::tr("Waiting for an earlier metadata read to finish…"));
+            }
             None => {
                 ui.label(crate::i18n::tr("Reading metadata…"));
             }
@@ -149,7 +158,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     let group = tag["group"].as_str().unwrap_or("XMP");
                     let name = tag["name"].as_str().unwrap_or("");
                     let value = tag["value"].as_str().unwrap_or("");
-                    let value = tag_value(name, value, system_locale());
+                    let value = tag_value(name, value, &app.metadata_panel.locale);
                     row(ui, &format!("{group} · {name}"), &value, &t);
                 }
                 if let Some(note) = data["note"].as_str() {
@@ -212,22 +221,16 @@ fn is_date_tag(name: &str) -> bool {
                 | "DateCreated"
                 | "GPSDateStamp"
                 | "GPS Date Stamp"
+                | "Date/Time Original"
+                | "Date/Time Digitized"
+                | "Date/Time Modified"
                 | "DateTimeCreated"
         )
     )
 }
 
-fn system_locale() -> &'static str {
-    static LOCALE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    LOCALE.get_or_init(|| sys_locale::get_locale().unwrap_or_default())
-}
-
 fn tag_value(name: &str, value: &str, locale: &str) -> String {
     if is_date_tag(name) { numeric_date(value, locale) } else { value.to_owned() }
-}
-
-fn date_value(value: &str) -> String {
-    numeric_date(value, system_locale())
 }
 
 fn numeric_date(value: &str, locale: &str) -> String {
@@ -260,7 +263,7 @@ fn numeric_date(value: &str, locale: &str) -> String {
 type Rows = Vec<(&'static str, String)>;
 
 /// Stable sections, with absent optional values omitted instead of empty editing boxes.
-fn sections(p: &lightcraft_catalog::Photo) -> Vec<(&'static str, Rows)> {
+fn sections(p: &lightcraft_catalog::Photo, locale: &str) -> Vec<(&'static str, Rows)> {
     let mut result = Vec::new();
     let mut file =
         vec![("File Name", p.file_name.clone()), ("Format", p.format.to_uppercase()), ("Dimensions", format!("{} × {}", p.width, p.height))];
@@ -268,7 +271,7 @@ fn sections(p: &lightcraft_catalog::Photo) -> Vec<(&'static str, Rows)> {
         file.push(("File Size", super::info::human_size(p.file_size)));
     }
     if let Some(captured) = &p.captured {
-        file.push(("Captured", date_value(captured)));
+        file.push(("Captured", numeric_date(captured, locale)));
     }
     result.push(("File", file));
     let m = &p.meta;
@@ -333,6 +336,9 @@ mod tests {
 
     #[test]
     fn dates_follow_locale_with_two_digit_day_and_month() {
+        for name in ["Date/Time Original", "Date/Time Digitized", "Date/Time Modified"] {
+            assert_eq!(super::tag_value(name, "2014:01:01 11:48:16", "de_DE"), "01.01.2014 11:48:16");
+        }
         assert_eq!(super::tag_value("GPS Date Stamp", "2014:01:01", "de_DE"), "01.01.2014");
         assert_eq!(super::tag_value("dc:title", "2014:01:01", "de_DE"), "2014:01:01");
         assert_eq!(numeric_date("2014-01-01", "de_DE"), "01.01.2014");

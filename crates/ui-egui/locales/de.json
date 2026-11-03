@@ -1,4 +1,5 @@
 {
+  "Waiting for an earlier metadata read to finish…": "Warte auf einen vorherigen Metadatenzugriff…",
   "Metadata read timed out. Try Refresh.": "Zeitlimit beim Lesen der Metadaten erreicht. Versuche es mit Aktualisieren.",
   "Refresh": "Aktualisieren",
   "Keys": "Keys",

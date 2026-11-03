@@ -15,7 +15,7 @@ fn metadata_panel_reads_sidecar_and_copies_complete_path() {
     let path = path.clone();
     std::fs::write(
         std::path::Path::new(&path).with_extension("xmp"),
-        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:creator="Sidecar-only author"/></rdf:RDF></x:xmpmeta>"#,
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:creator="Sidecar-only author" dc:title="2014:01:01"/></rdf:RDF></x:xmpmeta>"#,
     ).unwrap();
     let mut h = Headless::new(app, [1400.0, 1600.0], 1.0);
     h.app.run("panel.metadata", json!({})).unwrap();
@@ -23,6 +23,7 @@ fn metadata_panel_reads_sidecar_and_copies_complete_path() {
     let text = h.painted_text();
     assert!(text.iter().any(|s| s == &path), "complete path: {text:?}");
     assert!(text.iter().any(|s| s == "Sidecar-only author"), "file metadata: {text:?}");
+    assert!(text.iter().any(|s| s == "2014:01:01"), "literal XMP title: {text:?}");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:metadataCopyPath"}), T)["ok"], true);
     h.step();
     assert_eq!(h.view.clipboard, path);
