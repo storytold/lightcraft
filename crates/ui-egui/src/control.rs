@@ -612,6 +612,9 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         if let Some(photos) = after.finish(&app.session, &files) {
             out["applePhotos"] = photos;
         }
+        if let Some(done) = crate::export_task::run_after_export(app, &opts.after_export, &files, false) {
+            out["afterExport"] = done;
+        }
         out
     };
     // remember for Export with Previous (and to prefill the dialog)

@@ -12,6 +12,7 @@ mod files;
 mod run;
 mod ui_commands;
 
+pub(crate) use files::photocraft_editor;
 pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_enabled};
 pub use run::{parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
@@ -21,6 +22,45 @@ pub mod menubar;
 
 /// (id, label, shortcut, menu path)
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);
+
+/// The file dialog that picks an application: the Export dialog's After export ▸ Open in another
+/// application ▸ Choose… (`dialog.exportChooseApp`). An application bundle on macOS, a program
+/// elsewhere.
+pub(crate) fn application_request() -> PickRequest {
+    let filter: Option<(String, &'static [&'static str])> = if cfg!(target_os = "macos") {
+        Some((crate::i18n::tr("Applications").to_string(), &["app"]))
+    } else if cfg!(target_os = "windows") {
+        Some((crate::i18n::tr("Programs").to_string(), &["exe"]))
+    } else {
+        None
+    };
+    PickRequest { kind: crate::pick::PickKind::File, title: Some(crate::i18n::tr("Choose an application").to_string()), filter, file_name: None }
+}
+
+/// `dialog.exportChooseApp {app?}`: the application After export opens the files in, in the open
+/// Export dialog. Without `app`, the host's file dialog asks (off the UI thread where it can: the
+/// command comes back with the answer).
+fn choose_export_app(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    use lightcraft_engine::export::AfterAction;
+    if !matches!(app.ui.dialog, Some(Dialog::Export { .. })) {
+        return Err("the Export dialog isn't open".into());
+    }
+    let chosen = match p.get("app") {
+        Some(v) => v.as_str().ok_or("`app` must be the application's name or path")?.to_string(),
+        None => match crate::pick::ask(app, "dialog.exportChooseApp", p, "app", application_request(), |_| None) {
+            Picked::Now(paths) => match paths.into_iter().next() {
+                Some(path) => path,
+                None => return Ok(Value::Null),
+            },
+            Picked::Later => return Ok(Value::Null),
+            Picked::Unavailable => return Err("no file dialog here: give `app`".into()),
+        },
+    };
+    let action = AfterAction::from_param(&json!({"openIn": chosen}))?;
+    let Some(Dialog::Export { opts, .. }) = app.ui.dialog.as_mut() else { return Err("the Export dialog isn't open".into()) };
+    opts.after_export = action;
+    Ok(json!({"afterExport": opts.after_export}))
+}
 
 /// Views whose bottom bar has the thumbnail-size slider and that draw tiles of that size.
 fn thumb_size_view(app: &LightcraftApp) -> bool {
@@ -38,6 +78,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             !cfg!(target_arch = "wasm32") && !app.session.slideshow_export.as_ref().is_some_and(|r| r.running())
         }
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
+        "dialog.exportChooseApp" => matches!(app.ui.dialog, Some(Dialog::Export { .. })),
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()
         }

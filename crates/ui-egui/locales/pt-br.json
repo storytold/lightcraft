@@ -2234,5 +2234,13 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "Do nothing": "Não fazer nada",
+  "Open in PhotoCraft": "Abrir no PhotoCraft",
+  "Open in another application": "Abrir em outro aplicativo",
+  "After export": "Após exportar",
+  "Applications": "Aplicativos",
+  "Programs": "Programas",
+  "Choose an application": "Escolher um aplicativo",
+  "Choose Application for After Export…": "Escolher o aplicativo para após exportar…"
 }

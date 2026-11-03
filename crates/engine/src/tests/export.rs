@@ -1429,3 +1429,25 @@ fn huge_export_size_is_an_error() {
     assert!(s.render_now(id, huge, huge).is_err());
     assert!(s.render_now(id, 10, 70_000).is_err());
 }
+
+/// Issue #3440: an export preset keeps its After Export choice; one saved before there was a
+/// choice loads as "nothing".
+#[test]
+fn export_presets_keep_their_after_export_choice() {
+    use crate::export::AfterAction;
+    let mut s = Session::with_demo();
+    let params = json!({"format": "jpeg", "afterExport": {"openIn": "Preview"}});
+    s.execute("export.savePreset", &json!({"name": "To Preview", "params": params})).unwrap();
+    let p = s.export_params(&json!({"preset": "To Preview"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().after_export, AfterAction::OpenIn("Preview".into()));
+    // the call's own choice wins over the preset's
+    let p = s.export_params(&json!({"preset": "To Preview", "afterExport": "showInFileManager"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().after_export, AfterAction::ShowInFileManager);
+    // a preset from before #3440, as the prefs file holds it
+    s.export_presets.push(crate::export::ExportPreset { name: "Old".into(), params: json!({"format": "png", "longEdge": 64}) });
+    let p = s.export_params(&json!({"preset": "Old"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().after_export, AfterAction::Nothing);
+    // a typo is refused where it is typed, not when the preset exports
+    let e = s.execute("export.savePreset", &json!({"name": "Bad", "params": {"afterExport": "showInFinderr"}})).unwrap_err();
+    assert!(e.to_string().contains("afterExport"), "{e}");
+}

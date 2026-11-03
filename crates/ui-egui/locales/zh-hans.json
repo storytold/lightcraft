@@ -2389,5 +2389,13 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Do nothing": "不执行任何操作",
+  "Open in PhotoCraft": "在 PhotoCraft 中打开",
+  "Open in another application": "在其他应用程序中打开",
+  "After export": "导出后",
+  "Applications": "应用程序",
+  "Programs": "程序",
+  "Choose an application": "选择应用程序",
+  "Choose Application for After Export…": "选择导出后使用的应用程序…"
 }

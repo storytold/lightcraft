@@ -1,4 +1,4 @@
-use super::options::{Conflict, DestinationMode, ExportFormat, HdrCurve, MetadataPolicy, Resize, ResizeMode, SharpenAmount, SharpenFor};
+use super::options::{AfterAction, Conflict, DestinationMode, ExportFormat, HdrCurve, MetadataPolicy, Resize, ResizeMode, SharpenAmount, SharpenFor};
 use super::prepare::DngCompression;
 use super::watermark::{Anchor, Watermark};
 use super::{ExportOptions, JxlColour, JxlEffort, JxlOptions, OutputDepth, OutputSpace, TiffCompression};
@@ -31,6 +31,7 @@ impl Default for ExportOptions {
             jxl_progressive: false,
             add_to_photos: false,
             photos_album: String::new(),
+            after_export: AfterAction::Nothing,
             hdr_transfer: HdrCurve::Pq,
         }
     }
@@ -75,6 +76,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "jxlProgressive",
     "addToPhotos",
     "photosAlbum",
+    "afterExport",
     "hdrTransfer",
 ];
 
@@ -296,6 +298,9 @@ impl ExportOptions {
                         return Err(bad(format!("`{k}` can't contain a NUL character")));
                     }
                 }
+                "afterExport" => {
+                    AfterAction::from_param(v).map_err(bad)?;
+                }
                 "naming" | "subfolder" | "path" | "dir" | "preset" => {
                     string(cmd, k, v)?;
                 }
@@ -402,7 +407,7 @@ impl ExportOptions {
 
     /// Read options from command params (`format`, `quality`, `limitKb`, `sharpen`, `sharpenAmount`,
     /// `naming`, `metadata`, `removeLocation`, `watermark`, `colorSpace`, `bitDepth`, `ppi`,
-    /// `addToPhotos`, `photosAlbum`) and the
+    /// `addToPhotos`, `photosAlbum`, `afterExport`) and the
     /// size: one of `longEdge`, `shortEdge`, `width`, `height` (both = fit inside W × H),
     /// `megapixels`, `percent` (absent or 0 = full size), or a [`Resize`] object as `resize`; plus
     /// `dontEnlarge` (default true).
@@ -454,6 +459,7 @@ impl ExportOptions {
             jxl_progressive: p.get("jxlProgressive").and_then(Value::as_bool).unwrap_or(d.jxl_progressive),
             add_to_photos: p.get("addToPhotos").and_then(Value::as_bool).unwrap_or(d.add_to_photos),
             photos_album: s("photosAlbum").map_or(d.photos_album, |a| a.trim().to_string()),
+            after_export: p.get("afterExport").and_then(|v| AfterAction::from_param(v).ok()).unwrap_or(d.after_export),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
         }
     }

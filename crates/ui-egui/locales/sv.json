@@ -2459,5 +2459,13 @@
   "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…": "Knappen Taggar visar platshållare för mallen, till exempel {date} eller {seq}. Varje fil byter namn på disken tillsammans med sin XMP-sidofil; ett namn som redan finns får -1, -2…",
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
-  "Bottom bar": "Nedre fältet"
+  "Bottom bar": "Nedre fältet",
+  "Do nothing": "Gör ingenting",
+  "Open in PhotoCraft": "Öppna i PhotoCraft",
+  "Open in another application": "Öppna i ett annat program",
+  "After export": "Efter export",
+  "Applications": "Program",
+  "Programs": "Program",
+  "Choose an application": "Välj ett program",
+  "Choose Application for After Export…": "Välj program för efter export…"
 }

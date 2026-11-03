@@ -2388,5 +2388,13 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "Do nothing": "何もしない",
+  "Open in PhotoCraft": "PhotoCraft で開く",
+  "Open in another application": "他のアプリケーションで開く",
+  "After export": "書き出し後",
+  "Applications": "アプリケーション",
+  "Programs": "プログラム",
+  "Choose an application": "アプリケーションを選択",
+  "Choose Application for After Export…": "書き出し後に使うアプリケーションを選択…"
 }

@@ -66,6 +66,8 @@ USAGE:
                              --opt format=original (copy + XMP sidecar) --opt metadata=none
                              --opt addToPhotos=true --opt photosAlbum=NAME (macOS: then add
                              the file to Apple Photos, into that album)
+                             --opt afterExport=showInFileManager (only the desktop app
+                             shows or opens files: skipped here, with a note)
   lightcraft-cli snapshot [OPTIONS] [FILES/FOLDERS…]
       Run the full app UI headlessly (no window, no GPU: CPU-rasterized egui) and write PNGs.
       Options:
@@ -798,6 +800,9 @@ fn render(args: &[String]) -> Result<(), String> {
             return Err(format!("render: {output} was written, but {err}"));
         }
         eprintln!("lightcraft-cli: added to Apple Photos: {photos}");
+    }
+    if let Some(skipped) = o.after_export.unavailable(&[json!({"path": output})], false) {
+        eprintln!("lightcraft-cli: after export: {skipped}");
     }
     Ok(())
 }

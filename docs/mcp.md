@@ -341,6 +341,19 @@ the terminal running `lightcraft-cli`) to control Photos. After that, any client
 read to the user's Photos library (and so to iCloud Photos when that is on), not only exported ones: see [Who
 can add what](apple-photos.md#how-it-works).
 
+## After export
+
+`app.export` takes `afterExport`, the Export dialog's After export choice (Lightroom's Post-Processing):
+`"nothing"` (default), `"showInFileManager"` (Finder / Explorer / the file manager, at the first file written),
+`"openInPhotoCraft"` (PhotoCraft, found as Photo ▸ Edit In finds it) or `{"openIn": "Application"}` (an app name or
+path; at most 4096 bytes, no control characters). Presets keep it. Only the desktop app (connect mode) does it,
+once the export has finished and wrote files; the result's `afterExport` then says what it did (`{action, revealed}`,
+`{action, app?, opened}` or `{action, error}`), or `{action, skipped}` when the export was cancelled or wrote nothing.
+Headless (this server, `lightcraft-cli`, the web) writes the files as asked and reports `{action, skipped: "not
+available here"}`, so a preset made in the desktop app still exports here. An unknown value is refused before
+anything is written. In the desktop app `dialog.exportChooseApp {app?}` sets the Open in another application choice
+of the open Export dialog (no `app`: asks with a file picker).
+
 ## Export progress and cancellation
 
 Headless direct `export`, `command_run` / `run_command` with `app.export`, and `cmd_app_export`

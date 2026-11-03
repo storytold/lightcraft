@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterAction, AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -27,6 +27,8 @@ pub struct ExportTask {
     rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
+    /// What to do with the files once they are written (After export), here on the UI thread.
+    after: AfterAction,
 }
 
 impl ExportTask {
@@ -38,13 +40,15 @@ impl ExportTask {
 }
 
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
-/// Photos). Errors per photo are collected, not fatal.
+/// Photos) on the worker, and `opts.after_export` (show them, open them) here when it is done
+/// ([`poll`]). Errors per photo are collected, not fatal.
 pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
     let total = items.len();
+    let after_action = opts.after_export.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
@@ -81,7 +85,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard, after: after_action });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -128,7 +132,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, after: AfterAction::Nothing });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -181,7 +185,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, after: AfterAction::Nothing });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -205,6 +209,97 @@ pub fn apple_photos_note(outcome: &Value) -> String {
         m += &format!(" ({w})");
     }
     m
+}
+
+/// After export (#3440): show the files an export wrote in the file manager, or open them in an
+/// application, with the host's services (Photo ▸ Show in Finder's and Edit In's). `None` for Do
+/// nothing; else the outcome for the export's result (`afterExport`): `{action, revealed}`,
+/// `{action, app?, opened}`, `{action, error}`, or `{action, skipped}` when the export was
+/// cancelled, wrote nothing, or this host can't (the web). Never fails the export.
+pub fn run_after_export(app: &mut LightcraftApp, action: &AfterAction, files: &[Value], cancelled: bool) -> Option<Value> {
+    if *action == AfterAction::Nothing {
+        return None;
+    }
+    let paths = match action.targets(files, cancelled) {
+        Ok(paths) => paths,
+        Err(skipped) => return Some(skipped),
+    };
+    let mut out = action.outcome();
+    let done = match action {
+        AfterAction::Nothing => return None,
+        AfterAction::ShowInFileManager => {
+            let Some(reveal) = app.services.reveal.as_mut() else { return action.unavailable(files, cancelled) };
+            // the folder opens with the first file selected
+            let first = paths.first().map(|p| std::path::absolute(p).map_or_else(|_| p.clone(), |a| a.to_string_lossy().into_owned()));
+            first.ok_or_else(|| "the export wrote no files".to_string()).and_then(|path| {
+                reveal(&path)?;
+                out["revealed"] = json!(path);
+                Ok(())
+            })
+        }
+        AfterAction::OpenInPhotoCraft | AfterAction::OpenIn(_) => {
+            if app.services.open_with.is_none() && app.services.open_all_with.is_none() {
+                return action.unavailable(files, cancelled);
+            }
+            let editor = match action {
+                AfterAction::OpenIn(a) => a.clone(),
+                _ => crate::menus::photocraft_editor(&app.ui.settings),
+            };
+            open_exported(app, &editor, &paths).map(|opened| {
+                out["opened"] = json!(opened);
+            })
+        }
+    };
+    if let Err(e) = done {
+        out["error"] = json!(e);
+    }
+    Some(out)
+}
+
+/// Open the files an export wrote in `editor`, all with one start where the host can (as Open
+/// Original does). Only files of a type LightCraft reads are handed over (#2135); the paths
+/// opened, absolute.
+fn open_exported(app: &mut LightcraftApp, editor: &str, paths: &[String]) -> Result<Vec<String>, String> {
+    if let Some(check) = app.services.check_editor.as_ref() {
+        check(editor)?;
+    }
+    let files: Vec<String> = paths.iter().filter_map(|p| lightcraft_engine::open_path::openable(p, "").ok()).collect();
+    if files.is_empty() {
+        return Err("none of the files written can be handed to another application".into());
+    }
+    if let Some(open_all) = app.services.open_all_with.as_mut() {
+        open_all(&files, editor)?;
+        return Ok(files);
+    }
+    let open = app.services.open_with.as_mut().ok_or("opening another application isn't available here")?;
+    let mut opened = Vec::new();
+    let mut failed = None;
+    for f in files {
+        match open(&f, editor) {
+            Ok(()) => opened.push(f),
+            Err(e) => failed = Some(e),
+        }
+    }
+    match failed {
+        Some(e) if opened.is_empty() => Err(e),
+        _ => Ok(opened),
+    }
+}
+
+/// The toast's account of [`run_after_export`]'s outcome: only what the user didn't see happen
+/// (an error, or not done here); a cancelled or empty export says so already.
+pub fn after_export_note(outcome: &Value) -> Option<String> {
+    let action = outcome.get("action").and_then(Value::as_str).unwrap_or_default();
+    let what = match action {
+        "showInFileManager" => crate::i18n::tr(crate::menus::reveal_label()).to_string(),
+        "openInPhotoCraft" => crate::i18n::tr("Open in PhotoCraft").to_string(),
+        _ => crate::i18n::tr("Open in another application").to_string(),
+    };
+    if let Some(e) = outcome.get("error").and_then(Value::as_str) {
+        return Some(crate::i18n::tr_format!("{what} failed: {e}", what = what, e = e));
+    }
+    let why = outcome.get("skipped").and_then(Value::as_str)?;
+    (why == "not available here").then(|| crate::i18n::tr_format!("{what}: not available here", what = what))
 }
 
 /// Per frame: when an Apple Photos import that no export task reports finishes (`app.export`
@@ -268,18 +363,25 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            let after = task.after.clone();
             app.export = None;
-            // Photos refused (permission, not installed…): leave the way out on screen longer
-            let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
+            // Photos refused (permission, not installed…) or After export failed: leave the way out on screen longer
+            let mut failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
                 Ok((files, photos, _)) => {
-                    let m = export_summary(&files, photos.as_ref(), total, cancelled);
-                    app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
+                    let mut m = export_summary(&files, photos.as_ref(), total, cancelled);
+                    let done = run_after_export(app, &after, &files, cancelled);
+                    failed |= done.as_ref().is_some_and(|d| d.get("error").is_some());
+                    if let Some(note) = done.as_ref().and_then(after_export_note) {
+                        m += " · ";
+                        m += &note;
+                    }
+                    app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos, "afterExport": done}));
                     m
                 }
                 Err(e) => e,
             };
-            if photos_failed {
+            if failed {
                 app.toast_for(ctx, msg, 15.0);
             } else {
                 app.toast(ctx, msg);
@@ -406,6 +508,24 @@ mod contact_sheet_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The toast's After export part (#3440): only what the user didn't see happen.
+    #[test]
+    fn after_export_notes_say_only_what_went_wrong() {
+        let reveal = crate::menus::reveal_label();
+        assert_eq!(after_export_note(&json!({"action": "showInFileManager", "revealed": "/x/a.jpg"})), None);
+        assert_eq!(after_export_note(&json!({"action": "openIn", "app": "Preview", "opened": ["/x/a.jpg"]})), None);
+        assert_eq!(after_export_note(&json!({"action": "openIn", "skipped": "the export wrote no files"})), None, "the count says so");
+        assert_eq!(after_export_note(&json!({"action": "openIn", "skipped": "the export was cancelled", "cancelled": true})), None);
+        assert_eq!(
+            after_export_note(&json!({"action": "showInFileManager", "skipped": "not available here"})),
+            Some(format!("{reveal}: not available here"))
+        );
+        assert_eq!(
+            after_export_note(&json!({"action": "openInPhotoCraft", "error": "PhotoCraft isn't installed"})),
+            Some("Open in PhotoCraft failed: PhotoCraft isn't installed".into())
+        );
+    }
 
     /// The toast's Apple Photos part (issue #236): the count and album, a partial import's
     /// warning, an error with what to do, a cancelled export.

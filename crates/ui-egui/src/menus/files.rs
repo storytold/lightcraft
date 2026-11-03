@@ -105,6 +105,13 @@ pub(super) fn show_in_folders(app: &mut LightcraftApp, id: Option<lightcraft_cat
     Ok(json!({"path": path}))
 }
 
+/// The editor Edit in PhotoCraft starts: the location Settings ▸ External Editing gives, else
+/// PhotoCraft by name (the host finds it where its installers put it).
+pub(crate) fn photocraft_editor(settings: &crate::state::AppSettings) -> String {
+    let path = settings.photocraft_path.trim();
+    if path.is_empty() { crate::state::PHOTOCRAFT.to_string() } else { path.to_string() }
+}
+
 /// Photo ▸ Edit In: render a copy of each selected photo with its edits (stacked on its original)
 /// as Settings ▸ External Editing asks for that editor, then open them there. `p` may override the
 /// file (`format`, `colorSpace`, `bitDepth`) and the editor (`app`). PhotoCraft is checked first,
@@ -117,12 +124,8 @@ pub(super) fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, p
 
 fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: bool) -> Result<Value, String> {
     let settings = &app.ui.settings;
-    let (file, configured) = if photocraft {
-        let path = settings.photocraft_path.trim();
-        (settings.photocraft_file, if path.is_empty() { crate::state::PHOTOCRAFT.to_string() } else { path.to_string() })
-    } else {
-        (settings.external_file, settings.external_editor.clone())
-    };
+    let (file, configured) =
+        if photocraft { (settings.photocraft_file, photocraft_editor(settings)) } else { (settings.external_file, settings.external_editor.clone()) };
     let editor = p.get("app").and_then(Value::as_str).map_or(configured, str::to_string);
     if let Some(check) = app.services.check_editor.as_ref() {
         check(&editor)?;

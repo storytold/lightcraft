@@ -168,6 +168,121 @@ pub enum DestinationMode {
     SameAsOriginal,
 }
 
+/// What happens to the files once an export has written them (Lightroom's Post-Processing ▸ After
+/// Export; `afterExport`). The engine can't show a folder or start an application: the desktop app
+/// does it with its file manager and launcher, and other callers report it skipped
+/// ([`AfterAction::unavailable`]). Adding to Apple Photos is a separate setting
+/// ([`super::ExportOptions::add_to_photos`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AfterAction {
+    #[default]
+    Nothing,
+    /// Show the first file in Finder / Explorer / the file manager (`"showInFileManager"`).
+    ShowInFileManager,
+    /// Open the files in PhotoCraft, found as Photo ▸ Edit In finds it (`"openInPhotoCraft"`).
+    OpenInPhotoCraft,
+    /// Open the files in this application (`{"openIn": app}`): an application name or bundle path
+    /// on macOS, a program path elsewhere, as Settings ▸ External Editing takes it; "" = each
+    /// file's default application.
+    OpenIn(String),
+}
+
+impl AfterAction {
+    /// The values `afterExport` takes, for errors.
+    pub const VALUES: &str = "nothing|showInFileManager|openInPhotoCraft|{openIn: application}";
+
+    /// Longest application `openIn` takes, in bytes (a path, not a document).
+    pub const MAX_APP_LEN: usize = 4096;
+
+    /// Read an `afterExport` value. An error says what it takes: a stored or typed value this
+    /// version can't do is not quietly "nothing".
+    pub fn from_param(v: &serde_json::Value) -> Result<Self, String> {
+        use serde_json::Value;
+        match v {
+            Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "nothing" => Ok(Self::Nothing),
+                "showinfilemanager" => Ok(Self::ShowInFileManager),
+                "openinphotocraft" => Ok(Self::OpenInPhotoCraft),
+                _ => Err(format!("`afterExport` must be one of {}", Self::VALUES)),
+            },
+            Value::Object(o) if o.len() == 1 => {
+                let Some(app) = o.get("openIn") else { return Err(format!("`afterExport` must be one of {}", Self::VALUES)) };
+                let app = app.as_str().ok_or("`afterExport.openIn` must be the application's name or path (a string)")?;
+                if app.len() > Self::MAX_APP_LEN {
+                    return Err(format!("`afterExport.openIn` is longer than {} bytes", Self::MAX_APP_LEN));
+                }
+                // handed to the system's launcher as one argument: no NUL, no line breaks
+                if app.chars().any(char::is_control) {
+                    return Err("`afterExport.openIn` can't contain control characters".into());
+                }
+                Ok(Self::OpenIn(app.trim().to_string()))
+            }
+            _ => Err(format!("`afterExport` must be one of {}", Self::VALUES)),
+        }
+    }
+
+    /// Its name in results (`action`): `nothing`, `showInFileManager`, `openInPhotoCraft`, `openIn`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Nothing => "nothing",
+            Self::ShowInFileManager => "showInFileManager",
+            Self::OpenInPhotoCraft => "openInPhotoCraft",
+            Self::OpenIn(_) => "openIn",
+        }
+    }
+
+    /// The start of every outcome: `{action}`, plus `app` for [`AfterAction::OpenIn`].
+    pub fn outcome(&self) -> serde_json::Value {
+        let mut v = serde_json::json!({"action": self.name()});
+        if let Self::OpenIn(app) = self {
+            v["app"] = app.as_str().into();
+        }
+        v
+    }
+
+    /// The outcome when it was not done: `{action, skipped: why}`, with `cancelled: true` for a
+    /// cancelled export.
+    pub fn skipped(&self, why: &str, cancelled: bool) -> serde_json::Value {
+        let mut v = self.outcome();
+        v["skipped"] = why.into();
+        if cancelled {
+            v["cancelled"] = true.into();
+        }
+        v
+    }
+
+    /// The files to act on: those an export wrote (its per-photo results' `path`s, in order); or,
+    /// when there are none to act on, the outcome saying why (cancelled, nothing written, nothing
+    /// to do).
+    pub fn targets(&self, files: &[serde_json::Value], cancelled: bool) -> Result<Vec<String>, serde_json::Value> {
+        if *self == Self::Nothing {
+            return Err(self.skipped("nothing to do", false));
+        }
+        if cancelled {
+            return Err(self.skipped("the export was cancelled", true));
+        }
+        let paths: Vec<String> = files.iter().filter_map(|f| f.get("path").and_then(serde_json::Value::as_str)).map(str::to_string).collect();
+        if paths.is_empty() {
+            return Err(self.skipped("the export wrote no files", false));
+        }
+        Ok(paths)
+    }
+
+    /// The outcome for a caller with no file manager or launcher (MCP, lightcraft-cli, the web):
+    /// `None` for [`AfterAction::Nothing`], else skipped, saying why. The export is not refused
+    /// for it: a preset made in the desktop app still exports here.
+    pub fn unavailable(&self, files: &[serde_json::Value], cancelled: bool) -> Option<serde_json::Value> {
+        if *self == Self::Nothing {
+            return None;
+        }
+        Some(match self.targets(files, cancelled) {
+            Ok(_) => self.skipped("not available here", false),
+            Err(why) => why,
+        })
+    }
+}
+
 impl DestinationMode {
     /// `specificFolder` / `sameAsOriginal` (any case).
     pub fn parse(s: &str) -> Option<Self> {

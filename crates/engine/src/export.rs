@@ -30,8 +30,8 @@ pub use encoding::{
     output_sharpen_deep, removes_location, srgb8_in,
 };
 pub use options::{
-    Conflict, DestinationMode, ExportFormat, ExportPreset, HdrCurve, MAX_ENLARGED_PIXELS, MetadataPolicy, Resize, ResizeMode, SharpenAmount,
-    SharpenFor, builtin_presets,
+    AfterAction, Conflict, DestinationMode, ExportFormat, ExportPreset, HdrCurve, MAX_ENLARGED_PIXELS, MetadataPolicy, Resize, ResizeMode,
+    SharpenAmount, SharpenFor, builtin_presets,
 };
 pub use params::{
     OPTION_PARAMS, TARGET_PARAMS, WATERMARK_IMAGE_WIDTH_RANGE, WATERMARK_INSET_RANGE, WATERMARK_PARAMS, WATERMARK_SIZE_RANGE,
@@ -110,6 +110,8 @@ pub struct ExportOptions {
     pub add_to_photos: bool,
     /// The Photos album they go into, made when missing (empty = none).
     pub photos_album: String,
+    /// Then show the files or open them in an application (`afterExport`; done by the desktop app).
+    pub after_export: AfterAction,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
 }

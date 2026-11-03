@@ -74,7 +74,13 @@ fn open_result(ok: bool, stderr: &str) -> Result<(), String> {
 /// still starting when it is started once per file. The system default opens them one by one
 /// (Explorer and `xdg-open` take one file).
 pub fn open_all_with(paths: &[String], app: &str) -> Result<(), String> {
-    match all_command(launcher(app)?, paths) {
+    let launcher = launcher(app)?;
+    // `open` is waited for, as for one file, so an application it can't find is an error
+    if let Launcher::MacApp(app) = &launcher {
+        let args: Vec<&str> = ["-a", app.as_str()].into_iter().chain(paths.iter().map(String::as_str)).collect();
+        return run_open(&args);
+    }
+    match all_command(launcher, paths) {
         Some(mut c) => c.spawn().map(|_| ()).map_err(|e| e.to_string()),
         None => paths.iter().try_for_each(|p| open_with(p, app)),
     }
@@ -377,6 +383,13 @@ mod tests {
         assert!(open_result(true, "").is_ok());
         assert!(open_result(false, "Unable to find application\n").is_err());
         assert!(open_result(false, "").is_err(), "even when it says nothing");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn several_files_in_an_app_that_is_not_there_is_an_error() {
+        let files = ["/tmp/lc-a.jpg".to_string(), "/tmp/lc-b.jpg".to_string()];
+        assert!(open_all_with(&files, "No Such Application LightCraft").is_err(), "not a silent success");
     }
 
     #[test]

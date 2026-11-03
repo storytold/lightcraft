@@ -2356,5 +2356,13 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Do nothing": "Älä tee mitään",
+  "Open in PhotoCraft": "Avaa PhotoCraftissa",
+  "Open in another application": "Avaa toisessa sovelluksessa",
+  "After export": "Viennin jälkeen",
+  "Applications": "Sovellukset",
+  "Programs": "Ohjelmat",
+  "Choose an application": "Valitse sovellus",
+  "Choose Application for After Export…": "Valitse sovellus viennin jälkeen…"
 }

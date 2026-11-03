@@ -197,6 +197,23 @@ fn export_tool_forwards_its_advertised_options() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Issue #3440: headless there is no file manager or launcher, so `afterExport` is not done; the
+/// files are written and the result says it was skipped (a desktop preset still exports here).
+#[test]
+fn export_reports_the_after_export_action_it_skipped() {
+    let mut b = Headless::demo();
+    let base = std::env::temp_dir().join(format!("lc-mcp-after-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let r = call_tool(&mut b, "export", &json!({"dir": base.to_string_lossy(), "longEdge": 32, "afterExport": "showInFileManager"}));
+    assert!(!r.is_error, "{r:?}");
+    let out = r.structured.unwrap();
+    assert!(std::path::Path::new(out["files"][0]["path"].as_str().unwrap()).exists(), "{out}");
+    assert_eq!(out["afterExport"], json!({"action": "showInFileManager", "skipped": "not available here"}));
+    let r = call_tool(&mut b, "export", &json!({"dir": base.to_string_lossy(), "longEdge": 32, "afterExport": "showInFinder"}));
+    assert!(r.is_error && format!("{:?}", r.content).contains("afterExport"), "{r:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Issue #236: `app.export {addToPhotos, photosAlbum}` through the headless backend (the MCP
 /// `export` tool, `lightcraft-cli run`): the files written go to Photos and the result says how
 /// it went; where Photos isn't (not macOS), it is refused before anything is written. A fake

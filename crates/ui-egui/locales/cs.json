@@ -2438,5 +2438,13 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "Do nothing": "Nedělat nic",
+  "Open in PhotoCraft": "Otevřít v PhotoCraftu",
+  "Open in another application": "Otevřít v jiné aplikaci",
+  "After export": "Po exportu",
+  "Applications": "Aplikace",
+  "Programs": "Programy",
+  "Choose an application": "Vyberte aplikaci",
+  "Choose Application for After Export…": "Vybrat aplikaci pro akci po exportu…"
 }

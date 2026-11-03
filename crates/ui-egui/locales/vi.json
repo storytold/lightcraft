@@ -2684,5 +2684,13 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "Do nothing": "Không làm gì",
+  "Open in PhotoCraft": "Mở trong PhotoCraft",
+  "Open in another application": "Mở trong ứng dụng khác",
+  "After export": "Sau khi xuất",
+  "Applications": "Ứng dụng",
+  "Programs": "Chương trình",
+  "Choose an application": "Chọn ứng dụng",
+  "Choose Application for After Export…": "Chọn ứng dụng cho bước sau khi xuất…"
 }

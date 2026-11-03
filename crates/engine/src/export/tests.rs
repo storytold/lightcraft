@@ -1523,3 +1523,78 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+/// Issue #3440: `afterExport` (Lightroom's Post-Processing ▸ After Export) is one param, read the
+/// same by `app.export`, the CLI, MCP and export presets.
+#[test]
+fn after_export_parses_and_round_trips() {
+    let cases = [
+        (json!("nothing"), AfterAction::Nothing),
+        (json!("showInFileManager"), AfterAction::ShowInFileManager),
+        (json!("openInPhotoCraft"), AfterAction::OpenInPhotoCraft),
+        (json!({"openIn": "/Applications/Preview.app"}), AfterAction::OpenIn("/Applications/Preview.app".into())),
+        // blank: the system's default application for each file, as Settings ▸ External Editing
+        (json!({"openIn": ""}), AfterAction::OpenIn(String::new())),
+    ];
+    for (v, want) in cases {
+        let p = json!({"afterExport": v});
+        let o = ExportOptions::from_params(&p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert_eq!(o.after_export, want, "{p}");
+        let back = o.to_json();
+        assert_eq!(back["afterExport"], v, "written back as given");
+        assert_eq!(ExportOptions::from_json(&back).after_export, want, "{back}");
+    }
+    assert_eq!(ExportOptions::default().after_export, AfterAction::Nothing);
+    assert!(OPTION_PARAMS.contains(&"afterExport"));
+}
+
+/// A value `afterExport` doesn't know is an error naming what it takes, never a silent "nothing".
+#[test]
+fn after_export_refuses_what_it_does_not_know() {
+    let long = "a".repeat(5000);
+    for v in [
+        json!("showInFinder!"),
+        json!(true),
+        json!(3),
+        json!({"openIn": 5}),
+        json!({"openIn": "Preview", "also": 1}),
+        json!({"open": "Preview"}),
+        json!({"openIn": "Pre\0view"}),
+        json!({"openIn": "Pre\nview"}),
+        json!({"openIn": long}),
+    ] {
+        let e = ExportOptions::from_params(&json!({"afterExport": v})).unwrap_err().to_string();
+        assert!(e.contains("afterExport"), "{v}: {e}");
+    }
+    // stored settings stay lenient: an unreadable value is "nothing"
+    assert_eq!(ExportOptions::from_json(&json!({"afterExport": "bogus"})).after_export, AfterAction::Nothing);
+}
+
+/// What the action acts on: the files the export wrote, in order; nothing when it was cancelled
+/// or wrote no file (skipped, failed), with the reason to report.
+#[test]
+fn after_export_acts_on_the_files_written() {
+    let files = [json!({"path": "out/a.jpg"}), json!({"skipped": "out/b.jpg"}), json!({"error": "disk full"}), json!({"path": "out/c.jpg"})];
+    assert_eq!(AfterAction::ShowInFileManager.targets(&files, false), Ok(vec!["out/a.jpg".to_string(), "out/c.jpg".to_string()]));
+    let cancelled = AfterAction::ShowInFileManager.targets(&files, true).unwrap_err();
+    assert_eq!(cancelled, json!({"action": "showInFileManager", "skipped": "the export was cancelled", "cancelled": true}));
+    let none = AfterAction::OpenIn("Preview".into()).targets(&files[1..3], false).unwrap_err();
+    assert_eq!(none, json!({"action": "openIn", "app": "Preview", "skipped": "the export wrote no files"}));
+    assert!(AfterAction::Nothing.targets(&files, false).is_err(), "nothing to do");
+}
+
+/// Without a file manager or a way to start an application (MCP, lightcraft-cli, the web), the
+/// export still runs and its result says the action was skipped and why.
+#[test]
+fn after_export_without_a_desktop_is_reported_not_refused() {
+    let files = [json!({"path": "out/a.jpg"})];
+    assert_eq!(AfterAction::Nothing.unavailable(&files, false), None);
+    assert_eq!(
+        AfterAction::ShowInFileManager.unavailable(&files, false),
+        Some(json!({"action": "showInFileManager", "skipped": "not available here"}))
+    );
+    assert_eq!(
+        AfterAction::OpenInPhotoCraft.unavailable(&files, true),
+        Some(json!({"action": "openInPhotoCraft", "skipped": "the export was cancelled", "cancelled": true}))
+    );
+}

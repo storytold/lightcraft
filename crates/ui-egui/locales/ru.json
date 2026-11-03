@@ -2596,5 +2596,13 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "Do nothing": "Ничего не делать",
+  "Open in PhotoCraft": "Открыть в PhotoCraft",
+  "Open in another application": "Открыть в другом приложении",
+  "After export": "После экспорта",
+  "Applications": "Приложения",
+  "Programs": "Программы",
+  "Choose an application": "Выберите приложение",
+  "Choose Application for After Export…": "Выбрать приложение для действия после экспорта…"
 }

@@ -1609,7 +1609,68 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
     });
     use lightcraft_engine::export::Conflict as K;
     choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
+    export_after_rows(app, ui, opts);
     export_apple_photos_rows(ui, t, opts);
+}
+
+/// The label of an After export choice in the dialog.
+fn after_export_label(a: &lightcraft_engine::export::AfterAction) -> &'static str {
+    use lightcraft_engine::export::AfterAction as A;
+    match a {
+        A::Nothing => "Do nothing",
+        A::ShowInFileManager => crate::menus::reveal_label(),
+        A::OpenInPhotoCraft => "Open in PhotoCraft",
+        A::OpenIn(_) => "Open in another application",
+    }
+}
+
+/// Export dialog, after export (Lightroom's Post-Processing, #3440): show the files in the file
+/// manager or open them in an application (`combo:exportAfter`, items `item:exportAfter-<name>`).
+/// Not where the host has neither (the web): an export there reports the choice skipped.
+fn export_after_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions) {
+    use lightcraft_engine::export::AfterAction as A;
+    if app.services.reveal.is_none() && app.services.open_with.is_none() && app.services.open_all_with.is_none() {
+        return;
+    }
+    field(ui, "After export", |ui| {
+        let other = match &opts.after_export {
+            A::OpenIn(a) => a.clone(),
+            _ => app.ui.settings.external_editor.clone(),
+        };
+        let options = [A::Nothing, A::ShowInFileManager, A::OpenInPhotoCraft, A::OpenIn(other)];
+        let c = crate::widgets::combo_box("exportAfter").width(220.0).selected_text(crate::i18n::tr(after_export_label(&opts.after_export))).show_ui(
+            ui,
+            |ui| {
+                for a in options {
+                    let r = ui.selectable_label(opts.after_export.name() == a.name(), crate::i18n::tr(after_export_label(&a)));
+                    crate::widgets::register(ui, format!("item:exportAfter-{}", a.name()), r.rect);
+                    if r.clicked() {
+                        opts.after_export = a;
+                    }
+                }
+            },
+        );
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("After export"));
+        crate::widgets::register(ui, "combo:exportAfter", c.response.rect);
+    });
+    let A::OpenIn(chosen) = &mut opts.after_export else { return };
+    field(ui, "Application", |ui| {
+        trailing_button_row(ui, |ui| {
+            if app.services.picker.is_some()
+                && crate::widgets::text_button(ui, "exportChooseApp", crate::i18n::tr("Choose…"), false).clicked()
+                && let crate::pick::Picked::Now(paths) =
+                    crate::pick::ask(app, "dialog.exportChooseApp", &json!({}), "app", crate::menus::application_request(), |_| None)
+                && let Some(path) = paths.into_iter().next()
+            {
+                *chosen = path;
+            }
+            crate::text_field::TextField::singleline("field:exportAfterApp", chosen)
+                .hint(crate::i18n::tr("System default"))
+                .label(crate::i18n::tr("Application"))
+                .width(ui.available_width())
+                .show(ui);
+        });
+    });
 }
 
 /// Export dialog, after export: Apple Photos imports the files written (macOS only).

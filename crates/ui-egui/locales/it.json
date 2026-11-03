@@ -2556,5 +2556,13 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "Do nothing": "Non fare nulla",
+  "Open in PhotoCraft": "Apri in PhotoCraft",
+  "Open in another application": "Apri in un’altra applicazione",
+  "After export": "Dopo l’esportazione",
+  "Applications": "Applicazioni",
+  "Programs": "Programmi",
+  "Choose an application": "Scegli un’applicazione",
+  "Choose Application for After Export…": "Scegli l’applicazione per dopo l’esportazione…"
 }

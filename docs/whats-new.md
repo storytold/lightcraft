@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Export can show the files or open them when it finishes
+- The Export dialog has an After export choice, like Lightroom's Post-Processing: Do nothing, Show in Finder
+  (Explorer or the file manager), Open in PhotoCraft, or Open in another application (Choose… picks the app, or type
+  its name). It happens once the export has finished, not after a cancel or when nothing was written; if it fails,
+  the export's message says why. Presets and Export with Previous keep the choice. Agents set it with `app.export
+  {afterExport}`; headless runs (MCP, `lightcraft-cli`, the web) write the files and report the action as skipped
+  (issue #3440).
+- On macOS, Photo ▸ Edit In with several photos now says so when it can't find the application, as it already did
+  for one photo, instead of doing nothing.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

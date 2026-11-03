@@ -2389,5 +2389,13 @@
   "Top bar": "頂部列",
   "Tool strip": "工具列",
   "Bottom bar": "底部列",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）",
+  "Do nothing": "不執行任何操作",
+  "Open in PhotoCraft": "在 PhotoCraft 中開啟",
+  "Open in another application": "在其他應用程式中開啟",
+  "After export": "匯出後",
+  "Applications": "應用程式",
+  "Programs": "程式",
+  "Choose an application": "選擇應用程式",
+  "Choose Application for After Export…": "選擇匯出後使用的應用程式…"
 }
