@@ -184,6 +184,45 @@ fn a_preset_depth_is_judged_against_the_format_written() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A preset's saved policy applies to explicit paths as well as directory exports.
+#[test]
+fn export_presets_apply_their_conflict_policy_to_paths_and_folders() {
+    let mut b = Headless::demo();
+    let base = std::env::temp_dir().join(format!("lc-mcp-preset-conflict-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    for exact in [false, true] {
+        for policy in ["unique", "skip", "overwrite"] {
+            let folder = base.join(format!("{exact}-{policy}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            let target = folder.join("chosen.png");
+            std::fs::write(&target, b"previous export").unwrap();
+            b.session.export_presets = vec![lightcraft_engine::export::ExportPreset {
+                name: "Collision".into(),
+                params: json!({"format": "png", "longEdge": 32, "naming": "chosen", "conflict": policy}),
+            }];
+            let mut params = json!({"preset": "Collision"});
+            if exact {
+                params["path"] = json!(target.to_string_lossy());
+            } else {
+                params["dir"] = json!(folder.to_string_lossy());
+            }
+            let result = b.call("app.export", params).unwrap();
+            if policy == "skip" {
+                assert_eq!(result["files"][0]["skipped"], target.to_string_lossy().as_ref());
+                assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+            } else {
+                let expected = if policy == "unique" { folder.join("chosen-2.png") } else { target.clone() };
+                assert_eq!(result["files"][0]["path"], expected.to_string_lossy().as_ref());
+                assert!(std::fs::read(expected).unwrap().starts_with(b"\x89PNG"));
+            }
+            if policy != "overwrite" {
+                assert_eq!(std::fs::read(&target).unwrap(), b"previous export");
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(base);
+}
+
 /// Every option the `export` tool advertises reaches `app.export` (they were accepted, then dropped).
 #[test]
 fn export_tool_forwards_its_advertised_options() {

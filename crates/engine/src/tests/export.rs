@@ -437,6 +437,43 @@ fn export_never_overwrites_an_original() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The exact target's identity can change while collisions are probed. Check it again before
+/// writing the group, without losing the early refusal before Unique or Skip chooses a name.
+#[test]
+fn explicit_export_rechecks_the_original_guard_after_collision_probes() {
+    use crate::export::{Conflict, Destination, export_batch};
+    let (mut s, id, dir, src, original) = library_with_jpeg("export-exact-recheck");
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let target = out.join("IMG_1.jpg");
+    if let Err(error) = std::fs::hard_link(&src, &target) {
+        let _ = std::fs::remove_dir_all(&dir);
+        lightcraft_testkit::skip!(System, "no hard links in {}: {error}", dir.display());
+        return;
+    }
+    std::fs::remove_file(&target).unwrap();
+    let to = Destination { dir: String::new(), exact: Some(target.to_string_lossy().into()) };
+    let opts = ExportOptions { format: ExportFormat::Original, conflict: Conflict::Overwrite, ..Default::default() };
+    let probed = std::cell::Cell::new(false);
+    let exists = |path: &str| {
+        if std::path::Path::new(path) == target && !probed.replace(true) {
+            std::fs::hard_link(&src, &target).unwrap();
+        }
+        std::path::Path::new(path).exists()
+    };
+    let mut written = Vec::new();
+    let mut write = |path: &str, _: &[u8]| {
+        written.push(path.to_string());
+        Ok(())
+    };
+    let error = export_batch(&mut s, &[id], &opts, &to, &mut write, &exists).unwrap_err();
+    assert!(probed.get(), "the target changed after its early validation");
+    assert!(error.contains("never writes over an original"), "{error}");
+    assert!(written.is_empty(), "the image and sidecar are both refused");
+    assert_eq!(std::fs::read(&src).unwrap(), original);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Issue #1405: explicit paths must honor the same conflict policy as folder exports.
 #[test]
 fn explicit_export_paths_preserve_existing_files_and_rename_or_skip() {

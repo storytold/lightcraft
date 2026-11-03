@@ -197,6 +197,8 @@ export of an ordinary file need not use the exact filename requested. A preset's
 `path` and expects it replaced passes `conflict: "overwrite"` (otherwise it gets `a-2.jpg`,
 `a-3.jpg`, …). The policy is export's only: `render_photo {path}`, `ui.render` and
 `lightcraft-cli render -o` write scratch output and still replace an ordinary file there.
+The selected image and sidecars are checked for original-file protection again after collision
+selection, before any member is written. This does not make filesystem checks and publication atomic.
 
 `get_develop {id}` and `render_photo {id}` use that photo without changing the selection.
 `set_develop`, `crop` and `export` with a supplied photo `id` end the current edit interaction,

@@ -7,6 +7,9 @@
   including a preset's saved policy. Unique keeps existing files and chooses a numbered name in the requested
   folder; an Original export's image and XMP keep the same basename. Read `files[].path` for the chosen destination.
   An explicit path naming a catalogued original, its sidecar or a folder is refused under every policy.
+- The chosen image and all sidecars are checked against catalogued originals again after collision selection,
+  before writing any of them. This catches identity changes during selection, but does not make filesystem checks
+  and writes atomic.
 
 ## 2026-10-30
 

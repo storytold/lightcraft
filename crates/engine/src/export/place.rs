@@ -168,8 +168,8 @@ impl<'a> Placer<'a> {
         let written = path.and_then(|path| {
             let files = group(&path);
             // never over an original, whatever the conflict policy or the exact path said
-            // (the exact path itself was checked above)
-            for f in files.iter().filter(|f| exact != Some(f.as_str())) {
+            // Recheck the selected main file too: collision probes can outlive its early validation.
+            for f in &files {
                 guard.check(std::path::Path::new(f))?;
             }
             write(&path, &e.bytes)?;
