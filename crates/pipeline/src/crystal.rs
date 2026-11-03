@@ -883,17 +883,25 @@ fn tile_in(cache: &'static Cache, look: CrystalLook, seed: u32, wait: bool) -> O
     let id = (std::ptr::from_ref(cache) as usize, key);
     // a pool worker draws the tile itself: blocked, it could hold up the drawing it waits for
     // (its stack may carry a part of that drawing's parallel work); wasm has no other threads
-    if !cfg!(target_arch = "wasm32") && rayon::current_thread_index().is_none() {
+    let _drawing = if !cfg!(target_arch = "wasm32") && rayon::current_thread_index().is_none() {
+        // checked, waited for and registered under one lock: two renders that miss the tile
+        // together can't both find it neither cached nor being drawn (`cached` takes the cache's
+        // lock under this one; nothing takes them the other way round)
         let mut busy = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner);
-        while busy.contains(&id) {
+        loop {
+            if let Some(t) = cached(cache, key) {
+                return Some(t);
+            }
+            if !busy.contains(&id) {
+                break;
+            }
             busy = DRAWN.wait(busy).unwrap_or_else(PoisonError::into_inner);
         }
-        drop(busy);
-        if let Some(t) = cached(cache, key) {
-            return Some(t);
-        }
-    }
-    let _drawing = start_drawing(id);
+        busy.push(id);
+        Some(Drawing(id))
+    } else {
+        start_drawing(id)
+    };
     let t = Arc::new(CrystalTile::new(look, seed)?);
     keep(cache, key, t.clone());
     Some(t)

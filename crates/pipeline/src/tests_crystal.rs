@@ -201,6 +201,29 @@ fn a_render_waits_for_a_tile_being_drawn() {
     assert!(Arc::ptr_eq(&got, &drawn), "the render drew the tile again");
 }
 
+/// Renders that miss the same tile together draw it once: the first registers the draw and the
+/// others wait for it, as no gap lets a second render find it neither cached nor being drawn.
+#[test]
+fn renders_that_miss_a_tile_together_draw_it_once() {
+    static OWN: Cache = Mutex::new(Vec::new());
+    const N: usize = 8;
+    let look = CrystalLook::new(0.0, 50.0);
+    for seed in 0x0d4a_1000..0x0d4a_1000 + 40 {
+        let start = Arc::new(std::sync::Barrier::new(N));
+        let renders: Vec<_> = (0..N)
+            .map(|_| {
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    tile_in(&OWN, look, seed, true)
+                })
+            })
+            .collect();
+        let got: Vec<_> = renders.into_iter().map(|r| r.join().expect("render thread").expect("tile")).collect();
+        assert!(got.iter().all(|t| Arc::ptr_eq(t, &got[0])), "seed {seed:#x}: a render drew the tile again");
+    }
+}
+
 /// Grain width (autocorrelation half-width at mid grey, 6000 px) at Lightroom Classic's
 /// measured settings (open PR #1060's table); Size 0 is as fine as uncorrelated pixels get (0.5).
 #[test]
