@@ -472,9 +472,27 @@ mod ci_jobs_tests {
 
     /// The quoted `value` of the `key = { value = "…", … }` line in `.cargo/config.toml`'s `[env]`.
     fn config_env(config: &str, key: &str) -> Option<(String, String)> {
-        let line = config.lines().find(|l| l.split('=').next().is_some_and(|k| k.trim() == key))?;
+        // only inside `[env]`: the same key in another table isn't an environment default
+        let mut in_env = false;
+        let line = config.lines().find(|l| {
+            if l.trim_start().starts_with('[') {
+                in_env = l.trim() == "[env]";
+                return false;
+            }
+            in_env && l.split('=').next().is_some_and(|k| k.trim() == key)
+        })?;
         let value = line.split("value = \"").nth(1)?.split('"').next()?.to_owned();
         Some((value, line.to_owned()))
+    }
+
+    #[test]
+    fn config_env_reads_only_the_env_table() {
+        let k = "RUST_TEST_THREADS";
+        let line = |v: &str| format!("{k} = {{ value = \"{v}\", force = false }}");
+        assert_eq!(config_env(&format!("[env]\n{}\n", line("4")), k).map(|(v, _)| v).as_deref(), Some("4"));
+        assert_eq!(config_env(&format!("[build]\n{}\n[env]\n", line("4")), k), None, "another table's key");
+        assert_eq!(config_env(&format!("[env]\n[alias]\n{}\n", line("4")), k), None, "after [env] ends");
+        assert_eq!(config_env(&format!("{}\n[env]\nX = 1\n", line("4")), k), None, "before any table");
     }
 
     #[test]
