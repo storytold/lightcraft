@@ -33,7 +33,17 @@ fn confirms(id: &str) -> bool {
 /// The photos `id` is about to act on (before it runs: it may move the selection), or `None` for a command
 /// this module does not confirm or a target that is not photo ids (the command refuses that itself).
 pub(super) fn targets(app: &LightcraftApp, id: &str, params: &Value) -> Option<Vec<PhotoId>> {
-    if confirms(id) { app.session.targets(params).ok() } else { None }
+    if !confirms(id) {
+        return None;
+    }
+    let mut targets = app.session.targets(params).ok()?;
+    // The selection never repeats a photo, but a call's own `ids` may (control channel, agents): a photo named
+    // twice is one photo, so the count says so. Only that case pays for the set.
+    if params.get("ids").is_some_and(Value::is_array) {
+        let mut seen = std::collections::HashSet::with_capacity(targets.len());
+        targets.retain(|photo| seen.insert(*photo));
+    }
+    Some(targets)
 }
 
 /// The toast text, and the label color it is tinted with, for `id` having just succeeded on `targets`.

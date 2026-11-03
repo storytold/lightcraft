@@ -264,3 +264,15 @@ fn the_count_and_the_state_follow_the_interface_language() {
     assert_ne!(german, "Flagged as Reject · 3 photos", "the count wording comes from the catalog too");
     assert!(german.contains('3'), "{german}");
 }
+
+#[test]
+fn the_count_is_of_distinct_photos_when_a_call_names_one_twice() {
+    // the control channel and agents give `ids` as they like: a photo named twice is one photo
+    let mut app = fresh();
+    app.run("photo.rate", json!({"rating": 3, "ids": [1, 1]})).unwrap();
+    assert_eq!(toast(&mut app).as_deref(), Some("Rated ★★★"));
+    app.run("photo.flag", json!({"flag": "pick", "ids": [1, 2, 2, 1]})).unwrap();
+    assert_eq!(toast(&mut app).as_deref(), Some("Flagged as Pick · 2 photos"));
+    app.run("photo.label", json!({"label": "red", "ids": [3, 3, 3]})).unwrap();
+    assert_eq!(toast(&mut app).as_deref(), Some("Red Label"));
+}
