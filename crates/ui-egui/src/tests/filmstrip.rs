@@ -50,6 +50,24 @@ fn survey_filmstrip_size_changes_geometry() {
 }
 
 #[test]
+fn survey_filmstrip_requests_thumbnails_at_the_allocated_size() {
+    let app = crate::tests_fixtures::SyntheticLibrary::with_photos("survey-filmstrip-thumbnail-size", 1).app();
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "survey", "surveyFilmstripSize": 142.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let id = h.app.session.visible_cloned()[0];
+    let (requested_id, size) = h.app.renderer.last_thumb_request.expect("Survey renders a filmstrip cell thumbnail");
+    assert_eq!(requested_id, id, "the observed thumbnail request belongs to the Survey cell");
+    assert_eq!(lightcraft_engine::media::thumb_bucket(size), 256, "the default Survey strip requests the existing bucket");
+
+    let r = h.request("ui.set", json!({"surveyFilmstripSize": 200.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let (requested_id, size) = h.app.renderer.last_thumb_request.expect("resized Survey renders a filmstrip cell thumbnail");
+    assert_eq!(requested_id, id, "the observed thumbnail request still belongs to the Survey cell");
+    assert_eq!(lightcraft_engine::media::thumb_bucket(size), 384, "the larger Survey strip requests a larger thumbnail bucket");
+}
+
+#[test]
 fn survey_filmstrip_size_keeps_canvas_in_a_short_window() {
     let app = crate::tests_fixtures::SyntheticLibrary::new("survey-filmstrip-short-window").app();
     let mut h = Headless::new(app, [1200.0, 350.0], 1.0);
@@ -57,10 +75,9 @@ fn survey_filmstrip_size_keeps_canvas_in_a_short_window() {
     assert_eq!(r["ok"], true, "{r}");
     let canvas = h.app.canvas_rect.expect("Survey canvas");
     assert!(canvas.height().is_finite() && canvas.height() >= 120.0, "filmstrip leaves usable canvas space: {canvas:?}");
-    if let Some((_, strip)) = h.app.widgets.iter().find(|(w, _)| w == "filmstrip") {
-        assert!(strip.height().is_finite() && strip.height() <= 240.0, "allocated strip is bounded: {strip:?}");
-        assert!(canvas.bottom() <= strip.top(), "canvas and strip do not overlap: {canvas:?}, {strip:?}");
-    }
+    let strip = h.app.widgets.iter().find(|(w, _)| w == "filmstrip").map(|(_, r)| *r).expect("filmstrip is visible in a 1200×350 window");
+    assert!(strip.height().is_finite() && strip.height() <= 240.0, "allocated strip is bounded: {strip:?}");
+    assert!(canvas.bottom() <= strip.top(), "canvas and strip do not overlap: {canvas:?}, {strip:?}");
 }
 
 #[test]
