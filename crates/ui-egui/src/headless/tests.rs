@@ -2260,11 +2260,14 @@ fn a_background_export_holds_photos_while_it_writes() {
     std::fs::create_dir_all(&out).unwrap();
     let other = out.join("other.jpg");
     std::fs::write(&other, b"jpeg").unwrap();
-    // the writer waits for `go`: the export is still writing while we try another import
+    // the writer waits for `go`: the export is still writing while we try another import. It
+    // lets itself go after 20 s (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk) so a
+    // regression fails instead of hanging; a test that fails first drops `go`, which frees it.
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = std::sync::Mutex::new(wait);
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
     h.app.services.write_shared = Some(Arc::new(move |p: &str, bytes: &[u8]| {
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        let _ = wait.lock().unwrap().recv_timeout(hold);
         lightcraft_engine::export::write_file(p, bytes)
     }));
     let calls = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
