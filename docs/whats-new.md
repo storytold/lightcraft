@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-03
+
+### Invalid boolean search values show no results
+- `edited:`, `copy:` and `virtual:` accept `true` / `yes` and `false` / `no`. A blank value or typo now matches no photos instead of silently showing unedited photos or originals.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
