@@ -84,22 +84,35 @@ pub(crate) fn read_zip_spending(bytes: &[u8], max_entry: usize, max_total: usize
         let data = bytes.get(data_at..add(data_at, csize)?).ok_or_else(|| format!("{name}: truncated"))?;
         let left = max_total.saturating_sub(*total);
         let limit = max_entry.min(left);
-        let mut too_big = || {
-            *total = total.saturating_add(limit);
-            format!("{name}: unpacks to more than {} MB, too much for a preset", limit >> 20)
-        };
+        let too_big = || format!("{name}: unpacks to more than {} MB, too much for a preset", limit >> 20);
         let content = match method {
-            0 if data.len() > limit => return Err(too_big()),
+            0 if data.len() > limit => {
+                *total = total.saturating_add(limit);
+                return Err(too_big());
+            }
             0 => data.to_vec(),
-            8 => match miniz_oxide::inflate::decompress_to_vec_with_limit(data, usize_.max(1).saturating_mul(2).saturating_add(1024).min(limit)) {
-                Ok(v) => v,
-                Err(e) if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) => return Err(too_big()),
-                Err(e) => {
-                    // what a corrupt stream unpacked before failing was still unpacked: charge it
-                    *total = total.saturating_add(e.output.len());
-                    return Err(format!("{name}: {:?}", e.status));
+            8 => {
+                // the entry's own stated size, with slack, caps the inflate below `limit`
+                let cap = usize_.max(1).saturating_mul(2).saturating_add(1024);
+                match miniz_oxide::inflate::decompress_to_vec_with_limit(data, cap.min(limit)) {
+                    Ok(v) => v,
+                    Err(e) if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) && cap < limit => {
+                        // not over the budget: only what was unpacked is spent
+                        *total = total.saturating_add(e.output.len());
+                        return Err(format!("{name}: unpacks to more than its stated size"));
+                    }
+                    Err(e) if matches!(e.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) => {
+                        // past the budget (or the entry limit): its whole limit is spent
+                        *total = total.saturating_add(limit);
+                        return Err(too_big());
+                    }
+                    Err(e) => {
+                        // what a corrupt stream unpacked before failing was still unpacked: charge it
+                        *total = total.saturating_add(e.output.len());
+                        return Err(format!("{name}: {:?}", e.status));
+                    }
                 }
-            },
+            }
             m => return Err(format!("{name}: unsupported compression method {m}")),
         };
         *total = total.saturating_add(content.len());
@@ -847,6 +860,18 @@ text]], z = ZSTR "loc" }"#,
         let t = std::time::Instant::now();
         let _ = parse_lua(&text);
         assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn an_entry_past_its_stated_size_spends_only_what_it_unpacked() {
+        // the stated size (1 byte) caps the inflate at 1026 bytes, far below the 1 MB limit
+        let mut lying = zip(&[("a.xmp", &vec![b' '; 10_000])], true);
+        let cd = lying.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        lying[cd + 24..cd + 28].copy_from_slice(&1u32.to_le_bytes());
+        let mut spent = 0;
+        let e = read_zip_spending(&lying, 1 << 20, 1 << 20, &mut spent).unwrap_err();
+        assert!(e.contains("stated size"), "{e}");
+        assert!(spent > 0 && spent <= 2048, "{spent}");
     }
 
     #[test]
