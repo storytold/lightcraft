@@ -315,7 +315,9 @@ fn colour(headers: &[&Block], id: u64) -> Result<ColorData> {
                 Some(ILLUMINANT_D65) => 1,
                 _ => continue,
             };
-            let (Some(forward), Some(matrix)) = (c.sub(2)?.as_ref().and_then(mat3), c.sub(3)?.as_ref().and_then(mat3)) else { continue };
+            // a singular colour matrix (all zeros, say) has no camera neutral: the other illuminant's, or none, is used
+            let matrix = c.sub(3)?.as_ref().and_then(mat3).filter(|m| m.inverse().is_some());
+            let (Some(forward), Some(matrix)) = (c.sub(2)?.as_ref().and_then(mat3), matrix) else { continue };
             color.illuminant[slot] = [EXIF_STANDARD_A, EXIF_D65][slot];
             color.color_matrix[slot] = Some(matrix);
             color.forward_matrix[slot] = Some(forward);
@@ -634,6 +636,32 @@ mod tests {
         let wb = bytes(15, &[f32f(1, 2.0), f32f(2, 1.0), f32f(3, 1.0), f32f(4, 1.5)].concat());
         let file = [block(&capture, &data, 0), block(&header, &[], 0), block(&wb, &[], 1)].concat();
         (file, px)
+    }
+
+    /// A zero colour matrix was kept, and at white points beyond its illuminant the colour transform used it alone,
+    /// so the camera neutral came out [1, 1, 1] and ignored the scene white.
+    #[test]
+    fn a_singular_colour_matrix_is_not_used() {
+        let forward = [0.81, 0.25, -0.09, 0.28, 1.13, -0.4, -0.07, -0.39, 1.29];
+        let good = [0.76, -0.18, -0.04, -0.32, 1.1, 0.25, -0.01, 0.22, 0.48];
+        let record = |illuminant, m| [var(1, illuminant), matrix(2, forward), matrix(3, m)].concat();
+        let colour_of = |a: [f32; 9], d65: [f32; 9]| {
+            let cal = bytes(13, &[var(1, 0), bytes(2, &record(ILLUMINANT_A, a)), bytes(2, &record(ILLUMINANT_D65, d65))].concat());
+            let f = block(&cal, &[], 0);
+            let blocks = blocks(&f).unwrap();
+            colour(&blocks.iter().collect::<Vec<_>>(), 0).unwrap()
+        };
+        let as_mat = |m: [f32; 9]| Mat3(std::array::from_fn(|r| std::array::from_fn(|c| f64::from(m[r * 3 + c]))));
+        // a zero D65 matrix leaves standard A alone
+        let c = colour_of(good, [0.0; 9]);
+        assert_eq!(c.illuminant, [EXIF_STANDARD_A, 0]);
+        assert_eq!(c.color_matrix, [Some(as_mat(good)), None]);
+        // a zero A matrix leaves D65 alone, in the first slot as a single-illuminant DNG has it
+        let c = colour_of([0.0; 9], good);
+        assert_eq!(c.illuminant, [EXIF_D65, 0]);
+        assert_eq!(c.color_matrix, [Some(as_mat(good)), None]);
+        // both zero: no camera matrix, so the decoder's generic colour model applies
+        assert_eq!(colour_of([0.0; 9], [0.0; 9]).color_matrix, [None, None]);
     }
 
     #[test]
