@@ -376,7 +376,9 @@ mod tests {
         let ram = total_ram().unwrap();
         // the effective total: a job limit can rightly hold it below any floor (128 MiB → 32 MiB budget)
         assert!(ram > 0);
-        assert_eq!(Some(ram as u64), lightcraft_sysmem::effective_total(), "total_ram is sysmem's RAM-or-job-limit total");
+        // saturated as `total_ram` does, so a 32-bit build with more than 4 GiB compares like for like
+        let expected = lightcraft_sysmem::effective_total().map(|b| b.min(usize::MAX as u64));
+        assert_eq!(Some(ram as u64), expected, "total_ram is sysmem's RAM-or-job-limit total");
         assert_eq!(budget_for(Some(ram)), (ram / 4).min(3 << 29));
         let Some(limit) = lightcraft_sysmem::job_limit() else {
             lightcraft_testkit::skip!(System, "this process's job object (if any) sets no memory limit");
