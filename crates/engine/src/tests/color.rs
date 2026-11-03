@@ -99,6 +99,44 @@ fn pet_eye_catchlight_command() {
     assert_eq!(active_dev(&s).red_eye[1].catchlight, None);
 }
 
+/// The natural cubic spline through three points (second derivative 0 at both ends), written out
+/// from its formula to check the engine's curve against.
+fn natural_spline_through(p: [(f64, f64); 3], x: f64) -> f64 {
+    let (h0, h1) = (p[1].0 - p[0].0, p[2].0 - p[1].0);
+    let (d0, d1) = ((p[1].1 - p[0].1) / h0, (p[2].1 - p[1].1) / h1);
+    let m1 = 6.0 * (d1 - d0) / (2.0 * (h0 + h1));
+    let (x0, x1, h, y0, y1, m_lo, m_hi) =
+        if x <= p[1].0 { (p[0].0, p[1].0, h0, p[0].1, p[1].1, 0.0, m1) } else { (p[1].0, p[2].0, h1, p[1].1, p[2].1, m1, 0.0) };
+    let (a, b) = ((x1 - x) / h, (x - x0) / h);
+    a * y0 + b * y1 + ((a.powi(3) - a) * m_lo + (b.powi(3) - b) * m_hi) * h * h / 6.0
+}
+
+/// The point the targeted adjustment adds sits on the curve as it is drawn and rendered. With a
+/// master curve that bends that is the natural cubic spline through its points; the monotone one
+/// the point curve used before gives another value there.
+#[test]
+fn targeted_adjustment_adds_its_point_on_the_spline_of_a_curved_master_curve() {
+    let mut s = demo();
+    let by = |s: &mut Session, delta: f64| {
+        s.execute("develop.targeted", &json!({"target": "curve", "channel": "master", "x": 0.5, "y": 0.35, "delta": delta})).unwrap()
+    };
+    // the tone of the sampled pixel: a step of 0 adds a point there on the straight curve
+    by(&mut s, 0.0);
+    let v = active_dev(&s).curve.master[1].x;
+    assert!((0.1..0.9).contains(&v), "{v}");
+    // a curve that bends through a point to the right of it
+    let bent = [(0.0, 0.0), (v + (1.0 - v) / 2.0, 0.5), (1.0, 1.0)];
+    s.execute("develop.curve", &json!({"channel": "master", "points": bent})).unwrap();
+    by(&mut s, -12.75);
+    let m = active_dev(&s).curve.master;
+    assert_eq!(m.len(), 4, "{m:?}");
+    let added = m.iter().find(|q| (q.x - v).abs() < 1e-9).unwrap_or_else(|| panic!("no point at {v}: {m:?}"));
+    let want = natural_spline_through(bent, v) - 12.75 / 255.0;
+    assert!((added.y - want).abs() < 1e-6, "the point is at {} where the spline, lowered by the step, gives {want}", added.y);
+    let monotone = lightcraft_color::spline::MonotoneCurve::new(&bent).eval(v) - 12.75 / 255.0;
+    assert!((monotone - want).abs() > 0.02, "the monotone curve would give {monotone}: the test must tell the two apart");
+}
+
 #[test]
 fn targeted_adjustment_on_curve_and_mixer() {
     let mut s = demo();

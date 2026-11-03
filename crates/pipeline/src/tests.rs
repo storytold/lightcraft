@@ -460,12 +460,25 @@ fn point_curve_is_a_cubic_spline_that_swings_past_its_points_and_is_cut_off() {
     }
     assert!(out[100..=118].iter().all(|&v| v == 255), "cut off at white: {:?}", &out[95..125]);
     assert!(out[8..=40].iter().all(|&v| v == 0) && out[150..=220].iter().all(|&v| v == 0), "cut off at black");
-    // the same curve on the red channel alone moves red only, with the same shape
-    let mut s = DevelopSettings::default();
-    s.curve.red = pts.iter().map(|&(x, y)| Point::new(x, y)).collect();
+    // the same curve on one channel alone (red, green, blue) moves that channel only, with the same
+    // shape: a swap of two channels' curves would show here
     let src = Rgb32f::from_fn(256, 1, |x, _| [lightcraft_color::transfer::srgb_to_linear(x as f32 / 255.0); 3]);
-    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(256, 1)).image;
-    assert!(r.data[110][0] == 255 && (r.data[110][1] as i32 - 110).abs() <= 1 && (r.data[110][2] as i32 - 110).abs() <= 1, "{:?}", r.data[110]);
+    for channel in 0..3 {
+        let curve: Vec<Point> = pts.iter().map(|&(x, y)| Point::new(x, y)).collect();
+        let mut s = DevelopSettings::default();
+        match channel {
+            0 => s.curve.red = curve,
+            1 => s.curve.green = curve,
+            _ => s.curve.blue = curve,
+        }
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(256, 1)).image;
+        for (k, px) in r.data.iter().enumerate() {
+            for (c, &v) in px.iter().take(3).enumerate() {
+                let want = if c == channel { out[k] } else { plain[k] };
+                assert!((v as i32 - want as i32).abs() <= 1, "curve on channel {channel}, level {k}, channel {c}: {v} instead of {want}");
+            }
+        }
+    }
 }
 
 #[test]
