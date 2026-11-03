@@ -1798,6 +1798,10 @@ fn ai_masks_without_the_model_offer_the_download() {
 #[test]
 fn sky_without_the_model_uses_legacy_detection_without_a_setup_dialog() {
     let mut h = detail("panel.masking");
+    if let Some(remote) = h.app.session.segmenter.remote_endpoint() {
+        lightcraft_testkit::skip!(Model, "LIGHTCRAFT_SAM3_REMOTE is set ({remote}), so Sky uses the remote SAM 3 worker");
+        return;
+    }
     h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-missing-{}", std::process::id())));
     click(&mut h, "maskNew:sky");
     assert_eq!(h.app.ui.dialog, None);
@@ -2179,4 +2183,17 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let a = develop(&h).masks.last().expect("a mask").adjust;
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
+}
+
+#[test]
+fn sam_sky_component_rows_read_sky_like_legacy_ones() {
+    use crate::panels::masking::component_label;
+    use lightcraft_develop::{MaskComponent, MaskOp};
+    let comp = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let prompt = |text: &str| MaskShape::Prompt { text: text.into(), seg: None, detail: vec![], edge: 0.0 };
+    assert_eq!(component_label(&comp(MaskShape::Sky)), "Sky");
+    assert_eq!(component_label(&comp(prompt("sky"))), "Sky");
+    assert_eq!(component_label(&comp(prompt("red car"))), "“red car”");
+    let named = MaskComponent { name: Some("Clouds".into()), ..comp(prompt("sky")) };
+    assert_eq!(component_label(&named), "Clouds");
 }

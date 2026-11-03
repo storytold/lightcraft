@@ -13,6 +13,10 @@ use crate::segment::{NOT_INSTALLED, Segmenter};
 #[test]
 fn sky_uses_legacy_detection_without_sam() {
     use lightcraft_develop::{MaskOp, MaskShape};
+    if let Some(remote) = Session::with_demo().segmenter.remote_endpoint() {
+        lightcraft_testkit::skip!(Model, "LIGHTCRAFT_SAM3_REMOTE is set ({remote}), so Sky uses the remote SAM 3 worker");
+        return;
+    }
     for background in [false, true] {
         for dir in [None, Some(tmp(&format!("sky-missing-{background}")))] {
             let mut s = Session::with_demo();

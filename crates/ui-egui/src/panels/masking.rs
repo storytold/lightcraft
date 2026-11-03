@@ -41,6 +41,15 @@ pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
     serde_json::to_value(a).ok().and_then(|v| v.get(key).and_then(|x| x.as_f64())).unwrap_or(0.0)
 }
 
+/// A component's row text: its name, else a Describe component's prompt in quotes, else the
+/// tool's label (a SAM sky selection reads "Sky", like a legacy one).
+pub(crate) fn component_label(c: &lightcraft_develop::MaskComponent) -> String {
+    c.name.clone().unwrap_or_else(|| match &c.shape {
+        MaskShape::Prompt { text, .. } if text != "sky" => format!("“{text}”"),
+        shape => menu_label(kind_label(shape).0).to_string(),
+    })
+}
+
 fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
     match s {
         MaskShape::Brush { .. } => ("Brush", Icon::Brush),
@@ -308,11 +317,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
         for (i, c) in m.components.iter().enumerate() {
-            let (kind, icon) = kind_label(&c.shape);
-            let label = c.name.clone().unwrap_or_else(|| match &c.shape {
-                MaskShape::Prompt { text, .. } => format!("“{text}”"),
-                _ => menu_label(kind).to_string(),
-            });
+            let (_, icon) = kind_label(&c.shape);
+            let label = component_label(c);
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                 paint(ui.painter(), r, icon, t.text_label);
