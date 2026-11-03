@@ -23,6 +23,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     // .lceffect, also inside zips — become mask effects
     let mut effects = Vec::new();
     let mut effect_failed = Vec::new();
+    // every file's presets, added in one go below (adding one at a time indexed the library each time)
+    let mut pending: Vec<(lightcraft_develop::Preset, Value)> = Vec::new();
     for top in &paths {
         let from_dir = std::path::Path::new(top).is_dir();
         for f in expand_preset_paths(std::slice::from_ref(top)) {
@@ -65,18 +67,26 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                             it.unmapped.extend(crate::profile_refs::report(&look, &r));
                             profile = json!({"name": look["name"], "id": it.preset.settings["profile"].get("id")});
                         }
-                        let (name, grp) = (it.preset.name.clone(), it.preset.group.clone());
-                        let id = if dry { Some(it.preset.id.clone()) } else { s.add_presets(vec![it.preset]).pop() };
-                        match id {
-                            Some(id) => {
-                                imported.push(json!({"id": id, "name": name, "group": grp, "file": f, "unmapped": it.unmapped, "profile": profile}))
-                            }
-                            None => skipped += 1,
-                        }
+                        let row = json!({"name": it.preset.name, "group": it.preset.group, "file": f, "unmapped": it.unmapped, "profile": profile});
+                        pending.push((it.preset, row));
                     }
                 }
                 Err(e) => failed.push(json!([f, e])),
             }
+        }
+    }
+    let ids = if dry {
+        pending.iter().map(|(p, _)| Some(p.id.clone())).collect()
+    } else {
+        s.add_presets_each(pending.iter().map(|(p, _)| p.clone()).collect())
+    };
+    for ((_, mut row), id) in pending.into_iter().zip(ids) {
+        match id {
+            Some(id) => {
+                row["id"] = json!(id);
+                imported.push(row);
+            }
+            None => skipped += 1,
         }
     }
     failed.extend(effect_failed.into_iter().map(|(f, e)| json!([f, e])));

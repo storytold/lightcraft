@@ -94,6 +94,35 @@ fn importing_thousands_of_presets_is_not_quadratic() {
     assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
 }
 
+#[test]
+fn thousands_of_presets_sharing_a_name_and_id_get_unique_ids_in_one_pass() {
+    let mut s = Session::new();
+    let t = Instant::now();
+    // the same name, group and id throughout, each with its own settings: every one clashes
+    let same: Vec<Preset> = (0..20_000)
+        .map(|i| Preset {
+            id: "user.x".into(),
+            name: "Look".into(),
+            group: "Coll".into(),
+            settings: json!({"light": {"exposure": i}}),
+            favorite: false,
+            builtin: false,
+        })
+        .collect();
+    let each = s.add_presets_each(same);
+    assert_eq!(each.len(), 20_000);
+    assert!(each.iter().all(Option::is_some));
+    // (the session may hold built-in presets too: only the added ones are counted)
+    let ids: std::collections::HashSet<_> = s.presets.iter().filter(|p| p.group == "Coll").map(|p| p.id.as_str()).collect();
+    assert_eq!(ids.len(), 20_000);
+    // a repeat is skipped, per preset
+    let last = s.presets.last().cloned().unwrap();
+    let again = s.add_presets_each(vec![last.clone(), Preset { settings: json!({"light": {"exposure": -1}}), ..last }]);
+    assert_eq!(again[0], None);
+    assert!(again[1].is_some());
+    assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+}
+
 /// Timing with a real preset collection: `LIGHTCRAFT_BENCH_PRESETS=path/to/presets.json cargo test
 /// -p lightcraft-engine --release presets_scale_bench -- --ignored --nocapture`. The file is copied
 /// into a temporary library; the original is only read.

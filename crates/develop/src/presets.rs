@@ -220,13 +220,23 @@ impl Preset {
             o.remove("masks");
         }
         let mut out = apply_partial(s, &rest, amount);
+        // the masks by name, kept up to date: a preset of many masks compares each with its
+        // namesakes only, not with every mask added before it
+        let mut by_name: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        for (i, q) in out.masks.iter().enumerate() {
+            by_name.entry(q.name.clone()).or_default().push(i);
+        }
+        let mut next_id = out.next_mask_id();
         for m in masks {
             let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
-            if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
+            if by_name.get(&m.name).is_some_and(|ix| ix.iter().any(|&i| out.masks.get(i).is_some_and(|q| q.components == m.components))) {
                 continue;
             }
-            m.id = out.next_mask_id();
+            m.id = next_id;
+            // ids run on from the first free one (a scan for the next free id per mask would be another pass over them)
+            next_id = next_id.checked_add(1).unwrap_or_else(|| out.next_mask_id());
             m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
+            by_name.entry(m.name.clone()).or_default().push(out.masks.len());
             out.masks.push(m);
         }
         out

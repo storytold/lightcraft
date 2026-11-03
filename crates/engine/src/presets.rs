@@ -174,34 +174,43 @@ impl Session {
     /// Add imported presets. Identical presets (same name, group and settings) already present are
     /// skipped; id clashes get a fresh id. Returns the ids added.
     pub fn add_presets(&mut self, presets: Vec<Preset>) -> Vec<String> {
+        self.add_presets_each(presets).into_iter().flatten().collect()
+    }
+
+    /// [`Self::add_presets`] reporting per preset, in order: its id, or `None` when it was skipped
+    /// as already present. One call indexes the library once, so an importer adds a whole file's
+    /// presets through it rather than one at a time.
+    pub fn add_presets_each(&mut self, presets: Vec<Preset>) -> Vec<Option<String>> {
         use std::collections::{HashMap, HashSet};
         // indexed: a collection of 10 000+ presets was quadratic (minutes) to import
         let mut ids: HashSet<String> = self.presets.iter().map(|q| q.id.clone()).collect();
-        let mut by_name: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for (i, q) in self.presets.iter().enumerate() {
-            by_name.entry((q.name.clone(), q.group.clone())).or_default().push(i);
-        }
-        let mut added = Vec::new();
+        // (name, group, settings): settings as their JSON text, which is canonical (object keys
+        // sorted), so a preset is looked up rather than compared with every namesake
+        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), serde_json::to_string(&p.settings).unwrap_or_default());
+        let mut present: HashSet<(String, String, String)> = self.presets.iter().map(key_of).collect();
+        // the next suffix to try per generated id, so a batch of clashes doesn't probe from 2 each time
+        let mut next_suffix: HashMap<String, u32> = HashMap::new();
+        let mut added = Vec::with_capacity(presets.len());
         for mut p in presets {
-            let key = (p.name.clone(), p.group.clone());
-            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings)));
-            if same {
+            let key = key_of(&p);
+            if present.contains(&key) {
+                added.push(None);
                 continue;
             }
             if p.id.trim().is_empty() || p.id.starts_with("lc.") || ids.contains(&p.id) {
                 let base = format!("user.{}", slug(&format!("{}-{}", p.group, p.name)));
                 let mut id = base.clone();
-                let mut n = 2;
+                let n = next_suffix.entry(base.clone()).or_insert(2);
                 while ids.contains(&id) {
                     id = format!("{base}-{n}");
-                    n += 1;
+                    *n += 1;
                 }
                 p.id = id;
             }
             p.builtin = false;
             ids.insert(p.id.clone());
-            by_name.entry(key).or_default().push(self.presets.len());
-            added.push(p.id.clone());
+            present.insert(key);
+            added.push(Some(p.id.clone()));
             self.presets.push(p);
         }
         added
