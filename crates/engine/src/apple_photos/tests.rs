@@ -397,14 +397,19 @@ fn shutdown_follows_an_export_into_its_import() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// A runner that waits for `go` (at most 20 s, stretched by `LIGHTCRAFT_TIME_SCALE` and never
-/// shrunk, so a regression fails instead of hanging), then answers one id per file.
+/// How long [`delayed`]'s runner holds Photos at most: 20 s, stretched by
+/// `LIGHTCRAFT_TIME_SCALE` and never shrunk, so a regression fails instead of hanging.
+fn hold() -> Duration {
+    let hold = Duration::from_secs(20);
+    lightcraft_testkit::scaled(hold).max(hold)
+}
+
+/// A runner that waits for `go` (at most [`hold`]), then answers one id per file.
 fn delayed() -> (Runner, std::sync::mpsc::Sender<()>) {
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = Mutex::new(wait);
     let r: Runner = Arc::new(move |args: &[String], _| {
-        let hold = Duration::from_secs(20);
-        let _ = wait.lock().unwrap().recv_timeout(lightcraft_testkit::scaled(hold).max(hold));
+        let _ = wait.lock().unwrap().recv_timeout(hold());
         let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
         Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
     });
@@ -418,9 +423,12 @@ fn a_slow_import_runs_as_a_job_and_refuses_a_second_one() {
     let (dir, paths) = files("job", 2);
     let (runner, go) = delayed();
     let imports = Imports::default();
+    let t0 = std::time::Instant::now();
     let job = import_job(&runner, &imports, paths.clone(), " Trip ", true, None).unwrap();
     // Photos is held until `go`: had the caller waited for it, the job would be over by now
     assert!(!job.finished(), "the caller doesn't wait for Photos");
+    // nor does it wait a while first: it returns well inside the hold (both stretch alike)
+    assert!(t0.elapsed() < hold() / 4, "the caller returns at once: {:?} (hold {:?})", t0.elapsed(), hold());
     assert_eq!(job.json(), json!({"job": 1, "running": true, "requested": 2, "album": "Trip"}));
     assert_eq!(imports.running().map(|j| j.id), Some(1));
     let e = import_job(&runner, &imports, paths.clone(), "", true, None).unwrap_err();
