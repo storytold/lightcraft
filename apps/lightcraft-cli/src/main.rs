@@ -106,7 +106,7 @@ USAGE:
   lightcraft-cli controls [--json]   list every develop control id with its range
   lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -202,17 +202,25 @@ fn main() -> ExitCode {
 /// folder of links pointing back at their parents made the old recursive walk re-read the same
 /// folders exponentially often before its depth limit cut it off (CWE-400).
 fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let is_raw =
-        |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+    let is_raw = |p: &Path| {
+        p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf", "crw"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+    };
     if path.is_file() {
         if is_raw(path) {
             out.push(path.to_path_buf());
         }
         return;
     }
-    // (hidden entries are left out by the walk; `@eaDir` and other NAS metadata folders here)
-    let nas_metadata = |p: &Path| p.strip_prefix(path).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('@')));
-    let walked = lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), |p| is_raw(p) && !nas_metadata(p));
+    // (hidden entries are left out by the walk; `@eaDir` and other NAS metadata folders and files
+    // here, folders before they are listed so their entries do not use up the walk's budget)
+    let nas_metadata = |p: &Path| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+    let walked = lightcraft_engine::walk::files_in_entering(
+        path,
+        None,
+        lightcraft_engine::walk::Limits::default(),
+        |p| is_raw(p) && !nas_metadata(p),
+        |p| !nas_metadata(p),
+    );
     if walked.truncated {
         eprintln!("calibrate: {} has more folders or entries than a walk looks at; the rest is left out", path.display());
     }
