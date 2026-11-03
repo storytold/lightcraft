@@ -817,8 +817,15 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
     if w == 0 || h == 0 {
         return;
     }
+    // one dab budget for the whole mask, as the GPU path keeps: a stroke's own cap alone let a
+    // thousand far-flung two-point strokes build and stamp a billion dabs
+    let mut room = MAX_STROKE_DABS;
     for s in strokes {
-        let bd = brush_dabs(s, frame, w, h);
+        if room == 0 {
+            break;
+        }
+        let bd = brush_dabs_within(s, frame, w, h, room);
+        room = room.saturating_sub(bd.dabs.len());
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
         for (k, d) in bd.dabs.iter().enumerate() {
