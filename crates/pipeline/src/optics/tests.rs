@@ -449,6 +449,26 @@ fn defringe_removes_purple_at_edges_only() {
     assert!((chroma(flat2.get(20, 10)) - chroma(purple)).abs() < 1e-4);
 }
 
+#[test]
+fn defringe_analyses_and_preserves_signed_fringe_pixels() {
+    let mut s = DevelopSettings::default();
+    s.optics.defringe_purple_amount = 1.0;
+    s.optics.defringe_green_amount = 1.0;
+    s.optics.defringe_purple_hue_lo = 0.0;
+    s.optics.defringe_purple_hue_hi = 100.0;
+    s.optics.defringe_green_hue_lo = 0.0;
+    s.optics.defringe_green_hue_hi = 100.0;
+    let signed = [-0.25, -0.05, -0.45];
+    let mut img = Rgb32f::from_fn(40, 20, |x, _| if x < 20 { [0.9; 3] } else { signed });
+    defringe(&mut img, &s, 1.0);
+    let actual = img.get(20, 10);
+    assert!(actual.iter().all(|v| v.is_finite() && *v < 0.0), "{actual:?}");
+    assert!(actual.into_iter().zip(signed).any(|(a, b)| (a - b).abs() > 1e-3), "signed fringe must be analysed");
+    let (before, after) = (oklab_from_2020(signed), oklab_from_2020(actual));
+    assert!((before[0] - after[0]).abs() < 1e-5, "signed perceptual lightness is kept");
+    assert!(after[1].hypot(after[2]) < before[1].hypot(before[2]));
+}
+
 /// Found by fuzzing catalog snapshots: a defringe amount far past the sliders' 20 (from a
 /// damaged catalog or sidecar) made the filter's radius overflow (`x + r`), which panics.
 /// It acts as the sliders' end.

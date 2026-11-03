@@ -587,7 +587,7 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     let radius = ((1.0 + max_amt * 0.3) * scale).round();
     let radius = if radius.is_finite() { radius.clamp(1.0, w.max(h).max(1) as f64) as usize } else { 1 };
     // perceptual lightness and its local range (dilated contrast)
-    let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
+    let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020(*p)).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
     let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
     let range = |lo: f64, hi: f64, span: (f32, f32)| {
@@ -618,7 +618,7 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
                 continue;
             }
             let f = 1.0 - k.min(1.0);
-            *px = oklab_to_2020([ll, a * f, b * f]).map(|v| v.max(0.0));
+            *px = oklab_to_2020([ll, a * f, b * f]);
         }
     });
 }
