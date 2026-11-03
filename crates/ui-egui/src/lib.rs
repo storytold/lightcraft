@@ -23,6 +23,7 @@ pub mod destination;
 pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
+mod dupes_scan;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;
@@ -625,6 +626,8 @@ pub struct Caches {
     pub faces_next_pump: f64,
     /// When to ask the focus-point reader again (`focus_scan::pump`).
     pub focus_next_pump: f64,
+    /// When to ask the duplicate finder again (`dupes_scan::pump`).
+    pub dupes_next_pump: f64,
     /// When the user last dragged, typed or scrolled, and when they last moved the pointer (egui time).
     pub last_input: f64,
     /// The pace the face scan was last given, and whether the window was in front then (for `ui.inspect`).

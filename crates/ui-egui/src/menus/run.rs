@@ -197,13 +197,14 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "view.gridInfo" => {
-            // {info?: filename | exposure | date} (cycles when omitted)
+            // {info?: filename | exposure | date | size} (cycles when omitted)
             let next = match p.get("info").and_then(Value::as_str) {
-                Some(i @ ("filename" | "exposure" | "date")) => i.to_string(),
-                Some(other) => return Some(Err(format!("view.gridInfo: unknown `{other}` (filename|exposure|date)"))),
+                Some(i @ ("filename" | "exposure" | "date" | "size")) => i.to_string(),
+                Some(other) => return Some(Err(format!("view.gridInfo: unknown `{other}` (filename|exposure|date|size)"))),
                 None => match app.ui.grid_info.as_str() {
                     "filename" => "exposure".into(),
                     "exposure" => "date".into(),
+                    "date" => "size".into(),
                     _ => "filename".into(),
                 },
             };
@@ -1294,6 +1295,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
             Ok(Value::Null)
         }
+        "dialog.findDuplicates" => crate::panels::dialogs::dupes::open(app),
         "app.whatsNew" => {
             app.ui.dialog = Some(Dialog::WhatsNew);
             Ok(json!({"text": crate::panels::dialogs::WHATS_NEW}))

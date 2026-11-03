@@ -80,6 +80,7 @@ impl LightcraftApp {
         panels::faces::pump_background(self, ctx, now);
         model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
+        crate::dupes_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
         // a folder that couldn't be read stops being one once another is watched (or none)
