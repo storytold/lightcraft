@@ -807,7 +807,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 let frame = if anchor == SpotAnchor::Sensor {
                     let src = s.source_now(id, crate::media::SourceLevel::Preview).map_err(|e| bad(c, e))?;
                     let info = s.source_info(id);
-                    Some(lightcraft_pipeline::frame_for(&src, &info, &dd, false))
+                    // Match the render plan: apply the active profile before
+                    // resolving automatic Upright, then build the same frame.
+                    let effective = lightcraft_pipeline::profiles::effective(&dd);
+                    let resolved = lightcraft_pipeline::upright::resolve(&src, &info, &effective);
+                    Some(lightcraft_pipeline::frame_for(&src, &info, &resolved, false))
                 } else {
                     None
                 };

@@ -290,7 +290,10 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             .on_hover_text(crate::i18n::tr("Heal the small, soft dark spots sensor dust leaves on smooth areas"))
             .clicked()
         {
-            match app.run("spot.findDust", json!({"anchor": if app.ui.remove_sensor_anchor { "sensor" } else { "image" }})) {
+            // Fill hides the sensor-anchor control and always draws in
+            // image space. Find Dust must honour the same visible mode.
+            let sensor_anchor = app.ui.remove_sensor_anchor && app.ui.tool != "fill";
+            match app.run("spot.findDust", json!({"anchor": if sensor_anchor { "sensor" } else { "image" }})) {
                 Ok(r) => {
                     let n = r["added"].as_u64().unwrap_or(0);
                     app.toast(

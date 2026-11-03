@@ -228,7 +228,9 @@ pub fn window_for_reads_checked(
             }
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
             let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
-            let s = match spot.source_offset {
+            // Fill samples no external source: an invalid stored source
+            // offset must not discard its target from a tiled render.
+            let s = match spot.source_offset.filter(|_| spot.mode != SpotMode::Fill) {
                 Some(offset) if spot.anchor == SpotAnchor::Sensor => {
                     // Each dab has its own mapped source. Include every source
                     // disc in the read window, not just the first dab's delta.
@@ -630,6 +632,33 @@ mod tests {
         // a spot that only reaches in with its edge counts too
         let edge = spot_at(0.24, 0.38, 0.01, Some(Point::new(-0.05, 0.0)));
         assert!(window_for_reads(&with_spots(vec![edge]), &frame, 4000, 3000, ppl, win).x < win.x);
+    }
+
+    #[test]
+    fn sensor_fill_window_ignores_invalid_source_offset() {
+        use crate::PixelWindow;
+        let (w, h) = (600, 400);
+        let mut settings = DevelopSettings::default();
+        settings.optics.distortion = 100.0;
+        let frame = Frame::new(w, h, &settings, true);
+        let position = Point::new(0.35, 0.4);
+        let pixel = spot_to_out(&frame, SpotAnchor::Sensor, position, &frame.norm_to_out(w, h)).unwrap();
+        let win = PixelWindow { x: pixel.x as usize, y: pixel.y as usize, w: 4, h: 4 };
+        let spot = Spot {
+            mode: SpotMode::Fill,
+            anchor: SpotAnchor::Sensor,
+            points: vec![position],
+            size: 0.03,
+            source_offset: Some(Point::new(f64::NAN, 0.0)),
+            ..Default::default()
+        };
+        let mut without_offset = spot.clone();
+        without_offset.source_offset = None;
+        let ppl = frame.px_per_long(w);
+        let expected = window_for_reads_checked(&with_spots(vec![without_offset]), &frame, w, h, ppl, win).unwrap();
+        let actual = window_for_reads_checked(&with_spots(vec![spot]), &frame, w, h, ppl, win).unwrap();
+        assert_ne!(expected, win, "the Fill target requires a larger tile");
+        assert_eq!(actual, expected, "Fill must ignore even a non-invertible source offset");
     }
 
     #[test]
