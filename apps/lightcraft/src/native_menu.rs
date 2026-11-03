@@ -22,7 +22,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use lightcraft_ui_egui::LightcraftApp;
 use lightcraft_ui_egui::menubar::{
-    MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_structure as structure_of,
+    MenuNode, display_submenu_label, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_structure as structure_of,
 };
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -545,8 +545,8 @@ impl NativeMenu {
                 MenuNode::Separator => {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                 }
-                MenuNode::Submenu { label, children } => {
-                    let s = Submenu::new(label_text(label), true);
+                MenuNode::Submenu { id, label, children } => {
+                    let s = Submenu::new(display_submenu_label(id.as_deref(), label).replace('&', "&&"), true);
                     self.append_nodes(&s, children, keymap, swappable, ids);
                     let _ = sub.append(&s);
                 }
@@ -788,9 +788,9 @@ mod tests {
             vec![
                 item("dialog.export", a.0, a.1, a.2),
                 MenuNode::Separator,
-                MenuNode::Submenu { label: "Export with Preset".into(), children: vec![item("dialog.export", b.0, b.1, b.2)] },
+                MenuNode::Submenu { id: None, label: "Export with Preset".into(), children: vec![item("dialog.export", b.0, b.1, b.2)] },
                 item("view.toggle", c.0, c.1, c.2),
-                MenuNode::Submenu { label: "More".into(), children: vec![item("view.toggle", d.0, d.1, d.2)] },
+                MenuNode::Submenu { id: None, label: "More".into(), children: vec![item("view.toggle", d.0, d.1, d.2)] },
             ]
         };
         // what the native rows show after the install

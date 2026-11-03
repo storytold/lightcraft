@@ -299,7 +299,7 @@ fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
     let children = view
         .iter()
         .find_map(|n| match n {
-            MenuNode::Submenu { label, children } if label == "Sidebar Sections" => Some(children.clone()),
+            MenuNode::Submenu { label, children, .. } if label == "Sidebar Sections" => Some(children.clone()),
             _ => None,
         })
         .expect("View ▸ Sidebar Sections");
@@ -2524,7 +2524,7 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
         photo
             .iter()
             .find_map(|n| match n {
-                crate::menubar::MenuNode::Submenu { label, children } if label == "Add to Album" => Some(children.clone()),
+                crate::menubar::MenuNode::Submenu { label, children, .. } if label == "Add to Album" => Some(children.clone()),
                 _ => None,
             })
             .expect("Add to Album submenu")

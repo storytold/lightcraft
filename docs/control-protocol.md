@@ -401,6 +401,19 @@ or initializes that name, edited through `field:importAlbumName`. Choosing an ex
 the pending name. `ui.dialog.confirm` starts the same import into the selected album ID; engine
 `library.import` parameters `album` and `albumName` are unchanged.
 
+## Add to Album menus
+
+Photo → Add to Album and the photo context menu share the sidebar's album-folder hierarchy and
+custom sibling order. Only ordinary albums are destinations; folders with no ordinary descendant
+are omitted. New Album… stays at the top level. User-entered folder and album names are never
+translated.
+
+`ui.menu.tree` adds an optional `id` to user-named submenus: an album folder has
+`"id": "albumFolder:<id>"`. Built-in submenus keep their existing shape. Hover its registered
+`menusub:albumFolder:<id>` to open it; IDs distinguish same-named folders. Destination rows have
+`menuitem:album.addPhotos|{"id":<id>}` and the existing `button:contextAlbum:<id>` alias on both
+surfaces. `button:contextNewAlbum` still opens New Album… from the context menu.
+
 ## Panel docking
 
 Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences as a craft-ui docking workspace (`docking`: `version`, `layout`, `hidden`, `saved`, `locked`); settings written before workspaces had a `version` load as version 1. These operations do not edit document contents.

@@ -148,7 +148,7 @@ fn sort_menu_lists_reshuffle_once_and_only_enables_it_for_random() {
         let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
         view.iter()
             .find_map(|n| match n {
-                MenuNode::Submenu { label, children } if label == "Sort" => Some(children.clone()),
+                MenuNode::Submenu { label, children, .. } if label == "Sort" => Some(children.clone()),
                 _ => None,
             })
             .expect("Sort submenu")
@@ -266,7 +266,7 @@ fn bar_follows_the_registry_and_state() {
     let rated: Vec<_> = all
         .iter()
         .filter_map(|n| match n {
-            MenuNode::Submenu { label, children } if label == "Set Rating" => Some(children.clone()),
+            MenuNode::Submenu { label, children, .. } if label == "Set Rating" => Some(children.clone()),
             _ => None,
         })
         .flatten()
