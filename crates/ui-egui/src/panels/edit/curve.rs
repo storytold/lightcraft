@@ -383,7 +383,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
         let _ = app.run("develop.curve", json!({"channel": ch, "points": arr}));
     }
-    let over = menu_point(ui, &resp, &ch, &pts, nearest);
+    let over = menu_point(ui, &resp, &ch, id, &pts, nearest);
     crate::widgets::context_menu(&resp, |ui| curve_menu(app, ui, &ch, &pts, over));
     // the drag is over when egui says so, or when the pointer comes up without it saying so (a
     // release outside the window would otherwise leave the interaction open, and every later edit a
@@ -467,9 +467,17 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
 
 /// The point (of `pts`) the graph's right-click menu was opened over, if it can be deleted. It is
 /// read when the menu opens and kept while it is open (the pointer has moved on to the menu by
-/// then); the two ends can't be deleted.
-fn menu_point(ui: &egui::Ui, resp: &egui::Response, ch: &str, pts: &[Point], nearest: impl Fn(Pos2) -> Option<(usize, f32)>) -> Option<(f64, f64)> {
-    let menu_id = egui::Id::unique(("curve-menu-point", ch));
+/// then), for this photo and channel only: a menu left open while another photo is shown does not
+/// delete a point of that photo; the two ends can't be deleted.
+fn menu_point(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    ch: &str,
+    photo: PhotoId,
+    pts: &[Point],
+    nearest: impl Fn(Pos2) -> Option<(usize, f32)>,
+) -> Option<(f64, f64)> {
+    let menu_id = egui::Id::unique(("curve-menu-point", ch, photo));
     if resp.secondary_clicked() {
         let over = resp
             .interact_pointer_pos()

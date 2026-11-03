@@ -280,6 +280,30 @@ fn delete_control_point_is_offered_only_over_a_removable_point() {
     assert_eq!(develop(&h).curve.master.len(), 4);
 }
 
+/// The point the menu was opened over is kept while the menu is open, for the photo it was opened
+/// on: with the menu left open, showing another photo whose curve has the very same point must not
+/// offer (and so not apply) the deletion there.
+#[test]
+fn the_point_a_menu_was_opened_over_is_not_carried_to_another_photo() {
+    let mut h = curve_open("master");
+    let a = h.app.session.active().expect("an active photo");
+    let b = h.app.session.visible().iter().copied().find(|p| *p != a).expect("a second photo");
+    for id in [b, a] {
+        h.app.session.selection.active = Some(id);
+        h.step();
+        exec(&mut h, "develop.curve", json!({"channel": "master", "points": THREE_POINTS}));
+        h.step();
+    }
+    right_click_curve(&mut h, 0.3, 0.4);
+    assert!(has_widget(&h, "curveMenu:deletePoint"), "the menu offers Delete Control Point over the point");
+    h.app.session.selection.active = Some(b);
+    h.step();
+    h.step();
+    assert!(has_widget(&h, "curveMenu:resetChannel"), "the menu is still open");
+    assert!(!has_widget(&h, "curveMenu:deletePoint"), "but it was not opened over a point of this photo");
+    assert_eq!(pts(&develop(&h).curve.master).len(), 4);
+}
+
 /// Double-clicking a point removes it, but not an end point. (Each case gets its own app: egui
 /// counts a second pair of clicks as a third and fourth click, not as a new double-click.)
 #[test]
