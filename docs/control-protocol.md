@@ -65,7 +65,8 @@ knows a token. Its first line is an `auth` request; the server answers it, then 
 Anything else as the first line (a command, junk, a wrong token) gets one error reply and the connection is closed
 before any command runs. The token is `--control-token T` or `LIGHTCRAFT_CONTROL_TOKEN`; with neither, the app
 generates 128 random bits per run and writes them to `<home>/.lightcraft/control-<port>.token` (owner-only
-permissions on Unix). `lightcraft-cli` (`mcp --connect`, `run`) reads the same variable or file and sends the token
+permissions on Unix; on Windows it relies on the default ACL of the user profile, so on a machine where the profile
+directory is shared give the token with `--control-token` / `LIGHTCRAFT_CONTROL_TOKEN` instead). `lightcraft-cli` (`mcp --connect`, `run`) reads the same variable or file and sends the token
 for you, and only to a loopback address. Setting `LIGHTCRAFT_CONTROL_NO_AUTH=1` on the app starts it without a token
 (and removes that port's token file); set it for `lightcraft-cli` too, because a client that holds a token and meets
 an app that does not ask for one stops with an error instead of silently connecting unauthenticated.
