@@ -257,6 +257,7 @@ fn xmp_dimensions_invalid_primary_allows_fallback() {
 fn xmp_dimensions_preserve_valid_values() {
     for (field, value, expected) in [
         ("tiff:ImageWidth", "0", 0),
+        ("tiff:ImageWidth", "0001", 1),
         ("tiff:ImageWidth", "0/1e-129", 0),
         ("tiff:ImageWidth", "1e-400/1e-400", 1),
         ("tiff:ImageWidth", "1e400/1e400", 1),
@@ -289,6 +290,10 @@ fn xmp_dimensions_preserve_large_exact_ratio() {
     let numerator = format!("1{}8", "9".repeat(1023));
     let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{numerator}/{denominator}""#));
     assert_eq!(data.metadata.width, Some(2));
+
+    let numerator = format!("{}8", "9".repeat(1023));
+    let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{numerator}/{denominator}""#));
+    assert_eq!(data.metadata.width, None);
 }
 
 #[test]
