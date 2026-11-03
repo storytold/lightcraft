@@ -829,7 +829,7 @@ fn titles_survive_deleting_the_only_photo_and_need_photos_to_start() {
         if !seen.contains(&r.play.current()) {
             seen.push(r.play.current());
         }
-        assert!(t0.elapsed() < SETTLE, "the show plays on to its end: {seen:?}");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(SETTLE), "the show plays on to its end: {seen:?}");
         h.step();
     }
     assert_eq!(seen, vec![Item::INTRO, Item::Photo(photos[0]), Item::ENDING], "intro, the (gone) photo, ending");

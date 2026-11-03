@@ -17,12 +17,12 @@ fn shutdown_leaves_no_render_worker_running() {
     // frames until the grid's thumbnails are being rendered on the workers
     let t0 = Instant::now();
     while h.app.renderer.live_workers() == 0 || h.app.renderer.in_flight() == 0 {
-        assert!(t0.elapsed() < Duration::from_secs(120), "no render started");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(120)), "no render started");
         h.step();
     }
     assert!(!lightcraft_engine::gpu::shutting_down());
 
-    assert!(h.app.shutdown(Duration::from_secs(120)), "the jobs that were running ended in time");
+    assert!(h.app.shutdown(lightcraft_testkit::scaled(Duration::from_secs(120))), "the jobs that were running ended in time");
     assert_eq!(h.app.renderer.live_workers(), 0);
     assert_eq!(h.app.renderer.queued(), 0, "jobs that had not started are dropped");
     assert!(lightcraft_engine::gpu::shutting_down());
