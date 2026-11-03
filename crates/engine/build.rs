@@ -65,6 +65,7 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
     let manifest = dir.join("fonts/manifest.txt");
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let root = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let mut out = String::new();
     let mut has_japanese_ui = false;
@@ -82,7 +83,17 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
-        println!("cargo::rerun-if-changed={}", path.display());
+        // a font is a file of the checkout: a manifest entry or a link reaching outside it would
+        // embed some other file of the build machine
+        if !path.starts_with(&root) || !path.is_file() {
+            return Err(format!("{file}: not a file inside {}", root.display()));
+        }
+        let shown = path.display().to_string();
+        // one cargo instruction per line: a line break in the path would print a second one
+        if shown.contains(['\n', '\r']) {
+            return Err(format!("{file}: the path contains a line break"));
+        }
+        println!("cargo::rerun-if-changed={shown}");
         let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
         let _ = writeln!(
             out,
