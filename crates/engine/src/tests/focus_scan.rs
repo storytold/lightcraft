@@ -50,7 +50,7 @@ fn pump_until_idle(s: &mut Session) -> Value {
         if v["active"] == false {
             return v;
         }
-        assert!(started.elapsed() < Duration::from_secs(30), "the job never ended: {v}");
+        assert!(started.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)), "the job never ended: {v}");
         std::thread::sleep(Duration::from_millis(5));
     }
 }

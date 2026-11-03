@@ -36,13 +36,9 @@ fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) 
     rx.recv_timeout(std::time::Duration::from_secs(secs)).expect("deadlocked")
 }
 
-/// Wait (at most ten seconds) until `n` callers wait for `slot`'s generation.
+/// Wait (at most ten seconds, stretched by `LIGHTCRAFT_TIME_SCALE`) until `n` callers wait for `slot`'s generation.
 fn until_waiting(slot: &SceneSlot, n: usize) {
-    let started = std::time::Instant::now();
-    while slot.lock().waiting < n {
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "the callers never got to wait");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    lightcraft_testkit::wait_until(std::time::Duration::from_secs(10), "the callers get to wait", || slot.lock().waiting >= n);
 }
 
 fn pixels(n: usize) -> lightcraft_raster::Rgb32f {
