@@ -318,10 +318,9 @@ mod memory_budget_tests {
         assert_eq!(crate::memory::budget(), before, "a refused call changes nothing");
     }
 
-    /// Missing or null `mb`: the report only; numbers out of 64..1048576 (0 included) are refused,
-    /// and one in range is applied.
+    /// Missing or null `mb`: the report only; numbers out of 64..1048576 (0 included) are refused.
     #[test]
-    fn a_memory_budget_number_or_none_works_as_before() {
+    fn a_missing_null_or_out_of_range_memory_budget_changes_nothing() {
         let mut s = Session::new();
         let before = crate::memory::budget();
         for p in [json!({}), json!({"mb": null})] {
@@ -332,11 +331,38 @@ mod memory_budget_tests {
             let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
             assert!(matches!(&r, Err(EngineError::BadParams { cmd, .. }) if cmd == "app.memoryBudget"), "{mb}: {r:?}");
         }
-        // the budget the process has already (exact in MB as a float): other tests running beside
-        // this one see no change
-        let mb = before as f64 / 1_048_576.0;
-        let r = s.execute("app.memoryBudget", &json!({ "mb": mb })).unwrap();
-        assert_eq!(r["budget"].as_u64(), Some(before as u64), "{r}");
-        assert_eq!(r["cacheBudget"].as_u64(), Some(crate::memory::cache_share(before) as u64), "{r}");
+        assert_eq!(crate::memory::budget(), before, "nothing changed");
+    }
+
+    /// A number in range is applied: the process-wide budget and this session's cache share. Run
+    /// in a process of its own, so the other tests in this one keep their budget.
+    #[test]
+    fn a_memory_budget_in_range_is_applied() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "cmd::query::memory_budget_tests::applies_a_memory_budget_in_its_own_process", "--ignored", "--test-threads=1"])
+            .env("LC_MEMORY_BUDGET_CHILD", "1")
+            .output()
+            .unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+    }
+
+    /// The child of [`a_memory_budget_in_range_is_applied`].
+    #[test]
+    #[ignore = "run by a_memory_budget_in_range_is_applied in a process of its own"]
+    fn applies_a_memory_budget_in_its_own_process() {
+        if std::env::var_os("LC_MEMORY_BUDGET_CHILD").is_none() {
+            return;
+        }
+        let mut s = Session::new();
+        // a budget other than the one the process has, in whole MB (and a fractional one)
+        let mb = if crate::memory::budget() == 512 << 20 { 768.0 } else { 512.0 };
+        for mb in [mb, mb + 0.5] {
+            let r = s.execute("app.memoryBudget", &json!({ "mb": mb })).unwrap();
+            let bytes = (mb * 1_048_576.0) as u64;
+            assert_eq!(r["budget"].as_u64(), Some(bytes), "{r}");
+            assert_eq!(r["cacheBudget"].as_u64(), Some(bytes / 2), "{r}");
+            assert_eq!(crate::memory::budget() as u64, bytes);
+        }
     }
 }
