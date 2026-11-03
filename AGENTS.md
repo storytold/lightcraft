@@ -195,8 +195,8 @@ of it.
   changed and those that depend on them (`--doc` adds the doctests, which `ci` runs after the test binaries), and
   `cargo xtask parity`, `layers`, `assets` and `wasm` for the steps after `test`.
 - **Nothing outlives your session:** never leave a test run going in the background when you finish, and wrap a long
-  run in `timeout` (`timeout 60m cargo xtask test -p …`). Before you stop, check that no `cargo` or test process you
-  started is still running.
+  run in `timeout` (`timeout 60m cargo xtask test -p …`; on macOS that's `gtimeout`, from Homebrew's
+  `coreutils`). Before you stop, check that no `cargo` or test process you started is still running.
 
 ## Testing & performance (do this often)
 - Unit/property tests next to the code; end-to-end tests drive real binaries (`crates/mcp/tests/e2e.rs`,
