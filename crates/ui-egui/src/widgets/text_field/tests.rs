@@ -143,7 +143,17 @@ fn a_password_cannot_be_cut_or_copied_from_the_menu() {
     assert_eq!(rig.text, "s3cret", "Cut does not delete the secret");
     rig.menu("copy");
     assert_eq!(rig.view.clipboard, "", "nothing copied");
-    // a field that isn't a password still cuts
+    // nor from the keyboard (⌘X arrives as a cut event)
+    rig.select_all_by_keys();
+    rig.frame(vec![Event::Cut]);
+    rig.settle();
+    assert_eq!(rig.text, "s3cret", "⌘X does not delete the secret");
+    // a field that isn't a password still cuts, from the keyboard too
+    let mut rig = Rig::new("Lisbon");
+    rig.select_all_by_keys();
+    rig.frame(vec![Event::Cut]);
+    rig.settle();
+    assert_eq!(rig.text, "");
     let mut rig = Rig::new("Lisbon");
     rig.select_all_by_keys();
     rig.menu("cut");
