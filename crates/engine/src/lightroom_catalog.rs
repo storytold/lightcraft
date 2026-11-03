@@ -128,22 +128,27 @@ impl Reader {
                     SqlValue::Integer(n) => Some(json!(n)),
                     SqlValue::Real(n) => Some(json!(n)),
                     SqlValue::Text(s) => Some(json!(s)),
-                    SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
-                        Ok(packet) => {
-                            if xmp_total.saturating_add(packet.len()) > max_total {
-                                warnings
-                                    .push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
-                                None
-                            } else {
+                    SqlValue::Blob(bytes) if column == "xmp" => {
+                        // the declared size (the decode checks it) against what is left, before inflating
+                        let declared = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map_or(0, |s| u32::from_be_bytes(s) as usize);
+                        let over = |n: usize| n <= 16 << 20 && xmp_total.saturating_add(n) > max_total;
+                        let decoded = if over(declared) { Ok(None) } else { decode_xmp_bytes(&bytes).map(Some) };
+                        match decoded {
+                            Ok(Some(packet)) if !over(packet.len()) => {
                                 xmp_total += packet.len();
                                 Some(Value::String(packet))
                             }
+                            Ok(_) => {
+                                warnings
+                                    .push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
+                                None
+                            }
+                            Err(error) => {
+                                warnings.push(format!("image {image}: {error}"));
+                                None
+                            }
                         }
-                        Err(error) => {
-                            warnings.push(format!("image {image}: {error}"));
-                            None
-                        }
-                    },
+                    }
                     SqlValue::Blob(_) => None,
                 };
                 if let Some(value) = value {

@@ -1302,7 +1302,10 @@ fn xmp_packets_past_the_total_cap_are_left_out_one_by_one() {
     let packet = b"<x:xmpmeta>example</x:xmpmeta>";
     let mut encoded = (packet.len() as u32).to_be_bytes().to_vec();
     encoded.extend(miniz_oxide::deflate::compress_to_vec_zlib(packet, 6));
-    let rows = vec![vec![N, I(1), B(encoded.clone())], vec![N, I(2), B(encoded.clone())], vec![N, I(3), B(encoded)]];
+    // past the cap, a packet is not inflated at all: its body (not valid zlib) is never read
+    let mut unread = (packet.len() as u32).to_be_bytes().to_vec();
+    unread.extend([0xff; 8]);
+    let rows = vec![vec![N, I(1), B(encoded.clone())], vec![N, I(2), B(encoded.clone())], vec![N, I(3), B(encoded)], vec![N, I(4), B(unread)]];
     let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", rows)], None);
     let path = std::env::temp_dir().join(format!("lightcraft-xmp-total-{}.lrcat", std::process::id()));
     std::fs::write(&path, bytes).unwrap();
@@ -1310,9 +1313,10 @@ fn xmp_packets_past_the_total_cap_are_left_out_one_by_one() {
     std::fs::remove_file(&path).unwrap();
     let reader = Reader { tables: db.live_tables().unwrap(), db };
     let (rows, warnings) = reader.xmp_table_within(packet.len() * 2).unwrap();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(rows.iter().filter(|r| r.contains_key("xmp")).count(), 2);
     assert!(!rows[2].contains_key("xmp") && rows[2]["image"] == 3);
-    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings.len(), 2);
     assert!(warnings[0].starts_with("image 3:"), "{warnings:?}");
+    assert!(warnings[1].starts_with("image 4:") && warnings[1].contains("exceed"), "{warnings:?}");
 }
