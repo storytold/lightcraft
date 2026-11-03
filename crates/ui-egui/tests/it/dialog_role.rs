@@ -7,7 +7,9 @@ use lightcraft_ui_egui::{LightcraftApp, Services};
 
 fn harness() -> Harness<'static, LightcraftApp> {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+    // These tests assert dialog semantics, not font coverage. Endonyms can use scripts that are
+    // not part of the local craft-fonts checkout, so allow their glyphs to be absent here.
+    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).allow_missing_glyphs().build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
