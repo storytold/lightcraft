@@ -2157,8 +2157,10 @@ fn a_slow_photos_import_never_blocks_the_window() {
     assert!(t0.elapsed() < hold / 4, "answered at once: {:?} (hold {hold:?}): {r}", t0.elapsed());
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
+    // the outcome gets the whole hold from t0: the answer above may have used up to a quarter of
+    // it, and scaled(20 s) alone would be 2 s at LIGHTCRAFT_TIME_SCALE=0.1
     while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
-        assert!(t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)), "the outcome is announced");
+        assert!(t0.elapsed() < hold, "the outcome is announced: {:?} (hold {hold:?})", t0.elapsed());
         h.step();
     }
     assert_eq!(h.app.ui.toast.as_ref().unwrap().0, "1 added to Apple Photos album “Slow”");
@@ -2173,7 +2175,7 @@ fn a_slow_photos_import_never_blocks_the_window() {
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
         while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("1 added to Apple Photos") && !t.0.contains("Slow")) {
-            assert!(t1.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)), "the outcome is announced");
+            assert!(t1.elapsed() < hold, "the outcome is announced: {:?} (hold {hold:?})", t1.elapsed());
             h.step();
         }
     }
