@@ -213,13 +213,20 @@ impl LightcraftApp {
         } else {
             params
         };
-        let combined = crate::album_combination::active(self);
+        let combined = self.ui.album_combination.is_some();
         let mut r = self.session.execute(id, &params).map_err(CommandError::from);
-        if r.is_ok() && id == "library.source" && combined {
-            self.session.filter.rule_set = None;
-            self.ui.album_combination = None;
+        let member_removed = combined
+            && self
+                .ui
+                .album_combination
+                .as_ref()
+                .is_some_and(|(ids, _)| ids.iter().any(|id| self.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_none()));
+        if r.is_ok() && combined && (id == "library.source" || member_removed) {
+            crate::album_combination::clear(self);
             self.session.keep_active_in_view();
-            if let Ok(result) = &mut r {
+            if id == "library.source"
+                && let Ok(result) = &mut r
+            {
                 *result = serde_json::json!({"count": self.session.visible().len()});
             }
         }

@@ -88,6 +88,7 @@ fn album_operations_are_live_and_plain_source_clears_them() {
     let b = app.run("album.create", json!({"name": "Children"})).unwrap()["id"].as_u64().unwrap();
     app.run("album.addPhotos", json!({"id": a, "ids": [ids[0].0, ids[1].0]})).unwrap();
     app.run("album.addPhotos", json!({"id": b, "ids": [ids[1].0, ids[2].0]})).unwrap();
+    app.run("library.source", json!({"kind": "album", "id": a})).unwrap();
     for (operation, expected) in
         [("union", vec![ids[0], ids[1], ids[2]]), ("intersection", vec![ids[1]]), ("difference", vec![ids[0]]), ("exclusive", vec![ids[0], ids[2]])]
     {
@@ -101,9 +102,58 @@ fn album_operations_are_live_and_plain_source_clears_them() {
     assert!(app.session.visible_cloned().is_empty());
     let before = app.session.filter.clone();
     assert!(app.run("view.combineAlbums", json!({"ids": [a, 999999]})).is_err());
+    assert!(app.run("view.combineAlbums", json!({"ids": [a, b], "operation": false})).is_err());
     assert_eq!(app.session.filter, before);
     let result = app.run("library.source", json!({"kind": "album", "id": a})).unwrap();
     assert_eq!(result["count"], 2);
     assert_eq!(app.session.visible_cloned().len(), 2);
     assert!(!crate::album_combination::active(&app));
+    app.run("view.combineAlbums", json!({"ids": [a, b]})).unwrap();
+    app.run("album.delete", json!({"id": b})).unwrap();
+    assert!(app.ui.album_combination.is_none());
+    assert!(app.session.filter.rule_set.is_none());
+}
+
+#[test]
+fn command_click_album_row_combines_the_two_albums() {
+    let fixture = SyntheticLibrary::with_photos("album-command-click", 2);
+    let mut app = fixture.app();
+    let a = app.run("album.create", json!({"name": "First album"})).unwrap()["id"].as_u64().unwrap();
+    let b = app.run("album.create", json!({"name": "Second album"})).unwrap()["id"].as_u64().unwrap();
+    app.ui.left_panel = true;
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    assert!(h.settle(T));
+    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("source:album:{a}")}), T)["ok"], true);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("source:album:{b}"), "cmd": true}), T)["ok"], true);
+    assert!(crate::album_combination::active(&h.app));
+    assert_eq!(h.app.ui.album_combination.as_ref().unwrap().0, [a, b]);
+}
+
+#[test]
+fn metadata_reads_for_another_photo_can_finish_before_a_slow_read() {
+    let fixture = SyntheticLibrary::with_photos("metadata-slow-read", 2);
+    let mut app = fixture.app();
+    let ids = app.session.visible_cloned();
+    let lightcraft_catalog::Source::File { path } = &app.session.catalog.photo(ids[0]).unwrap().source else { panic!("file fixture") };
+    let slow_path = path.clone();
+    let (release, wait) = std::sync::mpsc::channel();
+    let wait = std::sync::Mutex::new(wait);
+    app.session.media.file_bytes = Some(std::sync::Arc::new(move |path| {
+        if path == slow_path {
+            let _ = wait.lock().unwrap().recv_timeout(T);
+            Err("slow original failed".into())
+        } else {
+            Err("other original failed".into())
+        }
+    }));
+    app.run("library.select", json!({"ids": [ids[0].0]})).unwrap();
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    h.app.run("panel.metadata", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.tasks.labels().iter().any(|name| name.starts_with("Metadata panel"))));
+    h.app.run("library.select", json!({"ids": [ids[1].0]})).unwrap();
+    assert!(h.step_until(T, |h| h.painted_text().iter().any(|text| text == "other original failed")));
+    release.send(()).unwrap();
+    assert!(h.settle(T));
+    assert!(h.painted_text().iter().any(|text| text == "other original failed"));
+    assert!(!h.painted_text().iter().any(|text| text == "slow original failed"));
 }

@@ -17,8 +17,12 @@ impl Request {
     }
 
     pub fn read(self) -> Result<Value, String> {
+        self.read_with_diagnostics().map(|(value, _)| value)
+    }
+
+    pub fn read_with_diagnostics(self) -> Result<(Value, Option<String>), String> {
         let Source::File { path } = self.source else {
-            return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
+            return Ok((json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}), None));
         };
         let bytes = match self.read {
             Some(read) => read(&path),
@@ -29,11 +33,15 @@ impl Request {
             .map(|row| json!({"group": row.group, "tag": row.tag, "name": row.name, "value": row.value}))
             .collect();
         let packet = match self.sidecar.find(&path) {
-            Some(sidecar) => std::fs::read_to_string(sidecar).ok(),
-            None => lightcraft_meta::embedded(&bytes).xmp,
+            Some(sidecar) => std::fs::read_to_string(&sidecar).map(Some).map_err(|error| format!("{}: {error}", sidecar.display())),
+            None => Ok(lightcraft_meta::embedded(&bytes).xmp),
         };
-        let xmp: Vec<Value> = packet
-            .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
+        let parsed =
+            packet.and_then(|packet| packet.map(|xmp| lightcraft_meta::parse_xmp(&xmp).map_err(|error| format!("XMP: {error}"))).transpose());
+        let warning = parsed.as_ref().err().cloned();
+        let xmp: Vec<Value> = parsed
+            .ok()
+            .flatten()
             .map(|d| {
                 d.properties
                     .into_iter()
@@ -42,6 +50,6 @@ impl Request {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(json!({"exif": exif, "xmp": xmp}))
+        Ok((json!({"exif": exif, "xmp": xmp}), warning))
     }
 }

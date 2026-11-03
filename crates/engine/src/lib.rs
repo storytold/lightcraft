@@ -1073,6 +1073,18 @@ impl Session {
         self.shelved_filter.is_some()
     }
 
+    /// Clear matching view rules from both the live filter and the filter put aside by Enable Filters.
+    pub fn clear_view_rules(&mut self, rules: &lightcraft_catalog::RuleSet) {
+        if self.filter.rule_set.as_ref() == Some(rules) {
+            self.filter.rule_set = None;
+        }
+        if let Some(filter) = &mut self.shelved_filter
+            && filter.rule_set.as_ref() == Some(rules)
+        {
+            filter.rule_set = None;
+        }
+    }
+
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
         let mut key =

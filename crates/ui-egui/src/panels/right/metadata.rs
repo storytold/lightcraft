@@ -4,11 +4,15 @@ use super::{LightcraftApp, PhotoId, Tokens, header, padded, register};
 use serde_json::Value;
 
 const TASK: &str = "Metadata panel";
+const MAX_READS: usize = 4;
+const TAGS_PER_PAGE: usize = 100;
+type ReadResult = Result<(Value, Option<String>), String>;
 
 #[derive(Default)]
 pub(crate) struct Runtime {
     key: Option<(u64, PhotoId, String)>,
-    result: Option<Result<Value, String>>,
+    result: Option<ReadResult>,
+    page: usize,
 }
 
 fn load(app: &mut LightcraftApp, id: PhotoId) {
@@ -19,9 +23,13 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     };
     let key = (app.session.library_generation(), id, path);
     if app.metadata_panel.key.as_ref() != Some(&key) {
-        app.metadata_panel = Runtime { key: Some(key.clone()), result: None };
+        app.metadata_panel = Runtime { key: Some(key.clone()), ..Default::default() };
     }
-    if app.metadata_panel.result.is_some() || app.tasks.is_running(TASK) {
+    let label = format!("{TASK} {}:{}:{}", key.0, id.0, key.2);
+    if app.metadata_panel.result.is_some()
+        || app.tasks.is_running(&label)
+        || app.tasks.labels().iter().filter(|name| name.starts_with(TASK)).count() >= MAX_READS
+    {
         return;
     }
     let request = match lightcraft_engine::metadata_read::Request::new(&app.session, id) {
@@ -33,9 +41,9 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     };
     let result = crate::tasks::spawn(
         app,
-        TASK,
+        &label,
         None,
-        move || request.read(),
+        move || request.read_with_diagnostics(),
         move |app, _, result| {
             if app.metadata_panel.key.as_ref() == Some(&key) && app.session.library_generation() == key.0 {
                 app.metadata_panel.result = Some(result);
@@ -90,6 +98,11 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(8.0);
         ui.separator();
         ui.label(egui::RichText::new(crate::i18n::tr("All File Metadata")).font(t.semibold(12.5)));
+        if app.metadata_panel.result.is_some() && ui.button(crate::i18n::tr("Refresh")).clicked() {
+            app.metadata_panel.result = None;
+            app.metadata_panel.page = 0;
+            ui.ctx().request_repaint();
+        }
         match &app.metadata_panel.result {
             None => {
                 ui.label(crate::i18n::tr("Reading metadata…"));
@@ -98,14 +111,30 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.label(crate::i18n::tr("Original metadata unavailable"));
                 ui.add(egui::Label::new(error).wrap());
             }
-            Some(Ok(data)) => {
-                for kind in ["exif", "xmp"] {
-                    for tag in data[kind].as_array().into_iter().flatten() {
-                        let group = tag["group"].as_str().unwrap_or("XMP");
-                        let name = tag["name"].as_str().unwrap_or("");
-                        let value = tag["value"].as_str().unwrap_or("");
-                        row(ui, &format!("{group} · {name}"), &date_value(value), &t);
-                    }
+            Some(Ok((data, warning))) => {
+                if let Some(warning) = warning {
+                    ui.add(egui::Label::new(warning).wrap());
+                }
+                let tags = data["exif"].as_array().into_iter().flatten().chain(data["xmp"].as_array().into_iter().flatten());
+                let count = tags.clone().count();
+                let page = app.metadata_panel.page;
+                if count > TAGS_PER_PAGE {
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(page > 0, egui::Button::new("‹")).clicked() {
+                            app.metadata_panel.page -= 1;
+                        }
+                        ui.label(format!("{} / {}", page + 1, count.div_ceil(TAGS_PER_PAGE)));
+                        if ui.add_enabled(page + 1 < count.div_ceil(TAGS_PER_PAGE), egui::Button::new("›")).clicked() {
+                            app.metadata_panel.page += 1;
+                        }
+                    });
+                }
+                for tag in tags.skip(page * TAGS_PER_PAGE).take(TAGS_PER_PAGE) {
+                    let group = tag["group"].as_str().unwrap_or("XMP");
+                    let name = tag["name"].as_str().unwrap_or("");
+                    let value = tag["value"].as_str().unwrap_or("");
+                    let value = if is_date_tag(name) { date_value(value) } else { value.to_owned() };
+                    row(ui, &format!("{group} · {name}"), &value, &t);
                 }
                 if let Some(note) = data["note"].as_str() {
                     ui.label(crate::i18n::tr(note));
@@ -149,9 +178,26 @@ fn catalog_rows(ui: &mut egui::Ui, prefix: &str, value: &Value, depth: usize, t:
                 catalog_rows(ui, &format!("{prefix}.{}", index + 1), value, depth + 1, t);
             }
         }
-        Value::String(text) => row(ui, prefix, &date_value(text), t),
+        Value::String(text) => row(ui, prefix, text, t),
         _ => row(ui, prefix, &value.to_string(), t),
     }
+}
+
+fn is_date_tag(name: &str) -> bool {
+    matches!(
+        name.rsplit(':').next(),
+        Some(
+            "DateTime"
+                | "DateTimeOriginal"
+                | "DateTimeDigitized"
+                | "CreateDate"
+                | "ModifyDate"
+                | "MetadataDate"
+                | "DateCreated"
+                | "GPSDateStamp"
+                | "DateTimeCreated"
+        )
+    )
 }
 
 fn date_value(value: &str) -> String {

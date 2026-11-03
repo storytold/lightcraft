@@ -14,14 +14,20 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
         open_to.push(p);
         cur = cat.album(p).and_then(|a| a.parent);
     }
-    albums_tree(app, ui, &kids, None, 0.0, &open_to);
+    let combined = if crate::album_combination::active(app) {
+        app.ui.album_combination.as_ref().map(|(ids, _)| ids.clone()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    albums_tree(app, ui, &kids, None, 0.0, (&open_to, &combined));
 }
 
 /// The albums inside each folder (`None`: the top level), in the order they are listed.
 type AlbumKids = std::collections::HashMap<Option<AlbumId>, Vec<Album>>;
 
 /// `open_to`: folders forced open this frame (the way down to an album that was just made).
-fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, open_to: &[AlbumId]) {
+fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, selection: (&[AlbumId], &[u64])) {
+    let (open_to, combined) = selection;
     // 64 folders deep at most (16 points a level): a catalog that loops must not overflow the stack
     if indent > 64.0 * INDENT_STEP {
         return;
@@ -59,11 +65,10 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             folder_menu(app, &resp, a);
             if draw_open {
-                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
+                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, selection);
             }
         } else {
-            let sel = app.session.source == LibrarySource::Album(a.id)
-                || (crate::album_combination::active(app) && app.ui.album_combination.as_ref().is_some_and(|(ids, _)| ids.contains(&a.id.0)));
+            let sel = app.session.source == LibrarySource::Album(a.id) || combined.contains(&a.id.0);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
             // cached: a smart album's count scans the catalog
             let now = (app.session.clock)();

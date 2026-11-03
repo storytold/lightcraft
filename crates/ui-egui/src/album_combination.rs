@@ -31,6 +31,15 @@ fn rules(ids: &[u64], operation: &str) -> Result<RuleSet, String> {
     Ok(RuleSet { mode, rules })
 }
 
+/// Remove only the rules installed by this view, preserving unrelated filters.
+pub fn clear(app: &mut LightcraftApp) {
+    if let Some((ids, operation)) = app.ui.album_combination.take()
+        && let Ok(set) = rules(&ids, &operation)
+    {
+        app.session.clear_view_rules(&set);
+    }
+}
+
 pub fn active(app: &LightcraftApp) -> bool {
     app.ui.album_combination.as_ref().is_some_and(|(ids, op)| {
         (2..=8).contains(&ids.len())
@@ -57,7 +66,10 @@ pub fn command(app: &mut LightcraftApp, params: &Value) -> Result<Value, String>
     if ids.len() < 2 {
         return Err("view.combineAlbums: choose two distinct albums".into());
     }
-    let operation = params.get("operation").and_then(Value::as_str).unwrap_or("union");
+    let operation = match params.get("operation") {
+        None => "union",
+        Some(value) => value.as_str().ok_or("view.combineAlbums: operation must be a string")?,
+    };
     let set = rules(&ids, operation)?;
     let problems = set.check(&app.session.catalog);
     if !problems.is_empty() {
