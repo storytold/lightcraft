@@ -14,7 +14,9 @@ pub(crate) fn ci_jobs(available_mb: Option<u64>, cpus: usize) -> usize {
 
 /// RAM the OS could hand out now (free plus reclaimable cache) in MB, if it reports it. On Linux,
 /// held to the room left under the process's cgroup memory limit (a container, a CI runner, a
-/// systemd scope with `MemoryMax`): `lightcraft_sysmem::available`.
+/// systemd scope with `MemoryMax`): `lightcraft_sysmem::available`. On Windows, the machine's
+/// available memory from PowerShell (`lightcraft-sysmem` has no Windows `available`), held to the
+/// job object's memory limit: [`held_to_limit`].
 pub(crate) fn available_ram_mb() -> Option<u64> {
     let output = |program: &str, args: &[&str]| {
         let out = Command::new(program).args(args).output().ok()?;
@@ -24,7 +26,8 @@ pub(crate) fn available_ram_mb() -> Option<u64> {
         Some(lightcraft_sysmem::available()? >> 20)
     } else if cfg!(windows) {
         let cmd = "(Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory).AvailableMBytes";
-        output("powershell", &["-NoProfile", "-Command", cmd])?.trim().parse().ok()
+        let machine = output("powershell", &["-NoProfile", "-Command", cmd]).and_then(|s| s.trim().parse().ok());
+        held_to_limit(machine, lightcraft_sysmem::job_limit())
     } else {
         // macOS: free + inactive + speculative pages
         let stat = output("vm_stat", &[])?;
@@ -38,23 +41,31 @@ pub(crate) fn available_ram_mb() -> Option<u64> {
     }
 }
 
-/// Installed physical memory in whole GB, if the OS reports it (the fallback when available RAM
-/// can't be read: half of it is assumed available). On Linux, the process's cgroup memory limit
-/// when smaller: `lightcraft_sysmem::effective_total`.
+/// The machine's available RAM (MB) held to a memory limit (bytes) the process can't exceed: a
+/// Windows job object's. The limit caps what is available but isn't itself room left (the job may
+/// already use some of it), so with the machine's number unknown the result is unknown too, and
+/// callers fall back to half the total. No limit leaves the machine's number as it is.
+fn held_to_limit(machine_mb: Option<u64>, limit: Option<u64>) -> Option<u64> {
+    let mb = machine_mb?;
+    Some(limit.map_or(mb, |bytes| mb.min(bytes >> 20)))
+}
+
+/// Physical memory in whole GB, if the OS reports it (the fallback when available RAM can't be
+/// read: half of it is assumed available). On Linux and Windows, held to the process's cgroup or
+/// job object memory limit when smaller: `lightcraft_sysmem::effective_total`.
 pub(crate) fn total_ram_gb() -> Option<u64> {
-    let bytes: u64 = if cfg!(target_os = "linux") {
+    let bytes: u64 = if cfg!(any(target_os = "linux", windows)) {
         lightcraft_sysmem::effective_total()?
     } else {
-        let (program, args): (&str, &[&str]) = if cfg!(windows) {
-            ("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"])
-        } else {
-            ("sysctl", &["-n", "hw.memsize"])
-        };
-        let out = Command::new(program).args(args).output().ok()?;
+        let out = Command::new("sysctl").args(["-n", "hw.memsize"]).output().ok()?;
         String::from_utf8_lossy(&out.stdout).trim().parse().ok()?
     };
-    // round to the nearest GB: "8 GB" machines report slightly less
-    Some(bytes.saturating_add(1 << 29) >> 30)
+    Some(whole_gb(bytes))
+}
+
+/// Bytes rounded to the nearest GB: "8 GB" machines report slightly less.
+fn whole_gb(bytes: u64) -> u64 {
+    bytes.saturating_add(1 << 29) >> 30
 }
 
 /// The targets the test runs build: no examples (clippy `--all-targets` still checks them).
@@ -470,6 +481,44 @@ mod ci_jobs_tests {
         assert!(gb <= (bound + (1 << 29)) >> 30, "{gb} GB above the {bound} bytes this process may use");
         let available = lightcraft_sysmem::available().unwrap();
         assert!(available <= bound, "available {available} above the {bound} bytes this process may use");
+    }
+
+    /// On Windows, a job object's memory limit caps the machine's available RAM (#3705).
+    #[test]
+    fn available_ram_is_held_to_the_job_limit() {
+        use super::held_to_limit;
+        const GB: u64 = 1 << 30;
+        assert_eq!(held_to_limit(Some(40 * 1024), Some(8 * GB)), Some(8 * 1024), "a 64 GB machine with 40 GB free in an 8 GB job");
+        assert_eq!(ci_jobs(held_to_limit(Some(40 * 1024), Some(8 * GB)), 32), 5, "sized from the job limit, not the machine");
+        assert_eq!(held_to_limit(Some(3 * 1024), Some(8 * GB)), Some(3 * 1024), "less free than the limit: what is free counts");
+        assert_eq!(held_to_limit(Some(40 * 1024), None), Some(40 * 1024), "no job limit: the machine's number");
+        assert_eq!(held_to_limit(None, Some(8 * GB)), None, "a limit isn't room left: unknown stays unknown");
+        assert_eq!(held_to_limit(None, None), None);
+        assert_eq!(held_to_limit(Some(40 * 1024), Some(100 << 20)), Some(100), "a limit under 1.5 GB");
+        assert_eq!(ci_jobs(held_to_limit(Some(40 * 1024), Some(100 << 20)), 32), 1, "still one job");
+        assert_eq!(held_to_limit(Some(u64::MAX), Some(u64::MAX)), Some(u64::MAX >> 20), "no overflow");
+    }
+
+    #[test]
+    fn totals_round_to_the_nearest_gb() {
+        use super::whole_gb;
+        assert_eq!(whole_gb(0), 0);
+        assert_eq!(whole_gb(8 * (1 << 30) - (200 << 20)), 8, "an \"8 GB\" machine reporting slightly less");
+        assert_eq!(whole_gb((1 << 29) - 1), 0);
+        assert_eq!(whole_gb(1 << 29), 1);
+        assert_eq!(whole_gb(u64::MAX), u64::MAX >> 30, "saturates instead of overflowing");
+    }
+
+    /// On Windows CI sizes itself from sysmem's RAM and job limit, not PowerShell's installed RAM
+    /// (#3705). Inside a job with a memory limit below the RAM, PowerShell's number was larger.
+    #[test]
+    #[cfg(windows)]
+    fn windows_ram_honours_the_job_limit() {
+        let effective = lightcraft_sysmem::effective_total().expect("GlobalMemoryStatusEx reports the RAM");
+        assert_eq!(super::total_ram_gb(), Some(super::whole_gb(effective)));
+        if let (Some(available), Some(limit)) = (super::available_ram_mb(), lightcraft_sysmem::job_limit()) {
+            assert!(available <= limit >> 20, "available {available} MB above the {limit}-byte job limit");
+        }
     }
 
     /// What CI would size itself from here; run by hand inside and outside a limited scope.
