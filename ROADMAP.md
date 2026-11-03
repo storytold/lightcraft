@@ -120,7 +120,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   and `print.set` take their customary names, and names are matched case-, space- and
   punctuation-insensitively (`L判`, `l`, `L-size` are one paper).
 - 2026-10-13: Canon CRW (the 2000–2004 CIFF bodies) decodes from sensor data: compression
-  derived clean-room against a black-box reference and frozen (`craft-libs crates/crw/clean-room/06-crw-format.md`);
+  derived clean-room against a black-box reference and frozen (`craft-libs crates/crw/clean-room/02-crw-format.md`);
   EOS D30/D60/10D/300D and PowerShot G1/G6 verified pixel-exact on 28 of 29 corpus files (18 of
   them the maintainer's D60 shots); as-shot white balance, black level, rotation and capture time
   from the CIFF records; the PowerShot G5's anomalous coding stays preview-only. With the

@@ -21,7 +21,7 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "orf-olympus-em",             // Olympus compressed ORF
     "-he.nef",                    // Nikon High Efficiency (HE / HE★) NEF, issue #193
     "sraw",                       // Canon sRAW / mRAW
-    "crw-canon-powershot-g5.crw", // Canon PowerShot G5 CRW: entropy coding anomaly (craft-libs crates/crw/clean-room/06-crw-format.md §4)
+    "crw-canon-powershot-g5.crw", // Canon PowerShot G5 CRW: entropy coding anomaly (craft-libs crates/crw/clean-room/02-crw-format.md §4)
 ];
 
 #[test]

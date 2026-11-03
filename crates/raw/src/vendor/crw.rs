@@ -1,9 +1,9 @@
 //! Canon CRW (CIFF heap) raw decoding through the shared `craft-crw` crate (craft-libs,
 //! `crates/crw`): the bodies before the CR2 era (EOS D30/D60/10D/300D, PowerShot G-series).
 //!
-//! The decoder, its frozen code tables and the whole clean-room derivation record live in
-//! craft-libs (`crates/crw/clean-room/`: the frozen format `06-crw-format.md`, the verification
-//! `07-verification.md`, 28 of 29 corpus files and 1,516 EOS D60 files sample-exact against a
+//! The decoder, its frozen code tables and its clean-room record live in
+//! craft-libs (`crates/crw/clean-room/`: the frozen format `02-crw-format.md`, the verification
+//! `03-verification.md`, 28 of 29 corpus files and 1,516 EOS D60 files sample-exact against a
 //! black-box reference). This module maps its output onto [`RawImage`]: CFA phase, black and white
 //! levels, active area, orientation, as-shot white balance and the make, model and capture-time
 //! records (a CRW carries no Exif block, so this is where the catalog learns the camera).
@@ -16,12 +16,6 @@
 use crate::{BlackLevel, Cfa, ColorData, Metadata, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_meta::DateTime;
 
-fn limits() -> craft_crw::Limits {
-    let mut limits = craft_crw::Limits::default();
-    limits.max_samples = crate::MAX_SAMPLES;
-    limits
-}
-
 fn map_err(e: craft_crw::Error) -> RawError {
     match e {
         craft_crw::Error::NotCrw => RawError::NotRaw,
@@ -32,7 +26,13 @@ fn map_err(e: craft_crw::Error) -> RawError {
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
-    let limits = limits();
+    // the crate's own cap (2²³ samples; the largest CRW frame is 7.4 million): its decode holds
+    // about three `u16` buffers of the declared size, so the raw crate's general `MAX_SAMPLES`
+    // (2³⁰) would let a malformed file ask for gigabytes. No sample may be filled after the
+    // entropy stream ends (the crate allows one 64-sample block by default): every corpus file
+    // ends exactly on its frame, so a shorter stream is a truncated file and is `Corrupt`.
+    let mut limits = craft_crw::Limits::default();
+    limits.max_stream_end_fill = 0;
     let full = mode == Mode::Full;
     let (h, samples, black, white) = if full {
         let img = craft_crw::decode(bytes, &limits).map_err(map_err)?;
@@ -108,6 +108,15 @@ mod tests {
     /// A CIFF file with the records the decoder reads and a pseudo-random payload: enough for the
     /// header path; the entropy data decodes or is refused, never panics.
     fn synthetic_crw(model: &str) -> Vec<u8> {
+        synthetic_crw_sized(model, W, H)
+    }
+
+    fn synthetic_crw_sized(model: &str, w: usize, h: usize) -> Vec<u8> {
+        let payload: Vec<u8> = (0..514 + 256).map(|i| (i * 41 % 253) as u8).collect();
+        synthetic_crw_with_payload(model, w, h, payload)
+    }
+
+    fn synthetic_crw_with_payload(model: &str, w: usize, h: usize, payload: Vec<u8>) -> Vec<u8> {
         let le16 = |v: u16| v.to_le_bytes();
         let le32 = |v: u32| v.to_le_bytes();
         let heap = |records: &[(u16, Vec<u8>)]| -> Vec<u8> {
@@ -130,9 +139,9 @@ mod tests {
             b.extend_from_slice(&le32(tbl));
             b
         };
-        let sensor: Vec<u8> = [34u16, W as u16, H as u16, 0, 0, 2, 2, W as u16 - 3, H as u16 - 3].iter().flat_map(|&v| le16(v)).collect();
+        let sensor: Vec<u8> = [34u16, w as u16, h as u16, 0, 0, 2, 2, w as u16 - 3, h as u16 - 3].iter().flat_map(|&v| le16(v)).collect();
         let dtable: Vec<u8> = [0u32, 0, 514, 0].iter().flat_map(|&v| le32(v)).collect();
-        let image_info: Vec<u8> = [W as u32, H as u32, 0, 270, 12, 12, 0].iter().flat_map(|&v| le32(v)).collect();
+        let image_info: Vec<u8> = [w as u32, h as u32, 0, 270, 12, 12, 0].iter().flat_map(|&v| le32(v)).collect();
         let mut color_balance: Vec<u16> = vec![66];
         color_balance.extend([2000u16, 800, 800, 960]);
         color_balance.extend((0..7).flat_map(|_| [1500u16, 900, 900, 1500]));
@@ -148,7 +157,6 @@ mod tests {
             (0x180e, [1083410638u32, 0, 0].iter().flat_map(|&v| le32(v)).collect()),
             (0x10a9, color_balance),
         ]);
-        let payload: Vec<u8> = (0..514 + 256).map(|i| (i * 41 % 253) as u8).collect();
         let root = heap(&[(0x2005, payload), (0x300a, props)]);
         let mut f = b"II".to_vec();
         f.extend_from_slice(&le32(26));
@@ -190,6 +198,48 @@ mod tests {
         let Err(RawError::Unsupported(why)) = decode(&synthetic_crw("Canon PowerShot G5"), Mode::Header) else { panic!("expected Unsupported") };
         assert!(why.contains("PowerShot G5"), "{why}");
         assert_eq!(map_err(craft_crw::Error::LimitExceeded("image too large")), RawError::Limit("image too large"));
+    }
+
+    /// A file declaring more samples than any CRW camera has is refused before anything is
+    /// allocated: 4096 × 4096 (16.8 million) passed when the adapter raised the crate's cap of 2²³
+    /// to the raw crate's 2³⁰.
+    #[test]
+    fn an_oversized_crw_is_refused_by_the_crates_own_limit() {
+        let f = synthetic_crw_sized("Canon EOS D60", 4096, 4096);
+        for mode in [Mode::Header, Mode::Full] {
+            assert_eq!(decode(&f, mode).err(), Some(RawError::Limit("image too large")), "{mode:?}");
+        }
+        // the largest real frame (the 10D's 3152 × 2068) is within it
+        assert!(decode(&synthetic_crw_sized("Canon EOS D60", 3152, 2068), Mode::Header).is_ok());
+    }
+
+    /// A stream cut short is `Corrupt`, not a smeared image: the crate once filled every sample
+    /// after the entropy stream ended with its predictor value and returned success, so a CRW
+    /// truncated just past its header rendered and exported as a flat frame.
+    #[test]
+    fn a_truncated_entropy_stream_is_corrupt() {
+        // the 514-byte header and two bytes of entropy: almost all of the 960-sample frame unread
+        let f = synthetic_crw_with_payload("Canon EOS D60", W, H, vec![0; 516]);
+        let Err(RawError::Corrupt(why)) = decode(&f, Mode::Full) else { panic!("a truncated stream must be refused") };
+        assert!(why.starts_with("CRW: ") && why.contains("before the frame does"), "{why}");
+        // the header alone still reads, so the library can list the file and show its preview
+        assert!(decode(&f, Mode::Header).is_ok());
+    }
+
+    /// A stream that ends a few samples short is `Corrupt` too: the crate's default limit fills up
+    /// to one 64-sample block silently, and no real CRW fills any.
+    #[test]
+    fn a_stream_a_few_samples_short_is_corrupt() {
+        // an all-zero entropy stream of 842 bytes decodes the 960-sample frame exactly
+        let payload = |len: usize| vec![0u8; 514 + len];
+        let whole = synthetic_crw_with_payload("Canon EOS D60", W, H, payload(842));
+        assert!(decode(&whole, Mode::Full).is_ok());
+        // six bytes fewer leave 10 samples unread, within the crate's default of 64
+        let short = synthetic_crw_with_payload("Canon EOS D60", W, H, payload(836));
+        let filled = craft_crw::decode(&short, &craft_crw::Limits::default()).map(|i| i.stream_end_fill);
+        assert_eq!(filled, Ok(10));
+        let Err(RawError::Corrupt(why)) = decode(&short, Mode::Full) else { panic!("a stream 10 samples short must be refused") };
+        assert!(why.contains("10 samples before the frame does"), "{why}");
     }
 
     #[test]

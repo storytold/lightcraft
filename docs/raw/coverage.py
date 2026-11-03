@@ -94,7 +94,7 @@ def classify(maker, camera, ext_field):
     if e == "ERF":
         return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks)"
     if e == "CRW":
-        # CIFF-era bodies decode (craft-libs crates/crw/clean-room/06-crw-format.md): EOS D30/D60/10D/300D and
+        # CIFF-era bodies decode (craft-libs crates/crw/clean-room/02-crw-format.md): EOS D30/D60/10D/300D and
         # the CIFF PowerShots; the pre-CIFF compacts (PowerShot 600, A5, A50, Pro70) and the
         # unprobed Pro90 IS stay preview. The G5 is preview by evidence (entropy anomaly).
         if CRW_DECODED.search(camera):

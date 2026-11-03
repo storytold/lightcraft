@@ -141,9 +141,9 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | CR3 | sRAW / mRAW | ⬜ | 4-plane Bayer only |
 | CR3 | HEIF / HDR PQ | ⬜ | HEVC tracks recognised, not decoded |
 | CR3 | dual-pixel raw | ⬜ | never substituted |
-| CRW | CIFF: EOS D30/D60/10D/300D, PowerShot G1/G6 | ✅ | clean-room derivation frozen in `craft-libs crates/crw/clean-room/06-crw-format.md`; 28 of 29 files pixel-exact vs a black-box reference (8 CC0 EOS, G1, G6, 18 private D60); as-shot WB from ColorBalance; EOS D60 colour matrices measured on a ColorChecker (Kelvin white balance) |
+| CRW | CIFF: EOS D30/D60/10D/300D, PowerShot G1/G6 | ✅ | clean-room derivation frozen in `craft-libs crates/crw/clean-room/02-crw-format.md`; 28 of 29 files pixel-exact vs a black-box reference (8 CC0 EOS, G1, G6, 18 private D60); as-shot WB from ColorBalance; EOS D60 colour matrices measured on a ColorChecker (Kelvin white balance) |
 | CRW | CIFF: PowerShot G2/G3/G4, Pro1, S-series | 🟡 | same decoder and tables; no sample file checked |
-| CRW | CIFF: PowerShot G5 | ⬜ | refused (entropy anomaly, `craft-libs crates/crw/clean-room/06-crw-format.md`); preview |
+| CRW | CIFF: PowerShot G5 | ⬜ | refused (entropy anomaly, `craft-libs crates/crw/clean-room/02-crw-format.md`); preview |
 | NEF | uncompressed, lossless, lossy type 1 / 2, lossy after split | ✅ | D5100, D7000, D7500, Z f corpus; ~60 NEFs by hand; #633; D4, D90, D5000, D600 and D610 image area measured against the camera JPEG (white level too for the D4, D90 and D5000) |
 | NEF | packed 14-bit stored under a compressed tag (Z 6II uncompressed) | ⬜ | #769; fix in PR #671 (not merged) |
 | NEF | High Efficiency / HE★ (JPEG XS) | ⬜ | named, preview (#193); needs a JPEG XS decoder |

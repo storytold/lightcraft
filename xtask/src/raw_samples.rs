@@ -926,7 +926,7 @@ pub(crate) const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/4204/nice/Leica%20-%20D-Lux%207%20-%204:3.RWL",
         "4f6db6492da83f7f2a5012591e370557249d1ed44d4c948784016605b799327c",
     ),
-    // Canon CRW (CIFF): the clean-room decode's verification corpus (craft-libs crates/crw/clean-room/07-verification.md);
+    // Canon CRW (CIFF): the clean-room decode's verification corpus (craft-libs crates/crw/clean-room/03-verification.md);
     // the PowerShot G5 is the documented anomaly the decoder refuses (embedded JPEG preview)
     (
         "crw-canon-eos-d30.crw",

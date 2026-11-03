@@ -150,7 +150,7 @@ Canon	EOS 90D	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinne
 Canon	EOS 200D (EOS Kiss X9, EOS Rebel SL2)	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 250D (EOS Rebel SL3, EOS 200D II, EOS Kiss X10)	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS D30	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
-Canon	EOS D60	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs; 18 maintainer files exact (craft-libs crates/crw/clean-room/07-verification.md)
+Canon	EOS D60	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs; 18 maintainer files exact (craft-libs crates/crw/clean-room/03-verification.md)
 Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
 Canon	EOS 100D (EOS Digital Rebel SL1, EOS Kiss X7)	CR2	2012	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 500D (EOS Digital Rebel T1i, EOS Kiss X3 Digital)	CR2	2008	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -212,7 +212,7 @@ Canon	PowerShot G1 X Mark III	CR2	2017	verified	corpus: crates/raw/tests/it/body
 Canon	PowerShot G2	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
 Canon	PowerShot G3	CRW	2003	unverified	CRW decoder (CIFF; selector 0-2 tables)
 Canon	PowerShot G3 X	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot G5	CRW	2003	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/06-crw-format.md section 4); embedded JPEG
+Canon	PowerShot G5	CRW	2003	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG
 Canon	PowerShot G5 X	CR2	2015	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G5 X Mark II	CR3	2018	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	PowerShot G6	CRW	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
