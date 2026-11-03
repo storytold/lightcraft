@@ -332,19 +332,15 @@ fn waiting_for_idle_outlasts_a_running_import() {
 /// for. The deadline follows the job: the write allowance while the export writes, then the
 /// import's own time limit from when Photos was asked, not one deadline fixed at the start
 /// (which gave up with the import still inside its limit). Scaled down: 300 ms of writing,
-/// imports limited to 1.5 s (+ 0.1 s).
+/// imports limited to 1.5 s (+ 0.1 s). Every time here is [`stretched`] together: the windows
+/// keep their proportions, and a slow machine gets more room around each edge.
 #[test]
 fn shutdown_follows_an_export_into_its_import() {
     let (dir, paths) = files("shutdown", 2);
-    let limits = WaitLimits {
-        writing: Duration::from_millis(300),
-        import: |_| Duration::from_millis(1500),
-        margin: Duration::from_millis(100),
-        cap: Duration::from_secs(20),
-    };
+    let limits = WaitLimits { writing: stretched(300), import: |_| stretched(1500), margin: stretched(100), cap: stretched(20_000) };
     let taking = |ms: u64| -> Runner {
         Arc::new(move |args: &[String], _| {
-            std::thread::sleep(Duration::from_millis(ms));
+            std::thread::sleep(stretched(ms));
             let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
             Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
         })
@@ -355,39 +351,42 @@ fn shutdown_follows_an_export_into_its_import() {
     let reserved = imports.reserve(taking(1000), "").unwrap();
     let written: Vec<Value> = paths.iter().map(|p| json!({"path": p})).collect();
     let exporter = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(stretched(150));
         reserved.run(&written, false)
     });
     let t0 = std::time::Instant::now();
     assert!(imports.wait_idle_within(limits), "waited for the import, not just the write allowance");
-    assert!(t0.elapsed() >= Duration::from_millis(1000), "{:?}", t0.elapsed());
+    assert!(t0.elapsed() >= stretched(1000), "{:?}", t0.elapsed());
     assert_eq!(exporter.join().unwrap()["imported"], 2);
     // an import past its own limit is given up on at its deadline (not the cap)
     let job = import_job(&taking(3000), &imports, paths.clone(), "", true, None).unwrap();
     let t0 = std::time::Instant::now();
     assert!(!imports.wait_idle_within(limits));
     let waited = t0.elapsed();
-    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_millis(2900), "{waited:?}");
-    while !job.finished() {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    assert!(waited >= stretched(1500) && waited < stretched(2900), "{waited:?}");
+    lightcraft_testkit::wait_until_at_least(Duration::from_secs(20), "the 3 s import ends", || job.finished());
     // an export that never hands its files over: the write allowance, then it's left
     let held = imports.reserve(taking(0), "").unwrap();
     let t0 = std::time::Instant::now();
     assert!(!imports.wait_idle_within(limits));
     let waited = t0.elapsed();
-    assert!(waited >= Duration::from_millis(300) && waited < Duration::from_millis(1500), "{waited:?}");
+    assert!(waited >= stretched(300) && waited < stretched(1500), "{waited:?}");
     drop(held);
     assert!(imports.wait_idle_within(limits));
     // and the cap holds over everything
     let job = import_job(&taking(1000), &imports, paths, "", true, None).unwrap();
     let t0 = std::time::Instant::now();
-    assert!(!imports.wait_idle_within(WaitLimits { cap: Duration::from_millis(200), ..limits }));
-    assert!(t0.elapsed() < Duration::from_millis(900));
-    while !job.finished() {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    assert!(!imports.wait_idle_within(WaitLimits { cap: stretched(200), ..limits }));
+    assert!(t0.elapsed() < stretched(900), "{:?}", t0.elapsed());
+    lightcraft_testkit::wait_until_at_least(Duration::from_secs(20), "the 1 s import ends", || job.finished());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// `ms` milliseconds stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the shutdown test's
+/// limits and Photos' answers stretch together, so each window keeps its edges in order.
+fn stretched(ms: u64) -> Duration {
+    let d = Duration::from_millis(ms);
+    lightcraft_testkit::scaled(d).max(d)
 }
 
 /// How long [`delayed`]'s runner holds Photos at most: 20 s, stretched by

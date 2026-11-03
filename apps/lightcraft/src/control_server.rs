@@ -369,7 +369,7 @@ mod tests {
         // this thread runs.
         let mut connection = Connection::new(&open, Duration::from_millis(100), |c| c.write_all(request(1).as_bytes()).unwrap());
         for id in [1, 2] {
-            let req = connection.requests.recv_timeout(Duration::from_secs(10)).unwrap();
+            let req = lightcraft_testkit::recv_within(&connection.requests, Duration::from_secs(10), "the request reaches the app");
             assert_eq!(req.method, "engine.commands");
             assert!(req.take());
             if id == 1 {
@@ -545,11 +545,14 @@ mod tests {
             let (s, _) = listener.accept().unwrap();
             serve(s, &tx, &egui::Context::default(), IDLE_TIMEOUT);
         });
+        // the program lives about 4 s, stretched by LIGHTCRAFT_TIME_SCALE (never shrunk)
+        let lives = lightcraft_testkit::scaled(Duration::from_secs(4)).max(Duration::from_secs(4));
         let mut c = TcpStream::connect(addr).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
-        // the connection is being served: start a program that lives about 4 s
+        c.set_read_timeout(Some(lives * 5)).unwrap();
+        // the connection is being served: start the program (`ping -n` waits a second between pings)
         std::thread::sleep(Duration::from_millis(200));
-        let mut child = std::process::Command::new("cmd").args(["/c", "ping -n 5 127.0.0.1 >nul"]).spawn().unwrap();
+        let ping = format!("ping -n {} 127.0.0.1 >nul", lives.as_secs().saturating_add(1));
+        let mut child = std::process::Command::new("cmd").args(["/c", ping.as_str()]).spawn().unwrap();
         std::thread::sleep(Duration::from_millis(200));
         // junk makes the server answer once and close
         c.write_all(b"hello\n").unwrap();
@@ -561,7 +564,7 @@ mod tests {
         let _ = child.wait();
         assert!(read.is_ok(), "the close must be clean, not a reset: {read:?}");
         assert!(text.contains("closing the connection"), "{text}");
-        assert!(waited < Duration::from_secs(2), "the client saw the close only after {waited:?}, when the program exited");
+        assert!(waited < lives / 2, "the client saw the close only after {waited:?}, when the program exited (it lives {lives:?})");
     }
 
     #[test]
@@ -609,14 +612,19 @@ mod tests {
             t0.elapsed()
         });
         let mut c = TcpStream::connect(addr).unwrap();
-        // one byte every 100 ms: each read returns well within its 500 ms timeout
-        for _ in 0..100 {
+        // one byte every 100 ms: each read returns well within its 500 ms timeout. The peer keeps it up for
+        // 10 s, and the drain must end well before: within DRAIN_TIME and a second. Both stretch with
+        // LIGHTCRAFT_TIME_SCALE (never shrunk), so the trickle always lasts five times the bound.
+        let at_least = |d: Duration| lightcraft_testkit::scaled(d).max(d);
+        let (trickle, bound) = (at_least(Duration::from_secs(10)), at_least(DRAIN_TIME + Duration::from_secs(1)));
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < trickle {
             if done.load(Ordering::SeqCst) || c.write_all(b"x").is_err() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
         let drained = server.join().unwrap();
-        assert!(drained < DRAIN_TIME + Duration::from_secs(1), "drained for {drained:?}");
+        assert!(drained < bound, "drained for {drained:?} (bound {bound:?}, the peer trickles for {trickle:?})");
     }
 }
