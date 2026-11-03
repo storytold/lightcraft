@@ -1493,6 +1493,25 @@ fn dust_spots_are_found_and_healed() {
     }
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.develop_of(id).unwrap().spots.is_empty(), "one undo step");
+
+    // An external sidecar may name automatic Upright without having stored
+    // its homography. Find Dust must resolve that frame before persisting
+    // sensor coordinates, just as a normal render does.
+    let mut develop = (*s.develop_of(id).unwrap()).clone();
+    develop.geometry.upright = lightcraft_develop::Upright::Auto;
+    develop.geometry.upright_transform = None;
+    s.set_develop(id, develop, "Synthetic unresolved Upright").unwrap();
+    let result = s.execute("spot.findDust", &json!({"anchor": "sensor"})).unwrap();
+    assert_eq!(result["added"], 2, "{result}");
+    let corrected = s.develop_of(id).unwrap();
+    assert!(corrected.spots.iter().all(|p| p.anchor == lightcraft_develop::SpotAnchor::Sensor));
+    let sensor_after = s.render_now(id, 900, 600).unwrap().image;
+    for (cx, cy) in spots {
+        assert!(
+            at(&sensor_after, cx as usize, cy as usize) > at(&before, cx as usize, cy as usize) + 6,
+            "sensor-anchored dust fix at {cx},{cy} must render"
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
