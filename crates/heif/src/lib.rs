@@ -269,6 +269,17 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
             if check_item_parameter_sets(&p).is_err() {
                 continue;
             }
+            // A grid whose tile would fail the same check must not win and then fail in
+            // `decode_item`, with no fallback to a larger valid thumbnail.
+            if let Ok(Some((_, tiles))) = ctx.grid(r.from) {
+                let mut seen = std::collections::HashSet::new();
+                let tiles_ok = tiles.iter().filter(|t| seen.insert(**t)).all(|&t| {
+                    item_visits(&ctx, t, 0, &mut candidate_visits).is_ok() && ctx.props(t).is_ok_and(|tp| check_item_parameter_sets(&tp).is_ok())
+                });
+                if !tiles_ok {
+                    continue;
+                }
+            }
             let Ok((w, h)) = ctx.coded_size(r.from, &p) else { continue };
             let edge = w.max(h);
             if edge >= min_edge && best.is_none_or(|(_, e)| edge < e) {
@@ -452,7 +463,14 @@ impl<'a> Coded<'a> {
         // conformance window (or a slice picking another SPS) can make far larger than the
         // declared one, and a grid holds all its tiles at once. Both are refused before decoding.
         let mut total = 0u64;
+        // A grid may list one tile thousands of times: each distinct tile is read and checked
+        // once, so the work follows the file's items, not the grid's cell count.
+        let mut largest_of: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         for t in &ids {
+            if let Some(largest) = largest_of.get(t) {
+                total = total.saturating_add(*largest);
+                continue;
+            }
             let tp = ctx.props(*t).map_err(err)?;
             let hvcc = tp.hvcc.as_ref().ok_or(heic_rs::Error::MissingBox("hvcC")).map_err(err)?;
             check_parameter_sets(&hvcc.parameter_sets())?;
@@ -462,6 +480,7 @@ impl<'a> Coded<'a> {
                 heic_rs::image::check_pixels(w, h, limit).map_err(err)?;
                 largest = largest.max(u64::from(w) * u64::from(h));
             }
+            largest_of.insert(*t, largest);
             total = total.saturating_add(largest);
         }
         if total > limit.saturating_mul(GRID_BUDGET) {
