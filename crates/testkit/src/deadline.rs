@@ -3,7 +3,8 @@
 //! every wait a limit and fail the test with what it was waiting for.
 //!
 //! Every limit is stretched by [`time_scale`] (`LIGHTCRAFT_TIME_SCALE`), so a slow or shared
-//! machine can give all of them more time at once.
+//! machine can give all of them more time at once; [`wait_until_at_least`]'s never shrinks below
+//! the limit it is given.
 
 use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -70,10 +71,31 @@ fn parse_time_scale(value: Option<&str>) -> (f64, Option<String>) {
 ///
 /// Also bounds waits on other threads (a gated worker job, an injected probe): the panic ends
 /// that thread's job instead of leaving it spinning after the test is gone.
+#[track_caller]
+pub fn wait_until(timeout: Duration, what: &str, cond: impl FnMut() -> bool) {
+    poll(scaled(timeout), &format!("{timeout:?} × {TIME_SCALE_ENV} {}", time_scale()), what, cond);
+}
+
+/// [`wait_until`] whose limit never shrinks below `timeout`: [`scaled`]`(timeout)` or `timeout`,
+/// whichever is longer. For a wait the test itself ends, such as a probe a worker holds until the
+/// test opens its gate: a `LIGHTCRAFT_TIME_SCALE` under 1 shortens the test's own limits, and must
+/// not make the worker give up while the test is still on its way to the gate.
+#[track_caller]
+pub fn wait_until_at_least(timeout: Duration, what: &str, cond: impl FnMut() -> bool) {
+    let rule = format!("{timeout:?} × {TIME_SCALE_ENV} {}, never less than {timeout:?}", time_scale());
+    poll(at_least(timeout, time_scale()), &rule, what, cond);
+}
+
+/// `timeout × scale`, never less than `timeout`.
+fn at_least(timeout: Duration, scale: f64) -> Duration {
+    scale_by(timeout, scale).max(timeout)
+}
+
+/// Poll `cond` until it holds, failing the test once `limit` has passed (`rule` says how the
+/// limit was reached).
 #[allow(clippy::panic)] // failing the test with what it waited for is the point
 #[track_caller]
-pub fn wait_until(timeout: Duration, what: &str, mut cond: impl FnMut() -> bool) {
-    let limit = scaled(timeout);
+fn poll(limit: Duration, rule: &str, what: &str, mut cond: impl FnMut() -> bool) {
     let start = Instant::now();
     let mut pause = Duration::from_millis(1);
     loop {
@@ -82,7 +104,7 @@ pub fn wait_until(timeout: Duration, what: &str, mut cond: impl FnMut() -> bool)
         }
         let elapsed = start.elapsed();
         if elapsed >= limit {
-            panic!("\"{what}\" not reached after {elapsed:.2?} (limit {limit:?}: {timeout:?} × {TIME_SCALE_ENV} {})", time_scale());
+            panic!("\"{what}\" not reached after {elapsed:.2?} (limit {limit:?}: {rule})");
         }
         std::thread::sleep(pause.min(limit.saturating_sub(elapsed)));
         pause = (pause * 2).min(MAX_POLL);
@@ -166,6 +188,28 @@ mod tests {
     #[should_panic(expected = "\"the gate opens\" not reached after")]
     fn wait_until_fails_the_test_with_what_it_waited_for() {
         wait_until(Duration::from_millis(20), "the gate opens", || false);
+    }
+
+    #[test]
+    fn an_at_least_limit_stretches_but_never_shrinks() {
+        let minute = Duration::from_secs(60);
+        assert_eq!(at_least(minute, MIN_TIME_SCALE), minute);
+        assert_eq!(at_least(minute, 1.0), minute);
+        assert_eq!(at_least(minute, 3.0), Duration::from_secs(180));
+        assert_eq!(at_least(Duration::MAX, MAX_TIME_SCALE), Duration::MAX);
+    }
+
+    #[test]
+    fn wait_until_at_least_returns_once_the_condition_holds() {
+        let checks = AtomicUsize::new(0);
+        wait_until_at_least(Duration::from_secs(30), "the third check", || checks.fetch_add(1, Ordering::SeqCst) >= 2);
+        assert_eq!(checks.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "\"the gate opens\" not reached after")]
+    fn wait_until_at_least_fails_the_test_with_what_it_waited_for() {
+        wait_until_at_least(Duration::from_millis(20), "the gate opens", || false);
     }
 
     #[test]
