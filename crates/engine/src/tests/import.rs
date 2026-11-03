@@ -1244,7 +1244,7 @@ fn damaged_smart_previews_are_rebuilt_and_failed_writes_leave_none() {
     let t0 = std::time::Instant::now();
     let r = loop {
         let r = s.execute("library.previewProgress", &json!({})).unwrap();
-        if r["running"] == false || t0.elapsed() > std::time::Duration::from_secs(60) {
+        if r["running"] == false || t0.elapsed() > lightcraft_testkit::scaled(std::time::Duration::from_secs(60)) {
             break r;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1253,7 +1253,7 @@ fn damaged_smart_previews_are_rebuilt_and_failed_writes_leave_none() {
     assert_eq!(std::fs::read(&file).unwrap(), full, "rebuilt whole in the background");
     // its row in the activity stack (issue #345) goes with it
     let t0 = std::time::Instant::now();
-    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(10) {
+    while !s.activity.list().is_empty() && t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(10)) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(s.activity.list().is_empty(), "{:?}", s.activity.list());

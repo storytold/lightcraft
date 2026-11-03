@@ -550,11 +550,11 @@ mod tests {
             w.submit(job(Tag::Wait, &tx)).unwrap();
         }
         for _ in 0..3 {
-            let o = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+            let o = lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), "a job's outcome");
             assert!(o.result.unwrap_err().contains("not found"));
         }
         let t = web_time::Instant::now();
-        while w.pending() > 0 && t.elapsed() < Duration::from_secs(5) {
+        while w.pending() > 0 && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)) {
             std::thread::yield_now();
         }
         assert_eq!(w.pending(), 0);

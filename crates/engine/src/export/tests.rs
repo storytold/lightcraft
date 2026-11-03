@@ -1482,8 +1482,8 @@ fn a_panic_in_progress_does_not_hang_the_lanes() {
             crate::guard::catch("test batch", || run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2));
         tx.send(r.and_then(|r| r)).ok();
     });
-    let r = rx.recv_timeout(std::time::Duration::from_secs(60));
-    assert!(matches!(r, Ok(Err(_))), "the batch returns an error instead of hanging: {r:?}");
+    let r = lightcraft_testkit::recv_within(&rx, std::time::Duration::from_secs(60), "the batch's result");
+    assert!(r.is_err(), "the batch returns an error instead of hanging: {r:?}");
 }
 
 // A photo that fails is reported in its place while the others are exported; with

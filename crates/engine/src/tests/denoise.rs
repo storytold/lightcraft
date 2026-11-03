@@ -96,7 +96,11 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     x.s.denoise.loader = Arc::new(move |_, _| {
         worker_loads.fetch_add(1, Ordering::Relaxed);
         entered_tx.send(()).map_err(|e| e.to_string())?;
-        release_rx.lock().unwrap().recv_timeout(Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(3)).max(Duration::from_secs(3)))
+            .map_err(|e| e.to_string())?;
         Ok(Arc::new(Dim { runs: runs.clone() }))
     });
     let info = x.s.execute("denoise.models.inspect", &json!({"path": path})).unwrap();
@@ -104,7 +108,7 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     assert_eq!(loads.load(Ordering::Relaxed), 0, "showing terms never executes the model");
     let r = x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).unwrap();
     assert_eq!(r["started"], "local-install");
-    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    lightcraft_testkit::recv_within(&entered_rx, Duration::from_secs(3), "the loader is entered");
     // The loader is blocked: the frame pump must still return, reporting installation in progress.
     let state = x.s.execute("denoise.models.downloads", &json!({})).unwrap();
     assert_eq!(state["downloads"][0]["state"], "installing");
@@ -765,11 +769,15 @@ fn a_picture_that_appears_while_its_job_runs_is_ready_only_when_the_job_reports(
     let runs = x.runs.clone();
     x.s.denoise.loader = Arc::new(move |_, _| {
         entered_tx.send(()).map_err(|e| e.to_string())?;
-        release_rx.lock().unwrap().recv_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10)))
+            .map_err(|e| e.to_string())?;
         Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>)
     });
     x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    lightcraft_testkit::recv_within(&entered_rx, Duration::from_secs(10), "the loader is entered");
     assert!(matches!(x.s.denoise_photo_state(id), PhotoState::Running { .. }));
     assert!(x.s.denoise_busy());
     // the picture lands on disk before the worker says so (as it does between its save and its report)

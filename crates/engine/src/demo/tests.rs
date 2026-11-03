@@ -308,7 +308,8 @@ fn scenes_are_generated_when_the_global_pool_is_broken() {
     };
     let (stdout, stderr) = (drain(Box::new(child.stdout.take().unwrap())), drain(Box::new(child.stderr.take().unwrap())));
     // A deadlocked child fails the test instead of hanging CI.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(120));
+    let deadline = std::time::Instant::now() + limit;
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -316,7 +317,7 @@ fn scenes_are_generated_when_the_global_pool_is_broken() {
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("the child process did not finish within 120 s");
+            panic!("the child process did not finish within {limit:?}");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };

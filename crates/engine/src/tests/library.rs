@@ -875,7 +875,7 @@ fn a_thumbnail_cache_from_before_is_tidied_in_the_background_when_the_library_op
     let rows = s.activity.list();
     assert!(rows.iter().any(|r| r.kind == "cache" && r.label == "Tidying the thumbnail cache" && r.cancellable), "{rows:?}");
     let t0 = std::time::Instant::now();
-    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
+    while !s.activity.list().is_empty() && t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(s.activity.list().is_empty());
