@@ -114,7 +114,7 @@
 
 ### The photo in Detail is named with its file for screen readers
 - With VoiceOver, the photo in Detail view is now announced with its file name, rating, flag and colour label ("Photo:
-  IMG_0042.JPG, 4 stars, picked") instead of only "Photo", as the grid names the same photo.
+  IMG_0042.JPG, rating 4 of 5, picked") instead of only "Photo", as the grid names the same photo.
 
 ### The grid's thumbnail size slider is a slider to screen readers
 - With VoiceOver, the Thumbnail size control at the right of the grid's bottom bar is now announced as a slider with its
