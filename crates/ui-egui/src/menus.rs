@@ -22,7 +22,6 @@ pub mod menubar;
 /// (id, label, shortcut, menu path)
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);
 
-
 /// Views whose bottom bar has the thumbnail-size slider and that draw tiles of that size.
 fn thumb_size_view(app: &LightcraftApp) -> bool {
     matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid | ViewMode::People)

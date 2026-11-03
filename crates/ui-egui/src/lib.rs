@@ -107,7 +107,6 @@ const TOAST_SECONDS: f64 = 1.4;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Perf {
     /// Layout of the last frame ([`LightcraftApp::ui`], including commands run from widgets).
