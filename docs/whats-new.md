@@ -2,6 +2,11 @@
 
 ## 2026-10-30
 
+### ↑ and ↓ keep the Survey together
+- In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
+  grid's Photo Below and Photo Above, which selected a single photo, so the survey shrank to that one photo
+  (issue #3640).
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 

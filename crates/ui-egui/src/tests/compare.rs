@@ -416,3 +416,19 @@ fn survey_command_click_on_the_active_photo_activates_the_last_one() {
     let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
     assert_eq!((sel, h.app.session.selection.active.map(|p| p.0)), (vec![b, c], Some(c)));
 }
+
+/// Issue #3640: ↑ / ↓ in Survey step through its photos like → / ←; they used to run the grid's
+/// Photo Below / Above, which selected one photo and left the other two out of the survey.
+#[test]
+fn survey_up_and_down_step_through_its_photos() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let sel = |h: &Headless| h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<u64>>();
+    for (key, want) in [("down", c), ("down", c), ("up", b), ("up", a), ("right", b), ("left", a)] {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!((sel(&h), h.app.session.selection.active.map(|p| p.0)), (vec![a, b, c], Some(want)), "after {key}");
+    }
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Survey);
+}
