@@ -29,7 +29,7 @@
 //! GPU kernel (`finish.wgsl`, which reads the same tables).
 
 use std::f64::consts::TAU;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_develop::Grain;
@@ -810,12 +810,48 @@ pub struct CrystalGrain {
 }
 
 type Key = (u64, u64, u32);
+
+/// The cache key of the tile of `look` and `seed`.
+fn key_of(look: CrystalLook, seed: u32) -> Key {
+    (look.width.to_bits(), look.spread.to_bits() ^ (look.layers as u64).rotate_left(40), seed)
+}
 /// Recently drawn tiles (the most recent last).
 type Cache = Mutex<Vec<(Key, Arc<CrystalTile>)>>;
 static TILES: Cache = Mutex::new(Vec::new());
 
 /// The tile being drawn in the background for a drag ([`tile`]): one at a time.
 static DRAWING: Mutex<Option<Key>> = Mutex::new(None);
+
+/// The tiles being drawn, by cache and key, and the condition their drawers signal when done: a
+/// render that misses a tile another is drawing waits for it rather than drawing it again.
+static IN_FLIGHT: Mutex<Vec<(usize, Key)>> = Mutex::new(Vec::new());
+static DRAWN: Condvar = Condvar::new();
+
+/// Marks a tile drawn (or failed) when dropped and wakes the renders waiting for it.
+struct Drawing((usize, Key));
+
+impl Drop for Drawing {
+    fn drop(&mut self) {
+        IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner).retain(|d| *d != self.0);
+        DRAWN.notify_all();
+    }
+}
+
+/// Registers the tile of `id` as being drawn, or `None` if another thread is drawing it.
+fn start_drawing(id: (usize, Key)) -> Option<Drawing> {
+    let mut busy = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner);
+    if busy.contains(&id) {
+        return None;
+    }
+    busy.push(id);
+    Some(Drawing(id))
+}
+
+/// The tile of `key` in `cache`.
+fn cached(cache: &Cache, key: Key) -> Option<Arc<CrystalTile>> {
+    let tiles = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    tiles.iter().find(|(k, _)| *k == key).map(|(_, t)| t.clone())
+}
 
 /// The tile of `look` and `seed`, drawn or from the cache. Unless `wait`, a tile not drawn yet
 /// is drawn in the background and the last one drawn for `seed` stands in for it meanwhile: a
@@ -827,7 +863,7 @@ fn tile(look: CrystalLook, seed: u32, wait: bool) -> Option<Arc<CrystalTile>> {
 
 /// [`tile`] with the tiles cached in `cache` (a test's own, which other tests can't evict from).
 fn tile_in(cache: &'static Cache, look: CrystalLook, seed: u32, wait: bool) -> Option<Arc<CrystalTile>> {
-    let key = (look.width.to_bits(), look.spread.to_bits() ^ (look.layers as u64).rotate_left(40), seed);
+    let key = key_of(look, seed);
     {
         let tiles = cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((_, t)) = tiles.iter().find(|(k, _)| *k == key) {
@@ -844,6 +880,20 @@ fn tile_in(cache: &'static Cache, look: CrystalLook, seed: u32, wait: bool) -> O
             return Some(stand_in);
         }
     }
+    let id = (std::ptr::from_ref(cache) as usize, key);
+    // a pool worker draws the tile itself: blocked, it could hold up the drawing it waits for
+    // (its stack may carry a part of that drawing's parallel work); wasm has no other threads
+    if !cfg!(target_arch = "wasm32") && rayon::current_thread_index().is_none() {
+        let mut busy = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner);
+        while busy.contains(&id) {
+            busy = DRAWN.wait(busy).unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(busy);
+        if let Some(t) = cached(cache, key) {
+            return Some(t);
+        }
+    }
+    let _drawing = start_drawing(id);
     let t = Arc::new(CrystalTile::new(look, seed)?);
     keep(cache, key, t.clone());
     Some(t)
@@ -862,19 +912,27 @@ fn keep(cache: &Cache, key: Key, t: Arc<CrystalTile>) {
 /// Draws the tile of `key` on the thread pool unless another is being drawn (the next render
 /// asks again for what it needs then).
 fn draw_in_background(cache: &'static Cache, key: Key, look: CrystalLook, seed: u32) {
-    {
+    let marker = {
         let mut drawing = DRAWING.lock().unwrap_or_else(PoisonError::into_inner);
         if drawing.is_some() {
             return;
         }
+        // (`None`: a render is drawing it already)
+        let Some(marker) = start_drawing((std::ptr::from_ref(cache) as usize, key)) else { return };
         *drawing = Some(key);
-    }
-    let draw = move || {
+        marker
+    };
+    spawn_in_background(move || {
         if let Some(t) = CrystalTile::new(look, seed) {
             keep(cache, key, Arc::new(t));
         }
+        drop(marker);
         *DRAWING.lock().unwrap_or_else(PoisonError::into_inner) = None;
-    };
+    });
+}
+
+/// Runs `draw` on the background pool.
+fn spawn_in_background(draw: impl FnOnce() + Send + 'static) {
     // on a pool of its own: the renders of the drag don't queue behind its parallel bands
     match background_pool() {
         Some(pool) => pool.spawn(draw),

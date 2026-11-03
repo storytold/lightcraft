@@ -184,6 +184,23 @@ fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
     assert_eq!(patch(&tile(a, fresh, false).expect("tile"), REF_LONG, 32, 0), exact(a, fresh));
 }
 
+/// A render that misses a tile another thread is drawing waits for that tile rather than drawing
+/// it a second time.
+#[test]
+fn a_render_waits_for_a_tile_being_drawn() {
+    static OWN: Cache = Mutex::new(Vec::new());
+    let (look, seed) = (CrystalLook::new(40.0, 50.0), 0x0d4a_0003);
+    let key = key_of(look, seed);
+    let marker = start_drawing((std::ptr::from_ref(&OWN) as usize, key)).expect("not drawn yet");
+    let render = std::thread::spawn(move || tile_in(&OWN, look, seed, true));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let drawn = Arc::new(CrystalTile::new(look, seed).expect("tile"));
+    keep(&OWN, key, drawn.clone());
+    drop(marker);
+    let got = render.join().expect("render thread").expect("tile");
+    assert!(Arc::ptr_eq(&got, &drawn), "the render drew the tile again");
+}
+
 /// Grain width (autocorrelation half-width at mid grey, 6000 px) at Lightroom Classic's
 /// measured settings (open PR #1060's table); Size 0 is as fine as uncorrelated pixels get (0.5).
 #[test]

@@ -1079,15 +1079,19 @@ mod tests {
         let (Some(a), Some(b)) = (CrystalTile::new(look, 0x7ab1_0001), CrystalTile::new(look, 0x7ab1_0002)) else { panic!("tiles") };
         let (a, b) = (std::sync::Arc::new(a), std::sync::Arc::new(b));
         let len: usize = a.sats.iter().map(Vec::len).sum();
-        let dst = g.buffer(len);
+        let (dst_a, dst_b) = (g.buffer(len), g.buffer(len));
         let mut first = g.encoder();
-        let held = g.grain_tables(&mut first, &a, &dst, 0).expect("tables copied");
+        let held = g.grain_tables(&mut first, &a, &dst_a, 0).expect("tables copied");
         // another render replaces the resident tables before `first` is submitted
         let mut second = g.encoder();
-        assert!(g.grain_tables(&mut second, &b, &dst, 0).is_some());
+        assert!(g.grain_tables(&mut second, &b, &dst_b, 0).is_some());
         let next = g.buffer(len);
         assert!(next.raw() != held.raw(), "the replaced tables went back to the pool before their copy was submitted");
-        g.submit([first.finish(), second.finish()]);
+        g.submit([first.finish()]);
+        // each render read its own tile's tables
+        let tables = |t: &lightcraft_pipeline::crystal::CrystalTile| t.sats.concat();
+        assert!(g.finish_and_read::<f32>(second, &dst_a, len) == tables(&a), "the first render copied other tables");
+        assert!(g.finish_and_read::<f32>(g.encoder(), &dst_b, len) == tables(&b), "the second render copied other tables");
     }
 
     /// A GPU retired by another failure (a validation error) keeps a live device: its buffers are
