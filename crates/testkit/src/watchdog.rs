@@ -142,27 +142,33 @@ fn parse_minutes(value: Option<&str>) -> (Option<f64>, Option<String>) {
     }
 }
 
-/// Start the watchdog thread, once per process.
+/// Start the watchdog thread, once per process. A lock and a flag set only once the thread is
+/// running, not `Once`: a spawn that fails is tried again at the next [`watch`].
 fn start(limit: Duration) {
-    static STARTED: Once = Once::new();
-    STARTED.call_once(|| {
-        // read here, not when the watchdog fires: a stuck process may hold the environment's lock
-        let grace = parse_grace(std::env::var(GRACE_ENV).ok().as_deref());
-        // check often enough that a short limit (tests of the watchdog) isn't overshot by much
-        let poll = (limit / 20).clamp(Duration::from_millis(10), Duration::from_secs(5));
-        let spawned = std::thread::Builder::new().name("lightcraft-testkit-watchdog".into()).spawn(move || {
-            loop {
-                std::thread::sleep(poll);
-                let report = overdue(&WATCHED.lock().unwrap_or_else(PoisonError::into_inner), Instant::now(), limit);
-                if let Some(report) = report {
-                    end_process(report, grace);
-                }
+    static STARTED: Mutex<bool> = Mutex::new(false);
+    static NOTED: Once = Once::new();
+    let mut started = STARTED.lock().unwrap_or_else(PoisonError::into_inner);
+    if *started {
+        return;
+    }
+    // read here, not when the watchdog fires: a stuck process may hold the environment's lock
+    let grace = parse_grace(std::env::var(GRACE_ENV).ok().as_deref());
+    // check often enough that a short limit (tests of the watchdog) isn't overshot by much
+    let poll = (limit / 20).clamp(Duration::from_millis(10), Duration::from_secs(5));
+    let spawned = std::thread::Builder::new().name("lightcraft-testkit-watchdog".into()).spawn(move || {
+        loop {
+            std::thread::sleep(poll);
+            let report = overdue(&WATCHED.lock().unwrap_or_else(PoisonError::into_inner), Instant::now(), limit);
+            if let Some(report) = report {
+                end_process(report, grace);
             }
-        });
-        if let Err(e) = spawned {
-            crate::note(&format!("{WATCHDOG_ENV}: can't start the test watchdog ({e}); hung tests won't be stopped"));
         }
     });
+    match spawned {
+        Ok(_) => *started = true,
+        // said once; the next watch() tries again
+        Err(e) => NOTED.call_once(|| crate::note(&format!("{WATCHDOG_ENV}: can't start the test watchdog ({e}); hung tests won't be stopped yet"))),
+    }
 }
 
 /// End the process for a stuck test, on the watchdog thread. A helper thread prints `report` and
