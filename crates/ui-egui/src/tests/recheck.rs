@@ -54,7 +54,7 @@ fn opening_a_library_rechecks_stale_preview_only_raws_in_the_background() {
     // it shows in the activity stack while it runs
     let rows = app.session.activity.list();
     assert!(rows.iter().any(|r| r.kind == "recheck" && r.label == crate::recheck::LABEL), "{rows:?}");
-    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
     assert!(app.session.activity.list().iter().all(|r| r.kind != "recheck"), "the row goes with the task");
     let p = app.session.catalog.photo(id).unwrap();
     assert_eq!(p.preview_only, None);
@@ -73,7 +73,7 @@ fn recheck_result_is_dropped_after_switching_libraries() {
     let ctx = egui::Context::default();
     crate::recheck::tick(&mut app);
     app.run("app.openLibrary", json!({"path": dir.0.join("other").to_string_lossy()})).unwrap();
-    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
     assert!(app.ui.toast.is_none(), "{:?}", app.ui.toast);
     assert!(app.session.catalog.photo(id).is_none(), "the other library is untouched");
 }
@@ -90,7 +90,7 @@ fn notice_reload_button_rereads_the_file() {
     let row = rows.iter().find(|r| r.kind == "reload").unwrap_or_else(|| panic!("no reload row: {rows:?}"));
     assert_eq!(row.label, crate::reload::LABEL);
     assert!(row.cancellable);
-    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
     assert!(app.session.activity.list().iter().all(|r| r.kind != "reload"), "the row goes with the task");
     assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
     assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
@@ -110,7 +110,7 @@ fn reload_of_a_selection_runs_in_the_background() {
     assert_eq!(r, json!({"background": true, "count": 1}));
     assert!(app.tasks.is_running(crate::reload::LABEL));
     assert!(app.session.activity.list().iter().any(|r| r.kind == "reload"));
-    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
     assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
 
     // agents can wait for the result: the engine's reply, nothing left running
@@ -172,12 +172,15 @@ fn an_older_reload_does_not_replace_a_newer_one() {
             let mut state = worker_gate.0.lock().unwrap();
             state.0 = true;
             worker_gate.1.notify_all();
-            let _ = worker_gate.1.wait_timeout_while(state, Duration::from_secs(10), |s| !s.1).unwrap();
+            let _ = worker_gate
+                .1
+                .wait_timeout_while(state, lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10)), |s| !s.1)
+                .unwrap();
         }
         info
     }));
     app.run("photo.reload", json!({"ids": [id.0]})).unwrap();
-    let (state, _) = gate.1.wait_timeout_while(gate.0.lock().unwrap(), Duration::from_secs(5), |s| !s.0).unwrap();
+    let (state, _) = gate.1.wait_timeout_while(gate.0.lock().unwrap(), lightcraft_testkit::scaled(Duration::from_secs(5)), |s| !s.0).unwrap();
     assert!(state.0, "the first reload read the original file");
     drop(state);
 
@@ -186,7 +189,7 @@ fn an_older_reload_does_not_replace_a_newer_one() {
     let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
     std::fs::write(dir.0.join("files/one.png"), lightcraft_engine::export::encode_image(&image, &o).unwrap()).unwrap();
     app.run("photo.reload", json!({"ids": [id.0]})).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(5));
     while app.session.catalog.photo(id).is_some_and(|p| (p.width, p.height) != (40, 20)) {
         crate::tasks::poll(&mut app, &ctx);
         assert!(std::time::Instant::now() < deadline, "the second reload finishes while the first is held");
@@ -197,7 +200,7 @@ fn an_older_reload_does_not_replace_a_newer_one() {
     // the first reload finishes last
     gate.0.lock().unwrap().1 = true;
     gate.1.notify_all();
-    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
     let after = app.session.catalog.photo(id).unwrap();
     assert_eq!((after.width, after.height), (40, 20), "the older reload put back the old dimensions");
     assert_eq!(after.content_hash, newer_hash);
@@ -224,7 +227,7 @@ fn a_background_reload_writes_the_sidecar_with_auto_write_on() {
     }));
     let r = app.run("photo.reload", json!({"ids": [id.0]})).unwrap();
     assert_eq!(r["background"], true);
-    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
     assert_eq!(app.session.catalog.photo(id).unwrap().meta.gps, Some((41.0, 2.0)));
     assert!(std::fs::read_to_string(&sidecar).unwrap().contains("GPSLatitude"), "the sidecar was not written");
 }
@@ -259,20 +262,23 @@ fn a_cancelled_reload_reports_only_what_it_did() {
             let mut state = worker_gate.0.lock().unwrap();
             state.0 = true;
             worker_gate.1.notify_all();
-            let _ = worker_gate.1.wait_timeout_while(state, Duration::from_secs(10), |s| !s.1).unwrap();
+            let _ = worker_gate
+                .1
+                .wait_timeout_while(state, lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10)), |s| !s.1)
+                .unwrap();
             // a read the cancel stopped comes back as an error, as a file not reached does
             if read { native(path) } else { Err(format!("{path}: cancelled")) }
         }));
         app.ui.toast = None;
         app.run("photo.reload", json!({"ids": [id.0]})).unwrap();
-        let (state, _) = gate.1.wait_timeout_while(gate.0.lock().unwrap(), Duration::from_secs(5), |s| !s.0).unwrap();
+        let (state, _) = gate.1.wait_timeout_while(gate.0.lock().unwrap(), lightcraft_testkit::scaled(Duration::from_secs(5)), |s| !s.0).unwrap();
         assert!(state.0, "the reload started reading");
         drop(state);
         let row = app.session.activity.list().into_iter().find(|r| r.kind == "reload").unwrap();
         app.session.activity.cancel(row.id).unwrap();
         gate.0.lock().unwrap().1 = true;
         gate.1.notify_all();
-        assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+        assert!(crate::tasks::wait(&mut app, &ctx, lightcraft_testkit::scaled(Duration::from_secs(10))));
         if read {
             assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
             assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
