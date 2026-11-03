@@ -84,12 +84,15 @@ no host name, user name or absolute path, and nothing is uploaded. `--hardware` 
 the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`).
 
 libtest has no per-test timeout, so a test wait never goes without a limit: `lightcraft_testkit::wait_until`
-(a condition, polled with backoff) and `recv_within` (a channel) fail the test with what they waited for,
-and a hand-made limit uses `scaled`. `LIGHTCRAFT_TIME_SCALE` (default 1, clamped to 0.1–1000) stretches
-every limit at once on a slow machine. `lightcraft_testkit::watch()` registers the running test with a
-per-process watchdog (ui-egui's `Headless::new` does it in that crate's unit tests): once a watched test
-has run for `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30 × the time scale; `0` or `off` disables
-it) it prints the watched tests still running and exits with status 124, so a hung run ends with names.
+(a condition, polled with backoff) and `recv_within` (a channel) fail the test with what they waited for, and
+a hand-made limit uses `scaled`. `LIGHTCRAFT_TIME_SCALE` (default 1, clamped to 0.1–1000) stretches the limits
+these three set, and the watchdog's below, on a slow machine. The headless harness's own timeouts
+(`Headless::request`, `settle`, `step_until`) take a `Duration` and don't scale it; a caller that wants them
+stretched passes a `scaled` one (#3653 tracks the rest). `lightcraft_testkit::watch()` registers the running
+test with a per-process watchdog (ui-egui's `Headless::new` does it in that crate's unit tests): once a
+watched test has run for `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30 × the time scale; `0` or `off`
+disables it) it prints the watched tests still running and exits with status 124, so a hung run ends with
+names.
 
 ## Revision history
 
