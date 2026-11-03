@@ -202,7 +202,7 @@ pub fn interact(app: &mut LightcraftApp, ui: &egui::Ui, resp: &Response, plot: R
     if dragging || hovered.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
-    register(ui.ctx(), "histogram:zone", zone.rect(plot));
+    register(ui, "histogram:zone", zone.rect(plot));
     Some(Active { zone, value: value_of(app, id, spec), dragging })
 }
 
