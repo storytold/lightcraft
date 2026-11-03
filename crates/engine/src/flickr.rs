@@ -90,6 +90,20 @@ impl Session {
         Ok(())
     }
 
+    /// Change the account with `change`, then save it. When the save fails, the account (and the
+    /// sign-in in progress) go back to how they were: memory never holds a key or sign-in that the
+    /// file doesn't, which would vanish at the next start while `flickr.status` says `saved`.
+    fn change_flickr(&mut self, change: impl FnOnce(&mut State)) -> Result<(), String> {
+        let (account, pending) = (self.flickr.account.clone(), self.flickr.pending.clone());
+        change(&mut self.flickr);
+        if let Err(e) = self.save_flickr() {
+            self.flickr.account = account;
+            self.flickr.pending = pending;
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// A client for the API key in use: the user's own, else the build's.
     pub fn flickr_client(&self) -> Result<Client, String> {
         let key = self.flickr.account.own_key().or_else(builtin_key).ok_or("enter a Flickr API key and its secret first (Settings → Accounts)")?;
@@ -135,14 +149,15 @@ impl Session {
         if [key, secret].iter().any(|s| s.len() > 256 || s.chars().any(|c| c.is_whitespace() || c.is_control())) {
             return Err("an API key and its secret are short codes without spaces".into());
         }
-        let a = &mut self.flickr.account;
-        if a.api_key != key || a.api_secret != secret {
-            a.api_key = key.to_string();
-            a.api_secret = secret.to_string();
-            a.token = None;
-            self.flickr.pending = None;
-        }
-        self.save_flickr()
+        self.change_flickr(|f| {
+            let a = &mut f.account;
+            if a.api_key != key || a.api_secret != secret {
+                a.api_key = key.to_string();
+                a.api_secret = secret.to_string();
+                a.token = None;
+                f.pending = None;
+            }
+        })
     }
 
     /// Sign-in step 1 is done: remember its temporary token until the code arrives.
@@ -157,9 +172,10 @@ impl Session {
 
     /// Sign-in finished: keep the account's token (saved at once).
     pub fn flickr_finish_sign_in(&mut self, token: Token) -> Result<(), String> {
-        self.flickr.pending = None;
-        self.flickr.account.token = Some(token);
-        self.save_flickr()
+        self.change_flickr(|f| {
+            f.pending = None;
+            f.account.token = Some(token);
+        })
     }
 
     /// Drop a sign-in in progress (nothing on disk changes).
@@ -169,9 +185,10 @@ impl Session {
 
     /// Forget the sign-in (the API key stays).
     pub fn flickr_sign_out(&mut self) -> Result<(), String> {
-        self.flickr.pending = None;
-        self.flickr.account.token = None;
-        self.save_flickr()
+        self.change_flickr(|f| {
+            f.pending = None;
+            f.account.token = None;
+        })
     }
 
     /// Remember the results of an upload (`flickr.status` → `lastUpload`). When Flickr refused

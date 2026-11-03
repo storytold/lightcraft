@@ -261,6 +261,7 @@ impl<'a> TextField<'a> {
         // would be gone
         let right = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary) || i.pointer.button_released(egui::PointerButton::Secondary));
         let selection = egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range());
+        drop_password_cut(ui, id, self.password);
         let mut response = ui.add(edit);
         // screen readers: the field by its caption, even once it holds text (egui names it by
         // nothing but its contents)
@@ -403,6 +404,14 @@ fn has_selection(ctx: &egui::Context, id: egui::Id) -> bool {
 }
 
 /// The field's context menu: Cut, Copy, Paste, Select All, with the keyboard's shortcuts beside them.
+/// A password: the keyboard's Cut (⌘X) is dropped before egui sees it, which would delete the
+/// selected secret without copying it (the menu greys Cut out for the same reason).
+fn drop_password_cut(ui: &mut Ui, id: egui::Id, password: bool) {
+    if password && ui.memory(|m| m.has_focus(id)) {
+        ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Cut)));
+    }
+}
+
 /// In a password field Cut and Copy are greyed out: egui never puts a secret on the clipboard, so
 /// Copy would do nothing and Cut would only delete it.
 fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, password: bool, action: &mut Option<Action>) {

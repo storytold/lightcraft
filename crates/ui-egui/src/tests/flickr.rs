@@ -472,3 +472,16 @@ fn the_key_field_follows_a_key_changed_elsewhere() {
     h.step();
     assert_eq!(h.app.flickr.key, "second", "Save Key would otherwise send the old key");
 }
+
+#[test]
+fn signing_out_drops_a_sign_in_still_on_its_way() {
+    let base = fake(Duration::from_millis(400));
+    let (mut h, opened) = app(&base);
+    h.app.session.flickr_set_api_key("k", "s").unwrap();
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    // an agent signs out (or sets another key) while Flickr is still answering
+    h.app.run("flickr.signOut", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.busy.is_none()), "the step ends");
+    assert_eq!(h.app.session.flickr_status()["pending"], false, "the old sign-in is not resumed");
+    assert!(opened.lock().unwrap().is_empty(), "no approval page opened");
+}
