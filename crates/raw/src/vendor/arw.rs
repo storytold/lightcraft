@@ -358,7 +358,9 @@ fn read_quad_tiles(bytes: &[u8], info: &ImageInfo) -> Result<Vec<u16>> {
         .map(|c| {
             let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
             let f = ljpeg::decode(src, (c.width as usize * c.height as usize).max(1 << 16))?;
-            if f.components != 4 || f.data.len() < f.width * f.height * 4 {
+            // a tile's frame is half its nominal width and height: a larger one (which the sample cap above would
+            // still let through when the tile is small) is no Sony tile
+            if f.components != 4 || f.data.len() < f.width * f.height * 4 || f.width * 2 > c.width as usize || f.height * 2 > c.height as usize {
                 return Err(RawError::Corrupt(format!(
                     "lossless ARW tile: {} samples in a {}×{}×{} frame",
                     f.data.len(),
