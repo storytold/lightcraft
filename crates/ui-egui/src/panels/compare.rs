@@ -208,6 +208,30 @@ fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: 
     }
 }
 
+/// Toggle a comparison pane around the clicked image point, without keyboard focus-point zoom.
+fn magnifier_click(
+    app: &mut LightcraftApp,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    placement: &super::detail::PhotoPlacement,
+    zoom: Zoom,
+) -> Option<(Zoom, Rect)> {
+    if app.ui.tool != "zoom" || !resp.clicked() {
+        return None;
+    }
+    let super::detail::PhotoPlacement { img, canvas, native, aspect } = *placement;
+    let at = resp.interact_pointer_pos().filter(|p| canvas.contains(*p))?;
+    let zoom = if zoom == Zoom::Fit { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+    let ppp = ui.ctx().pixels_per_point();
+    let point = ((at.x - img.left()) / img.width(), (at.y - img.top()) / img.height());
+    let size = super::detail::fit_rect(canvas, aspect, zoom, native, ppp, (0.5, 0.5)).size();
+    let offset = canvas.center() - at;
+    // Pointer zoom keeps this pane's image point under the pointer, within the photo's edges.
+    app.ui.pan = super::detail::bounded_pan(canvas, size, (point.0 + offset.x / size.x.max(1.0), point.1 + offset.y / size.y.max(1.0)));
+    app.ui.zoom = zoom;
+    Some((zoom, super::detail::fit_rect(canvas, aspect, zoom, native, ppp, app.ui.pan)))
+}
+
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
 fn photo_tile(
@@ -247,19 +271,10 @@ fn photo_tile(
         } else if resp.dragged() {
             super::detail::pan_image(app, img_area, img, resp.drag_delta());
         }
-        if app.ui.tool == "zoom"
-            && resp.clicked()
-            && let Some(at) = resp.interact_pointer_pos().filter(|p| img_area.contains(*p))
-        {
-            zoom = if zoom == Zoom::Fit { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
-            let point = ((at.x - img.left()) / img.width(), (at.y - img.top()) / img.height());
-            let size = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, (0.5, 0.5)).size();
-            let offset = img_area.center() - at;
-            // Pointer zoom keeps this pane's image point under the pointer (as far as the photo's
-            // edges allow); keyboard zoom may centre the active AF point. Panes don't animate.
-            app.ui.pan = super::detail::bounded_pan(img_area, size, (point.0 + offset.x / size.x.max(1.0), point.1 + offset.y / size.y.max(1.0)));
-            app.ui.zoom = zoom;
-            img = super::detail::fit_rect(img_area, aspect, app.ui.zoom, native, ppp, app.ui.pan);
+        let placement = super::detail::PhotoPlacement { img, canvas: img_area, native, aspect };
+        if let Some((next_zoom, next_img)) = magnifier_click(app, ui, &resp, &placement, zoom) {
+            zoom = next_zoom;
+            img = next_img;
         }
     }
     let texture_side = super::detail::texture_side(ui.ctx());

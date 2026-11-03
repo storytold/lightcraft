@@ -177,6 +177,8 @@ not trigger that click toggle on release.
 Pointer clicks keep the clicked image point under the pointer, including off-centre clicks in
 Compare/Reference at the chosen target ratio, subject to pan edge limits. Keyboard Toggle Zoom
 can still centre the active photo's camera focus point when Zoom to Focus Point is enabled.
+Compare and Reference apply their pointer toggle separately from the keyboard focus-point path;
+extracting that calculation from tile drawing does not change either pane's selection policy.
 
 Crop, Masking, Remove, Red Eye, pickers and targeted adjustments retain their editing gestures;
 Shift does not turn those tools into scrub zoom. Selecting the zoom tool leaves an editing tool

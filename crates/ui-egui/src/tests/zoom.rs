@@ -594,7 +594,7 @@ fn selected_zoom_space_taps_do_not_escape_popups_or_owned_widgets() {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
     app.run("tool.zoom", json!({})).unwrap();
     let ctx = egui::Context::default();
-    let popup = egui::Id::new("zoom-space-menu");
+    let popup = egui::Id::unique("zoom-space-menu");
     for owner in ["popup", "button"] {
         for (frame, events) in [vec![space(true)], vec![space(false)]].into_iter().enumerate() {
             let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
