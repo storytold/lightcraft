@@ -3403,7 +3403,9 @@ fn browsing_the_same_folder_again_does_not_restart() {
     let (g, n) = (gate.clone(), started.clone());
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
         n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        lightcraft_testkit::wait_until(Duration::from_secs(60), "the test opens the probe's gate", || g.load(std::sync::atomic::Ordering::Relaxed));
+        lightcraft_testkit::wait_until_at_least(Duration::from_secs(60), "the test opens the probe's gate", || {
+            g.load(std::sync::atomic::Ordering::Relaxed)
+        });
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     let browse = |h: &mut Headless| h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
@@ -3529,7 +3531,9 @@ fn folder_scan_cancel_and_busy() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let g = gate.clone();
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
-        lightcraft_testkit::wait_until(Duration::from_secs(60), "the test opens the probe's gate", || g.load(std::sync::atomic::Ordering::Relaxed));
+        lightcraft_testkit::wait_until_at_least(Duration::from_secs(60), "the test opens the probe's gate", || {
+            g.load(std::sync::atomic::Ordering::Relaxed)
+        });
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
