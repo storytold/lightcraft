@@ -407,3 +407,80 @@ fn updating_a_preset_from_an_unconverted_photo_keeps_its_negative_group() {
     let n = &s.presets.iter().find(|x| x.id == pid).unwrap().settings["negative"];
     assert_eq!(n["film"], "off", "the group stays, now off: {n}");
 }
+
+/// Convert to another film type unlocks a roll-synced frame, even one whose analysis predates the recorded film type
+/// (it would otherwise "fit" any type and keep the roll's numbers for the old one).
+#[test]
+fn convert_to_another_film_type_unlocks_a_roll_frame() {
+    let mut s = Session::with_demo();
+    let ids = three_frames(&s);
+    s.execute("negative.syncRoll", &json!({"ids": ids, "wait": true})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[0]], "active": ids[0]})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"negative": {"analysis": {"film": null}}}})).unwrap();
+    assert!(neg(&s).locked && neg(&s).analysis.unwrap().film.is_none());
+    s.execute("negative.convert", &json!({"film": "bwNegative"})).unwrap();
+    let n = neg(&s);
+    assert_eq!(n.film, FilmType::BwNegative);
+    assert!(!n.locked, "measured on its own for the new type");
+    assert_eq!(n.analysis.unwrap().film, Some(FilmType::BwNegative));
+}
+
+/// A `film` of null names no film: an already converted photo keeps its type.
+#[test]
+fn convert_with_a_null_film_keeps_the_film_type() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({"film": "slide"})).unwrap();
+    s.execute("negative.convert", &json!({"film": null})).unwrap();
+    assert_eq!(neg(&s).film, FilmType::Slide);
+}
+
+/// An option name the command doesn't know is an error, not the option's fallback.
+#[test]
+fn a_misspelled_option_is_an_error() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({})).unwrap();
+    for p in [json!({"tone": "sof"}), json!({"colorModel": "warmish"}), json!({"film": "negative"})] {
+        assert!(s.execute("negative.set", &p).is_err(), "{p}");
+    }
+    assert_eq!(neg(&s).tone, FilmTone::Standard);
+    s.execute("negative.set", &json!({"tone": "soft"})).unwrap();
+    assert_eq!(neg(&s).tone, FilmTone::Soft);
+}
+
+/// Setting the film type to off on a photo that isn't converted resets nothing: only switching on does.
+#[test]
+fn switching_an_unconverted_photo_off_keeps_its_edits() {
+    let mut s = Session::with_demo();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"negative": {"film": "someFutureType"}}})).unwrap();
+    assert_eq!(neg(&s).film, FilmType::Unknown);
+    s.execute("negative.set", &json!({"film": "off"})).unwrap();
+    let d = s.develop_of(s.active().unwrap()).unwrap();
+    assert_eq!(d.light.exposure, 0.7);
+}
+
+/// A photo no longer converted gets its source's own white balance back: the relative values set on the positive
+/// don't carry over as the raw's.
+#[test]
+fn switching_the_conversion_off_restores_the_source_white_balance() {
+    for off in [json!(["negative.reset", {}]), json!(["negative.set", {"film": "off"}])] {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let original = s.develop_of(id).unwrap().wb;
+        s.execute("negative.convert", &json!({})).unwrap();
+        s.execute("develop.set", &json!({"control": "wb.temp", "value": 9000})).unwrap();
+        s.execute(off[0].as_str().unwrap(), &off[1]).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert!(!d.negative.converts());
+        assert_eq!((d.wb.mode, d.wb.temp, d.wb.tint), (original.mode, original.temp, original.tint), "{off}");
+    }
+}
+
+/// Slide film has no base to pick: the Film Base Selector is an error there, not a stored base the render ignores.
+#[test]
+fn a_slide_has_no_film_base_to_sample() {
+    let mut s = Session::with_demo();
+    s.execute("negative.convert", &json!({"film": "slide"})).unwrap();
+    assert!(s.execute("negative.sampleBase", &json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 0.2, "y1": 0.05}})).is_err());
+    assert_ne!(neg(&s).analysis.unwrap().base_source, BaseSource::Sampled);
+}

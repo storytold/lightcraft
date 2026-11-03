@@ -20,10 +20,17 @@ fn targets(s: &Session, p: &Value, c: &str) -> Result<Vec<PhotoId>> {
 }
 
 /// `p[key]` read as the enum `T` by its JSON name; `None` when absent or null, an error naming the bad value.
-fn enum_param<T: serde::de::DeserializeOwned>(p: &Value, key: &str, c: &str) -> Result<Option<T>> {
+fn enum_param<T: serde::de::DeserializeOwned + serde::Serialize>(p: &Value, key: &str, c: &str) -> Result<Option<T>> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| bad(c, format!("invalid `{key}`: {e}"))),
+        Some(v) => {
+            let t: T = serde_json::from_value(v.clone()).map_err(|e| bad(c, format!("invalid `{key}`: {e}")))?;
+            // (a name the enum doesn't know reads as its fallback: a typo is an error, not the fallback)
+            if serde_json::to_value(&t).ok().as_ref() != Some(v) {
+                return Err(bad(c, format!("invalid `{key}`: {v}")));
+            }
+            Ok(Some(t))
+        }
     }
 }
 
@@ -73,6 +80,13 @@ fn reset_wb(d: &mut DevelopSettings) {
     d.wb.tint = 0.0;
 }
 
+/// A photo no longer converted gets its source's own white balance back, As Shot: the relative values set on the
+/// positive would read as the raw's Kelvin.
+fn restore_wb(s: &Session, id: PhotoId, d: &mut DevelopSettings) {
+    let info = s.source_info(id);
+    d.wb = if info.raw { DevelopSettings::for_raw(info.as_shot_temp, info.as_shot_tint) } else { DevelopSettings::default() }.wb;
+}
+
 /// `negative.convert`: switch the target photos to `film` (default colour negative), measure and store each one's
 /// analysis, and, unless `keepEdits`, reset the edits made on the negative ([`DevelopSettings::reset_negative_conflicts`])
 /// on a photo not converted before. One undo step.
@@ -105,13 +119,19 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         // (before the preset: a film preset makes the photo read as converted, and its white balance would then be
         // kept as if it were set on the positive)
         let was_converted = d.negative.converts();
+        let film_before = d.negative.film;
         if let Some(pr) = &preset {
             *d = lightcraft_develop::apply_partial(d, &pr.settings, 1.0);
         }
-        if !was_converted || p.get("film").is_some() {
+        // (a `film` of null is no film named, as `enum_param` reads it)
+        if !was_converted || p.get("film").is_some_and(|v| !v.is_null()) {
             d.negative.film = film;
         }
         d.set_section_enabled("negative", true);
+        // a roll's analysis was measured for the film type it had: another type is measured on its own
+        if d.negative.film != film_before {
+            d.negative.locked = false;
+        }
         // a roll-synced frame keeps the roll's analysis; otherwise keep a base sampled from the film edge and measure
         // everything else again
         if !(d.negative.locked && d.negative.analysis.is_some_and(|a| a.fits(d.negative.film))) {
@@ -202,6 +222,10 @@ fn sample_base(s: &mut Session, p: &Value) -> Result<Value> {
         if !d.negative.converts() {
             return Err(bad(C, format!("photo {} is not converted (negative.convert first)", id.0)));
         }
+        // (slide film has no base to divide out: its conversion would ignore one)
+        if d.negative.film == FilmType::Slide {
+            return Err(bad(C, format!("photo {} is slide film, which has no film base", id.0)));
+        }
         d.negative.analysis =
             Some(lightcraft_pipeline::negative::analyze(&src, &d.negative, d.negative_region(), Some((base, r))).map_err(|e| bad(C, e))?);
         // a base picked on this frame makes it its own, no longer the roll's
@@ -233,7 +257,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             && f != d.negative.film
         {
             let was_converted = d.negative.converts();
-            if !was_converted && !keep {
+            if !was_converted && matches!(f, FilmType::ColorNegative | FilmType::BwNegative | FilmType::Slide) && !keep {
                 // switched on here: the edits made on the negative go, as with negative.convert
                 for name in d.negative_conflicts() {
                     if !reset.contains(&name) {
@@ -259,6 +283,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
                 if !was_converted {
                     reset_wb(d);
                 }
+            } else if was_converted {
+                restore_wb(s, id, d);
             }
         }
         if let Some(t) = tone {
@@ -280,7 +306,10 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "negative.reset";
     let ids = targets(s, p, C)?;
-    let done = commit_each(s, &ids, C, "Reset Negative Conversion", |_, _, d| {
+    let done = commit_each(s, &ids, C, "Reset Negative Conversion", |s, id, d| {
+        if d.negative.converts() {
+            restore_wb(s, id, d);
+        }
         d.negative = Negative::default();
         d.set_section_enabled("negative", true);
         Ok(())
@@ -379,7 +408,7 @@ pub fn roll_measure(plan: &RollPlan, cancel: &std::sync::atomic::AtomicBool, pro
         let m = f.source.load_source().and_then(|src| measure_frame(&src.image, &f.settings.negative, f.settings.negative_region(), sampled));
         match m {
             Ok(mut m) => {
-                thin_for_roll(&mut m);
+                thin_for_roll(&mut m, plan.frames.len());
                 measured.push((f.id, m));
             }
             Err(e) => skipped.push((f.id, e)),

@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "La conversion réinitialise les modifications faites sur le négatif : {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Synchroniser la pellicule convertit les vues pas encore converties ({n} sélectionnées) et réinitialise leurs modifications faites sur le négatif : {list}.",
   "Roll synced: {n} frames share one film base and range": "Pellicule synchronisée : {n} vues partagent une base de film et une plage",
-  "Roll synced: {n} frames ({m} could not be read)": "Pellicule synchronisée : {n} vues ({m} illisibles)"
+  "Roll synced: {n} frames ({m} could not be read)": "Pellicule synchronisée : {n} vues ({m} illisibles)",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Pellicule synchronisée : {n} vues ({m} illisibles ; {c} modifiées pendant la synchronisation, laissées telles quelles)"
 }

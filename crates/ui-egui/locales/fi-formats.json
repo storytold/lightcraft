@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "Muunnos nollaa negatiiviin tehdyt muokkaukset: {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Synkronoi filmirulla muuntaa vielä muuntamattomat ruudut (valittuna {n}) ja nollaa niiden negatiiviin tehdyt muokkaukset: {list}.",
   "Roll synced: {n} frames share one film base and range": "Filmirulla synkronoitiin: {n} ruutua jakaa saman filmin pohjan ja alueen",
-  "Roll synced: {n} frames ({m} could not be read)": "Filmirulla synkronoitiin: {n} ruutua ({m} ei voitu lukea)"
+  "Roll synced: {n} frames ({m} could not be read)": "Filmirulla synkronoitiin: {n} ruutua ({m} ei voitu lukea)",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Filmirulla synkronoitiin: {n} ruutua ({m} ei voitu lukea; {c} synkronoinnin aikana muokattua jätettiin ennalleen)"
 }

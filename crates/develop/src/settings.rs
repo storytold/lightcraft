@@ -1418,8 +1418,8 @@ impl FilmAnalysis {
         self.is_valid() && self.film.is_none_or(|f| f == film)
     }
 
-    /// Every number finite and within [`Self::LIMIT`], the base at least [`Self::MIN_BASE`], each range ordered and the
-    /// tone samples rising: anything else is measured again instead of rendered.
+    /// Every number finite and within [`Self::LIMIT`], the base at least [`Self::MIN_BASE`], each range ordered, the
+    /// medians in 0..1 and the tone samples rising: anything else is measured again instead of rendered.
     pub fn is_valid(&self) -> bool {
         // finite and within what a film can measure (and an f32 can hold): a damaged or hand-edited sidecar with values
         // past that is measured again instead of rendering a channel black or flat
@@ -1428,6 +1428,8 @@ impl FilmAnalysis {
             && fin(&self.lo)
             && fin(&self.hi)
             && fin(&self.mid)
+            // (medians of normalised density: 0..1)
+            && self.mid.iter().all(|m| (0.0..=1.0).contains(m))
             && self.tones.is_none_or(|t| t.iter().all(fin))
             // (each channel's density rises with the tone level, as quantiles do: samples out of order weren't measured)
             && self.tones.is_none_or(|t| t.iter().zip(t.iter().skip(1)).all(|(a, b)| a.iter().zip(b).all(|(x, y)| x <= y)))

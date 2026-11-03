@@ -147,16 +147,18 @@ pub(super) fn negative(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
         }
         row(ui, |ui| {
             let picking = app.ui.tool == "filmBase";
-            if crate::widgets::icon_button(
-                ui,
-                "negativeBasePicker",
-                crate::icons::Icon::Picker,
-                egui::vec2(28.0, 28.0),
-                picking,
-                true,
-                crate::i18n::tr("Film Base Selector: click unexposed film (the rebate)"),
-            )
-            .clicked()
+            // (slide film has no base to pick: its conversion ignores one)
+            if n.film != FilmType::Slide
+                && crate::widgets::icon_button(
+                    ui,
+                    "negativeBasePicker",
+                    crate::icons::Icon::Picker,
+                    egui::vec2(28.0, 28.0),
+                    picking,
+                    true,
+                    crate::i18n::tr("Film Base Selector: click unexposed film (the rebate)"),
+                )
+                .clicked()
             {
                 if picking {
                     app.ui.tool.clear();

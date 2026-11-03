@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "La conversione reimposta le modifiche fatte sul negativo: {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Sincronizza rullino converte i fotogrammi non ancora convertiti ({n} selezionati) e reimposta le loro modifiche fatte sul negativo: {list}.",
   "Roll synced: {n} frames share one film base and range": "Rullino sincronizzato: {n} fotogrammi condividono una base della pellicola e un intervallo",
-  "Roll synced: {n} frames ({m} could not be read)": "Rullino sincronizzato: {n} fotogrammi ({m} non leggibili)"
+  "Roll synced: {n} frames ({m} could not be read)": "Rullino sincronizzato: {n} fotogrammi ({m} non leggibili)",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Rullino sincronizzato: {n} fotogrammi ({m} non leggibili; {c} modificati durante la sincronizzazione sono stati lasciati com'erano)"
 }

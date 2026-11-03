@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "转换会重置在负片上所做的编辑：{list}。",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "“同步胶卷”会转换尚未转换的帧（已选择 {n} 帧），并重置它们在负片上所做的编辑：{list}。",
   "Roll synced: {n} frames share one film base and range": "胶卷已同步：{n} 帧共用同一片基和范围",
-  "Roll synced: {n} frames ({m} could not be read)": "胶卷已同步：{n} 帧（{m} 帧无法读取）"
+  "Roll synced: {n} frames ({m} could not be read)": "胶卷已同步：{n} 帧（{m} 帧无法读取）",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "胶卷已同步：{n} 帧（{m} 帧无法读取；同步期间被编辑的 {c} 帧保持原样）"
 }

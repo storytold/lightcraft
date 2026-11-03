@@ -331,6 +331,15 @@ pub fn analyze(src: &Rgb32f, neg: &Negative, region: Rect, sampled: Option<([f64
 
 /// Most picture samples one frame gives a roll analysis, so every frame weighs about the same.
 const ROLL_SAMPLES: usize = 40_000;
+/// Most picture samples a whole roll pools (about 24 MB): past [`ROLL_SAMPLES`] × 50 frames, each frame gives fewer, so
+/// a large selection doesn't grow the memory a sync holds without bound.
+const ROLL_POOL: usize = 2_000_000;
+
+/// The samples each frame of a roll of `frames` gives its analysis: [`ROLL_SAMPLES`], fewer for a roll past
+/// [`ROLL_POOL`] (at least one).
+pub fn roll_samples_per_frame(frames: usize) -> usize {
+    (ROLL_POOL / frames.max(1)).clamp(1, ROLL_SAMPLES)
+}
 
 /// One analysis for a whole roll (`frames`, each measured by [`measure_frame`]): the same film base and density range
 /// for every frame, so frames shot alike convert alike, as a lab scans a roll. The base is a sampled one if any frame
@@ -349,9 +358,10 @@ pub fn analyze_roll(film: FilmType, frames: &[FrameMeasure]) -> Result<FilmAnaly
         let b = frames.iter().fold([0.0f32; 3], |m, f| [0, 1, 2].map(|i| m[i].max(f.base[i])));
         (b, first.base_source, None)
     };
-    let mut pooled: Vec<[f32; 3]> = Vec::with_capacity(frames.len().saturating_mul(ROLL_SAMPLES));
+    let per = roll_samples_per_frame(frames.len());
+    let mut pooled: Vec<[f32; 3]> = Vec::with_capacity(frames.len().saturating_mul(per));
     for f in frames {
-        let step = f.px.len().div_ceil(ROLL_SAMPLES).max(1);
+        let step = f.px.len().div_ceil(per).max(1);
         pooled.extend(f.px.iter().step_by(step));
     }
     // (frames already thinned by `thin_for_roll` pool alike: their step is 1)
@@ -375,10 +385,10 @@ pub fn base_spread(frames: &[FrameMeasure]) -> f32 {
         .fold(1.0, f32::max)
 }
 
-/// Keep only the samples [`analyze_roll`] reads from `m` (at most [`ROLL_SAMPLES`]), so a roll's frames can be held
+/// Keep only the samples [`analyze_roll`] reads from `m`, one frame of a roll of `frames` ([`roll_samples_per_frame`]), so a roll's frames can be held
 /// until it is written, and the roll analysed again without some of them, at a bounded cost.
-pub fn thin_for_roll(m: &mut FrameMeasure) {
-    let step = m.px.len().div_ceil(ROLL_SAMPLES).max(1);
+pub fn thin_for_roll(m: &mut FrameMeasure, frames: usize) {
+    let step = m.px.len().div_ceil(roll_samples_per_frame(frames)).max(1);
     if step > 1 {
         m.px = m.px.iter().step_by(step).copied().collect();
     }
@@ -948,6 +958,15 @@ mod tests {
         assert!([back.x0 - c.x0, back.y0 - c.y0, back.x1 - c.x1, back.y1 - c.y1].iter().all(|d| d.abs() < 1e-9), "{back:?}");
         s.crop.geometry.rect = Rect::new(f64::NAN, 0.0, 1.0, 1.0);
         assert_eq!(s.negative_region(), Rect::UNIT);
+    }
+
+    /// A roll's frames give it fewer samples each past the pool's size, so a large selection holds bounded memory.
+    #[test]
+    fn a_large_roll_pools_a_bounded_number_of_samples() {
+        assert_eq!(roll_samples_per_frame(36), ROLL_SAMPLES);
+        assert_eq!(roll_samples_per_frame(0), ROLL_SAMPLES);
+        assert_eq!(roll_samples_per_frame(1000) * 1000, ROLL_POOL);
+        assert_eq!(roll_samples_per_frame(usize::MAX), 1);
     }
 
     /// A base channel measured below the conversion's floor is stored at the floor, so the analysis stays valid (and

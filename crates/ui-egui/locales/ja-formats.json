@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "変換すると、ネガに対して行った編集がリセットされます: {list}。",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "「ロールを同期」は未変換のコマ（{n} 枚選択）を変換し、ネガに対して行った編集をリセットします: {list}。",
   "Roll synced: {n} frames share one film base and range": "ロールを同期しました: {n} コマでフィルムベースと範囲を共有",
-  "Roll synced: {n} frames ({m} could not be read)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした）"
+  "Roll synced: {n} frames ({m} could not be read)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした）",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした。同期中に編集された {c} 枚はそのままです）"
 }

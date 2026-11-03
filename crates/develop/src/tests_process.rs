@@ -216,6 +216,8 @@ fn absurd_film_analysis_numbers_are_not_valid() {
         FilmAnalysis { hi: [1.0e30; 3], ..ok },
         FilmAnalysis { base: [1.0e39, 0.5, 0.3], ..ok },
         FilmAnalysis { mid: [-1.0e20; 3], ..ok },
+        FilmAnalysis { mid: [-0.5, 0.5, 0.5], ..ok },
+        FilmAnalysis { mid: [0.5, 1.5, 0.5], ..ok },
         FilmAnalysis { tones: Some([[1.0e30; 3]; 9]), ..ok },
         FilmAnalysis { base: [1.0e-9, 0.5, 0.3], ..ok },
         FilmAnalysis { tones: Some(std::array::from_fn(|k| [1.0 - k as f64 * 0.1; 3])), ..ok },

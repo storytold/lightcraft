@@ -49,7 +49,7 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
             Err(e) if e == "stopped" => return,
             Err(e) => return app.toast_error(ctx, e),
         };
-        let skipped = measured.skipped.len();
+        let unreadable = measured.skipped.len();
         // as the command: one undo step, the durable save and the automatic XMP sidecar write
         match app.session.execute_fn("negative.syncRoll", |s| negative::roll_apply(s, plan, measured)) {
             Ok(r) if r["warning"].is_string() => {
@@ -57,10 +57,19 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
             }
             Ok(r) => {
                 let synced = r["photos"].as_array().map_or(0, Vec::len);
-                let message = if skipped == 0 {
+                // (the frames skipped there: those unreadable, then those edited while the roll was read)
+                let changed = r["skipped"].as_array().map_or(0, Vec::len).saturating_sub(unreadable);
+                let message = if unreadable + changed == 0 {
                     crate::i18n::tr_format!("Roll synced: {n} frames share one film base and range", n = synced)
+                } else if changed == 0 {
+                    crate::i18n::tr_format!("Roll synced: {n} frames ({m} could not be read)", n = synced, m = unreadable)
                 } else {
-                    crate::i18n::tr_format!("Roll synced: {n} frames ({m} could not be read)", n = synced, m = skipped)
+                    crate::i18n::tr_format!(
+                        "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)",
+                        n = synced,
+                        m = unreadable,
+                        c = changed
+                    )
                 };
                 app.toast(ctx, message);
             }

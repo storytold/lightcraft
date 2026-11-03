@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "Перетворення скидає редагування, зроблені на негативі: {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "«Синхронізувати плівку» перетворює ще не перетворені кадри (вибрано: {n}) і скидає їхні редагування, зроблені на негативі: {list}.",
   "Roll synced: {n} frames share one film base and range": "Плівку синхронізовано: спільна основа й діапазон у кадрів: {n}",
-  "Roll synced: {n} frames ({m} could not be read)": "Плівку синхронізовано, кадрів: {n} (не вдалося прочитати: {m})"
+  "Roll synced: {n} frames ({m} could not be read)": "Плівку синхронізовано, кадрів: {n} (не вдалося прочитати: {m})",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Плівку синхронізовано, кадрів: {n} (не вдалося прочитати: {m}; змінені під час синхронізації й залишені як є: {c})"
 }

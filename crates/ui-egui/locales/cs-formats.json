@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "Převod obnoví úpravy provedené na negativu: {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Synchronizovat film převede dosud nepřevedené snímky (vybráno: {n}) a obnoví jejich úpravy provedené na negativu: {list}.",
   "Roll synced: {n} frames share one film base and range": "Film synchronizován: společná podložka filmu a rozsah, snímky: {n}",
-  "Roll synced: {n} frames ({m} could not be read)": "Film synchronizován, snímky: {n} (nelze přečíst: {m})"
+  "Roll synced: {n} frames ({m} could not be read)": "Film synchronizován, snímky: {n} (nelze přečíst: {m})",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Film synchronizován, snímky: {n} (nelze přečíst: {m}; upravené během synchronizace a ponechané beze změny: {c})"
 }

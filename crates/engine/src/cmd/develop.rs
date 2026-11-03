@@ -125,8 +125,19 @@ fn wb_info_after(info: &lightcraft_pipeline::SourceInfo, after: &DevelopSettings
 
 /// A preset applied to one photo at `amount` (1.0 = 100 %), with the one-field white balance handling of
 /// [`merge_settings_for_photo`], read in the conversion state the photo has at that amount.
+///
+/// A preset that converts a scan not converted yet (a Film Conversion or Film Stocks preset, at 50 % or more) resets
+/// the edits made on the negative first, as `negative.convert` does: they would act the wrong way on the positive.
 pub(crate) fn apply_preset_for_photo(d: &DevelopSettings, preset: &Preset, amount: f64, info: &lightcraft_pipeline::SourceInfo) -> DevelopSettings {
-    let after = preset.apply(d, amount);
+    let mut after = preset.apply(d, amount);
+    let mut converted_here = None;
+    if !d.negative.converts() && after.negative.converts() {
+        let mut base = d.clone();
+        base.reset_negative_conflicts();
+        after = preset.apply(&base, amount);
+        converted_here = Some(base);
+    }
+    let d = converted_here.as_ref().unwrap_or(d);
     let info = wb_info_after(info, &after);
     let Some(prepared) = prepare_photo_for_wb_partial(d, &preset.settings, &after, &info) else {
         return after;
@@ -1398,6 +1409,32 @@ mod tests_negative_wb {
         let on = super::merge_settings_for_photo(&plain, &json!({"negative": {"film": "colorNegative"}, "wb": {"temp": 7000.0}}), &raw()).unwrap();
         assert!(on.negative.converts());
         assert_eq!((on.wb.temp, on.wb.tint), (7000.0, 0.0), "the positive's neutral tint, not the raw's +22");
+    }
+
+    /// A preset that converts a scan resets the edits made on the negative, as Convert does; below 50 % (no
+    /// conversion) and on a photo already converted, they stay.
+    #[test]
+    fn a_preset_that_converts_a_scan_resets_its_negative_edits() {
+        let preset = lightcraft_develop::Preset {
+            id: "p".into(),
+            name: "p".into(),
+            group: "g".into(),
+            settings: json!({"negative": {"film": "colorNegative", "tone": "soft"}}),
+            favorite: false,
+            builtin: false,
+        };
+        let mut scan = DevelopSettings::for_raw(3442.0, 22.0);
+        scan.light.exposure = 1.0;
+        let full = super::apply_preset_for_photo(&scan, &preset, 1.0, &raw());
+        assert!(full.negative.converts());
+        assert_eq!(full.light.exposure, 0.0, "set on the negative: reset");
+        let low = super::apply_preset_for_photo(&scan, &preset, 0.25, &raw());
+        assert!(!low.negative.converts());
+        assert_eq!(low.light.exposure, 1.0, "not converted: kept");
+        let mut positive = converted();
+        positive.light.exposure = 1.0;
+        let again = super::apply_preset_for_photo(&positive, &preset, 1.0, &raw());
+        assert_eq!(again.light.exposure, 1.0, "set on the positive: kept");
     }
 
     /// Below 50 % a preset that switches the conversion off leaves it on, so its one white balance number is read

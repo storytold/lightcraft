@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "轉換會重設在負片上所做的編輯：{list}。",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "「同步底片卷」會轉換尚未轉換的格（已選取 {n} 格），並重設它們在負片上所做的編輯：{list}。",
   "Roll synced: {n} frames share one film base and range": "底片卷已同步：{n} 格共用同一片基和範圍",
-  "Roll synced: {n} frames ({m} could not be read)": "底片卷已同步：{n} 格（{m} 格無法讀取）"
+  "Roll synced: {n} frames ({m} could not be read)": "底片卷已同步：{n} 格（{m} 格無法讀取）",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "底片卷已同步：{n} 格（{m} 格無法讀取；同步期間被編輯的 {c} 格維持原樣）"
 }

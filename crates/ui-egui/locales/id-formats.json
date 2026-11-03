@@ -324,5 +324,6 @@
   "Converting resets the edits made on the negative: {list}.": "Konversi mengatur ulang editan yang dibuat pada negatif: {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Sinkronkan rol mengonversi bingkai yang belum dikonversi ({n} dipilih) dan mengatur ulang editan mereka yang dibuat pada negatif: {list}.",
   "Roll synced: {n} frames share one film base and range": "Rol disinkronkan: {n} bingkai berbagi satu dasar film dan rentang",
-  "Roll synced: {n} frames ({m} could not be read)": "Rol disinkronkan: {n} bingkai ({m} tidak dapat dibaca)"
+  "Roll synced: {n} frames ({m} could not be read)": "Rol disinkronkan: {n} bingkai ({m} tidak dapat dibaca)",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Rol disinkronkan: {n} bingkai ({m} tidak dapat dibaca; {c} yang diedit selama sinkronisasi dibiarkan apa adanya)"
 }

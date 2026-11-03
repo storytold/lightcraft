@@ -321,5 +321,6 @@
   "Converting resets the edits made on the negative: {list}.": "Konwersja resetuje edycje wykonane na negatywie: {list}.",
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Synchronizuj rolkę konwertuje klatki jeszcze nieprzekonwertowane (zaznaczone: {n}) i resetuje ich edycje wykonane na negatywie: {list}.",
   "Roll synced: {n} frames share one film base and range": "Rolka zsynchronizowana: wspólne podłoże filmu i zakres, klatki: {n}",
-  "Roll synced: {n} frames ({m} could not be read)": "Rolka zsynchronizowana, klatki: {n} (nie udało się odczytać: {m})"
+  "Roll synced: {n} frames ({m} could not be read)": "Rolka zsynchronizowana, klatki: {n} (nie udało się odczytać: {m})",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Rolka zsynchronizowana, klatki: {n} (nie udało się odczytać: {m}; edytowane podczas synchronizacji i pozostawione bez zmian: {c})"
 }
