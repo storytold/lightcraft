@@ -162,13 +162,22 @@ fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
     // items (`iloc` construction method 2) is rebuilt once per extent, so a chain of such items
     // multiplies at every level while each result stays small. Count those visits from the
     // `iloc` table before reconstructing anything: the primary item first (`heic_rs::probe` and
-    // `Context::grid` both rebuild its descriptor), then its alpha plane, then every tile
-    // reference, repeats included.
+    // `Context::grid` both rebuild its descriptor), then its alpha plane and, when that is a grid,
+    // its tiles, then every tile reference, repeats included.
     let mut visits = 0_usize;
     item_visits(&ctx, id, 0, &mut visits)?;
+    // `heic_rs::probe` reads an item without `ispe` from its parameter sets
+    check_item_parameter_sets(&ctx.props(id).map_err(err)?)?;
     let info = heic_rs::probe(bytes).map_err(open_error)?;
-    if let Some(alpha) = ctx.alpha_item(id).map_err(err)? {
+    let alpha = ctx.alpha_item(id).map_err(err)?;
+    if let Some(alpha) = alpha {
         item_visits(&ctx, alpha, 0, &mut visits)?;
+        // an alpha plane may be a grid too: its tiles are rebuilt when it is decoded
+        if let Some((_, tiles)) = ctx.grid(alpha).map_err(err)? {
+            for &tile in tiles.iter().filter(|&&tile| tile != alpha) {
+                item_visits(&ctx, tile, 0, &mut visits)?;
+            }
+        }
     }
     let mut coded = match ctx.grid(id).map_err(err)? {
         Some((_, tiles)) => tiles,
@@ -257,6 +266,9 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
                 continue;
             }
             let Ok(p) = ctx.props(r.from) else { continue };
+            if check_item_parameter_sets(&p).is_err() {
+                continue;
+            }
             let Ok((w, h)) = ctx.coded_size(r.from, &p) else { continue };
             let edge = w.max(h);
             if edge >= min_edge && best.is_none_or(|(_, e)| edge < e) {
@@ -316,7 +328,9 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
         return Err(Error::Limit(format!("the image carries {} transform properties, over the {MAX_TRANSFORMS}-property cap", p.transforms.len())));
     }
     let limit = options.max_pixels;
-    // The declared sizes are refused before anything is decoded or allocated.
+    // The declared sizes are refused before anything is decoded or allocated (an item without
+    // `ispe` takes its size from its parameter sets, checked first).
+    check_item_parameter_sets(&p)?;
     let (cw, ch) = ctx.coded_size(id, &p).map_err(err)?;
     heic_rs::image::check_pixels(cw, ch, limit).map_err(err)?;
     let (tw, th) = heic_rs::transform::transformed_size(cw, ch, &p.transforms).map_err(err)?;
@@ -376,6 +390,44 @@ const GRID_BUDGET: u64 = 2;
 /// most one of each, so anything approaching this is a reordered or hostile association list.
 const MAX_TRANSFORMS: usize = 12;
 
+/// The most parameter sets one `hvcC` may carry: one per id H.265 allows (16 VPS, 16 SPS, 64 PPS).
+/// heic-rs 0.1.4 replaces a repeated id by scanning every set kept so far, so more sets (repeats,
+/// or ids past the standard's range) only make that collection quadratic.
+const MAX_PARAMETER_SETS: usize = 16 + 16 + 64;
+/// Highest `pps_pic_parameter_set_id` H.265 allows (7.4.3.3.1).
+const MAX_PPS_ID: u32 = 63;
+/// Most tile columns and rows a picture may have: H.265's level limits (Table A.8, levels 6 to
+/// 6.2). heic-rs 0.1.4 builds its tile tables by walking the tile boundaries for every coding tree
+/// block, so its work grows with blocks × tiles; these keep that a small multiple of the blocks.
+const MAX_TILE_COLS: u32 = 20;
+const MAX_TILE_ROWS: u32 = 22;
+
+/// Refuses parameter sets that would make heic-rs's set collection or tile tables cost far more
+/// than the picture: too many sets, a PPS id out of range, or more tiles than any level allows.
+fn check_parameter_sets(sets: &[&[u8]]) -> Result<(), Error> {
+    if sets.len() > MAX_PARAMETER_SETS {
+        return Err(Error::Limit(format!("the hvcC record carries {} parameter sets, over the {MAX_PARAMETER_SETS}-set cap", sets.len())));
+    }
+    let layouts = vui::pps_layouts(sets).ok_or_else(|| Error::Malformed("unreadable picture parameter set".into()))?;
+    for p in layouts {
+        if p.id > MAX_PPS_ID {
+            return Err(Error::Malformed(format!("picture parameter set id {} is out of range", p.id)));
+        }
+        if p.tile_cols > MAX_TILE_COLS || p.tile_rows > MAX_TILE_ROWS {
+            return Err(Error::Limit(format!(
+                "a picture of {} × {} tiles, over the {MAX_TILE_COLS} × {MAX_TILE_ROWS} H.265 allows",
+                p.tile_cols, p.tile_rows
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// [`check_parameter_sets`] of a coded item's `hvcC`, if it has one.
+fn check_item_parameter_sets(p: &ItemProps<'_>) -> Result<(), Error> {
+    p.hvcc.as_ref().map_or(Ok(()), |h| check_parameter_sets(&h.parameter_sets()))
+}
+
 /// The decoded pictures of an item: one, or a grid's tiles in `dimg` order.
 struct Coded<'a> {
     frames: Vec<Frame>,
@@ -403,6 +455,7 @@ impl<'a> Coded<'a> {
         for t in &ids {
             let tp = ctx.props(*t).map_err(err)?;
             let hvcc = tp.hvcc.as_ref().ok_or(heic_rs::Error::MissingBox("hvcC")).map_err(err)?;
+            check_parameter_sets(&hvcc.parameter_sets())?;
             let sizes = vui::coded_sizes(&hvcc.parameter_sets()).ok_or_else(|| Error::Malformed("unreadable sequence parameter set".into()))?;
             let mut largest = 0u64;
             for (w, h) in sizes {
