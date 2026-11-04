@@ -292,11 +292,11 @@ pub enum DngCompression {
     Lossy,
 }
 
-/// The destination of a batch: a folder (with `ExportOptions::subfolder` and the conflict policy
-/// applied to each file together with its sidecars; with [`DestinationMode::SameAsOriginal`] each
-/// photo's own folder instead of `dir`), or one exact file path (single photo; an ordinary file
-/// already there is replaced). Either way a catalogued original (or its sidecar)
-/// is never written over: see [`crate::originals`].
+/// The destination of a batch: a folder (with `ExportOptions::subfolder`; with
+/// [`DestinationMode::SameAsOriginal`] each photo's own folder instead of `dir`), or one explicit
+/// file path (single photo). Both apply the conflict policy to the file and its sidecars;
+/// Unique may change the requested basename. A catalogued original or its sidecar is never
+/// written over: see [`crate::originals`].
 #[derive(Clone, Debug, Default)]
 pub struct Destination {
     pub dir: String,

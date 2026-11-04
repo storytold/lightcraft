@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-11-03
+
+### Explicit export paths honor the conflict policy
+- An export to a single `path` now uses the same `unique`, `skip` or `overwrite` policy as a destination folder,
+  including a preset's saved policy. Unique keeps existing files and chooses a numbered name in the requested
+  folder; an Original export's image and XMP keep the same basename. Read `files[].path` for the chosen destination.
+  An explicit path naming a catalogued original, its sidecar or a folder is refused under every policy.
+- The chosen image and all sidecars are checked against catalogued originals again after collision selection,
+  before writing any of them. This catches identity changes during selection, but does not make filesystem checks
+  and writes atomic.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
