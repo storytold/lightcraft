@@ -318,7 +318,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let op = match c.op {
                     lightcraft_develop::MaskOp::Add => "",
                     lightcraft_develop::MaskOp::Subtract => "− ",
-                    lightcraft_develop::MaskOp::Intersect => "∩ ",
+                    lightcraft_develop::MaskOp::Intersect => {
+                        // drawn: Inter has no ∩, only the CJK faces do (issue #1950)
+                        let (r, _) = ui.allocate_exact_size(vec2(8.0, 16.0), Sense::hover());
+                        intersect_mark(ui.painter(), r, ui.visuals().text_color());
+                        ""
+                    }
                 };
                 if let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(mid, k, _)| *mid == m.id && *k == i) {
                     // inline rename: Enter (or leaving the field) commits, Escape cancels
@@ -343,9 +348,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let room = (ui.available_width() - 30.0).max(0.0);
                 let resp = ui.scope(|ui| {
                     ui.set_max_width(room);
-                    ui.add(egui::Label::new(text).truncate().sense(Sense::click()))
+                    ui.add(egui::Label::new(text.clone()).truncate().sense(Sense::click()))
                 });
                 let resp = resp.inner;
+                if matches!(c.op, lightcraft_develop::MaskOp::Intersect) {
+                    // the drawn ∩ has no text: the row still names its mode to screen readers
+                    let spoken = format!("{}: {text}", crate::i18n::tr("Intersect"));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken.clone()));
+                }
                 register(ui, format!("component:{i}"), resp.rect);
                 if resp.double_clicked() {
                     app.ui.renaming_component = Some((m.id, i, label.clone()));
@@ -917,6 +927,19 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+/// The ∩ in front of an intersecting mask component: two legs joined by a half circle, as tall as
+/// a lowercase letter.
+fn intersect_mark(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
+    let (c, r) = (rect.center(), 3.0);
+    let mut points = vec![pos2(c.x - r, c.y + 4.0)];
+    points.extend((0..=8).map(|i| {
+        let a = std::f32::consts::PI * (1.0 + i as f32 / 8.0);
+        pos2(c.x + r * a.cos(), c.y - 0.5 + r * a.sin())
+    }));
+    points.push(pos2(c.x + r, c.y + 4.0));
+    painter.add(egui::Shape::line(points, Stroke::new(1.2, color)));
 }
 
 #[cfg(test)]

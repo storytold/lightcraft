@@ -124,7 +124,7 @@ pub(super) fn region_overlay(
             let cross = Stroke::new(1.4, if resp.hovered() { Color32::WHITE } else { Color32::from_gray(210) });
             p.line_segment([c - vec2(m, m), c + vec2(m, m)], cross);
             p.line_segment([c - vec2(m, -m), c + vec2(m, -m)], cross);
-            if resp.on_hover_text(crate::i18n::tr("Remove this face box (undo with Edit ▸ Undo)")).clicked() {
+            if resp.on_hover_text(crate::i18n::tr("Remove this face box (undo with Edit → Undo)")).clicked() {
                 edit = Some(RegionEdit::Remove(index));
             }
         }

@@ -1935,7 +1935,7 @@ fn import_luts(app: &mut LightcraftApp, lut_paths: &[&String], news: &mut Import
             let profiles = v["imported"].as_array().map_or(0, Vec::len);
             if profiles > 0 {
                 news.parts.push(crate::i18n::tr_format!(
-                    "Imported {profiles} profile{} (Profile browser ▸ their groups)",
+                    "Imported {profiles} profile{} (Profile browser → their groups)",
                     crate::i18n::plural_s(profiles),
                     profiles = profiles
                 ));
