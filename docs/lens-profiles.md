@@ -50,6 +50,8 @@ Sync carry Enable Lens Corrections and its amounts, and each photo keeps the pro
 (`crates/engine/src/tests/lens_refresh.rs`).
 
 Files are read once per folder and again after a download. Invalid files are skipped with a warning in the log.
+Each read logs the folder, whether it is the download or `LIGHTCRAFT_LENSFUN_DIR`, and how many lenses and cameras
+it holds; a folder that is missing or holds no lenses is logged as a warning (#2511).
 
 ## What is applied
 
