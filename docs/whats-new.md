@@ -763,6 +763,9 @@
   and says why, as `album.createSmart` does. So does a filter that names a smart album.
 - With View ▸ Hold View Until Refreshed on, a view of several albums holds a photo only while one of them has it: a
   photo that stops matching the rules of a smart album among them goes at once, unless another album shown has it.
+- `library.filter` refuses an album that is not there (`no such album N`), as `library.source` does. Deleting a shown
+  album moves the active photo into what is left. A filter put aside by Enable Filters that a deleted album or folder
+  leaves with only the rating operator is dropped, as one a deleted keyword leaves.
 - `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
   it), so editing a smart album saved from a view of several albums no longer loses them.
 
