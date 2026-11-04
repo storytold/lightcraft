@@ -417,3 +417,21 @@ fn load_dir_refuses_a_non_regular_xml_entry() {
     assert!(db.is_empty());
     assert_eq!(errs.len(), 1, "{errs:?}");
 }
+
+/// A FIFO named `*.xml` is refused without opening it: opening a FIFO for reading blocks until a writer appears.
+#[cfg(unix)]
+#[test]
+fn load_dir_refuses_a_fifo_without_blocking() {
+    let dir = std::env::temp_dir().join(format!("lensdb-test-fifo-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let fifo = dir.join("f.xml");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success());
+    if !made {
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+    let (db, errs) = LensDb::load_dir(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(db.is_empty());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+}
