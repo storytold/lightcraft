@@ -209,7 +209,7 @@ fn hdr_batch_merges_each_stack() {
 }
 
 /// Issue #1455: a panorama keeps its photos' resolution, held to what fits in the merge's memory
-/// beside them, and never above a size asked for.
+/// beside them (down to its floor), and never above a size asked for.
 #[test]
 fn panorama_size_is_held_to_memory() {
     use crate::merge::fit_in_memory;
@@ -225,31 +225,39 @@ fn panorama_size_is_held_to_memory() {
     assert_eq!(mp(fit_in_memory(&asked, photos, gb(10.5))), 20.0, "a size asked for is kept when it fits");
 }
 
-/// Issue #3708: a merge whose memory can hold a 40 MP panorama is sized as before; one that can't
-/// is planned at what fits (and says memory held it), not raised to 40 MP, and one where not even
-/// a 1 MP panorama fits is refused, naming the memory it needs and has.
+/// Issue #3708: a panorama is made smaller to fit its memory down to its floor (40 MP, or a
+/// smaller size asked for, or its photos' own resolution when that is less), and says memory held
+/// it; a merge whose memory can't hold the floor is refused, naming the floor and the memory it
+/// needs and has, rather than made quietly far below it.
 #[test]
-fn a_panorama_is_not_planned_past_the_merge_memory() {
-    use crate::merge::{MIN_PANORAMA_MEGAPIXELS, fit_in_memory, size_limit};
+fn a_panorama_is_made_no_smaller_than_its_floor() {
+    use crate::merge::{MIN_PANORAMA_MEGAPIXELS, fit_in_memory, panorama_floor, size_limit};
+    assert_eq!(MIN_PANORAMA_MEGAPIXELS, 40.0);
     let full = lightcraft_merge::PanoOptions::default();
-    let photos = 3.0 * 12e6; // three 12 MP photos: the blend (68 B/px) decides
-    let mp = |room: f64| fit_in_memory(&full, photos, room).map(|o| o.max_megapixels);
-    // exactly 40 MP fits, and a little more: the size memory allows, as before
+    let photos = 5.0 * 12e6; // five 12 MP photos: the blend (68 B/px) decides
+    let fit = |pano: &lightcraft_merge::PanoOptions, photos: f64, room: f64| fit_in_memory(pano, photos, room).map(|o| o.max_megapixels);
+    let mp = |room: f64| fit(&full, photos, room);
+    // the floor and a little more fit: the size memory allows, between the floor and the full size
     assert_eq!(mp(40e6 * 68.0), Ok(40.0));
-    assert_eq!(mp(41e6 * 68.0), Ok(41.0));
-    // 2 GB (a 4 GB computer, or a small memory limit): about 29 MP, not 40
-    let small = mp(2e9).unwrap();
-    assert!((29.0..30.0).contains(&small), "2 GB: {small} MP");
-    assert_eq!(size_limit(lightcraft_merge::pano::MAX_MEGAPIXELS, small, 36.0, small), Some("memory"), "the result says memory held it");
-    // room for 0.6 MP beside the photos: under the 1 MP minimum, but a 0.5 MP size asked for fits
+    assert_eq!(mp(50e6 * 68.0), Ok(50.0));
+    assert_eq!(size_limit(lightcraft_merge::pano::MAX_MEGAPIXELS, 50.0, 55.0, 50.0), Some("memory"), "the result says memory held it");
+    // 2 GB (a 4 GB computer, or a small memory limit): about 29 MP, under the floor: refused
+    let e = mp(2e9).unwrap_err();
+    assert!(e.starts_with("not enough memory for this panorama: at 40 MP, the smallest it is made,"), "{e}");
+    assert!(e.contains("needs about 2594 MB") && e.contains("may use 1907 MB"), "{e}");
+    // three 1 MP photos: their own resolution is the floor
+    assert_eq!(panorama_floor(full.max_megapixels, 3e6), 3.0);
+    assert_eq!(fit(&full, 3e6, 3.5e6 * 68.0), Ok(3.5));
+    let e = fit(&full, 3e6, 2e6 * 68.0).unwrap_err();
+    assert!(e.contains("at 3 MP") && e.contains("may use 129 MB"), "{e}");
+    // a size asked for below 40 MP is the floor: room for 0.6 MP beside the photos holds 0.5 MP
     let room = photos * 12.0 + 0.6e6 * 36.0;
     let asked = lightcraft_merge::PanoOptions { max_megapixels: 0.5, ..full.clone() };
-    assert_eq!(fit_in_memory(&asked, photos, room).map(|o| o.max_megapixels), Ok(0.5));
-    assert!(mp(room).is_err(), "the full size: refused");
-    // not even 1 MP fits beside the photos (they hold 412 MB): refused, naming both amounts
-    let e = mp(0.4e9).unwrap_err();
-    assert!(e.contains("not enough memory") && e.contains(&format!("at {MIN_PANORAMA_MEGAPIXELS} MP")), "{e}");
-    assert!(e.contains("needs about 447 MB") && e.contains("may use 381 MB"), "{e}");
+    assert_eq!(fit(&asked, photos, room), Ok(0.5));
+    assert!(fit(&lightcraft_merge::PanoOptions { max_megapixels: 0.7, ..full.clone() }, photos, room).unwrap_err().contains("at 0.7 MP"));
+    assert!(mp(room).unwrap_err().contains("at 40 MP"), "the full size: refused");
+    assert_eq!(panorama_floor(f64::NAN, 1e9), 40.0, "a NaN size asked for is ignored");
+    assert_eq!(panorama_floor(0.01, 1e3), 0.1, "the stitch's least");
     for room in [0.0, -1.0, f64::NAN] {
         assert!(mp(room).unwrap_err().contains("may use 0 MB"), "{room}");
     }

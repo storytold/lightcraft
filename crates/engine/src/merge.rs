@@ -287,22 +287,22 @@ fn merge_memory(ram: Option<usize>) -> f64 {
 
 /// `pano` with its size held to what fits in `room` bytes (the merge's memory, [`merge_memory`])
 /// beside its photos (`frame_px` pixels, 12 bytes each, loaded already): a panorama of five 51 MP
-/// photos may have up to 166 MP on a 16 GB computer, 355 MP on 32 GB. Not raised to the 40 MP every
-/// panorama had before it followed the photos' resolution when that doesn't fit (issue #3708: a
-/// 40 MP stitch peaks near 2.7 GB, more than a small computer or a memory limit allows; the result
-/// says `limit: "memory"`), and refused when not even [`MIN_PANORAMA_MEGAPIXELS`] fit. Never above
-/// what was asked.
+/// photos may have up to 166 MP on a 16 GB computer, 355 MP on 32 GB. Never below its floor
+/// ([`panorama_floor`]): a merge whose memory can't hold that is refused, naming the memory it
+/// needs and has (issue #3708: the floor used to be kept whatever the memory, and a 40 MP stitch
+/// peaks near 2.7 GB, more than a small computer or a memory limit allows; a refusal is preferred
+/// to a panorama quietly far below it). Between the floor and the full size the result says
+/// `limit: "memory"`. Never above what was asked.
 pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std::result::Result<PanoOptions, String> {
     let fits = ((room - frame_px * 12.0) / PANO_TILE_BYTES).min(room / PANO_BLEND_BYTES) / 1e6;
-    // a size asked for below the minimum is kept when it fits (`min` ignores a NaN `asked`), down
-    // to the 0.1 MP the stitch makes at the least
-    let least = MIN_PANORAMA_MEGAPIXELS.min(pano.max_megapixels).max(0.1);
+    let floor = panorama_floor(pano.max_megapixels, frame_px);
     // a NaN `fits` (a NaN `room`) is refused too
-    if fits.is_nan() || fits < least {
-        let need = (frame_px * 12.0 + least * 1e6 * PANO_TILE_BYTES).max(least * 1e6 * PANO_BLEND_BYTES);
+    if fits.is_nan() || fits < floor {
+        let need = (frame_px * 12.0 + floor * 1e6 * PANO_TILE_BYTES).max(floor * 1e6 * PANO_BLEND_BYTES);
         let mb = |b: f64| b / (1u64 << 20) as f64;
         return Err(format!(
-            "not enough memory for this panorama: even at {least} MP it needs about {:.0} MB, its photos included, and the merge may use {:.0} MB; merge fewer or smaller photos, or close other apps",
+            "not enough memory for this panorama: at {} MP, the smallest it is made, it needs about {:.0} MB, its photos included, and the merge may use {:.0} MB; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
+            (floor * 10.0).round() / 10.0,
             mb(need).ceil(),
             mb(room.max(0.0)).floor()
         ));
@@ -310,14 +310,23 @@ pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std
     Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(fits), ..pano.clone() })
 }
 
+/// The smallest a panorama is made to fit its memory (megapixels): [`MIN_PANORAMA_MEGAPIXELS`],
+/// or less when less was `asked` for (`min` ignores a NaN one), or when its photos (`frame_px`
+/// pixels, standing for the panorama's own resolution, known only once they are stitched) have
+/// less; never under the 0.1 MP the stitch makes at the least.
+pub(crate) fn panorama_floor(asked: f64, frame_px: f64) -> f64 {
+    MIN_PANORAMA_MEGAPIXELS.min(asked).min(frame_px / 1e6).max(0.1)
+}
+
 /// The pixels of `frames`.
 fn pixels(frames: &[Frame]) -> f64 {
     frames.iter().map(|f| (f.width() * f.height()) as f64).sum()
 }
 
-/// The smallest panorama [`fit_in_memory`] plans (megapixels); a merge whose memory can't hold
-/// one is refused rather than made at a size nobody can use.
-pub(crate) const MIN_PANORAMA_MEGAPIXELS: f64 = 1.0;
+/// The smallest panorama [`fit_in_memory`] plans (megapixels): the size every panorama had before
+/// it followed its photos' resolution. A merge whose memory can't hold it (or the smaller
+/// [`panorama_floor`]) is refused rather than made smaller.
+pub(crate) const MIN_PANORAMA_MEGAPIXELS: f64 = 40.0;
 
 /// Bracket size from EXIF: the smallest period of the exposure sequence (≥ 2).
 pub fn detect_bracket(frames: &[Frame]) -> Option<usize> {
