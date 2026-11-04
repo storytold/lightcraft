@@ -1798,3 +1798,62 @@ fn oversized_optional_table_warns_and_is_skipped() {
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
 }
+
+/// Discovery must offer every source even when the caller can select only 32 per import.
+#[test]
+fn discovery_lists_more_than_thirty_two_shares() {
+    use SqlValue::Text;
+    let roots: Vec<_> = (0..40).map(|i| vec![Text(format!(r"\\nas\s{i:02}"))]).collect();
+    let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "absolutePath TEXT", roots)], None);
+    let source = std::env::temp_dir().join(format!("lc-many-shares-{}.lrcat", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&source).unwrap();
+    std::io::Write::write_all(&mut file, &bytes).unwrap();
+    drop(file);
+    let shares = network_sources(&source).unwrap();
+    assert_eq!(shares.len(), 40);
+    assert!(NetworkShares::new(shares[..32].to_vec()).is_ok());
+    assert!(NetworkShares::new(Vec::new()).is_ok());
+    std::fs::remove_file(source).unwrap();
+}
+
+/// Cancelling before discovery does not even try to open the catalog.
+#[test]
+fn cancelled_source_discovery_does_not_open_the_catalog() {
+    let error = network_sources_with_cancel(Path::new("missing-cancelled-catalog.lrcat"), &AtomicBool::new(true)).unwrap_err();
+    assert!(error.contains("cancelled"), "{error}");
+}
+
+/// Cancellation during a WAL read stops before the next chunk, not after the whole WAL.
+#[test]
+fn cancelling_a_wal_read_stops_before_the_next_chunk() {
+    struct Cancels<'a> {
+        cancel: &'a AtomicBool,
+        reads: usize,
+    }
+    impl std::io::Read for Cancels<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            buffer.fill(0);
+            self.cancel.store(true, Ordering::Relaxed);
+            Ok(buffer.len())
+        }
+    }
+    let cancel = AtomicBool::new(false);
+    let mut input = Cancels { cancel: &cancel, reads: 0 };
+    let mut bytes = Vec::new();
+    let error = read_catalog_chunks(&mut input, &mut bytes, &cancel).unwrap_err();
+    assert!(error.contains("cancelled"));
+    assert_eq!(input.reads, 1);
+    assert_eq!(bytes.len(), 64 * 1024);
+}
+
+/// A canceled root-table read returns before visiting its B-tree pages.
+#[test]
+fn cancelled_root_table_read_stops_before_visiting_records() {
+    let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "absolutePath TEXT", vec![vec![SqlValue::Text(r"\\nas\photos".into())]])], None);
+    let db = Database::open_with_wal(bytes, &[]).unwrap();
+    let cancel = AtomicBool::new(true);
+    let error = db.read_table_with_cancel(2, 1, &cancel).unwrap_err();
+    assert!(error.contains("cancelled"));
+    assert_eq!(db.read_table(2, 1).unwrap().len(), 1);
+}

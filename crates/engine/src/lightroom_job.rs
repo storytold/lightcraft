@@ -210,7 +210,8 @@ impl LightroomJob {
     pub fn new(s: &mut crate::Session, path: PathBuf, update_existing: bool) -> crate::Result<Self> {
         // a photo deleted here stays deleted: the catalog's record is matched, not restored
         let opts = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
-        let import = ImportJob::new(s, opts)?;
+        let mut import = ImportJob::new(s, opts)?;
+        import.check_network_links();
         let archive_dir = s.library.as_ref().filter(|library| library.on_disk).map(|library| library.dir.join("Interop"));
         let progress = LightroomProgress {
             read_total: Arc::clone(&import.read_total),
@@ -234,6 +235,11 @@ impl LightroomJob {
     pub fn with_network_shares(mut self, shares: crate::doc_path::NetworkShares) -> Self {
         self.network_shares = shares;
         self
+    }
+
+    /// The share policy actually received by this job, for the caller's start acknowledgement.
+    pub fn network_shares(&self) -> &crate::doc_path::NetworkShares {
+        &self.network_shares
     }
 
     /// The job's progress, to watch from another thread while [`LightroomJob::prepare`] runs.
@@ -269,7 +275,7 @@ impl LightroomJob {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        let (paths, missing_sources) = original_paths(&data, cancel)?;
+        let (paths, missing_sources) = original_paths(&mut data, cancel)?;
         // Catalog entries name files, never folders. Missing originals already have enough
         // catalog metadata for placeholders; probing them again only adds failed I/O and errors.
         // Complete the catalog step before the separate read/add photo progress starts.
@@ -336,10 +342,11 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
 }
 
-fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
+fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
     let mut paths = Vec::new();
     let mut missing = HashSet::new();
     let mut seen = HashSet::new();
+    let mut redirected = HashSet::new();
     for photo in &data.photos {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
@@ -351,10 +358,30 @@ fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(V
         if !seen.insert(key.clone()) {
             continue;
         }
-        if photo.original_is_file() {
+        let is_file = if photo.original == lightroom_catalog::Original::Local {
+            match crate::doc_path::original_metadata(Path::new(&photo.path)) {
+                Ok(meta) => meta.is_file(),
+                Err(e) => {
+                    if crate::doc_path::is_network_redirect(&e) {
+                        redirected.insert(key.clone());
+                    }
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if is_file {
             paths.push(photo.path.clone());
         } else {
             missing.insert(key);
+        }
+    }
+    for photo in &mut data.photos {
+        if redirected.contains(&normalize(&photo.path)) {
+            let why = "network originals through reparse points are not imported";
+            photo.original = lightroom_catalog::Original::Refused(why.into());
+            data.warnings.push(format!("image {}: {why}", photo.source_id));
         }
     }
     Ok((paths, missing))

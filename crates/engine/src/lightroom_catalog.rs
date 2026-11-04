@@ -52,6 +52,7 @@ struct Reader {
     wal_before: Option<(u64, Option<std::time::SystemTime>)>,
 }
 impl Reader {
+    /// Reject a source database or WAL changed since this reader was opened.
     fn ensure_unchanged(&self) -> Result<(), String> {
         self.db.ensure_unchanged()?;
         let after = std::fs::metadata(&self.wal_path).ok().map(|m| (m.len(), m.modified().ok()));
@@ -61,12 +62,19 @@ impl Reader {
         Ok(())
     }
 
+    /// Read a required or optional table with the reader's existing row and payload bounds.
     fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
+        self.table_with_cancel(name, required, &AtomicBool::new(false))
+    }
+
+    /// Map table records while allowing cancellation between SQLite pages.
+    fn table_with_cancel(&self, name: &str, required: bool, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
+        ensure_read_active(cancel)?;
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
             return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
         };
         let columns = t.column_names.as_ref().ok_or_else(|| format!("cannot read {name} columns"))?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("{name}: {e:?}"))?;
+        let rows = self.db.read_table_with_cancel(t.rootpage, columns.len(), cancel).map_err(|e| format!("{name}: {e:?}"))?;
         if rows.len() > 1_000_000 {
             return Err(format!("{name}: more than one million records"));
         }
@@ -99,6 +107,7 @@ impl Reader {
         (!id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
     }
 
+    /// Keep other importable tables when an optional table cannot be decoded.
     fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         match self.table(name, false) {
             Ok(rows) => Ok(rows),
@@ -109,6 +118,7 @@ impl Reader {
         }
     }
 
+    /// Decode XMP packets separately so opaque blobs never become JSON byte arrays.
     fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
         let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
@@ -190,7 +200,7 @@ pub enum Original {
 impl CatalogPhoto {
     /// Whether the original is a file here; only a [`Original::Local`] path is looked at.
     pub fn original_is_file(&self) -> bool {
-        self.original == Original::Local && Path::new(&self.path).is_file()
+        self.original == Original::Local && crate::doc_path::original_metadata(Path::new(&self.path)).is_ok_and(|m| m.is_file())
     }
 }
 
@@ -326,7 +336,9 @@ pub(crate) fn validate_for_job(data: &CatalogImport) -> Result<(), String> {
     validate(data)
 }
 
-fn bytes(path: &Path) -> Result<Vec<u8>, String> {
+/// Read a bounded WAL, honoring cancellation before opening and between chunks.
+fn bytes(path: &Path, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
+    ensure_read_active(cancel)?;
     use std::io::Read;
     let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let len = f.metadata().map_err(|e| e.to_string())?.len();
@@ -336,12 +348,31 @@ fn bytes(path: &Path) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     // Reserve the exact size up front: growing by doubling would briefly need about twice the catalog's size.
     let wanted = usize::try_from(len).map_err(|_| "catalog is too large for this platform".to_string())?;
+    ensure_read_active(cancel)?;
     out.try_reserve_exact(wanted).map_err(|_| "not enough memory to read the catalog".to_string())?;
-    f.take(MAX_FILE + 1).read_to_end(&mut out).map_err(|e| e.to_string())?;
+    let mut input = f.take(MAX_FILE + 1);
+    read_catalog_chunks(&mut input, &mut out, cancel)?;
     if out.len() as u64 > MAX_FILE {
         return Err("catalog grew beyond import limit".into());
     }
     Ok(out)
+}
+
+/// Read bounded chunks so cancelling a large WAL does not wait for the entire file.
+fn read_catalog_chunks(input: &mut impl std::io::Read, out: &mut Vec<u8>, cancel: &AtomicBool) -> Result<(), String> {
+    let mut chunk = [0; 64 * 1024];
+    loop {
+        ensure_read_active(cancel)?;
+        let n = match input.read(&mut chunk) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        if n == 0 {
+            return Ok(());
+        }
+        out.extend_from_slice(chunk.get(..n).ok_or("invalid catalog read length")?);
+    }
 }
 
 fn xmp(v: Option<&Value>) -> Result<String, String> {
@@ -440,10 +471,13 @@ fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
 /// catalog's volume, resolved against the catalog's folder, if that is a folder. Both paths are
 /// looked at only when [`crate::doc_path::resolve`] follows them.
 fn relocated_root(absolute: &str, relative: &str, catalog: &Path, shares: &NetworkShares) -> Option<PathBuf> {
-    if relative.is_empty() || !Path::new(relative).is_relative() || shares.resolve(absolute, Some(catalog)).is_ok_and(|p| p.is_dir()) {
+    if relative.is_empty()
+        || !Path::new(relative).is_relative()
+        || shares.resolve(absolute, Some(catalog)).is_ok_and(|p| crate::doc_path::original_metadata(&p).is_ok_and(|m| m.is_dir()))
+    {
         return None;
     }
-    shares.resolve(relative, Some(catalog)).ok().filter(|dir| dir.is_dir())
+    shares.resolve(relative, Some(catalog)).ok().filter(|dir| crate::doc_path::original_metadata(dir).is_ok_and(|m| m.is_dir()))
 }
 
 /// Whether a folder path or file name from the catalog is absolute: `Path::join` would put it in
@@ -536,33 +570,45 @@ pub fn read_source_with_network_shares(
     read_file(path, path, path, shares, cancel, done)
 }
 
-// Shared by source review and full import: same read-only SQLite/WAL view.
-fn open_reader(path: &Path) -> Result<Reader, String> {
+/// Open the same read-only SQLite/WAL view for source discovery and full import.
+fn open_reader(path: &Path, cancel: &AtomicBool) -> Result<Reader, String> {
+    ensure_read_active(cancel)?;
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     let main = FileSource::open(path)?;
     let wal = match std::fs::metadata(&wal_path) {
-        Ok(_) => bytes(&wal_path)?,
+        Ok(_) => bytes(&wal_path, cancel)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.to_string()),
     };
+    ensure_read_active(cancel)?;
     let wal_len = committed_wal_len(main.header(), &wal)?;
+    ensure_read_active(cancel)?;
     let db = Database::open_file_with_wal(main, &wal[..wal_len]).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
     let after = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() || wal_before != wal_after {
         return Err("catalog changed during reading; close Lightroom and retry".into());
     }
+    ensure_read_active(cancel)?;
     Ok(Reader { tables: db.live_tables()?, db, wal_path, wal_before })
 }
 
 /// Discover UNC shares from recorded root folders. Reads only catalog/schema/WAL pages;
 /// never resolves, probes or enumerates originals, even when the catalog itself is on a share.
 pub fn network_sources(path: &Path) -> Result<Vec<String>, String> {
-    let reader = open_reader(path)?;
+    network_sources_with_cancel(path, &AtomicBool::new(false))
+}
+
+/// Discover sources with the UI task's cancellation flag, including during WAL reads.
+/// Discovery is bounded by the SQLite reader; the selection limit must not hide sources.
+pub fn network_sources_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<Vec<String>, String> {
+    let reader = open_reader(path, cancel)?;
+    ensure_read_active(cancel)?;
     let mut shares: BTreeMap<String, String> = BTreeMap::new();
-    for root in reader.table("AgLibraryRootFolder", true)? {
+    for root in reader.table_with_cancel("AgLibraryRootFolder", true, cancel)? {
+        ensure_read_active(cancel)?;
         let absolute = text(&root, "absolutePath");
         let relative = text(&root, "relativePathFromCatalog");
         for (stored, relative_only) in [(absolute, false), (relative, true)] {
@@ -577,10 +623,8 @@ pub fn network_sources(path: &Path) -> Result<Vec<String>, String> {
                 shares.entry(share.to_ascii_lowercase()).or_insert(share);
             }
         }
-        if shares.len() > 32 {
-            return Err("Lightroom catalog references more than 32 network shares".into());
-        }
     }
+    ensure_read_active(cancel)?;
     reader.ensure_unchanged()?;
     Ok(shares.into_values().collect())
 }
@@ -598,11 +642,11 @@ pub fn read_with_network_shares_and_progress(
 
 /// Read the extracted file while resolving originals relative to the original catalog location.
 fn read_file(path: &Path, document: &Path, source: &Path, shares: &NetworkShares, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
-    let reader = open_reader(path)?;
+    let reader = open_reader(path, cancel)?;
     let mut warnings = Vec::new();
     let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
-        let rows = reader.table(name, required)?;
+        let rows = reader.table_with_cancel(name, required, cancel)?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };

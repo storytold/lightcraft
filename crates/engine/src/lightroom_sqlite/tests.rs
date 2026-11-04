@@ -359,7 +359,7 @@ fn utf16_and_overflow_payloads_are_supported() {
     // payload bytes locally, followed by the overflow page pointer.
     cell_page[92..96].copy_from_slice(&2u32.to_be_bytes());
     let inline_page = vec![b'i'; 512];
-    assert_eq!(db.payload(&inline_page, 0, 110).unwrap(), vec![b'i'; 110]);
+    assert_eq!(db.payload(&inline_page, 0, 110, None).unwrap(), vec![b'i'; 110]);
     let mut overflow_page = vec![b'y'; 512];
     overflow_page[..4].copy_from_slice(&0u32.to_be_bytes());
     let mut db = db;
@@ -367,13 +367,13 @@ fn utf16_and_overflow_payloads_are_supported() {
     let mut with_overflow = db.overlay;
     with_overflow.insert(2, overflow_page);
     db.overlay = with_overflow;
-    let bytes = db.payload(&cell_page, 0, 600).unwrap();
+    let bytes = db.payload(&cell_page, 0, 600, None).unwrap();
     assert_eq!(bytes.len(), 600);
     assert_eq!(&bytes[..92], &[b'x'; 92]);
     assert_eq!(&bytes[92..], &[b'y'; 508]);
     let (_scratch, mut db) = file_backed(db);
     db.overlay.clear();
-    let bytes = db.payload(&cell_page, 0, 600).unwrap();
+    let bytes = db.payload(&cell_page, 0, 600, None).unwrap();
     assert_eq!(&bytes[92..], &[b'y'; 508]);
 }
 
@@ -408,5 +408,5 @@ fn malformed_varint_and_wal_cycle_fail_cleanly() {
         tables: Vec::new(),
         rowid_aliases: HashMap::new(),
     };
-    assert!(db.payload(&page, 0, 600).is_err());
+    assert!(db.payload(&page, 0, 600, None).is_err());
 }

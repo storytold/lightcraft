@@ -176,6 +176,7 @@ fn busy(app: &LightcraftApp) -> Result<(), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Run read-only catalog inspection with this operation's share policy on a worker.
 fn spawn_inspect(
     path: PathBuf,
     temp: Option<PathBuf>,
@@ -393,6 +394,7 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Start an inspection after checking that no other Lightroom task owns the activity.
 fn start_inspect(
     app: &mut LightcraftApp,
     path: PathBuf,
@@ -411,6 +413,7 @@ fn start_inspect(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Start the detached import and acknowledge the policy accepted by the actual job.
 fn start_import(
     app: &mut LightcraftApp,
     path: PathBuf,
@@ -422,13 +425,14 @@ fn start_import(
     let job = lightcraft_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing)
         .map_err(|e| e.to_string())?
         .with_network_shares(shares);
+    let accepted_shares = job.network_shares().param_value();
     let cancel = Arc::new(AtomicBool::new(false));
     let progress = job.progress();
     let (tx, rx) = mpsc::channel();
     spawn_prepare(job, cancel.clone(), tx, ctx.clone())?;
     app.lightroom_last = None;
     app.lightroom = Some(LightroomTask::new(&app.session, Kind::Import, path.clone(), cancel, progress, rx));
-    Ok(json!({"running": true, "kind": "import", "path": path}))
+    Ok(json!({"running": true, "kind": "import", "path": path, "networkShares": accepted_shares}))
 }
 
 /// Read the source list off the UI thread before asking for network access or creating a library.
@@ -448,12 +452,13 @@ pub fn start_sources(app: &mut LightcraftApp, path: &str, request: &crate::light
         let progress = LightroomProgress::default();
         let (tx, rx) = mpsc::channel();
         let worker_path = path.clone();
+        let worker_cancel = cancel.clone();
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         std::thread::Builder::new()
             .name("lc-lightroom-sources".into())
             .spawn(move || {
                 let result = lightcraft_engine::guard::catch("Lightroom network sources", || {
-                    lightcraft_engine::lightroom_catalog::network_sources(&worker_path)
+                    lightcraft_engine::lightroom_catalog::network_sources_with_cancel(&worker_path, &worker_cancel)
                 })
                 .and_then(|r| r);
                 let _ = tx.send(Message::Sources { result, request, generation });
