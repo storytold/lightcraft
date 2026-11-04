@@ -485,8 +485,8 @@ fn scanned_containers_give_the_largest_colour_jpeg() {
             f.extend_from_slice(part);
             f.extend_from_slice(&[0u8; 7]);
         }
-        // MRW decodes; its preview is still found by the scan
-        assert!(crate::probe(&f).is_some_and(|p| !p.is_supported() || p == crate::RawFormat::Mrw), "{head:?}");
+        // CRW and MRW decode; their previews are still found by the scan, the others stay preview-only containers
+        assert!(crate::probe(&f).is_some_and(|p| !p.is_supported() || p == crate::RawFormat::Crw || p == crate::RawFormat::Mrw), "{head:?}");
         assert_eq!(embedded_preview(&f).as_deref(), Some(&big[..]), "{head:?}");
         for n in (0..f.len()).step_by(11) {
             let _ = embedded_preview(&f[..n]);
