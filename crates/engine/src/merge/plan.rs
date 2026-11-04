@@ -155,6 +155,20 @@ fn brackets(asked: usize, n: usize) -> Vec<usize> {
     if all.is_empty() { vec![2] } else { all }
 }
 
+/// The fewest pixels a panorama's stitch gets from its photos decoded at most `edge`: an HDR
+/// panorama's bracket left to EXIF could be any of [`brackets`], each making its own frames.
+fn fewest_stitched(kind: &MergeKind, sizes: &[PhotoSize], edge: Option<usize>) -> f64 {
+    let px: Vec<f64> = sizes.iter().map(|s| s.decoded(edge)).collect();
+    match kind {
+        MergeKind::Hdr { .. } => 0.0,
+        MergeKind::Panorama { .. } => px.iter().sum(),
+        MergeKind::HdrPanorama { bracket, .. } => brackets(*bracket, px.len())
+            .into_iter()
+            .map(|b| px.chunks(b).map(|set| set.iter().copied().fold(0.0, f64::max)).sum::<f64>())
+            .fold(f64::INFINITY, f64::min),
+    }
+}
+
 /// The merge's peak (bytes) after its photos are decoded at most `edge` (`decode`: the decode's
 /// own peak), and the pixels its stitch gets (panoramas).
 fn need_after(kind: &MergeKind, sizes: &[PhotoSize], edge: Option<usize>, decode: f64) -> (f64, Option<f64>) {
@@ -205,6 +219,12 @@ fn pano_of(kind: &MergeKind) -> Option<&lightcraft_merge::PanoOptions> {
     }
 }
 
+/// The share of its frames' pixels a panorama is taken to keep (their overlap aside) when the plan
+/// decodes them smaller: they keep at least their floor's pixels over this (or the photos' own),
+/// so the panorama of them still reaches its floor ([`super::reaches_floor`] checks it after the
+/// stitch, when the overlap is known).
+const PANORAMA_SHARE: f64 = 0.5;
+
 /// The panorama's floor (megapixels, [`panorama_floor`]) when its stitch gets `photos` pixels at
 /// the photos' own size (a preview's: at its size); `None` for an HDR.
 fn floor_of(kind: &MergeKind, photos: Option<f64>) -> Option<f64> {
@@ -249,7 +269,8 @@ fn what(kind: &MergeKind, preview: bool) -> &'static str {
 /// Refused when not even [`MIN_PLANNED_EDGE`] fits, or the panorama can't reach its floor, naming
 /// the memory needed and allowed.
 pub(crate) fn plan_memory(kind: &MergeKind, sizes: &[PhotoSize], room: f64) -> Result<Option<usize>, String> {
-    let floor = floor_of(kind, need(kind, sizes, None).1);
+    let native = need(kind, sizes, None).1;
+    let floor = floor_of(kind, native);
     let fits = |edge: Option<usize>| fits_in(kind, need(kind, sizes, edge), floor, room);
     if fits(None) {
         return Ok(None);
@@ -260,7 +281,20 @@ pub(crate) fn plan_memory(kind: &MergeKind, sizes: &[PhotoSize], room: f64) -> R
         return Err(not_enough(what(kind, false), &how, need(kind, sizes, None).0, room));
     };
     let long = sizes.iter().map(|s| s.long()).max().unwrap_or(0);
-    let least = MIN_PLANNED_EDGE.min(long);
+    // the smallest edge whose frames keep enough pixels for a panorama at its floor (memory bounds
+    // the frames' size from above, below; this bounds it from below)
+    // (for every bracket an HDR panorama's photos could be merged in)
+    let enough = (floor * 1e6 / PANORAMA_SHARE).min(fewest_stitched(kind, sizes, None));
+    let (mut below, mut keeps) = (0, long);
+    while keeps - below > 1 {
+        let mid = below + (keeps - below) / 2;
+        if fewest_stitched(kind, sizes, Some(mid)) >= enough {
+            keeps = mid;
+        } else {
+            below = mid;
+        }
+    }
+    let least = MIN_PLANNED_EDGE.min(long).max(keeps);
     if least >= long || !fits(Some(least)) {
         // at the smallest frames: the photos' decode and merges, or the stitch at its floor
         let at = megapixels(floor);

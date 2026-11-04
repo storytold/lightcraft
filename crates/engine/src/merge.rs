@@ -23,8 +23,6 @@ use crate::{EngineError, Result, Session};
 
 mod plan;
 use plan::FRAME_BYTES;
-#[cfg(test)]
-pub(crate) use plan::MIN_PLANNED_EDGE;
 pub use plan::PhotoSize;
 pub(crate) use plan::{fill_unknown, holds, plan_memory, plan_preview};
 
@@ -321,8 +319,9 @@ impl MergeJob {
                 let frames = self.load(load, &check, progress, (0.0, 0.25))?;
                 let p = sub(0.25, 0.9);
                 let scale = areas(&frames, 1);
-                let fit = fit_decoded(pano, pixels(&frames), &scale, memory, self.preview.is_some())?;
+                let (fit, floor) = fit_decoded(pano, pixels(&frames), &scale, memory, self.preview.is_some())?;
                 let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
+                reaches_floor(&r, floor, &scale, memory)?;
                 let info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 (
                     r.image,
@@ -367,8 +366,9 @@ impl MergeJob {
                 }
                 let p = sub(0.6, 0.9);
                 let scale = areas(&merged, b);
-                let fit = fit_decoded(pano, pixels(&merged), &scale, memory, self.preview.is_some())?;
+                let (fit, floor) = fit_decoded(pano, pixels(&merged), &scale, memory, self.preview.is_some())?;
                 let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
+                reaches_floor(&r, floor, &scale, memory)?;
                 let mut info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 info["bracket"] = json!(b);
                 (
@@ -433,9 +433,7 @@ pub(crate) fn photo_areas(real: &[Option<PhotoSize>], frames: &[f64], group: usi
 /// [`plan_memory`] decoded the photos smaller (memory decided that); empty otherwise.
 fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], asked: &PanoOptions, fit: &PanoOptions, areas: &[(f64, f64)]) -> Value {
     let megapixels = (r.image.width * r.image.height) as f64 / 1e6;
-    // how many times their pixels the photos the panorama used have
-    let (photos, frames) = r.used.iter().filter_map(|&i| areas.get(i)).fold((0.0, 0.0), |(p, f), &(a, b)| (p + a, f + b));
-    let shrunk = if frames > 0.0 { (photos / frames).max(1.0) } else { 1.0 };
+    let shrunk = shrunk(r, areas);
     // the resolution of the photos themselves, and (smaller frames) memory held it to the frames'
     let (native, fit_mp) = if shrunk > 1.0 {
         (r.native_megapixels * shrunk, fit.max_megapixels.min(r.native_megapixels))
@@ -454,6 +452,35 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
         "nativeMegapixels": native,
         "limit": limit,
     })
+}
+
+/// How many times their frames' pixels the photos the panorama used have (`areas`: each stitched
+/// frame's photo pixels and its own, [`photo_areas`]; 1 when the photos weren't made smaller).
+fn shrunk(r: &lightcraft_merge::PanoResult, areas: &[(f64, f64)]) -> f64 {
+    let (photos, frames) = r.used.iter().filter_map(|&i| areas.get(i)).fold((0.0, 0.0), |(p, f), &(a, b)| (p + a, f + b));
+    if frames > 0.0 { (photos / frames).max(1.0) } else { 1.0 }
+}
+
+/// A panorama stitched from frames the plan made smaller must still reach its `floor`
+/// (megapixels), or its own resolution when that is less: the plan keeps enough of their pixels
+/// for it ([`plan_memory`]), but their overlap is known only once they are stitched, and a stitch
+/// makes no more pixels than its frames give. Refused when it doesn't (never on a guessed memory).
+fn reaches_floor(r: &lightcraft_merge::PanoResult, floor: f64, areas: &[(f64, f64)], memory: Memory) -> std::result::Result<(), String> {
+    let canvas = r.native_megapixels;
+    if !memory.known || !below_floor(canvas, shrunk(r, areas), floor) {
+        return Ok(());
+    }
+    Err(format!(
+        "not enough memory for this panorama: its photos had to be decoded smaller to fit the merge's memory, and the panorama of them has {canvas:.1} MP, under the {} MP it is made at the least; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
+        (floor * 10.0).round() / 10.0
+    ))
+}
+
+/// Whether a panorama of `canvas` megapixels, stitched from frames `shrink` times smaller than its
+/// photos, falls under its `floor`, or under its own resolution (`canvas × shrink`) when that is
+/// less (the stitch's own rounding aside). Never when its photos weren't made smaller.
+pub(crate) fn below_floor(canvas: f64, shrink: f64, floor: f64) -> bool {
+    shrink > 1.0 && canvas < floor.min(canvas * shrink) * 0.98
 }
 
 /// Why a panorama of `megapixels` came out smaller than its photos' resolution (`native`), if it
@@ -514,15 +541,22 @@ pub(crate) fn fit_with_floor(pano: &PanoOptions, frame_px: f64, floor: f64, room
 /// pixels (`areas`, each stitched frame's photo pixels and its own, [`photo_areas`]; empty: the
 /// frames are the photos' size). On a guessed memory a panorama it would refuse is made at its
 /// floor, as before merges were planned ([`Memory::known`]). A `preview`'s floor is at most
-/// [`MIN_PREVIEW_MEGAPIXELS`].
-fn fit_decoded(pano: &PanoOptions, frame_px: f64, areas: &[(f64, f64)], memory: Memory, preview: bool) -> std::result::Result<PanoOptions, String> {
+/// [`MIN_PREVIEW_MEGAPIXELS`]. Returns the floor too.
+fn fit_decoded(
+    pano: &PanoOptions,
+    frame_px: f64,
+    areas: &[(f64, f64)],
+    memory: Memory,
+    preview: bool,
+) -> std::result::Result<(PanoOptions, f64), String> {
     let photos = if areas.is_empty() { frame_px } else { areas.iter().map(|a| a.0).sum() };
     let floor = panorama_floor(pano.max_megapixels, photos);
     let floor = if preview { floor.min(MIN_PREVIEW_MEGAPIXELS) } else { floor };
-    match fit_with_floor(pano, frame_px, floor, memory.bytes) {
-        Err(_) if !memory.known => Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(floor), ..pano.clone() }),
-        fit => fit,
-    }
+    let fit = match fit_with_floor(pano, frame_px, floor, memory.bytes) {
+        Err(_) if !memory.known => PanoOptions { max_megapixels: pano.max_megapixels.min(floor), ..pano.clone() },
+        fit => fit?,
+    };
+    Ok((fit, floor))
 }
 
 /// [`fit_with_floor`] with the floor of `frame_px` (frames of the photos' own size; tests).

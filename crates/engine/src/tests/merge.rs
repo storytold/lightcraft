@@ -336,7 +336,7 @@ fn hdr_panorama(bracket: usize) -> crate::merge::MergeKind {
 /// and has, rather than made smaller than its floor.
 #[test]
 fn a_panorama_is_planned_before_its_photos_are_decoded() {
-    use crate::merge::{MIN_PLANNED_EDGE, plan_memory};
+    use crate::merge::plan_memory;
     let photos = photos_24mp(5);
     assert_eq!(plan_memory(&panorama(), &photos, 2.9e9), Ok(None), "fits: full size, as before");
     assert_eq!(plan_memory(&panorama(), &photos, 1e12), Ok(None));
@@ -346,7 +346,8 @@ fn a_panorama_is_planned_before_its_photos_are_decoded() {
     for room in [2.0e9, 0.4e9] {
         let e = plan_memory(&panorama(), &photos, room).unwrap_err();
         assert!(e.starts_with("not enough memory for this panorama"), "{e}");
-        assert!(e.contains(&format!("made {MIN_PLANNED_EDGE} px on the long side and the panorama 40 MP, the smallest it is made,")), "{e}");
+        // made no smaller than keeps 80 MP of frames for a 40 MP panorama: 6000 × √(80 / 120)
+        assert!(e.contains("made 4899 px on the long side and the panorama 40 MP, the smallest it is made,"), "{e}");
         assert!(e.contains("needs about 2594 MB"), "{e}");
     }
     // photos no larger than the smallest frames can't be made smaller: refused at the stitch's
@@ -401,30 +402,31 @@ fn an_hdr_is_planned_before_its_photos_are_decoded_and_never_made_smaller() {
 }
 
 /// An HDR panorama holds every bracket's photos before it merges them: twelve 24 MP photos peak at
-/// ~4.1 GB merging the first bracket of three beside the others' photos. With 3.5 GB they are
-/// decoded smaller (each bracket's merge is a stitch frame, and the stitch still reaches its 40 MP
-/// floor); with 2.0 GB the floor doesn't fit and the merge is refused; a bracket left to EXIF is
-/// planned as every size it could be (2, 3, 4 or 6 here).
+/// ~4.1 GB merging the first bracket of three beside the others' photos. With 4.0 GB they are
+/// decoded smaller (each bracket's merge is a stitch frame, and the four keep enough pixels for
+/// the stitch to reach its 40 MP floor); with 2.0 GB the floor doesn't fit and the merge is
+/// refused. A bracket left to EXIF is planned as every size it could be (2, 3, 4 or 6 here): in
+/// brackets of six they make two 24 MP frames, which can't be made smaller and still reach the
+/// floor, so with 4.0 GB that merge is refused.
 #[test]
 fn an_hdr_panorama_is_planned_before_its_photos_are_decoded() {
     use crate::merge::plan_memory;
     let photos = photos_24mp(12);
-    for bracket in [0, 3] {
+    for bracket in [0, 2, 3] {
         assert_eq!(plan_memory(&hdr_panorama(bracket), &photos, 1e12), Ok(None), "{bracket}");
-        let edge = plan_memory(&hdr_panorama(bracket), &photos, 3.5e9).unwrap().expect("made smaller");
-        assert!((1024..6000).contains(&edge), "{bracket}: {edge}");
         let e = plan_memory(&hdr_panorama(bracket), &photos, 2.0e9).unwrap_err();
         assert!(
-            e.starts_with("not enough memory for this HDR panorama") && e.contains("the panorama 40 MP") && e.contains("needs about 2594 MB"),
+            e.starts_with("not enough memory for this HDR panorama") && e.contains("the panorama 40 MP") && e.contains("may use 1907 MB"),
             "{bracket}: {e}"
         );
     }
     assert_eq!(plan_memory(&hdr_panorama(3), &photos, 4.2e9), Ok(None));
     // pairs make more stitch frames than threes: the frames are made no larger
-    let pairs = plan_memory(&hdr_panorama(2), &photos, 3.5e9).unwrap().unwrap();
-    let threes = plan_memory(&hdr_panorama(3), &photos, 3.5e9).unwrap().unwrap();
-    let either = plan_memory(&hdr_panorama(0), &photos, 3.5e9).unwrap().unwrap();
-    assert!(pairs <= threes && either <= pairs.min(threes), "{pairs} {threes} {either}");
+    let pairs = plan_memory(&hdr_panorama(2), &photos, 4.0e9).unwrap().expect("made smaller");
+    let threes = plan_memory(&hdr_panorama(3), &photos, 4.0e9).unwrap().expect("made smaller");
+    assert!((1024..6000).contains(&threes) && pairs <= threes, "{pairs} {threes}");
+    let e = plan_memory(&hdr_panorama(0), &photos, 4.0e9).unwrap_err();
+    assert!(e.contains("even with the panorama 40 MP, the smallest it is made,"), "{e}");
 }
 
 /// A preview's photos are decoded at full size before they are made small: several at once when
@@ -791,4 +793,27 @@ fn native_megapixels_come_only_from_real_sizes() {
     assert_eq!(photo_areas(&[big, None, small], &[1e6, 2e6, 3e6], 1), vec![(24e6, 1e6), (2e6, 2e6), (6e6, 3e6)]);
     // an HDR panorama's brackets: the largest photo of each, or its frame when one is unknown
     assert_eq!(photo_areas(&[big, small, small, None], &[1e6, 2e6], 2), vec![(24e6, 1e6), (2e6, 2e6)]);
+}
+
+/// Frames made smaller for memory keep enough pixels for the panorama to reach its floor: three
+/// 100 MP photos with 5 GB would fit only as ~12 MP of frames (one photo's decode alone holds
+/// ~4.9 GB), far under a 40 MP panorama, so the merge is refused rather than stitched below it.
+/// With 6 GB they are decoded smaller, to at least 80 MP of frames (the floor's pixels over the
+/// half a panorama is taken to keep of its frames). After the stitch, a panorama of smaller frames
+/// still under its floor (their overlap known only then) is refused too.
+#[test]
+fn frames_made_smaller_keep_enough_pixels_for_the_floor() {
+    use crate::merge::{PhotoSize, below_floor, plan_memory};
+    let photos = vec![PhotoSize::new(10_000, 10_000, 100_000_000).unwrap(); 3];
+    assert_eq!(plan_memory(&panorama(), &photos, 8e9), Ok(None));
+    let edge = plan_memory(&panorama(), &photos, 6e9).unwrap().expect("made smaller");
+    assert!(3.0 * photos[0].decoded(Some(edge)) >= 80e6, "{edge}");
+    let e = plan_memory(&panorama(), &photos, 5e9).unwrap_err();
+    assert!(e.starts_with("not enough memory for this panorama") && e.contains("the panorama 40 MP"), "{e}");
+    // after the stitch: 30 MP from frames four times smaller than the photos is under 40 MP
+    assert!(below_floor(30.0, 4.0, 40.0));
+    assert!(!below_floor(40.0, 4.0, 40.0) && !below_floor(45.0, 4.0, 40.0));
+    assert!(!below_floor(30.0, 1.0, 40.0), "not made smaller: its own size");
+    // small photos whose own size is the floor: any panorama of smaller frames is under it
+    assert!(below_floor(2.39, 1.2, 3.0) && !below_floor(2.9, 1.01, 3.0));
 }
