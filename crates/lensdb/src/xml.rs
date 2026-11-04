@@ -43,8 +43,10 @@ fn entity(name: &str) -> Option<char> {
         _ => {
             let n = name.strip_prefix('#')?;
             let v = match n.strip_prefix('x') {
-                Some(h) => u32::from_str_radix(h, 16).ok()?,
-                None => n.parse().ok()?,
+                Some(h) if h.bytes().all(|b| b.is_ascii_hexdigit()) => u32::from_str_radix(h, 16).ok()?,
+                Some(_) => return None,
+                None if n.bytes().all(|b| b.is_ascii_digit()) => n.parse().ok()?,
+                None => return None,
             };
             char::from_u32(v)?
         }
@@ -74,7 +76,6 @@ fn unescape(s: &str) -> String {
 
 pub(crate) fn parse(s: &str) -> Result<Node, Error> {
     let mut reader = quick_xml::Reader::from_str(s);
-    reader.config_mut().check_end_names = false;
     let mut stack = vec![Node { name: "#root".into(), ..Default::default() }];
     let mut count = 0usize;
     loop {
@@ -132,5 +133,18 @@ fn close(stack: &mut Vec<Node>) {
         && let Some(p) = stack.last_mut()
     {
         p.children.push(n);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entity_rejects_signed_numeric_references() {
+        assert_eq!(entity("#+65"), None);
+        assert_eq!(entity("#x+41"), None);
+        assert_eq!(entity("#65"), Some('A'));
+        assert_eq!(entity("#x41"), Some('A'));
     }
 }

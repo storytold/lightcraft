@@ -5,7 +5,6 @@
 use lightcraft_geom::{Homography, Point};
 use lightcraft_raster::resample::{Filter, fit};
 use lightcraft_raster::{Plane, Rgb32f};
-use rayon::prelude::*;
 
 use crate::features::{self, Features};
 use crate::ransac::{self, Model};
@@ -129,23 +128,10 @@ pub fn align_pair(ref_feat: &Features, feat: &Features, scale: f64, full_w: usiz
 /// Resample `img` into the reference geometry: `out(p) = img(h(p))` (Lanczos-3). Returns the warped
 /// image and a validity mask (false where `h(p)` falls outside `img`).
 pub fn warp(img: &Rgb32f, h: &Homography) -> (Rgb32f, Vec<bool>) {
-    let (w, ht) = (img.width, img.height);
     if *h == Homography::IDENTITY {
-        return (img.clone(), vec![true; w * ht]);
+        return (img.clone(), vec![true; img.width * img.height]);
     }
-    let mut out = Rgb32f::new(w, ht);
-    let mut valid = vec![false; w * ht];
-    out.data.par_chunks_mut(w).zip(valid.par_chunks_mut(w)).enumerate().for_each(|(y, (row, vrow))| {
-        for x in 0..w {
-            let p = h.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-            let (sx, sy) = (p.x as f32, p.y as f32);
-            if sx >= 0.0 && sy >= 0.0 && sx <= w as f32 && sy <= ht as f32 {
-                row[x] = img.sample_lanczos3(sx, sy);
-                vrow[x] = true;
-            }
-        }
-    });
-    (out, valid)
+    crate::flow::warp(img, h, &crate::flow::Flow::default())
 }
 
 #[cfg(test)]

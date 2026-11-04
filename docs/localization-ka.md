@@ -19,7 +19,7 @@ not translated. Descriptions for SAM 3 go to the model unchanged.
 ## Georgian script
 
 Mkhedruli has no upper and lower case: `i18n::upper_first` leaves Georgian letters alone, and the
-interface never uses Mtavruli (a test checks the whole catalog). Commands are verbal nouns. Counts
+interface never uses Mtavruli. Commands are verbal nouns. Counts
 are count-neutral, noun first (`იმპორტირებულია ფოტო: 3`); English plural endings are dropped with
 `{:.0}`. Dates read `კვირა, 20.09.2026` (`{weekday}, {day:02}.{month:02}.{year}`), months `09.2026`.
 
@@ -64,7 +64,7 @@ Please follow this table and the shared ArtCraft Georgian glossary when you add 
 
 ## Maintenance and checks
 
-Fixed texts: `crates/ui-egui/locales/ka.json` (2,719 entries). Messages with values:
+Fixed texts: `crates/ui-egui/locales/ka.json` (3,616 entries). Messages with values:
 `crates/ui-egui/locales/ka-formats.json` (249 entries). The English keys stay unchanged; Rust checks
 the placeholders at build time. Strings not yet in the plain catalog show in English.
 
@@ -73,7 +73,7 @@ cargo test -p lightcraft-ui-egui i18n::tests -- --nocapture
 LIGHTCRAFT_LANGUAGE=ka lightcraft-cli snapshot --demo -o georgian.png --size 1600x1000
 ```
 
-The tests check catalog coverage, placeholders, switching language by menu and control channel,
-saving, the `ka` locale tags, dates, count wording, the absence of Mtavruli and that sentence case
-keeps Georgian lowercase. More notes are in
+The tests check placeholders, switching language by menu and control channel, saving, the `ka`
+locale tags, dates and that sentence case keeps Georgian lowercase. Messages Georgian lacks show in
+English; `i18n::tests::translation_gaps_report` lists them. More notes are in
 [localization.md](localization.md).

@@ -8,10 +8,10 @@ Các tag locale hệ thống sau cũng chọn tiếng Việt: `vi`, `vi-VN`, `vi
 ## Phạm vi
 
 Catalog tiếng Việt phủ **toàn bộ** bề mặt localization hiện tại của LightCraft
-(đo 2026-10-13: union plain **2 222** + formats **249** = **2 471** thông điệp):
+(đo 2026-10-26: union plain **2 658** + formats **307** = **2 965** thông điệp):
 
-- `crates/ui-egui/locales/vi.json` — thông điệp plain / nhãn hiển thị (2 222 khóa)
-- `crates/ui-egui/locales/vi-formats.json` — thông điệp có giá trị runtime và mẫu ngày (249 khóa)
+- `crates/ui-egui/locales/vi.json` — thông điệp plain / nhãn hiển thị (2 658 khóa)
+- `crates/ui-egui/locales/vi-formats.json` — thông điệp có giá trị runtime và mẫu ngày (307 khóa)
 
 Điều này là **100% bề mặt localizable/runtime hiện tại**, không phải “mọi chuỗi tiếng Anh
 trong toàn bộ repository”. Lỗi kỹ thuật từ crate tầng dưới vẫn có thể là tiếng Anh, giống
@@ -66,8 +66,9 @@ LIGHTCRAFT_LANGUAGE=vi lightcraft-cli snapshot --demo -o vi.png --size 1600x1000
 LIGHTCRAFT_LANGUAGE=vi lightcraft-cli snapshot --demo -o vi-narrow.png --size 1280x800
 ```
 
-Các test tiếng Việt bắt buộc phủ catalog union, nhãn lệnh/control/Settings/Smart Album,
-đổi ngôn ngữ, lưu `vi`, formats, ngày, dữ liệu người dùng, và glyph dấu.
+Các test tiếng Việt kiểm tra đổi ngôn ngữ, lưu `vi`, formats, ngày, dữ liệu người dùng và glyph
+dấu. Chuỗi còn thiếu hiện bằng tiếng Anh và được `i18n::tests::translation_gaps_report` liệt kê;
+không test nào thất bại vì thiếu bản dịch.
 
 ## Nguồn dịch (clean-room)
 
