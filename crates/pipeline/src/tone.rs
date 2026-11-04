@@ -99,20 +99,28 @@ impl CameraTone {
     /// Here the gap shrinks in stops instead, `gap / (1 + c·(2^(k·t) − 1))` at `t` stops past the
     /// knot, with `c` matching the curve's slope there (so the join is smooth) and the gap halving
     /// every [`ROLLOFF_STOPS`] stops in the end. Same value as [`CameraTone::apply`] up to the last
-    /// knot, monotone, finite, and at most 1 (it reaches 1 only by rounding, hundreds of stops up).
+    /// knot, monotone, finite and at most 1. In real numbers it only approaches white; in `f32` the
+    /// gap can round to 0 far up, and within a stop or two for a last knot a few ulps below white.
     pub fn apply_rolloff(&self, y: f32) -> f32 {
         let (a, b) = (self.knots[30], self.knots[31]);
         if !y.is_finite() || y <= b[0] {
             return self.apply(y);
         }
-        // the last segment's own slope, so the join is smooth; a flatter one than 0.1 rises at 0.1
-        // (still continuous and monotone) instead of staying flat below white
-        let slope = ((b[1] - a[1]) / (b[0] - a[0])).max(0.1);
+        // the last segment's own slope, so the join is smooth even when it is flat (`new` keeps the
+        // knots non-decreasing, so it is at least 0)
+        let slope = ((b[1] - a[1]) / (b[0] - a[0])).max(0.0);
         // `CameraTone::new` keeps the last knot below 1, so the gap is positive (no floor: one
         // would step the curve down past a knot within it of white)
-        rolloff_past(y, b, slope)
+        rolloff_past(y, b, slope, CAMERA_MIN_SLOPE)
     }
 }
+
+/// The pace [`CameraTone::apply_rolloff`] closes on white at least at, as display per unit of scene
+/// luminance at the last knot (the floor [`CameraTone::apply`] puts on its slope there). A last
+/// segment flatter than this still joins with its own slope; [`rolloff_past`] then adds a term that
+/// has no slope at the knot and reaches this pace further up, so a flat curve does not stay below
+/// white.
+const CAMERA_MIN_SLOPE: f32 = 0.1;
 
 /// Stops in which the gap between a V3 curve and white halves, far past where its shoulder starts
 /// ([`CameraTone::apply_rolloff`], [`ToneMap::rolloff_hdr`]). With 1, the sensor's white renders at
@@ -126,14 +134,23 @@ pub const ROLLOFF_STOPS: f32 = 1.0;
 /// `gap / (1 + c·(2^(k·t) − 1))` at `t = log2(y / x)` stops past the knee, `k = 1 / ROLLOFF_STOPS`,
 /// so it halves every [`ROLLOFF_STOPS`] stops in the end. `c` gives it the curve's slope at the
 /// knee: d(display)/d(stop) there is `slope · x · ln 2` on the curve and `gap · c · k · ln 2` on the
-/// shoulder. Monotone for `y ≥ x`, finite, and at most 1 (1 only by rounding, hundreds of stops up).
-fn rolloff_past(y: f32, [x, o]: [f32; 2], slope: f32) -> f32 {
+/// shoulder. When `slope` is below `min_slope`, `d · u²` (with `u = 2^(k·t) − 1`) joins the
+/// denominator: it adds no slope at the knee, so the join keeps the curve's own slope, and it makes
+/// up the difference to `min_slope`'s pace further up (the gap then quarters every stop in the end).
+/// Monotone for `y ≥ x`, finite and at most 1; in real numbers it only approaches white, while in
+/// `f32` the gap rounds to 0 eventually.
+fn rolloff_past(y: f32, [x, o]: [f32; 2], slope: f32, min_slope: f32) -> f32 {
     let gap = 1.0 - o;
     let k = 1.0 / ROLLOFF_STOPS;
     // bounded, so `c · 0` right past the knee stays 0 for a gap of a few ulps
-    let c = (slope * x / (gap * k)).min(1e30);
-    let t = (y / x).log2();
-    1.0 - gap / (1.0 + c * ((k * t).exp2() - 1.0))
+    let per = |s: f32| (s * x / (gap * k)).min(1e30);
+    let c = per(slope);
+    let d = (per(min_slope) - c).max(0.0);
+    let u = (k * (y / x).log2()).exp2() - 1.0;
+    // each term only when its coefficient is positive: `0 · ∞` is NaN far up
+    let linear = if c > 0.0 { c * u } else { 0.0 };
+    let quadratic = if d > 0.0 { d * u * u } else { 0.0 };
+    1.0 - gap / (1.0 + linear + quadratic)
 }
 
 /// Stops below its white point where process V3's generic raw curve ([`ToneMap::rolloff_hdr`])
@@ -227,7 +244,7 @@ impl ToneMap {
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
                 let y = GREY * 2f32.powf(ev * slope) * pre;
-                let mut o = if rolloff && y > knee[0] && knee[1] < 1.0 { rolloff_past(y, knee, knee_slope) } else { reinhard(y) };
+                let mut o = if rolloff && y > knee[0] && knee[1] < 1.0 { rolloff_past(y, knee, knee_slope, 0.0) } else { reinhard(y) };
                 o = o.min(1.0);
                 // Toe: blacks < 0 crushes, > 0 lifts.
                 if b < 0.0 {
@@ -445,6 +462,27 @@ mod tests {
                 let h = k[31][0] * 1e-5;
                 let after = (c.apply_rolloff(k[31][0] + h) - top) / h;
                 assert!((after - slope).abs() < 0.02 * slope, "{after} vs {slope}");
+            }
+        }
+        // a flat or shallow last segment joins with its own slope (not the 0.1 floor of the V1/V2
+        // extension) and still closes on white further up
+        for s in [0.0f32, 0.05] {
+            let mut k = knots();
+            k[31][1] = k[30][1] + s * (k[31][0] - k[30][0]);
+            let c = CameraTone::new(k).unwrap();
+            let (x, top) = (k[31][0], k[31][1]);
+            let h = x * 1e-4;
+            let after = (c.apply_rolloff(x + h) - top) / h;
+            assert!((after - s).abs() < 0.01, "{s}: right slope {after}");
+            let mut prev = top;
+            for i in 1..3000 {
+                let o = c.apply_rolloff(x * 1.005f32.powi(i));
+                assert!(o.is_finite() && o >= prev && o <= 1.0, "{s} {i}: {o} < {prev}");
+                prev = o;
+            }
+            assert!(1.0 - c.apply_rolloff(x * 64.0) < (1.0 - top) / 4.0, "{s}");
+            for y in [f32::MAX, f32::INFINITY] {
+                assert!((0.0..=1.0).contains(&c.apply_rolloff(y)), "{s} {y}");
             }
         }
         // hostile input
