@@ -26,9 +26,10 @@ fallback to supply the capture time. The original tag remains available in All M
 malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
 IPTC `Date Created` / `Time Created` is projected only when the entire decoded time is valid: a blank or absent time
-keeps date-only behavior, six ASCII digits remain a supported local clock, and the complete eleven-character
-`HHMMSS±HHMM` form carries an offset. Partial offsets, extra digits and trailing text are ignored as capture-time
-candidates, so they cannot block valid XMP or the import file-date fallback; other IPTC fields remain available.
+keeps date-only behavior, a valid six-digit clock without a zone also remains date-only because it is ambiguous, and
+the complete eleven-character `HHMMSS±HHMM` form carries an offset. Clock components and offsets are range-checked;
+partial offsets, extra digits, leap seconds and trailing text are ignored as capture-time candidates, so they cannot
+block valid XMP or the import file-date fallback. Other IPTC fields remain available.
 
 ## XMP namespaces
 

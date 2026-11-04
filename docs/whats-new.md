@@ -5,7 +5,8 @@
 ### Malformed IPTC times no longer become photo timestamps
 - IPTC Time Created values with partial offsets, extra clock digits or trailing text used to be truncated to a plausible
   clock. They are now skipped as capture-time candidates, allowing valid embedded XMP or the file-date fallback to be
-  used. Six-digit local clocks and complete signed offsets remain supported, and unrelated IPTC metadata is retained.
+  used. A valid six-digit clock without an offset keeps date-only behavior; complete signed offsets retain the time.
+  Out-of-range clock values are rejected, and unrelated IPTC metadata is retained.
 
 ## 2026-10-30
 

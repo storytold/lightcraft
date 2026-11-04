@@ -90,7 +90,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-04 | patch | LR-META-EXIF-FULL validates complete IPTC Time Created values before projection, allowing valid XMP or file-date fallback while retaining raw metadata; readiness and gap counts are unchanged |
+| 2026-11-04 | patch | LR-META-EXIF-FULL validates complete IPTC Time Created values before projection, enforcing clock and offset ranges, allowing valid XMP or file-date fallback while retaining raw metadata; readiness and gap counts are unchanged |
 | 2026-10-28 | minor | Gap 8 shrinks: the desktop app offers lensfun's lens database (CC BY-SA, pinned) once on the first launch and downloads it on request and looks the library's raws up when it arrives; validation, a profile picker and own calibration remain |
 | 2026-10-23 | patch | Gap 8: the Sigma 10–18 mm on the ILCE-6700 gets a measured lens exception at 10–10.5 mm (0.55 px worst over 99 photos, was about 1.4 px) |
 | 2026-10-29 | minor | Import thumbnails render when the camera JPEG is too small, retaining preview-only/error fallbacks; import review: remembered thumbnail size and density-aware previews (#2237, part of #2056); pre-import loupe/keyboard culling remains open; no ranked gap closes |
