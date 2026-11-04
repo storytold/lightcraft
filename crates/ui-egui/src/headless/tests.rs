@@ -2185,6 +2185,15 @@ fn a_slow_photos_import_never_blocks_the_window() {
         let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
         let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
         assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 1, "the export answers without waiting for Photos: {r}");
+        // no bounded wait in front of the background job either (the gate can't see one). A responsiveness guard looser
+        // than assert_responsive's 2 s: this call renders and writes a small export before it answers (0.41-0.46 s in
+        // a debug build on Linux without Photos), so 5 s, stretched by LIGHTCRAFT_TIME_SCALE, never shrunk
+        let responsive = lightcraft_testkit::scaled(Duration::from_secs(5)).max(Duration::from_secs(5));
+        let took = t1.elapsed();
+        assert!(
+            took < responsive,
+            "app.export {{addToPhotos}} must answer once its files are written: took {took:.2?} (responsiveness guard {responsive:?})"
+        );
         assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
