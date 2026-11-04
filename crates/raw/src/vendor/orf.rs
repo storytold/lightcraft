@@ -438,7 +438,7 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
     let mut raw_image = vec![0u16; n];
     let mut reader = BitReader::new(stream);
 
-    let one_shl_tag0x641 = 1i32.checked_shl(params.tag0x641.min(30)).unwrap_or(1 << 5);
+    let one_shl_tag0x641 = 1u32.checked_shl(params.tag0x641.min(30)).unwrap_or(1 << 5);
     let one_shl_tag645 = 1i32.checked_shl(params.tag0x645.min(30)).unwrap_or(1 << 4);
 
     let mut context = [0i32; 4];
@@ -527,8 +527,8 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
                     n_val = w_val;
                 } else if nw_val < n_val || w_val >= n_val {
                     if nw_val > w_val || w_val >= n_val {
-                        let diff_n_nw = n_val.saturating_sub(nw_val).abs();
-                        let diff_w_nw = w_val.saturating_sub(nw_val).abs();
+                        let diff_n_nw = n_val.abs_diff(nw_val);
+                        let diff_w_nw = w_val.abs_diff(nw_val);
                         if diff_n_nw > one_shl_tag0x641 {
                             n_val = n_val.saturating_add(w_val.saturating_sub(nw_val));
                         } else if diff_w_nw <= one_shl_tag0x641 {
@@ -1224,5 +1224,34 @@ mod tests {
         bad_params.tag0x649 = 20;
         bad_params.tag0x651 = 20;
         assert!(decode_compressed_image(&[0xff; 32], 4, 4, &bad_params).is_err());
+    }
+
+    #[test]
+    fn predictor_extreme_difference_never_panics() {
+        // Extreme differences between n_val, w_val, nw_val (including i32::MIN magnitude) do not overflow or panic.
+        assert_eq!(i32::MIN.abs_diff(0), 2_147_483_648u32);
+        assert_eq!(i32::MIN.abs_diff(i32::MAX), 4_294_967_295u32);
+
+        let params = CompressedParams {
+            tag0x640: 0,
+            tag0x641: 5,
+            tag0x642: 0,
+            tag0x643: 0,
+            tag0x644: 5,
+            tag0x645: 4,
+            tag0x646: 3,
+            tag0x647: 2,
+            tag0x648: 3,
+            tag0x649: 4,
+            tag0x650: 7,
+            tag0x651: 15,
+            tag0x652: 12,
+            tag0x653: 5,
+            valid_bits: 12,
+        };
+        for fill in [0x00, 0x55, 0xaa, 0xff] {
+            let stream = vec![fill; 64];
+            let _ = decode_compressed_image(&stream, 4, 4, &params);
+        }
     }
 }
