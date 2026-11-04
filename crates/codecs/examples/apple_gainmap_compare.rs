@@ -26,10 +26,13 @@ fn read_rgb(path: &Path, pixels: usize) -> Result<Vec<[f32; 3]>, Box<dyn std::er
         return Err("RGB byte count mismatch".into());
     }
     let mut rgb = Vec::with_capacity(pixels);
-    for pixel in bytes.chunks_exact(12) {
+    // the length was checked to be exactly `pixels * 12` above, so no remainder is dropped
+    let (rgb_chunks, _) = bytes.as_chunks::<12>();
+    for pixel in rgb_chunks {
         let mut channels = [0.0; 3];
-        for (channel, chunk) in channels.iter_mut().zip(pixel.chunks_exact(4)) {
-            *channel = f32::from_le_bytes(chunk.try_into()?);
+        let (words, _) = pixel.as_chunks::<4>();
+        for (channel, word) in channels.iter_mut().zip(words) {
+            *channel = f32::from_le_bytes(*word);
             if !channel.is_finite() {
                 return Err("non-finite reference sample".into());
             }
