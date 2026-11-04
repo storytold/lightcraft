@@ -618,15 +618,17 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
 }
 
 /// The ILCE-7RM6's lateral CA as the pre-demosaic map, within the same validated 3:2 scope as its distortion
-/// (`arw_lens_rm6::lateral_ca`), centred on the tables' `reference` crop; marks the CA record applied when there is one.
+/// (`arw_lens_rm6::lateral_ca`, only for the lenses it measurably improves), centred on the tables' `reference` crop;
+/// marks the CA record applied when there is one.
 fn rm6_lateral_ca(
     raw: &Ifd,
     model: &str,
+    lens: Option<&str>,
     crop: Rect,
     reference: Rect,
     sony_lens: &mut Option<crate::lens_metadata::SonyLensCorrections>,
 ) -> Option<crate::LateralCa> {
-    let map = super::arw_lens::is_3_2(crop).then(|| super::arw_lens_rm6::lateral_ca(raw, model, reference)).flatten();
+    let map = super::arw_lens::is_3_2(crop).then(|| super::arw_lens_rm6::lateral_ca(raw, model, lens, reference)).flatten();
     if map.is_some()
         && let Some(record) = sony_lens.as_mut()
     {
@@ -817,7 +819,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         // distortion only: its lateral CA is the pre-demosaic map below, not warp planes (see `arw_lens_rm6::lens_opcodes`)
         record.distortion.status = crate::lens_metadata::SonyLensStatus::Applied;
     }
-    let lateral_ca = if linear_rgb { None } else { rm6_lateral_ca(raw, &model, crop, reference, &mut sony_lens) };
+    let lateral_ca = if linear_rgb { None } else { rm6_lateral_ca(raw, &model, metadata.lens_model.as_deref(), crop, reference, &mut sony_lens) };
     let img = RawImage {
         format: RawFormat::Arw,
         width: w,
@@ -839,7 +841,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         linearized: false,
         pixel_aspect: 1.0,
         // only validated components become opcodes (see `arw_lens`, and `arw_lens_rm6` for the ILCE-7RM6); the
-        // ILCE-7RM6's lateral CA is a map on the mosaic, applied before demosaic whatever Lens Corrections says
+        // ILCE-7RM6's lateral CA is a map on the mosaic, applied before demosaic whatever Lens Corrections says, so
+        // only for the lenses it measurably improves
         opcodes: OpcodeLists { list3: warp.into_iter().chain(rm6).collect(), lateral_ca, ..Default::default() },
         metadata,
         lens_metadata: LensMetadata { sony: sony_lens },
@@ -957,8 +960,9 @@ mod tests {
     #[test]
     fn lens_tables_reach_opcode_list3() {
         use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
-        let file_sized = |model: &str, ca: bool, height: u32| {
+        let file_lens = |model: &str, ca: bool, height: u32, lens: &str| {
             let mut raw = IfdBuilder::new();
+            raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii(lens.into())));
             raw.set(t::MAKE, Value::Ascii("SONY".into()));
             raw.set(t::MODEL, Value::Ascii(model.into()));
             raw.set(t::IMAGE_WIDTH, Value::Long(vec![96]));
@@ -985,6 +989,8 @@ mod tests {
             raw.set_image(ImageData::Strips { rows_per_strip: height, strips: vec![vec![0u8; 96 * height as usize]] });
             TiffWriter::default().write(&[raw]).unwrap()
         };
+        // a lens the pre-demosaic map measurably improves (`arw_lens_rm6::CA_IMPROVES`)
+        let file_sized = |model: &str, ca: bool, height: u32| file_lens(model, ca, height, "FE 24-70mm F2.8 GM II");
         // 3:2, the aspect the corrections are limited to
         let file = |model: &str, ca: bool| file_sized(model, ca, 64);
         for mode in [Mode::Header, Mode::Full] {
@@ -1003,6 +1009,9 @@ mod tests {
                 let other = decode(&file("ILCE-7M4", ca), mode).unwrap().opcodes;
                 assert!(other.list3.is_empty() && other.lateral_ca.is_none(), "{mode:?} {ca}");
             }
+            // the FE 200–600 mm G got worse with the map, so it keeps the warp but gets no map
+            let worse = decode(&file_lens("ILCE-7RM6", true, 64, "FE 200-600mm F5.6-6.3 G OSS"), mode).unwrap().opcodes;
+            assert!(worse.list3.len() == 1 && worse.lateral_ca.is_none(), "{mode:?}");
             // 4:3 (an in-camera aspect crop): the map switches off with the warp
             let four_three = decode(&file_sized("ILCE-7RM6", true, 72), mode).unwrap().opcodes;
             assert!(four_three.list3.is_empty() && four_three.lateral_ca.is_none(), "{mode:?}");

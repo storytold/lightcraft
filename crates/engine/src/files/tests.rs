@@ -1766,6 +1766,8 @@ fn sony_arw(model: &str) -> Vec<u8> {
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::MAKE, Value::Ascii("SONY".into()));
     ifd0.set(t::MODEL, Value::Ascii(model.into()));
+    // a lens the ILCE-7RM6's lateral CA map is applied for (`arw_lens_rm6::CA_IMPROVES`)
+    ifd0.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii("FE 24-70mm F2.8 GM II".into())));
     ifd0.add_sub_ifd(raw);
     TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
 }

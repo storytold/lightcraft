@@ -121,7 +121,8 @@ DNG.
 - **Where it runs:** `RawImage::normalized()`, right after `OpcodeList2`. Every demosaic (AHD, PPG, bilinear) and AI
   Denoise therefore see the corrected mosaic. Binned previews and thumbnails bin the mosaic without the map and then
   resample the binned red and blue with the same kernel (the clip mask stands in for the clip level). No path
-  corrects twice. Only Bayer ILCE-7RM6 files framed 3:2 get the map: linear files (the downsized lossless M and S
+  corrects twice. Only Bayer ILCE-7RM6 files framed 3:2, taken with a lens the map measurably improves ([Limits](#limits)),
+  get the map: linear files (the downsized lossless M and S
   sizes) and in-camera aspect crops get neither the map nor the distortion warp.
 - **Why there:** the colour-difference demosaic (AHD) borrows green's edges for red and blue, so a full-size render
   shows only 0.29 × the lens CA measured on the raw mosaic. Applied after demosaic, the table (the earlier design: a
@@ -460,7 +461,10 @@ about 55 ms more per 1920 px render and about 2.9 s more per full-size render (n
   captured; per-lens units would need per-lens verification.
 - **Lateral CA: the unit is still provisional** (above). With it, the corrected render beats the uncorrected one on
   three lenses but not on the 200–600 mm (2 photos; [Verification](#verification)). A per-lens unit would need more
-  photos per lens.
+  photos per lens. Since the map is applied whatever Lens Corrections says, it is limited to those three lenses
+  (`CA_IMPROVES` in `arw_lens_rm6.rs`: FE 24–70 mm F2.8 GM II, FE 16–35 mm F2.8 GM II, FE 100 mm F2.8 Macro GM OSS, by
+  Exif `LensModel`). The 200–600 mm, any lens not measured, and a file without a lens name get no map; their distortion
+  warp is unchanged.
 - **Lateral CA beside blown highlights stays uncorrected:** a site whose support holds a clipped sample keeps its
   value. Sites within a few pixels of the mosaic's edge, whose source lies beyond it, repeat the edge sample; on
   ILCE-7RM6 files they lie outside the default crop (inset 8–16 px).
