@@ -948,3 +948,67 @@ fn bounded_flag_is_ignored_for_full_frames_and_deep_output() {
         assert!(!cache.is_empty());
     }
 }
+
+/// Every pixel of six exact windows (at the corners, crossing the middle and its contours) of an
+/// `overlay` render of [`blocks`] against the whole render.
+fn check_edges(name: &str, s: &DevelopSettings, overlay: crate::Overlay) {
+    let src = blocks();
+    let req = RenderRequest { overlay, ..RenderRequest::fit(W, H) };
+    let f = render(&src, &SourceInfo::default(), s, &req).unwrap().image;
+    for (x, y) in [(301, 181), (0, 0), (560, 340), (200, 100), (150, 300), (500, 50)] {
+        let at = PixelWindow { x, y, w: 400, h: 300 };
+        let w = render(&src, &SourceInfo::default(), s, &RenderRequest { window: Some(at), ..req }).unwrap().image;
+        let (max, mean) = compare_inset(&f, &w, at, 0);
+        assert!(max <= 3 && mean <= 0.5, "{name} ({x},{y}): max {max} (≤ 3), mean {mean:.3} (≤ 0.5)");
+    }
+}
+
+// Given the overlay of a hidden mask (selected in the Masking panel), its blur and refinement read
+// as far past the window's edge as a visible mask's
+#[test]
+fn a_hidden_mask_overlay_window_matches_the_whole_render() {
+    use crate::{MaskView, Overlay};
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let overlay = Overlay::Mask { id: 3, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 };
+    for (name, shape, refine) in [
+        ("subject", MaskShape::Subject, 0.0),
+        ("sky", MaskShape::Sky, 0.0),
+        ("linear refined", MaskShape::Linear { start: Point::new(0.4, 0.1), end: Point::new(0.6, 0.9) }, 100.0),
+    ] {
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask {
+            id: 3,
+            visible: false,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+            adjust: LocalAdjustments { exposure: 1.0, ..Default::default() },
+            refine,
+            ..Default::default()
+        });
+        check_edges(name, &s, overlay);
+    }
+}
+
+// Given a model's segmentation with Edge and Refine at 0, its guided filter reads past the window's
+// edge on the whole frame's reduced grid, so a window's contour lands where the full render's does
+#[test]
+fn segmented_mask_windows_match_the_whole_render() {
+    use crate::{MaskView, Overlay};
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    for side in [16, 32, 64] {
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask {
+            id: 3,
+            components: vec![MaskComponent {
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(side)), detail: vec![], edge: 0.0 },
+            }],
+            adjust: LocalAdjustments { exposure: 2.0, ..Default::default() },
+            ..Default::default()
+        });
+        check_edges(&format!("{side}² grid"), &s, Overlay::None);
+        check_edges(&format!("{side}² grid overlay"), &s, Overlay::Mask { id: 3, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 });
+    }
+}

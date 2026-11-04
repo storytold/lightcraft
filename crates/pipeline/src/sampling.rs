@@ -16,6 +16,8 @@ pub type ResampleTaps = [Vec<(usize, Vec<f32>)>; 2];
 pub struct GuidedGrid {
     pub down: ResampleTaps,
     pub up: ResampleTaps,
+    /// The reduced rectangle's first cell on the full frame's reduced grid (x, y).
+    pub first: [usize; 2],
 }
 
 impl GuidedGrid {
@@ -32,15 +34,15 @@ impl GuidedGrid {
         if fw == 0 || fh == 0 || end_x > fw || end_y > fh || (x == 0 && y == 0 && w == fw && h == fh) {
             return None;
         }
-        let (dx, ux) = axis(fw, x..end_x, step);
-        let (dy, uy) = axis(fh, y..end_y, step);
-        Some(Self { down: [dx, dy], up: [ux, uy] })
+        let (dx, ux, first_x) = axis(fw, x..end_x, step);
+        let (dy, uy, first_y) = axis(fh, y..end_y, step);
+        Some(Self { down: [dx, dy], up: [ux, uy], first: [first_x, first_y] })
     }
 }
 
 type AxisTaps = Vec<(usize, Vec<f32>)>;
 
-fn axis(full: usize, work: Range<usize>, step: usize) -> (AxisTaps, AxisTaps) {
+fn axis(full: usize, work: Range<usize>, step: usize) -> (AxisTaps, AxisTaps, usize) {
     let low = full.div_ceil(step);
     // Snap the coefficient rectangle outwards to the full frame's reduced
     // grid. Integer multiples of step would be wrong for odd frame dimensions.
@@ -49,7 +51,7 @@ fn axis(full: usize, work: Range<usize>, step: usize) -> (AxisTaps, AxisTaps) {
     let reduced = first..end;
     let down = crop_taps(weights_range(full, low, Filter::Box, reduced.clone()), work.clone());
     let up = crop_taps(weights_range(low, full, Filter::Bilinear, work), reduced);
-    (down, up)
+    (down, up, first)
 }
 
 fn crop_taps(taps: AxisTaps, src: Range<usize>) -> AxisTaps {

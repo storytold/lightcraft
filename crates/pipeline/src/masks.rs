@@ -580,9 +580,21 @@ impl SegGrid {
     /// Output pixels per grid cell (the longer side of a cell: the grid is square over a
     /// rectangle).
     fn cell_px(&self, frame: &Frame, w: usize) -> f64 {
-        let px = frame.px_per_long(w) / frame.ow.max(frame.oh).max(1e-9);
-        ((self.r[2] - self.r[0]) * frame.ow).max((self.r[3] - self.r[1]) * frame.oh) * px / self.side.max(1) as f64
+        cell_px(self.r, self.side, frame, w)
     }
+}
+
+fn cell_px(r: [f64; 4], side: usize, frame: &Frame, w: usize) -> f64 {
+    let px = frame.px_per_long(w) / frame.ow.max(frame.oh).max(1e-9);
+    ((r[2] - r[0]) * frame.ow).max((r[3] - r[1]) * frame.oh) * px / side.max(1) as f64
+}
+
+/// The guided filter's sigma that [`sample_seg`] applies to these grids at an output `w` px wide
+/// (`None`: no filter), so a window can carry its context.
+pub(crate) fn seg_sigma(seg: Option<&SegMask>, detail: &[SegMask], frame: &Frame, w: usize) -> Option<f32> {
+    let grids = seg.into_iter().chain(detail.iter().take(lightcraft_develop::segmask::MAX_DETAIL));
+    let cell = grids.filter_map(|g| Some(cell_px(g.bounds()?, g.side as usize, frame, w))).fold(0.0, f64::max);
+    (cell >= 1.0).then_some((SEG_WINDOW * cell) as f32)
 }
 
 /// [`sample_seg`]'s window, in grid cells (Gaussian sigma): the width of the band bilinear
@@ -627,7 +639,8 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     // (the coarsest grid sets the window: it leaves the widest uncertain band)
     let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
     if cell >= 1.0 {
-        guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
+        // (a window fits on the whole frame's reduced grid: its contour lands where the full render's does)
+        guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, frame.view, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
 }
@@ -1024,26 +1037,34 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
 /// edge the guide has there (0 keeps it exactly: where the photo is flat the filter could only
 /// blur `p`). Extra memory: the reduced planes only (the coefficients are sampled per pixel, not
 /// enlarged into planes).
-fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight: impl Fn(f32) -> f32 + Sync + Send) {
-    use lightcraft_raster::resample::{Filter, resize};
+///
+/// A partial `view` of the output fits the model on the whole frame's reduced grid (its scale and
+/// phase, [`crate::local::GuidedGrid`]), given the context `window::margin` adds.
+fn guided_cross_fast(
+    guide: &Plane,
+    p: &mut Plane,
+    sigma: f32,
+    eps: f32,
+    view: Option<crate::geometry::ViewWindow>,
+    weight: impl Fn(f32) -> f32 + Sync + Send,
+) {
     let (w, h) = (p.width, p.height);
     if guide.width != w || guide.height != h || w == 0 || h == 0 || !sigma.is_finite() {
         return;
     }
+    let (fw, fh) = view.map_or((w, h), |v| (v.full_w as usize, v.full_h as usize));
     // (a window past the whole frame fits one model to it all)
-    let sigma = sigma.clamp(0.5, w.max(h) as f32);
+    let sigma = sigma.clamp(0.5, fw.max(fh).max(1) as f32);
     let s = crate::local::guided_fast_step(sigma);
-    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
-    let g = guided_coeffs(&resize(guide, lw, lh, Filter::Box), &resize(p, lw, lh, Filter::Box), sigma / s as f32, eps, true);
+    let (lo_guide, lo_p, ((kx, ky), (ox, oy), (cx, cy))) = reduce_for_view(guide, p, s, view);
+    let g = guided_coeffs(&lo_guide, &lo_p, sigma / s as f32, eps, true);
     let Some(edge) = &g.edge else {
         return;
     };
-    // (the reduced planes span the same frame: their pixel per full pixel)
-    let (kx, ky) = (lw as f32 / w as f32, lh as f32 / h as f32);
     for_rows(&mut p.data, w, |y, row| {
-        let fy = (y as f32 + 0.5) * ky;
+        let fy = ((oy + y) as f32 + 0.5) * ky - cy;
         for (x, (v, i)) in row.iter_mut().zip(guide.row(y)).enumerate() {
-            let fx = (x as f32 + 0.5) * kx;
+            let fx = ((ox + x) as f32 + 0.5) * kx - cx;
             let k = weight(bilinear(&g.mean, fx, fy));
             // (no edge in the photo: nothing to follow, keep the sample)
             let k = if k > 0.0 { k * smooth(0.05, 1.0, bilinear(edge, fx, fy)) } else { 0.0 };
@@ -1053,6 +1074,31 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
             }
         }
     });
+}
+
+/// Where a buffer's pixels fall on its reduced planes: reduced pixels per pixel, the buffer's origin
+/// in full-frame pixels, and the first reduced cell it holds.
+type Placement = ((f32, f32), (usize, usize), (f32, f32));
+
+/// `guide` and `p` box-reduced by `s`. A partial `view` reduces on the whole frame's grid, so its
+/// cells are the full render's.
+fn reduce_for_view(guide: &Plane, p: &Plane, s: usize, view: Option<crate::geometry::ViewWindow>) -> (Plane, Plane, Placement) {
+    use lightcraft_raster::resample::{Filter, resize};
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(v) = view
+        && let Some(grid) = crate::local::GuidedGrid::for_window(p.width, p.height, s, Some(v))
+    {
+        let (fw, fh) = (v.full_w as usize, v.full_h as usize);
+        let k = (fw.div_ceil(s) as f32 / fw as f32, fh.div_ceil(s) as f32 / fh as f32);
+        let at = ((v.x as usize, v.y as usize), (grid.first[0] as f32, grid.first[1] as f32));
+        return (crate::sampling::resize(guide, &grid.down), crate::sampling::resize(p, &grid.down), (k, at.0, at.1));
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = view;
+    let (w, h) = (p.width, p.height);
+    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
+    // (the reduced planes span the same frame: their pixel per full pixel)
+    (resize(guide, lw, lh, Filter::Box), resize(p, lw, lh, Filter::Box), ((lw as f32 / w as f32, lh as f32 / h as f32), (0, 0), (0.0, 0.0)))
 }
 
 /// At most 512 MiB per stage entry (two entries per view). No extra buffers

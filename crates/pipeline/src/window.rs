@@ -4,7 +4,7 @@
 use lightcraft_develop::{DevelopSettings, MaskShape};
 use lightcraft_raster::blur::box_radii;
 
-use crate::{PixelWindow, Quality, local, masks::Mattes};
+use crate::{PixelWindow, Quality, geometry::Frame, local, masks, masks::Mattes};
 
 /// Finite support of the three box passes used by `gaussian`, in each axis.
 fn gaussian_radius(sigma: f32) -> usize {
@@ -23,8 +23,18 @@ fn guided_radius(sigma: f32) -> usize {
 
 /// Context for the local planes, including upstream noise reduction. Parallel
 /// planes take the maximum support; sequential filters add their supports.
-/// The planner adds Defringe support after resolving spot source reads.
-pub(crate) fn margin(s: &DevelopSettings, ppl: f64, detail_scale: f32, out_long: usize, q: Quality, mattes: Option<&Mattes>) -> usize {
+/// The planner adds Defringe support after resolving spot source reads. `shown`
+/// is the mask an overlay draws, hidden or not.
+pub(crate) fn margin(
+    s: &DevelopSettings,
+    (frame, full_w, full_h): (&Frame, usize, usize),
+    detail_scale: f32,
+    q: Quality,
+    mattes: Option<&Mattes>,
+    shown: Option<u32>,
+) -> usize {
+    let ppl = frame.px_per_long(full_w);
+    let out_long = full_w.max(full_h);
     let sig = local::context_plane_sigmas(s, ppl, q);
     let mut radius = sig.base.map_or(0, |sg| guided_radius(sg) + sig.base_detail);
     radius = radius.max(sig.clarity.map_or(0, guided_radius));
@@ -33,7 +43,7 @@ pub(crate) fn margin(s: &DevelopSettings, ppl: f64, detail_scale: f32, out_long:
     }
     // Mask alpha is prepared in parallel with the local planes. Its refinement
     // reads the shape's blurred alpha, so those supports add too.
-    for mask in s.masks.iter().filter(|m| m.visible && !m.components.is_empty()) {
+    for mask in s.masks.iter().filter(|m| (m.visible || shown == Some(m.id)) && !m.components.is_empty()) {
         let shape = mask
             .components
             .iter()
@@ -41,11 +51,11 @@ pub(crate) fn margin(s: &DevelopSettings, ppl: f64, detail_scale: f32, out_long:
                 shape if mattes.is_some_and(|m| m.uses_matte(shape)) => 0,
                 MaskShape::Sky => gaussian_radius((0.01 * ppl as f32).max(0.5)),
                 MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
-                    if *edge > 0.0 {
-                        gaussian_radius(((*edge / 100.0).clamp(0.0, 1.0) as f32 * 0.02 * ppl as f32).max(0.5))
-                    } else {
-                        0
-                    }
+                    // The model's grid is guided-filtered, then Edge feathers it.
+                    let grid = masks::seg_sigma(seg.as_ref(), detail, frame, full_w).map_or(0, |sg| guided_radius(sg.clamp(0.5, out_long as f32)));
+                    let feather =
+                        if *edge > 0.0 { gaussian_radius(((*edge / 100.0).clamp(0.0, 1.0) as f32 * 0.02 * ppl as f32).max(0.5)) } else { 0 };
+                    grid + feather
                 }
                 MaskShape::Object { hint, .. } if hint.is_empty() => 0,
                 MaskShape::Subject | MaskShape::Background | MaskShape::Object { .. } | MaskShape::People { .. } => {

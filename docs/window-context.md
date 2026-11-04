@@ -79,8 +79,10 @@ and Moire use the same fine-detail and chromaticity planes. Mask feathering,
 heuristic blurs, and Refine Edges have their own support in the same calculation.
 Supplied segmentation mattes skip the heuristic support that their evaluation
 bypasses. Background uses the Subject matte before inversion. Refine Edges still
-adds support when a matte is supplied. Hidden masks and masks without components
-add no unused support, and hidden Dehaze does not trigger the full-frame airlight calculation.
+adds support when a matte is supplied. A stored Object or Prompt segmentation adds
+its guided filter's support (1.5 grid cells of sigma) before Edge feathering. Hidden
+masks and masks without components add no unused support, except the mask a mask
+overlay shows, and hidden Dehaze does not trigger the full-frame airlight calculation.
 Rendering retains main's #1214 fix: hidden and empty masks do not select the
 tone base Clarity reads. CPU and GPU use the same visible-mask selector and
 context plan.
@@ -147,6 +149,7 @@ value because the blur's floating-point running sums start at different places.
 | Luminance and color noise reduction | Full-resolution guided filter and Gaussian |
 | Refine Edges and Auto Mask refinement | Full-resolution cross-guided filter |
 | Supplied mask mattes and segmentation grids | Existing frame-to-source coordinates |
+| Stored segmentation guided filter | Full-frame reduced grid (`local::GuidedGrid`); the GPU evaluates it on the CPU |
 | Dehaze airlight | Full-output-resolution statistic on each renderer, including upstream processing and every-seventh-value selection |
 
 ## Full-frame airlight and mask reuse
