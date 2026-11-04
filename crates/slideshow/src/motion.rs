@@ -137,4 +137,30 @@ mod tests {
         assert_eq!(View { zoom: f64::NAN, x: 9.0, y: -1.0 }.window(), (0.0, 0.0, 1.0, 1.0), "bad values: the whole photo");
         assert_eq!(View { zoom: 2.0, x: 0.0, y: 1.0 }.window(), (0.0, 0.5, 0.5, 1.0), "the center is moved in");
     }
+
+    /// On a 16:9 screen, a photo with the screen's aspect, a very narrow one and a very wide one:
+    /// the window, placed on the photo's visible part in slide pixels, stays inside that part and
+    /// has its shape, so the photo is not stretched and no empty edge shows.
+    #[test]
+    fn the_window_keeps_the_shape_of_the_visible_photo_at_any_aspect() {
+        for aspect in [16.0 / 9.0, 0.01, 50.0] {
+            let l = crate::layout(&crate::SlideSettings::default(), aspect, 1920, 1080);
+            let v = l.visible;
+            if aspect == 16.0 / 9.0 {
+                assert_eq!(v, l.cell, "a photo with the screen's aspect fills the screen");
+            }
+            let (w, h) = (v.width(), v.height());
+            assert!(w >= 1.0 && h >= 1.0, "{aspect}: {v:?}");
+            for k in 0..64 {
+                let m = Motion::new(k, 1.0);
+                for i in 0..=10 {
+                    let (x0, y0, x1, y1) = m.at(i as f64 / 10.0).window();
+                    let (sx0, sy0, sx1, sy1) = (v.x0 + x0 * w, v.y0 + y0 * h, v.x0 + x1 * w, v.y0 + y1 * h);
+                    assert!(sx0 >= v.x0 && sy0 >= v.y0 && sx1 <= v.x1 + 1e-9 && sy1 <= v.y1 + 1e-9, "{aspect}, key {k} at {i}");
+                    let shape = ((sx1 - sx0) / (sy1 - sy0)) / (w / h);
+                    assert!((shape - 1.0).abs() < 1e-9, "{aspect}, key {k} at {i}: stretched by {shape}");
+                }
+            }
+        }
+    }
 }

@@ -297,6 +297,77 @@ fn pan_and_zoom_settings_round_trip_and_are_checked() {
 }
 
 #[test]
+fn pan_and_zoom_shows_the_start_the_middle_and_the_end_of_a_slide() {
+    let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(2), None, s, 5, 10.0).unwrap();
+    let first = p.current();
+    let m = Motion::new(p.motion_key(first).unwrap(), 0.5);
+    assert_ne!(m.start, m.end, "the photo moves");
+    assert_eq!(p.tick(10.0, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(10.0).current, Some(m.start), "at 0");
+    let half = p.pan_zoom(12.0).current.unwrap();
+    assert_eq!(half, m.at(0.5), "half way");
+    for (a, b, mid) in [(m.start.zoom, m.end.zoom, half.zoom), (m.start.x, m.end.x, half.x), (m.start.y, m.end.y, half.y)] {
+        assert!((mid - (a + b) / 2.0).abs() < 1e-12, "half way along the path: {half:?}");
+    }
+    assert_eq!(p.tick(13.99, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(14.0).current, Some(m.end), "at the end");
+    assert_eq!(p.pan_zoom(30.0).current, Some(m.end), "a slide that runs over stays at its end");
+    let Tick::Advanced(next) = p.tick(14.0, all_ready) else { panic!("the next slide comes up at 14") };
+    let m2 = Motion::new(p.motion_key(next).unwrap(), 0.5);
+    assert_eq!(p.pan_zoom(14.0), PanZoom { current: Some(m2.start), from: Some(m.end) }, "the next one starts at its start");
+}
+
+#[test]
+fn pan_and_zoom_stops_while_paused_and_carries_on_after() {
+    let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(2), None, s, 5, 0.0).unwrap();
+    let m1 = Motion::new(p.motion_key(p.current()).unwrap(), 0.5);
+    assert!(p.toggle_pause(1.0));
+    for now in [1.0, 2.0, 50.0] {
+        assert_eq!(p.pan_zoom(now).current, Some(m1.at(0.25)), "paused at {now}");
+    }
+    assert_eq!(p.tick(50.0, all_ready), Tick::Idle, "no slide change while paused");
+    assert!(!p.toggle_pause(50.0));
+    assert_eq!(p.pan_zoom(50.0).current, Some(m1.at(0.25)), "it resumes where it stopped");
+    assert_eq!(p.pan_zoom(52.0).current, Some(m1.at(0.75)));
+    assert_eq!(p.tick(52.99, all_ready), Tick::Idle);
+    let Tick::Advanced(next) = p.tick(53.0, all_ready) else { panic!("the slide had 3 s left after the pause") };
+    let m2 = Motion::new(p.motion_key(next).unwrap(), 0.5);
+    // paused during the fade: both photos hold their views, and the fade waits too
+    assert!(p.toggle_pause(53.5));
+    assert_eq!(p.pan_zoom(80.0), PanZoom { current: Some(m2.at(0.125)), from: Some(m1.end) });
+    assert_eq!(p.tick(80.0, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(80.0).from, Some(m1.end));
+    assert!(!p.toggle_pause(80.0));
+    assert_eq!(p.pan_zoom(80.25), PanZoom { current: Some(m2.at(0.1875)), from: Some(m1.end) });
+    assert_eq!(p.tick(80.5, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(80.5), PanZoom { current: Some(m2.at(0.25)), from: None }, "the fade is over after its second");
+}
+
+#[test]
+fn pan_and_zoom_moves_through_a_fade_that_overlaps_it() {
+    // a 2 s fade in a 4 s slide, straight and through a color: the new photo moves from its start
+    // view as it fades in, and the old one shows at its end view until the fade is over
+    for color in [None, Some([0, 0, 0])] {
+        let s = PlaybackSettings { pan_and_zoom: true, fade_color: color, ..settings(4.0, 2.0) };
+        let mut p = Playback::new(ids(2), None, s, 5, 0.0).unwrap();
+        let old = p.current();
+        let m1 = Motion::new(p.motion_key(old).unwrap(), 0.5);
+        let Tick::Advanced(new) = p.tick(4.0, all_ready) else { panic!("the next slide comes up at 4") };
+        let m2 = Motion::new(p.motion_key(new).unwrap(), 0.5);
+        for (now, t, progress) in [(4.0, 0.0, 0.0), (5.0, 0.25, 0.5), (5.5, 0.375, 0.75)] {
+            let f = p.frame(now);
+            assert_eq!((f.current, f.from), (new, Some(old)), "{color:?} at {now}");
+            assert!((f.progress - progress).abs() < 1e-6, "{color:?} at {now}: {f:?}");
+            assert_eq!(p.pan_zoom(now), PanZoom { current: Some(m2.at(t)), from: Some(m1.end) }, "{color:?} at {now}");
+        }
+        assert_eq!(p.tick(6.0, all_ready), Tick::Idle);
+        assert_eq!(p.pan_zoom(6.0), PanZoom { current: Some(m2.at(0.5)), from: None }, "{color:?}: the fade is over, the move goes on");
+    }
+}
+
+#[test]
 fn a_single_photo_repeats_without_changing() {
     let mut p = Playback::new(ids(1), None, settings(1.0, 0.5), 1, 0.0).unwrap();
     assert_eq!(p.upcoming(2), vec![]);
