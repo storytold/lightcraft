@@ -157,8 +157,8 @@ fn wait_for_slot(dir: &Path, slots: usize, owner: &str, wait: Option<Duration>, 
 /// The error when a slot came free only as the wait ran out: nothing to end, just run again.
 fn freed_as_it_ended(wait: Duration) -> String {
     format!(
-        "ci lock: a CI slot came free just as the {} wait for one ran out, so it wasn't taken; run again \
-         (it's free now), or set {WAIT_ENV}=<minutes> to wait longer (0 for as long as it takes)",
+        "ci lock: a CI slot came free just as the {} wait for one ran out, so it wasn't taken; run again, \
+         or set {WAIT_ENV}=<minutes> to wait longer (0 for as long as it takes)",
         crate::deadline::show(wait)
     )
 }
