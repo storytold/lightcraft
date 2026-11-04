@@ -434,13 +434,12 @@ fn effect_files(paths: &[String]) -> Vec<(String, Option<String>, bool)> {
     out
 }
 
-/// Read a file of at most [`MAX_FILE`] bytes.
+/// Read a regular file of at most [`MAX_FILE`] bytes.
 pub fn read_capped(path: &str) -> std::result::Result<Vec<u8>, String> {
-    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if len > MAX_FILE {
-        return Err(format!("too large for a preset file ({} MB)", len >> 20));
-    }
-    std::fs::read(path).map_err(|e| e.to_string())
+    crate::bounded_read::read_bounded(std::path::Path::new(path), MAX_FILE).map_err(|e| match e {
+        crate::bounded_read::ReadError::TooLarge(len) => format!("too large for a preset file ({} MB)", len >> 20),
+        e => e.to_string(),
+    })
 }
 
 pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {
@@ -501,6 +500,26 @@ pub fn export_effects(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A FIFO named as a preset file reports 0 bytes and opening it waits for a writer: the
+    /// import must report it, not hang (#2570).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_as_a_preset_is_refused_without_waiting() {
+        let dir = std::env::temp_dir().join(format!("lc-mask-effect-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("Soft Glow.xmp");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.to_string_lossy().to_string();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_capped(&path).map(|b| b.len()));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("reading a FIFO must not hang");
+        assert!(got.is_err(), "{got:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     // A synthetic template in the shape Lightroom writes (our own values).
     const TEMPLATE: &str = r#"s = {
