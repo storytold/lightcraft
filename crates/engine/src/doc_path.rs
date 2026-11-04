@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 pub use craft_docpath::Refused;
 
+/// Maximum number of shares explicitly granted by one import; discovery has no such cap.
+pub const MAX_NETWORK_SHARES: usize = 32;
+
 /// Network shares explicitly selected by the caller for this operation. This is not saved in
 /// documents or global settings. Construction and resolution are lexical and perform no I/O.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -24,7 +27,7 @@ impl NetworkShares {
     /// A folder on each allowed UNC share. Access is granted to the whole server/share pair,
     /// using craft-docpath's normalisation and comparison, never a string-prefix comparison.
     pub fn new(paths: Vec<String>) -> Result<Self, String> {
-        if paths.len() > 32 {
+        if paths.len() > MAX_NETWORK_SHARES {
             return Err("networkShares: at most 32 network shares may be selected".into());
         }
         for path in &paths {
@@ -42,7 +45,9 @@ impl NetworkShares {
     pub fn from_params(params: &serde_json::Value) -> Result<Self, String> {
         match params.get("networkShares") {
             None | Some(serde_json::Value::Null) => Ok(Self::default()),
-            Some(serde_json::Value::Array(values)) if values.len() > 32 => Err("networkShares: at most 32 network shares may be selected".into()),
+            Some(serde_json::Value::Array(values)) if values.len() > MAX_NETWORK_SHARES => {
+                Err("networkShares: at most 32 network shares may be selected".into())
+            }
             Some(serde_json::Value::Array(values)) => Self::new(
                 values
                     .iter()
@@ -53,6 +58,7 @@ impl NetworkShares {
         }
     }
 
+    /// UNC folders supplied for this operation; no implicit document grant is listed here.
     pub fn paths(&self) -> &[String] {
         &self.paths
     }
@@ -138,9 +144,107 @@ pub fn resolve(stored: &str, document: Option<&Path>) -> Result<PathBuf, NotFoll
     }
 }
 
+/// Distinguishes a refused redirect from an unavailable original that can stay offline.
+#[derive(Debug)]
+struct NetworkRedirect;
+impl fmt::Display for NetworkRedirect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("network originals through reparse points are not imported")
+    }
+}
+impl std::error::Error for NetworkRedirect {}
+
+pub(crate) fn is_network_redirect(error: &std::io::Error) -> bool {
+    error.get_ref().is_some_and(|e| e.is::<NetworkRedirect>())
+}
+
+/// Metadata for a catalog original. On Windows, reject reparse points along a UNC path
+/// before asking about a descendant, so an existing directory or file link is never followed.
+/// This is a preflight check, not an atomic filesystem sandbox against concurrent path swaps.
+pub(crate) fn original_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    #[cfg(windows)]
+    if path.to_str().is_some_and(|p| craft_docpath::classify(p) == craft_docpath::PathKind::Network) {
+        return metadata_without_reparse(path, |p| std::fs::symlink_metadata(p));
+    }
+    std::fs::metadata(path)
+}
+
+/// Walk from the root to the leaf, checking each entry without following its final component.
+/// Never query a descendant after a reparse point; the callback also lets tests observe this.
+#[cfg(windows)]
+fn metadata_without_reparse(path: &Path, mut stat: impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>) -> std::io::Result<std::fs::Metadata> {
+    use std::os::windows::fs::MetadataExt;
+    let mut ancestors: Vec<_> = path.ancestors().take(257).collect();
+    if ancestors.len() > 256 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "network original path is too deeply nested"));
+    }
+    ancestors.reverse();
+    let mut last = None;
+    for part in ancestors {
+        let meta = stat(part)?;
+        // FILE_ATTRIBUTE_REPARSE_POINT includes junctions and other redirects, not only symlinks.
+        if meta.file_attributes() & 0x400 != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, NetworkRedirect));
+        }
+        last = Some(meta);
+    }
+    last.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty original path"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A link at either a directory or the leaf is rejected before its target is inspected.
+    #[cfg(windows)]
+    #[test]
+    fn network_preflight_stops_at_reparse_points_before_descendants() {
+        let root = std::env::temp_dir().join(format!(
+            "lc-reparse-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("photo.jpg"), b"synthetic").unwrap();
+        let link = root.join("redirect");
+        if let Err(e) = std::os::windows::fs::symlink_dir(&target, &link) {
+            std::fs::remove_dir_all(&root).unwrap();
+            lightcraft_testkit::skip!(System, "Windows symlink creation is unavailable: {e}");
+            return;
+        }
+        let mut visited = Vec::new();
+        let error = metadata_without_reparse(&link.join("photo.jpg"), |p| {
+            visited.push(p.to_path_buf());
+            std::fs::symlink_metadata(p)
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(visited.last(), Some(&link));
+        assert!(!visited.contains(&link.join("photo.jpg")));
+        let leaf = root.join("leaf.jpg");
+        std::os::windows::fs::symlink_file(target.join("photo.jpg"), &leaf).unwrap();
+        assert!(metadata_without_reparse(&leaf, |p| std::fs::symlink_metadata(p)).is_err());
+        assert!(metadata_without_reparse(&target.join("photo.jpg"), |p| std::fs::symlink_metadata(p)).unwrap().is_file());
+        // Exercise the actual UNC entry point too when this machine offers its loopback share.
+        let drive_root = root.ancestors().last().unwrap();
+        if let Some(std::path::Component::Prefix(prefix)) = drive_root.components().next()
+            && let std::path::Prefix::Disk(drive) = prefix.kind()
+        {
+            let unc = PathBuf::from(format!(r"\\localhost\{}$", char::from(drive))).join(root.strip_prefix(drive_root).unwrap());
+            if std::fs::metadata(unc.join("target/photo.jpg")).is_ok() {
+                assert!(original_metadata(&unc.join("target/photo.jpg")).unwrap().is_file());
+                assert!(is_network_redirect(&original_metadata(&unc.join("redirect/photo.jpg")).unwrap_err()));
+                assert!(is_network_redirect(&original_metadata(&unc.join("leaf.jpg")).unwrap_err()));
+                std::os::windows::fs::symlink_dir(r"\\localhost\lightcraft-unselected", root.join("other-share")).unwrap();
+                assert!(is_network_redirect(&original_metadata(&unc.join("other-share/photo.jpg")).unwrap_err()));
+            } else {
+                lightcraft_testkit::skip!(System, "loopback administrative share unavailable; local reparse checks passed");
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn selected_network_shares_allow_only_the_chosen_server_and_share() {
