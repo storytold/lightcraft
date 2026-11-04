@@ -305,6 +305,11 @@ fn a_photo_named_twice_is_merged_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `bytes` of memory the merge may use, this computer's memory known.
+fn known(bytes: f64) -> crate::merge::Memory {
+    crate::merge::Memory { bytes, known: true }
+}
+
 /// `n` 24 MP photos (6000 × 4000, 30 MB files), as the catalog knows them.
 fn photos_24mp(n: usize) -> Vec<crate::merge::PhotoSize> {
     vec![crate::merge::PhotoSize::new(6000, 4000, 30_000_000).unwrap(); n]
@@ -479,7 +484,7 @@ fn counted_job(
         Err(format!("{path}: read"))
     });
     let sources = (0..sizes.len()).map(|i| (lightcraft_catalog::PhotoId(i as u64 + 1), format!("/photos/{i}.ARW"))).collect();
-    let job = crate::merge::MergeJob { kind, finish: Default::default(), sources, preview, read, sizes, memory: Some(room) };
+    let job = crate::merge::MergeJob { kind, finish: Default::default(), sources, preview, read, sizes, memory: Some(known(room)) };
     (job, reads)
 }
 
@@ -533,7 +538,7 @@ fn counted(
         counter.fetch_add(1, Ordering::SeqCst);
         if garbage { Ok(b"not a photo".to_vec()) } else { inner(path) }
     });
-    (crate::merge::MergeJob { read, sizes, memory: Some(room), ..job.clone() }, reads)
+    (crate::merge::MergeJob { read, sizes, memory: Some(known(room)), ..job.clone() }, reads)
 }
 
 /// A photo the catalog has no size for is sized from its file's header, read but not decoded, and
@@ -610,7 +615,7 @@ fn a_panorama_of_photos_too_large_for_memory_is_made_from_smaller_frames() {
     let room = 145e6 + file;
     let edge = crate::merge::plan_memory(&job.kind, &sizes, room).unwrap().expect("made smaller");
     assert!((1024..1600).contains(&edge), "{edge}");
-    job.memory = Some(room);
+    job.memory = Some(known(room));
     let r = job.run(&|_, _| true).unwrap().info;
     assert_eq!(r["used"].as_array().map(Vec::len), Some(5), "{r}");
     assert_eq!(r["limit"], "memory", "{r}");
@@ -618,4 +623,36 @@ fn a_panorama_of_photos_too_large_for_memory_is_made_from_smaller_frames() {
     // at most room / 68 bytes; the photos' own resolution is ~(1600 / 1024)² × the frames'
     assert!(mp <= room / 68e6 && native > 2.0 * mp, "{r}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A computer whose memory can't be read (Windows, for now) has a guessed allowance (8 GB of RAM):
+/// the plan follows it, but a merge it would refuse runs as it did before merges were planned
+/// (full size, one photo at a time), since HDR merges like five 67 MP raws (measured at ~5.5 GB)
+/// ran there before and may well fit. No check before a decode refuses on the guess either.
+#[test]
+fn a_guessed_memory_never_refuses_a_merge() {
+    use crate::merge::{Memory, PhotoSize, plan_memory};
+    use std::sync::atomic::Ordering;
+    let guess = |bytes: f64| Memory { bytes, known: false };
+    let raws = vec![PhotoSize::new(10_000, 6_700, 80_000_000).unwrap(); 5];
+    assert!(plan_memory(&hdr(), &raws, 5e9).is_err(), "refused when 5 GB is known");
+    let (mut job, reads) = counted_job(hdr(), raws.into_iter().map(Some).collect(), None, 5e9);
+    job.memory = Some(guess(5e9));
+    assert_eq!(job.plan(guess(5e9)).map(|(l, _)| (l.edge, l.parallel)), Ok((None, false)));
+    assert_eq!(job.run(&|_, _| true).err().as_deref(), Some("/photos/0.ARW: read"), "it runs: the photos are read");
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    for kind in [panorama(), hdr(), hdr_panorama(3)] {
+        for preview in [None, Some(crate::merge::PREVIEW_EDGE)] {
+            let (job, _) = counted_job(kind.clone(), photos_24mp(6).into_iter().map(Some).collect(), preview, 0.3e9);
+            let (load, _) = job.plan(guess(0.3e9)).unwrap();
+            assert_eq!((load.edge, load.parallel), (preview, false), "{kind:?} {preview:?}: as before, one at a time");
+            assert!(job.plan(known(0.3e9)).is_err(), "{kind:?} {preview:?}: refused when the memory is known");
+        }
+    }
+    // what the guess allows is still planned: smaller frames, previews in parallel
+    let (job, _) = counted_job(panorama(), photos_24mp(5).into_iter().map(Some).collect(), None, 1.5e9);
+    assert_eq!(job.plan(guess(1.5e9)).map(|(l, _)| l.edge), job.plan(known(1.5e9)).map(|(l, _)| l.edge));
+    assert!(job.plan(guess(1.5e9)).unwrap().0.edge.is_some());
+    let (job, _) = counted_job(panorama(), photos_24mp(6).into_iter().map(Some).collect(), Some(crate::merge::PREVIEW_EDGE), 1e12);
+    assert!(job.plan(guess(1e12)).unwrap().0.parallel);
 }

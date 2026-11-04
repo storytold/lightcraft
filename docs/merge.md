@@ -92,7 +92,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   a pixel (48 when it is made smaller; a raw whose sensor has many more samples than its picture has pixels, 8 bytes
   a sample instead when that is more) beside the frames already held (12 bytes a pixel each). Issue #3708: until then
   a merge was sized only after every photo was decoded, which could run out of memory first. A merge that fits runs
-  as it always did; one with no size known at all runs unplanned. Just before each photo is decoded its header is
+  as it always did; one with no size known at all runs unplanned. When the computer's memory can't be read
+  (Windows, for now) the merge's memory is a guess (that of 8 GB of RAM): the plan follows it but refuses nothing on
+  it, and what it would refuse runs as it did before, at full size, one photo at a time. Just before each photo is decoded its header is
   read again and the plan checked with it (the catalog doesn't keep a raw's sensor size, and a file can have changed
   since it was imported): when the plan no longer holds the merge stops before decoding it, naming the file.
 - A preview's photos are decoded at full size too, several at once: one at a time when several don't fit, and the

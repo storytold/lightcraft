@@ -96,8 +96,25 @@ pub struct MergeJob {
     /// merge is planned against its memory before a photo is decoded ([`plan_memory`]); `None`:
     /// read from the file's header when the merge starts.
     pub sizes: Vec<Option<PhotoSize>>,
-    /// The memory the merge may use (bytes); `None`: [`merge_memory`] of this computer (tests set it).
-    pub(crate) memory: Option<f64>,
+    /// The memory the merge may use; `None`: [`merge_memory`] of this computer (tests set it).
+    pub(crate) memory: Option<Memory>,
+}
+
+/// The memory a merge may use (bytes), and whether it is known: a computer whose memory can't be
+/// read (Windows, for now) has a guess, which the plan follows but
+/// never refuses a merge on ([`MergeJob::plan`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Memory {
+    pub(crate) bytes: f64,
+    pub(crate) known: bool,
+}
+
+impl Memory {
+    /// This computer's: [`merge_memory`] of its RAM, a guess when that can't be read.
+    fn of_this_computer() -> Memory {
+        let ram = crate::memory::total_ram();
+        Memory { bytes: merge_memory(ram), known: ram.is_some() }
+    }
 }
 
 /// What a merge produced.
@@ -115,14 +132,14 @@ pub struct MergeOutput {
 pub type ProgressFn<'a> = dyn Fn(f32, &str) -> bool + Sync + 'a;
 
 /// How a merge decodes its photos ([`MergeJob::plan`]).
-#[derive(Clone, Copy, Debug)]
-struct Load {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Load {
     /// The long edge they are held to (`None`: full size).
-    edge: Option<usize>,
+    pub(crate) edge: Option<usize>,
     /// Several at once.
-    parallel: bool,
+    pub(crate) parallel: bool,
     /// Turned upright (panoramas).
-    orient: bool,
+    pub(crate) orient: bool,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -173,16 +190,31 @@ impl MergeJob {
         Ok(fill_unknown(&sizes))
     }
 
-    /// Plan the merge against `room` before anything is decoded: how the photos are decoded, and
-    /// what each was planned at (empty: unplanned).
-    fn plan(&self, room: f64) -> std::result::Result<(Load, Vec<PhotoSize>), String> {
+    /// Plan the merge against `memory` before anything is decoded: how the photos are decoded, and
+    /// what each was planned at (empty: unplanned). With the memory unknown (a guess) it is planned
+    /// the same, but what the guess would refuse runs as it did before merges were planned: a
+    /// full-size merge at full size, a preview one photo at a time.
+    pub(crate) fn plan(&self, memory: Memory) -> std::result::Result<(Load, Vec<PhotoSize>), String> {
         let orient = matches!(self.kind, MergeKind::Panorama { .. });
         let Some(sizes) = self.known_sizes()? else {
             return Ok((Load { edge: self.preview, parallel: self.preview.is_some(), orient }, Vec::new()));
         };
+        let room = memory.bytes;
         let load = match self.preview {
-            Some(edge) => Load { edge: Some(edge), parallel: plan_preview(&self.kind, &sizes, room, rayon::current_num_threads())?, orient },
-            None => Load { edge: plan_memory(&self.kind, &sizes, room)?, parallel: false, orient },
+            Some(edge) => {
+                let parallel = match plan_preview(&self.kind, &sizes, room, rayon::current_num_threads()) {
+                    Err(_) if !memory.known => false,
+                    p => p?,
+                };
+                Load { edge: Some(edge), parallel, orient }
+            }
+            None => {
+                let edge = match plan_memory(&self.kind, &sizes, room) {
+                    Err(_) if !memory.known => None,
+                    e => e?,
+                };
+                Load { edge, parallel: false, orient }
+            }
         };
         Ok((load, sizes))
     }
@@ -196,16 +228,20 @@ impl MergeJob {
             return Err("cancelled".into());
         }
         let sub = |a: f32, b: f32| move |f: f32, s: &str| progress(a + (b - a) * f, s);
-        let room = self.memory.unwrap_or_else(|| merge_memory(crate::memory::total_ram()));
+        let memory = self.memory.unwrap_or_else(Memory::of_this_computer);
+        let room = memory.bytes;
         // planned before anything is decoded: it runs as it is, with smaller frames (panoramas), or
-        // is refused
-        let (load, planned) = self.plan(room)?;
+        // is refused (never on a guessed memory)
+        let (load, planned) = self.plan(memory)?;
         // just before each photo is decoded its header is read again, and the plan checked with it
         // (and every photo checked so far): a raw's sensor can be larger than its picture, which the
         // catalog keeps, and a file can have changed since it was imported
         let seen = std::sync::Mutex::new(planned.clone());
         let threads = self.preview.map(|_| if load.parallel { rayon::current_num_threads() } else { 1 });
         let check = |i: usize, bytes: &[u8]| -> std::result::Result<(), String> {
+            if !memory.known {
+                return Ok(());
+            }
             let (Some(&was), Some(now)) = (planned.get(i), PhotoSize::from_header(bytes)) else { return Ok(()) };
             let mut sizes = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(s) = sizes.get_mut(i) {
