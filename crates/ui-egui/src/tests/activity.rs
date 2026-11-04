@@ -98,6 +98,62 @@ fn not_cancellable_rows_have_no_cross() {
 }
 
 #[test]
+fn library_backup_commands_keep_the_row_until_async_success_or_failure() {
+    let mut h = demo();
+    for command in ["file.backupLibrary", "web.recoveryBackup"] {
+        for fails in [false, true] {
+            let (finish, waiting) = std::sync::mpsc::channel();
+            let worker = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let started_worker = worker.clone();
+            let mut waiting = Some(waiting);
+            h.app.services.backup_library = Some(Box::new(move |session, ui, task| {
+                assert_eq!(session.activity.list().len(), 1, "registered before calling the host");
+                assert_eq!(ui.view, crate::state::ViewMode::PhotoGrid);
+                let waiting = waiting.take().unwrap();
+                *started_worker.borrow_mut() = Some(std::thread::spawn(move || {
+                    let _task = task;
+                    if waiting.recv().unwrap() { Err("synthetic download failure") } else { Ok(()) }
+                }));
+                Ok(json!({"started": true, "backupId": 42}))
+            }));
+            h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+            let result = crate::menus::run_ui_command(&mut h.app, command, &json!({})).unwrap().unwrap();
+            assert_eq!(result["backupId"], 42);
+            let tasks = h.app.session.activity.list();
+            assert_eq!(tasks.len(), 1, "{command}: {tasks:?}");
+            assert_eq!(tasks[0].kind, "backup");
+            assert_eq!(tasks[0].label, "Backing up library");
+            assert_eq!(tasks[0].total, 0);
+            assert!(!tasks[0].cancellable);
+            wait_visible(&mut h);
+            assert!(has(&h, &format!("activity:row:{}", tasks[0].id)));
+            assert!(!has(&h, &format!("activity:cancel:{}", tasks[0].id)));
+            assert!(h.app.ui.toast.is_none(), "a running backup uses the activity row, not a toast");
+            finish.send(fails).unwrap();
+            let outcome = worker.borrow_mut().take().unwrap().join().unwrap();
+            assert_eq!(outcome.is_err(), fails);
+            assert!(h.app.session.activity.list().is_empty());
+            h.step();
+            assert_eq!(rows(&h), 0, "{command}: the finished backup leaves no row");
+        }
+    }
+}
+
+#[test]
+fn library_backup_capture_failure_leaves_no_row() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    app.services.backup_library = Some(Box::new(|session, _, _task| {
+        assert_eq!(session.activity.list().len(), 1);
+        Err("synthetic capture failure".into())
+    }));
+    for command in ["file.backupLibrary", "web.recoveryBackup"] {
+        let error = crate::menus::run_ui_command(&mut app, command, &json!({})).unwrap().unwrap_err();
+        assert_eq!(error, "synthetic capture failure");
+        assert!(app.session.activity.list().is_empty());
+    }
+}
+
+#[test]
 fn count_text_by_unit() {
     let mut t = TaskInfo {
         id: 1,

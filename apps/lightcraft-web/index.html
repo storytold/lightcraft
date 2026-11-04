@@ -22,7 +22,7 @@
   <div id="lightcraft_loading">Loading LightCraft…</div>
   <div id="lightcraft_status" aria-live="polite"></div>
   <script type="module">
-    import init, { start, command } from "./lightcraft_web.js";
+    import init, { start, command, recovery_messages } from "./lightcraft_web.js";
     (async () => {
       // The Chinese font is a separate file: embedding it would exceed the host's WASM size limit.
       // Font-free development builds can still run, with the same missing-glyph warning as before.
@@ -38,6 +38,98 @@
       await init({ module_or_path: module });
       // automation: `await lightcraft.command("library.info", "{}")` → JSON text
       globalThis.lightcraft = { command };
+      const canvas = document.getElementById("lightcraft_canvas");
+      let recovery;
+      canvas.addEventListener("webglcontextlost", (event) => {
+        event.preventDefault(); // permit restoration, but stale GPU resources still require a restart
+        if (recovery) return;
+        const messages = JSON.parse(recovery_messages());
+        recovery = document.createElement("dialog");
+        recovery.id = "lightcraft_graphics_recovery";
+        recovery.setAttribute("role", "alertdialog");
+        recovery.setAttribute("aria-labelledby", "lightcraft_graphics_title");
+        recovery.setAttribute("aria-modal", "true");
+        recovery.setAttribute("aria-describedby", "lightcraft_graphics_explanation");
+        recovery.tabIndex = -1;
+        recovery.addEventListener("cancel", (event) => event.preventDefault());
+        recovery.style.cssText = "position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;border:0;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;background:#1c1c1c;color:#e0e0e0;font:15px/1.5 system-ui;text-align:center;overflow:auto";
+        const title = document.createElement("h1");
+        title.id = "lightcraft_graphics_title";
+        title.textContent = messages.title;
+        const explanation = document.createElement("p");
+        explanation.id = "lightcraft_graphics_explanation";
+        explanation.style.maxWidth = "600px";
+        explanation.textContent = messages.explanation;
+        const status = document.createElement("p");
+        status.setAttribute("aria-live", "polite");
+        const backup = document.createElement("button");
+        backup.textContent = messages.backup;
+        const reload = document.createElement("button");
+        reload.textContent = messages.reload;
+        reload.disabled = true;
+        for (const button of [backup, reload]) button.style.cssText = "font:inherit;padding:10px 18px;cursor:pointer";
+        const focusRecovery = () => (backup.disabled ? (reload.disabled ? recovery : reload) : backup).focus();
+        recovery.addEventListener("keydown", (event) => {
+          if (event.key !== "Tab") return;
+          event.preventDefault();
+          const buttons = [backup, reload].filter(button => !button.disabled);
+          if (!buttons.length) return recovery.focus();
+          const current = buttons.indexOf(document.activeElement);
+          const next = current < 0 ? (event.shiftKey ? buttons.length - 1 : 0) : (current + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length;
+          buttons[next].focus();
+        });
+        document.addEventListener("focusin", () => {
+          if (recovery.isConnected && recovery.open && !recovery.contains(document.activeElement)) focusRecovery();
+        });
+        const missing = document.createElement("pre");
+        missing.style.cssText = "max-width:100%;max-height:25vh;overflow:auto;white-space:pre-wrap;text-align:left";
+        let pendingBackup;
+        const finishBackup = (detail) => {
+          if (!pendingBackup || detail.backupId !== pendingBackup.id) return;
+          pendingBackup = undefined;
+          backup.disabled = false;
+          if (detail.error) {
+            status.textContent = messages.failed + " " + detail.error;
+            return;
+          }
+          const unavailable = detail.report.missing;
+          missing.textContent = [...(detail.report.warnings || []), ...(unavailable.length ? [messages.missing, ...unavailable] : [])].join("\n");
+          status.textContent = messages.complete;
+          reload.disabled = false;
+        };
+        document.addEventListener("lightcraft-backup-complete", (event) => {
+          if (!pendingBackup) return;
+          if (pendingBackup.id === undefined) pendingBackup.completions.set(event.detail.backupId, event.detail);
+          else finishBackup(event.detail);
+        });
+        backup.addEventListener("click", async () => {
+          backup.disabled = true;
+          reload.disabled = true;
+          recovery.focus();
+          status.textContent = messages.preparing;
+          const attempt = { completions: new Map() };
+          pendingBackup = attempt;
+          try {
+            const result = JSON.parse(await command("web.recoveryBackup", "{}"));
+            attempt.id = result.backupId;
+            if (attempt.completions.has(attempt.id)) finishBackup(attempt.completions.get(attempt.id));
+          } catch (error) {
+            status.textContent = messages.failed + " " + error;
+            pendingBackup = undefined;
+            backup.disabled = false;
+          }
+        });
+        reload.addEventListener("click", () => {
+          if (window.confirm(messages.confirm)) location.reload();
+        });
+        recovery.append(title, explanation, backup, reload, status, missing);
+        document.body.append(recovery);
+        recovery.showModal();
+        backup.focus();
+      });
+      canvas.addEventListener("webglcontextrestored", () => {
+        if (recovery) recovery.querySelector("h1").textContent = JSON.parse(recovery_messages()).restored;
+      });
       start(font);
     })().catch((e) => {
       console.error(e);

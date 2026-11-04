@@ -573,13 +573,17 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         "app.recentLibraries" => crate::panels::settings::recent_libraries(app, p),
         "app.clearRecentLibraries" => crate::panels::settings::recent_libraries(app, &json!({"clear": true})),
         "app.displayProfile" => crate::panels::settings::display_profile(app, p),
-        "file.backupLibrary" | "file.restoreLibrary" => {
-            let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
-            match action {
-                Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+        "file.backupLibrary" | "web.recoveryBackup" => match app.services.backup_library.as_mut() {
+            Some(f) => {
+                let task = app.session.activity.start("backup", crate::i18n::tr("Backing up library"), lightcraft_engine::activity::Cancel::No);
+                f(&mut app.session, &app.ui, task)
             }
-        }
+            None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+        },
+        "file.restoreLibrary" => match app.services.restore_library.as_mut() {
+            Some(f) => f(&mut app.session),
+            None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+        },
         "view.filmstrip" => {
             app.ui.filmstrip = !app.ui.filmstrip;
             Ok(Value::Null)

@@ -234,6 +234,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
+    ("web.recoveryBackup", "Back up library", None, ""),
     ("photo.locate", "Locate Missing File…", None, ""),
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
     // the keywords ⇧K adds or removes, typed with commas between them

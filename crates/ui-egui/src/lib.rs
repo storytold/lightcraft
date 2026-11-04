@@ -98,8 +98,8 @@ pub use clock::{monotonic_ms, now_ms};
 #[cfg(target_os = "linux")]
 pub use services::OpenModelFolderFn;
 pub use services::{
-    CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    BackupLibraryFn, CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile,
+    ScreenProfileFn, Services, SharedWrite, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 

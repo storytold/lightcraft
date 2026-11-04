@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-11-03
+
+### Browser recovery keeps available work
+- Losing the browser's WebGL connection leaves the editing session open behind a localized,
+  keyboard-accessible recovery dialog instead of silently reloading. Its registered
+  `web.recoveryBackup` command shares File ▸ Back Up Library's backup action and activity row.
+  Both save the current catalog, edits and available originals; known missing or unreadable
+  photos are named in a warning and `MISSING-ORIGINALS.txt`. If stored originals cannot be listed,
+  backup still reads catalogued and resident photos, with uncertain coverage reported separately
+  in `BACKUP-WARNINGS.txt`. Keep source photos separately.
+- Reload stays disabled until that recovery attempt starts a backup download, and asks for
+  confirmation. A failed ZIP or download keeps it disabled. A failing library save still refuses
+  backup (issue #1508), rather than reporting success with stale preferences or view state.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
@@ -752,7 +766,6 @@
 - An Epson ERF or Mamiya MEF whose raw strip runs past the end of the file is now an error on import (issue #2119).
   Before, the header probe trusted the declared strip length and sized its sample buffer from it, so a few KB of file
   could make it allocate gigabytes.
-
 ## 2026-10-16
 
 ### Synchronize Folder shows that it is listing the folder
@@ -766,7 +779,6 @@
 - While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
-
 ## 2026-10-15
 
 ### Photo Merge takes each photo once

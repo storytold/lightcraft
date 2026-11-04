@@ -37,9 +37,44 @@ const DOS_DATE: u16 = (1 << 5) | 1;
 /// The readme inside every backup.
 pub const README: &str = "LightCraft library backup (browser version)\n\n\
 library/      the catalog (catalog.snap + catalog.log), presets, view state and preferences\n\
-originals/    every imported photo, as originals/<content hash>/<file name>\n\n\
+originals/    available imported photos, as originals/<content hash>/<file name>\n\n\
 Restore it in LightCraft for the web with File > Restore Library from Backup...\n\
 The photos in originals/ are the untouched files you imported; edits live in the catalog.\n";
+
+/// A completed backup can preserve edits even when some source photos are unavailable.
+#[derive(serde::Serialize)]
+pub struct BackupReport {
+    pub originals: usize,
+    pub bytes: f64,
+    pub missing: Vec<String>,
+    /// Non-fatal failures that leave the backup's source-photo coverage uncertain.
+    pub warnings: Vec<String>,
+}
+
+/// Freeze a restorable catalog and small files without writing to the failing browser store.
+/// The catalog itself includes pending operations and the current interactive edit.
+pub fn capture_library(
+    session: &lightcraft_engine::Session,
+    ui: &lightcraft_ui_egui::UiState,
+    files: &crate::files::Files,
+) -> Result<crate::files::Files, String> {
+    use lightcraft_engine::catalog::{
+        Journal,
+        journal::{LOG, SNAPSHOT},
+    };
+    let captured = crate::files::Files::default();
+    for name in crate::files::LIBRARY_FILES {
+        if !matches!(name, LOG | SNAPSHOT)
+            && let Some(data) = files.get(name)
+        {
+            captured.preload(name, data);
+        }
+    }
+    let (mut journal, _, _) = Journal::open(Box::new(captured.store())).map_err(|e| e.to_string())?;
+    journal.snapshot(&session.catalog).map_err(|e| e.to_string())?;
+    captured.preload("ui.json", serde_json::to_vec_pretty(ui).map_err(|e| e.to_string())?);
+    Ok(captured)
+}
 
 /// Is `name` a safe library folder name (`library` or `library-<letters, digits, ->`)?
 pub fn valid_library_dir(name: &str) -> bool {
@@ -282,6 +317,44 @@ mod tests {
         }
         out.extend(w.finish().unwrap());
         out
+    }
+
+    #[test]
+    fn capture_keeps_pending_and_interactive_edits_without_repairing_failed_storage() {
+        use lightcraft_engine::{
+            Session,
+            catalog::{
+                Journal,
+                journal::{LOG, SNAPSHOT},
+            },
+        };
+        use serde_json::json;
+        let live = crate::files::Files::default();
+        let mut session = Session::new();
+        let stores = lightcraft_engine::library::LibraryStores {
+            dir: "browser:test".into(),
+            catalog: Box::new(live.store()),
+            files: Box::new(live.store()),
+            on_disk: false,
+        };
+        session.open_library_in(stores, true).unwrap();
+        let original = live.get(SNAPSHOT).unwrap();
+        let id = session.active().unwrap();
+        live.set_error(Some("quota exhausted".into()));
+        assert!(session.execute("photo.rate", &json!({"rating": 5})).is_err());
+        session.begin_interaction("Exposure").unwrap();
+        session.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+        let captured = capture_library(&session, &Default::default(), &live).unwrap();
+        let (_, recovered, report) = Journal::open(Box::new(captured.store())).unwrap();
+        let photo = recovered.photo(id).unwrap();
+        assert_eq!(photo.rating, 5);
+        assert_eq!(photo.develop.light.exposure, 0.7);
+        assert!(report.damaged.is_none());
+        assert_eq!(captured.get(LOG).unwrap(), b"");
+        assert_eq!(live.get(SNAPSHOT).unwrap(), original);
+        assert_eq!(live.error().as_deref(), Some("quota exhausted"));
+        assert!(session.unsaved().is_some());
+        assert!(session.interaction.is_some());
     }
 
     #[test]

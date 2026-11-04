@@ -209,7 +209,7 @@ fn library_backup_items_follow_the_host() {
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let c = calls.clone();
     let services = crate::Services {
-        backup_library: Some(Box::new(move |s: &mut lightcraft_engine::Session| {
+        backup_library: Some(Box::new(move |s: &mut lightcraft_engine::Session, _, _task| {
             c.set(c.get() + 1);
             Ok(json!({"photos": s.catalog.len()}))
         })),
@@ -465,10 +465,9 @@ fn in_window_menu_headings_are_spaced_apart() {
 /// the menu, as a refused export does; the refusal used to reach only the control channel.
 #[test]
 fn a_refused_backup_from_the_menu_shows_why() {
-    // the host refuses, as the web one does while changes are still unsaved (issue #1508)
+    // a host that refuses to start a backup: its reason reaches the user (issue #1508)
     let refusal = "Backup not started: 1 change could not be saved to browser storage yet";
-    let services =
-        crate::Services { backup_library: Some(Box::new(move |_: &mut lightcraft_engine::Session| Err(refusal.to_string()))), ..Default::default() };
+    let services = crate::Services { backup_library: Some(Box::new(move |_, _, _| Err(refusal.to_string()))), ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
     let t = std::time::Duration::from_secs(30);
