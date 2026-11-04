@@ -1156,6 +1156,42 @@ fn cube_luts_become_profiles() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// A LUT path in prefs.json that leaves `Profiles/` is neither read on open nor deleted with
+/// the profile (#2565).
+#[test]
+fn imported_profile_paths_stay_in_the_profiles_folder() {
+    let lib = temp_dir("cubeescape");
+    let src = temp_dir("cubeescapesrc");
+    let mut cube = String::from("TITLE \"Escape Check\"\nLUT_3D_SIZE 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                cube.push_str(&format!("{r} {g} {b}\n"));
+            }
+        }
+    }
+    std::fs::write(src.join("esc.cube"), &cube).unwrap();
+    let outside = lib.join("outside.cube");
+    std::fs::write(&outside, &cube).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, true).unwrap();
+    let r = s.execute("profile.import", &json!({"paths": [src.join("esc.cube").to_string_lossy()]})).unwrap();
+    let id = r["imported"][0]["id"].as_str().unwrap().to_string();
+    let own = std::path::PathBuf::from(&s.lut_profiles[0].file);
+    std::fs::remove_file(&own).unwrap();
+    s.lut_profiles[0].file = lib.join("Profiles").join("..").join("outside.cube").to_string_lossy().to_string();
+    s.save_prefs().unwrap();
+    drop(s);
+    lightcraft_pipeline::lut::unregister(&id);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(lightcraft_pipeline::lut::get(&id).is_none(), "a file outside Profiles/ is not read");
+    s.execute("profile.deleteImported", &json!({"id": id})).unwrap();
+    assert!(outside.exists(), "deleting the profile leaves a file outside Profiles/ alone");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Without a library on disk an imported LUT lives only in this session: no copy of it is
 /// left in the temp folder (#1952).
 #[test]
