@@ -149,10 +149,11 @@ pub fn extract(archive: &Path, name: &str, dest: &Path, max_bytes: u64) -> Resul
     }
     let tmp = dest.with_extension("part");
     let written = (|| -> std::io::Result<()> {
-        let mut out = std::fs::File::create(&tmp)?;
-        out.write_all(&data)?;
-        out.flush()?;
-        drop(out);
+        {
+            let mut out = std::fs::File::create(&tmp)?;
+            out.write_all(&data)?;
+            out.flush()?;
+        }
         std::fs::rename(&tmp, dest)
     })();
     if let Err(err) = written {

@@ -24,6 +24,7 @@ pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
 pub mod export_task;
+pub mod file_providers;
 mod focus_scan;
 mod frame_rate;
 pub mod headless;
@@ -150,6 +151,10 @@ pub struct LightcraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Optional web storage capability; absent in desktop/CLI and disabled until registration.
+    pub file_provider: Option<file_providers::Host>,
+    pub file_provider_document: u64,
+    pub file_provider_revision: u64,
     pub renderer: render::Renderer,
     pub perf: Perf,
     /// macOS: the host draws the traffic lights over our top bar.

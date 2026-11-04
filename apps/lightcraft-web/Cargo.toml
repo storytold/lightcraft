@@ -32,6 +32,8 @@ js-sys = { workspace = true }
 web-sys = { workspace = true, features = [
     "Blob",
     "BlobPropertyBag",
+    "CustomEvent",
+    "CustomEventInit",
     "DedicatedWorkerGlobalScope",
     "Document",
     "DomStringList",
@@ -80,3 +82,6 @@ heif = ["lightcraft-codecs/heif"]
 
 [dev-dependencies]
 egui = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.79"
