@@ -1119,6 +1119,31 @@ fn external_edit_again_on_an_unchanged_copy_still_works() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #3617, review of #3628: the unchanged copy was moved to Recently Deleted and its file is gone. Import then
+/// restores that photo by pointing it at the file just rendered, so that file must be kept.
+#[test]
+fn external_edit_again_after_the_copy_was_trashed_keeps_the_file_the_restored_copy_uses() {
+    let dir = temp_dir("extedit-trashed");
+    let src = dir.join("beach.png");
+    write_png(&src, 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let first = s.execute("photo.editExternal", &json!({})).unwrap();
+    let copy = first["id"].as_u64().unwrap();
+    s.execute("photo.delete", &json!({"ids": [copy]})).unwrap();
+    std::fs::remove_file(first["path"].as_str().unwrap()).unwrap();
+    s.execute("library.select", &json!({"ids": [orig.0]})).unwrap();
+    let again = s.execute("photo.editExternal", &json!({})).expect("Edit In works after the copy was trashed");
+    let path = again["path"].as_str().unwrap();
+    assert!(std::path::Path::new(path).exists(), "the copy handed to the editor has its file: {again}");
+    let id = lightcraft_catalog::PhotoId(again["id"].as_u64().unwrap());
+    let photo = s.catalog.photo(id).expect("in the library");
+    assert!(!photo.deleted, "restored from Recently Deleted");
+    assert_eq!(photo.source, lightcraft_catalog::Source::File { path: path.to_string() }, "and its file is there");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #920: with several photos selected, each gets its own `-Edit` copy stacked on its
 /// original, the copies end up selected and are all reported; `ids` picks photos explicitly.
 #[test]
