@@ -183,9 +183,14 @@ impl MergeJob {
         span: (f32, f32),
     ) -> std::result::Result<Vec<Frame>, String> {
         use rayon::prelude::*;
-        let done = std::sync::atomic::AtomicUsize::new(0);
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let (done, stop) = (AtomicUsize::new(0), AtomicBool::new(false));
         let n = self.sources.len();
         let one = |(i, (_, path)): (usize, &(PhotoId, String))| {
+            // cancelled: a photo not started yet isn't read (several are in flight in a parallel preview)
+            if stop.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
             let bytes = (self.read)(path)?;
             check(i, &bytes)?;
             // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
@@ -197,9 +202,9 @@ impl MergeJob {
                 &crate::camera_preview::starting_colour_tags,
             )
             .map_err(|e| format!("{path}: {e}"));
-            let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            // cancelled: the photos not read yet aren't
+            let k = done.fetch_add(1, Ordering::Relaxed) + 1;
             if !progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos") {
+                stop.store(true, Ordering::Relaxed);
                 return Err("cancelled".into());
             }
             f
