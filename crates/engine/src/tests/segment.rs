@@ -78,7 +78,8 @@ fn status_and_model_commands_without_the_model() {
 #[test]
 fn a_failing_download_ends_with_an_error_and_never_blocks() {
     use std::io::{BufRead, BufReader, Write};
-    // the mirror's hold, and the bound on a request that must not wait for it, from one scale
+    // how long the mirror holds its first answer at most: a hang guard (a request that waited for the download
+    // gets its answer only after it, and fails the `running` checks below)
     let hold = lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30));
     // a local mirror that has nothing; its first answer waits until the test has made its second
     // request, so the download is still running then however the threads are scheduled (a 404 at
@@ -114,9 +115,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     let again = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert!(again["started"] == false || again["downloading"] == false);
     // AI mask requests meanwhile: an error while the mirror still holds the download, never a wait for it
-    let q = Instant::now();
     let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
-    assert!(q.elapsed() < hold / 4, "the AI mask request waited {:?} (bound {:?})", q.elapsed(), hold / 4);
     assert!(e.contains(NOT_INSTALLED), "{e}");
     assert!(s.segmenter.download_status().running, "the AI mask request did not wait for the download");
     let _ = release.send(());
@@ -143,6 +142,8 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
 
 /// The app (background mode) never waits: with the model missing every request fails at once;
 /// with a damaged model the requests are queued, fail on the worker, and come back as messages.
+/// Observed, not timed: nothing is queued or downloaded for a missing model, and the requests for a
+/// damaged one return while the worker is held just before loading it.
 #[test]
 fn background_requests_never_wait_and_failures_come_back_as_messages() {
     let mut s = Session::with_demo();
@@ -151,24 +152,43 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     s.segmenter.dir = Some(tmp("missing"));
     for (cmd, p) in [("mask.add", json!({"kind": "object"})), ("mask.add", json!({"kind": "prompt", "text": "sky"})), ("segment.prepare", json!({}))]
     {
-        let t = Instant::now();
         let e = s.execute(cmd, &p).unwrap_err().to_string();
-        assert!(t.elapsed() < Duration::from_millis(500), "{cmd}");
         if Segmenter::AVAILABLE {
             assert!(e.starts_with(NOT_INSTALLED), "{cmd}: {e}");
         } else {
             assert!(e.contains("not available"), "{cmd}: {e}");
         }
+        // nothing to wait for: no request for the worker, no download
+        assert!(!s.segmenter.busy(), "{cmd} queued a request");
+        assert!(!s.segmenter.download_status().running, "{cmd} started a download");
     }
     assert!(s.develop_of(id).unwrap().masks.is_empty());
-    if !Segmenter::AVAILABLE {
-        return;
-    }
-    // a model folder whose weights are damaged
+    #[cfg(feature = "sam")]
+    damaged_model_requests_are_queued_while_the_model_loads(&mut s, id);
+}
+
+/// [`background_requests_never_wait_and_failures_come_back_as_messages`] with a damaged model: the worker is held
+/// just before it loads the model until every request has returned, so a request that waited for the load could
+/// not have returned yet.
+#[cfg(feature = "sam")]
+fn damaged_model_requests_are_queued_while_the_model_loads(s: &mut Session, id: lightcraft_catalog::PhotoId) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     let dir = damaged_model("damaged");
     s.segmenter.dir = Some(dir.clone());
     assert!(s.segmenter.installed());
-    let t = Instant::now();
+    // each load waits until `release` goes; the hold is only a hang guard (a request that waited for the load would block
+    // the test until it runs out, and is then caught by the checks below and by `forced`)
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30));
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let (entered, forced) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (e, f) = (entered.clone(), forced.clone());
+    s.segmenter.before_model_load(move || {
+        e.store(true, Ordering::SeqCst);
+        let waited = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv_timeout(hold);
+        f.store(matches!(waited, Err(std::sync::mpsc::RecvTimeoutError::Timeout)), Ordering::SeqCst);
+    });
     s.execute("mask.add", &json!({"kind": "object"})).unwrap();
     let r = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap();
     assert_eq!(r["pending"], true);
@@ -178,8 +198,15 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     assert_eq!((r["include"].as_u64(), r["exclude"].as_u64()), (Some(1), Some(1)));
     let r = s.execute("mask.add", &json!({"kind": "prompt", "text": "the sky"})).unwrap();
     assert_eq!(r["pending"], true);
-    assert!(t.elapsed() < Duration::from_secs(1), "nothing waited for the model: {:?}", t.elapsed());
-    let messages = settle(&mut s, Duration::from_secs(60));
+    // every request has returned, and the worker is (or is about to be) held at the load
+    assert!(!forced.load(Ordering::SeqCst), "a request waited for the model");
+    assert!(s.segmenter.busy(), "the requests are queued on the worker");
+    lightcraft_testkit::wait_until(Duration::from_secs(30), "the worker reaches the model load", || entered.load(Ordering::SeqCst));
+    assert!(s.segment_poll().messages.is_empty(), "nothing came back while the load is held");
+    // (dropped: this load and every later one go on)
+    drop(release);
+    let messages = settle(s, Duration::from_secs(60));
+    assert!(!forced.load(Ordering::SeqCst), "the load was held until the test let it go");
     assert!(!messages.is_empty() && messages.iter().all(|m| !m.is_empty()), "{messages:?}");
     assert!(messages.iter().any(|m| m.contains("model.safetensors") || m.contains("SAM 3")), "{messages:?}");
     assert!(s.segmenter.pending_clicks().is_none());
