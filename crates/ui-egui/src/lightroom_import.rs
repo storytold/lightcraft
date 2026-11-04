@@ -406,7 +406,7 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
     let path_refused = count("pathRefused");
     if path_refused > 0 {
         details.push(crate::i18n::tr_format!(
-            "{path_refused} catalog photos were not imported: their originals are on another computer or a device, or their paths in the catalog aren't valid. The warnings list them.",
+            "{path_refused} catalog photos were not imported: their originals are on another computer or a device, or their paths in the catalog aren't valid. The warnings name each photo, or its folder when the whole folder isn't opened.",
             path_refused = path_refused
         ));
     }
@@ -851,7 +851,7 @@ mod tests {
                 "1 catalog photos were already in this library and were updated from the catalog.",
                 "1 catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.",
                 "2 catalog photos were not imported: LightCraft doesn't read their file types (MOV, MP4).",
-                "1 catalog photos were not imported: their originals are on another computer or a device, or their paths in the catalog aren't valid. The warnings list them.",
+                "1 catalog photos were not imported: their originals are on another computer or a device, or their paths in the catalog aren't valid. The warnings name each photo, or its folder when the whole folder isn't opened.",
                 "1 catalog images were not imported because their records in the catalog are incomplete.",
                 "1 originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
             ]
