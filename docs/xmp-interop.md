@@ -17,6 +17,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 
 | Field | XMP property |
 |---|---|
+| ISO sensitivity | `exif:ISOSpeedRatings` (positive integer) |
 | Rating 0–5 | `xmp:Rating` |
 | Colour label | `xmp:Label` (`Red`, `Yellow`, `Green`, `Blue`, `Purple`) |
 | Title / caption / copyright / creator | `dc:title` / `dc:description` / `dc:rights` / `dc:creator` |
@@ -31,7 +32,9 @@ What we write (standard namespaces, so other tools can read the metadata):
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
 
 Reading merges into the catalog with the **sidecar winning** for every field it states; fields it doesn't state are
-kept. The one exception is the **capture time**: a valid time embedded in the file (EXIF/IPTC) wins. Invalid EXIF
+kept. Within XMP, ISO is read from `exif:ISOSpeedRatings`, falling back to `exifEX:PhotographicSensitivity` when the
+first candidate is invalid; only finite, positive integral values representable as `u32` are projected, while the raw
+properties remain available. The one exception is the **capture time**: a valid time embedded in the file (EXIF/IPTC) wins. Invalid EXIF
 clock values are skipped, allowing DateTimeDigitized, IFD0 DateTime or embedded XMP to supply the time. If the file
 has no valid capture time, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, else `xmp:CreateDate`
 (ISO 8601) is used — on import (it then also files a copied photo in its date folder) and by
