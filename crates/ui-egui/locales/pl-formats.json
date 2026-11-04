@@ -272,7 +272,7 @@
   "{not_supported} not supported": "nieobsługiwane: {not_supported}",
   "{path_refused} on refused paths": "z odrzuconą ścieżką: {path_refused}",
   "{incomplete} incomplete": "niekompletne: {incomplete}",
-  "{failed} failed": "błędy: {failed}",
+  "{message}; {failed} originals could not be read": "{message}; nieczytelne oryginały: {failed}",
   "{message}; index warning: {warning}": "{message}; ostrzeżenie indeksu: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "Zdjęcia w katalogu, z wirtualnymi kopiami: {in_catalog}; kolekcje: {collections}.",
   "{added} added to the library.": "Dodane do biblioteki: {added}.",

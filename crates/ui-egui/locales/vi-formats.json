@@ -267,7 +267,7 @@
   "{not_supported} not supported": "{not_supported} không được hỗ trợ",
   "{path_refused} on refused paths": "{path_refused} ở đường dẫn bị từ chối",
   "{incomplete} incomplete": "{incomplete} không đầy đủ",
-  "{failed} failed": "{failed} thất bại",
+  "{message}; {failed} originals could not be read": "{message}; {failed} bản gốc không đọc được",
   "{message}; index warning: {warning}": "{message}; cảnh báo chỉ mục: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "{in_catalog} ảnh trong danh mục, kể cả bản sao ảo; {collections} bộ sưu tập.",
   "{added} added to the library.": "Đã thêm {added} vào thư viện.",
