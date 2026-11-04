@@ -1257,7 +1257,7 @@ fn dehaze_statistic_tracks_upstream_edits() {
 
 #[test]
 fn enabling_dehaze_replaces_a_window_local_preparation() {
-    if !lightcraft_gpu::available() {
+    if !gpu() {
         return;
     }
     let cache = StageCache::default();

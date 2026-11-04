@@ -1540,7 +1540,10 @@ mod tests {
 
     #[test]
     fn temporary_windows_preserve_exact_gpu_preparation() {
-        let Some(gpu) = crate::device() else { return };
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
         let _scope = crate::ctx::RenderScope::new(gpu);
         let src = Arc::new(Rgb32f::from_fn(401, 267, |x, y| {
             let l = 0.01 + ((x * 17 + y * 23) % 103) as f32 / 103.0;
@@ -1587,7 +1590,10 @@ mod tests {
 
     #[test]
     fn device_limited_full_frame_reuses_its_cpu_statistic_on_a_pan() {
-        let Some(gpu) = crate::device() else { return };
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
         let _scope = crate::ctx::RenderScope::new(gpu);
         let _limit = crate::ctx::LimitOverride::new(4 << 20);
         let src = Arc::new(Rgb32f::from_fn(1281, 853, |x, y| {
@@ -1613,7 +1619,10 @@ mod tests {
 
     #[test]
     fn consuming_nr_buffers_preserves_the_borrowed_kernels_bits() {
-        let Some(gpu) = crate::device() else { return };
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
         let _scope = crate::ctx::RenderScope::new(gpu);
         let (w, h) = (257, 83);
         let img = Rgb32f::from_fn(w, h, |x, y| {
@@ -1645,7 +1654,10 @@ mod tests {
 
     #[test]
     fn small_preparation_budget_uses_proxy_and_keeps_window_stages_warm() {
-        let Some(gpu) = crate::device() else { return };
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
         let _scope = crate::ctx::RenderScope::new(gpu);
         let src = Arc::new(Rgb32f::from_fn(1201, 803, |x, y| {
             let l = 0.01 + ((x * 17 + y * 23) % 103) as f32 / 103.0;
