@@ -258,7 +258,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     hint(
         ui,
         t,
-        "Cleans noise out of raw photos with an AI model, before the picture is built: the AI Denoise Amount slider under Detail sets how much of it you see. \
+        "Cleans noise out of raw photos and finished pictures (JPEG, PNG, TIFF …) with an AI model, before any other edit: the AI Denoise Amount slider under Detail sets how much of it you see. \
          Your files are never changed and no extra files are made in your library: the cleaned picture is cached data that is made again when needed.",
     );
     let runtime = list["runtime"].as_bool() == Some(true);
@@ -309,7 +309,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if all.iter().all(|m| m["selected"] != true) && all.iter().any(|m| m["installed"] == true) {
         hint(ui, t, "AI Denoise is off: press Use on a model.");
     }
-    hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
+    hint(
+        ui,
+        t,
+        "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.",
+    );
     work_section(app, ui, t, &list);
 }
 
@@ -473,6 +477,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         ui.label(RichText::new(tr("installed")).color(t.text_dim));
                     }
                 });
+                let made_for = if m["domain"] == "rgbToRgb" { tr("For JPEG and other finished pictures") } else { tr("For raw photos") };
+                ui.label(RichText::new(made_for).font(t.font(11.5)).color(t.text_dim));
                 ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m["licence"]["commercial"] == "yes" {
                     t.text_dim
                 } else {
@@ -526,7 +532,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         let r = ui.button(tr("Turn off"));
                         register(ui, format!("denoise:off:{id}"), r.rect);
                         if r.clicked() {
-                            let _ = app.run("denoise.models.select", json!({"id": null}));
+                            let kind = if m["domain"] == "rgbToRgb" { "rgb" } else { "raw" };
+                            let _ = app.run("denoise.models.select", json!({"id": null, "kind": kind}));
                             app.caches.denoise.epoch += 1;
                         }
                     } else {

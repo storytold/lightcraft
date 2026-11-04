@@ -106,6 +106,8 @@ pub(crate) struct State {
     /// How a model is loaded (tests put another in).
     pub loader: Loader,
     pub(crate) active: Option<Active>,
+    /// The model in use for finished pictures (`Settings::rgb_model`).
+    pub(crate) active_rgb: Option<Active>,
     pub(super) active_seen: Option<web_time::Instant>,
     /// `settings.json` as last read (with the model choice).
     pub(crate) settings: Settings,
@@ -132,6 +134,7 @@ impl Default for State {
             install: None,
             loader: default_loader(),
             active: None,
+            active_rgb: None,
             active_seen: None,
             settings: Settings::default(),
             dirty: true,

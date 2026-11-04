@@ -4,6 +4,7 @@ use super::{
     Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, HashSet, Hasher128, Layout, Mutex, OnceLock, Ordering, Params,
     Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, product,
 };
+use lightcraft_denoise::manifest::Domain;
 
 /// Samples at or above this (white = 1) are clipped: the model leaves them as the camera recorded them.
 const CLIP: f32 = 0.99;
@@ -20,9 +21,20 @@ pub(crate) struct Active {
 // ---------------------------------------------------------------------------------------------------------------------
 // products
 
-/// The photos whose files can be denoised at all: raw files developed from their sensor data and read from disk.
+/// Which kind of model photo `p` takes: a raw developed from its sensor data takes a Bayer model, a finished picture
+/// (JPEG, PNG, TIFF …) a model for finished pictures; anything else (a video, a raw shown from its embedded preview)
+/// none.
+pub(crate) fn domain_of(p: &Photo) -> Option<Domain> {
+    if p.develops_raw() {
+        return Some(Domain::BayerToRgb);
+    }
+    (p.kind == lightcraft_catalog::MediaKind::Image).then_some(Domain::RgbToRgb)
+}
+
+/// The photos whose files can be denoised at all: raw files developed from their sensor data and finished pictures,
+/// read from disk.
 pub(crate) fn eligible(p: &Photo) -> bool {
-    p.develops_raw() && matches!(p.source, Source::File { .. }) && !p.deleted
+    domain_of(p).is_some() && matches!(p.source, Source::File { .. }) && !p.deleted
 }
 
 /// A product's name: what it was made from and with.
@@ -162,6 +174,9 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
         None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
     };
+    if spec.manifest.domain == Domain::RgbToRgb {
+        return make_rgb_product(spec, bytes, progress, began);
+    }
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
     let (mosaic, layout) = {
         let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
@@ -232,6 +247,87 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             (ran - decoded).as_secs_f64() * 1e3,
             (began.elapsed() - ran).as_secs_f64() * 1e3
         );
+    }
+    Ok(true)
+}
+
+/// A finished picture as the model for finished pictures takes it: decoded at full size, unrotated (the product is the
+/// file's own pixels, as a raw's is its mosaic's), transparency flattened onto white as the plain picture's is
+/// ([`lightcraft_codecs::Decoded::to_working`]), in gamma-encoded sRGB clipped to 0 to 1 (colours outside sRGB and
+/// values above white are clipped: the denoised picture of a wide-gamut or HDR file is the sRGB part of it).
+pub(crate) fn srgb_encoded(d: &lightcraft_codecs::Decoded) -> lightcraft_raster::Rgb32f {
+    let m = d.space.to_space(&lightcraft_color::SRGB).to_f32();
+    let enc = lightcraft_color::transfer::linear_to_srgb;
+    let mut image = d.image.clone();
+    if let Some(a) = d.alpha.as_ref().filter(|a| a.width == image.width && a.height == image.height) {
+        // white is (1, 1, 1) in every space here, so it is flattened before the conversion as after it
+        for (p, &av) in image.data.iter_mut().zip(&a.data) {
+            let av = av.clamp(0.0, 1.0);
+            *p = p.map(|c| c * av + (1.0 - av));
+        }
+    }
+    image.map(|p| {
+        let q = [
+            m[0][0] * p[0] + m[0][1] * p[1] + m[0][2] * p[2],
+            m[1][0] * p[0] + m[1][1] * p[1] + m[1][2] * p[2],
+            m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2],
+        ];
+        q.map(|v| enc(v.clamp(0.0, 1.0)))
+    })
+}
+
+/// [`make_product`] for a finished picture: decode it whole, run the model over it, write what it gives.
+fn make_rgb_product(spec: &JobSpec, bytes: Vec<u8>, progress: Option<&Progress>, began: web_time::Instant) -> Result<bool, MakeError> {
+    let cancelled = || progress.is_some_and(|p| p.cancel.load(Ordering::Relaxed));
+    let image = {
+        let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(16));
+        if lightcraft_raw::probe(&bytes).is_some() {
+            return Err(MakeError::Unsupported("a raw file takes a model for raw files".into()));
+        }
+        let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::default())
+            .map_err(|e| MakeError::Unsupported(format!("not a picture this model can read: {e}")))?;
+        drop(bytes);
+        // the decode and its sRGB copy (12 bytes a pixel each), counted once their size is known; it does not wait (a
+        // second wait on the gate while this job holds a permit could wait for itself)
+        let _pixels = crate::memory::work_gate().acquire_urgent(d.image.data.len().saturating_mul(24));
+        srgb_encoded(&d)
+    };
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
+    let model = loaded(spec)?;
+    let t = spec.manifest.tile as usize;
+    let scratch = model.bytes_per_tile().saturating_add(32usize.saturating_mul(t).saturating_mul(t));
+    let (_, budget) = crate::memory::work_gate().usage();
+    let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
+    // the picture, the blended result and its weights wait their turn (32 bytes a pixel); the colour restore's two
+    // blurred copies and their working buffers (48 more at the peak) are counted without waiting, so a big picture does
+    // not hold the whole gate (and the grid's thumbnails) for its whole run
+    let _held = crate::memory::work_gate().acquire(image.data.len().saturating_mul(32).saturating_add(scratch.saturating_mul(parallel)));
+    let _restore = crate::memory::work_gate().acquire_urgent(image.data.len().saturating_mul(48));
+    let (runner, parallel) = model.runner(spec.run_on, parallel);
+    let params = Params { tile: t, overlap: spec.manifest.overlap as usize, gain: spec.manifest.gain, clip: None, parallel: parallel.max(1) };
+    let report = |done: usize, total: usize| {
+        if let Some(p) = progress {
+            p.total.store(total, Ordering::Relaxed);
+            p.done.store(done, Ordering::Relaxed);
+        }
+    };
+    let ctl = Control { cancel: progress.map(|p| &p.cancel), progress: Some(&report) };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(params.parallel)
+        .stack_size(STACK)
+        .thread_name(|i| format!("denoise-{i}"))
+        .build()
+        .map_err(|e| MakeError::Failed(format!("could not start the worker threads: {e}")))?;
+    let rgb = pool.install(|| lightcraft_denoise::run::denoise_rgb(&image, runner, &params, &ctl))?;
+    drop(image);
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
+    product::write(&spec.product, &rgb, &spec.key).map_err(|e| MakeError::Failed(format!("could not save the denoised picture: {e}")))?;
+    if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
+        eprintln!("[denoise] finished picture {}×{}: {:.0} ms", rgb.width, rgb.height, began.elapsed().as_secs_f64() * 1e3);
     }
     Ok(true)
 }

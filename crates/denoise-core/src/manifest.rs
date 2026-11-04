@@ -21,6 +21,27 @@ pub enum Domain {
     /// `[R, G1, G2, B]` of its 2 × 2 cells, forced to RGGB; gives camera RGB at the mosaic's resolution, so
     /// the picture is denoised and demosaiced in one step and must not be demosaiced again.
     BayerToRgb,
+    /// A finished picture (a JPEG, PNG, TIFF …) as three planes `[R, G, B]` of gamma-encoded sRGB in 0 to 1; gives the
+    /// same, at the same size. For photos that have no sensor data left to denoise.
+    RgbToRgb,
+}
+
+impl Domain {
+    /// Planes the model takes per tile.
+    pub fn in_channels(self) -> usize {
+        match self {
+            Domain::BayerToRgb => 4,
+            Domain::RgbToRgb => 3,
+        }
+    }
+
+    /// Pixels the model gives across per cell it takes (the Bayer model demosaics: 2 × 2 pixels per cell).
+    pub fn scale(self) -> usize {
+        match self {
+            Domain::BayerToRgb => 2,
+            Domain::RgbToRgb => 1,
+        }
+    }
 }
 
 /// How the model's output scale is brought back to the input's.

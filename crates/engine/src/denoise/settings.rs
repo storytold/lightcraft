@@ -22,8 +22,10 @@ pub(super) const SETTINGS_TTL: Duration = Duration::from_secs(2);
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct Settings {
-    /// The installed model in use; `None`: denoise is off.
+    /// The installed model in use for raw photos; `None`: denoise is off for them.
     pub model: Option<String>,
+    /// The installed model in use for finished pictures (JPEG, PNG, TIFF …); `None`: denoise is off for them.
+    pub rgb_model: Option<String>,
     /// Photos with a Denoise amount above 0 that are being looked at (active, selected) get their picture made without
     /// being asked (`None`: yes).
     pub auto: Option<bool>,
@@ -48,6 +50,26 @@ impl Settings {
             None if self.gpu == Some(false) => RunOn::Cpu,
             None => RunOn::Auto,
         }
+    }
+
+    /// The setting that names the model in use for photos of `domain`.
+    pub fn slot(&self, domain: lightcraft_denoise::manifest::Domain) -> Option<&str> {
+        match domain {
+            lightcraft_denoise::manifest::Domain::BayerToRgb => self.model.as_deref(),
+            lightcraft_denoise::manifest::Domain::RgbToRgb => self.rgb_model.as_deref(),
+        }
+    }
+
+    pub fn slot_mut(&mut self, domain: lightcraft_denoise::manifest::Domain) -> &mut Option<String> {
+        match domain {
+            lightcraft_denoise::manifest::Domain::BayerToRgb => &mut self.model,
+            lightcraft_denoise::manifest::Domain::RgbToRgb => &mut self.rgb_model,
+        }
+    }
+
+    /// Is `id` the model in use for one kind of photo?
+    pub fn chosen(&self, id: &str) -> bool {
+        self.model.as_deref() == Some(id) || self.rgb_model.as_deref() == Some(id)
     }
 
     pub fn cache_bytes(&self) -> u64 {
@@ -82,6 +104,7 @@ pub(crate) fn write_settings(dir: &Path, st: &Settings) -> Result<(), String> {
 }
 
 /// An installed model folder: `<id>/model.onnx`, `denoise-model.json`, `installed.json`.
+#[derive(Clone)]
 pub(crate) struct Installed {
     pub manifest: DenoiserManifest,
     pub onnx: PathBuf,
