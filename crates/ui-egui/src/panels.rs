@@ -10,6 +10,7 @@ pub mod detail;
 pub mod edit;
 pub mod empty_library;
 pub mod filterbar;
+pub mod generation;
 pub mod grid;
 pub mod histogram;
 pub mod keyword_list;

@@ -1,0 +1,136 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
+    },
+    "_meta": {
+      "title": "Model \u2014 Juggernaut XL"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Lightcraft-masking-input.png"
+    },
+    "_meta": {
+      "title": "Original photo"
+    }
+  },
+  "3": {
+    "class_type": "LoadImageMask",
+    "inputs": {
+      "image": "Lightcraft-masking-mask.png",
+      "channel": "red"
+    },
+    "_meta": {
+      "title": "Mask \u2014 white replaces, black preserves"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "PROMPT \u2014 describe the replacement"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, text, watermark",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "Negative prompt"
+    }
+  },
+  "6": {
+    "class_type": "VAEEncodeForInpaint",
+    "inputs": {
+      "pixels": [
+        "2",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "mask": [
+        "3",
+        0
+      ],
+      "grow_mask_by": 8
+    },
+    "_meta": {
+      "title": "Prepare masked region"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "seed": 36020261028,
+      "steps": 28,
+      "cfg": 6.0,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ],
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Generate replacement"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "filename_prefix": "Lightcraft-masking/Lightcraft-masking"
+    },
+    "_meta": {
+      "title": "Lightcraft-masking \u2014 result"
+    }
+  }
+}

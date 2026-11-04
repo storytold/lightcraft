@@ -381,6 +381,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         divider(ui);
         brush_settings(app, ui);
     }
+    super::generation::show(app, ui);
     divider(ui);
     super::mask_effects::effect_row(app, ui, &m);
     for s in LOCAL {
