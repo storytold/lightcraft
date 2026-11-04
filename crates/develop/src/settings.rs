@@ -1054,15 +1054,35 @@ pub struct Mask {
     /// Refine Edges 0..100: the mask's edges snap to the photo's (guided filter).
     #[serde(skip_serializing_if = "is_zero")]
     pub refine: f64,
+    /// Where its coordinates (gradients, brush strokes, AI selections) live: `true`, on the photo as
+    /// shot (user orientation, before lens corrections, Upright and Transform), so the mask stays
+    /// on the same content whatever those do; `false`, a mask from before that, on the corrected
+    /// frame. Read as `false` when absent; [`Mask::default`] (every new mask) is `true`, and an
+    /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub on_photo: bool,
 }
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 impl Default for Mask {
     fn default() -> Self {
-        Self { id: 0, name: "Mask 1".into(), visible: true, invert: false, components: Vec::new(), adjust: LocalAdjustments::default(), refine: 0.0 }
+        Self {
+            id: 0,
+            name: "Mask 1".into(),
+            visible: true,
+            invert: false,
+            components: Vec::new(),
+            adjust: LocalAdjustments::default(),
+            refine: 0.0,
+            on_photo: true,
+        }
     }
 }
 

@@ -192,11 +192,11 @@ fn bad_crc_is_still_a_torn_tail() {
     assert!(r.torn_bytes > 0 && r.damaged.is_none(), "{r:?}");
 }
 
-/// A v9 library (culling scores before the subject focus, #2276) reads its analysis as a frame
+/// A v10 library (culling scores before the subject focus, #2276) reads its analysis as a frame
 /// score with no subject, and is rewritten in the current format; a subject score survives the
 /// round trip and an unmeasured one is not written.
 #[test]
-fn v9_analysis_loads_as_a_frame_score_and_is_upgraded() {
+fn v10_analysis_loads_as_a_frame_score_and_is_upgraded() {
     let mut c = Catalog::new();
     let id = c.alloc_photo_id();
     let mut p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 160, 120, "2026-01-01");
@@ -208,11 +208,11 @@ fn v9_analysis_loads_as_a_frame_score_and_is_upgraded() {
         "nothing new is written for a frame score: {snap}"
     );
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     let a = loaded.photo(id).unwrap().analysis.unwrap();
     assert_eq!((a.sharpness, a.subject, a.focus_on, a.frame), (61.0, None, FocusOn::Frame, None));
-    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(r.upgraded_from, Some(10));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     // a subject score round-trips
     let mut c = loaded;
@@ -268,8 +268,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v10: `Analysis.subject`, `Analysis.focus_on` and `Analysis.frame`.
-    const NEWEST_FIELDS: u32 = 10;
+    /// v11: `Analysis.subject`, `Analysis.focus_on` and `Analysis.frame` (v10: `Mask.on_photo`).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
