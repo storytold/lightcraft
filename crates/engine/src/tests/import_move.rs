@@ -341,6 +341,27 @@ fn collisions_are_numbered_and_files_in_the_destination_stay() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// CodeRabbit on #1635: a camera's staged file is moved even when the destination holds the temp
+/// folder (a home folder on Windows does), so the library's original is never left there for the
+/// system to clear.
+#[test]
+fn a_staged_camera_file_leaves_the_temp_folder() {
+    let staging = crate::camera_import::staging_dir(&format!("lc-move-staged-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    write_png(&staging.join("DCIM/100/a.png"), 1);
+    // the destination holds the staging folder: the temp folder itself (under a name of its own)
+    let dest = std::env::temp_dir();
+    let name = format!("lc-move-staged-{}", std::process::id());
+    let moved = dest.join(format!("{name}.png"));
+    let mut s = session();
+    let r = import_move(&mut s, &[&staging.join("DCIM")], &dest, json!({"organize": "flat", "rename": name}));
+    assert_eq!((len(&r, "moved"), len(&r, "kept")), (1, 0), "{r}");
+    assert!(moved.is_file() && files_under(&staging).is_empty(), "{r}");
+    assert_eq!(photo_paths(&s), [moved.to_string_lossy().to_string()]);
+    let _ = std::fs::remove_file(&moved);
+    let _ = std::fs::remove_dir_all(&staging);
+}
+
 /// A stem-named sidecar shared with a photo that isn't moved is copied along but stays beside
 /// that photo.
 #[test]

@@ -6,8 +6,10 @@
 //! card's folders; the review then opens on them with Move checked, so each one leaves the staging
 //! folder once it is verified and catalogued (`import_move`). The folder is outside the library on
 //! purpose: a file already inside the library is added where it is, never moved (a library can be
-//! a whole drive, so "next to it" isn't always possible). Only what the library doesn't have yet is
-//! fetched:
+//! a whole drive, so "next to it" isn't always possible). A staged file is the exception: Copy and
+//! Move always take it out, also when the destination or the library holds the temp folder (a
+//! home folder on Windows does), which the system clears. Only what the library doesn't have yet
+//! is fetched:
 //!
 //! - **Already in the library:** a photo with the same file name (any case), the same byte size and
 //!   a capture time within [`SAME_SHOT`] of the camera's date for the file is skipped without
@@ -236,6 +238,12 @@ pub struct Fetched {
 /// Where a camera's photos are staged: `<temp>/lightcraft-camera-import/<camera>`.
 pub fn staging_dir(camera: &str) -> PathBuf {
     std::env::temp_dir().join(STAGING).join(safe_component(camera))
+}
+
+/// `path` is in a camera's staging folder ([`staging_dir`]): a Copy or Move import takes it out
+/// even when the destination or the library holds the temp folder, which the system clears.
+pub(crate) fn is_staged(path: &Path) -> bool {
+    crate::import_move::inside(path, &std::env::temp_dir().join(STAGING))
 }
 
 /// A device-supplied name as one safe file name: no separators, no characters Windows forbids, no
