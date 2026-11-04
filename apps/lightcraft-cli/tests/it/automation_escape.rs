@@ -140,6 +140,10 @@ fn folders(tag: &str) -> PathBuf {
         symlink(base.join("outside/nothing-here"), base.join("in/dangling")).unwrap();
         symlink(base.join("outside"), base.join("out/linkdir")).unwrap();
         symlink(base.join("outside/new.png"), base.join("out/dangling.png")).unwrap();
+        // and from outside into the write root: writing to one acts on the link, where it stands
+        png(&base.join("out/back.png"));
+        symlink(base.join("out/back.png"), base.join("outside/back.png")).unwrap();
+        symlink(base.join("out"), base.join("outside/backdir")).unwrap();
     }
     base
 }
@@ -166,7 +170,13 @@ fn escapes(base: &Path) -> (Vec<String>, Vec<String>) {
             s(base.join("in/linkfile.png")),
             s(base.join("in/dangling")),
         ]);
-        write.extend([s(base.join("out/linkdir")), s(base.join("out/linkdir/new.png")), s(base.join("out/dangling.png"))]);
+        write.extend([
+            s(base.join("out/linkdir")),
+            s(base.join("out/linkdir/new.png")),
+            s(base.join("out/dangling.png")),
+            s(base.join("outside/back.png")),
+            s(base.join("outside/backdir")),
+        ]);
     }
     (read, write)
 }

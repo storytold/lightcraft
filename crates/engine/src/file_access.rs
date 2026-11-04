@@ -104,8 +104,16 @@ impl AutomationRoots {
                 Access::Write => Err(format!("automation filesystem access is not granted: write authority is absent: {}", path.display())),
             };
         }
-        let resolved = resolve(path)?;
-        if roots.iter().any(|r| inside(&resolved, &r.resolved)) {
+        let in_roots = |p: &Path| roots.iter().any(|r| inside(p, &r.resolved));
+        let mut allowed = in_roots(&resolve(path)?);
+        // Writing to a link replaces, renames or removes the link where it stands, whatever it points to.
+        if allowed
+            && access == Access::Write
+            && let Some(folder) = folder_of_link(path)
+        {
+            allowed = in_roots(&resolve(folder)?);
+        }
+        if allowed {
             return Ok(());
         }
         let shown: Vec<String> = roots.iter().map(|r| r.shown.display().to_string()).collect();
@@ -202,6 +210,15 @@ pub fn check_write(path: impl AsRef<Path>) -> Result<(), String> {
     current().map_or(Ok(()), |r| r.check(path, Access::Write))
 }
 
+/// The folder `path` stands in when its last name is a link (`a/link/` and `a/link/.` are that link too).
+fn folder_of_link(path: &Path) -> Option<&Path> {
+    let path = path.components().as_path();
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return None;
+    }
+    Some(path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")))
+}
+
 /// `path` made absolute with its links followed; for a path that doesn't exist (yet), its nearest
 /// existing folder's links followed and the rest appended.
 fn resolve(path: &Path) -> Result<PathBuf, String> {
@@ -282,6 +299,34 @@ fn is_device_name(component: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Writing to a link replaces, renames or removes the link where it stands, whatever it points to.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_written_where_it_stands() {
+        let base = std::env::temp_dir().join(format!("lc-access-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, outside) = (base.join("root"), base.join("outside"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("file"), b"x").unwrap();
+        let link = |target: &Path, at: &Path| std::os::unix::fs::symlink(target, at).unwrap();
+        link(&root.join("file"), &outside.join("back"));
+        link(&root.join("sub"), &outside.join("backdir"));
+        link(&root.join("file"), &root.join("near"));
+        let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+        for refused in ["outside/back", "outside/backdir", "outside/backdir/", "outside/backdir/."] {
+            let e = roots.check(base.join(refused), Access::Write).unwrap_err();
+            assert!(e.contains("outside the write root"), "{refused}: {e}");
+            assert!(roots.check(base.join(refused), Access::Read).is_ok(), "{refused}: read follows the link");
+        }
+        // inside a linked folder a file really is in the root; a link in the root stands in the root
+        for allowed in ["outside/backdir/new", "root/near", "root/file", "root/new", "root"] {
+            assert!(roots.check(base.join(allowed), Access::Write).is_ok(), "{allowed}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// A fresh folder holding `in` (read root), `out` (write root) and `outside`.
     fn folders(name: &str) -> (PathBuf, Arc<AutomationRoots>) {

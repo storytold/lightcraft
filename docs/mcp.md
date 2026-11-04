@@ -49,6 +49,10 @@ The rules:
   file or folder outside, and a link that leads nowhere are refused before anything is opened. A file that doesn't exist
   yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`),
   without regard to case on Windows, where reserved device names (`CON`, `NUL`, `COM1`…) are refused too.
+- **Writing to a link acts on the link.** A write can replace, rename or remove the link itself, so a link's own folder
+  has to be inside the write root too, whatever the link points to. A file under a linked folder is judged where it
+  really is. A write root that is itself a link is used through paths below it: the link alone isn't writable unless its
+  own folder is in the root.
 - **Headless only.** `--connect` is refused together with a root: a running app isn't confined by them.
 - **Every command is classified.** `Session::execute` checks the paths among a command's parameters before it runs
   (`crates/engine/src/file_access/commands.rs`). A command not in that list is refused, and a test walks the command

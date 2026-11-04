@@ -565,3 +565,27 @@ fn a_sidecar_link_out_of_the_roots_stops_the_move_and_leaves_nothing() {
     assert_eq!(std::fs::read_to_string(&secret).unwrap(), xmp(5));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Moving a link from outside the write root would remove the link, outside the write root.
+#[cfg(unix)]
+#[test]
+fn a_link_from_outside_the_roots_is_not_moved_or_removed() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::{finish, place};
+    let base = temp_dir("link-from-outside");
+    let (root, dst, outside) = (base.join("root"), base.join("root/dst"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    write_png(&root.join("target.png"), 1);
+    let link = outside.join("a.png");
+    std::os::unix::fs::symlink(root.join("target.png"), &link).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    assert!(confine(Some(&roots), || place(&link, &dst, "a.png")).is_err());
+    assert!(!dst.exists(), "nothing is placed");
+    // placed before the roots came into force: the removal is still refused
+    let placed = place(&link, &dst, "a.png").unwrap();
+    assert!(confine(Some(&roots), || finish(&placed)).is_err());
+    assert!(link.symlink_metadata().is_ok(), "the link stays");
+    let _ = std::fs::remove_dir_all(&base);
+}
