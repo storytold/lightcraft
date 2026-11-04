@@ -1104,6 +1104,80 @@ fn enter_keywords_refuses_a_name_ending_in_an_asterisk() {
     assert!(all_have(&h, &ids, "sea"), "the text was kept and put right");
 }
 
+/// What the Enter Keywords box shows, read by copying all of it.
+fn enter_text(h: &mut Headless) -> String {
+    ask(h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
+    ask(h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
+    ask(h, "ui.key", json!({"key": "A", "cmd": true}));
+    ask(h, "ui.clipboard", json!({"action": "copy"}));
+    let r = h.request("ui.inspect", json!({}), T);
+    r["result"]["copied"].as_str().unwrap_or_default().to_string()
+}
+
+/// A plain list of names typed in the box goes to every selected photo as written; the names left
+/// out come off every one of them.
+#[test]
+fn enter_keywords_gives_a_plain_list_to_every_photo() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "harbour, sea, pier");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    for id in &ids {
+        assert_eq!(keywords_of(&h, *id), ["harbour", "sea", "pier"], "photo {id}");
+    }
+}
+
+/// `>` and `<` in a typed name mark a hierarchy, as `|` does: `animal > dog` and `cat < animal`
+/// give both photos `animal|dog` and `animal|cat`.
+#[test]
+fn enter_keywords_reads_a_hierarchy_typed_with_greater_or_less_than() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, animal > dog, cat < animal");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "animal|dog") && all_have(&h, &ids, "animal|cat"), "{:?}", keywords_of(&h, ids[1]));
+    assert!(none_has(&h, &ids, "animal > dog") && none_has(&h, &ids, "cat < animal"));
+    assert_eq!(enter_text(&mut h), "animal|cat, animal|dog, beach, Weddings*", "the box shows them as paths");
+}
+
+/// A mixed selection shows each keyword only some photos have with an asterisk after it. Left
+/// marked, it stays on those photos only while the rest of the edit applies; it comes off only
+/// when its name is deleted from the text.
+#[test]
+fn enter_keywords_shows_and_keeps_a_mixed_selections_keywords() {
+    let (mut h, ids) = two_selected();
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "a keyword only some photos have is marked");
+    ask(&mut h, "ui.key", json!({"key": "End", "cmd": true}));
+    ask(&mut h, "ui.text", json!({"text": ", sea"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings", "sea"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach", "sea"], "Weddings did not go to the photo without it");
+    enter(&mut h, "Weddings*, sea");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(keywords_of(&h, ids[0]), ["Weddings", "sea"], "beach, deleted from the text, came off");
+    assert_eq!(keywords_of(&h, ids[1]), ["sea"]);
+}
+
+/// One edit that adds and removes keywords on three photos is one undo step for all of them, and
+/// one redo gives it back to all of them.
+#[test]
+fn enter_keywords_undoes_an_edit_of_every_photo_in_one_step() {
+    let (mut h, mut ids) = two_selected();
+    let third = h.app.session.visible_cloned().get(2).map(|p| p.0).unwrap();
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [third], "keywords": ["pier"]}}));
+    ids.push(third);
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+    let before: Vec<Vec<String>> = ids.iter().map(|id| keywords_of(&h, *id)).collect();
+    let undo = h.app.session.undo.len();
+    enter(&mut h, "Weddings*, sea, animal > dog");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    let after: Vec<Vec<String>> = ids.iter().map(|id| keywords_of(&h, *id)).collect();
+    assert_eq!(after, [vec!["Weddings", "sea", "animal|dog"], vec!["sea", "animal|dog"], vec!["sea", "animal|dog"]]);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    ask(&mut h, "engine.execute", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(ids.iter().map(|id| keywords_of(&h, *id)).collect::<Vec<_>>(), before, "one undo puts every photo back");
+    ask(&mut h, "engine.execute", json!({"command": "edit.redo", "params": {}}));
+    assert_eq!(ids.iter().map(|id| keywords_of(&h, *id)).collect::<Vec<_>>(), after, "one redo gives it back");
+}
+
 /// Another selection while the box is being edited gives the edit up: what was typed goes neither to
 /// the photos it was typed for nor to the new selection.
 #[test]

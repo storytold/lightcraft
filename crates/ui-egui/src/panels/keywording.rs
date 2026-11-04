@@ -781,7 +781,14 @@ fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
     let spells = |s: &str, c: &Chip| {
         let marked = s.strip_suffix('*');
         let inside = [quoted(s), marked.and_then(quoted)];
-        [Some(s), marked].into_iter().flatten().chain(inside.iter().flatten().map(String::as_str)).any(|n| same(&clean(n), &c.path))
+        // as written, and with `>` and `<` read as hierarchy marks
+        let leveled: Vec<String> = [Some(s), marked].into_iter().flatten().map(levels).collect();
+        [Some(s), marked]
+            .into_iter()
+            .flatten()
+            .chain(inside.iter().flatten().map(String::as_str))
+            .chain(leveled.iter().map(String::as_str))
+            .any(|n| same(&clean(n), &c.path))
     };
     // a piece holding a double quote that is not one written twice
     let unpaired = |s: &str| s.split(|ch| ch != '"').any(|run| run.len() % 2 == 1);
@@ -845,6 +852,13 @@ fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
     names
 }
 
+/// `name` with `>` and `<` read as hierarchy marks, as `|` is: `animal > dog` and `dog < animal`
+/// are both `animal|dog`. The parts between `>` go in order, and the parts between `<` inside each
+/// of them go from the last.
+fn levels(name: &str) -> String {
+    name.split('>').flat_map(|part| part.rsplit('<')).collect::<Vec<_>>().join("|")
+}
+
 /// Reads the Enter Keywords `text` against `start`, the selection's keywords when the edit began.
 /// Keywords are separated by commas or new lines; a name in double quotes holding commas (or new
 /// lines, when it is a keyword of `start`), and a keyword of `start` whose name holds a comma
@@ -857,6 +871,8 @@ fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
 /// written twice inside it is one double quote. A keyword every photo has whose own name ends in an
 /// asterisk is also kept when written without its quotes, unless a keyword only some photos have
 /// reads the same. An asterisk after any other name is refused: the error is the name as typed.
+/// Outside double quotes, `>` and `<` mark a hierarchy as `|` does (see `levels`), unless the name
+/// as written is a keyword of `start`.
 pub(crate) fn entered(catalog: &Catalog, start: &[Chip], text: &str) -> Result<Entered, String> {
     use lightcraft_catalog::keywords::{clean, same};
     let mut kept: Vec<String> = Vec::new();
@@ -867,16 +883,19 @@ pub(crate) fn entered(catalog: &Catalog, start: &[Chip], text: &str) -> Result<E
             let (whole, name) = (clean(token), clean(marked));
             // the name inside the quotes of a marked name in double quotes
             let inner = quoted(marked).map(|n| clean(&n));
-            // a partial keyword marked (as written, else inside its quotes), or else a keyword on
-            // every photo named with the asterisk; one not named yet first
+            // a marked name without quotes, with `>` and `<` read as hierarchy marks
+            let leveled = inner.is_none().then(|| clean(&levels(marked)));
+            // a partial keyword marked (as written, else inside its quotes, else as a hierarchy),
+            // or else a keyword on every photo named with the asterisk; one not named yet first
             let on_all = |c: &Chip| c.on_all() && same(&c.path, &whole);
             let partial = |c: &Chip, name: &str| !c.on_all() && same(&c.path, name);
-            let either = |c: &Chip| partial(c, &name) || inner.as_deref().is_some_and(|n| partial(c, n));
+            let either = |c: &Chip| [Some(name.as_str()), inner.as_deref(), leveled.as_deref()].into_iter().flatten().any(|n| partial(c, n));
             let fresh = |c: &Chip| !kept.iter().any(|k| same(k, &c.path));
             let found = start
                 .iter()
                 .find(|c| fresh(c) && partial(c, &name))
                 .or_else(|| inner.as_deref().and_then(|n| start.iter().find(|c| fresh(c) && partial(c, n))))
+                .or_else(|| leveled.as_deref().and_then(|n| start.iter().find(|c| fresh(c) && partial(c, n))))
                 .or_else(|| start.iter().find(|c| fresh(c) && on_all(c)))
                 .or_else(|| start.iter().find(|c| either(c) || on_all(c)))
                 .ok_or_else(|| token.to_string())?;
@@ -885,10 +904,13 @@ pub(crate) fn entered(catalog: &Catalog, start: &[Chip], text: &str) -> Result<E
         }
         let written = literal.as_deref().unwrap_or(token);
         let typed = clean(written);
-        let (name, on_all) = match start.iter().find(|c| same(&c.path, &typed)) {
+        // a name without quotes, with `>` and `<` read as hierarchy marks
+        let path = if literal.is_some() { written.to_string() } else { levels(written) };
+        let leveled = clean(&path);
+        let (name, on_all) = match start.iter().find(|c| same(&c.path, &typed)).or_else(|| start.iter().find(|c| same(&c.path, &leveled))) {
             Some(c) => (c.path.clone(), c.on_all()),
             None if typed.ends_with('*') => return Err(token.to_string()),
-            None => (catalog.typed_keyword(written), false),
+            None => (catalog.typed_keyword(&path), false),
         };
         if name.is_empty() {
             continue;
@@ -1386,5 +1408,29 @@ mod tests {
         c.apply(Op::SetKeyword { path: "Inbox".into(), info: Some(KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() }) }).unwrap();
         let start = chips(&c, &ids);
         assert_eq!(entered(&c, &start, "beach, harbour"), Ok(edit(&["Inbox|harbour"], &[])));
+    }
+
+    /// `>` and `<` mark a hierarchy as `|` does: `animal > dog` and `dog < animal` are both
+    /// `animal|dog`, for a new name, a keyword of the selection and one marked with its asterisk. A
+    /// keyword whose own name holds one of them, and a name in double quotes, are read as written.
+    #[test]
+    fn a_hierarchy_is_written_with_greater_or_less_than() {
+        let (c, ids) = library(&[&["beach", "Places|Lisbon"], &["beach"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, "beach, Places|Lisbon*, animal > dog, cat < animal"), Ok(edit(&["animal|dog", "animal|cat"], &[])));
+        assert_eq!(entered(&c, &start, "beach, Places > Lisbon*"), Ok(Entered::default()), "a partial keyword marked");
+        assert_eq!(entered(&c, &start, "beach, Lisbon < Places*"), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "beach, Places > Lisbon"), Ok(edit(&["Places|Lisbon"], &[])), "made common");
+        assert_eq!(entered(&c, &start, "beach, a > b > c, z < y < x"), Ok(edit(&["a|b|c", "x|y|z"], &["Places|Lisbon"])), "deeper levels");
+        assert_eq!(entered(&c, &start, "beach, \"a > b\""), Ok(edit(&["a > b"], &["Places|Lisbon"])), "in quotes, as written");
+        // a keyword whose name holds a comma is one name written with `>` too
+        let (c, ids) = library(&[&["Places|Paris, France", "beach"], &["beach"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, "beach, Places > Paris, France*"), Ok(Entered::default()));
+        assert_eq!(entered(&c, &start, "beach, Places > Paris, France"), Ok(edit(&["Places|Paris, France"], &[])));
+        let (c, ids) = library(&[&["x>y"], &["beach"]]);
+        let start = chips(&c, &ids);
+        assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()), "a name holding > reads back");
+        assert_eq!(entered(&c, &start, "x>y, beach*"), Ok(edit(&["x>y"], &[])), "made common as written");
     }
 }
