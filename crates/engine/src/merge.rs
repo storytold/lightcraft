@@ -164,8 +164,14 @@ impl MergeJob {
             let bytes = (self.read)(path)?;
             check(i, &bytes)?;
             // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
-            let f = lightcraft_merge::load_frame_with(&bytes, load.edge, load.orient, &crate::camera_preview::starting_colour_tags)
-                .map_err(|e| format!("{path}: {e}"));
+            let f = lightcraft_merge::load_frame_with(
+                &bytes,
+                load.edge,
+                self.preview.is_some(),
+                load.orient,
+                &crate::camera_preview::starting_colour_tags,
+            )
+            .map_err(|e| format!("{path}: {e}"));
             let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
             f
