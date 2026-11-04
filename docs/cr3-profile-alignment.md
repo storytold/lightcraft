@@ -24,11 +24,16 @@ CR3 framing path. All subsequent colour,
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
 The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags
-for merge/DNG conversion. Cache versions advance from upstream look 13/render 73 to look 14/render 74.
+for merge/DNG conversion. Cache versions advance from upstream look 13/render 74 to look 14/render 75.
+Render 75 also separates the combined result from the earlier CR3-only render 74 cache.
 The upstream source-position vignetting correction remains before geometry, including CR3. No camera allowlist,
 new profile matching rules, or weaker acceptance gate is introduced. Other RAW formats
 retain their existing correspondence behaviour. The non-CR3 and fixed-mount changes
 proposed by #2675 are separate work.
+
+Profile resolution uses the shared lens resolver, including the downloaded database or
+`LIGHTCRAFT_LENSFUN_DIR` override and its reload support. Unknown crop factors remain
+unknown under the upstream optional-crop API; this change adds no crop-factor fallback.
 
 Synthetic tests cover lens-only and lens-plus-framing acceptance, unrelated/flat/already aligned
 rejection, crop-relative profile orientation at multiple resolutions, clip-mask contributions,
