@@ -90,7 +90,13 @@ pub fn database() -> Option<Arc<LensDb>> {
     }
     let generation = generation();
     // the app's own folder without its marker is a download that never finished: not read (the start fetches it)
-    let db = if downloaded && !crate::lensfun_download::complete(&dir) { None } else { load(&dir, downloaded) };
+    let db = if downloaded && !crate::lensfun_download::complete(&dir) {
+        // info, not a warning: before the first download this is every user's state (logged once per reload)
+        log::info!("lens database: no finished download in {} yet; lens profiles are not applied", dir.display());
+        None
+    } else {
+        load(&dir, downloaded)
+    };
     let mut loaded = LOADED.write().unwrap_or_else(PoisonError::into_inner);
     // a reload while the files were read: they may be the old ones, so they aren't kept (the next call reads again)
     if GENERATION.load(Ordering::Relaxed) == generation {
@@ -126,7 +132,10 @@ fn load(dir: &Path, downloaded: bool) -> Option<Arc<LensDb>> {
 fn summary(dir: &Path, whose: &str, db: &LensDb) -> (log::Level, String) {
     let (lenses, cameras) = (db.lenses.len(), db.cameras.len());
     if lenses == 0 {
-        (log::Level::Warn, format!("lens database: no lenses in {} ({whose}); lens profiles are not applied", dir.display()))
+        (
+            log::Level::Warn,
+            format!("lens database: no lenses in {} ({whose}): lenses 0, cameras {cameras}; lens profiles are not applied", dir.display()),
+        )
     } else {
         (log::Level::Info, format!("lens database: read {} ({whose}): lenses {lenses}, cameras {cameras}", dir.display()))
     }
@@ -217,7 +226,7 @@ mod tests {
         assert!(line.contains("lenses 1, cameras 1") && line.contains("/lensfun/db") && line.contains(ENV), "{line}");
         let (level, line) = summary(dir, "downloaded", &LensDb::parse("<lensdatabase></lensdatabase>").unwrap());
         assert_eq!(level, log::Level::Warn);
-        assert!(line.contains("no lenses") && line.contains("downloaded"), "{line}");
+        assert!(line.contains("no lenses") && line.contains("downloaded") && line.contains("lenses 0, cameras"), "{line}");
     }
 
     #[test]
