@@ -45,6 +45,7 @@ pub struct Request {
 impl Request {
     /// Read `{into?, name?, location?}` from `file.importLightroom`'s params. A wrong type or an
     /// unknown `into` is an error, before any file dialog opens.
+    /// Validate the explicit destination and per-import share choices before any I/O.
     pub fn parse(p: &Value) -> Result<Request, String> {
         let into = match p.get("into") {
             None | Some(Value::Null) => None,
@@ -163,6 +164,9 @@ pub fn after_sources(app: &mut LightcraftApp, path: &str, req: &Request, mut net
         Plan::NewLibrary => into_new_library(app, path, req),
         Plan::Ask { new_library } => {
             busy(app)?;
+            if app.ui.dialog.is_some() {
+                return Err(crate::i18n::tr("Close the current dialog and retry the Lightroom import").to_string());
+            }
             if !Path::new(path).is_file() {
                 return Err(format!("{path}: there is no Lightroom catalog file here"));
             }
@@ -335,10 +339,14 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         ui.add_space(4.0);
         ui.label(tr("Network sources in this catalog"));
         ui.add(egui::Label::new(tr("Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.")).wrap());
+        if network_sources.len() > lightcraft_engine::doc_path::MAX_NETWORK_SHARES {
+            ui.label(tr("Select up to 32 network sources for this import."));
+        }
         egui::ScrollArea::vertical().id_salt("lightroom-network-sources").max_height(140.0).show(ui, |ui| {
             for (i, source) in network_sources.iter().enumerate() {
                 let mut selected = network_shares.iter().any(|s| s.eq_ignore_ascii_case(source));
-                let response = ui.checkbox(&mut selected, source);
+                let enabled = selected || network_shares.len() < lightcraft_engine::doc_path::MAX_NETWORK_SHARES;
+                let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut selected, source));
                 crate::widgets::register(ui, format!("check:lightroomNetworkSource-{i}"), response.rect);
                 if response.changed() {
                     network_shares.retain(|s| !s.eq_ignore_ascii_case(source));

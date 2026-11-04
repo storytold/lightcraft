@@ -46,6 +46,8 @@ pub struct ImportJob {
     /// Probes from a preceding scan (not read again).
     pub(super) cache: HashMap<String, ProbeInfo>,
     naming: crate::sidecar::SidecarNaming,
+    /// Catalog-driven imports preflight network originals and sidecars before probing them.
+    check_network_links: bool,
     now: String,
     /// Next rename number; `None` once the final representable value has been reserved.
     seq: Option<usize>,
@@ -198,12 +200,26 @@ impl ImportJob {
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
+            check_network_links: false,
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
             read_total: Default::default(),
             read_done: Default::default(),
         })
+    }
+
+    /// Catalog paths are untrusted: recheck existing UNC redirects immediately before probing.
+    pub(crate) fn check_network_links(&mut self) {
+        self.check_network_links = true;
+        if let Some(probe) = self.probe.take() {
+            self.probe = Some(std::sync::Arc::new(move |path| {
+                if craft_docpath::classify(path) == craft_docpath::PathKind::Network {
+                    crate::doc_path::original_metadata(Path::new(path)).map_err(|e| e.to_string())?;
+                }
+                probe(path)
+            }));
+        }
     }
 
     /// The file-system half of importing `paths`: expand folders, skip known paths, probe, skip
@@ -259,6 +275,15 @@ impl ImportJob {
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
         let mut todo = Vec::new();
         for f in files {
+            if self.check_network_links && craft_docpath::classify(&f) == craft_docpath::PathKind::Network {
+                if let Err(e) = crate::doc_path::original_metadata(Path::new(&f)) {
+                    out.items.push(PreparedItem::Failed(f, e.to_string()));
+                    self.done.fetch_add(1, Relaxed);
+                    continue;
+                }
+                // Avoid a cached probe's unguarded stat and re-read through the guarded probe.
+                self.cache.remove(&f);
+            }
             match self.by_path.get(f.as_str()).copied() {
                 Some((id, true)) if !opts.local => {
                     // a file that was only browsed (Local) joins the library when it is imported for real
@@ -306,9 +331,18 @@ impl ImportJob {
             .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
             .map(|(f, _)| f.as_str())
             .collect();
-        let mut found =
-            sidecars_of(&asked, cancel, |f| if known.contains(f) { None } else { crate::sidecar::find_sidecar_for_import(&stems, self.naming, f) })
-                .into_iter();
+        let mut found = sidecars_of(&asked, cancel, |f| {
+            if known.contains(f) {
+                None
+            } else if self.check_network_links {
+                crate::sidecar::SidecarLookup { naming: self.naming, owns_stem: stems.owns(f) }
+                    .candidates(f)
+                    .find(|p| crate::doc_path::original_metadata(p).is_ok_and(|m| m.is_file()))
+            } else {
+                crate::sidecar::find_sidecar_for_import(&stems, self.naming, f)
+            }
+        })
+        .into_iter();
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -347,7 +381,14 @@ impl ImportJob {
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+                found_sidecar
+                    .and_then(|f| {
+                        if self.check_network_links {
+                            crate::doc_path::original_metadata(&f).ok()?;
+                        }
+                        std::fs::read_to_string(f).ok()
+                    })
+                    .or_else(|| info.xmp.clone().filter(|_| raw))
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {

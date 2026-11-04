@@ -246,8 +246,13 @@ fn network_sources_are_discovered_selectable_and_not_remembered() {
     begin(&mut h, json!({"path": f.lrcat()}));
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares.is_empty()));
     click(&mut h, "check:lightroomNetworkSource-1");
-    click(&mut h, "button:dialogOk");
+    let started = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(started["ok"], true, "{started}");
+    assert_eq!(started["result"]["networkShares"], json!([r"\\other\archive"]), "the import job received exactly the selected share");
     import_ends(&mut h, &f.lrcat);
+    // Close the previous import's result before asking for another source review.
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::LightroomResult { .. })));
+    assert_eq!(h.request("ui.dialog.cancel", json!({}), T)["ok"], true);
     begin(&mut h, json!({"path": f.lrcat()}));
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares.is_empty()));
     assert_eq!(std::fs::read(&f.lrcat).unwrap(), before);
@@ -565,4 +570,37 @@ fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none());
     assert_eq!(open_dir(&h), Some(other));
     assert!(!target.exists(), "no library was made at {}", target.display());
+}
+
+/// A dialog opened while discovery runs keeps its unconfirmed input.
+#[test]
+fn source_review_preserves_an_existing_dialog() {
+    let f = Fixture::new("source-dialog-busy");
+    std::fs::write(&f.lrcat, root_catalog(&[r"\\nas\photos"])).unwrap();
+    let mut h = f.app(true);
+    let start = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    assert_eq!(start["kind"], "sources");
+    let dialog = Dialog::CreatePreset { name: "Unconfirmed name".into(), group: "User Presets".into(), groups: vec![] };
+    h.app.ui.dialog = Some(dialog.clone());
+    assert!(h.step_until(T, |h| h.app.lightroom.is_none()));
+    assert_eq!(h.app.ui.dialog.as_ref(), Some(&dialog));
+    assert!(h.app.lightroom_last.as_ref().unwrap()["error"].as_str().unwrap().contains("current dialog"));
+    assert!(h.app.session.catalog.is_empty());
+}
+
+/// A large source list still opens review and permits an empty selection (local sources only).
+#[test]
+fn more_than_thirty_two_sources_still_open_review() {
+    let f = Fixture::new("many-sources");
+    let roots: Vec<_> = (0..40).map(|i| format!(r"\\nas\s{i:02}")).collect();
+    std::fs::write(&f.lrcat, root_catalog(&roots.iter().map(String::as_str).collect::<Vec<_>>())).unwrap();
+    let mut h = f.app(true);
+    assert_eq!(begin(&mut h, json!({"path": f.lrcat()}))["asking"], true);
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_sources, network_shares, .. })
+        if network_sources.len() == 40 && network_shares.is_empty()));
+    shot(&mut h, "lightroom-many-network-sources.png");
+    let start = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(start["ok"], true, "{start}");
+    assert_eq!(start["result"]["networkShares"], json!([]));
+    import_ends(&mut h, &f.lrcat);
 }
