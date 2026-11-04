@@ -90,11 +90,15 @@ pub const RESPONSIVE: Duration = Duration::from_secs(2);
 #[track_caller]
 #[allow(clippy::panic)] // failing the test with what was slow is the point
 pub fn assert_responsive(started: Instant, what: &str) {
-    let limit = scaled(RESPONSIVE).max(RESPONSIVE);
-    let took = started.elapsed();
-    if took >= limit {
-        panic!("{what} took {took:.2?}, but it must answer at once (limit {limit:?}: {RESPONSIVE:?}, scaled, never shrunk)");
+    if let Some(failure) = unresponsive(started.elapsed(), time_scale(), what) {
+        panic!("{failure}");
     }
+}
+
+/// Why a call that took `took` isn't responsive at `LIGHTCRAFT_TIME_SCALE` `scale`, or `None` when it is.
+fn unresponsive(took: Duration, scale: f64, what: &str) -> Option<String> {
+    let limit = at_least(RESPONSIVE, scale);
+    (took >= limit).then(|| format!("{what} took {took:.2?}, but it must answer at once (limit {limit:?}: {RESPONSIVE:?}, scaled, never shrunk)"))
 }
 
 /// [`wait_until`] whose limit never shrinks below `timeout`: [`scaled`]`(timeout)` or `timeout`,
@@ -194,9 +198,23 @@ mod tests {
     #[test]
     fn a_prompt_call_is_responsive_and_a_slow_one_fails_naming_it() {
         super::assert_responsive(Instant::now(), "a prompt call");
-        let Some(long_ago) = Instant::now().checked_sub(Duration::from_secs(10_000)) else { return };
+        // the limit: RESPONSIVE stretched by the scale, never shrunk
+        let just_under = RESPONSIVE - Duration::from_millis(1);
+        for (scale, limit) in [(MIN_TIME_SCALE, RESPONSIVE), (1.0, RESPONSIVE), (3.0, RESPONSIVE * 3)] {
+            assert_eq!(unresponsive(just_under, scale, "a call"), None, "{scale}");
+            assert_eq!(unresponsive(limit - Duration::from_millis(1), scale, "a call"), None, "{scale}");
+            let failure = unresponsive(limit, scale, "the slow call").unwrap_or_default();
+            assert!(failure.starts_with("the slow call took") && failure.contains("must answer at once"), "{scale}: {failure}");
+        }
+        // and assert_responsive fails the test with it, given a start further back than this run's limit (an
+        // `Instant` can't go back past the machine's boot, so a machine up for less than that skips this half)
+        let limit = at_least(RESPONSIVE, time_scale());
+        let Some(long_ago) = Instant::now().checked_sub(limit + Duration::from_secs(1)) else {
+            crate::skip!(System, "the machine has been up for less than {limit:?}: no Instant that long ago");
+            return;
+        };
         let failed = std::panic::catch_unwind(|| super::assert_responsive(long_ago, "the slow call"));
-        let message = failed.expect_err("a call 10,000 s ago isn't responsive");
+        let message = failed.expect_err("a call longer ago than the limit isn't responsive");
         let message = message.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
         assert!(message.contains("the slow call took") && message.contains("must answer at once"), "{message}");
     }

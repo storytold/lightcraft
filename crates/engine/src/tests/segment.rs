@@ -145,7 +145,8 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
 /// The app (background mode) never waits: with the model missing every request fails at once;
 /// with a damaged model the requests are queued, fail on the worker, and come back as messages.
 /// Observed, not timed: nothing is queued or downloaded for a missing model, and the requests for a
-/// damaged one return while the worker is held just before loading it.
+/// damaged one return while the worker is held just before loading it. Each also has a responsiveness guard
+/// (`assert_responsive`), for a bounded wait in front of the answer that leaves no other trace.
 #[test]
 fn background_requests_never_wait_and_failures_come_back_as_messages() {
     let mut s = Session::with_demo();
@@ -154,7 +155,10 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     s.segmenter.dir = Some(tmp("missing"));
     for (cmd, p) in [("mask.add", json!({"kind": "object"})), ("mask.add", json!({"kind": "prompt", "text": "sky"})), ("segment.prepare", json!({}))]
     {
+        let t0 = Instant::now();
         let e = s.execute(cmd, &p).unwrap_err().to_string();
+        // nothing to wait for, and no bounded wait in front of the error either (the checks below can't see one)
+        lightcraft_testkit::assert_responsive(t0, &format!("{cmd} with the model missing"));
         if Segmenter::AVAILABLE {
             assert!(e.starts_with(NOT_INSTALLED), "{cmd}: {e}");
         } else {

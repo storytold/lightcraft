@@ -657,14 +657,22 @@ mod tests {
         let mut first = String::new();
         replies.read_line(&mut first).unwrap();
         assert!(first.contains("\"id\":1"), "{first}");
-        let mut child = std::process::Command::new("ping").args(["-n", "3600", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        // ended when the test is done with it, or on a panic before that (not left to ping for an hour)
+        struct KillOnDrop(std::process::Child);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child =
+            KillOnDrop(std::process::Command::new("ping").args(["-n", "3600", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap());
         // junk makes the server answer once and close
         c.write_all(b"hello\n").unwrap();
         let mut text = String::new();
         let read = replies.read_to_string(&mut text);
-        let still_running = child.try_wait().is_ok_and(|status| status.is_none());
-        let _ = child.kill();
-        let _ = child.wait();
+        let still_running = child.0.try_wait().is_ok_and(|status| status.is_none());
+        drop(child);
         server.join().unwrap();
         assert!(read.is_ok(), "the close must be clean, not a reset or a wait for the program to exit: {read:?}");
         assert!(text.contains("closing the connection"), "{text}");
