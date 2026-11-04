@@ -359,9 +359,12 @@ impl CompressedParams {
         if tag0x653 == 0 || tag0x653 > 8 {
             return None;
         }
+        if ip.u64(0x0640).is_some_and(|v| v > 32) || ip.u64(0x0643).is_some_and(|v| v > 32) {
+            return None;
+        }
         let tag0x640 = ip.u64(0x0640).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
         let tag0x641 = ip.u64(0x0641).and_then(|v| u32::try_from(v).ok()).unwrap_or(5);
-        let tag0x642 = ip.u64(0x0642).and_then(|v| i32::try_from(v).ok()).unwrap_or(0);
+        let tag0x642 = ip.u64(0x0642).and_then(|v| i32::try_from(v).ok()).filter(|&v| (-65536..=65536).contains(&v)).unwrap_or(0);
         let tag0x643 = ip.u64(0x0643).and_then(|v| u32::try_from(v).ok()).unwrap_or(2);
         let tag0x644 = ip.u64(0x0644).and_then(|v| u32::try_from(v).ok()).unwrap_or(5);
         let tag0x645 = ip.u64(0x0645).and_then(|v| u32::try_from(v).ok()).unwrap_or(4);
@@ -371,7 +374,7 @@ impl CompressedParams {
         let tag0x649 = ip.u64(0x0649).and_then(|v| i32::try_from(v).ok()).unwrap_or(4);
         let tag0x650 = ip.u64(0x0650).and_then(|v| i32::try_from(v).ok()).unwrap_or(7);
         let tag0x651 = ip.u64(0x0651).and_then(|v| i32::try_from(v).ok()).unwrap_or(15);
-        let tag0x652 = ip.u64(0x0652).and_then(|v| u32::try_from(v).ok()).unwrap_or(12).max(1);
+        let tag0x652 = ip.u64(0x0652).and_then(|v| u32::try_from(v).ok()).unwrap_or(12).clamp(1, 32);
         let valid_bits = mn.and_then(|m| m.ifd.u64(MN_VALID_BITS)).and_then(|v| u32::try_from(v).ok()).filter(|b| (8..=16).contains(b)).unwrap_or(12);
 
         Some(Self {
@@ -411,6 +414,9 @@ fn check_header(src: &[u8], bytes: usize) -> bool {
 
 fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &CompressedParams) -> Result<Vec<u16>> {
     let n = w.checked_mul(h).ok_or(RawError::Limit("ORF image dimensions overflow"))?;
+    if n > 0 && stream.is_empty() {
+        return Err(RawError::Corrupt("ORF compressed stream is empty".into()));
+    }
     let mut raw_image = vec![0u16; n];
     let mut reader = BitReader::new(stream);
 
@@ -508,10 +514,11 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
                 }
             }
 
-            lpred = gcode_adj + n_val;
-            let pixel_final_value = (t640bits as i32) + ((gcode_adj + n_val) << params.tag0x640.min(15));
+            let sum = gcode_adj.checked_add(n_val).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
+            lpred = sum;
+            let pixel_final_value = (t640bits as i32).saturating_add(sum.checked_shl(params.tag0x640.min(15)).unwrap_or(0));
             if let Some(px) = raw_image.get_mut(row_offset + col) {
-                *px = pixel_final_value.max(0) as u16;
+                *px = pixel_final_value.clamp(0, i32::from(u16::MAX)) as u16;
             }
         }
     }
@@ -550,6 +557,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12)
+    } else if let Some((params, stream)) = (|| {
+        let params = CompressedParams::from_ip(ip.as_ref()?, mn.as_ref())?;
+        let chunk = chunks.first()?;
+        let src = chunk_bytes(bytes, chunk)?;
+        if !check_header(src, params.tag0x653) {
+            return None;
+        }
+        let stream = src.get(params.tag0x653.saturating_add(2)..)?;
+        Some((params, stream))
+    })() {
+        let d = if mode == Mode::Full || stated.is_none() { decode_compressed_image(stream, w, h, &params)? } else { Vec::new() };
+        (RawData::U16(d), params.valid_bits)
     } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
         // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
@@ -588,15 +607,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12)
-    } else if let Some(params) = ip.as_ref().and_then(|i| CompressedParams::from_ip(i, mn.as_ref())) {
-        let chunk = chunks.first().ok_or_else(|| RawError::Corrupt("ORF missing raw strip".into()))?;
-        let src = chunk_bytes(bytes, chunk).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
-        if !check_header(src, params.tag0x653) {
-            return Err(RawError::Corrupt("ORF compressed header mismatch".into()));
-        }
-        let stream = src.get(params.tag0x653.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
-        let d = if mode == Mode::Full || stated.is_none() { decode_compressed_image(stream, w, h, &params)? } else { Vec::new() };
-        (RawData::U16(d), params.valid_bits)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };
@@ -1169,8 +1179,9 @@ mod tests {
             tag0x653: 5,
             valid_bits: 12,
         };
-        // empty or short streams do not panic
-        let _ = decode_compressed_image(&[], 10, 10, &params);
+        // empty stream returns error for nonempty image, succeeds for 0x0
+        assert!(decode_compressed_image(&[], 10, 10, &params).is_err());
+        assert_eq!(decode_compressed_image(&[], 0, 0, &params).unwrap(), Vec::<u16>::new());
         let _ = decode_compressed_image(&[0xff; 16], 10, 10, &params);
         let _ = decode_compressed_image(&[0x00; 16], 10, 10, &params);
 

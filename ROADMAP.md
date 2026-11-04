@@ -14,18 +14,18 @@ from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are 
 |---|---:|---|
 | **Feature breadth** (checklist) | **81.6%** of 532 rows (P0 98.0%, P1 95.2%, P2 50.0%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
 | **Feature breadth** (weighted by use) | **~77%** | estimated |
-| **Ready for real work** (full target) | **~61%** (56–66%) | estimated: weighted sum over the dimensions |
-| **Mainstream practitioner** | **~51%** (46–56%) | estimated |
+| **Ready for real work** (full target) | **~62%** (57–67%) | estimated: weighted sum over the dimensions |
+| **Mainstream practitioner** | **~52%** (47–57%) | estimated |
 | **Essentials user** | **~65%** (60–70%) | estimated |
 | Remaining to **beta** | **~340–600 h** (Opus 5.5 agent hours, ~60% parallel) | estimated |
-| Remaining to **full parity** | **~1,000–1,800 h** (~70% parallel) | estimated |
+| Remaining to **full parity** | **~980–1,750 h** (~70% parallel) | estimated |
 
 Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 
 | Audience | Ready | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---:|---:|---|
-| Full target (ready for real work) | **~61%** | **1,000–1,800 h** (~70% parallelizes) | raw colour, lens and camera data; AI models; Classic output modules; localization; plug-in ecosystem |
-| Mainstream practitioner | **~51%** | **450–840 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
+| Full target (ready for real work) | **~62%** | **980–1,750 h** (~70% parallelizes) | raw colour, lens and camera data; AI models; Classic output modules; localization; plug-in ecosystem |
+| Mainstream practitioner | **~52%** | **440–820 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
 | Essentials user | **~65%** | **160–300 h** (~50% parallelizes) | default raw look for popular cameras; launch stability; basic-slider feel; opening CR3 / HEIC files people send |
 
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is

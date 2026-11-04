@@ -61,6 +61,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-11-04: Gap 6 closed: compressed Olympus ORF decodes from sensor data (`crates/raw/src/vendor/orf.rs`); OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) verified; 78 bodies unlocked.
+
 - 2026-10-29: the import review has a remembered 80–320 pt thumbnail-size slider, density-aware previews and bounded visible retention (#2237, part of #2056). Small sources do not reconstruct the same preview job every frame. The pre-import loupe and keyboard culling remain open in #2056; no ranked gap or headline feature count closes.
 
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
