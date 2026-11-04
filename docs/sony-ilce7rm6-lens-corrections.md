@@ -146,6 +146,24 @@ full-frame 0.25 px gate. Measured against the camera JPEG, the fitted polynomial
 0.22–0.73 px against 0.23–0.68 px on the 27 photos, 1.35–1.38 px at 10 mm), so APS-C bodies use a 0.5 px gate
 (`APSC_FIT_ERROR_PX_AT_1440`).
 
+**Lens exception: Sigma 10–18 mm F2.8 DC DN at 10–10.5 mm** (`LENS_EXCEPTIONS`, matched on Exif `LensModel`
+`10-18mm F2.8 DC DN | Contemporary 023` and `FocalLength` ≤ 10.5 mm). Its wide end keeps 1.36–1.38 px under the
+body's rule. On 115 further private photos of this lens (97 at 10 mm, 2 at 10.4–10.5 mm, 16 at 11.7–12.5 mm), a grid
+over spacing 372–426 px and unit 14000–16500 was measured on the exact table. The photos at 10 mm were split by
+shooting location: 63 to choose the values, 34 to check them. A larger spacing with a smaller unit fits about as well
+(a ridge in the grid): 420 px / 14000 was best on the 63 choice photos (0.445 px worst) but put 2 of the 34 check photos
+above 0.75 px, so the pick is **416 px / 14250**, within 0.51 px on both sets.
+As rendered (`lightcraft-cli render`, Enable Lens Corrections on):
+
+| Sigma 10–18 mm | p95 at 1440 px |
+|---|---|
+| 10 mm, 97 photos (one night photo has too little detail to measure) | 0.38–0.55 px, median 0.44 (body's rule: about 1.4 px) |
+| 10.4–10.5 mm, 2 photos | 0.36 px |
+| 11.7–12.5 mm, 16 photos (body's rule, the exception does not apply) | 0.48–0.72 px, median 0.57 |
+
+At 11.7 mm and longer an exception of this kind fits worse than the body's rule (412 px / 14500 on the grid: 0.73–1.19 px against 0.48–0.69 px), so it stops at
+10.5 mm, the longest measured focal length where it helps; 10.6–11.6 mm is unmeasured and takes the body's rule.
+
 ## Two conventions
 
 A second Sony decoder, `crates/raw/src/vendor/arw_lens.rs`
@@ -327,13 +345,14 @@ the resampled source by the source, framing and output size, so tone, colour and
 - **ILCE-7RM6 and ILCE-6700 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the
   full-frame crop, or an APS-C body's own crop), unit and zoom rule are unverified, so they get no correction from this conversion (the ILCE-7RM4A's distortion has
   its own: [Two conventions](#two-conventions)).
-- **ILCE-6700 at strong barrel distortion:** 1.36–1.38 px at the Sigma 10–18 mm's 10 mm end (above). The two public
-  raw.pixls.us ILCE-6700 files (one scene, E 16–55 mm F2.8 G at 16 mm, not used for fitting) both carry the same
-  table (−1829 at the last knot). On the compressed file the correction leaves p95 3.1 px (uncorrected 5.1 px, exact
-  table 3.4 px); with the same spacing this lens fits at unit 16000 (0.43 px), another lens-dependent unit (below).
-  On the lossless file the table, on its padded 6656 × 4608 frame, misses the 0.5 px fit gate, so that photo stays
-  uncorrected (5.3 px). Its vignetting and lateral CA tables are read, not applied: measured in #2801 (the camera JPEG
-  doesn't compensate vignetting, as on the ILCE-7RM6).
+- **ILCE-6700 at strong barrel distortion:** the body's rule leaves 1.36–1.38 px at the Sigma 10–18 mm's 10 mm end;
+  that lens has a measured exception (above). The two public raw.pixls.us ILCE-6700 files (one scene, E 16–55 mm
+  F2.8 G at 16 mm, not used for fitting) both carry the same table (−1829 at the last knot). On the compressed file
+  the correction leaves p95 3.1 px (uncorrected 5.1 px, exact table 3.4 px); with the same spacing this lens fits at
+  unit 16000 (0.43 px), another lens-dependent unit (below). On the lossless file the table, on its padded
+  6656 × 4608 frame, misses the 0.5 px fit gate, so that photo stays uncorrected (5.3 px). Other wide lenses with
+  similarly strong tables are unmeasured. Its vignetting and lateral CA tables are read, not applied: measured in
+  #2801 (the camera JPEG doesn't compensate vignetting, as on the ILCE-7RM6).
 - **APS-C distortion is unverified in camera on the ILCE-7RM6:** no APS-C photo with distortion correction on was available; the APS-C
   knot spacing is verified on CA only, and the APS-C zoom follows the full-frame rule.
 - **Aspect-ratio crops** (in-camera 4:3, 16:9, 1:1) were not measured; the correction uses the crop the file records.
