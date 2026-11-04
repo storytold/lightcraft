@@ -1016,6 +1016,21 @@ fn jxl_export_writes_metadata() {
     assert!(d.exif.is_some(), "EXIF box");
 }
 
+/// Issue #3754: importing a JPEG XL reads the EXIF and XMP that export wrote into its boxes.
+#[test]
+fn jxl_export_metadata_survives_import() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 120, "format": "jxl", "quality": 80}));
+    let e = export_photo(&mut s, id, &o, 1).unwrap();
+    let m = lightcraft_meta::extract(&e.bytes);
+    assert_eq!(m.title.as_deref(), Some("Golden horizon"), "{m:?}");
+    assert!(m.capture_time.is_some() && m.model.is_some(), "{m:?}");
+    let info = crate::files::probe_bytes("sunset.jxl", &e.bytes).unwrap();
+    assert_eq!(info.meta.title, "Golden horizon");
+    assert!(!info.meta.camera.is_empty() && info.captured.is_some(), "{:?}", info.meta);
+}
+
 /// Issue #236: Add to Apple Photos after an export. A fake runner stands in for osascript: tests
 /// never start it, nor Photos.
 #[cfg(not(target_arch = "wasm32"))]

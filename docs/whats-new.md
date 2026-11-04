@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### JPEG XL files keep their metadata on import
+- Importing a JPEG XL file now reads the EXIF and XMP it carries, plain or Brotli-wrapped (`brob`), so a photo
+  arrives with its capture time, camera, lens, exposure, title and keywords, and All Metadata shows them. A `.jxl`
+  exported by LightCraft and imported again keeps everything export wrote. Before, every JPEG XL imported with no
+  metadata at all (issue #3754).
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

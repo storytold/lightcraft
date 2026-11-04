@@ -13,6 +13,8 @@
 //!   XMP `uuid` box.
 //! - HEIF/HEIC/AVIF (ISO base media file, see [`crate::heif`]): the `Exif` item's TIFF stream and the XMP
 //!   `mime` item.
+//! - JPEG XL (ISO base media file, see [`crate::jxl`]): the `Exif` and `xml ` boxes, plain or Brotli-wrapped
+//!   in `brob`; a bare codestream has no metadata.
 
 use lightcraft_tiff::{Tiff, tags};
 
@@ -56,6 +58,9 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     }
     if crate::heif::is_heif(bytes) {
         return crate::heif::metadata(bytes);
+    }
+    if crate::jxl::is_jxl_container(bytes) {
+        return crate::jxl::metadata(bytes);
     }
     if bytes.starts_with(&[0xff, 0xd8]) {
         jpeg_segments(bytes)
