@@ -98,7 +98,14 @@ fn at_least(timeout: Duration, scale: f64) -> Duration {
 /// limit was reached).
 #[allow(clippy::panic)] // failing the test with what it waited for is the point
 #[track_caller]
-fn poll(limit: Duration, rule: &str, what: &str, mut cond: impl FnMut() -> bool) {
+fn poll(limit: Duration, rule: &str, what: &str, cond: impl FnMut() -> bool) {
+    poll_pausing(limit, rule, what, cond, std::thread::sleep);
+}
+
+/// [`poll`], pausing between checks with `pause` (the tests record the pauses instead of timing them).
+#[allow(clippy::panic)] // failing the test with what it waited for is the point
+#[track_caller]
+fn poll_pausing(limit: Duration, rule: &str, what: &str, mut cond: impl FnMut() -> bool, mut sleep: impl FnMut(Duration)) {
     let start = Instant::now();
     let mut pause = Duration::from_millis(1);
     loop {
@@ -109,7 +116,7 @@ fn poll(limit: Duration, rule: &str, what: &str, mut cond: impl FnMut() -> bool)
         if elapsed >= limit {
             panic!("\"{what}\" not reached after {elapsed:.2?} (limit {limit:?}: {rule})");
         }
-        std::thread::sleep(pause.min(limit.saturating_sub(elapsed)));
+        sleep(pause.min(limit.saturating_sub(elapsed)));
         pause = (pause * 2).min(MAX_POLL);
     }
 }
@@ -169,10 +176,12 @@ mod tests {
     #[test]
     fn wait_until_returns_once_the_condition_holds() {
         let checks = AtomicUsize::new(0);
-        let start = Instant::now();
         wait_until(Duration::from_secs(30), "the third check", || checks.fetch_add(1, Ordering::SeqCst) >= 2);
         assert_eq!(checks.load(Ordering::SeqCst), 3);
-        assert!(start.elapsed() < Duration::from_secs(10), "it doesn't wait out the limit");
+        // it doesn't wait out the limit: two short pauses between the three checks, recorded instead of timed
+        let (checks, mut pauses) = (AtomicUsize::new(0), Vec::new());
+        poll_pausing(Duration::from_secs(30), "", "the third check", || checks.fetch_add(1, Ordering::SeqCst) >= 2, |d| pauses.push(d));
+        assert_eq!(pauses, [Duration::from_millis(1), Duration::from_millis(2)]);
     }
 
     #[test]
