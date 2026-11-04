@@ -420,6 +420,18 @@ pub fn lrtemplate_props(text: &str) -> Result<(Option<String>, Props, crate::crs
     Ok((title, props, values))
 }
 
+/// The `crs:` structures [`lua_settings_props`] reads from Lua settings (local corrections); any
+/// other table there is only reported.
+const LUA_STRUCTURES: [&str; 4] = crate::crs_masks::CONTAINERS;
+
+/// Whether Lua develop settings read by [`lua_settings_props`] carry the `crs:` property `crs`
+/// (named as in an XMP packet: `crs:Clarity2012`, `crs:MaskGroupBasedCorrections`): every field
+/// they can hold, except a structure the XMP mapper reads that [`lua_settings_props`] only reports
+/// (spot removal, `crs:RetouchAreas`).
+pub(crate) fn lua_settings_carry(crs: &str) -> bool {
+    !crate::crs_masks::is_structure(crs) || LUA_STRUCTURES.contains(&crs)
+}
+
 /// Data-only Lua settings shared by preset and native catalog import. Never executes Lua.
 pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_masks::Values), String> {
     let Lua::Table(_, fields) = settings else { return Err("no develop settings in this template".into()) };
@@ -441,7 +453,7 @@ pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_ma
             }
             continue;
         }
-        if crate::crs_masks::CONTAINERS.contains(&key.as_str()) {
+        if LUA_STRUCTURES.contains(&key.as_str()) {
             values.insert(key.clone(), crate::crs_masks::from_lua(v));
         }
         let vals: Vec<String> = match v {

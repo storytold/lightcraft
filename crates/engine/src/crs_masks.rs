@@ -305,6 +305,13 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
 /// beside `RetouchAreas` for older readers and read on its own when that is all there is).
 pub const SPOT_CONTAINERS: [&str; 2] = ["crs:RetouchAreas", "crs:RetouchInfo"];
 
+/// Whether `crs` (`crs:MaskGroupBasedCorrections`) is a structure [`crate::crs::to_partial_report`]
+/// reads from a packet's structured values: local corrections ([`CONTAINERS`]) or spot removal
+/// ([`SPOT_CONTAINERS`]).
+pub(crate) fn is_structure(crs: &str) -> bool {
+    CONTAINERS.contains(&crs) || SPOT_CONTAINERS.contains(&crs)
+}
+
 /// One `RetouchAreas` item → a [`Spot`](lightcraft_develop::Spot) as JSON. `aspect` = width /
 /// height of the target: horizontal sizes are stored as fractions of the width, ours of the long
 /// edge. Returns the component kind it can't carry over.

@@ -86,6 +86,15 @@
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
 
+### A Lightroom catalog's develop settings win over the XMP it keeps
+- A Lightroom Classic catalog keeps an XMP copy of each photo's settings next to the settings themselves, and the
+  copy can be older. Lightroom leaves a setting at zero (Clarity, Texture, Luminance noise reduction…) out of a
+  photo's settings, so when the copy still held an older value, such as Clarity +30, the import showed +30 where
+  Lightroom shows 0. The catalog's settings now win: a setting they leave out isn't taken from the copy, for every
+  photo whose settings the import applies. The copy still gives the photo its title, caption and other metadata,
+  and its heal and clone spots, which LightCraft can't read from the settings yet. A photo the catalog has no
+  readable settings for still takes them from the copy.
+
 ### Raising Exposure keeps raw highlights (process 5)
 - Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
   curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at

@@ -1214,9 +1214,10 @@ fn imported_crops_use_the_catalog_orientation() {
     assert_eq!(r, [0.1, 0.1, 0.8, 0.6]);
 }
 
-/// Masks only the catalog's XMP has (the develop row has none to replace them) are on the stored
-/// image too: on a vertical shot (`DA`) they turn like the row's, and a radial keeps its shape on
-/// the 2:1 stored image, also for a photo already in the library at its shown 10 × 20.
+/// Masks from the catalog's XMP (for a photo without develop text, whose XMP is all there is)
+/// are on the stored image too: on a vertical shot (`DA`) they turn like the develop text's, and a
+/// radial keeps its shape on the 2:1 stored image, also for a photo already in the library at its
+/// shown 10 × 20.
 #[test]
 fn catalog_xmp_masks_follow_the_photo_orientation() {
     let mut data = sample();
@@ -1225,7 +1226,7 @@ fn catalog_xmp_masks_follow_the_photo_orientation() {
     data.photos[0].image.insert("orientation".into(), json!("DA"));
     data.photos[0].image.insert("fileWidth".into(), json!(20));
     data.photos[0].image.insert("fileHeight".into(), json!(10));
-    data.photos[0].settings = "s = { Exposure2012 = 0.5 }".into();
+    data.photos[0].settings = String::new();
     data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
  <crs:MaskGroupBasedCorrections><rdf:Seq>
@@ -1245,7 +1246,6 @@ fn catalog_xmp_masks_follow_the_photo_orientation() {
     apply(&mut s, data, true).unwrap();
     assert_eq!(s.catalog.len(), 1, "the catalog's photo is the one already in the library");
     let p = s.catalog.photo(id).unwrap();
-    assert_eq!(p.develop.light.exposure, 0.5, "the develop row is applied too");
     let c = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"];
     let (linear, radial) = (&c[0]["shape"], &c[1]["shape"]);
     let r = [&linear["start"]["x"], &linear["start"]["y"], &linear["end"]["x"], &linear["end"]["y"], &radial["center"]["x"], &radial["center"]["y"]]
@@ -1303,13 +1303,19 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     data.photos[0].settings = "s = { AutoTone = true, Exposure2012 = -999999, Contrast2012 = -999999, Shadows2012 = 65, Temperature = 6150 }".into();
     data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-999999" crs:Contrast2012="-999999" crs:Blacks2012="-22"/></rdf:RDF></x:xmpmeta>"#.into();
     let mut s = crate::Session::new();
-    let report = apply(&mut s, data, false).unwrap();
+    let report = apply(&mut s, data.clone(), false).unwrap();
     let p = s.catalog.photos().next().unwrap();
     assert_eq!(p.develop.light.exposure, 0.0);
     assert_eq!(p.develop.light.contrast, 0.0);
     assert_eq!(p.develop.light.shadows, 65.0);
-    assert_eq!(p.develop.light.blacks, -22.0);
+    assert_eq!(p.develop.light.blacks, 0.0, "the develop text, which leaves Blacks out, wins over the XMP");
     assert!(report["unmapped"]["2"].as_array().unwrap().iter().any(|v| v.as_str().is_some_and(|v| v.contains("Deferred"))));
+    // without develop text, the XMP's settings apply, its sentinels left out
+    data.photos[0].settings = String::new();
+    let mut s = crate::Session::new();
+    apply(&mut s, data, false).unwrap();
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!((p.develop.light.exposure, p.develop.light.contrast, p.develop.light.blacks), (0.0, 0.0, -22.0));
     let (partial, _) = mapped_settings(
         "s = { Exposure2012 = -5, Contrast2012 = -100 }",
         crate::crs::Target::RawAbsolute,
@@ -2018,4 +2024,133 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// A catalog XMP packet older than the develop text: settings Lightroom has since set back to zero
+/// (and so leaves out of the text) still at their old values, a spot (which only the XMP gives the
+/// import: the text's `RetouchAreas` isn't read), and metadata.
+const STALE_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" crs:Exposure2012="+2" crs:Clarity2012="+30" crs:Texture="+12" crs:LuminanceSmoothing="25">
+ <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:title>
+ <dc:creator><rdf:Seq><rdf:li>Example Photographer</rdf:li></rdf:Seq></dc:creator>
+ <crs:RetouchAreas><rdf:Seq>
+  <rdf:li><rdf:Description crs:SpotType="heal" crs:SourceState="sourceSetExplicitly" crs:SourceX="0.45" crs:OffsetY="0.3" crs:Opacity="1" crs:Feather="0">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Ellipse" crs:X="0.4" crs:Y="0.3" crs:SizeX="0.01" crs:SizeY="0.015"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:RetouchAreas>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+/// One catalog photo (offline original) with `settings` as its develop text and [`STALE_XMP`].
+fn stale_xmp_catalog(settings: &str) -> CatalogImport {
+    let mut data = sample();
+    data.photos.truncate(1);
+    data.photos[0].image.remove("masterImage");
+    data.photos[0].settings = settings.into();
+    data.photos[0].xmp = STALE_XMP.into();
+    data
+}
+
+/// (exposure, clarity, texture, luminance noise reduction, spots) of `p`'s develop settings.
+fn stale_xmp_develop(p: &Photo) -> (f64, f64, f64, f64, usize) {
+    let d = &p.develop;
+    (d.light.exposure, d.effects.clarity, d.effects.texture, d.detail.nr_luminance, d.spots.len())
+}
+
+/// Lightroom leaves settings at zero out of a photo's develop text, and the catalog's XMP can be
+/// older than the text: the text wins for every setting it carries, and one it leaves out is at
+/// its default, not the XMP's value. The XMP still gives the photo its metadata and what the
+/// import can't read from the text (spots). For a record the import makes (here an offline
+/// original) and for every record found before it whose develop settings take the catalog's.
+#[test]
+fn the_catalog_develop_text_wins_over_its_xmp() {
+    let text = "s = { Exposure2012 = 0.5 }";
+    let mut got = Vec::new();
+    // a record the import makes
+    let mut s = crate::Session::new();
+    apply(&mut s, stale_xmp_catalog(text), false).unwrap();
+    let p = s.catalog.photos().next().unwrap();
+    got.push(("new record", stale_xmp_develop(p), p.meta.title.clone()));
+    assert_eq!(p.meta.creator, "Example Photographer");
+    assert_eq!(p.rating, 2, "the catalog's rating, over the XMP's");
+    // records there before: in the library unedited (Existing), browsed in Local and changed
+    // since (Promoted), and either with an edit made in LightCraft, which "update existing"
+    // replaces with the catalog's settings
+    let cases: [(&str, bool, bool, bool); 4] = [
+        ("library, unedited", false, false, false),
+        ("Local, changed", true, false, false),
+        ("library, edited", false, true, true),
+        ("Local, edited", true, true, true),
+    ];
+    for (case, local, edited, update_existing) in cases {
+        let mut s = crate::Session::new();
+        let id = library_photo(&mut s, "/missing/test.ARW", |p| {
+            p.local = local;
+            p.rating = 3;
+            if edited {
+                let mut d = (*p.develop).clone();
+                d.light.exposure = -1.0;
+                p.develop = Arc::new(d);
+                p.edited = Some("before".into());
+            }
+        });
+        let r = apply(&mut s, stale_xmp_catalog(text), update_existing).unwrap();
+        assert_eq!(r["preservedExistingEdits"], 0, "{case}");
+        let p = s.catalog.photo(id).unwrap();
+        got.push((case, stale_xmp_develop(p), p.meta.title.clone()));
+    }
+    let want = ["new record", "library, unedited", "Local, changed", "library, edited", "Local, edited"]
+        .map(|case| (case, (0.5, 0.0, 0.0, 0.0, 1), "Harbour at dawn".to_string()));
+    assert_eq!(got, want);
+}
+
+/// A LightCraft edit an import keeps stays whole: neither the catalog's text nor its XMP changes
+/// it; the XMP's metadata still arrives.
+#[test]
+fn a_kept_edit_takes_neither_the_catalog_text_nor_its_xmp() {
+    let mut s = crate::Session::new();
+    let id = library_photo(&mut s, "/missing/test.ARW", |p| {
+        let mut d = (*p.develop).clone();
+        d.light.exposure = -1.0;
+        d.effects.clarity = 15.0;
+        p.develop = Arc::new(d);
+        p.edited = Some("before".into());
+    });
+    let r = apply(&mut s, stale_xmp_catalog("s = { Exposure2012 = 0.5 }"), false).unwrap();
+    assert_eq!(r["preservedExistingEdits"], 1);
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(stale_xmp_develop(p), (-1.0, 15.0, 0.0, 0.0, 0));
+    assert_eq!(p.meta.title, "Harbour at dawn");
+}
+
+/// Without develop text the catalog can read, its XMP is all there is: its settings apply, as
+/// before.
+#[test]
+fn without_readable_develop_text_the_catalog_xmp_develops_the_photo() {
+    for text in ["", "s = {"] {
+        let mut s = crate::Session::new();
+        apply(&mut s, stale_xmp_catalog(text), false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!(stale_xmp_develop(p), (2.0, 30.0, 12.0, 25.0, 1), "text {text:?}");
+        assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
+    }
+}
+
+/// LightCraft's own settings in the catalog's XMP (`lc:settings`, kept there from a sidecar
+/// LightCraft wrote) are a whole develop older than the text, so the text wins over them too.
+#[test]
+fn the_catalog_develop_text_wins_over_lightcraft_settings_in_its_xmp() {
+    let mut old = lightcraft_develop::DevelopSettings::default();
+    old.effects.clarity = 30.0;
+    let meta = lightcraft_meta::Metadata { title: Some("Harbour at dawn".into()), ..Default::default() };
+    let packet = lightcraft_meta::write_xmp(&meta, Some(&serde_json::to_string(&old).unwrap()));
+    for (text, clarity) in [("s = { Exposure2012 = 0.5 }", 0.0), ("", 30.0)] {
+        let mut data = stale_xmp_catalog(text);
+        data.photos[0].xmp = packet.clone();
+        let mut s = crate::Session::new();
+        apply(&mut s, data, false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!(p.develop.effects.clarity, clarity, "text {text:?}");
+        assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
+    }
 }

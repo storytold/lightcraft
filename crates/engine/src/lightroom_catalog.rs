@@ -967,7 +967,8 @@ fn catalog_masks(partial: &mut Value, orientation: Orientation) {
 }
 
 /// The catalog's XMP masks in LightCraft's frame, as [`catalog_masks`] puts the develop row's: they
-/// are on the same stored image, and they stay when the row has no masks of its own. The packet's
+/// are on the same stored image (the XMP gives masks only to a photo without develop text the
+/// import can read; the text's own replace them otherwise). The packet's
 /// radials come fitted to the sidecar default aspect and `sidecar::merge_into` re-fits them to the
 /// photo's size, so they are fitted to the stored image to be turned (a quarter turn swaps the
 /// radii) and handed back in the default aspect, for that re-fit to undo.
@@ -1473,8 +1474,14 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
+        // The catalog's XMP can be older than its develop text, and the text leaves settings at
+        // zero out: the text, read, is the photo's develop settings, so the XMP gives only what the
+        // text can't carry (spot removal), with its metadata. A setting the text leaves out stays
+        // what the record has: the camera's defaults for a record the job made (above).
+        let text_read = matches!(settings, Some(Ok(_)));
+        let from_xmp = |crs: &str| !text_read || !crate::preset_import::lua_settings_carry(crs);
         if !src.xmp.is_empty() {
-            match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
+            match crate::sidecar::parse_sidecar_where(&src.xmp, crate::crs::Target::for_photo(&p), from_xmp) {
                 Ok(mut sc) => {
                     if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
                         strip_xmp_sentinels(partial);
