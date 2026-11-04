@@ -368,6 +368,9 @@ mod tests {
         let malformed = crate::extract(&jpeg_with_orientation(None, "6.9"));
         assert_eq!(malformed.orientation, None);
 
+        let malformed_xmp_with_exif = crate::extract(&jpeg_with_orientation(Some(crate::Orientation::Rotate180), "6.5"));
+        assert_eq!(malformed_xmp_with_exif.orientation.map(|orientation| orientation.to_exif()), Some(3));
+
         let valid_xmp = crate::extract(&jpeg_with_orientation(None, "6"));
         assert_eq!(valid_xmp.orientation.map(|orientation| orientation.to_exif()), Some(6));
 
