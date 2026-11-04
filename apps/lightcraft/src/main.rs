@@ -61,7 +61,7 @@ use launch::{
 };
 #[cfg(test)]
 use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
-use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
+use prefs::{MAXIMIZE_LATER, PrefsWriter, as_remembered, load_prefs, prefs_path};
 #[cfg(test)]
 use prefs::{load_prefs_at, write_atomic};
 use session::{open_session, services};
@@ -246,7 +246,7 @@ fn main() -> eframe::Result {
     let opens_as = prefs.as_ref().and_then(|ui| ui.window).and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
     let options = eframe::NativeOptions {
         renderer,
-        viewport: as_remembered(egui::ViewportBuilder::default().with_title("LightCraft"), opens_as)
+        viewport: as_remembered(egui::ViewportBuilder::default().with_title("LightCraft"), opens_as, MAXIMIZE_LATER)
             .with_min_inner_size(lightcraft_ui_egui::window_place::MIN_SIZE)
             .with_drag_and_drop(true)
             .with_transparent(window_gpu::composes_window(compose_window, window_renderer))
@@ -315,6 +315,10 @@ fn main() -> eframe::Result {
                     written: serde_json::to_vec_pretty(&app.ui).unwrap_or_default(),
                     library: app.ui.settings.library_path.clone(),
                     keep_file: keep_prefs_file,
+                    start: Some(
+                        lightcraft_ui_egui::window_place::StartPlace::new(MAXIMIZE_LATER && opens_as.is_some_and(|w| w.zoomed))
+                            .remembered(opens_as.map(|w| w.size)),
+                    ),
                     ..Default::default()
                 };
                 // a library opened from its catalog file is the one in use from now on, as Open Library makes it
