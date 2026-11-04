@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Raising Exposure keeps raw highlights (process 3)
+- Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
+  curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
+  Exposure +1 and +2 a sky, a lit wall or a face keeps its detail where it used to go flat white. At Exposure 0 the
+  brightest tones render a few codes darker (on average 1 code or less on the photos measured), and fully clipped
+  areas such as a blown sky stay slightly below pure white until Exposure lifts them further. This is rendering
+  process 3: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
+  to Current Process. See [process versions](process-versions.md).
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
