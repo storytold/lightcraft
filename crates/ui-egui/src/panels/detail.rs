@@ -283,7 +283,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
-    let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool);
+    let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool, id);
     let p = ui.painter_at(canvas);
     let turn = crop_lr.then_some((crop_pan, crop_angle));
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, &SlotDraw { slot, r, clip, turn });
@@ -384,12 +384,20 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
 /// angle and slides with the pan under the fixed frame (the offset is the applied rect's own
 /// movement; it survives the release — the photo keeps sitting where the pan left it — and the tool
 /// closing clears it). `on` is false in the Photoshop-style crop, where the image is drawn straight.
-fn crop_display(app: &mut LightcraftApp, d: &DevelopSettings, img_rect: Rect, crop_tool: bool) -> (bool, egui::Vec2, f64) {
+fn crop_display(app: &mut LightcraftApp, d: &DevelopSettings, img_rect: Rect, crop_tool: bool, id: PhotoId) -> (bool, egui::Vec2, f64) {
     let lr = crop_tool && app.ui.settings.crop_lightroom();
     let angle = d.crop.geometry.angle;
     if !lr {
         app.ui.crop_pan = egui::Vec2::ZERO;
+        app.ui.crop_pan_photo = None;
         return (false, egui::Vec2::ZERO, angle);
+    }
+    // a pan survives the release but belongs to the photo it was made on: switching photos
+    // (while the crop tool stays open) clears it, so the new photo is not drawn with the
+    // previous one's offset
+    if app.ui.crop_pan_photo != Some(id.0) {
+        app.ui.crop_pan = egui::Vec2::ZERO;
+        app.ui.crop_pan_photo = Some(id.0);
     }
     let pan = match &app.gesture {
         Some(Gesture::CropPan { start_rect, pan0 }) => {
