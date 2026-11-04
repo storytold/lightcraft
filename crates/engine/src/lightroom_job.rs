@@ -796,6 +796,46 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// What a photo's XMP sidecar names and LightCraft doesn't apply (here a camera profile) is
+    /// said in the report for the record the job makes from that file, a content duplicate's (whose
+    /// sidecar the catalog's apply reads) as well as one the file import adds, while the record
+    /// keeps the sidecar's develop settings. Catalog settings that replace them leave nothing to
+    /// warn about. (Before, the report never said it, and the photo had partial settings.)
+    #[test]
+    fn a_sidecar_s_warnings_reach_the_report_while_its_develop_settings_stand() {
+        for duplicate in [true, false] {
+            for settings in ["", "s = { Exposure2012 = -1.0 }"] {
+                let case = format!("duplicate {duplicate}, settings {settings:?}");
+                let (dir, path, mut session) =
+                    file_with_develop_sidecar(&format!("lr-job-sidecar-warning-{duplicate}-{}", settings.len()), "warned-bytes");
+                std::fs::write(
+                    dir.join("photo.xmp"),
+                    r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:CameraProfile="Camera Faithful" crs:Exposure2012="+2.00"/>
+</rdf:RDF></x:xmpmeta>"#,
+                )
+                .unwrap();
+                let other = duplicate.then(|| edited_record(&mut session, "/elsewhere/other.jpg", false, Some("warned-bytes")));
+                let prepared = prepared_for(&session, &path, 3);
+                let report = run_job_with(&mut session, prepared, vec![path.clone()], false, settings);
+                let id = lightcraft_catalog::PhotoId(report["mapping"]["1"].as_u64().unwrap());
+                assert_ne!(Some(id), other, "{case}: a record of its own: {report}");
+                assert_eq!((report["added"].as_u64(), report["alreadyInLibrary"].as_u64()), (Some(1), Some(0)), "{case}: {report}");
+                let said: Vec<&str> =
+                    report["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.contains("Camera Faithful")).collect();
+                let stands = settings.is_empty();
+                assert_eq!(session.catalog.photo(id).unwrap().develop.light.exposure, if stands { 2.0 } else { -1.0 }, "{case}");
+                if stands {
+                    assert_eq!(said.len(), 1, "{case}: {report}");
+                    assert!(said[0].starts_with("image 1 XMP sidecar of ") && said[0].contains(&path), "{case}: {}", said[0]);
+                } else {
+                    assert!(said.is_empty(), "{case}: the catalog's settings replace the sidecar's: {report}");
+                }
+                std::fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+
     /// Two catalog photos at the same path whose file is a content duplicate: the second lands on
     /// no library record (the first one's is still being made), so the job makes another one from
     /// the file and its sidecar. That record is the job's own too: the catalog's settings apply and

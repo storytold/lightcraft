@@ -1305,6 +1305,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     // Where each record this job lands on came from, from the file import on: what the import
     // does to the record follows from it (its develop settings, the report's breakdown).
     let mut origins = std::mem::take(&mut files.origins);
+    // What the XMP sidecars of the files this job's file import read named and LightCraft doesn't
+    // apply (a camera profile, Upright geometry, unmapped fields), by path: the report says it for
+    // the record made from the file (see `sidecar_warning`).
+    let mut sidecar_warnings = warnings_by_path(std::mem::take(&mut files.warnings));
     // The records a catalog photo has landed on so far: the first one counts it as added (or
     // promotes it), any other catalog photo with the same path finds it already there.
     let mut claimed = HashSet::new();
@@ -1341,12 +1345,15 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
         let existing_id = indexed.or_else(|| if master == 0 { by_path.get(&key(&src.path)).copied() } else { None });
         let mut trashed = false;
+        // the warnings of the XMP sidecar that gave this record its develop settings, if one did
+        let mut from_sidecar = Vec::new();
         let (mut p, origin) = if let Some(found) = existing_id.and_then(|id| s.catalog.photo(id)) {
             trashed = found.deleted;
             // what the job already says of it (a record its file import made or promoted), else
             // what it was before the job: browsed in Local (untouched since or changed, as for an
             // offline original, which never reaches the file import) or in the library
             let origin = origins.record(found.id, Origin::of(found));
+            from_sidecar = made_from_file(&mut sidecar_warnings, origin, master, &src.path);
             ((**found).clone(), origin)
         } else if master != 0 {
             let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
@@ -1408,7 +1415,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // as a file import of it: its file's metadata and capture time, the import defaults
             // (as-shot white balance, embedded lens corrections, the default preset), its XMP
             // sidecar; the catalog's settings and metadata apply on top
-            crate::import::start_from_file(s, &mut p, file, &now);
+            from_sidecar = crate::import::start_from_file(s, &mut p, file, &now).map(|sc| sc.warnings).unwrap_or_default();
             (p, Origin::Created)
         } else {
             let id = s.catalog.alloc_photo_id();
@@ -1450,6 +1457,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         // With no develop text, or text that can't be read, there is nothing to replace them with.
         if !origin.was_there() && matches!(settings, Some(Ok(_))) {
             p.develop = Arc::new(p.camera_defaults());
+        } else {
+            // the sidecar's develop settings stand, so what it named and isn't applied is said
+            warnings.extend(from_sidecar.iter().map(|warning| sidecar_warning(src, warning)));
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
@@ -1565,6 +1575,56 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             "missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// The file import's XMP sidecar warnings, by path ([`key`]).
+fn warnings_by_path(warnings: Vec<crate::import::ImportWarning>) -> HashMap<String, Vec<crate::import::ImportWarning>> {
+    let mut out: HashMap<String, Vec<crate::import::ImportWarning>> = HashMap::new();
+    for warning in warnings {
+        out.entry(key(&warning.path)).or_default().push(warning);
+    }
+    out
+}
+
+/// The sidecar warnings of a record the job's file import made from the file at `path` (a master
+/// whose origin is `Created`), taken once: none for any other record.
+fn made_from_file(
+    warnings: &mut HashMap<String, Vec<crate::import::ImportWarning>>,
+    origin: Origin,
+    master: i64,
+    path: &str,
+) -> Vec<crate::import::ImportWarning> {
+    if origin == Origin::Created && master == 0 { warnings.remove(&key(path)).unwrap_or_default() } else { Vec::new() }
+}
+
+/// A report line for what a catalog photo's XMP sidecar named that LightCraft doesn't apply (the
+/// file import's [`crate::import::ImportWarning`], which the import window words in the UI
+/// language), for a record whose develop settings came from that sidecar. A sidecar can name any
+/// number of unmapped fields: past twelve the rest are an ellipsis.
+fn sidecar_warning(src: &CatalogPhoto, warning: &crate::import::ImportWarning) -> String {
+    use crate::import::{ImportUprightMode as Mode, ImportWarningCode as Code};
+    let what = match warning.code {
+        Code::CameraProfile => {
+            format!("the XMP profile \"{}\" was not applied; colors may differ from Lightroom", warning.profile.as_deref().unwrap_or_default())
+        }
+        Code::UprightGeometry => match warning.mode.unwrap_or(Mode::Unknown) {
+            Mode::Off => "Lightroom geometry was not preserved; the saved transform is ignored because Upright is Off".into(),
+            Mode::Guided => "Lightroom geometry was not preserved; Guided Upright's saved transform is unsupported".into(),
+            Mode::Auto => "Lightroom geometry was not preserved; Auto Upright will be recalculated".into(),
+            Mode::Level => "Lightroom geometry was not preserved; Level Upright will be recalculated".into(),
+            Mode::Vertical => "Lightroom geometry was not preserved; Vertical Upright will be recalculated".into(),
+            Mode::Full => "Lightroom geometry was not preserved; Full Upright will be recalculated".into(),
+            Mode::Unknown => "Lightroom geometry was not preserved; the saved Upright transform is unsupported".into(),
+        },
+        Code::UnmappedXmp => {
+            let mut fields: Vec<&str> = warning.fields.iter().take(12).map(String::as_str).collect();
+            if warning.fields.len() > 12 {
+                fields.push("…");
+            }
+            format!("XMP adjustments were not imported: {}", fields.join(", "))
+        }
+    };
+    format!("image {} XMP sidecar of {}: {what}", src.source_id, src.path)
 }
 
 /// The collection set a Lightroom collection's album goes into (`None`: the top level), and whether that isn't its
