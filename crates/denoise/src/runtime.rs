@@ -7,7 +7,7 @@ use web_time::Instant;
 
 use serde::Serialize;
 
-use crate::manifest::{DenoiserManifest, Gain};
+use crate::manifest::{DenoiserManifest, Domain, Gain};
 use crate::run::{Error, TileRunner};
 
 /// What `self_test` found.
@@ -17,7 +17,7 @@ pub struct SelfTest {
     pub ok: bool,
     /// Milliseconds to load and optimise the model.
     pub load_ms: f64,
-    /// Median milliseconds to run one tile.
+    /// Median milliseconds to run one tile, summed over the threads that shared it: about its time on one thread.
     pub tile_ms: f64,
     /// Megapixels of picture one tile covers, for estimating a whole photo's time.
     pub tile_megapixels: f64,
@@ -39,7 +39,15 @@ impl CpuRunner {
         crate::manifest::validate(manifest).map_err(|e| Error::Load(e.to_string()))?;
         let started = Instant::now();
         let net = crate::onnx::read(path).map_err(|e| Error::Load(e.to_string()))?;
-        let runner = crate::cpu::NetRunner::new(&net, manifest.tile as usize).map_err(|e| Error::Load(e.to_string()))?;
+        if net.in_channels != manifest.domain.in_channels() {
+            return Err(Error::Load(format!("the model takes {} planes, the description says {}", net.in_channels, manifest.domain.in_channels())));
+        }
+        let tile = manifest.tile as usize;
+        let runner = crate::cpu::NetRunner::new(&net, tile).map_err(|e| Error::Load(e.to_string()))?;
+        let promised = manifest.domain.scale().saturating_mul(tile);
+        if runner.out_side() != promised {
+            return Err(Error::Load(format!("the model gives {} pixels across for a tile, the description promises {promised}", runner.out_side())));
+        }
         Ok(Self { runner, manifest: manifest.clone(), load_ms: started.elapsed().as_secs_f64() * 1e3 })
     }
     pub fn manifest(&self) -> &DenoiserManifest {
@@ -51,8 +59,20 @@ impl CpuRunner {
     pub fn bytes_per_tile(&self) -> usize {
         self.runner.bytes_per_tile()
     }
+    /// Side of the output of one tile in pixels: `2·tile` for Bayer to RGB, `tile` for RGB to RGB, `4·tile` for an
+    /// upscaler.
+    pub fn out_side(&self) -> usize {
+        self.runner.out_side()
+    }
+    /// The installation self-test, its two tiles spread over the current Rayon pool like [`Self::run_wide`]: one tile
+    /// on one thread takes minutes on an older CPU. `tile_ms` is then the time summed over the threads.
     pub fn self_test(&self) -> SelfTest {
-        self_test(self, &self.manifest, self.load_ms)
+        check(&|input| self.run_wide(input), &self.manifest, self.load_ms)
+    }
+    /// One tile on every thread of the current Rayon pool, for a tile that is waited on: the same values as
+    /// [`TileRunner::run`], and the time it took summed over the threads (ms), about its time on one thread.
+    pub fn run_wide(&self, input: &[f32]) -> Result<(Vec<f32>, f64), Error> {
+        self.runner.run_wide(input)
     }
 }
 impl TileRunner for CpuRunner {
@@ -60,57 +80,58 @@ impl TileRunner for CpuRunner {
         self.runner.run(input)
     }
 }
+#[cfg(test)]
 fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64) -> SelfTest {
+    let timed = |input: &[f32]| {
+        let started = Instant::now();
+        runner.run(input).map(|out| (out, started.elapsed().as_secs_f64() * 1000.0))
+    };
+    check(&timed, manifest, load_ms)
+}
+/// The self-test with `run` giving a tile's answer and the milliseconds it took.
+fn check(run: &dyn Fn(&[f32]) -> Result<(Vec<f32>, f64), Error>, manifest: &DenoiserManifest, load_ms: f64) -> SelfTest {
     let t = manifest.tile as usize;
     let mut checks: Vec<(String, bool)> = Vec::new();
-    let (input, base) = test_tile(t);
+    let domain = manifest.domain;
+    let (input, base) = test_tile_for(domain, t);
     let (mut times, mut scale) = (Vec::new(), 0.0f64);
-    let mut run = || {
-        let started = Instant::now();
-        let r = runner.run(&input);
-        times.push(started.elapsed().as_secs_f64() * 1000.0);
-        r
+    let mut timed = || {
+        run(&input).map(|(out, ms)| {
+            times.push(ms);
+            out
+        })
     };
-    let (a, b) = (run(), run());
+    let (a, b) = (timed(), timed());
     match (&a, &b) {
         (Ok(a), Ok(b)) => {
-            checks.push((format!("gives {} finite numbers per tile", a.len()), true));
+            let expected = 3 * (domain.scale() * t) * (domain.scale() * t);
+            checks.push((
+                format!("gives {expected} finite numbers per tile (gave {})", a.len()),
+                a.len() == expected && a.iter().all(|v| v.is_finite()),
+            ));
             checks.push((
                 "gives the same answer for the same tile".into(),
                 a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1e-4 * x.abs().max(y.abs()).max(1e-9)),
             ));
-            let side = 2 * t;
+            let scale_px = domain.scale();
             let mean_in = base.iter().map(|&v| f64::from(v)).sum::<f64>() / base.len().max(1) as f64;
             let mean_out = a.iter().map(|&v| f64::from(v)).sum::<f64>() / a.len().max(1) as f64;
             scale = if mean_in > 0.0 { mean_out / mean_in } else { 0.0 };
-            if let Gain::MatchMean { nominal, max_deviation } = manifest.gain {
-                let ratio = scale / f64::from(nominal);
-                let tolerance = f64::from(max_deviation).max(0.05) * 4.0;
-                checks.push((format!("its scale is the {nominal:.3e} the description says (found {scale:.3e})"), (ratio - 1.0).abs() <= tolerance));
-            }
-            // noise left after bringing the answer back to the input's scale, against the noise that went in
-            let g = if scale > 0.0 { 1.0 / scale } else { 1.0 };
-            let (mut noise_in, mut noise_out, mut n_in, mut n_out) = (0.0f64, 0.0f64, 0usize, 0usize);
-            for (i, (&v, &s)) in input.iter().zip(base.iter().cycle()).enumerate() {
-                // centre of each plane only: edges are the model's guess
-                let (x, y) = ((i % (t * t)) % t, (i % (t * t)) / t);
-                if x >= t / 4 && x < 3 * t / 4 && y >= t / 4 && y < 3 * t / 4 {
-                    noise_in += f64::from(v - s).powi(2);
-                    n_in += 1;
+            match manifest.gain {
+                Gain::MatchMean { nominal, max_deviation } => {
+                    let ratio = scale / f64::from(nominal);
+                    let tolerance = f64::from(max_deviation).max(0.05) * 4.0;
+                    checks
+                        .push((format!("its scale is the {nominal:.3e} the description says (found {scale:.3e})"), (ratio - 1.0).abs() <= tolerance));
                 }
+                // nothing brings its answer back to the input's scale, so it must give it already
+                Gain::None => checks.push((format!("keeps the picture's brightness (found {scale:.3} times)"), (0.8..=1.25).contains(&scale))),
             }
-            for c in 0..3 {
-                for y in side / 4..3 * side / 4 {
-                    for x in side / 4..3 * side / 4 {
-                        if let (Some(&o), Some(&s)) = (a.get(c * side * side + y * side + x), base.get((y / 2) * t + x / 2)) {
-                            noise_out += (f64::from(o) * g - f64::from(s)).powi(2);
-                            n_out += 1;
-                        }
-                    }
-                }
-            }
-            let (rms_in, rms_out) = ((noise_in / n_in.max(1) as f64).sqrt(), (noise_out / n_out.max(1) as f64).sqrt());
-            checks.push((format!("takes noise down (from {rms_in:.4} to {rms_out:.4})"), rms_out < 0.8 * rms_in));
+            checks.push(if domain == Domain::RgbToRgb4x {
+                follows_the_picture(run, t)
+            } else {
+                takes_noise_down(&input, &base, a, t, scale_px, scale)
+            });
         }
         (Err(e), _) | (_, Err(e)) => checks.push((format!("runs: {e}"), false)),
     }
@@ -119,15 +140,87 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
         ok: !checks.is_empty() && checks.iter().all(|(_, ok)| *ok),
         load_ms,
         tile_ms: times.get(times.len() / 2).copied().unwrap_or(0.0),
-        tile_megapixels: (2 * t * 2 * t) as f64 / 1e6,
+        tile_megapixels: (domain.scale() * t * domain.scale() * t) as f64 / 1e6,
         scale,
         checks,
     }
 }
 
+/// The square of the central half of a `side × side` plane: a model's guess at its tile's edges is not judged.
+fn centre(side: usize) -> std::ops::Range<usize> {
+    side / 4..3 * side / 4
+}
+
+/// A denoiser's check: the noise left in its answer `out` (brought back to the input's scale), against the noise
+/// that went in.
+fn takes_noise_down(input: &[f32], base: &[f32], out: &[f32], t: usize, scale_px: usize, scale: f64) -> (String, bool) {
+    let side = scale_px * t;
+    let g = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+    let (mut noise_in, mut noise_out, mut n_in, mut n_out) = (0.0f64, 0.0f64, 0usize, 0usize);
+    for (i, (&v, &s)) in input.iter().zip(base.iter().cycle()).enumerate() {
+        let (x, y) = ((i % (t * t)) % t, (i % (t * t)) / t);
+        if centre(t).contains(&x) && centre(t).contains(&y) {
+            noise_in += f64::from(v - s).powi(2);
+            n_in += 1;
+        }
+    }
+    for c in 0..3 {
+        for y in centre(side) {
+            for x in centre(side) {
+                if let (Some(&o), Some(&s)) = (out.get(c * side * side + y * side + x), base.get((y / scale_px) * t + x / scale_px)) {
+                    noise_out += (f64::from(o) * g - f64::from(s)).powi(2);
+                    n_out += 1;
+                }
+            }
+        }
+    }
+    let (rms_in, rms_out) = ((noise_in / n_in.max(1) as f64).sqrt(), (noise_out / n_out.max(1) as f64).sqrt());
+    (format!("takes noise down (from {rms_in:.4} to {rms_out:.4})"), rms_out < 0.8 * rms_in)
+}
+
+/// How far an upscaler's answer, averaged back down to the tile's size, may stray from what went in: this fraction
+/// of how much the picture itself varies. A flat grey strays by about all of it; a faithful upscaler by at most the
+/// noise it takes out, about 0.27 of it on the check tile (`realesr-general-x4v3`: 0.26).
+const UPSCALE_STRAY: f64 = 0.5;
+
+/// An upscaler's check: run on the black-to-white [`check_tile_for`], its `4·t` answer averaged back down over `4 × 4`
+/// blocks keeps to the input.
+fn follows_the_picture(run: &dyn Fn(&[f32]) -> Result<(Vec<f32>, f64), Error>, t: usize) -> (String, bool) {
+    let k = Domain::RgbToRgb4x.scale();
+    let side = k * t;
+    let input = check_tile_for(Domain::RgbToRgb4x, t);
+    let out = match run(&input) {
+        Ok((out, _)) => out,
+        Err(e) => return (format!("runs on a black-to-white tile: {e}"), false),
+    };
+    let mean = input.iter().map(|&v| f64::from(v)).sum::<f64>() / input.len().max(1) as f64;
+    let (mut spread, mut off, mut n) = (0.0f64, 0.0f64, 0usize);
+    for c in 0..3 {
+        for y in centre(t) {
+            for x in centre(t) {
+                let Some(&v) = input.get(c * t * t + y * t + x) else { continue };
+                let block: f64 =
+                    (0..k * k).filter_map(|d| out.get(c * side * side + (k * y + d / k) * side + k * x + d % k)).map(|&o| f64::from(o)).sum::<f64>()
+                        / (k * k) as f64;
+                spread += (f64::from(v) - mean).powi(2);
+                off += (block - f64::from(v)).powi(2);
+                n += 1;
+            }
+        }
+    }
+    let (spread, off) = ((spread / n.max(1) as f64).sqrt(), (off / n.max(1) as f64).sqrt());
+    (format!("keeps to the picture (off by {off:.4} where it varies by {spread:.4})"), n > 0 && off <= UPSCALE_STRAY * spread)
+}
+
 /// A deterministic test tile: four planes of a smooth gradient with noise on top, and the gradient alone for one
 /// plane (`tile × tile`).
 pub fn test_tile(t: usize) -> (Vec<f32>, Vec<f32>) {
+    test_tile_for(crate::manifest::Domain::BayerToRgb, t)
+}
+
+/// [`test_tile`] for a model of `domain`: its number of planes (four Bayer planes, or three `[R, G, B]` planes).
+pub fn test_tile_for(domain: crate::manifest::Domain, t: usize) -> (Vec<f32>, Vec<f32>) {
+    let planes = domain.in_channels();
     if t == 0 || t > 2048 {
         return (Vec::new(), Vec::new());
     }
@@ -139,7 +232,7 @@ pub fn test_tile(t: usize) -> (Vec<f32>, Vec<f32>) {
         (seed >> 8) as f32 / (1u32 << 24) as f32
     };
     let base: Vec<f32> = (0..t * t).map(|i| 0.12 + 0.3 * (((i % t) + (i / t)) as f32 / (2 * t) as f32)).collect();
-    let input = (0..4 * t * t)
+    let input = (0..planes * t * t)
         .map(|i| {
             // sum of four uniforms: close to Gaussian, deviation 0.0577 × 2 before scaling
             let n = next() + next() + next() + next() - 2.0;
@@ -153,6 +246,12 @@ pub fn test_tile(t: usize) -> (Vec<f32>, Vec<f32>) {
 /// mid-greys — a noisy ramp from black to white across the tile, a flat black corner and a clipped white one (four
 /// planes of `tile × tile`).
 pub fn check_tile(t: usize) -> Vec<f32> {
+    check_tile_for(crate::manifest::Domain::BayerToRgb, t)
+}
+
+/// [`check_tile`] for a model of `domain`: its number of planes.
+pub fn check_tile_for(domain: crate::manifest::Domain, t: usize) -> Vec<f32> {
+    let planes = domain.in_channels();
     if t == 0 || t > 2048 {
         return Vec::new();
     }
@@ -164,7 +263,7 @@ pub fn check_tile(t: usize) -> Vec<f32> {
         (seed >> 8) as f32 / (1u32 << 24) as f32
     };
     let (edge, span) = ((t / 8).max(1), (2 * t).saturating_sub(2).max(1) as f32);
-    (0..4 * t * t)
+    (0..planes * t * t)
         .map(|i| {
             let (x, y) = ((i % (t * t)) % t, (i % (t * t)) / t);
             let n = next() + next() + next() + next() - 2.0;
@@ -343,6 +442,137 @@ mod tests {
         }
         assert!(CpuRunner::load(&std::env::temp_dir().join("does-not-exist.onnx"), &manifest(64, 1.0)).is_err());
         let _ = std::fs::remove_file(p);
+    }
+
+    fn rgb_manifest(tile: u32) -> DenoiserManifest {
+        DenoiserManifest { domain: Domain::RgbToRgb, gain: Gain::None, ..manifest(tile, 1.0) }
+    }
+
+    #[test]
+    fn an_rgb_to_rgb_model_loads_runs_at_the_same_size_and_passes_the_self_test() {
+        let p = temp_model("rgb", &crate::synthetic::rgb_smoothing_onnx(64));
+        let r = CpuRunner::load(&p, &rgb_manifest(64)).unwrap();
+        assert_eq!(r.out_side(), 64);
+        let (input, base) = test_tile_for(Domain::RgbToRgb, 64);
+        assert_eq!((input.len(), base.len()), (3 * 64 * 64, 64 * 64));
+        assert_eq!(r.run(&input).unwrap().len(), 3 * 64 * 64);
+        let t = r.self_test();
+        assert!(t.ok, "{t:?}");
+        assert!((t.tile_megapixels - 64.0 * 64.0 / 1e6).abs() < 1e-12);
+        assert!(t.checks.iter().any(|(c, ok)| c.contains("takes noise down") && *ok), "{t:?}");
+        // a Bayer manifest over an RGB model, and the other way round, are refused
+        assert!(CpuRunner::load(&p, &manifest(64, 1.0)).is_err());
+        let q = temp_model("bayer-as-rgb", &tiny_model(64, 1.0));
+        assert!(CpuRunner::load(&q, &rgb_manifest(64)).is_err());
+        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(q);
+    }
+
+    fn upscale_manifest(tile: u32) -> DenoiserManifest {
+        DenoiserManifest { domain: Domain::RgbToRgb4x, gain: Gain::None, ..manifest(tile, 1.0) }
+    }
+
+    #[test]
+    fn an_upscaler_loads_at_four_times_the_size_and_only_as_an_upscaler() {
+        let p = temp_model("upscaler", &crate::synthetic::upscaler_onnx(8, 1, 4, 3));
+        let r = CpuRunner::load(&p, &upscale_manifest(64)).unwrap();
+        assert_eq!(r.out_side(), 256);
+        let (input, _) = test_tile_for(Domain::RgbToRgb4x, 64);
+        assert_eq!(r.run(&input).unwrap().len(), 3 * 256 * 256);
+        // described as a denoiser for finished pictures it promises the wrong size; a denoiser is no upscaler
+        let e = CpuRunner::load(&p, &rgb_manifest(64)).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains("promises 64"), "{e}");
+        let q = temp_model("rgb-as-upscaler", &crate::synthetic::rgb_smoothing_onnx(64));
+        assert!(CpuRunner::load(&q, &upscale_manifest(64)).is_err());
+        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(q);
+    }
+
+    /// The real `realesr-general-x4v3.onnx` export (sha256 `09b757ac…`) at `LC_SR_MODEL` passes the installation
+    /// self-test as an upscaler.
+    #[test]
+    #[ignore = "needs LC_SR_MODEL: the realesr-general-x4v3 ONNX export"]
+    fn the_real_upscaler_passes_its_self_test() {
+        let model = std::env::var_os("LC_SR_MODEL").expect("set LC_SR_MODEL");
+        let r = CpuRunner::load(std::path::Path::new(&model), &upscale_manifest(64)).unwrap();
+        let t = r.self_test();
+        eprintln!("{t:?}");
+        assert!(t.ok, "{t:?}");
+    }
+
+    #[test]
+    fn an_upscalers_self_test_asks_it_to_keep_to_the_picture_not_to_denoise() {
+        // every pixel becomes a 4 × 4 block: no noise taken out, but exactly the picture, larger
+        struct Repeat(usize);
+        impl TileRunner for Repeat {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                let (t, big) = (self.0, 4 * self.0);
+                Ok((0..3 * big * big).map(|k| input[(k / (big * big)) * t * t + (k % (big * big)) / big / 4 * t + k % big / 4]).collect())
+            }
+        }
+        let t = self_test(&Repeat(32), &upscale_manifest(32), 0.0);
+        assert!(t.ok, "{t:?}");
+        assert!(t.checks.iter().any(|(c, ok)| c.contains("keeps to the picture") && *ok), "{t:?}");
+        assert!((t.tile_megapixels - 128.0 * 128.0 / 1e6).abs() < 1e-12);
+        // a flat grey of the right size and brightness is not the picture
+        struct Flat(usize);
+        impl TileRunner for Flat {
+            fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(vec![0.27; 3 * 16 * self.0 * self.0])
+            }
+        }
+        let t = self_test(&Flat(32), &upscale_manifest(32), 0.0);
+        assert!(!t.ok && t.checks.iter().any(|(c, ok)| c.contains("keeps to the picture") && !*ok), "{t:?}");
+        // the picture's own size is not four times it
+        let t = self_test(&Repeat(8), &upscale_manifest(32), 0.0);
+        assert!(!t.ok, "{t:?}");
+    }
+
+    #[test]
+    fn an_rgb_model_that_does_nothing_fails_the_noise_check() {
+        struct Same;
+        impl TileRunner for Same {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(input.to_vec())
+            }
+        }
+        let t = self_test(&Same, &rgb_manifest(32), 0.0);
+        assert!(!t.ok && t.checks.iter().any(|(c, ok)| c.contains("noise") && !*ok), "{t:?}");
+    }
+
+    #[test]
+    fn an_rgb_model_that_brightens_or_gives_the_wrong_size_fails_its_self_test() {
+        // it denoises (a 3 × 3 mean), but doubles the picture: nothing brings a `gain: none` model back to scale
+        struct Bright(usize, f32, usize);
+        impl TileRunner for Bright {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                let t = self.0;
+                let mut out = vec![0f32; 3 * t * t];
+                for c in 0..3 {
+                    for y in 0..t {
+                        for x in 0..t {
+                            let (mut sum, mut n) = (0f32, 0f32);
+                            for (dy, dx) in (-1i32..=1).flat_map(|dy| (-1i32..=1).map(move |dx| (dy, dx))) {
+                                let (yy, xx) = (y as i32 + dy, x as i32 + dx);
+                                if yy >= 0 && xx >= 0 && (yy as usize) < t && (xx as usize) < t {
+                                    sum += input[c * t * t + yy as usize * t + xx as usize];
+                                    n += 1.0;
+                                }
+                            }
+                            out[c * t * t + y * t + x] = sum / n * self.1;
+                        }
+                    }
+                }
+                out.truncate(out.len().saturating_sub(self.2));
+                Ok(out)
+            }
+        }
+        let fine = self_test(&Bright(32, 1.0, 0), &rgb_manifest(32), 0.0);
+        assert!(fine.ok, "a model that denoises and keeps the scale passes: {fine:?}");
+        let bright = self_test(&Bright(32, 2.0, 0), &rgb_manifest(32), 0.0);
+        assert!(!bright.ok && bright.checks.iter().any(|(c, ok)| c.contains("brightness") && !*ok), "{bright:?}");
+        let short = self_test(&Bright(32, 1.0, 5), &rgb_manifest(32), 0.0);
+        assert!(!short.ok && short.checks.iter().any(|(c, ok)| c.contains("finite numbers") && !*ok), "{short:?}");
     }
 
     #[test]

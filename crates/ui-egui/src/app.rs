@@ -104,6 +104,7 @@ impl LightcraftApp {
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
             merge: merge::MergeState::default(),
+            enhance: Default::default(),
             import: None,
             scan: None,
             waiting_import: Default::default(),

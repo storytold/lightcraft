@@ -1,19 +1,27 @@
-//! Single-thread CPU execution of the checked denoise network.
+//! CPU execution of a checked network (a denoiser, or the compact upscaler), one tile per thread.
 //!
 //! Convolutions lower at most 256 spatial positions at a time, then use faer's safe views over pure-Rust GEMM.
-//! No inner thread pool: `run::denoise_bayer` already runs tiles on the application's Rayon pool. Tensor lifetimes
-//! are planned once; buffers and im2col storage are recycled between calls, independently for concurrent callers.
+//! No inner thread pool for a picture's tiles: `run::denoise_bayer` already runs them on the application's Rayon pool.
+//! A single tile that is waited on (the GPU set-up's check tile) can instead spread its blocks of positions over the
+//! pool with [`NetRunner::run_wide`]; each block is computed exactly as in [`TileRunner::run`], so both give the same
+//! values. Tensor lifetimes are planned once; buffers and im2col storage are recycled between calls, independently
+//! for concurrent callers.
 
-use crate::net::{Net, NetError, Op};
+use crate::net::{Activation, Net, NetError, Op};
 use crate::run::{Error, TileRunner};
 use faer::{Parallelism, mat};
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 const BLOCK: usize = 256;
-/// Cap all tensor buffers and convolution scratch for one tile together (512 MiB).
-const MAX_VALUES: usize = 128 * 1024 * 1024;
+/// Cap all tensor buffers and convolution scratch for one tile together (768 MiB: the RGB model at a 768 tile needs
+/// about 515 MiB).
+const MAX_VALUES: usize = 192 * 1024 * 1024;
 const MAX_TILE: usize = 2048;
 const MAX_IDLE: usize = 1;
+/// Blocks a wide convolution computes before it copies them out, so its extra memory stays a few blocks per thread.
+const WIDE_GROUP: usize = 64;
 
 type Result<T> = std::result::Result<T, NetError>;
 fn bad(why: &str) -> NetError {
@@ -35,8 +43,12 @@ fn sources(op: &Op) -> (usize, Option<usize>) {
     match op {
         Op::Conv(c) => (c.src, c.src2),
         Op::ConvT2(c) => (c.src, None),
-        Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => (*src, None),
+        Op::Add { a, b } => (*a, Some(*b)),
+        Op::MaxPool2 { src } | Op::DepthToSpace { src, .. } | Op::PRelu { src, .. } | Op::Upsample { src, .. } | Op::Clip { src, .. } => (*src, None),
     }
+}
+fn scaled(side: usize, factor: usize) -> Result<usize> {
+    side.checked_mul(factor).ok_or_else(|| bad("size overflow"))
 }
 #[derive(Clone, Copy)]
 struct Tensor {
@@ -66,15 +78,24 @@ pub struct NetRunner {
 }
 
 impl NetRunner {
+    /// A runner for a denoiser or an upscaler: four Bayer planes of `tile × tile` in and RGB at twice the size out, or
+    /// RGB in and RGB at the same size (a denoiser) or four times the size (an upscaler) out.
     pub fn new(net: &Net, tile: usize) -> Result<Self> {
-        if tile == 0
-            || tile > MAX_TILE
-            || !net.fits_tile(tile)
-            || net.in_channels != 4
-            || net.out_channels() != 3
-            || net.shape(0).is_none_or(|s| s.channels != net.in_channels)
+        // the output's resolution level: -1 twice the input's size, 0 the same, -2 four times
+        let rgb_levels = [0, -2];
+        if net.out_channels() != 3
+            || !((net.in_channels == 4 && net.fits_tile(tile)) || (net.in_channels == 3 && rgb_levels.iter().any(|&l| net.fits_tile_at(tile, l))))
         {
-            return Err(bad("the tile or Bayer-to-RGB contract does not fit the network"));
+            return Err(bad("the tile or the Bayer-to-RGB / RGB-to-RGB contract does not fit the network"));
+        }
+        Self::for_tile(net, tile)
+    }
+
+    /// A runner for any network whose pooling divides a `tile × tile` input; what the input and output channels mean
+    /// is the caller's to check.
+    pub fn for_tile(net: &Net, tile: usize) -> Result<Self> {
+        if tile == 0 || tile > MAX_TILE || !net.pools_evenly(tile) || net.shape(0).is_none_or(|s| s.channels != net.in_channels) {
+            return Err(bad("the tile does not fit the network"));
         }
         let mut last = vec![0; net.ops().len() + 1];
         for (i, op) in net.ops().iter().enumerate() {
@@ -100,14 +121,22 @@ impl NetRunner {
                     }
                     (c.cout, a.side)
                 }
-                Op::ConvT2(c) => (c.cout, a.side.checked_mul(2).ok_or_else(|| bad("size overflow"))?),
+                Op::ConvT2(c) => (c.cout, scaled(a.side, 2)?),
                 Op::MaxPool2 { .. } => {
                     if a.side < 2 || !a.side.is_multiple_of(2) {
                         return Err(bad("pooling does not divide the tile"));
                     }
                     (a.channels, a.side / 2)
                 }
-                Op::DepthToSpace2 { .. } => (a.channels / 4, a.side.checked_mul(2).ok_or_else(|| bad("size overflow"))?),
+                Op::DepthToSpace { block, .. } => (a.channels / block.saturating_mul(*block).max(1), scaled(a.side, *block)?),
+                Op::Upsample { factor, .. } => (a.channels, scaled(a.side, *factor)?),
+                Op::Add { .. } => {
+                    if src2.and_then(|s| tensors.get(s)).is_none_or(|b| b.side != a.side || b.channels != a.channels) {
+                        return Err(bad("a sum of tensors of different shapes"));
+                    }
+                    (a.channels, a.side)
+                }
+                Op::PRelu { .. } | Op::Clip { .. } => (a.channels, a.side),
             };
             let n = count(channels, side)?;
             let slot = busy
@@ -166,6 +195,14 @@ impl NetRunner {
     pub fn net(&self) -> &Net {
         &self.plan.net
     }
+    /// Channels of the output (3).
+    pub fn out_channels(&self) -> usize {
+        self.plan.tensors.last().map_or(0, |t| t.channels)
+    }
+    /// Side of the output in pixels (`2·tile` for Bayer to RGB, `tile` for RGB to RGB).
+    pub fn out_side(&self) -> usize {
+        self.plan.tensors.last().map_or(0, |t| t.side)
+    }
     pub fn bytes_per_tile(&self) -> usize {
         (self.plan.sizes.iter().sum::<usize>() + self.plan.lower + self.plan.product) * 4
     }
@@ -179,7 +216,9 @@ impl NetRunner {
             product: zeros(self.plan.product)?,
         })
     }
-    fn execute(&self, input: &[f32], w: &mut Workspace) -> Result<Vec<f32>> {
+    /// With `wide`, convolutions spread their blocks over the Rayon pool and the time the work took on its threads
+    /// is added to it.
+    fn execute(&self, input: &[f32], w: &mut Workspace, wide: Option<&AtomicU64>) -> Result<Vec<f32>> {
         let first = self.plan.tensors.first().ok_or_else(|| bad("no input"))?;
         let want = count(first.channels, first.side)?;
         w.buffers.first_mut().and_then(|b| b.get_mut(..want)).ok_or_else(|| bad("missing input buffer"))?.copy_from_slice(input);
@@ -204,22 +243,27 @@ impl NetRunner {
             let (a, shape) = get(src)?;
             let b = src2.map(get).transpose()?.map(|v| v.0);
             let dest = dest.get_mut(..count(out.channels, out.side)?).ok_or_else(|| bad("short output buffer"))?;
-            match op {
-                Op::Conv(c) => conv(c, a, b, shape.side, dest, &mut w.lower, &mut w.product)?,
-                Op::ConvT2(c) => up(
-                    c,
-                    a,
-                    shape.side,
-                    dest,
-                    self.plan.up_weights.get(i).and_then(Option::as_deref).ok_or_else(|| bad("missing up weights"))?,
-                    &mut w.lower,
-                    &mut w.product,
-                )?,
-                Op::MaxPool2 { .. } => pool(a, shape.side, dest)?,
-                Op::DepthToSpace2 { .. } => shuffle(a, shape.side, dest)?,
+            let up_weights = || self.plan.up_weights.get(i).and_then(Option::as_deref).ok_or_else(|| bad("missing up weights"));
+            match (op, wide) {
+                (Op::Conv(c), None) => conv(c, a, b, shape.side, dest, &mut w.lower, &mut w.product)?,
+                (Op::Conv(c), Some(busy)) => conv_wide(c, a, b, shape.side, dest, busy)?,
+                (Op::ConvT2(c), None) => up(c, a, shape.side, dest, up_weights()?, &mut w.lower, &mut w.product)?,
+                (Op::ConvT2(c), Some(busy)) => up_wide(c, a, shape.side, dest, up_weights()?, busy)?,
+                (Op::MaxPool2 { .. }, _) => pool(a, shape.side, dest)?,
+                (Op::DepthToSpace { block, .. }, _) => shuffle(a, shape.side, *block, dest)?,
+                (Op::PRelu { slope, .. }, _) => prelu(a, shape.side, slope, dest)?,
+                (Op::Upsample { factor, .. }, _) => upsample(a, shape.side, *factor, dest)?,
+                (Op::Add { .. }, _) => add(a, b.ok_or_else(|| bad("a sum without its second tensor"))?, dest)?,
+                (Op::Clip { min, max, .. }, _) => clip(a, *min, *max, dest)?,
             }
+            let checked = web_time::Instant::now();
             if dest.iter().any(|v| !v.is_finite()) {
                 return Err(bad("the model produced non-finite values"));
+            }
+            if let Some(busy) = wide {
+                // the wide convolutions counted their own work; the rest ran here, on one thread
+                let here = if matches!(op, Op::Conv(_) | Op::ConvT2(_)) { checked } else { started };
+                busy.fetch_add(nanos(here.elapsed()), Ordering::Relaxed);
             }
             if profile {
                 eprintln!("[denoise-cpu] layer {i}: {}x{}x{} {:.2} ms", out.channels, out.side, out.side, started.elapsed().as_secs_f64() * 1e3);
@@ -232,15 +276,24 @@ impl NetRunner {
         Ok(out)
     }
 }
-impl TileRunner for NetRunner {
-    fn run(&self, input: &[f32]) -> std::result::Result<Vec<f32>, Error> {
+impl NetRunner {
+    /// One tile with its blocks spread over the current Rayon pool, for a single tile that is waited on (the GPU
+    /// set-up's check tile). Gives the same values as [`TileRunner::run`], and the time the work took summed over the
+    /// threads, in ms: about what the tile takes on one thread, somewhat more where threads share a core or some cores
+    /// are slower (an M4 Pro sums 8.5 s for a 768 px RGB tile that takes 6.1 s on one thread, in 1.0 s).
+    pub fn run_wide(&self, input: &[f32]) -> std::result::Result<(Vec<f32>, f64), Error> {
+        let busy = AtomicU64::new(0);
+        let out = self.run_on(input, Some(&busy))?;
+        Ok((out, busy.load(Ordering::Relaxed) as f64 / 1e6))
+    }
+    fn run_on(&self, input: &[f32], wide: Option<&AtomicU64>) -> std::result::Result<Vec<f32>, Error> {
         let first = self.plan.tensors.first().ok_or_else(|| Error::Runtime("missing input shape".into()))?;
         let want = count(first.channels, first.side).map_err(|e| Error::Runtime(e.to_string()))?;
         if input.len() != want || input.iter().any(|v| !v.is_finite()) {
             return Err(Error::Input("the tile has the wrong size or non-finite values".into()));
         }
         let mut w = self.workspace().map_err(|e| Error::Runtime(e.to_string()))?;
-        let result = self.execute(input, &mut w).map_err(|e| Error::Runtime(e.to_string()));
+        let result = self.execute(input, &mut w, wide).map_err(|e| Error::Runtime(e.to_string()));
         let mut idle = self.idle.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if idle.len() < MAX_IDLE {
             idle.push(w);
@@ -248,9 +301,16 @@ impl TileRunner for NetRunner {
         result
     }
 }
-fn activate(x: f32, bias: f32, alpha: Option<f32>) -> f32 {
-    let x = x + bias;
-    if x < 0.0 { x * alpha.unwrap_or(1.0) } else { x }
+impl TileRunner for NetRunner {
+    fn run(&self, input: &[f32]) -> std::result::Result<Vec<f32>, Error> {
+        self.run_on(input, None)
+    }
+}
+fn nanos(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
+}
+fn activate(x: f32, bias: f32, act: Activation) -> f32 {
+    act.apply(x + bias)
 }
 
 /// All views are over exact, checked slices. The matrix library's assertions therefore never see file-derived sizes.
@@ -315,38 +375,109 @@ fn conv(c: &crate::net::Conv, a: &[f32], b: Option<&[f32]>, side: usize, dest: &
         lower(a, b, side, c.k, start, n, x)?;
         let y = product.get_mut(..c.cout * n).ok_or_else(|| bad("short product storage"))?;
         multiply(&c.weight, x, y, c.cout, k, n)?;
-        for ((row, &bias), out) in y.chunks_exact(n).zip(&c.bias).zip(dest.chunks_exact_mut(pixels)) {
-            let to = out.get_mut(start..start + n).ok_or_else(|| bad("short convolution output"))?;
-            for (d, &v) in to.iter_mut().zip(row) {
-                *d = activate(v, bias, c.leaky);
-            }
+        put_conv(c, y, start, n, pixels, dest)?;
+    }
+    Ok(())
+}
+/// One block's product `y` (`cout × n`, positions `start..start + n`) into `dest`, activated.
+fn put_conv(c: &crate::net::Conv, y: &[f32], start: usize, n: usize, pixels: usize, dest: &mut [f32]) -> Result<()> {
+    for ((row, &bias), out) in y.chunks_exact(n).zip(&c.bias).zip(dest.chunks_exact_mut(pixels)) {
+        let to = out.get_mut(start..start + n).ok_or_else(|| bad("short convolution output"))?;
+        for (d, &v) in to.iter_mut().zip(row) {
+            *d = activate(v, bias, c.activation);
         }
     }
     Ok(())
 }
 fn up(c: &crate::net::ConvT2, a: &[f32], side: usize, dest: &mut [f32], weights: &[f32], scratch: &mut [f32], product: &mut [f32]) -> Result<()> {
     let pixels = side * side;
-    let out_side = 2 * side;
     for start in (0..pixels).step_by(BLOCK) {
         let n = BLOCK.min(pixels - start);
         let x = scratch.get_mut(..c.cin * n).ok_or_else(|| bad("short up input storage"))?;
-        for (to, from) in x.chunks_exact_mut(n).zip(a.chunks_exact(pixels)) {
-            to.copy_from_slice(from.get(start..start + n).ok_or_else(|| bad("short up input"))?);
-        }
+        gather_up(a, start, n, pixels, x)?;
         let y = product.get_mut(..c.cout * 4 * n).ok_or_else(|| bad("short up product storage"))?;
         multiply(weights, x, y, c.cout * 4, c.cin, n)?;
-        for (co, (&bias, out)) in c.bias.iter().zip(dest.chunks_exact_mut(4 * pixels)).enumerate() {
-            for d in 0..4 {
-                let row = y.get((4 * co + d) * n..(4 * co + d + 1) * n).ok_or_else(|| bad("short up product"))?;
-                for (j, &v) in row.iter().enumerate() {
-                    let p = start + j;
-                    let at = (2 * (p / side) + d / 2) * out_side + 2 * (p % side) + d % 2;
-                    *out.get_mut(at).ok_or_else(|| bad("short up output"))? = activate(v, bias, c.leaky);
-                }
+        put_up(c, y, start, n, side, dest)?;
+    }
+    Ok(())
+}
+/// Positions `start..start + n` of every input plane, one row per plane.
+fn gather_up(a: &[f32], start: usize, n: usize, pixels: usize, x: &mut [f32]) -> Result<()> {
+    for (to, from) in x.chunks_exact_mut(n).zip(a.chunks_exact(pixels)) {
+        to.copy_from_slice(from.get(start..start + n).ok_or_else(|| bad("short up input"))?);
+    }
+    Ok(())
+}
+/// One block's product `y` (`4·cout × n`) into `dest` at twice the size, activated.
+fn put_up(c: &crate::net::ConvT2, y: &[f32], start: usize, n: usize, side: usize, dest: &mut [f32]) -> Result<()> {
+    let (pixels, out_side) = (side * side, 2 * side);
+    for (co, (&bias, out)) in c.bias.iter().zip(dest.chunks_exact_mut(4 * pixels)).enumerate() {
+        for d in 0..4 {
+            let row = y.get((4 * co + d) * n..(4 * co + d + 1) * n).ok_or_else(|| bad("short up product"))?;
+            for (j, &v) in row.iter().enumerate() {
+                let p = start + j;
+                let at = (2 * (p / side) + d / 2) * out_side + 2 * (p % side) + d % 2;
+                *out.get_mut(at).ok_or_else(|| bad("short up output"))? = activate(v, bias, c.activation);
             }
         }
     }
     Ok(())
+}
+/// Run `block(start, n, scratch)` for every block of `pixels` positions on the Rayon pool, `WIDE_GROUP` at a time,
+/// and hand each product to `put` in order. Every thread keeps one scratch of `scratch_len` values; the time the
+/// blocks and the copying took is added to `busy`.
+fn wide_blocks(
+    pixels: usize,
+    scratch_len: usize,
+    busy: &AtomicU64,
+    block: impl Fn(usize, usize, &mut [f32]) -> Result<Vec<f32>> + Sync,
+    mut put: impl FnMut(&[f32], usize, usize) -> Result<()>,
+) -> Result<()> {
+    let starts: Vec<usize> = (0..pixels).step_by(BLOCK).collect();
+    for group in starts.chunks(WIDE_GROUP) {
+        let done = group
+            .par_iter()
+            .map_init(Vec::new, |scratch: &mut Vec<f32>, &start| {
+                let began = web_time::Instant::now();
+                if scratch.is_empty() {
+                    *scratch = zeros(scratch_len)?;
+                }
+                let n = BLOCK.min(pixels - start);
+                let y = block(start, n, scratch)?;
+                busy.fetch_add(nanos(began.elapsed()), Ordering::Relaxed);
+                Ok((start, n, y))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let began = web_time::Instant::now();
+        for (start, n, y) in done {
+            put(&y, start, n)?;
+        }
+        busy.fetch_add(nanos(began.elapsed()), Ordering::Relaxed);
+    }
+    Ok(())
+}
+fn conv_wide(c: &crate::net::Conv, a: &[f32], b: Option<&[f32]>, side: usize, dest: &mut [f32], busy: &AtomicU64) -> Result<()> {
+    let pixels = side * side;
+    let k = c.cin * c.k * c.k;
+    let block = |start: usize, n: usize, scratch: &mut [f32]| -> Result<Vec<f32>> {
+        let x = scratch.get_mut(..k * n).ok_or_else(|| bad("short im2col storage"))?;
+        lower(a, b, side, c.k, start, n, x)?;
+        let mut y = zeros(c.cout * n)?;
+        multiply(&c.weight, x, &mut y, c.cout, k, n)?;
+        Ok(y)
+    };
+    wide_blocks(pixels, k.saturating_mul(BLOCK.min(pixels)), busy, block, |y, start, n| put_conv(c, y, start, n, pixels, dest))
+}
+fn up_wide(c: &crate::net::ConvT2, a: &[f32], side: usize, dest: &mut [f32], weights: &[f32], busy: &AtomicU64) -> Result<()> {
+    let pixels = side * side;
+    let block = |start: usize, n: usize, scratch: &mut [f32]| -> Result<Vec<f32>> {
+        let x = scratch.get_mut(..c.cin * n).ok_or_else(|| bad("short up input storage"))?;
+        gather_up(a, start, n, pixels, x)?;
+        let mut y = zeros(c.cout * 4 * n)?;
+        multiply(weights, x, &mut y, c.cout * 4, c.cin, n)?;
+        Ok(y)
+    };
+    wide_blocks(pixels, c.cin.saturating_mul(BLOCK.min(pixels)), busy, block, |y, start, n| put_up(c, y, start, n, side, dest))
 }
 fn pool(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
     let s = side / 2;
@@ -363,21 +494,67 @@ fn pool(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
     }
     Ok(())
 }
-fn shuffle(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
+/// Depth-to-space in CRD order: input plane `b²·c + b·dy + dx` fills the pixels `(b·y + dy, b·x + dx)` of plane `c`.
+fn shuffle(a: &[f32], side: usize, block: usize, dest: &mut [f32]) -> Result<()> {
     let pixels = side * side;
-    for (input, out) in a.chunks_exact(4 * pixels).zip(dest.chunks_exact_mut(4 * pixels)) {
-        for d in 0..4 {
+    let cells = block * block;
+    let out_side = block * side;
+    for (input, out) in a.chunks_exact(cells * pixels).zip(dest.chunks_exact_mut(cells * pixels)) {
+        for d in 0..cells {
+            let (dy, dx) = (d / block, d % block);
             let plane = input.get(d * pixels..(d + 1) * pixels).ok_or_else(|| bad("short shuffle input"))?;
             for (y, row) in plane.chunks_exact(side).enumerate() {
-                let at = (2 * y + d / 2) * 2 * side;
-                let to = out.get_mut(at..at + 2 * side).ok_or_else(|| bad("short shuffle output"))?;
-                for (to, &v) in to.as_chunks_mut::<2>().0.iter_mut().zip(row) {
-                    if let Some(t) = to.get_mut(d % 2) {
+                let at = (block * y + dy) * out_side;
+                let to = out.get_mut(at..at + out_side).ok_or_else(|| bad("short shuffle output"))?;
+                for (to, &v) in to.chunks_exact_mut(block).zip(row) {
+                    if let Some(t) = to.get_mut(dx) {
                         *t = v;
                     }
                 }
             }
         }
+    }
+    Ok(())
+}
+fn prelu(a: &[f32], side: usize, slope: &[f32], dest: &mut [f32]) -> Result<()> {
+    let pixels = side * side;
+    if a.len() != dest.len() || slope.len().checked_mul(pixels) != Some(a.len()) {
+        return Err(bad("a slope per channel does not fit the tensor"));
+    }
+    for ((input, out), &s) in a.chunks_exact(pixels).zip(dest.chunks_exact_mut(pixels)).zip(slope) {
+        for (d, &v) in out.iter_mut().zip(input) {
+            *d = if v < 0.0 { v * s } else { v };
+        }
+    }
+    Ok(())
+}
+fn upsample(a: &[f32], side: usize, factor: usize, dest: &mut [f32]) -> Result<()> {
+    let out_side = factor * side;
+    for (input, out) in a.chunks_exact(side * side).zip(dest.chunks_exact_mut(out_side * out_side)) {
+        for (y, row) in out.chunks_exact_mut(out_side).enumerate() {
+            let from = input.get(y / factor * side..(y / factor + 1) * side).ok_or_else(|| bad("short upsampling input"))?;
+            for (to, &v) in row.chunks_exact_mut(factor).zip(from) {
+                to.fill(v);
+            }
+        }
+    }
+    Ok(())
+}
+fn add(a: &[f32], b: &[f32], dest: &mut [f32]) -> Result<()> {
+    if a.len() != dest.len() || b.len() != dest.len() {
+        return Err(bad("a sum of tensors of different sizes"));
+    }
+    for ((d, &x), &y) in dest.iter_mut().zip(a).zip(b) {
+        *d = x + y;
+    }
+    Ok(())
+}
+fn clip(a: &[f32], min: f32, max: f32, dest: &mut [f32]) -> Result<()> {
+    if a.len() != dest.len() {
+        return Err(bad("a clip of a tensor of another size"));
+    }
+    for (d, &v) in dest.iter_mut().zip(a) {
+        *d = v.max(min).min(max);
     }
     Ok(())
 }

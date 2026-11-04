@@ -177,6 +177,11 @@ impl Session {
         self.denoise.models_dir = dir;
         self.denoise.touch();
     }
+
+    /// Whether this host keeps AI models (the web build doesn't): AI Denoise and Enhance need it.
+    pub fn has_denoise_models_dir(&self) -> bool {
+        self.denoise.models_dir.is_some()
+    }
 }
 
 #[cfg(test)]

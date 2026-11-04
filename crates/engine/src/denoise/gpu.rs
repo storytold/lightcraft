@@ -126,10 +126,18 @@ fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
     best
 }
 
+/// Threads for a single tile that is waited on (the card's check tile, the installation self-test): as many as a job at
+/// full pace may take, and of their own, as the jobs have, so a busy window's renders keep theirs.
+#[cfg(feature = "denoise")]
+pub(super) fn check_pool() -> Result<rayon::ThreadPool, rayon::ThreadPoolBuildError> {
+    let threads = super::Pace::Full.parallel(std::thread::available_parallelism().map_or(1, |n| n.get()), None);
+    rayon::ThreadPoolBuilder::new().num_threads(threads).stack_size(STACK).thread_name(|i| format!("denoise-check-{i}")).build()
+}
+
 /// Set the card up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
 #[cfg(feature = "denoise")]
 pub(super) fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
-    let input = Arc::new(lightcraft_denoise::runtime::check_tile(tile));
+    let input = Arc::new(lightcraft_denoise::runtime::check_tile_for(cpu.manifest().domain, tile));
     let (on_card, net) = (input.clone(), cpu.net().clone());
     let card = move || -> Result<_, String> {
         let runner = lightcraft_gpu::nn::runner(&net, tile)?;
@@ -137,9 +145,18 @@ pub(super) fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path
         let card_ms = card_tile_ms(&runner, &on_card);
         Ok((runner, got, card_ms))
     };
+    // The CPU's answer on the cores a job at full pace may take, so an older CPU doesn't keep the card waiting for
+    // minutes; its time summed over the threads stands for one tile on one thread, which is what the card is compared
+    // with.
     let on_cpu = || {
-        let started = web_time::Instant::now();
-        (cpu.run(&input), started.elapsed().as_secs_f64() * 1000.0)
+        let wide = match check_pool() {
+            Ok(pool) => pool.install(|| cpu.run_wide(&input)),
+            Err(e) => Err(lightcraft_denoise::run::Error::Runtime(format!("could not start the worker threads: {e}"))),
+        };
+        match wide {
+            Ok((want, cpu_ms)) => (Ok(want), cpu_ms),
+            Err(e) => (Err(e), f64::INFINITY),
+        }
     };
     let ((runner, got, card_ms), (want, cpu_ms)) = set_up_card(&path.with_file_name(GPU_SETUP_MARKER), GPU_SETUP_LIMIT, card, on_cpu)?;
     let want = want.map_err(|e| format!("the CPU could not check the GPU: {e}"))?;

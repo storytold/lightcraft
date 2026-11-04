@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Canon CRW decoder shared via craft-libs `craft-crw`; Canon CRW decoded clean-room, 6 bodies verified; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 85% of Adobe's models decode, 39% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (AI: Super Resolution and AI Sharpen 🟡 with an opt-in upscaler, as a rendered TIFF; Raw Details still missing; numbers unchanged)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -97,7 +97,8 @@ search embeddings; generative remove runs in Adobe's cloud.
 | Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured | 🟡 |
 | Depth range mask, Lens Blur | — | ⬜ |
 | AI Denoise | Bayer only, pure-Rust CPU / GPU, user-installed weights | 🟡 |
-| Raw Details, Super Resolution | — | ⬜ |
+| Super Resolution, AI Sharpen | opt-in upscaler (Real-ESRGAN General v3, BSD-3), pure-Rust CPU / GPU; a rendered 16-bit TIFF, so a raw's edits don't carry over ([super-resolution.md](super-resolution.md)) | 🟡 |
+| Raw Details | — | ⬜ |
 | Generative remove, distractions, reflections | — (generative is out of scope: cloud) | ⬜ |
 | Dust detection | ✅ | ✅ |
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
@@ -322,3 +323,4 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-10 | major | Created as progress docs: full re-measure (checklist recount, installed Lightroom 9.6 bundle listing, code counts, catalogs, CI), feature areas with weights, dimensions, AI, stage, calibration; merged ROADMAP's *Where we stand* and *Parity estimate* |
 | 2026-10-14 | minor | RAW: 82% of Adobe's models decode, 36% verified (integration batch 36) |
 | 2026-10-26 | minor | Canon CRW decoder moved to craft-libs as `craft-crw` (shared with the other Craft apps); LightCraft keeps the adapter, the EOS D60 colour work and its records; numbers unchanged |
+| 2026-11-04 | minor | AI table: Super Resolution and AI Sharpen 🟡 (opt-in upscaler, a rendered 16-bit TIFF stacked with the photo); Raw Details stays ⬜; numbers unchanged |

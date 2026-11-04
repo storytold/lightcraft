@@ -30,6 +30,7 @@ pub mod denoise;
 pub mod devices;
 pub mod display;
 pub mod doc_path;
+pub mod enhance;
 mod errors;
 pub mod export;
 pub mod face_download;

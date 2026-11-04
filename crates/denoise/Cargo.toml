@@ -13,6 +13,7 @@ default = []
 runtime = ["dep:faer"]
 # Product-policy switch: absent by default; users may install their own model.
 rawnind-model = ["lightcraft-denoise-core/rawnind-model"]
+realesrgan-model = ["lightcraft-denoise-core/realesrgan-model"]
 
 [dependencies]
 lightcraft-denoise-core = { workspace = true }
