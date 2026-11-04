@@ -657,6 +657,10 @@ fn cached_renders_with_masks_match_uncached() {
             s.wb.mode = WbMode::Custom;
             s.wb.temp = 4300.0;
         }),
+        // a perspective warp, then an old mask (on the corrected frame) with the same coordinates
+        Box::new(|s| s.geometry.vertical = 25.0),
+        Box::new(|s| s.masks[0].on_photo = false),
+        Box::new(|s| s.geometry.vertical = 0.0),
         Box::new(|s| s.masks[1].visible = false),
     ];
     for (i, step) in steps.iter().enumerate() {
