@@ -598,6 +598,7 @@ mod tests {
         "lensfun_download.rs",
         "library.rs",
         "lightroom_archive.rs",
+        "lightroom_job.rs",
         "lightroom_sqlite.rs",
         "memory.rs",
         "model_download.rs",
@@ -607,7 +608,7 @@ mod tests {
     ];
 
     fn opens_files(code: &str) -> bool {
-        ["std::fs::", "File::open", "File::create", "OpenOptions::new"].iter().any(|api| code.contains(api))
+        ["std::fs::", "File::open", "File::create", "OpenOptions::new", "safe_file::write"].iter().any(|api| code.contains(api))
     }
 
     fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

@@ -45,7 +45,9 @@ impl Headless {
         Self { session, progress: None, roots: None }
     }
 
-    /// Configures the automation roots for this headless backend.
+    /// The automation roots of this backend's calls, on the calling thread only: worker threads
+    /// see the process's roots, so a server that hosts agents also needs
+    /// [`confine_process`](lightcraft_engine::file_access::confine_process), as `lightcraft-cli mcp` does.
     pub fn with_automation_roots(mut self, roots: impl Into<Option<Arc<AutomationRoots>>>) -> Self {
         self.roots = roots.into();
         self

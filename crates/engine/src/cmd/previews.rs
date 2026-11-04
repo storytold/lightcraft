@@ -619,6 +619,9 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(existing) = existing else {
         return Err(bad(C, format!("{held} smart preview(s) are in {}: pass existing = move, leave or discard", current.display())));
     };
+    if !matches!(existing, crate::smart::Existing::Leave) {
+        crate::file_access::check_write(&current).map_err(|e| bad(C, e))?;
+    }
     let (moved, failed) = crate::smart::migrate(&current, &new_dir, existing);
     s.smart_previews_dir = custom;
     s.media.smart_dir = Some(new_dir);

@@ -524,11 +524,13 @@ fn image_result_from_bytes(bytes: Vec<u8>, max: Option<u32>, format: &str, save_
     let mut info = meta;
     info["width"] = json!(w);
     info["height"] = json!(h);
+    if let Some(o) = info.as_object_mut() {
+        o.remove("data"); // it is the image block, not a second copy in the text
+    }
     if let Some(p) = save_to {
         info["path"] = json!(p);
     } else if let Some(o) = info.as_object_mut() {
         o.remove("path");
-        o.remove("data");
     }
     ToolResult {
         content: vec![json!({"type": "image", "data": base64_encode(&bytes), "mimeType": mime}), json!({"type": "text", "text": info.to_string()})],

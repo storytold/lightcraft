@@ -213,7 +213,17 @@ fn render_photo_in_memory_succeeds_under_confinement() {
     // Calling render_photo without a path stays in memory and succeeds
     let (error, text, reply) = call(&mut server, "render_photo", json!({}));
     assert!(!error, "render_photo in memory must succeed under confinement: {text}");
-    assert!(reply["result"]["content"].as_array().unwrap().iter().any(|c| c["type"] == "image"));
+    let image = reply["result"]["content"].as_array().unwrap().iter().find(|c| c["type"] == "image").expect("an image block");
+    let png = lightcraft_mcp::base64_decode(image["data"].as_str().unwrap()).unwrap();
+    assert!(lightcraft_codecs::decode(&png, Default::default()).is_ok(), "the image decodes");
+    assert!(!text.contains("\"data\""), "the text doesn't repeat the image: {text}");
+
+    // saved to a file, the text doesn't carry it either
+    let saved = base.join("out/render.png");
+    let (error, text, _) = call(&mut server, "render_photo", json!({"path": s(&saved)}));
+    assert!(!error, "{text}");
+    assert!(saved.is_file());
+    assert!(!text.contains("\"data\""), "the text doesn't repeat the image: {text}");
 
     let _ = std::fs::remove_dir_all(base);
 }
@@ -543,5 +553,38 @@ fn photo_relink_refused_outside_read_root() {
 
     let outside_path = s(&base.join("outside/secret.png"));
     refused(&mut server, "run_command", json!({"command": "photo.relink", "params": {"id": id, "path": outside_path}}), "outside the read root");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn merge_refused_when_the_file_would_land_outside_the_write_root() {
+    let (mut server, base) = confined("merge", true, true);
+    // other pixels: the same bytes would be imported as the same photo
+    let img = lightcraft_raster::Rgba8::from_fn(64, 64, |x, y| [y as u8, x as u8, 32, 255]);
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+    std::fs::write(base.join("in/second.png"), png).unwrap();
+    ok(&mut server, "import", json!({"paths": [s(&base.join("in/photo.png")), s(&base.join("in/second.png"))]}));
+    ok(&mut server, "run_command", json!({"command": "library.selectAll"}));
+    for id in ["merge.hdr", "merge.panorama"] {
+        refused(&mut server, "run_command", json!({"command": id}), "outside the write root");
+    }
+    let names: Vec<_> = std::fs::read_dir(base.join("in")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(!names.iter().any(|n| n.to_string_lossy().ends_with(".dng")), "{names:?}");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn smart_previews_stay_put_unless_their_folder_can_be_written() {
+    let (mut server, base) = confined_with_library("smart-existing", true, true);
+    let new_dir = s(&base.join("out/smart"));
+    for existing in ["move", "discard"] {
+        refused(
+            &mut server,
+            "run_command",
+            json!({"command": "library.smartPreviewsLocation", "params": {"path": new_dir, "existing": existing}}),
+            "outside the write root",
+        );
+    }
+    ok(&mut server, "run_command", json!({"command": "library.smartPreviewsLocation", "params": {"path": new_dir, "existing": "leave"}}));
     let _ = std::fs::remove_dir_all(base);
 }

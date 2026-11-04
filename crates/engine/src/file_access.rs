@@ -274,7 +274,8 @@ fn same_component(a: Component, b: Component) -> bool {
 /// A Windows device name (`CON`, `NUL`, `COM1`… also with an extension), which names no file.
 fn is_device_name(component: &str) -> bool {
     let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
-    let numbered = |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
+    let numbered =
+        |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"));
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
 }
 
@@ -438,7 +439,7 @@ mod tests {
 
     #[test]
     fn device_names() {
-        for d in ["CON", "nul", "Com1", "LPT9.txt", "aux.jpg", "NUL "] {
+        for d in ["CON", "nul", "Com1", "LPT9.txt", "aux.jpg", "NUL ", "COM¹", "lpt³.txt"] {
             assert!(is_device_name(d), "{d}");
         }
         for f in ["console", "com10", "COM0", "lpt", "a.jpg", "nul-x"] {

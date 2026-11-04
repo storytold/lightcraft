@@ -530,3 +530,38 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     inject(Fault::None);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A sidecar link leading out of the automation roots stops the move, and nothing is left behind.
+#[cfg(unix)]
+#[test]
+fn a_sidecar_link_out_of_the_roots_stops_the_move_and_leaves_nothing() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::place;
+    let base = temp_dir("sidecar-link");
+    let (root, dst, outside) = (base.join("root"), base.join("root/dst"), base.join("outside"));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let secret = outside.join("secret.xmp");
+    std::fs::write(&secret, xmp(5)).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    // the source's sidecar is the link
+    let a = root.join("src/a.png");
+    write_png(&a, 1);
+    std::os::unix::fs::symlink(&secret, root.join("src/a.png.xmp")).unwrap();
+    assert!(confine(Some(&roots), || place(&a, &dst, "a.png")).is_err());
+    assert!(!dst.exists(), "refused before anything is placed");
+
+    // a sidecar is already at the destination, and it's the link
+    let b = root.join("src/b.png");
+    write_png(&b, 2);
+    std::fs::write(root.join("src/b.png.xmp"), xmp(1)).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    std::os::unix::fs::symlink(&secret, dst.join("b.png.xmp")).unwrap();
+    assert!(confine(Some(&roots), || place(&b, &dst, "b.png")).is_err());
+    assert!(!dst.join("b.png").exists(), "the placed photo is rolled back");
+
+    assert!(a.is_file() && b.is_file(), "the sources stay");
+    assert_eq!(std::fs::read_to_string(&secret).unwrap(), xmp(5));
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -150,6 +150,11 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
     crate::file_access::check_read(src)?;
     crate::file_access::check_write(src)?;
     crate::file_access::check_write(dir)?;
+    // before anything is placed, so a refusal leaves nothing behind
+    for (sc, _) in sidecars_of(src) {
+        crate::file_access::check_read(&sc)?;
+        crate::file_access::check_write(&sc)?;
+    }
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -170,16 +175,17 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
     let Some(dst) = dst else { return Err(format!("move {}: no free name in {}", src.display(), dir.display())) };
     let mut placed = Placed { src: src.to_path_buf(), dst, sidecars: Vec::new() };
     for (sc, stem_named) in sidecars_of(src) {
-        crate::file_access::check_read(&sc)?;
-        crate::file_access::check_write(&sc)?;
         let sc_ext = sc.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "xmp".into());
         let sc_dst =
             if stem_named { placed.dst.with_extension(&sc_ext) } else { PathBuf::from(format!("{}.{sc_ext}", placed.dst.to_string_lossy())) };
         let r = if sc_dst.exists() {
-            match same_bytes(&sc, &sc_dst) {
+            // one already there is compared, so it has to be readable: a link out of the roots isn't
+            match crate::file_access::check_read(&sc_dst)
+                .and_then(|()| same_bytes(&sc, &sc_dst).map_err(|e| format!("{}: {e} (the original is kept)", sc_dst.display())))
+            {
                 Ok(true) => Ok(false),
                 Ok(false) => Err(format!("a different sidecar is already at {} (the original is kept)", sc_dst.display())),
-                Err(e) => Err(format!("{}: {e} (the original is kept)", sc_dst.display())),
+                Err(e) => Err(e),
             }
         } else {
             link_or_copy(&sc, &sc_dst).map(|()| true).map_err(|e| format!("move {}: {e} (the original is kept)", sc.display()))
