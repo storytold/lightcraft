@@ -2,6 +2,11 @@
 
 ## 2026-10-30
 
+### The pointer stays visible in the Flatpak on GNOME Wayland
+- In the Flatpak on a Wayland desktop without the cursor-shape protocol (GNOME 46, for one), the mouse pointer could
+  vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
+  points at the host's cursor themes, as VectorCraft's does (issue #1657).
+
 ### Lens distortion correction for the Sony A7 III
 - Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
   the A7R IVA's: straight lines stay straight at wide angles (the FE 16–35 F4 ZA at 16 mm shifts detail near the
