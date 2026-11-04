@@ -40,6 +40,10 @@ remains available in the raw property map, and does not prevent the next valid c
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 
+XMP `tiff:Orientation` is projected only for integral codes 1–8. Fractional and out-of-range values are omitted
+from typed metadata while the original properties remain available in All Metadata. A valid EXIF orientation keeps
+precedence over a valid XMP orientation.
+
 When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
 report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
 unmapped adjustments; they do not change the source packet or become catalog edits.
