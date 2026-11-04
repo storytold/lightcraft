@@ -216,6 +216,8 @@ mod cancellation_tests {
 
         assert_eq!(calls.load(Ordering::Relaxed), FILES);
         assert_eq!(results.iter().filter(|(_, result)| result.is_err()).count(), 1);
+        assert_eq!(results[1].0.path, "unreadable.raw");
+        assert!(results[1].1.is_err());
         assert_eq!(results.len(), FILES);
         assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&FILES));
     }
