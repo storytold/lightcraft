@@ -291,6 +291,9 @@ pub struct Playback {
     from_key: Option<u64>,
     /// Times a single photo repeating has started over (each time on a new path).
     reps: u64,
+    /// Where a single repeating photo's last path ended: its new path starts there, so the
+    /// picture does not jump when it starts over.
+    rep_start: Option<View>,
     /// Paused at this time.
     paused_at: Option<f64>,
     ended: bool,
@@ -351,6 +354,7 @@ impl Playback {
             from: None,
             from_key: None,
             reps: 0,
+            rep_start: None,
             paused_at: None,
             ended: false,
             held: None,
@@ -549,7 +553,8 @@ impl Playback {
         let Some(next) = self.upcoming(1).first().copied() else {
             if self.settings.repeat {
                 // a single photo repeating: nothing to change to (its pan and zoom starts again,
-                // on a new path)
+                // on a new path from where the last one ended)
+                self.rep_start = self.motion(self.current()).map(|m| m.end);
                 self.started = now;
                 self.reps = self.reps.wrapping_add(1);
                 return Tick::Idle;
@@ -569,8 +574,16 @@ impl Playback {
             self.started = now;
             self.from = (self.fade_to(new) > 0.0).then_some(old);
             self.from_key = self.from.and(old_key);
+            self.rep_start = None;
         }
         t
+    }
+
+    /// The pan and zoom path of `item` up now (`None` for a title screen): from its key, starting
+    /// where the last path ended when a single photo repeats.
+    fn motion(&self, item: Item) -> Option<Motion> {
+        let m = Motion::new(self.motion_key(item)?, self.settings.pan_and_zoom_amount);
+        Some(Motion { start: self.rep_start.unwrap_or(m.start), ..m })
     }
 
     /// The pan and zoom key of `item` up in the current pass (`None` for a title screen): the
@@ -602,7 +615,7 @@ impl Playback {
             if d > 0.0 { (self.clock(now) - self.started) / d } else { 1.0 }
         };
         let from = self.frame(now).from.and(self.from_key).map(|k| Motion::new(k, amount).at(1.0));
-        PanZoom { current: self.motion_key(current).map(|k| Motion::new(k, amount).at(t)), from }
+        PanZoom { current: self.motion(current).map(|m| m.at(t)), from }
     }
 
     /// Whether pan and zoom moves the current photo at `now`: on, playing (not paused, not a
@@ -677,6 +690,7 @@ impl Playback {
         }
         self.from = None;
         self.from_key = None;
+        self.rep_start = None;
         self.held = None;
         self.started = now;
         if self.paused_at.is_some() {

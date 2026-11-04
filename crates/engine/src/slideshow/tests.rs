@@ -261,8 +261,15 @@ fn pan_and_zoom_paths_change_each_pass_and_hold_in_a_manual_slideshow() {
     // a single photo repeating starts again on a new path
     let mut p = Playback::new(ids(1), None, s.clone(), 9, 0.0).unwrap();
     let first = p.pan_zoom(0.0).current;
+    let ended = p.pan_zoom(4.0).current;
     assert_eq!(p.tick(4.0, all_ready), Tick::Idle);
     assert_ne!(p.pan_zoom(4.0).current, first);
+    assert_eq!(p.pan_zoom(4.0).current, ended, "the new path starts where the last one ended: no jump");
+    let second_end = p.pan_zoom(8.0).current;
+    assert_ne!(second_end, ended, "and goes somewhere new");
+    assert_eq!(p.tick(8.0, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(8.0).current, second_end, "again");
+    assert_ne!(p.pan_zoom(12.0).current, second_end);
     // the amount sets the zoom
     let close = |amount: f64| {
         let p = Playback::new(ids(1), None, PlaybackSettings { pan_and_zoom_amount: amount, ..s.clone() }, 9, 0.0).unwrap();
