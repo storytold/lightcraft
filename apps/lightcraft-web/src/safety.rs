@@ -13,8 +13,8 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::backend::Backend;
 use crate::backup::{
-    ACTIVE_LIBRARY, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_plan, restored_dir_name, tail_len,
-    valid_hash, verify, verify_checksum,
+    ACTIVE_LIBRARY, BackupParts, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_plan, restored_dir_name,
+    tail_len, valid_hash, verify, verify_checksum,
 };
 use crate::files::{Files, LIBRARY_FILES};
 use crate::store::storage_key;
@@ -157,20 +157,20 @@ pub type Deliver = Box<dyn FnOnce(String, web_sys::Blob) -> std::pin::Pin<Box<dy
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
 /// heap) and handed to `deliver`. `names`: content hash → the photo's file name.
 pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>, deliver: Deliver) -> Result<(usize, f64), String> {
-    let parts = js_sys::Array::new();
+    let mut parts = BackupParts::<JsValue>::new();
     let mut zip = ZipWriter::default();
-    let mut bytes = 0f64;
-    let mut add = |zip: &mut ZipWriter, name: &str, data: &[u8]| -> Result<(), String> {
+    let js_bytes = |b: &[u8]| JsValue::from(Uint8Array::from(b));
+    let add = |zip: &mut ZipWriter, parts: &mut BackupParts<JsValue>, name: &str, data: &[u8]| -> Result<(), String> {
         let header = zip.entry(name, data)?;
-        parts.push(&Uint8Array::from(&header[..]));
-        parts.push(&Uint8Array::from(data));
-        bytes += (header.len() + data.len()) as f64;
+        parts.parts.push(js_bytes(&header));
+        parts.parts.push(js_bytes(data));
+        parts.bytes = parts.bytes.saturating_add((header.len() + data.len()) as u64);
         Ok(())
     };
-    add(&mut zip, "README.txt", README.as_bytes())?;
+    add(&mut zip, &mut parts, "README.txt", README.as_bytes())?;
     for name in LIBRARY_FILES {
         if let Some(d) = files.get(name) {
-            add(&mut zip, &format!("library/{name}"), &d)?;
+            add(&mut zip, &mut parts, &format!("library/{name}"), &d)?;
         }
     }
     let mut originals = 0;
@@ -192,10 +192,7 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
                     crc.update(&read_range(&data, at, end).await?);
                     at = end;
                 }
-                let header = zip.entry_with_crc(&original_entry(&hash, name), size, crc.finalize())?;
-                parts.push(&Uint8Array::from(&header[..]));
-                parts.push(&data);
-                bytes += header.len() as f64 + size as f64;
+                parts.push_original(&mut zip, &original_entry(&hash, name), data.into(), size, crc.finalize(), js_bytes)?;
                 originals += 1;
             }
             Ok(None) => {}
@@ -203,13 +200,15 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
         }
     }
     let tail = zip.finish()?;
-    parts.push(&Uint8Array::from(&tail[..]));
+    parts.parts.push(js_bytes(&tail));
+    let total = parts.bytes as f64 + tail.len() as f64;
+    let parts: js_sys::Array = parts.parts.into_iter().collect();
     let opts = web_sys::BlobPropertyBag::new();
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
     deliver(format!("lightcraft-library-backup-{day}.zip"), blob).await?;
-    Ok((originals, bytes + tail.len() as f64))
+    Ok((originals, total))
 }
 
 /// Bytes `start..end` of a picked file.

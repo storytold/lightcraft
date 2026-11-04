@@ -123,9 +123,7 @@ fn small_square_cells_keep_the_format_and_duration_pills_apart() {
             if let (Some(d), Some(f)) = (duration, rect(&format!("badge:videoFormat:{id}"))) {
                 assert!(!d.intersects(f), "{size}: clip {id}'s pills overlap: {d:?} {f:?}");
             }
-            if size >= 180.0 {
-                assert!(duration.is_some(), "{size}: clip {id} shows its running time");
-            }
+            assert!(duration.is_some(), "{size}: clip {id} shows its running time");
         }
     }
 }

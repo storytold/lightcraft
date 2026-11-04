@@ -297,9 +297,71 @@ pub fn restored_dir_name(now_ms: f64) -> String {
     format!("library-restored-{}", now_ms.max(0.0) as u64)
 }
 
+/// The parts of a backup being assembled, in file order: a part is bytes made here or a payload
+/// the browser streams from storage (`P`), so an original is never copied into memory whole.
+pub struct BackupParts<P> {
+    pub parts: Vec<P>,
+    pub bytes: u64,
+}
+
+impl<P> BackupParts<P> {
+    pub fn new() -> Self {
+        Self { parts: Vec::new(), bytes: 0 }
+    }
+
+    /// One original: its local header (`bytes` turns it into a part), then its `payload` of
+    /// `size` bytes whose CRC-32 is `crc`.
+    pub fn push_original(
+        &mut self,
+        zip: &mut ZipWriter,
+        entry: &str,
+        payload: P,
+        size: u64,
+        crc: u32,
+        bytes: impl Fn(&[u8]) -> P,
+    ) -> Result<(), String> {
+        let header = zip.entry_with_crc(entry, size, crc)?;
+        self.parts.push(bytes(&header));
+        self.parts.push(payload);
+        self.bytes = self.bytes.saturating_add(header.len() as u64).saturating_add(size);
+        Ok(())
+    }
+}
+
+impl<P> Default for BackupParts<P> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each original's payload follows its header in the backup, and reads back whole.
+    #[test]
+    fn a_backup_carries_each_originals_payload() {
+        let originals: [(&str, &[u8]); 2] = [("clip.mp4", b"first original payload"), ("IMG 2.jpg", &[9, 8, 7, 6, 5])];
+        let mut zip = ZipWriter::default();
+        let mut parts = BackupParts::<Vec<u8>>::new();
+        for (name, data) in originals {
+            let entry = original_entry(&crate::store::content_hash(data), name);
+            parts.push_original(&mut zip, &entry, data.to_vec(), data.len() as u64, crc32fast::hash(data), <[u8]>::to_vec).unwrap();
+        }
+        let tail = zip.finish().unwrap();
+        let mut file: Vec<u8> = parts.parts.concat();
+        assert_eq!(file.len() as u64, parts.bytes);
+        file.extend(tail);
+        let (off, size) = find_central(&file[file.len() - tail_len(file.len() as u64) as usize..]).unwrap();
+        let entries = parse_central(&file[off as usize..(off + size) as usize]).unwrap();
+        assert_eq!(entries.len(), 2);
+        for (e, (_, data)) in entries.iter().zip(originals) {
+            let start = data_offset(e, &file[e.header as usize..e.header as usize + 30]).unwrap() as usize;
+            let got = &file[start..start + e.size as usize];
+            assert_eq!(got, data);
+            verify_original(e, &crate::store::content_hash(data), got).unwrap();
+        }
+    }
 
     fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = ZipWriter::default();

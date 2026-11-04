@@ -1095,8 +1095,9 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
     }
     let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
     let w = g.size().x + 26.0;
-    // A pill wider or taller than the cell's margins would spill over its neighbours: skip it instead.
-    if w > img_rect.width() - 10.0 || img_rect.height() < 21.0 {
+    // A pill wider than the cell's margins would spill over its neighbours, and in a cell under
+    // 48 points it would sit on the badge bar: skip it instead.
+    if w > img_rect.width() - 10.0 || img_rect.height() < 48.0 {
         return None;
     }
     let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
