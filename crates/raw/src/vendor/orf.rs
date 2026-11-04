@@ -199,19 +199,24 @@ fn field_rows(strips: &[(u64, u64)], w: usize, h: usize, file_len: usize) -> Opt
     Some(rows)
 }
 
+/// Bit-level stream reader with lookahead and zero-padding for Olympus compressed entropy bitstreams.
 struct BitReader<'a> {
     data: &'a [u8],
     pos: usize,
     storage: u32,
     count: u32,
+    loaded: u64,
 }
 
 impl<'a> BitReader<'a> {
+    /// Construct a new bit reader wrapping the given byte slice.
     fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0, storage: 0, count: 0 }
+        Self { data, pos: 0, storage: 0, count: 0, loaded: 0 }
     }
 
+    /// Refill the bit storage with 32 bits from the data slice, zero-padding when past EOF.
     fn replace_data(&mut self) {
+        self.loaded = self.loaded.saturating_add(32);
         if let Some(b) = self.data.get(self.pos..self.pos.saturating_add(4)) {
             self.storage = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
             self.pos = self.pos.saturating_add(4);
@@ -230,7 +235,9 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// Append up to 16 bits of additional data to the lower part of storage.
     fn add_data(&mut self) -> u32 {
+        self.loaded = self.loaded.saturating_add(16);
         let next = if let Some(b) = self.data.get(self.pos..self.pos.saturating_add(2)) {
             self.pos = self.pos.saturating_add(2);
             u16::from_be_bytes([b[0], b[1]])
@@ -245,6 +252,7 @@ impl<'a> BitReader<'a> {
         self.count
     }
 
+    /// Read `wbits` bits (up to 16 bits) from the bitstream.
     fn get_bits(&mut self, wbits: u32) -> u32 {
         if wbits == 0 {
             return 0;
@@ -258,6 +266,7 @@ impl<'a> BitReader<'a> {
         ret
     }
 
+    /// Advance the bitstream by one bit, refilling data if needed.
     fn skip_bit(&mut self, vbits: &mut u32) {
         if *vbits == 0 {
             self.replace_data();
@@ -270,6 +279,7 @@ impl<'a> BitReader<'a> {
     }
 }
 
+/// Decoded symbol containing residual differences and bitfield components for Olympus ORF decompression.
 struct OlySymbol {
     gcode: i32,
     glc: u32,
@@ -277,6 +287,7 @@ struct OlySymbol {
     t643bits: u32,
 }
 
+/// Decode the next Golomb/Rice-style entropy-coded difference symbol from the bitstream.
 fn oly_code(reader: &mut BitReader<'_>, wbits: u32, params: &CompressedParams) -> OlySymbol {
     if reader.count == 0 {
         reader.replace_data();
@@ -335,6 +346,7 @@ fn oly_code(reader: &mut BitReader<'_>, wbits: u32, params: &CompressedParams) -
     OlySymbol { gcode, glc, t640bits, t643bits }
 }
 
+/// Parameters extracted from the Olympus ImageProcessing IFD tag for compressed ORF decompression.
 struct CompressedParams {
     tag0x640: u32,
     tag0x641: u32,
@@ -354,17 +366,21 @@ struct CompressedParams {
 }
 
 impl CompressedParams {
+    /// Parse and validate decompression parameters from the ImageProcessing IFD and MakerNote.
     fn from_ip(ip: &Ifd, mn: Option<&MakerNote>) -> Option<Self> {
         let tag0x653 = usize::try_from(ip.u64(0x0653)?).ok()?;
         if tag0x653 == 0 || tag0x653 > 8 {
             return None;
         }
-        if ip.u64(0x0640).is_some_and(|v| v > 32) || ip.u64(0x0643).is_some_and(|v| v > 32) {
+        if ip.u64(0x0640).is_some_and(|v| v > 16) || ip.u64(0x0643).is_some_and(|v| v > 16) {
+            return None;
+        }
+        if ip.u64(0x0644).is_some_and(|v| v == 0 || v > 15) {
             return None;
         }
         let tag0x640 = ip.u64(0x0640).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
         let tag0x641 = ip.u64(0x0641).and_then(|v| u32::try_from(v).ok()).unwrap_or(5);
-        let tag0x642 = ip.u64(0x0642).and_then(|v| i32::try_from(v).ok()).filter(|&v| (-65536..=65536).contains(&v)).unwrap_or(0);
+        let tag0x642 = ip.i64(0x0642).and_then(|v| i32::try_from(v).ok()).filter(|&v| (-65536..=65536).contains(&v)).unwrap_or(0);
         let tag0x643 = ip.u64(0x0643).and_then(|v| u32::try_from(v).ok()).unwrap_or(2);
         let tag0x644 = ip.u64(0x0644).and_then(|v| u32::try_from(v).ok()).unwrap_or(5);
         let tag0x645 = ip.u64(0x0645).and_then(|v| u32::try_from(v).ok()).unwrap_or(4);
@@ -397,6 +413,7 @@ impl CompressedParams {
     }
 }
 
+/// Validate the compressed ORF payload header prefix (big-endian 1 followed by two zero bytes).
 fn check_header(src: &[u8], bytes: usize) -> bool {
     if bytes == 0 || bytes > 8 || src.len() < bytes.saturating_add(2) {
         return false;
@@ -412,6 +429,7 @@ fn check_header(src: &[u8], bytes: usize) -> bool {
     trailer == [0, 0]
 }
 
+/// Decompress the Olympus entropy-coded residual bitstream into a mosaic image raster.
 fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &CompressedParams) -> Result<Vec<u16>> {
     let n = w.checked_mul(h).ok_or(RawError::Limit("ORF image dimensions overflow"))?;
     if n > 0 && stream.is_empty() {
@@ -465,12 +483,20 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
 
             let (gcode_adj, vbits) = if params.tag0x643 > 0 {
                 let v = if col < 2 { 0 } else { pred1 };
+                let v_plus_g = v.checked_add(gcode).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
                 if params.tag0x643 == 1 {
-                    let g = (t643bits as i32) + 2 * (v + gcode);
-                    (g, v + (g >> 1))
+                    let g_mult = v_plus_g.checked_mul(2).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
+                    let g = (t643bits as i32).checked_add(g_mult).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
+                    let v_res = v.checked_add(g >> 1).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
+                    (g, v_res)
                 } else {
-                    let g = (t643bits as i32) + 4 * (v + gcode);
-                    let v_res = (((g >> 1) as u32 & 0xffff_fffe) as i32) + v + (g >> 2);
+                    let g_mult = v_plus_g.checked_mul(4).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
+                    let g = (t643bits as i32).checked_add(g_mult).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
+                    let half_g = ((g >> 1) as u32 & 0xffff_fffe) as i32;
+                    let v_res = half_g
+                        .checked_add(v)
+                        .and_then(|x| x.checked_add(g >> 2))
+                        .ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
                     (g, v_res)
                 }
             } else {
@@ -501,12 +527,14 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
                     n_val = w_val;
                 } else if nw_val < n_val || w_val >= n_val {
                     if nw_val > w_val || w_val >= n_val {
-                        if (n_val - nw_val).abs() > one_shl_tag0x641 {
-                            n_val += w_val - nw_val;
-                        } else if (w_val - nw_val).abs() <= one_shl_tag0x641 {
-                            n_val = (n_val + w_val) >> 1;
+                        let diff_n_nw = n_val.saturating_sub(nw_val).abs();
+                        let diff_w_nw = w_val.saturating_sub(nw_val).abs();
+                        if diff_n_nw > one_shl_tag0x641 {
+                            n_val = n_val.saturating_add(w_val.saturating_sub(nw_val));
+                        } else if diff_w_nw <= one_shl_tag0x641 {
+                            n_val = (n_val.saturating_add(w_val)) >> 1;
                         } else {
-                            n_val = n_val + w_val - nw_val;
+                            n_val = n_val.saturating_add(w_val.saturating_sub(nw_val));
                         }
                     }
                 } else {
@@ -521,6 +549,11 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
                 *px = pixel_final_value.clamp(0, i32::from(u16::MAX)) as u16;
             }
         }
+    }
+
+    let consumed_bits = reader.loaded.saturating_sub(u64::from(reader.count));
+    if consumed_bits > (stream.len() as u64).saturating_mul(8) {
+        return Err(RawError::Corrupt("ORF compressed stream ends before all symbols are decoded".into()));
     }
 
     Ok(raw_image)
@@ -1182,8 +1215,9 @@ mod tests {
         // empty stream returns error for nonempty image, succeeds for 0x0
         assert!(decode_compressed_image(&[], 10, 10, &params).is_err());
         assert_eq!(decode_compressed_image(&[], 0, 0, &params).unwrap(), Vec::<u16>::new());
-        let _ = decode_compressed_image(&[0xff; 16], 10, 10, &params);
-        let _ = decode_compressed_image(&[0x00; 16], 10, 10, &params);
+        // truncated stream (too short for requested dimensions) returns error
+        assert!(decode_compressed_image(&[0xff; 2], 10, 10, &params).is_err());
+        assert!(decode_compressed_image(&[0x00; 2], 10, 10, &params).is_err());
 
         // invalid wbits parameter returns error
         let mut bad_params = params;
