@@ -425,20 +425,31 @@ fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     assert!(!target.exists(), "no library was made at {}", target.display());
 }
 
-/// Issue #3655: where the host has no Lightroom catalog dialog (the browser build), Import
-/// Lightroom Catalog… without a `path` says so instead of doing nothing; one that was cancelled
-/// stays quiet.
+/// Issue #3655: where the host has no file or folder dialog (the browser build), the commands that
+/// ask for one without a path say so instead of doing nothing; one that was cancelled stays quiet.
 #[test]
 fn no_catalog_dialog_is_an_error_not_silence() {
     let services = Services { png: None, ..Default::default() };
-    assert!(services.pick_lightroom_catalog.is_none() && services.picker.is_none());
+    assert!(services.picker.is_none() && services.pick_lightroom_catalog.is_none());
+    assert!(services.pick_folder.is_none() && services.pick_tracklog.is_none());
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
-    let err = app.run("file.importLightroom", json!({})).unwrap_err();
-    assert!(err.contains("no file dialog"), "{err}");
+    let first = app.session.visible_cloned()[0];
+    app.session.selection = lightcraft_engine::Selection::single(first);
+    for (command, says) in [
+        ("file.importLightroom", "no file dialog"),
+        ("file.addFolder", "no folder dialog"),
+        ("file.findMissing", "no folder dialog"),
+        ("photo.tagFromTracklog", "no file dialog"),
+    ] {
+        let err = app.run(command, json!({})).unwrap_err();
+        assert!(err.contains(says), "{command}: {err}");
+    }
     assert!(app.lightroom.is_none() && destination_of(&app).is_none());
     // a dialog that was there but came back empty (cancelled)
     app.services.pick_lightroom_catalog = Some(Box::new(|| None));
     assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);
+    app.services.pick_folder = Some(Box::new(|| None));
+    assert_eq!(app.run("file.addFolder", json!({})).unwrap(), Value::Null);
 }
 
 fn destination_of(app: &LightcraftApp) -> Option<()> {
