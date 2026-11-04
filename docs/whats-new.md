@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-11-03
+
+### Buttons answer the pointer
+- The top bar's buttons, the in-window menu titles (File, Edit, View…) and the sidebar's rows, section headers and
+  folder chevrons show the pointing hand while the pointer is on them. Disabled buttons, such as Forward with
+  nowhere to go, keep the arrow.
+- A menu title is highlighted while the pointer is on it and while its menu is open. Icon buttons (the top bar,
+  tool strip, bottom bar and panels) use the theme's full hover colour instead of a fainter one, and its pressed
+  colour while held down.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

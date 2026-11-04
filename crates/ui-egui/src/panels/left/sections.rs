@@ -212,6 +212,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     let edge = r.right().min(visible_right(ui));
     let hovered = resp.hovered() && app.ui.dragging_section.is_none();
     if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         let bar = Rect::from_min_max(r.min + vec2(8.0, 2.0), pos2((edge - 8.0).max(r.left() + 8.0), r.bottom() - 2.0));
         ui.painter().rect_filled(bar, 4.0, t.hover.gamma_multiply(0.6));
     }
