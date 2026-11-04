@@ -143,6 +143,43 @@ SFace's builtin speed metadata now uses the measured 6.9× ratio. User `catalog.
 Older published tables for MobileFaceNet/R50/R100 came from a different runtime and are not measurements of this runner; architecture
 names alone do not guarantee the same speed, and those additional model files were not verified in this task.
 
+### On the GPU
+
+On a machine with a usable GPU, the whole detector and recogniser run on it through wgpu (`crates/gpu/src/faces.rs`).
+The interpreter lowers the graph to a flat program for the input's shape (`crates/faces/src/net/program.rs`): each
+convolution (`wgsl/faces_conv.wgsl`: an implicit matrix product that gathers the input straight into workgroup memory,
+cuts K into slices when a map is small, and a direct kernel for depthwise layers) and every other operator (activations,
+batch norm, PRelu, broadcasting add/sub/mul, max pooling, nearest upscaling, transposes, global pooling and the fully
+connected layer, `wgsl/faces_ops.wgsl`) is a kernel, every value stays on the device between layers in reused
+buffers, and a run is one upload, one submission and one read-back. Shape-only operators make no step. A model that
+needs something the program cannot express runs its convolutions one by one on the GPU instead. Several faces of one
+photo go together (`Embedder::embed_batch`, up to 16 per submission).
+
+The CPU interpreter remains the reference. After a model loads, a background check (a row in the activity stack, "Checking
+the GPU for faces") runs it once on the CPU and twice through the GPU on a fixed test input: the GPU is used only when
+every output is within 1e-3 of the CPU's (relative to the output's largest value) **and** it was faster; until then,
+and whenever the GPU is switched off (`LIGHTCRAFT_GPU=0`, `LIGHTCRAFT_GPU_BACKEND=off`, the GPU preference, or **Settings ▸
+Faces ▸ Run face models on the CPU only**), missing, wrong or slower, the model runs on the CPU. The first GPU error,
+or a result of the wrong size or with values that are not finite, drops it for that model. Settings ▸ Faces shows
+which device each model runs on (`faces.gpu`). The weights stay on a device of the scan's own (separate from the
+editor's) while the model is loaded, at most 768 MB per model.
+
+The background scan's pace also limits the GPU: paused or light, one model run at a time and the GPU busy at most a
+quarter of the time (the editor renders on the same GPU); normal, two at once and three quarters; full, as fast as it
+goes.
+
+Measured on Linux with a Radeon (Vulkan) and a 32-thread CPU, one call at a time, machine under very heavy load from
+other jobs (load average 100–250, so the absolute numbers are noisy):
+
+| Model | CPU | GPU, one layer at a time | GPU, whole network | Batch of 16, per face |
+| --- | ---: | ---: | ---: | ---: |
+| YuNet (640², one photo) | 58–60 ms | 85–89 ms | 21 ms | – |
+| SFace 2021dec | 40–42 ms | 47–51 ms | 9.6 ms | 8.1 ms |
+| AuraFace v1 | 295–308 ms | 165–172 ms | 70–73 ms | 71 ms |
+
+`LC_FACE_MODELS=<folder> cargo test --release -p lightcraft-gpu faces::tests -- --include-ignored --nocapture` checks
+agreement on the real models and every operator, and prints these timings.
+
 ### Agreement and regression coverage
 
 The public-crop embeddings match the reference runtime's outputs:
@@ -268,6 +305,13 @@ To name a group: click faces to select them (Shift-click selects a range, **Sele
 name in the bar that appears (people already named complete as you type), press Enter: all of them are named at once, as
 one undo step. Selecting names nothing.
 
+Right-click a person's card, or use **Rename Person…** on their page, to rename every face of that person in the library
+at once (`faces.renamePerson`). The name is matched the way the cards are grouped (trimmed, ignoring capitalization) and
+every matching face is stored with the exact new spelling, so a change of capitalization alone updates them all. The
+dialog says how many faces that is. If the new name is already someone else, it refuses until **Combine with the existing
+person** is ticked; that makes one person, and Undo separates them again. Cancelling changes nothing. A person filter,
+the open person page and the way back to it follow the new name. Nothing is written back to the files.
+
 The thumbnail-size slider in the bottom bar sizes the faces here too, with limits of their own. Every face is shown by the
 same kind of box: the detector's own box once the scan has looked at it (kept beside its embedding), so a loosely drawn box
 from another tool does not make one face look farther away than the next; before the scan has looked at a face it is shown
@@ -278,6 +322,11 @@ by its own box.
 In **People**, a click on a person opens their page: **only cropped faces**, never whole photos. First the faces named
 with their name (a click opens that photo), then **More**: the unnamed faces that look like them, most alike first. Click one
 to confirm it (that names the face, as one undo step, and it moves up into their faces), or × to hide it for this session.
+The `↑` control at the top left of a suggested face confirms that face and every currently shown, non-hidden suggestion
+with an equal or higher similarity score. Its tooltip names the person and shows the number of faces before you act.
+Hover a suggestion or focus it with the keyboard and press `A` for the same action. The batch is one undo step;
+suggestions below that score, previously confirmed faces and hidden suggestions stay as they were. Nothing is named
+without this explicit action.
 **Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
 already embedded, so it fills in as the scan goes; it shows faces scoring above four fifths of the model's suggestion bar,
 since you look at each one before anything is named.
@@ -327,7 +376,7 @@ reuses the pictures of its step instead of rendering every face again.
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step) and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step), `faces.renamePerson {from, to, merge?}` (rename every in-library face of one person, or merge two when `merge` is true, one undo step) and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
 
 ## Find Blemishes
 

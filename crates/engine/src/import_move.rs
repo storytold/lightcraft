@@ -128,7 +128,10 @@ pub(crate) fn sidecars_of(src: &Path) -> Vec<(PathBuf, bool)> {
             if !ext.eq_ignore_ascii_case("xmp") || !e.path().is_file() {
                 return None;
             }
-            if base == name {
+            // `IMG_1.cr3.xmp` names `IMG_1.CR3` too: some apps lower-case the photo's extension
+            let full = base == name
+                || base.rsplit_once('.').is_some_and(|(s, x)| s == stem && name.rsplit_once('.').is_some_and(|(_, y)| x.eq_ignore_ascii_case(y)));
+            if full {
                 Some((e.path(), false))
             } else if base == stem {
                 Some((e.path(), true))

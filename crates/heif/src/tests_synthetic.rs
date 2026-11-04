@@ -146,6 +146,17 @@ fn limits_are_checked_before_decoding() {
     assert!(matches!(r, Err(Error::Limit(_))), "{r:?}");
 }
 
+/// #1518: a grid's tiles together are held to the pixel budget before any is decoded. A
+/// 33 × 33 canvas fits 1089 pixels, but its four 32 × 32 tiles hold 4096: over twice the limit.
+#[test]
+fn grid_tiles_are_held_to_the_pixel_budget_together() {
+    let bytes = build(&Spec::new(33, 33, &grey));
+    let r = decode(&bytes, &Options { max_pixels: 33 * 33, ..Default::default() });
+    assert!(matches!(r, Err(Error::Limit(_))), "{r:?}");
+    let d = decode(&bytes, &Options { max_pixels: 2 * 32 * 32, ..Default::default() }).unwrap();
+    assert_eq!((d.width, d.height), (33, 33));
+}
+
 #[test]
 fn truncated_and_corrupted_files_are_errors_not_panics() {
     let bytes = build(&Spec { props: vec![FULL_601, Prop::Irot(1)], thumbnail: Some(&grey), ..Spec::new(64, 64, &grey) });
@@ -173,4 +184,17 @@ fn truncated_and_corrupted_files_are_errors_not_panics() {
         let _ = decode(&b, &Options::default());
         let _ = decode_thumbnail(&b, 1, &Options::default());
     }
+}
+
+/// CodeRabbit #44: heic-rs keeps every associated transform and each one re-allocates the
+/// whole picture, so 13 of them are over the [`crate::MAX_TRANSFORMS`] cap and refused.
+#[test]
+fn too_many_transform_properties_are_refused() {
+    let bytes = build(&Spec { props: std::iter::repeat_n(Prop::Irot(0), 13).collect(), ..Spec::new(32, 32, &grey) });
+    let r = decode(&bytes, &Options::default());
+    assert!(matches!(r, Err(Error::Limit(ref m)) if m.contains("transform")), "{r:?}");
+    // At the cap they're not: 12 identity rotations decode normally.
+    let bytes = build(&Spec { props: std::iter::repeat_n(Prop::Irot(0), 12).collect(), ..Spec::new(32, 32, &grey) });
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (32, 32));
 }

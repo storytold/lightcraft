@@ -143,7 +143,13 @@ pub(crate) fn table(b: &[u8], order: ByteOrder) -> Result<Huffman> {
 
 /// Decode a `w × h` Huffman-coded image.
 pub(crate) fn decode_huffman(src: &[u8], h: &Huffman, w: usize, hgt: usize, bits_per: u32) -> Result<Vec<u16>> {
-    let mut out = vec![0u16; w * hgt];
+    // every sample takes at least one bit: a stream too short for the declared size is refused before its picture
+    // is allocated, so a few bytes can't ask for gigabytes (issue #1512)
+    let samples = w.checked_mul(hgt).ok_or(RawError::Limit("image too large"))?;
+    if (src.len() as u64).saturating_mul(8) < samples as u64 {
+        return Err(RawError::Corrupt(format!("PEF: {w} x {hgt} samples need more than the {} bytes of data there", src.len())));
+    }
+    let mut out = vec![0u16; samples];
     let mut bits = Bits::new(src);
     let mut vpred = [[0i32; 2]; 2];
     let max = (1i32 << bits_per.min(16)) - 1;
@@ -243,7 +249,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
     let pair = |tag: u16| mn.as_ref().and_then(|m| m.ifd.u64s(tag)).filter(|v| v.len() == 2).map(|v| (v[0] as usize, v[1] as usize));
     let tagged = match (pair(CROP_ORIGIN), pair(CROP_SIZE)) {
-        (Some((x, y)), Some((cw, ch))) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= hgt => Some(Rect::new(x, y, cw, ch)),
+        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
+        (Some((x, y)), Some((cw, ch)))
+            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= hgt) =>
+        {
+            Some(Rect::new(x, y, cw, ch))
+        }
         _ => None,
     };
     // without crop tags the image area is found from the samples (dark borders)
@@ -256,14 +267,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             let chunks = info.chunks(bytes.len() as u64);
             let first = chunks.first().ok_or_else(|| RawError::Corrupt("PEF without image data".into()))?;
             let mut c = *first;
-            c.len = chunks.iter().map(|c| c.len).sum::<u64>().max(first.len);
+            c.len = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len)).max(first.len);
             let src = chunk_bytes(bytes, &c)
                 .or_else(|| bytes.get(first.offset as usize..))
                 .ok_or_else(|| RawError::Corrupt("PEF data outside file".into()))?;
             if read == Mode::Full { RawData::U16(decode_huffman(src, &huff, w, hgt, bits)?) } else { RawData::U16(Vec::new()) }
         }
         1 => {
-            let strip: u64 = info.chunks(bytes.len() as u64).iter().map(|c| c.len).sum();
+            let strip = info.chunks(bytes.len() as u64).iter().fold(0u64, |a, c| a.saturating_add(c.len));
             let packing = if strip >= (w * hgt * 2) as u64 { Packing::Word16 } else { Packing::Msb };
             read_image_in(read, bytes, &info, tiff.order, packing)?
         }
@@ -324,8 +335,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -356,6 +369,18 @@ mod tests {
         }
         b.extend(codes.iter().map(|c| c.1));
         (b, codes)
+    }
+
+    /// A compressed PEF declaring far more samples than its data could hold (one bit each at least) is refused
+    /// before its picture is allocated (issue #1512).
+    #[test]
+    fn a_stream_too_short_for_its_size_is_refused_before_allocating() {
+        let (tb, _) = test_table();
+        let h = table(&tb, ByteOrder::Big).unwrap();
+        let t = std::time::Instant::now();
+        let r = decode_huffman(&[0x55; 4096], &h, 30_000, 30_000, 12);
+        assert!(matches!(r, Err(RawError::Corrupt(ref m)) if m.contains("need more")), "{r:?}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
     }
 
     fn encode(px: &[u16], w: usize, codes: &[(u16, u8)]) -> Vec<u8> {
@@ -681,5 +706,17 @@ mod tests {
         let (w, h) = (320, 288);
         let file = pef_with_black_point(w, h, 64, |x, y| 64 + ((x * 7 + y * 13) % 5) as u16);
         assert_eq!(decode(&file, Mode::Full).unwrap().active_area, Rect::new(0, 0, w, h));
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow,
+    /// for the Huffman-coded and the uncompressed samples.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        for compression in [65535u16, 1] {
+            let file = crate::vendor::tests::huge_strip_counts(pef_with_pattern(compression, [0, 1, 1, 2]));
+            for mode in [Mode::Header, Mode::Full] {
+                let _ = decode(&file, mode);
+            }
+        }
     }
 }

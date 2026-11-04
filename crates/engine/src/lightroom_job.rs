@@ -247,23 +247,14 @@ impl LightroomJob {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        let paths: Vec<String> = data
-            .photos
-            .iter()
-            .filter(|photo| lightroom_catalog::number_for_job(&photo.image, "masterImage") == 0)
-            .map(|photo| photo.path.clone())
-            .collect();
-        let missing_sources = data
-            .photos
-            .iter()
-            .filter(|photo| lightroom_catalog::number_for_job(&photo.image, "masterImage") == 0)
-            .filter(|photo| !Path::new(&photo.path).is_file())
-            .map(|photo| normalize(&photo.path))
-            .collect();
-        // the catalog step's last unit (validation, and looking for each original), then the photos
+        let (paths, missing_sources) = original_paths(&data, cancel)?;
+        // Catalog entries name files, never folders. Missing originals already have enough
+        // catalog metadata for placeholders; probing them again only adds failed I/O and errors.
+        // Complete the catalog step before the separate read/add photo progress starts.
         self.progress.catalog_done.fetch_add(1, Ordering::Relaxed);
         self.progress.photos.store(true, Ordering::Relaxed);
-        let normal = self.import.prepare(&paths, cancel);
+        self.import.total.fetch_add(paths.len(), Ordering::Relaxed);
+        let normal = self.import.prepare_files(paths, cancel);
         if cancel.load(Ordering::Relaxed) {
             normal.rollback();
             return Err(cancelled());
@@ -323,6 +314,30 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
 }
 
+fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
+    let mut paths = Vec::new();
+    let mut missing = HashSet::new();
+    let mut seen = HashSet::new();
+    for photo in &data.photos {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        if lightroom_catalog::number_for_job(&photo.image, "masterImage") != 0 {
+            continue;
+        }
+        let key = normalize(&photo.path);
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if photo.original_is_file() {
+            paths.push(photo.path.clone());
+        } else {
+            missing.insert(key);
+        }
+    }
+    Ok((paths, missing))
+}
+
 fn normalize(path: &str) -> String {
     let path = path.replace('\\', "/");
     if cfg!(windows) { path.to_lowercase() } else { path }
@@ -340,6 +355,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -378,11 +394,13 @@ mod tests {
                     keywords: Vec::new(),
                     history: Vec::new(),
                     snapshots: Vec::new(),
+                    original: lightroom_catalog::Original::Local,
                 }],
                 collections: Vec::new(),
                 members: Vec::new(),
                 collection_content: Vec::new(),
                 warnings: Vec::new(),
+                skipped: Vec::new(),
             },
             normal: Prepared::default(),
             index: ImportIndex::default(),
@@ -516,6 +534,7 @@ mod tests {
                         serde_json::json!(format!("history-{source_id}-{}", "x".repeat(8 * 1024))),
                     )])],
                     snapshots: Vec::new(),
+                    original: lightroom_catalog::Original::Local,
                 }
             })
             .collect();

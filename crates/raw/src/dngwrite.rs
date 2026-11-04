@@ -23,11 +23,87 @@ pub enum DngCompression {
         tile: u32,
         half: bool,
     },
+    /// Lossy DNG (DNG 1.4 compression 34892): the raw data demosaiced to linear camera RGB (with `OpcodeList3`
+    /// and the default crop applied), scaled down to at most `long_edge` pixels on the long side when given,
+    /// then stored as 8-bit baseline JPEG tiles of `tile × tile` pixels at JPEG `quality` (1–100). The 8-bit
+    /// codes follow a 1/2.2 power curve that a `LinearizationTable` maps back to linear 16-bit values, so
+    /// shadows keep their precision. The colour tags (matrices, white balance, profile look) are kept.
+    LossyJpeg {
+        tile: u32,
+        quality: u8,
+        long_edge: Option<u32>,
+    },
+}
+
+/// Gamma of the 8-bit codes in a lossy DNG (own choice: perceptually close to even steps, like sRGB).
+const LOSSY_GAMMA: f64 = 2.2;
+
+/// The 256-entry `LinearizationTable` of a lossy DNG: code → linear 16-bit value.
+fn lossy_linearization() -> Vec<u16> {
+    (0..256u32).map(|i| ((i as f64 / 255.0).powf(LOSSY_GAMMA) * 65535.0).round() as u16).collect()
+}
+
+/// The image a lossy DNG stores: `raw` developed to linear camera RGB (white = 1), scaled to fit
+/// `long_edge`, as 8-bit codes (in `u16` samples) on the [`LOSSY_GAMMA`] curve, with the levels,
+/// geometry and opcode lists that this data needs (black 0, white 65535 after linearization).
+fn lossy_source(raw: &RawImage, long_edge: Option<u32>) -> Result<RawImage> {
+    let mut rgb = raw.develop(crate::Method::Ahd)?;
+    if let Some(edge) = long_edge.map(|e| e.max(1) as usize) {
+        let long = rgb.width.max(rgb.height);
+        if long > edge {
+            let s = edge as f64 / long as f64;
+            let w = ((rgb.width as f64 * s).round() as usize).max(1);
+            let h = ((rgb.height as f64 * s).round() as usize).max(1);
+            rgb = lightcraft_raster::resample::resize(&rgb, w, h, lightcraft_raster::resample::Filter::Lanczos3);
+        }
+    }
+    let (w, h) = (rgb.width, rgb.height);
+    if w == 0 || h == 0 {
+        return Err(RawError::Corrupt("empty image".into()));
+    }
+    let inv = 1.0 / LOSSY_GAMMA as f32;
+    let data: Vec<u16> = rgb
+        .data
+        .par_iter()
+        .flat_map_iter(|px| px.map(|v| if v.is_finite() { (v.clamp(0.0, 1.0).powf(inv) * 255.0).round() as u16 } else { 0 }))
+        .collect();
+    let full = crate::Rect::new(0, 0, w, h);
+    Ok(RawImage {
+        width: w,
+        height: h,
+        cpp: 3,
+        data: RawData::U16(data),
+        cfa: None,
+        bits: 8,
+        black: crate::BlackLevel::default(),
+        white: vec![65535.0],
+        active_area: full,
+        crop: full,
+        // list 1 and 2 work on the undemosaiced data and list 3 is applied by `develop`
+        opcodes: crate::OpcodeLists::default(),
+        linearized: true,
+        ..raw.clone()
+    })
 }
 
 /// Software tag of the DNGs this writer makes. A bare "LightCraft" marks older files, whose CFAPattern is anchored at
 /// the sensor origin instead of the ActiveArea (the reader keeps their original reading).
 pub const SOFTWARE: &str = "LightCraft DNG 2";
+
+/// zlib level of Deflate tiles. On a 67 MP focus-stack merge (half floats) level 6 took 7× as long as level 1
+/// (3.9 s vs 0.55 s on 4 cores) to save 3 % of the file (266 vs 275 MB); 5–12 % on raw and rendered DNGs.
+const DEFLATE_LEVEL: u8 = 1;
+
+/// Largest Deflate tile edge the writer pads to (`tile` is caller-supplied in [`DngCompression::Deflate`]):
+/// square-tile buffers grow with the square, so an unclamped edge lets a request pad a tiny valid image into
+/// a multi-gigabyte buffer and billions of edge-replicate iterations. 2048² samples (≤ 24 MB of f32) is far
+/// above the 256 default and every real tile this writer makes.
+const MAX_DEFLATE_TILE: u32 = 2048;
+
+/// `tile` aligned down to a multiple of 16 and clamped to [`MAX_DEFLATE_TILE`].
+fn deflate_tile(tile: u32) -> usize {
+    (tile.max(16) & !15).min(MAX_DEFLATE_TILE) as usize
+}
 
 /// IEEE 754 binary32 → binary16 (round to nearest even; overflow → ±inf, NaN kept).
 pub fn f32_to_f16(v: f32) -> u16 {
@@ -102,6 +178,14 @@ fn rat_vec(v: &[f64]) -> Value {
 /// Serialise `raw` as a DNG.
 pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     raw.validate()?;
+    let lossy;
+    let raw = match opts.compression {
+        DngCompression::LossyJpeg { long_edge, .. } => {
+            lossy = lossy_source(raw, long_edge)?;
+            &lossy
+        }
+        _ => raw,
+    };
     let (w, h, cpp) = (raw.width, raw.height, raw.cpp);
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
@@ -200,52 +284,12 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if let Some(v) = c.baseline_sharpness {
         ifd.set(t::BASELINE_SHARPNESS, rat_vec(&[v]));
     }
-    // the source's own profile look travels with its data (conversions, smart previews, merges)
-    let p = &c.profile;
-    let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {
-        ifd.set(dims, Value::Long(vec![table.hue_divisions as u32, table.sat_divisions as u32, table.val_divisions as u32]));
-        if table.srgb_value {
-            ifd.set(enc, Value::Long(vec![1]));
-        }
-    };
-    let flat = |table: &crate::profile::HsvTable| Value::Float(table.data.iter().flatten().copied().collect());
-    match &p.hue_sat_map {
-        [Some(a), b] => {
-            table_tags(&mut ifd, a, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
-            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(a));
-            if let Some(b) =
-                b.as_ref().filter(|b| (b.hue_divisions, b.sat_divisions, b.val_divisions) == (a.hue_divisions, a.sat_divisions, a.val_divisions))
-            {
-                ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_2, flat(b));
-            }
-        }
-        [None, Some(b)] => {
-            table_tags(&mut ifd, b, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
-            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(b));
-        }
-        [None, None] => {}
-    }
-    if let Some(l) = &p.look_table {
-        table_tags(&mut ifd, l, t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_ENCODING);
-        ifd.set(t::PROFILE_LOOK_TABLE_DATA, flat(l));
-    }
-    if let Some(curve) = &p.tone_curve {
-        ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
-    }
-    if let Some(map) = &p.gain_table_map {
-        // the raw IFD is IFD 0 here, where both tag versions are valid
-        let (version2, bytes) = map.to_bytes(opts.order);
-        ifd.set(if version2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP }, Value::Undefined(bytes));
-    }
-    for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
-        if !list.is_empty() {
-            ifd.set(tag, Value::Undefined(opcodes::write_list(list)));
-        }
-    }
+    write_profile_tags(&mut ifd, raw, opts.order);
+    write_opcode_tags(&mut ifd, raw);
 
     match (&raw.data, opts.compression) {
         (RawData::F32(v), DngCompression::Deflate { tile, half }) => {
-            let tile = (tile.max(16) & !15) as usize;
+            let tile = deflate_tile(tile);
             let bp = if half { 2 } else { 4 };
             ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![(bp * 8) as u16; cpp]));
             ifd.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
@@ -274,7 +318,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                         }
                         buf.extend_from_slice(&float_predict(&row, tile * cpp, bp, cpp));
                     }
-                    miniz_oxide::deflate::compress_to_vec_zlib(&buf, 6)
+                    miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
                 })
                 .collect();
             ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
@@ -290,6 +334,37 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                 bytes.extend_from_slice(&tmp);
             }
             ifd.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
+        }
+        (RawData::U16(v), DngCompression::LossyJpeg { tile, quality, .. }) => {
+            // `lossy_source` made 3-sample 8-bit codes
+            let tile = (tile.clamp(16, 4096) & !15) as usize;
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![8; cpp]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![compression::LOSSY_JPEG]));
+            ifd.set(t::LINEARIZATION_TABLE, Value::Short(lossy_linearization()));
+            let quality = quality.clamp(1, 100);
+            let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
+            let tiles: Vec<Vec<u8>> = (0..ta * td)
+                .into_par_iter()
+                .map(|i| {
+                    let (tx, ty) = (i % ta * tile, i / ta * tile);
+                    let mut buf = Vec::with_capacity(tile * tile * 3);
+                    for y in 0..tile {
+                        let sy = (ty + y).min(h - 1);
+                        for x in 0..tile {
+                            let sx = (tx + x).min(w - 1);
+                            for s in 0..3 {
+                                buf.push(v.get((sy * w + sx) * cpp + s.min(cpp - 1)).map_or(0, |&c| c.min(255) as u8));
+                            }
+                        }
+                    }
+                    let mut out = Vec::new();
+                    jpeg_encoder::Encoder::new(&mut out, quality)
+                        .encode(&buf, tile as u16, tile as u16, jpeg_encoder::ColorType::Rgb)
+                        .map(|()| out)
+                        .map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))
+                })
+                .collect::<Result<_>>()?;
+            ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
         }
         (RawData::U16(v), _) => {
             let maxv = v.iter().copied().max().unwrap_or(0);
@@ -313,7 +388,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                     ifd.set_image(ImageData::Strips { rows_per_strip: rows as u32, strips });
                 }
                 DngCompression::Deflate { tile, .. } => {
-                    let tile = (tile.max(16) & !15) as usize;
+                    let tile = deflate_tile(tile);
                     ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16; cpp]));
                     ifd.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
                     ifd.set(t::PREDICTOR, Value::Short(vec![2]));
@@ -337,11 +412,13 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                                 }
                                 row.iter().for_each(|&x| opts.order.put_u16(&mut buf, x));
                             }
-                            miniz_oxide::deflate::compress_to_vec_zlib(&buf, 6)
+                            miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
                         })
                         .collect();
                     ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
                 }
+                // handled above (the data is converted first)
+                DngCompression::LossyJpeg { .. } => return Err(RawError::Unsupported("lossy DNG of this data".into())),
                 DngCompression::Lj92 { tile } => {
                     let tile = (tile.max(2) & !1) as usize;
                     if tile > 65534 {
@@ -376,6 +453,54 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         }
     }
     Ok(TiffWriter::new(opts.order, false).write(&[ifd])?)
+}
+
+fn write_profile_tags(ifd: &mut IfdBuilder, raw: &RawImage, order: ByteOrder) {
+    // The source's own profile look travels with its data (conversions, smart previews, merges).
+    let profile = &raw.color.profile;
+    let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {
+        ifd.set(dims, Value::Long(vec![table.hue_divisions as u32, table.sat_divisions as u32, table.val_divisions as u32]));
+        if table.srgb_value {
+            ifd.set(enc, Value::Long(vec![1]));
+        }
+    };
+    let flat = |table: &crate::profile::HsvTable| Value::Float(table.data.iter().flatten().copied().collect());
+    match &profile.hue_sat_map {
+        [Some(first), second] => {
+            table_tags(ifd, first, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
+            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(first));
+            if let Some(second) = second.as_ref().filter(|second| {
+                (second.hue_divisions, second.sat_divisions, second.val_divisions) == (first.hue_divisions, first.sat_divisions, first.val_divisions)
+            }) {
+                ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_2, flat(second));
+            }
+        }
+        [None, Some(table)] => {
+            table_tags(ifd, table, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
+            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(table));
+        }
+        [None, None] => {}
+    }
+    if let Some(table) = &profile.look_table {
+        table_tags(ifd, table, t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_ENCODING);
+        ifd.set(t::PROFILE_LOOK_TABLE_DATA, flat(table));
+    }
+    if let Some(curve) = &profile.tone_curve {
+        ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
+    }
+    if let Some(map) = &profile.gain_table_map {
+        // The raw IFD is IFD 0 here, where both tag versions are valid.
+        let (version2, bytes) = map.to_bytes(order);
+        ifd.set(if version2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP }, Value::Undefined(bytes));
+    }
+}
+
+fn write_opcode_tags(ifd: &mut IfdBuilder, raw: &RawImage) {
+    for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
+        if !list.is_empty() {
+            ifd.set(tag, Value::Undefined(opcodes::write_list(list)));
+        }
+    }
 }
 
 /// Exif `LightSource` code of a white point the rendered DNG writer knows (D65 = 21, D50 = 23).
@@ -432,9 +557,53 @@ pub fn write_rendered_dng(
         color,
         wb_multipliers: None,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: crate::OpcodeLists::default(),
         metadata: metadata.clone(),
+        lens_metadata: Default::default(),
     };
     let order = ByteOrder::Little;
     write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 256, half: true }, order, xmp })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BlackLevel, OpcodeLists, RawData, RawFormat, RawImage, Rect};
+
+    /// Deflate tiles of `tile × tile` pad into a square buffer that grows with the square: a
+    /// caller-supplied edge of `u32::MAX` would make the writer pad an 8 × 8 image into billions of
+    /// edge-replicate iterations and a multi-gigabyte buffer. The clamp keeps the bounded shape — same
+    /// file as requesting the cap exactly, and a DNG either way.
+    #[test]
+    fn a_hostile_deflate_tile_edge_is_clamped() {
+        let (w, h) = (8usize, 8usize);
+        let full = Rect::new(0, 0, w, h);
+        let raw = RawImage {
+            format: RawFormat::Dng,
+            width: w,
+            height: h,
+            cpp: 1,
+            data: RawData::U16((0..64).map(|i| i as u16 * 129).collect()),
+            cfa: None,
+            bits: 12,
+            black: BlackLevel::uniform(0.0),
+            white: vec![4095.0],
+            active_area: full,
+            crop: full,
+            orientation: lightcraft_geom::Orientation::Normal,
+            color: crate::ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            metadata: Default::default(),
+            lens_metadata: Default::default(),
+        };
+        let opts = |tile: u32| DngWriteOptions { compression: DngCompression::Deflate { tile, half: false }, ..DngWriteOptions::default() };
+        let hostile = write_dng(&raw, &opts(u32::MAX)).expect("the clamped tile writes");
+        assert_eq!(hostile, write_dng(&raw, &opts(2048)).expect("the cap itself writes"), "u32::MAX is clamped to the cap");
+        assert_ne!(hostile, write_dng(&raw, &opts(256)).expect("a normal tile writes"), "the clamp is not a no-op");
+        assert_eq!(crate::probe(&hostile), Some(RawFormat::Dng), "the clamped output is still a DNG");
+    }
 }

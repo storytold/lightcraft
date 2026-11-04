@@ -3,9 +3,9 @@
 //! ```text
 //! lightcraft-cli run [--demo | --library DIR | --connect [ADDR]] [--import PATH]… CMD [key=value…]…
 //! lightcraft-cli mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
-//! lightcraft-cli render <in> -o <out> [--set control=value]… [--settings FILE.json] [--preset ID] [--size N] [--quality Q]
+//! lightcraft-cli render <in> -o <out> [--set control=value]… [--settings FILE.json|FILE.lcpreset] [--preset ID] [--size N] [--quality Q]
 //! lightcraft-cli snapshot [--library DIR | --demo] [--script FILE.jsonl] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
-//! lightcraft-cli merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
+//! lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [OPTIONS] FILES…
 //! lightcraft-cli synth-merge hdr|panorama -o DIR
 //! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! lightcraft-cli commands [--json]
@@ -17,7 +17,7 @@
 
 mod alloc_release;
 
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -55,7 +55,8 @@ USAGE:
       Develop one file and export it (.jpg, .png, .tif, .webp, .avif, .jxl, .psd or .dng by extension) with the
       same encoder as the app's Export dialog. Options:
         --set CONTROL=VALUE  set a develop slider, repeatable (e.g. --set light.exposure=0.5)
-        --settings FILE      merge a partial develop-settings JSON file
+        --settings FILE      merge a partial develop-settings JSON file, or apply the one preset of a
+                             .lcpreset (preset.export) or XMP preset
         --preset ID          apply a preset (see `commands`/presets.list)
         --size N             long edge in pixels (default: full size, cropped)
         --quality Q          JPEG/AVIF/JPEG XL quality 1..100 (default 92)
@@ -79,9 +80,10 @@ USAGE:
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
-  lightcraft-cli merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
+  lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [OPTIONS] FILES…
       Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng next to the first file and
-      prints the result as JSON. Options:
+      prints the result as JSON. hdr-batch merges each bracket set among the files (photos taken
+      less than a second apart at different exposures), e.g. a whole folder. Options:
         --deghost none|low|medium|high   --no-align   --bracket N (HDR panorama)
         --projection auto|spherical|cylindrical|perspective   --boundary-warp 0..100
         --auto-crop   --fill-edges   --no-auto-settings
@@ -104,7 +106,7 @@ USAGE:
   lightcraft-cli controls [--json]   list every develop control id with its range
   lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -153,7 +155,16 @@ fn main() -> ExitCode {
     // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
     // or RUST_LOG picks another level (#168).
     lightcraft_engine::logging::install("lightcraft-cli");
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = Vec::new();
+    for (index, arg) in std::env::args_os().skip(1).enumerate() {
+        match arg.into_string() {
+            Ok(arg) => args.push(arg),
+            Err(_) => {
+                eprintln!("lightcraft-cli: argument {} is not valid Unicode", index + 1);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
         Some("mcp") => mcp(&args[1..]),
@@ -185,26 +196,35 @@ fn main() -> ExitCode {
 }
 
 /// Raw files below `path` (or `path` itself), skipping hidden and NAS metadata folders.
-fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
-    let is_raw =
-        |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+///
+/// Folders go through the engine's bounded walk ([`lightcraft_engine::walk::files_in`]): it enters
+/// a folder reached through a link once at most and stops at a depth and an entry budget. A
+/// folder of links pointing back at their parents made the old recursive walk re-read the same
+/// folders exponentially often before its depth limit cut it off (CWE-400).
+fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let is_raw = |p: &Path| {
+        p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf", "crw"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+    };
     if path.is_file() {
         if is_raw(path) {
             out.push(path.to_path_buf());
         }
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else { return };
-    if depth > 32 {
-        return;
+    // (hidden entries are left out by the walk; `@eaDir` and other NAS metadata folders and files
+    // here, folders before they are listed so their entries do not use up the walk's budget)
+    let nas_metadata = |p: &Path| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+    let walked = lightcraft_engine::walk::files_in_entering(
+        path,
+        None,
+        lightcraft_engine::walk::Limits::default(),
+        |p| is_raw(p) && !nas_metadata(p) && p.is_file(),
+        |p| !nas_metadata(p),
+    );
+    if walked.truncated {
+        eprintln!("calibrate: {} has more folders or entries than a walk looks at; the rest is left out", path.display());
     }
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with(['.', '@']) {
-            continue;
-        }
-        raw_files(&entry.path(), out, depth + 1);
-    }
+    out.extend(walked.files);
 }
 
 fn calibrate(args: &[String]) -> Result<(), String> {
@@ -226,7 +246,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     }
     let mut files = Vec::new();
     for input in &inputs {
-        raw_files(Path::new(input), &mut files, 0);
+        raw_files(Path::new(input), &mut files);
     }
     files.sort();
     files.dedup();
@@ -364,8 +384,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
     };
     eprintln!("lightcraft-cli mcp: serving MCP on stdio ({})", backend.describe());
     let mut server = Server::new(backend).with_command_tools(!compact);
-    let stdin = std::io::stdin();
-    server.serve(BufReader::new(stdin), std::io::stdout()).map_err(|e| e.to_string())
+    server.serve_stdio(std::io::stdout()).map_err(|e| e.to_string())
 }
 
 fn merge(args: &[String]) -> Result<(), String> {
@@ -373,7 +392,8 @@ fn merge(args: &[String]) -> Result<(), String> {
         Some("hdr") => "merge.hdr",
         Some("panorama" | "pano") => "merge.panorama",
         Some("hdr-panorama") => "merge.hdrPanorama",
-        _ => return Err("merge: expected hdr, panorama or hdr-panorama".into()),
+        Some("hdr-batch") => "merge.hdrBatch",
+        _ => return Err("merge: expected hdr, panorama, hdr-panorama or hdr-batch".into()),
     };
     let mut p = serde_json::Map::new();
     let mut files = Vec::new();
@@ -414,7 +434,7 @@ fn merge(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = file_session();
     let paths = expand_paths(&files);
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
     let mut ids: Vec<u64> = r["imported"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
@@ -555,6 +575,8 @@ fn run(args: &[String]) -> Result<(), String> {
         } else {
             std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?
         };
+        // Windows PowerShell 5.1 writes a UTF-8 BOM; it is not part of the first JSON line.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
             let v: Value = serde_json::from_str(line).map_err(|e| format!("{path}:{}: {e}", n + 1))?;
             // `{"command": id, "params": …}` or a control request `{"method": m, "params": …}`
@@ -563,7 +585,11 @@ fn run(args: &[String]) -> Result<(), String> {
                 .or(v.get("method"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("{path}:{}: needs `command` or `method`", n + 1))?;
-            let params = v.get("params").cloned().filter(|p| p.is_object()).unwrap_or_else(|| json!({}));
+            let params = match v.get("params") {
+                None | Some(Value::Null) => json!({}),
+                Some(Value::Object(params)) => Value::Object(params.clone()),
+                Some(_) => return Err(format!("{path}:{}: `params` must be a JSON object", n + 1)),
+            };
             steps.push(Step { id: id.to_string(), params });
         }
     }
@@ -592,14 +618,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     None => Headless::default(),
                 };
                 if !imports.is_empty() {
-                    let paths = expand_paths(&imports);
-                    let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                    // what follows acts on the imported photos (already-known files are reported as duplicates)
-                    let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
-                    ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
-                    if let Some(first) = ids.first().cloned() {
-                        h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
-                    }
+                    import_and_select(&mut h.session, &imports)?;
                 }
                 Box::new(h)
             }
@@ -624,6 +643,34 @@ fn run(args: &[String]) -> Result<(), String> {
     if failed > 0 { Err(format!("{failed} command(s) failed")) } else { Ok(()) }
 }
 
+fn import_and_select(session: &mut Session, imports: &[String]) -> Result<(), String> {
+    let selection = session.selection.clone();
+    let paths = expand_paths(imports);
+    let result = (|| {
+        let r = session.execute("library.import", &json!({"paths": paths})).map_err(|e| format!("import failed: {e}; no commands were run"))?;
+        let ids = import_targets(&r)?;
+        let first = ids.first().cloned().ok_or("import found no photos to select; no commands were run")?;
+        session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })();
+    if result.is_err() {
+        session.selection = selection;
+    }
+    result
+}
+
+fn import_targets(report: &Value) -> Result<Vec<Value>, String> {
+    if let Some(failed) = report["failed"].as_array().filter(|failed| !failed.is_empty()) {
+        return Err(format!("import failed for {} item(s): {}; no commands were run", failed.len(), json!(failed)));
+    }
+    let mut ids: Vec<Value> = report["imported"].as_array().cloned().unwrap_or_default();
+    ids.extend(report["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
+    ids.extend(report["restored"].as_array().into_iter().flatten().filter(|id| id.is_u64()).cloned());
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| id.as_u64().is_none_or(|id| seen.insert(id)));
+    if ids.is_empty() { Err("import found no photos to select; no commands were run".into()) } else { Ok(ids) }
+}
+
 fn take_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {
     *i += 1;
     args.get(*i).map(String::as_str).ok_or_else(|| format!("{flag} needs a value"))
@@ -635,11 +682,47 @@ fn connect_port(addr: &str) -> &str {
     addr.rsplit_once(':').map_or(addr, |(_, port)| port)
 }
 
+/// What `render --settings FILE` applies: a partial develop-settings object, or the one preset of
+/// a preset file (`.lcpreset` from `preset.export`, XMP), applied as the app applies it. Merging a
+/// `.lcpreset` as settings dropped its wrapper and applied nothing (#1730).
+enum SettingsFile {
+    Partial(Value),
+    Preset(lightcraft_engine::develop::Preset),
+}
+
+fn read_settings(p: &str) -> Result<SettingsFile, String> {
+    use lightcraft_engine::presets::{LCPRESET_EXT, parse_preset_file};
+    let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
+    let ext = Path::new(p).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let json = serde_json::from_slice::<Value>(&bytes);
+    // a settings object never has a top-level `presets` or `settings` key; a preset file always does
+    let preset_file =
+        ext == LCPRESET_EXT || ext == "xmp" || json.as_ref().is_ok_and(|v| v.is_array() || v.get("presets").is_some() || v.get("settings").is_some());
+    if preset_file {
+        let mut list = parse_preset_file(p, &bytes).map_err(|e| format!("{p}: {e}"))?;
+        return match (list.pop(), list.len()) {
+            (Some(preset), 0) => Ok(SettingsFile::Preset(preset)),
+            (None, _) => Err(format!("{p}: no presets in this file")),
+            (Some(_), n) => Err(format!("{p}: {} presets in this file; --settings applies one, export it on its own", n + 1)),
+        };
+    }
+    match json.map_err(|e| format!("{p}: {e}"))? {
+        v @ Value::Object(_) => Ok(SettingsFile::Partial(v)),
+        _ => Err(format!("{p}: not a develop-settings object or a preset file")),
+    }
+}
+
+/// The session `render` and `merge` develop files in: with the lens database the desktop app downloaded, when it is
+/// there (never fetched from here: scripts and tests stay offline).
+fn file_session() -> Session {
+    Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_lens_database()
+}
+
 fn render(args: &[String]) -> Result<(), String> {
     let mut input = None;
     let mut output = None;
     let mut values = serde_json::Map::new();
-    let mut settings: Option<Value> = None;
+    let mut settings = None;
     let mut preset = None;
     let mut size: Option<u64> = None;
     let mut quality = 92u8;
@@ -651,14 +734,12 @@ fn render(args: &[String]) -> Result<(), String> {
             "--set" => {
                 let kv = take_value(args, &mut i, "--set")?;
                 let (k, v) = kv.split_once('=').ok_or_else(|| format!("--set expects control=value, got `{kv}`"))?;
-                let v: f64 = v.trim().parse().map_err(|_| format!("--set {k}: `{v}` is not a number"))?;
+                // `inf` / `NaN` parse as f64 but become JSON null, which the control would silently ignore.
+                let v: f64 =
+                    v.trim().parse().ok().filter(|n: &f64| n.is_finite()).ok_or_else(|| format!("--set {k}: `{v}` is not a finite number"))?;
                 values.insert(k.trim().to_string(), json!(v));
             }
-            "--settings" => {
-                let p = take_value(args, &mut i, "--settings")?;
-                let text = std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?;
-                settings = Some(serde_json::from_str(&text).map_err(|e| format!("{p}: {e}"))?);
-            }
+            "--settings" => settings = Some(read_settings(take_value(args, &mut i, "--settings")?)?),
             "--preset" => preset = Some(take_value(args, &mut i, "--preset")?.to_string()),
             "--size" => size = Some(take_value(args, &mut i, "--size")?.parse().map_err(|_| "--size expects a number")?),
             "--quality" => quality = take_value(args, &mut i, "--quality")?.parse().map_err(|_| "--quality expects 1..100")?,
@@ -675,7 +756,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = file_session();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -684,8 +765,14 @@ fn render(args: &[String]) -> Result<(), String> {
     if let Some(p) = preset {
         run(&mut s, "preset.apply", json!({"id": p}))?;
     }
-    if let Some(st) = settings {
-        run(&mut s, "develop.merge", json!({"settings": st}))?;
+    match settings {
+        Some(SettingsFile::Partial(st)) => run(&mut s, "develop.merge", json!({"settings": st}))?,
+        Some(SettingsFile::Preset(mut p)) => {
+            p.id = "cli.settings".into();
+            s.presets.push(p);
+            run(&mut s, "preset.apply", json!({"id": "cli.settings"}))?;
+        }
+        None => {}
     }
     if !values.is_empty() {
         run(&mut s, "develop.set", json!({"values": values}))?;
@@ -698,12 +785,13 @@ fn render(args: &[String]) -> Result<(), String> {
     for (k, v) in opts {
         p[k] = v;
     }
-    let mut o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
     if p.get("format").is_none() {
         let ext = Path::new(&output).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-        o.format = ExportFormat::parse(&ext)
-            .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
+        ExportFormat::parse(&ext).ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
+        // given before validating, so `bitDepth` is checked against the format written (issue #1952)
+        p["format"] = json!(ext);
     }
+    let o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
     // Add to Apple Photos: refused before anything is written when it can't be done
     let after = s.after_export(&o)?;
     let e = export_photo(&mut s, lightcraft_engine::catalog::PhotoId(id), &o, 1)?;
@@ -763,12 +851,30 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let t0 = Instant::now();
     let mut session = match &library {
         Some(dir) => {
-            let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
+            let mut s = Session::new()
+                .with_fs()
+                .with_default_denoise_models()
+                .with_system_clock()
+                .with_default_face_models()
+                .with_default_lens_database()
+                .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
         }
-        None if files.is_empty() => Session::with_demo().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models(),
-        None => Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models(),
+        None if files.is_empty() => Session::with_demo()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_slide_templates(),
+        None => Session::new()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_slide_templates(),
     };
     // Apply compute policy before imports or the first scripted query can discover an adapter.
     session.execute("app.gpu", &json!({"enabled": false})).map_err(|e| e.to_string())?;
@@ -781,6 +887,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let services = lightcraft_ui_egui::Services {
         write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
         write: Some(Box::new(lightcraft_engine::export::write_file)),
+        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
@@ -791,6 +898,8 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     // before the first frame can start background adapter discovery.
     // This UI state is session-local: the CLI neither loads nor saves desktop ui.json.
     app.ui.settings.gpu = false;
+    // as the desktop app opens it: an empty library on the grid, where Import is offered
+    lightcraft_ui_egui::panels::empty_library::open_on_empty_library(&mut app);
     let mut h = Headless::new(app, size, scale);
     let timeout = Duration::from_secs(60);
     let mut shots = 0usize;
@@ -811,6 +920,8 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let mut failed = 0usize;
     if let Some(script) = &script {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
+        // Windows PowerShell 5.1 writes a UTF-8 BOM; it is not part of the first JSON line.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let mut out = std::io::stdout().lock();
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
@@ -832,7 +943,17 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                         match next_path(&mut shots) {
                             Some(p) => {
                                 wrote_output = true;
-                                params["path"] = json!(p);
+                                // `params` is untrusted script JSON: `params["path"] = …` panics on
+                                // an array or a string. Only an object (or null, like an absent
+                                // `params`) may take the path.
+                                if params.is_null() {
+                                    params = json!({});
+                                }
+                                if let Some(o) = params.as_object_mut() {
+                                    o.insert("path".into(), json!(p));
+                                } else {
+                                    return Err(format!("{script}:{}: ui.screenshot: `params` must be a JSON object", n + 1));
+                                }
                             }
                             None => return Err(format!("{script}:{}: ui.screenshot needs a `path` (or give -o)", n + 1)),
                         }
@@ -885,7 +1006,11 @@ fn snapshot(args: &[String]) -> Result<(), String> {
 
 fn commands(args: &[String]) -> Result<(), String> {
     let mut h = Headless::demo();
-    let cmds = h.call("engine.commands", json!({}))?;
+    let mut cmds = h.call("engine.commands", json!({}))?;
+    // Listed by id so each family (`photo.*`, `mask.*`, …) reads together; the registry keeps its own order.
+    if let Some(list) = cmds.as_array_mut() {
+        list.sort_by(|a, b| a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or("")));
+    }
     let mut out = std::io::stdout().lock();
     if args.iter().any(|a| a == "--json") {
         writeln!(out, "{}", serde_json::to_string_pretty(&cmds).unwrap_or_default()).map_err(|e| e.to_string())?;
@@ -972,4 +1097,96 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
 #[cfg(not(feature = "denoise"))]
 fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
+}
+
+#[cfg(all(test, unix))]
+mod raw_files_tests {
+    use super::raw_files;
+
+    /// Links back to their own folders are entered once, not once per path that reaches them: a
+    /// handful of such links made the old walk list the same folders exponentially often.
+    #[test]
+    fn folder_links_back_up_are_walked_once() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-cli-raw-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = dir.join("a");
+        std::fs::create_dir_all(a.join("@eaDir")).unwrap();
+        std::fs::write(a.join("one.NEF"), b"").unwrap();
+        std::fs::write(a.join("@eaDir").join("thumb.nef"), b"").unwrap();
+        std::fs::write(a.join("notes.txt"), b"").unwrap();
+        for i in 0..8 {
+            std::os::unix::fs::symlink(&dir, a.join(format!("up{i}"))).unwrap();
+        }
+        // a named pipe with a raw extension: not a file, so never opened (a read would block)
+        assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
+        let started = std::time::Instant::now();
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
+        assert_eq!(files, vec![a.join("one.NEF")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
+    /// gets the same profile everywhere), but never fetch it.
+    #[test]
+    fn render_reads_the_downloaded_lens_database() {
+        let s = super::file_session();
+        assert_eq!(lightcraft_engine::lens_profiles::host_dir(), lightcraft_engine::lensfun_download::default_dir());
+        assert!(!s.lens_auto_download, "selecting it is not permission to download it");
+    }
+}
+
+#[cfg(test)]
+mod import_target_tests {
+    use super::{import_and_select, import_targets, json};
+
+    #[test]
+    fn empty_reports_and_duplicates_without_ids_have_no_target() {
+        assert!(import_targets(&json!({})).is_err());
+        assert!(import_targets(&json!({"imported": [], "duplicates": [{"existing": null}]})).is_err());
+    }
+
+    #[test]
+    fn restored_only_and_mixed_reports_keep_target_order() {
+        assert_eq!(import_targets(&json!({"restored": [9]})).unwrap(), vec![json!(9)]);
+        assert_eq!(
+            import_targets(&json!({"imported": [1], "duplicates": [{"existing": null}, {"existing": 2}], "restored": [3]})).unwrap(),
+            vec![json!(1), json!(2), json!(3)]
+        );
+    }
+
+    #[test]
+    fn repeated_targets_are_selected_once_in_first_occurrence_order() {
+        let report = json!({"imported": [5, 7], "duplicates": [{"existing": 5}, {"existing": 8}, {"existing": 8}, {"existing": 7}, {"existing": null}], "restored": [8, 9, 5]});
+        assert_eq!(import_targets(&report).unwrap(), vec![json!(5), json!(7), json!(8), json!(9)]);
+    }
+
+    #[test]
+    fn failed_items_reject_even_when_targets_exist() {
+        let error = import_targets(&json!({"imported": [1], "failed": [["broken.png", "invalid"]]})).unwrap_err();
+        assert!(error.contains("1") && error.contains("broken.png") && error.contains("no commands were run"), "{error}");
+    }
+
+    #[test]
+    fn failed_partial_import_restores_empty_selection() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-import-selection-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("valid.png");
+        let broken = dir.join("broken.png");
+        let img = lightcraft_raster::Rgba8::from_fn(2, 2, |_, _| [20, 40, 60, 255]);
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+        std::fs::write(&input, png).unwrap();
+        std::fs::write(&broken, b"not a PNG").unwrap();
+        let mut headless = lightcraft_mcp::Headless::default();
+        let session = &mut headless.session;
+        let selection = session.selection.clone();
+        assert!(selection.ids.is_empty() && selection.active.is_none());
+        assert!(import_and_select(session, &[input.to_string_lossy().into_owned(), broken.to_string_lossy().into_owned()]).is_err());
+        assert_eq!(session.selection, selection);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

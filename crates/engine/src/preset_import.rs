@@ -395,6 +395,20 @@ pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_ma
     let mut values = crate::crs_masks::Values::new();
     for (k, v) in fields {
         let key = format!("crs:{k}");
+        // the profile a preset names: its fields as XMP's struct fields (`crs:Look/crs:Name`…)
+        if k == "Look"
+            && let Lua::Table(_, look) = v
+        {
+            for (f, fv) in look {
+                let val = match fv {
+                    Lua::Num(n) => format!("{n}"),
+                    Lua::Str(s) => delocalize(s),
+                    _ => continue,
+                };
+                props.insert(format!("crs:Look/crs:{f}"), vec![val]);
+            }
+            continue;
+        }
         if crate::crs_masks::CONTAINERS.contains(&key.as_str()) {
             values.insert(key.clone(), crate::crs_masks::from_lua(v));
         }
@@ -488,14 +502,24 @@ pub fn group_from_dir(dir: &str) -> Option<String> {
 }
 
 pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: String, group: Option<String>, from_photo: bool) -> Option<Imported> {
-    let (mut settings, unmapped) = crate::crs::to_partial_report(props, Some(values), crate::crs::Target::Any, crate::crs_masks::DEFAULT_ASPECT);
+    let (mut settings, mut unmapped) = crate::crs::to_partial_report(props, Some(values), crate::crs::Target::Any, crate::crs_masks::DEFAULT_ASPECT);
     if from_photo && let Some(o) = settings.as_object_mut() {
         // a photo's own framing and absolute white balance don't belong in a look
         o.remove("crop");
         o.remove("geometry");
-        if o.get("wb").and_then(|w| w.get("mode")).and_then(Value::as_str).is_none_or(|m| m == "custom" || m == "asShot") {
+        let mode = o.get("wb").and_then(|w| w.get("mode")).and_then(Value::as_str);
+        if mode == Some("custom") {
+            unmapped.push("Temperature, Tint (custom white balance of a photo: not kept in a look)".into());
+        }
+        if mode.is_none_or(|m| m == "custom" || m == "asShot") {
             o.remove("wb");
         }
+    }
+    // the profile it names, resolved against the user's imported profiles by `preset.import`
+    if let Some(look) = crate::profile_refs::look_ref(props)
+        && let Some(o) = settings.as_object_mut()
+    {
+        o.insert("profile".into(), serde_json::json!({"look": look}));
     }
     if settings.as_object().is_none_or(Map::is_empty) {
         return None;
@@ -685,6 +709,17 @@ text]], z = ZSTR "loc" }"#,
     }
 
     #[test]
+    fn lrtemplate_keeps_the_profile_it_names() {
+        let t = r#"s = { title = "Film", value = { settings = { Exposure2012 = 0.2,
+            Look = { Name = "Portra 400", Amount = 0.5, UUID = "ABCD", Group = "$$$/Pack=Film Pack", Parameters = { Version = "14.0" } } } } }"#;
+        let v = read_presets("Film.lrtemplate", t.as_bytes(), None).unwrap();
+        assert_eq!(
+            v[0].preset.settings["profile"],
+            serde_json::json!({"look": {"name": "Portra 400", "amount": 50.0, "group": "Film Pack", "uuid": "abcd"}})
+        );
+    }
+
+    #[test]
     fn old_process_version_fields_are_approximated() {
         let t = "s = { title = \"Old\", value = { settings = { Exposure = 0.5, Contrast = 50, FillLight = 20, HighlightRecovery = 30, Clarity = 10, ToneCurve = { 0, 0, 64, 50, 255, 255 } } } }";
         let p = &read_presets("Old.lrtemplate", t.as_bytes(), None).unwrap()[0].preset;
@@ -717,6 +752,23 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(p.name, "Moody");
         assert_eq!(p.settings, json!({"light": {"exposure": 0.5}, "color": {"vibrance": 20.0}}));
         assert!(read_presets("plain.jpg", b"\xff\xd8 no xmp", None).is_err());
+    }
+
+    #[test]
+    fn photo_custom_white_balance_left_out_is_reported() {
+        // issue #2938: a photo's custom Kelvin that the look leaves out is reported
+        let photo = |wb: &str| {
+            let mut file = b"\xff\xd8\xff\xe1 http://ns.adobe.com/xap/1.0/\0".to_vec();
+            file.extend_from_slice(XMP.replace(r#"crs:WhiteBalance="As Shot" crs:Temperature="5600""#, wb).as_bytes());
+            read_presets("/x/repro.jpg", &file, None).unwrap().remove(0)
+        };
+        let custom = photo(r#"crs:WhiteBalance="Custom" crs:Temperature="8000" crs:Tint="+16""#);
+        assert!(custom.unmapped.iter().any(|u| u.starts_with("Temperature, Tint (")), "{:?}", custom.unmapped);
+        // a named white balance stays, unreported; As Shot is no loss
+        let daylight = photo(r#"crs:WhiteBalance="Daylight""#);
+        assert_eq!(daylight.preset.settings["wb"]["mode"], json!("daylight"));
+        assert!(daylight.unmapped.is_empty(), "{:?}", daylight.unmapped);
+        assert!(photo(r#"crs:WhiteBalance="As Shot""#).unmapped.is_empty());
     }
 
     #[test]

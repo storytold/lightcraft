@@ -363,10 +363,10 @@ pub fn dialog_body(ui: &mut egui::Ui, t: &crate::theme::Tokens, opts: &mut Repor
         .width(ui.available_width())
         .show(ui);
     let r = ui.checkbox(&mut opts.private, tr("Hide my home folder and photo file names"));
-    crate::widgets::register(ui.ctx(), "check:reportBugPrivate", r.rect);
+    crate::widgets::register(ui, "check:reportBugPrivate", r.rect);
     if logs.len() > 1 {
         let r = ui.checkbox(&mut opts.previous_logs, tr("Also attach the logs of the two previous runs"));
-        crate::widgets::register(ui.ctx(), "check:reportBugPrevious", r.rect);
+        crate::widgets::register(ui, "check:reportBugPrevious", r.rect);
     }
     ui.label(
         egui::RichText::new(tr("A raw file? Name the camera model, and share the file through a link (Google Drive, Dropbox…).")).color(t.text_dim),
@@ -385,7 +385,7 @@ pub fn dialog_body(ui: &mut egui::Ui, t: &crate::theme::Tokens, opts: &mut Repor
     };
     ui.label(egui::RichText::new(files).color(t.text_dim));
     let r = ui.button(tr("Copy to Clipboard"));
-    crate::widgets::register(ui.ctx(), "button:reportBugCopy", r.rect);
+    crate::widgets::register(ui, "button:reportBugCopy", r.rect);
     if r.clicked() {
         ui.ctx().copy_text(issue.body);
     }

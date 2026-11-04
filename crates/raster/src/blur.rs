@@ -26,6 +26,16 @@ pub fn box_radii(sigma: f32) -> [usize; 3] {
     std::array::from_fn(|i| (((if (i as i32) < m { wl } else { wu }) - 1) / 2).max(0) as usize)
 }
 
+/// Standard deviation (px) of the blur [`gaussian`] actually makes for `sigma`: its boxes are
+/// whole pixels wide, so small radii snap to a few steps (0 below about 0.58 px, then √(2/3) px for one
+/// 3-px box per axis, …).
+pub fn box_sigma(sigma: f32) -> f32 {
+    if sigma.is_nan() || sigma <= 0.3 {
+        return 0.0;
+    }
+    box_radii(sigma).iter().map(|&r| (((2 * r + 1) * (2 * r + 1) - 1) as f32) / 12.0).sum::<f32>().sqrt()
+}
+
 /// One horizontal box pass over `row` (clamped edges), using `tmp` as scratch.
 #[inline]
 fn box_row<T: Pixel>(row: &mut [T], tmp: &mut Vec<T>, r: usize) {
@@ -183,6 +193,20 @@ mod tests {
         // peak moved to the centre and symmetric
         assert!((b.get(45, 50) - b.get(55, 50)).abs() < 1e-6);
         assert!((b.get(50, 45) - b.get(50, 55)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn box_sigma_is_the_blur_made() {
+        assert_eq!(box_sigma(0.3), 0.0);
+        assert_eq!(box_sigma(0.5), 0.0, "no box wider than 1 px");
+        assert!((box_sigma(1.0) - (2.0f32 / 3.0).sqrt()).abs() < 1e-6);
+        for sigma in [1.0f32, 2.5, 8.0] {
+            let mut imp = Image::<f32>::new(201, 1);
+            imp.set(100, 0, 1.0);
+            let b = gaussian(&imp, sigma);
+            let var: f32 = b.data.iter().enumerate().map(|(i, v)| v * ((i as f32 - 100.0).powi(2))).sum();
+            assert!((var.sqrt() - box_sigma(sigma)).abs() < 1e-3, "{sigma}: {} vs {}", var.sqrt(), box_sigma(sigma));
+        }
     }
 
     #[test]

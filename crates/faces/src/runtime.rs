@@ -40,6 +40,9 @@ pub struct SelfTest {
 
 type Plan = Net;
 
+/// Most faces [`Embedder::embed_batch`] sends to a GPU in one go.
+pub const BATCH: usize = 16;
+
 /// A loaded recognition model.
 #[derive(Clone)]
 pub struct Embedder {
@@ -99,6 +102,31 @@ impl Embedder {
         })
     }
 
+    /// The network, e.g. to see which device it runs on.
+    pub fn net(&self) -> &Net {
+        &self.plan
+    }
+
+    /// Run the model's convolutions on `accelerator` if it gives the CPU's embedding on a test face (and, with
+    /// `require_faster`, runs it faster than the CPU); otherwise (or on
+    /// its first error) recognition stays on the CPU. Returns why it was not used.
+    pub fn accelerate(&self, accelerator: Arc<dyn crate::net::Accelerator>, require_faster: bool) -> Result<(), RuntimeError> {
+        let (mean, std) = (self.manifest.input.mean, self.manifest.input.std);
+        let plane = self.width * self.height;
+        let data: Vec<f32> = crate::yunet::probe_pixels(3 * plane)
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let c = (i / plane.max(1)).min(2);
+                (v - mean.get(c).copied().unwrap_or(0.0)) / std.get(c).copied().filter(|s| *s != 0.0).unwrap_or(1.0)
+            })
+            .collect();
+        let probe = Tensor::new(vec![1, 3, self.height, self.width], data).map_err(|e| RuntimeError::Input(e.to_string()))?;
+        guarded("checking the device", || {
+            self.plan.attach_checked(accelerator, &probe, crate::yunet::ACCELERATOR_TOLERANCE, require_faster).map_err(RuntimeError::Run)
+        })
+    }
+
     /// The size of the aligned face picture the model wants (width, height).
     pub fn input_size(&self) -> (usize, usize) {
         (self.width, self.height)
@@ -110,6 +138,66 @@ impl Embedder {
 
     /// The face as a unit-length vector. `rgb` is an aligned face at exactly [`Self::input_size`], 8-bit RGB.
     pub fn embed(&self, rgb: &[u8]) -> Result<Vec<f32>, RuntimeError> {
+        let input = self.input(rgb)?;
+        let out = guarded("running it", || {
+            let mut result = self.plan.run(input).map_err(|e| RuntimeError::Run(e.to_string()))?;
+            if result.len() != 1 {
+                return Err(RuntimeError::Run("the model must give one embedding".into()));
+            }
+            Ok(result.pop().ok_or_else(|| RuntimeError::Run("no output".into()))?.1.data)
+        })?;
+        self.unit(out)
+    }
+
+    /// Several faces at once, each as [`Self::embed`] gives it. On a GPU they run together, up to [`BATCH`] per
+    /// dispatch (one upload and one read-back for all of them); on the CPU one after another.
+    pub fn embed_batch(&self, faces: &[&[u8]]) -> Vec<Result<Vec<f32>, RuntimeError>> {
+        if self.plan.accelerator().is_none() || faces.len() < 2 {
+            return faces.iter().map(|f| self.embed(f)).collect();
+        }
+        let mut results: Vec<Option<Result<Vec<f32>, RuntimeError>>> = faces.iter().map(|_| None).collect();
+        let mut ready: Vec<(usize, Tensor)> = Vec::new();
+        for (i, face) in faces.iter().enumerate() {
+            match self.input(face) {
+                Ok(t) => ready.push((i, t)),
+                Err(e) => {
+                    if let Some(r) = results.get_mut(i) {
+                        *r = Some(Err(e));
+                    }
+                }
+            }
+        }
+        while !ready.is_empty() {
+            let chunk: Vec<(usize, Tensor)> = ready.drain(..ready.len().min(BATCH)).collect();
+            let (at, inputs): (Vec<usize>, Vec<Tensor>) = chunk.into_iter().unzip();
+            let ran = guarded("running it", || self.plan.run_batch(inputs).map_err(|e| RuntimeError::Run(e.to_string())));
+            match ran {
+                Ok(outs) if outs.len() == at.len() => {
+                    for (i, mut out) in at.into_iter().zip(outs) {
+                        let r = match (out.len(), out.pop()) {
+                            (1, Some((_, t))) => self.unit(t.data),
+                            _ => Err(RuntimeError::Run("the model must give one embedding".into())),
+                        };
+                        if let Some(slot) = results.get_mut(i) {
+                            *slot = Some(r);
+                        }
+                    }
+                }
+                // one bad face spoils a batch: run them one by one so the others still get theirs
+                _ => {
+                    for i in at {
+                        if let (Some(slot), Some(face)) = (results.get_mut(i), faces.get(i)) {
+                            *slot = Some(self.embed(face));
+                        }
+                    }
+                }
+            }
+        }
+        results.into_iter().map(|r| r.unwrap_or_else(|| Err(RuntimeError::Run("the face was not embedded".into())))).collect()
+    }
+
+    /// The model's input for an aligned face.
+    fn input(&self, rgb: &[u8]) -> Result<Tensor, RuntimeError> {
         if rgb.len() != self.width * self.height * 3 {
             return Err(RuntimeError::Input("the face picture is not the size the model wants".into()));
         }
@@ -124,14 +212,11 @@ impl Embedder {
                 }
             }
         }
-        let out = guarded("running it", || {
-            let input = Tensor::new(vec![1, 3, self.height, self.width], data).map_err(|e| RuntimeError::Input(e.to_string()))?;
-            let mut result = self.plan.run(input).map_err(|e| RuntimeError::Run(e.to_string()))?;
-            if result.len() != 1 {
-                return Err(RuntimeError::Run("the model must give one embedding".into()));
-            }
-            Ok(result.pop().ok_or_else(|| RuntimeError::Run("no output".into()))?.1.data)
-        })?;
+        Tensor::new(vec![1, 3, self.height, self.width], data).map_err(|e| RuntimeError::Input(e.to_string()))
+    }
+
+    /// The model's output, checked and scaled to unit length.
+    fn unit(&self, out: Vec<f32>) -> Result<Vec<f32>, RuntimeError> {
         if out.len() != self.dim {
             return Err(RuntimeError::Run(format!("the model gave {} numbers per face, not the {} its description says", out.len(), self.dim)));
         }

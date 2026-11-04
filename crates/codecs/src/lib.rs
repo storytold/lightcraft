@@ -12,6 +12,7 @@
 //! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and, on native targets, AVIF (feature `avif`) and
 //!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
+//! - [`video`] encodes AV1 video (native, feature `avif`) and writes it as MP4 or WebM.
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
@@ -31,11 +32,13 @@ mod jxl;
 mod jxl_encode;
 mod other;
 mod png_codec;
+pub mod print;
 pub mod proof;
 mod psd;
 mod sniff;
 pub mod space;
 mod tiff_codec;
+pub mod video;
 mod webp;
 
 pub use encode::{
@@ -204,6 +207,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::WebP => webp::header(bytes)?,
         Format::Psd => psd::header(bytes)?,
         Format::Heif => heif::header(bytes)?,
+        Format::Gif | Format::Bmp => other::header(bytes, format)?,
         // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
         _ => {
             let d = decode_unguarded(bytes, format, &DecodeOptions::fit(64, 64))?;
@@ -334,4 +338,30 @@ pub fn decode_thumbnail_with(bytes: &[u8], opts: &ThumbnailOptions) -> Result<Th
         source_width: d.source_width,
         source_height: d.source_height,
     })
+}
+
+/// Checked sample-buffer length `width × height × ch`, in u64: `None` on overflow or a zero
+/// dimension. Image size is capped by `DecodeOptions::max_pixels` alone; once the buffer is known to
+/// hold this many samples, every later `usize` product is bounded by an allocation that exists.
+pub(crate) fn checked_sample_buf_len(width: usize, height: usize, ch: usize) -> Option<u64> {
+    (width as u64).checked_mul(height as u64).and_then(|n| n.checked_mul(ch as u64)).filter(|&n| n > 0)
+}
+
+#[cfg(test)]
+mod checked_arithmetic_tests {
+    use super::*;
+
+    #[test]
+    fn checked_sample_buf_len_wrap_inputs_rejected() {
+        assert_eq!(checked_sample_buf_len(usize::MAX, usize::MAX, 4), None);
+        assert_eq!(checked_sample_buf_len(0, 1, 3), None);
+    }
+
+    #[test]
+    fn checked_sample_buf_len_normal_accepted() {
+        assert_eq!(checked_sample_buf_len(100, 1, 3), Some(300));
+        assert_eq!(checked_sample_buf_len(1, 1, 1), Some(1));
+        // 300 Mpx RGBA is within the default pixel limit, so it must not be refused by sample count.
+        assert_eq!(checked_sample_buf_len(20_000, 15_000, 4), Some(1_200_000_000));
+    }
 }
