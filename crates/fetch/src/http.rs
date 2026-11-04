@@ -286,17 +286,18 @@ fn lookup_waiting(
 /// Connect to the first of `addrs` that answers, all of them together within `deadline` (each used to get the whole
 /// connect timeout of its own, issue #1532).
 fn connect_any(host: &str, addrs: &[SocketAddr], deadline: Instant, limits: &Limits) -> Result<TcpStream, HttpError> {
-    connect_any_with(host, addrs, deadline, limits, TcpStream::connect_timeout)
+    connect_any_with(host, addrs, deadline, limits, Instant::now, TcpStream::connect_timeout)
 }
 
-/// [`connect_any`], connecting with `connect` (given the address and how long it may take). The tests pass a
-/// `connect` that records the time it was given, which shows that the addresses share the deadline without timing
-/// it.
+/// [`connect_any`] on the clock `now`, connecting with `connect` (given the address and how long it may take). The
+/// tests pass a clock that moves only while `connect` waits and a `connect` that records the time it was given,
+/// which shows that the addresses share the deadline without timing it.
 fn connect_any_with(
     host: &str,
     addrs: &[SocketAddr],
     deadline: Instant,
     limits: &Limits,
+    now: impl Fn() -> Instant,
     mut connect: impl FnMut(&SocketAddr, Duration) -> std::io::Result<TcpStream>,
 ) -> Result<TcpStream, HttpError> {
     let mut last = format!("{host}: no address");
@@ -304,7 +305,7 @@ fn connect_any_with(
         if limits.cancel.load(Ordering::Relaxed) {
             return Err(HttpError::Cancelled);
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(now());
         if left.is_zero() {
             return Err(HttpError::Connect(format!("{host}: connecting timed out")));
         }
@@ -758,34 +759,47 @@ mod tests_connect {
         assert_eq!(reads, 1, "Cancel is looked at after each wait");
     }
 
-    /// Several addresses that don't answer share one deadline instead of each getting the full timeout. Each
-    /// stand-in connection takes all the time it is given (an address that never answers); what each was given is
-    /// recorded instead of timed.
+    /// Several addresses that don't answer share one deadline instead of each getting the full timeout. On a clock
+    /// that moves only while a connection is tried, each stand-in connection takes all the time it is given (an
+    /// address that never answers); what each was given is recorded instead of timed.
     #[test]
     fn addresses_share_one_connect_deadline() {
         let cancel = AtomicBool::new(false);
         let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
-        let mut given = Vec::new();
+        let base = Instant::now();
+        let at = std::cell::Cell::new(Duration::ZERO);
         // (shorter than the connect timeout of `limits`, so an address given a timeout of its own shows)
-        let start = Instant::now();
-        let deadline = start + Duration::from_millis(200);
-        let r = connect_any_with("blackhole", &addrs, deadline, &limits(&cancel), |_, timeout| {
-            given.push(timeout);
-            std::thread::sleep(timeout);
-            Err(std::io::ErrorKind::TimedOut.into())
-        });
-        assert!(r.is_err());
-        // all of them within the one deadline: never more in all than the time from the start to it
-        let total: Duration = given.iter().sum();
-        assert!(!given.is_empty() && total <= deadline - start, "{given:?}");
+        let deadline = base + Duration::from_millis(200);
+        let mut given = Vec::new();
+        let r = connect_any_with(
+            "blackhole",
+            &addrs,
+            deadline,
+            &limits(&cancel),
+            || base + at.get(),
+            |_, timeout| {
+                given.push(timeout);
+                at.set(at.get() + timeout);
+                Err(std::io::ErrorKind::TimedOut.into())
+            },
+        );
+        assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
+        assert_eq!(given, [Duration::from_millis(200)], "the first address used up the one deadline; the rest got none");
         // and an address that fails at once leaves the rest of the deadline to the next
         let mut given = Vec::new();
-        let r = connect_any_with("refused", &addrs, Instant::now() + Duration::from_secs(3600), &limits(&cancel), |_, timeout| {
-            given.push(timeout);
-            Err(std::io::ErrorKind::ConnectionRefused.into())
-        });
+        let r = connect_any_with(
+            "refused",
+            &addrs,
+            base + Duration::from_secs(3600),
+            &limits(&cancel),
+            || base,
+            |_, timeout| {
+                given.push(timeout);
+                Err(std::io::ErrorKind::ConnectionRefused.into())
+            },
+        );
         assert!(r.is_err());
-        assert_eq!(given.len(), 5, "every address is tried: {given:?}");
+        assert_eq!(given, [Duration::from_secs(3600); 5], "every address is tried with what is left");
     }
 
     /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.
