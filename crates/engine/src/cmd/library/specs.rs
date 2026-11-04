@@ -1,4 +1,4 @@
-use super::filters::{covers_other_disks, merge_rules, several_smart_refused, view_rules};
+use super::filters::{covers_other_disks, drop_emptied_shelf, merge_rules, several_smart_refused, view_rules};
 use super::gps::parse_gps;
 use super::import::{import_batch_done, import_params, list_auto_import_folder};
 use super::selection::{
@@ -179,6 +179,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 if sets_albums && matches!(s.source, LibrarySource::Album(_)) {
                     return Err(bad("library.filter", "albums are already shown (library.source): show another source first"));
                 }
+                // an album this call names is there: an id nothing has is an error, not an empty grid, as in
+                // `library.source` (one left in the filter from before, an undone Create Album, is not this call's)
+                let mut named = f.albums.iter().copied().filter(|_| p.get("albums").is_some()).chain(f.album.filter(|_| p.get("album").is_some()));
+                if let Some(gone) = named.find(|a| s.catalog.album(*a).is_none()) {
+                    return Err(bad("library.filter", format!("no such album {}", gone.0)));
+                }
                 if (f.library_folder.is_some() || !f.library_folders.is_empty()) && s.source == LibrarySource::LibraryFolder {
                     return Err(bad("library.filter", "a folder is already shown (library.source): show another source first"));
                 }
@@ -241,15 +247,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 // of several folders shown, the others stay
                 s.also_library_folders.retain(|c| !lightcraft_catalog::query::folder_within(c, path));
                 // a filter put aside by Enable Filters must not bring the removed folder back
+                let shelved_before = s.shelved_filter.clone();
                 if let Some(f) = s.shelved_filter.as_mut() {
                     if f.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                         f.library_folder = None;
                     }
                     f.library_folders.retain(|c| !lightcraft_catalog::query::folder_within(c, path));
                 }
-                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
-                    s.shelved_filter = None;
-                }
+                drop_emptied_shelf(s, shelved_before.as_ref());
                 // the folder being shown is gone: back to everything, as for a deleted album
                 if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.library_folder = s.also_library_folders.pop();
@@ -364,7 +369,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Hold View Until Refreshed",
             ["View"],
             None,
-            "{on?: bool (toggles when omitted)} → {hold} — when on, an edit that makes a photo stop matching the view (a keyword given in a smart album of photos without keywords, a flag taken off in Picks, a rating under the filter bar's) keeps it in the view until `library.refresh`, Reshuffle, or another source, filter or sort; photos that start matching still appear at once, and deleting a photo or taking it out of the album or folder shown still takes it out of the view. Changing a smart album's rules is another view too. Off (the default): the view follows every edit. Kept with the library's preferences; asking for the state it already has changes nothing",
+            "{on?: bool (toggles when omitted)} → {hold} — when on, an edit that makes a photo stop matching the view (a keyword given in a smart album of photos without keywords, a flag taken off in Picks, a rating under the filter bar's) keeps it in the view until `library.refresh`, Reshuffle, or another source, filter or sort; photos that start matching still appear at once, and deleting a photo or taking it out of the album or folder shown still takes it out of the view. Of several albums shown, a photo stays only while one of them still has it: one that stops matching the rules of a smart album among them goes at once unless another album shown has it. Changing a smart album's rules is another view too. Off (the default): the view follows every edit. Kept with the library's preferences; asking for the state it already has changes nothing",
             always,
             |s, p| {
                 let on = match p.get("on") {
@@ -1067,17 +1072,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 // an album chip of the filter, or of one put aside by Enable Filters, must not name a deleted album
                 s.filter.album = s.filter.album.filter(|a| !removed.contains(a));
                 s.filter.albums.retain(|a| !removed.contains(a));
+                let shelved_before = s.shelved_filter.clone();
                 if let Some(f) = s.shelved_filter.as_mut() {
                     f.album = f.album.filter(|a| !removed.contains(a));
                     f.albums.retain(|a| !removed.contains(a));
                 }
-                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
-                    s.shelved_filter = None;
-                }
+                drop_emptied_shelf(s, shelved_before.as_ref());
                 // of several albums shown, the others stay
+                let was_shown = s.source_albums().iter().any(|a| removed.contains(a));
                 s.also_albums.retain(|a| !removed.contains(a));
                 if matches!(s.source, LibrarySource::Album(current) if removed.contains(&current)) {
                     s.source = s.also_albums.pop().map_or(LibrarySource::All, LibrarySource::Album);
+                }
+                // the photo looked at may have been in a shown album that went only, so not in the grid now: as when
+                // another source is shown (an album the grid does not show leaves the selection alone)
+                if was_shown && s.selection.active.is_some() {
+                    s.keep_active_in_view();
                 }
                 ok()
             }

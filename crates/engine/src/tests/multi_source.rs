@@ -554,3 +554,120 @@ fn folders_of_a_filter_do_not_narrow_the_all_photos_a_gone_folder_falls_back_to(
     assert_eq!(s.filter.library_folder, None);
     assert!(s.filter.library_folders.is_empty());
 }
+
+#[test]
+fn a_filter_naming_a_smart_album_says_why_it_cannot_be_saved() {
+    let mut s = Session::new();
+    let (_, a, _) = two_albums(&mut s);
+    let smart = s.execute("album.createSmart", &json!({"name": "Rated", "rules": {"rating": 1}})).unwrap()["id"].as_u64().unwrap();
+    // Given the filter of All Photos names an album that is not smart, Then the view is saved as rules
+    s.execute("library.filter", &json!({"albums": [a]})).unwrap();
+    assert_eq!(s.view_save_refusal(), None);
+    // When it names a smart album (among others, or alone as the single album), Then the refusal names it
+    for filter in [json!({"albums": [a, smart]}), json!({"albums": [], "album": smart})] {
+        s.execute("library.filter", &filter).unwrap();
+        let why = s.view_save_refusal().expect("refused");
+        assert!(why.contains("\"Rated\" is a smart album") || why.contains("\"Rated\", a smart album"), "{why}");
+        // and the commands refuse with that sentence, saving nothing
+        let before = s.catalog.to_snapshot();
+        let e = s.execute("album.createSmart", &json!({"name": "Both"})).unwrap_err().to_string();
+        assert!(e.contains(&why), "{e}");
+        assert_eq!(s.catalog.to_snapshot(), before);
+    }
+    // the smart album shown alone as the source is still saved as its own rules
+    s.execute("library.clearFilter", &json!({})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": smart})).unwrap();
+    assert_eq!(s.view_save_refusal(), None);
+}
+
+#[test]
+fn library_filter_refuses_an_album_that_is_not_there_and_the_filter_stays() {
+    let mut s = Session::new();
+    let (ids, a, _) = two_albums(&mut s);
+    s.execute("library.filter", &json!({"albums": [a]})).unwrap();
+    for params in [json!({"albums": [a, 9999]}), json!({"album": 9999})] {
+        let e = s.execute("library.filter", &params).unwrap_err().to_string();
+        assert!(e.contains("9999"), "the refusal names the album: {e}");
+        assert_eq!(s.filter.albums, vec![AlbumId(a)], "{params}: refused, nothing changed");
+        assert_eq!(s.filter.album, None);
+    }
+    assert_eq!(shown(&mut s), vec![ids[0], ids[1]]);
+    // an album left in the filter that is gone now (an undone Create Album) blocks no other change
+    let c = album(&mut s, "Cairo", &[ids[3]]);
+    s.execute("library.filter", &json!({"albums": [a, c]})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("library.filter", &json!({"rating": 0})).unwrap();
+    // clearing the albums and the single album stays possible
+    s.execute("library.filter", &json!({"albums": [], "album": null})).unwrap();
+    assert!(s.filter.albums.is_empty());
+}
+
+#[test]
+fn deleting_the_album_of_a_filter_put_aside_leaves_filtering_on_when_only_the_rating_operator_is_left() {
+    let mut s = Session::new();
+    let (_, a, b) = two_albums(&mut s);
+    s.execute("library.filter", &json!({"albums": [a], "ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    // another album goes: the filter put aside is not touched
+    s.execute("album.delete", &json!({"id": b})).unwrap();
+    assert!(s.filters_off());
+    // the album it names goes: an operator with no stars filters nothing, there is nothing to bring back
+    s.execute("album.delete", &json!({"id": a})).unwrap();
+    assert!(!s.filters_off());
+    // a filter put aside with only an operator, which no deletion touched, stays put aside
+    s.execute("library.filter", &json!({"ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    let c = s.execute("album.create", &json!({"name": "Cairo"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.delete", &json!({"id": c})).unwrap();
+    assert!(s.filters_off());
+}
+
+#[test]
+fn removing_the_folder_of_a_filter_put_aside_leaves_filtering_on_when_only_the_rating_operator_is_left() {
+    let mut s = Session::new();
+    add_file(&mut s, "/pics/2025/alps/a.jpg");
+    add_file(&mut s, "/pics/2026/beach/c.jpg");
+    s.execute("library.filter", &json!({"libraryFolder": "/pics/2025/alps", "ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    // another folder goes: the filter put aside is not touched
+    s.execute("library.removeFolder", &json!({"path": "/pics/2026/beach"})).unwrap();
+    assert!(s.filters_off());
+    // the folder it names goes: nothing is left to bring back but an operator with no stars
+    s.execute("library.removeFolder", &json!({"path": "/pics/2025/alps"})).unwrap();
+    assert!(!s.filters_off());
+}
+
+#[test]
+fn deleting_one_of_several_shown_albums_moves_the_active_photo_into_what_is_left() {
+    let mut s = Session::new();
+    // Alps {0, 1} and Beach {1, 2}, both shown
+    let (ids, a, b) = two_albums(&mut s);
+    s.execute("library.source", &json!({"kind": "album", "ids": [a, b]})).unwrap();
+    // Given the active photo is in the album that goes only
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    // When Alps is deleted
+    s.execute("album.delete", &json!({"id": a})).unwrap();
+    // Then the grid shows Beach and the active photo is one of its photos, not one nobody can see
+    let left = shown(&mut s);
+    assert_eq!(left, vec![ids[1], ids[2]]);
+    assert!(s.active().is_some_and(|p| left.contains(&p.0)), "{:?}", s.active());
+    // a photo still in view stays the active one
+    let (ids, a, b) = two_albums(&mut s);
+    s.execute("library.source", &json!({"kind": "album", "ids": [a, b]})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[1]]})).unwrap();
+    s.execute("album.delete", &json!({"id": a})).unwrap();
+    assert_eq!(s.active(), Some(PhotoId(ids[1])));
+    // and with no active photo, none is picked
+    let (_, a, b) = two_albums(&mut s);
+    s.execute("library.source", &json!({"kind": "album", "ids": [a, b]})).unwrap();
+    s.selection = Default::default();
+    s.execute("album.delete", &json!({"id": a})).unwrap();
+    assert_eq!(s.active(), None);
+    // an album the grid does not show leaves the selection alone, also a photo the grid does not show
+    let (ids, a, b) = two_albums(&mut s);
+    s.execute("library.source", &json!({"kind": "album", "id": a})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[2]]})).unwrap();
+    s.execute("album.delete", &json!({"id": b})).unwrap();
+    assert_eq!(s.active(), Some(PhotoId(ids[2])));
+}

@@ -49,11 +49,23 @@ pub(crate) fn covers_other_disks(s: &Session, path: &str, ids: &[PhotoId]) -> bo
         .any(|v| v != "/" && !lightcraft_catalog::query::folder_within(path, &v))
 }
 
-/// A view of several albums can't be saved when one of them is a smart album (smart album rules
-/// can't test another smart album): refuse up front, naming it, instead of letting the rules'
-/// check say so without the cause.
+/// A view can't be saved as smart-album rules when it names a smart album beside another album, or in the
+/// filter at all (smart album rules can't test another smart album): refuse up front, naming it, instead of
+/// letting the rules' check say so without the cause.
 pub(super) fn several_smart_refused(s: &Session, cmd: &str) -> Result<()> {
     s.view_save_refusal().map_or(Ok(()), |why| Err(bad(cmd, why)))
+}
+
+/// Drops the filter put aside by Enable Filters when a deletion emptied it: nothing is left to bring back, and
+/// Enable Filters must not stay off for it. `before` is what was put aside before the deletion, so a filter the
+/// deletion did not touch stays put aside, whatever it holds. The rating operator filters nothing without stars,
+/// so it alone does not count (`keyword.delete` reads it the same way).
+pub(super) fn drop_emptied_shelf(s: &mut Session, before: Option<&lightcraft_catalog::Filter>) {
+    use lightcraft_catalog::Filter;
+    let emptied = |f: &Filter| (Filter { rating_op: Default::default(), ..f.clone() }) == Filter::default();
+    if s.shelved_filter.as_ref() != before && s.shelved_filter.as_ref().is_some_and(emptied) {
+        s.shelved_filter = None;
+    }
 }
 
 impl Session {
@@ -61,15 +73,23 @@ impl Session {
     /// Update Rules from Current Filter), or `None` when it can. The one check behind the menu
     /// item's grey-out and the refusal of `album.createSmart` / `album.setRules {fromView}`.
     pub fn view_save_refusal(&self) -> Option<String> {
-        // (asked every frame by the menus: most views name no second album, so say so without a list)
-        if self.also_albums.is_empty() {
+        // (asked every frame by the menus: most views name no album beyond the source's own, so say so without a list)
+        if self.also_albums.is_empty() && self.filter.album.is_none() && self.filter.albums.is_empty() {
             return None;
+        }
+        let smart_among = |albums: &[AlbumId]| albums.iter().find_map(|a| self.catalog.album(*a).filter(|a| a.is_smart()));
+        // an album the filter names is saved as the rules' album, one smart album alone as well
+        if let Some(smart) = smart_among(&self.filter.albums_wanted()) {
+            return Some(format!(
+                "the filter names \"{}\", a smart album: smart album rules can't test another smart album. Take it out of the filter, or show it and save its own view",
+                smart.name
+            ));
         }
         let shown = self.source_albums();
         if shown.len() < 2 {
             return None;
         }
-        let smart = shown.iter().find_map(|a| self.catalog.album(*a).filter(|a| a.is_smart()))?;
+        let smart = smart_among(&shown)?;
         Some(format!(
             "the view shows several albums and \"{}\" is a smart album: smart album rules can't test another smart album. Show only albums that aren't smart, or save the smart album's own view",
             smart.name

@@ -760,7 +760,9 @@
   `libraryFolders` and `albums`. The single fields stay and count as one
   more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click that use
   this come in a later change. When the albums shown include a smart album, New Smart Album from Filter… is grayed out
-  and says why, as `album.createSmart` does.
+  and says why, as `album.createSmart` does. So does a filter that names a smart album.
+- With View ▸ Hold View Until Refreshed on, a view of several albums holds a photo only while one of them has it: a
+  photo that stops matching the rules of a smart album among them goes at once, unless another album shown has it.
 - `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
   it), so editing a smart album saved from a view of several albums no longer loses them.
 

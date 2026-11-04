@@ -491,6 +491,7 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
         *other = chosen.unwrap_or_default();
     }
     follow_library_folder(&mut s.filter.library_folder, from, to);
+    // (the standalone `folder` criterion, as the one put aside below)
     follow_library_folder(&mut s.filter.folder, from, to);
     if let Some(f) = s.shelved_filter.as_mut() {
         follow_library_folder(&mut f.library_folder, from, to);

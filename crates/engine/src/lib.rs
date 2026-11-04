@@ -249,6 +249,9 @@ pub struct Session {
     visible_clock_minute: Option<String>,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
     /// matching a smart album's rules, Picks or the filter bar leaves it where it is. Off: the photo goes at once.
+    /// Several albums shown hold a photo only while one of them has it (the view looks in the albums shown, a smart
+    /// album among them asked live): a photo that stops matching that smart album's rules goes at once, unless another
+    /// album shown has it.
     pub hold_view: bool,
     /// The view last worked out, the catalog's revision then, and the photos in it before stacks are arranged.
     /// A small edit is followed from it: only the photos the edit touched are asked about again and put at their
