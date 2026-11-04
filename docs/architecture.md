@@ -128,7 +128,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | Quality gates: a test run's output is forwarded outside the lock its clock is checked under, and not after the run ends; only a binary's first `running N tests` line restarts its clock; the slot wait never sleeps past its limit |
+| 2026-11-03 | minor | Quality gates: a test run's output is forwarded outside the lock its clock is checked under, and not (but for a write under way) after the run ends; only a binary's first `running N tests` line restarts its clock; the slot wait never sleeps past its limit |
 | 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid; without pidfds only xtask's own child is killed), and one that can't be killed is continued rather than left stopped |
 | 2026-10-26 | minor | Quality gates: each test binary's run (`LIGHTCRAFT_TEST_BINARY_TIMEOUT`) and the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) have a time limit |
 | 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |

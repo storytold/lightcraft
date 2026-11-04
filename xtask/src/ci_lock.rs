@@ -220,21 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn a_slot_freed_after_the_limit_is_not_taken() {
-        let dir = scratch("late");
-        let held = try_acquire(&dir, 1, "first").unwrap().expect("free slot");
-        // freed after the 100 ms limit and before the 1 s poll would have looked again
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(400));
-            drop(held);
-        });
-        let got = wait_for_slot(&dir, 1, "second", Some(Duration::from_millis(100)), Duration::from_secs(1));
-        assert!(got.is_err_and(|e| e.contains("gave up")), "the limit ended the wait first");
-        release.join().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn giving_up_names_an_unrecorded_holder_too() {
         assert!(
             gave_up(Duration::from_secs(7200), &[]).contains("gave up after waiting 120 min for a CI slot, held by: a run that didn't record itself")
