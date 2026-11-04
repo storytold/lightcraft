@@ -143,10 +143,12 @@ fn built_in_ratios_hide_and_show_but_free_and_original_stay() {
     for key in ["free", "original", "7x5", "nonsense"] {
         assert!(s.execute("crop.hideAspect", &json!({"aspect": key})).is_err(), "{key}");
     }
-    // a hidden ratio still applies by its value (only the menu leaves it out)
+    // a hidden ratio still applies by its value (only the menu leaves it out); a preset takes the
+    // crop's orientation (#2253), so 16 × 10 may come out portrait
     s.execute("crop.aspect", &json!({"aspect": "16x10"})).unwrap();
     let id = s.active().unwrap();
-    assert_eq!(s.develop_of(id).unwrap().crop.aspect, Some((1600, 1000)));
+    let (w, h) = s.develop_of(id).unwrap().crop.aspect.unwrap();
+    assert_eq!((w.max(h), w.min(h)), (1600, 1000));
 }
 
 #[test]

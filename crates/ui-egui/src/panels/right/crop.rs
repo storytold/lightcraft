@@ -6,7 +6,7 @@ use lightcraft_engine::cmd::crop_aspects::{BUILTIN_ASPECTS, CustomAspect};
 /// "Original" for the photo's own shape, else the name of a ratio the user saved, else a built-in
 /// ratio's name, when the ratio matches one in either orientation; otherwise the ratio as
 /// `1.37 : 1`.
-pub(super) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, custom: &[CustomAspect]) -> String {
+pub(crate) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, custom: &[CustomAspect]) -> String {
     let Some((w, h)) = aspect else { return "Free".into() };
     if w == 0 || h == 0 {
         return "Free".into();
@@ -133,18 +133,18 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked() {
                         if let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name})) {
-                    app.toast_error(ui.ctx(), e);
-                }
+                            app.toast_error(ui.ctx(), e);
+                        }
                     }
                     if i < last && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked() {
                         if let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1})) {
-                    app.toast_error(ui.ctx(), e);
-                }
+                            app.toast_error(ui.ctx(), e);
+                        }
                     }
                     if i > 0 && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked() {
                         if let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1})) {
-                    app.toast_error(ui.ctx(), e);
-                }
+                            app.toast_error(ui.ctx(), e);
+                        }
                     }
                 });
             });
