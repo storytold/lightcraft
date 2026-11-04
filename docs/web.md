@@ -188,7 +188,8 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 
 ## Measuring
 
-Open `http://127.0.0.1:8080/?bench` to run a scripted measurement:
+Open `http://127.0.0.1:8080/?bench` to run a scripted measurement. It always runs on the generated demo photos in an unsaved library
+(`?bench` implies `?store=memory`), so it never edits the library kept in browser storage:
 
 1. Wait for the grid thumbnails.
 2. Open the first photo in Detail.
