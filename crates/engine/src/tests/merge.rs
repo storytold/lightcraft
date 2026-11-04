@@ -307,7 +307,7 @@ fn a_photo_named_twice_is_merged_once() {
 
 /// `n` 24 MP photos (6000 × 4000, 30 MB files), as the catalog knows them.
 fn photos_24mp(n: usize) -> Vec<crate::merge::PhotoSize> {
-    vec![crate::merge::PhotoSize { width: 6000, height: 4000, bytes: 30_000_000 }; n]
+    vec![crate::merge::PhotoSize::new(6000, 4000, 30_000_000).unwrap(); n]
 }
 
 fn panorama() -> crate::merge::MergeKind {
@@ -344,7 +344,7 @@ fn a_panorama_is_planned_before_its_photos_are_decoded() {
     // the last decode (6000 × 4000 × 48 bytes and its file) beside four 1024 × 683 frames
     assert!(e.contains("needs about 1160 MB") && e.contains("may use 381 MB"), "{e}");
     // photos no larger than the smallest frames can't be made smaller: refused at the stitch's least
-    let small = vec![crate::merge::PhotoSize { width: 1000, height: 800, bytes: 1_000_000 }; 3];
+    let small = vec![crate::merge::PhotoSize::new(1000, 800, 1_000_000).unwrap(); 3];
     assert_eq!(plan_memory(&panorama(), &small, 1e9), Ok(None));
     let e = plan_memory(&panorama(), &small, 20e6).unwrap_err();
     assert!(e.contains("even at its least") && e.contains("needs about 65 MB") && e.contains("may use 19 MB"), "{e}");
@@ -401,11 +401,53 @@ fn a_merge_preview_is_planned_before_its_photos_are_decoded() {
     use crate::merge::plan_preview;
     // each decode: 24 MP × 48 bytes and its file (1.18 GB), beside six 1024 × 683 frames
     let photos = photos_24mp(6);
-    assert_eq!(plan_preview(&photos, 5e9, 4), Ok(true));
-    assert_eq!(plan_preview(&photos, 2e9, 4), Ok(false), "one at a time");
-    assert_eq!(plan_preview(&photos, 2e9, 1), Ok(true), "one thread is one at a time");
-    let e = plan_preview(&photos, 1e9, 4).unwrap_err();
+    assert_eq!(plan_preview(&panorama(), &photos, 5e9, 4), Ok(true));
+    assert_eq!(plan_preview(&panorama(), &photos, 2e9, 4), Ok(false), "one at a time");
+    assert_eq!(plan_preview(&panorama(), &photos, 2e9, 1), Ok(true), "one thread is one at a time");
+    let e = plan_preview(&panorama(), &photos, 1e9, 4).unwrap_err();
     assert!(e.starts_with("not enough memory for this merge preview: even decoding one photo at a time,") && e.contains("may use 953 MB"), "{e}");
+}
+
+/// A preview is planned through the merge after its decode too: twenty 1024 px photos decode one
+/// at a time in ~290 MB, but their HDR merge (saturation maps beside every frame) needs ~420 MB.
+#[test]
+fn a_merge_preview_is_planned_through_the_merge_after_its_decode() {
+    use crate::merge::plan_preview;
+    let photos = vec![crate::merge::PhotoSize::new(1024, 1024, 1_000_000).unwrap(); 20];
+    let e = plan_preview(&hdr(), &photos, 3.5e8, 4).unwrap_err();
+    assert!(e.starts_with("not enough memory for this merge preview: even decoding one photo at a time,") && e.contains("needs about 400 MB"), "{e}");
+    assert_eq!(plan_preview(&panorama(), &photos, 3.5e8, 1), Ok(true), "a panorama of them stitches in less");
+    assert_eq!(plan_preview(&hdr(), &photos, 5e8, 4), Ok(true));
+}
+
+/// A raw's sensor can hold far more samples than its picture has pixels (masked borders, a small
+/// default crop): the catalog keeps only the picture's size, so the header read just before the
+/// decode is what the plan is checked with.
+#[test]
+fn a_raw_sensor_larger_than_its_picture_is_planned_with_its_samples() {
+    use crate::merge::{PhotoSize, holds, plan_memory};
+    let catalog = vec![PhotoSize::new(1000, 1000, 200_000_000).unwrap(); 2];
+    let header = vec![PhotoSize { samples: 100_000_000, ..catalog[0] }; 2];
+    assert_eq!(plan_memory(&hdr(), &catalog, 4e8), Ok(None));
+    assert_eq!(holds(&hdr(), &catalog, 4e8, None, None), Ok(()));
+    // 100 M samples × 8 bytes beside the 200 MB file
+    let e = holds(&hdr(), &header, 4e8, None, None).unwrap_err();
+    assert!(e.starts_with("not enough memory for this HDR merge: with its 2 photos at full size,") && e.contains("needs about 977 MB"), "{e}");
+}
+
+/// A photo replaced by one of the same pixels and file size but another shape is held to a larger
+/// frame at the planned edge (8000 × 3000 at 1024 px is 1024 × 384; 5000 × 4800 is 1024 × 983):
+/// the check before its decode sees it, as it sees a larger one.
+#[test]
+fn a_photo_of_another_shape_is_checked_at_the_planned_edge() {
+    use crate::merge::{PhotoSize, holds, plan_memory};
+    let wide = vec![PhotoSize::new(8000, 3000, 24_000_000).unwrap(); 200];
+    let edge = plan_memory(&panorama(), &wide, 2.3e9).unwrap().expect("made smaller");
+    assert!((1024..8000).contains(&edge), "{edge}");
+    assert_eq!(holds(&panorama(), &wide, 2.3e9, Some(edge), None), Ok(()));
+    let squarer = vec![PhotoSize::new(5000, 4800, 24_000_000).unwrap(); 200];
+    let e = holds(&panorama(), &squarer, 2.3e9, Some(edge), None).unwrap_err();
+    assert!(e.starts_with(&format!("not enough memory for this panorama: with its photos made {edge} px on the long side,")), "{e}");
 }
 
 /// A photo of unknown size among known ones is planned as the largest of them (a merge's photos
@@ -413,8 +455,8 @@ fn a_merge_preview_is_planned_before_its_photos_are_decoded() {
 #[test]
 fn photos_of_unknown_size_are_planned_as_the_largest_known() {
     use crate::merge::{PhotoSize, fill_unknown};
-    let (a, b) = (PhotoSize { width: 4000, height: 3000, bytes: 9 }, PhotoSize { width: 6000, height: 4000, bytes: 5 });
-    assert_eq!(fill_unknown(&[Some(a), None, Some(b)]), Some(vec![a, PhotoSize { width: 6000, height: 4000, bytes: 9 }, b]));
+    let (a, b) = (PhotoSize::new(4000, 3000, 9).unwrap(), PhotoSize::new(6000, 4000, 5).unwrap());
+    assert_eq!(fill_unknown(&[Some(a), None, Some(b)]), Some(vec![a, PhotoSize { bytes: 9, ..b }, b]));
     assert_eq!(fill_unknown(&[None, None]), None);
     assert_eq!(PhotoSize::new(1, 1, 10), None, "a size of a pixel is unknown");
     assert_eq!(PhotoSize::new(10, 10, 0), None, "so is one without its file size");
@@ -502,8 +544,11 @@ fn a_photo_of_unknown_size_is_sized_from_its_header() {
     use std::sync::atomic::Ordering;
     let (dir, job) = bracketed_dngs("unknown-size");
     assert!(job.sizes.iter().all(|s| s.is_some_and(|s| (s.width, s.height) == (480, 320) && s.bytes > 0)), "the catalog's sizes: {:?}", job.sizes);
-    let unknown =
-        vec![None, Some(crate::merge::PhotoSize { width: 0, height: 0, bytes: 9 }), Some(crate::merge::PhotoSize { width: 1, height: 1, bytes: 9 })];
+    let unknown = vec![
+        None,
+        Some(crate::merge::PhotoSize { width: 0, height: 0, bytes: 9, samples: 0 }),
+        Some(crate::merge::PhotoSize { width: 1, height: 1, bytes: 9, samples: 1 }),
+    ];
     // three 480 × 320 photos need several MB: refused with 4 MB after reading only the headers
     let (small, reads) = counted(&job, unknown.clone(), 4e6, false);
     let e = small.run(&|_, _| true).err().unwrap_or_default();
@@ -527,10 +572,14 @@ fn a_photo_of_unknown_size_is_sized_from_its_header() {
 fn a_photo_larger_than_the_catalog_says_is_planned_again_before_it_is_decoded() {
     use std::sync::atomic::Ordering;
     let (dir, job) = bracketed_dngs("stale-size");
-    let stale = vec![Some(crate::merge::PhotoSize { width: 48, height: 32, bytes: 10 }); 3];
+    let stale = vec![crate::merge::PhotoSize::new(48, 32, 10); 3];
     let (small, reads) = counted(&job, stale.clone(), 4e6, false);
     let e = small.run(&|_, _| true).err().unwrap_or_default();
-    assert!(e.contains("IMG_0.dng has changed since it was imported (now 480×320") && e.contains("synchronize its folder"), "{e}");
+    assert!(
+        e.contains("IMG_0.dng needs more memory than the merge was planned with (planned as 48×32, 1 MB; its file is 480×320")
+            && e.contains("synchronize its folder"),
+        "{e}"
+    );
     assert!(e.contains("not enough memory for this HDR merge"), "{e}");
     assert_eq!(reads.load(Ordering::SeqCst), 1, "the first file read, not decoded");
     let (fits, _) = counted(&job, stale, 1e9, false);

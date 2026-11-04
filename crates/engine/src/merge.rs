@@ -26,7 +26,7 @@ use plan::FRAME_BYTES;
 #[cfg(test)]
 pub(crate) use plan::MIN_PLANNED_EDGE;
 pub use plan::PhotoSize;
-pub(crate) use plan::{fill_unknown, plan_memory, plan_preview};
+pub(crate) use plan::{fill_unknown, holds, plan_memory, plan_preview};
 
 /// Why `merge.hdrBatch` found nothing to merge.
 pub const NO_BRACKET_SETS: &str =
@@ -181,7 +181,7 @@ impl MergeJob {
             return Ok((Load { edge: self.preview, parallel: self.preview.is_some(), orient }, Vec::new()));
         };
         let load = match self.preview {
-            Some(edge) => Load { edge: Some(edge), parallel: plan_preview(&sizes, room, rayon::current_num_threads())?, orient },
+            Some(edge) => Load { edge: Some(edge), parallel: plan_preview(&self.kind, &sizes, room, rayon::current_num_threads())?, orient },
             None => Load { edge: plan_memory(&self.kind, &sizes, room)?, parallel: false, orient },
         };
         Ok((load, sizes))
@@ -200,41 +200,38 @@ impl MergeJob {
         // planned before anything is decoded: it runs as it is, with smaller frames (panoramas), or
         // is refused
         let (load, planned) = self.plan(room)?;
-        // a file larger than planned (changed since it was imported) is planned again before it is
-        // decoded: it goes on if the plan still holds
-        // a file larger than planned (changed since it was imported) is planned again, with every
-        // such file seen so far, before it is decoded: it goes on if the plan still holds
+        // just before each photo is decoded its header is read again, and the plan checked with it
+        // (and every photo checked so far): a raw's sensor can be larger than its picture, which the
+        // catalog keeps, and a file can have changed since it was imported
         let seen = std::sync::Mutex::new(planned.clone());
+        let threads = self.preview.map(|_| if load.parallel { rayon::current_num_threads() } else { 1 });
         let check = |i: usize, bytes: &[u8]| -> std::result::Result<(), String> {
             let (Some(&was), Some(now)) = (planned.get(i), PhotoSize::from_header(bytes)) else { return Ok(()) };
-            if u64::from(now.width) * u64::from(now.height) <= u64::from(was.width) * u64::from(was.height) && now.bytes <= was.bytes {
-                return Ok(());
-            }
             let mut sizes = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(s) = sizes.get_mut(i) {
                 *s = now;
             }
-            let same = match self.preview {
-                Some(_) => plan_preview(&sizes, room, rayon::current_num_threads()).map(|parallel| parallel || !load.parallel),
-                None => plan_memory(&self.kind, &sizes, room).map(|edge| edge == load.edge),
-            };
-            if same == Ok(true) {
-                return Ok(());
-            }
+            let Err(e) = holds(&self.kind, &sizes, room, load.edge, threads) else { return Ok(()) };
             let path = self.sources.get(i).map_or("a photo", |s| s.1.as_str());
-            let changed = format!(
-                "{path} has changed since it was imported (now {}×{}, {:.0} MB; the merge was planned for {}×{}, {:.0} MB): synchronize its folder and merge again",
-                now.width,
-                now.height,
-                mb(now.bytes as f64).ceil(),
+            let sensor = if now.samples > u64::from(now.width) * u64::from(now.height) {
+                format!(", {:.0} MP of raw samples", now.samples as f64 / 1e6)
+            } else {
+                String::new()
+            };
+            let changed = if (now.width, now.height, now.bytes) == (was.width, was.height, was.bytes) {
+                String::new()
+            } else {
+                "; if it changed since it was imported, synchronize its folder and merge again".to_owned()
+            };
+            Err(format!(
+                "{path} needs more memory than the merge was planned with (planned as {}×{}, {:.0} MB; its file is {}×{}, {:.0} MB{sensor}): {e}{changed}",
                 was.width,
                 was.height,
-                mb(was.bytes as f64).ceil()
-            );
-            Err(match same {
-                Err(e) => format!("{changed}; {e}"),
-                _ => changed,
-            })
+                mb(was.bytes as f64).ceil(),
+                now.width,
+                now.height,
+                mb(now.bytes as f64).ceil()
+            ))
         };
         // the photos' own pixels beside each frame's, when the plan made them smaller
         let reduced = self.preview.is_none() && load.edge.is_some() && planned.len() == self.sources.len();

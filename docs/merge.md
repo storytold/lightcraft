@@ -89,17 +89,19 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   file size in the catalog (when it has none, its file's header; when that can't be read either, the largest known),
   against the merge's memory: three quarters of the RAM, less the cache budget. Each phase is followed in the order
   it runs. Photos are decoded one at a time, always at full size, then made smaller: each holds its file and ~36 bytes
-  a pixel (48 when it is made smaller) beside the frames already held (12 bytes a pixel each). Issue #3708: until then
+  a pixel (48 when it is made smaller; a raw whose sensor has many more samples than its picture has pixels, 8 bytes
+  a sample instead when that is more) beside the frames already held (12 bytes a pixel each). Issue #3708: until then
   a merge was sized only after every photo was decoded, which could run out of memory first. A merge that fits runs
   as it always did; one with no size known at all runs unplanned. Just before each photo is decoded its header is
-  read again: a file larger than the catalog says (changed since it was imported) is planned again, and when the
-  plan no longer holds the merge stops before decoding it, naming the file.
+  read again and the plan checked with it (the catalog doesn't keep a raw's sensor size, and a file can have changed
+  since it was imported): when the plan no longer holds the merge stops before decoding it, naming the file.
 - A preview's photos are decoded at full size too, several at once: one at a time when several don't fit, and the
-  preview is refused when not even one fits.
+  preview is refused when not even that, or the merge or stitch of its small frames after it, fits.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
   photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
   4.8 / 6.3 GB for 3 / 4). Planned as 17 bytes a pixel of every frame and 12 of the largest, plus deghosting's 2048 px
-  maps (20 bytes a pixel): 3.9 / 5.0 / 6.1 GB for those without deghosting, 3–10 % above the measurements. An HDR
+  maps (20 bytes a pixel), or the frames and two saturation maps of each (20 bytes a pixel, measured for every frame
+  at once) when that is more: 3.9 / 5.0 / 6.1 GB for those without deghosting, 3–10 % above the measurements. An HDR
   keeps its photos' resolution: one that doesn't fit is refused with the memory it needs and has. Half-float frames
   would halve the per-frame share.
 - Panorama output keeps the photos' resolution, up to `maxMegapixels` (default 512) and what fits in the merge's
