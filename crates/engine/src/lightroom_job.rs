@@ -677,8 +677,8 @@ mod tests {
         }
     }
 
-    /// A file beside an XMP sidecar with develop settings (`Exposure2012 +2`), and a session whose
-    /// probe reads it with `hash`.
+    /// A file beside an XMP sidecar with develop settings (`Exposure2012 +2`, and `Clarity2012 +30`,
+    /// which the catalog's settings leave out), and a session whose probe reads it with `hash`.
     fn file_with_develop_sidecar(name: &str, hash: &'static str) -> (PathBuf, String, crate::Session) {
         let dir = crate::tests_xmp::temp_dir(name);
         let file = dir.join("photo.jpg");
@@ -686,7 +686,7 @@ mod tests {
         std::fs::write(
             dir.join("photo.xmp"),
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+2.00"/>
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+2.00" crs:Clarity2012="+30"/>
 </rdf:RDF></x:xmpmeta>"#,
         )
         .unwrap();
@@ -713,13 +713,24 @@ mod tests {
 
     /// The job's real route: the Lightroom job's own file import prepares `paths`, then the
     /// catalog (`data`, settings `Exposure2012 = -1.0` on every photo) is committed on top of it.
-    fn run_job(session: &mut crate::Session, mut prepared: PreparedLightroom, paths: Vec<String>, update_existing: bool) -> Value {
+    fn run_job(session: &mut crate::Session, prepared: PreparedLightroom, paths: Vec<String>, update_existing: bool) -> Value {
+        run_job_with(session, prepared, paths, update_existing, "s = { Exposure2012 = -1.0 }")
+    }
+
+    /// [`run_job`] with `settings` on every catalog photo.
+    fn run_job_with(
+        session: &mut crate::Session,
+        mut prepared: PreparedLightroom,
+        paths: Vec<String>,
+        update_existing: bool,
+        settings: &str,
+    ) -> Value {
         let mut job = LightroomJob::new(session, PathBuf::from("fixture.lrcat"), update_existing).unwrap();
         prepared.normal = job.import.prepare_files(paths, &AtomicBool::new(false));
         prepared.missing_sources.clear();
         prepared.update_existing = update_existing;
         for photo in &mut prepared.data.photos {
-            photo.settings = "s = { Exposure2012 = -1.0 }".into();
+            photo.settings = settings.into();
         }
         commit_prepared(session, prepared).unwrap().report
     }
@@ -750,6 +761,7 @@ mod tests {
             let kept = before.is_some() && !update_existing;
             let exposure = if kept { 0.75 } else { -1.0 };
             assert_eq!(photo.develop.light.exposure, exposure, "{case}: never the sidecar's +2");
+            assert_eq!(photo.develop.effects.clarity, 0.0, "{case}: a setting the catalog leaves out is not the sidecar's +30");
             assert_eq!(report["preservedExistingEdits"], u64::from(kept), "{case}: {report}");
             let added = before != Some(false);
             assert_eq!(
@@ -777,6 +789,7 @@ mod tests {
         assert_ne!(id, other, "{report}");
         let new = session.catalog.photo(id).unwrap();
         assert_eq!(new.develop.light.exposure, -1.0, "the catalog's settings, not the sidecar's +2 or the other photo's 0.75: {report}");
+        assert_eq!(new.develop.effects.clarity, 0.0, "a setting the catalog leaves out is not the sidecar's +30: {report}");
         assert_eq!(session.catalog.photo(other).unwrap().develop.light.exposure, 0.75, "the other photo is untouched");
         assert_eq!(report["preservedExistingEdits"], 0, "{report}");
         assert_eq!((report["added"].as_u64(), report["alreadyInLibrary"].as_u64()), (Some(1), Some(0)), "{report}");
@@ -802,7 +815,9 @@ mod tests {
         let report = run_job(&mut session, prepared, vec![path.clone()], false);
         for source in ["1", "2"] {
             let id = lightcraft_catalog::PhotoId(report["mapping"][source].as_u64().unwrap());
-            assert_eq!(session.catalog.photo(id).unwrap().develop.light.exposure, -1.0, "catalog photo {source}: {report}");
+            let photo = session.catalog.photo(id).unwrap();
+            assert_eq!(photo.develop.light.exposure, -1.0, "catalog photo {source}: {report}");
+            assert_eq!(photo.develop.effects.clarity, 0.0, "catalog photo {source}: not the sidecar's +30: {report}");
         }
         assert_eq!(report["preservedExistingEdits"], 0, "{report}");
         std::fs::remove_dir_all(dir).unwrap();
@@ -930,5 +945,78 @@ mod tests {
             "{report}"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Settings a file's XMP gives the record the job makes of it (embedded in a DNG, or a sidecar)
+    /// are not edits the library had: the catalog's settings win without "update existing", and
+    /// nothing counts as preserved. They start from the camera's defaults, so a setting the catalog
+    /// leaves out (Lightroom omits those at zero) is taken neither from the file nor from a default
+    /// import preset. (Adapted from #3435.)
+    #[test]
+    fn a_photo_the_job_adds_takes_the_catalogs_settings_over_its_files_xmp() {
+        let dir = crate::tests_xmp::temp_dir("lr-job-embedded-edits");
+        let saved = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+1.00" crs:Dehaze="0" crs:Clarity2012="+20"/></rdf:RDF></x:xmpmeta>"#;
+        let embedded = dir.join("embedded.dng");
+        std::fs::write(&embedded, crate::tests_xmp::synthetic_dng_with(Some(saved), Default::default())).unwrap();
+        let beside = dir.join("sidecar.dng");
+        std::fs::write(&beside, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        std::fs::write(dir.join("sidecar.xmp"), saved).unwrap();
+        let paths: Vec<String> = [&embedded, &beside].iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let mut session = crate::Session::new().with_fs();
+        // a default import preset sets a value the catalog leaves out too
+        session.presets.push(lightcraft_develop::Preset {
+            id: "look".into(),
+            name: "Look".into(),
+            group: "g".into(),
+            settings: serde_json::json!({"effects": {"texture": 12.0}}),
+            favorite: false,
+            builtin: false,
+        });
+        session.import_defaults.raw_preset = Some("look".into());
+        let mut prepared = with_second_photo(prepared_for(&session, &paths[0], 0), &paths[1]);
+        for photo in &mut prepared.data.photos {
+            for (key, value) in
+                [("fileFormat", serde_json::json!("DNG")), ("fileWidth", serde_json::json!(32)), ("fileHeight", serde_json::json!(24))]
+            {
+                photo.image.insert(key.into(), value);
+            }
+        }
+        let report = run_job_with(&mut session, prepared, paths, false, "s = { Exposure2012 = 1, Dehaze = -50 }");
+        assert_eq!(report["imported"], 2, "{report}");
+        assert_eq!(report["preservedExistingEdits"], 0, "the library held nothing before the import: {report}");
+        assert_eq!(session.catalog.len(), 2, "{report}");
+        for p in session.catalog.photos() {
+            assert_eq!(p.develop.light.exposure, 1.0, "{}: the file's saved exposure and the catalog's agree", p.file_name);
+            assert_eq!(p.develop.effects.dehaze, -50.0, "{}: the catalog's later edit is kept, not the file's", p.file_name);
+            assert_eq!(p.develop.effects.clarity, 0.0, "{}: a setting the catalog leaves out is not taken from the file", p.file_name);
+            assert_eq!(p.develop.effects.texture, 0.0, "{}: nor from a default import preset", p.file_name);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A new virtual copy is a record the job makes too: its catalog settings start from the
+    /// camera's defaults, not from its master's, so a setting the copy's develop text leaves out
+    /// (Lightroom omits those at zero) is zero, while the master keeps its own.
+    #[test]
+    fn a_new_virtual_copy_takes_none_of_its_masters_settings_the_catalog_leaves_out() {
+        let mut session = crate::Session::new();
+        let mut prepared = prepared_for(&session, "/missing/lr-job-copy.jpg", 3);
+        prepared.data.photos[0].settings = "s = { Exposure2012 = -1.0, Clarity2012 = 30 }".into();
+        let mut copy = prepared.data.photos[0].clone();
+        copy.source_id = 2;
+        copy.uuid = "fixture-copy".into();
+        copy.image.insert("id_local".into(), serde_json::json!(2));
+        copy.image.insert("masterImage".into(), serde_json::json!(1));
+        copy.image.insert("copyName".into(), serde_json::json!("Copy 1"));
+        copy.settings = "s = { Exposure2012 = 0.5 }".into();
+        prepared.data.photos.push(copy);
+        prepared.data.images = 2;
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        let develop =
+            |source: &str| session.catalog.photo(lightcraft_catalog::PhotoId(report["mapping"][source].as_u64().unwrap())).unwrap().develop.clone();
+        let (master, copy) = (develop("1"), develop("2"));
+        assert_eq!((master.light.exposure, master.effects.clarity), (-1.0, 30.0), "{report}");
+        assert_eq!((copy.light.exposure, copy.effects.clarity), (0.5, 0.0), "the copy's own settings, not its master's clarity: {report}");
+        assert_eq!(report["preservedExistingEdits"], 0, "{report}");
     }
 }

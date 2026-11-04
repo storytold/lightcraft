@@ -1418,6 +1418,13 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if keep_develop {
             preserved += 1;
         }
+        // Lightroom leaves settings at zero (Clarity, Texture, …) out of its develop text, so the
+        // catalog's settings for a record the job made start from the camera's defaults, not from
+        // what its file's XMP, a default import preset or a virtual copy's master gave it (#3434).
+        // With no develop text there is nothing to replace.
+        if !origin.was_there() && !src.settings.is_empty() {
+            p.develop = Arc::new(p.camera_defaults());
+        }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
         if !src.xmp.is_empty() {
