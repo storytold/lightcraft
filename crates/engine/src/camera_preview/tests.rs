@@ -1280,10 +1280,13 @@ fn assert_lowered(fitted: &CameraLook, fixed: &CameraLook, what: &str) {
         }
     }
     assert!(at_most(&fixed.tone, &fitted.tone), "{what}: brighter than the fitted curve somewhere");
-    // the same check spelled out, from deep shadows to far past the last knot (the shoulder)
+    // the same check spelled out, from deep shadows to far past the last knot (the shoulder), with
+    // the shoulder of V1 and V2 and the one of V3 (issue #1632)
     for i in 0..=2400 {
         let x = 0.001 * 1.005f32.powi(i);
         assert!(fixed.tone.apply(x) <= fitted.tone.apply(x) + 1e-5, "{what} at {x}: {} > {}", fixed.tone.apply(x), fitted.tone.apply(x));
+        let (v3, own) = (fixed.tone.apply_rolloff(x), fitted.tone.apply_rolloff(x));
+        assert!(v3 <= own + 1e-5, "{what} at {x}, V3: {v3} > {own}");
     }
 }
 

@@ -110,21 +110,38 @@ impl CameraTone {
         let slope = ((b[1] - a[1]) / (b[0] - a[0])).max(0.1);
         // `CameraTone::new` keeps the last knot below 1, so the gap is positive (no floor: one
         // would step the curve down past a knot within it of white)
-        let gap = 1.0 - b[1];
-        let k = 1.0 / ROLLOFF_STOPS;
-        // d(display)/d(stop) at the knot is slope · x · ln 2; the shoulder's is gap · c · k · ln 2
-        // (bounded, so `c · 0` right past the knot stays 0 for a gap of a few ulps)
-        let c = (slope * b[0] / (gap * k)).min(1e30);
-        let t = (y / b[0]).log2();
-        1.0 - gap / (1.0 + c * ((k * t).exp2() - 1.0))
+        rolloff_past(y, b, slope)
     }
 }
 
-/// Stops in which the gap between a V3 camera curve and white halves, far past its last knot
-/// ([`CameraTone::apply_rolloff`]). With 1, the sensor's white renders at 8-bit 239–250 on the CC0
-/// corpus files (Sony, Nikon, Fujifilm) at Exposure 0 and below 254 up to Exposure +2, where the
-/// extension of [`CameraTone::apply`] reaches 254–255 by Exposure +1 (issue #1632).
+/// Stops in which the gap between a V3 curve and white halves, far past where its shoulder starts
+/// ([`CameraTone::apply_rolloff`], [`ToneMap::rolloff_hdr`]). With 1, the sensor's white renders at
+/// 8-bit 239–250 on the CC0 corpus files with a camera curve (Sony, Nikon, Fujifilm) at Exposure 0
+/// and below 254 up to Exposure +2, where the extension of [`CameraTone::apply`] reaches 254–255 by
+/// Exposure +1 (issue #1632).
 pub const ROLLOFF_STOPS: f32 = 1.0;
+
+/// Process V3's shoulder past a knee at scene luminance `x` and display `o` (below 1), where the
+/// curve rises at `slope` (display per unit of scene luminance): the gap to white is
+/// `gap / (1 + c·(2^(k·t) − 1))` at `t = log2(y / x)` stops past the knee, `k = 1 / ROLLOFF_STOPS`,
+/// so it halves every [`ROLLOFF_STOPS`] stops in the end. `c` gives it the curve's slope at the
+/// knee: d(display)/d(stop) there is `slope · x · ln 2` on the curve and `gap · c · k · ln 2` on the
+/// shoulder. Monotone for `y ≥ x`, finite, and at most 1 (1 only by rounding, hundreds of stops up).
+fn rolloff_past(y: f32, [x, o]: [f32; 2], slope: f32) -> f32 {
+    let gap = 1.0 - o;
+    let k = 1.0 / ROLLOFF_STOPS;
+    // bounded, so `c · 0` right past the knee stays 0 for a gap of a few ulps
+    let c = (slope * x / (gap * k)).min(1e30);
+    let t = (y / x).log2();
+    1.0 - gap / (1.0 + c * ((k * t).exp2() - 1.0))
+}
+
+/// Stops below its white point where process V3's generic raw curve ([`ToneMap::rolloff_hdr`])
+/// leaves the extended Reinhard curve for the [`ROLLOFF_STOPS`] shoulder, instead of clipping at
+/// the white point. With ½, the sensor's white of a raw without a camera curve (scene 1.0, about
+/// ¼ stop below that white point at default settings) renders at about 8-bit 235, 248 and 252 at
+/// Exposure 0, +1 and +2 where V1 and V2 render 239, 255 and 255 (issue #1632).
+pub const GENERIC_KNEE_STOPS: f32 = 0.5;
 
 /// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
 const HDR_FROM_EV: f32 = 1.5;
@@ -180,6 +197,18 @@ impl ToneMap {
     /// white point moved up by the headroom, so the result stays monotone, never exceeds `peak`,
     /// and reaches it there (within the table's range).
     pub fn hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        ToneMap::generic(contrast, whites, blacks, peak, false)
+    }
+
+    /// [`ToneMap::hdr`] of process V3 (issue #1632): from [`GENERIC_KNEE_STOPS`] below the white
+    /// point the curve rolls off into white in stops, with the same value and slope at the join,
+    /// instead of reaching white about ¼ stop past the sensor's white and clipping there. The
+    /// result stays below 1 (SDR white) and is the same as [`ToneMap::hdr`]'s below the join.
+    pub fn rolloff_hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        ToneMap::generic(contrast, whites, blacks, peak, true)
+    }
+
+    fn generic(contrast: f64, whites: f64, blacks: f64, peak: f32, rolloff: bool) -> ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let c = (contrast / 100.0) as f32;
         let slope = if c >= 0.0 { 1.0 + 0.55 * c } else { 1.0 + 0.4 * c };
@@ -188,12 +217,17 @@ impl ToneMap {
         let wl = GREY * 2f32.powf(white_ev);
         let pre = 1.0 + GREY / wl; // keep grey near grey
         let b = (blacks / 100.0) as f32;
+        // extended Reinhard with white point wl: y(1 + y/wl²)/(1 + y), reaching 1 at wl
+        let reinhard = |y: f32| y * (1.0 + y / (wl * wl)) / (1.0 + y);
+        // V3's knee, below the white point, and the curve's slope there: (1 + y(2 + y)/wl²)/(1 + y)²
+        let knee = wl * (-GENERIC_KNEE_STOPS).exp2();
+        let knee_slope = (1.0 + knee * (2.0 + knee) / (wl * wl)) / ((1.0 + knee) * (1.0 + knee));
+        let knee = [knee, reinhard(knee)];
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
                 let y = GREY * 2f32.powf(ev * slope) * pre;
-                // extended Reinhard with white point wl: y(1 + y/wl²)/(1 + y)
-                let mut o = y * (1.0 + y / (wl * wl)) / (1.0 + y);
+                let mut o = if rolloff && y > knee[0] && knee[1] < 1.0 { rolloff_past(y, knee, knee_slope) } else { reinhard(y) };
                 o = o.min(1.0);
                 // Toe: blacks < 0 crushes, > 0 lifts.
                 if b < 0.0 {
@@ -427,6 +461,44 @@ mod tests {
                 assert!((0.0..=peak).contains(&o) && o >= prev - 1e-6, "{peak} {i}: {o}");
                 prev = o;
             }
+        }
+    }
+
+    #[test]
+    fn generic_rolloff_joins_the_curve_smoothly_and_never_reaches_white() {
+        for (c, w, b) in [(0.0, 0.0, 0.0), (100.0, 100.0, -100.0), (-100.0, -100.0, 100.0), (50.0, -30.0, -40.0), (0.0, -100.0, 0.0)] {
+            for peak in [1.0f32, 4.0] {
+                let (clip, roll) = (ToneMap::hdr(c, w, b, peak), ToneMap::rolloff_hdr(c, w, b, peak));
+                let (clip, roll) = (clip.lut(), roll.lut());
+                // the generic curve up to the knee, never brighter past it
+                let join = roll.iter().zip(clip).position(|(r, c)| r != c).expect("the shoulder starts inside the table");
+                assert!(join > 2 && roll[join] < clip[join], "{c} {w} {b} {peak}: {join}");
+                for (i, (r, c)) in roll.iter().zip(clip).enumerate() {
+                    assert!(*r <= c + 1e-6, "{c} {w} {b} {peak} {i}: {r} > {c}");
+                }
+                // same value and slope at the join: the step across it is the step before it
+                let (before, across) = (roll[join - 1] - roll[join - 2], roll[join] - roll[join - 1]);
+                assert!((across / before - 1.0).abs() < 0.02, "{c} {w} {b} {peak}: {before} then {across}");
+                // monotone, and below white where the V1/V2 curve clips (SDR) or lifts to `peak` (HDR)
+                assert!(roll.windows(2).all(|p| p[1] >= p[0] - 1e-6), "{c} {w} {b} {peak}");
+                if peak == 1.0 {
+                    assert_eq!(clip[LUT_N - 1], 1.0);
+                    // close to it at the top of the table at default settings (10 EV over grey);
+                    // Whites −100 moves the white point, and so the shoulder, up 1.6 stops
+                    let top = roll[LUT_N - 1];
+                    assert!(top < 1.0 && (top > 0.999 || w < 0.0), "{c} {w} {b}: {top}");
+                }
+            }
+        }
+        // no kink where V1/V2 clip: there the clipped curve stops rising at once
+        let (clip, roll) = (ToneMap::new(0.0, 0.0, 0.0), ToneMap::rolloff_hdr(0.0, 0.0, 0.0, 1.0));
+        let kink = |lut: &[f32]| lut.windows(3).filter(|p| p[1] - p[0] > 1e-5).map(|p| 1.0 - (p[2] - p[1]) / (p[1] - p[0])).fold(0.0f32, f32::max);
+        assert!(kink(clip.lut()) > 0.9);
+        assert!(kink(roll.lut()) < 0.05, "{}", kink(roll.lut()));
+        // hostile input (NaN passes through `ToneMap::apply` as on every curve)
+        for y in [f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, f32::MAX, f32::MIN_POSITIVE] {
+            let o = roll.apply(y);
+            assert!(o.is_finite() && (0.0..=1.0).contains(&o), "{y}: {o}");
         }
     }
 

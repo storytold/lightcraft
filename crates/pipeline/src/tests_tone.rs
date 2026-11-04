@@ -296,3 +296,33 @@ fn exposure_keeps_the_highlights_a_camera_curve_recorded() {
         assert!((v2.apply(y) - v3.apply(y)).abs() < 1e-6, "{y}");
     }
 }
+
+/// Issue #1632: a raw without a camera curve takes the generic curve, which reached white about ¼
+/// stop past the sensor's white (scene 1.0) and clipped there, so Exposure +1 rendered the top stop
+/// the sensor recorded (scene 0.5..1.0) at 8-bit 255 from its upper half. The latest process rolls
+/// off in stops from half a stop below the white point; V1 and V2 keep their look.
+#[test]
+fn exposure_keeps_the_highlights_the_generic_curve_recorded() {
+    use lightcraft_color::transfer::linear_to_srgb;
+    let info = SourceInfo { raw: true, ..SourceInfo::default() };
+    let at = |process: Process, ev: f32, y: f32| {
+        let o = crate::finish::base_tone(&on(process), &info, 1.0).apply(y * ev.exp2());
+        (linear_to_srgb(o.clamp(0.0, 1.0)) * 255.0).round()
+    };
+    for ev in [0.0, 1.0, 2.0] {
+        let (white, half) = (at(Process::LATEST, ev, 1.0), at(Process::LATEST, ev, 0.5));
+        assert!(white <= 253.0, "Exposure {ev:+}: the sensor's white renders at {white}");
+        assert!(white - half >= 3.0, "Exposure {ev:+}: the top stop spans {half}..{white}");
+    }
+    // the curve still reaches white, 5 stops past the sensor's
+    assert_eq!(at(Process::LATEST, 5.0, 1.0), 255.0);
+    // the earlier processes are frozen: the sensor's white at 255 from Exposure +1
+    assert_eq!(at(Process::V2, 1.0, 1.0), 255.0);
+    assert_eq!(at(Process::V1, 1.0, 1.0), 255.0);
+    assert_eq!(at(Process::V2, 0.0, 1.0), at(Process::V1, 0.0, 1.0));
+    // below the knee every process renders the same curve
+    let (v2, v3) = (crate::finish::base_tone(&on(Process::V2), &info, 1.0), crate::finish::base_tone(&on(Process::LATEST), &info, 1.0));
+    for y in [0.003, 0.02, 0.18, 0.4, 0.6] {
+        assert_eq!(v2.apply(y), v3.apply(y), "{y}");
+    }
+}
