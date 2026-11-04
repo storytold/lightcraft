@@ -994,18 +994,30 @@ impl SyncCommit {
             SyncStep::Sidecars(read) => {
                 let mut ops = Vec::new();
                 let mut held = Vec::new();
+                // an entry's warnings and held crop count only once its metadata is in the library
+                let mut warnings = Vec::new();
                 for (id, path, sc) in read {
-                    if let Ok(sc) = &sc {
-                        if let Some(crop) = &sc.unframed_crop {
-                            held.push((id, path.clone(), crop.clone()));
+                    let built = sc.map_err(EngineError::Other).and_then(|sc| {
+                        let crop = sc.unframed_crop.clone();
+                        let found: Vec<_> = sc
+                            .warnings
+                            .iter()
+                            .cloned()
+                            .map(|mut w| {
+                                w.path = path.clone();
+                                w
+                            })
+                            .collect();
+                        s.sidecar_op(id, sc).map(|op| (op, crop, found))
+                    });
+                    match built {
+                        Ok((op, crop, found)) => {
+                            ops.push(op);
+                            if let Some(crop) = crop {
+                                held.push((id, path, crop));
+                            }
+                            warnings.extend(found);
                         }
-                        report.warnings.extend(sc.warnings.iter().cloned().map(|mut w| {
-                            w.path = path.clone();
-                            w
-                        }));
-                    }
-                    match sc.map_err(EngineError::Other).and_then(|sc| s.sidecar_op(id, sc)) {
-                        Ok(op) => ops.push(op),
                         Err(e) => report.failed.push((path, e.to_string())),
                     }
                 }
@@ -1014,6 +1026,7 @@ impl SyncCommit {
                     match s.commit("Read Metadata from File", Op::Batch { ops }) {
                         Ok(()) => {
                             report.read += n;
+                            report.warnings.extend(warnings);
                             for (id, path, crop) in held {
                                 s.sync_frames.acknowledge(id, path, crop);
                             }

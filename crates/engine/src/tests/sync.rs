@@ -774,6 +774,25 @@ fn review_synchronize_keeps_new_photo_import_warnings() {
 }
 
 #[test]
+fn review_a_sidecar_that_cannot_be_applied_reports_no_warnings() {
+    let dir = Scratch::new("review-unapplied-warnings");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/c.png"), 3);
+    let (_, mut commit) = readied(&mut s, &dir, Default::default());
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:UprightVersion="151388160" crs:UprightCenterMode="0" crs:UprightFocalMode="0" crs:UprightPreview="False" crs:UprightTransformCount="1" crs:UprightFourSegmentsCount="0" crs:UprightTransform_0="unsupported" crs:PerspectiveUpright="1"/></rdf:RDF></x:xmpmeta>"#;
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap();
+    let sc = crate::sidecar::parse_sidecar(xmp, crate::crs::Target::for_photo(a)).unwrap();
+    assert!(!sc.warnings.is_empty(), "the packet warns about its Upright geometry");
+    // a photo that is gone by the time the step lands (sidecar_op fails for it)
+    let gone = lightcraft_catalog::PhotoId(u64::MAX);
+    let path = dir.path("trip/gone.png");
+    commit.apply(&mut s, crate::sync::SyncStep::Sidecars(vec![(gone, path.clone(), Ok(sc))]));
+    let r = commit.finish(&mut s);
+    assert!(r.failed.iter().any(|(p, _)| *p == path), "{r:?}");
+    assert!(r.warnings.iter().all(|w| w.path != path), "no warnings for metadata that never landed: {r:?}");
+}
+
+#[test]
 fn review_synchronize_reuses_only_unchanged_photo_frame_probes() {
     use std::sync::{
         Arc,
