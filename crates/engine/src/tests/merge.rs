@@ -330,7 +330,7 @@ fn hdr_panorama(bracket: usize) -> crate::merge::MergeKind {
 /// Issue #3708: a panorama is planned before its photos are decoded. Five 24 MP photos decoded one
 /// at a time peak at ~2.05 GB (four frames held, 12 bytes a pixel, beside the fifth decoding: 36
 /// bytes a pixel and its file): with 2.1 GB they run at full size; with 1.5 GB they are decoded
-/// smaller, as large as fits beside a panorama as large as they are; with 400 MB not even one
+/// smaller, as large as fits (and leaves the panorama as large as memory allows); with 400 MB not even one
 /// decodes (a photo is decoded at full size, then made smaller), and the merge is refused with the
 /// memory it needs and has.
 #[test]
@@ -341,8 +341,8 @@ fn a_panorama_is_planned_before_its_photos_are_decoded() {
     assert_eq!(plan_memory(&panorama(), &photos, 1e12), Ok(None));
     assert!(plan_memory(&panorama(), &photos, 2.0e9).unwrap().is_some(), "the fifth decode doesn't fit beside four frames");
     let edge = plan_memory(&panorama(), &photos, 1.5e9).unwrap().expect("made smaller");
-    // 1.5 GB / 68 bytes = 22 MP of frames: 6000 × √(22 / 120) ≈ 2569 px
-    assert!((2500..2600).contains(&edge), "{edge}");
+    // the fifth decode (1.18 GB) leaves room for four frames of ~6.7 MP: 6000 × √(6.7 / 24) ≈ 3160 px
+    assert!((3100..3200).contains(&edge), "{edge}");
     let e = plan_memory(&panorama(), &photos, 0.4e9).unwrap_err();
     assert!(e.starts_with("not enough memory for this panorama"), "{e}");
     assert!(e.contains(&format!("made {MIN_PLANNED_EDGE} px on the long side")), "{e}");
@@ -620,8 +620,9 @@ fn a_panorama_of_photos_too_large_for_memory_is_made_from_smaller_frames() {
     assert_eq!(r["used"].as_array().map(Vec::len), Some(5), "{r}");
     assert_eq!(r["limit"], "memory", "{r}");
     let (mp, native) = (r["megapixels"].as_f64().unwrap(), r["nativeMegapixels"].as_f64().unwrap());
-    // at most room / 68 bytes; the photos' own resolution is ~(1600 / 1024)² × the frames'
-    assert!(mp <= room / 68e6 && native > 2.0 * mp, "{r}");
+    // at most room / 68 bytes (the output's rounding to whole pixels aside); the photos' own
+    // resolution, more than twice that
+    assert!(mp <= room / 68e6 * 1.01 && native > 2.0 * mp, "{r} {}", room / 68e6);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -710,4 +711,22 @@ fn a_jpeg_xl_is_planned_from_its_headers_and_an_unplanned_preview_decodes_one_at
     assert!(load.parallel, "planned: in parallel when that fits");
     let (load, planned) = job(b"not a photo".to_vec()).plan(known(1e12)).unwrap();
     assert!(planned.is_empty() && !load.parallel, "unplanned: one at a time");
+}
+
+/// A panorama whose decode is just over its memory is decoded only as much smaller as it must be:
+/// five 24 MP photos peak at ~2.05 GB, so with 2.0 GB they are made smaller, but not halved (the
+/// plan used to keep all frames under the blend's memory, 2.0 GB / 68 bytes = 29 MP: ~2970 px).
+/// Frames up to ~78 MP still leave the stitch as large as memory allows (2.0 GB / 68 bytes); larger
+/// ones would leave less room for its projected tiles and make the panorama smaller.
+#[test]
+fn a_panorama_just_over_its_memory_is_made_only_a_little_smaller() {
+    use crate::merge::{fit_in_memory, plan_memory};
+    let (photos, room) = (photos_24mp(5), 2.0e9);
+    let edge = plan_memory(&panorama(), &photos, room).unwrap().expect("made smaller");
+    assert!((4500..6000).contains(&edge), "{edge}");
+    let frames = |edge: usize| 5.0 * photos[0].decoded(Some(edge));
+    let pano = lightcraft_merge::PanoOptions::default();
+    let stitch = |edge: usize| fit_in_memory(&pano, frames(edge), room).unwrap().max_megapixels;
+    assert!((stitch(edge) - room / 68e6).abs() < 1e-9, "as large as memory allows: {}", stitch(edge));
+    assert!(stitch(edge + 100) < stitch(edge), "larger frames make it smaller");
 }

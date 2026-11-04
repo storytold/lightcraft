@@ -230,19 +230,19 @@ fn what(kind: &MergeKind, preview: bool) -> &'static str {
 /// Plan a full-size merge of photos of `sizes` against `room` bytes (the merge's memory,
 /// [`super::merge_memory`]) before any is decoded. `Ok(None)`: it fits at full size, and runs as it
 /// always did. `Ok(Some(edge))`: a panorama's (or HDR panorama's) photos are decoded at most `edge`
-/// px on their long side, as large as fits beside a panorama as large as they are (the result says
-/// `limit: "memory"`); an HDR keeps its photos' resolution or is refused. Refused when not even
+/// px on their long side, as large as fits and still leaves the panorama as large as memory allows
+/// (the result says `limit: "memory"`); an HDR keeps its photos' resolution or is refused. Refused when not even
 /// [`MIN_PLANNED_EDGE`] fits, naming the memory needed and allowed.
 pub(crate) fn plan_memory(kind: &MergeKind, sizes: &[PhotoSize], room: f64) -> Result<Option<usize>, String> {
     let fits = |edge: Option<usize>| fits_in(kind, need(kind, sizes, edge), room);
     if fits(None) {
         return Ok(None);
     }
-    if pano_of(kind).is_none() {
+    let Some(pano) = pano_of(kind) else {
         // an HDR is its photos' resolution: not made smaller than them
         let how = format!("with its {} photos at full size,", sizes.len());
         return Err(not_enough(what(kind, false), &how, need(kind, sizes, None).0, room));
-    }
+    };
     let long = sizes.iter().map(|s| s.long()).max().unwrap_or(0);
     let least = MIN_PLANNED_EDGE.min(long);
     if least >= long || !fits(Some(least)) {
@@ -250,12 +250,19 @@ pub(crate) fn plan_memory(kind: &MergeKind, sizes: &[PhotoSize], room: f64) -> R
         let how = if least < long { format!("even with its photos made {least} px on the long side,") } else { "even at its least,".to_owned() };
         return Err(not_enough(what(kind, false), &how, least_need(kind, need(kind, sizes, Some(least))), room));
     }
-    // the largest edge whose frames fit beside a panorama as large as they are, else the smallest
-    let stitched = |edge: usize| need(kind, sizes, Some(edge)).1.unwrap_or(0.0);
+    // the largest edge whose frames fit and leave the stitch as large as it can be (what memory
+    // allows for the blend, or the frames' own pixels, or what was asked): beyond it the frames
+    // leave less room for the projected tiles ([`fit_in_memory`]), and the panorama comes out
+    // smaller than with smaller frames
+    let full = |edge: usize| {
+        let px = need(kind, sizes, Some(edge)).1.unwrap_or(0.0);
+        let largest = (room / PANO_BLEND_BYTES).min(px).min(pano.max_megapixels * 1e6);
+        (room - px * FRAME_BYTES) / PANO_TILE_BYTES >= largest
+    };
     let (mut lo, mut hi) = (least, long);
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
-        if fits(Some(mid)) && stitched(mid) * PANO_BLEND_BYTES <= room {
+        if fits(Some(mid)) && full(mid) {
             lo = mid;
         } else {
             hi = mid;

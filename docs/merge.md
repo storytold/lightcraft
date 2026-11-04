@@ -114,8 +114,8 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   or the smaller `maxMegapixels` asked for (at least 0.1 MP), or the photos' own pixels when they have less. A merge
   whose memory can't hold the floor is refused with the memory it needs and has (issue #3708; until then the 40 MP
   floor was kept whatever the memory, and could run out of it). Photos that don't fit at full
-  size are decoded smaller, as large as fits beside a panorama as large as they are, and never under 1024 px on the
-  long side (the preview's frames): the result says `limit: "memory"`, and `nativeMegapixels` is still the photos' own
+  size are decoded smaller, as large as fits and still leaves the panorama as large as memory allows (frames above
+  about 1/25 of the memory in pixels leave less room for projecting it), and never under 1024 px on the long side (the preview's frames): the result says `limit: "memory"`, and `nativeMegapixels` is still the photos' own
   resolution. One that doesn't fit even then is refused. An HDR panorama holds all its brackets' photos before merging
   them, one bracket at a time; with the bracket left to EXIF, every size it could be is planned for.
 - The browser build has no file access for merges yet.
