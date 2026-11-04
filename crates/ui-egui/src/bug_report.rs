@@ -130,10 +130,16 @@ fn hide_photo_names(text: &str) -> String {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     for (i, &(at, c)) in chars.iter().enumerate() {
         let next = at + c.len_utf8();
+        // punctuation inside a path's last name is part of the name (`Client (1).CR2`, `[final].jpg`,
+        // `O'Brien.CR2`) until a name has been hidden there; after that it ends a word again
+        let in_basename = after_path.is_some_and(|p| hidden_end <= p);
+        // an apostrophe between letters is part of a word anywhere (`O'Brien.CR2`)
+        let in_word = c == '\'' && i > 0 && chars.get(i - 1).is_some_and(|(_, l)| l.is_alphanumeric())
+            && chars.get(i + 1).is_some_and(|(_, r)| r.is_alphanumeric());
         if c == '/' || c == '\\' {
             after_path = Some(next);
             after_space = next;
-        } else if separates(c) {
+        } else if separates(c) && !in_word && !(in_basename && matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '\'' | ',' | ';' | '=')) {
             after_path = None;
             after_space = next;
         } else if c.is_whitespace() {
@@ -415,6 +421,16 @@ mod tests {
         assert_eq!(redact("no home given: /Users/ann/x.jpg", None), "no home given: /Users/ann/<photo>.jpg");
         // never cuts inside a character
         assert_eq!(redact("写真/桜.jpg ✓", None), "写真/<photo>.jpg ✓");
+        // punctuation inside a photo's name is part of it (#1128 review): the whole name is hidden
+        assert_eq!(
+            redact("import /Users/ann/Pictures/Private Client (1).CR2: no preview", home),
+            "import ~/Pictures/<photo>.CR2: no preview"
+        );
+        assert_eq!(redact("/Users/ann/Wedding/[final].jpg", home), "~/Wedding/<photo>.jpg");
+        assert_eq!(redact("/Users/ann/O'Brien.CR2 and O'Brien.CR2", home), "~/<photo>.CR2 and <photo>.CR2");
+        assert_eq!(redact(r"C:\Users\ann\Smith, J. {2}.NEF", Some(r"C:\Users\ann")), r"~\<photo>.NEF");
+        // after a hidden name, the same marks end words again
+        assert_eq!(redact("/Users/ann/x.jpg (DSC_1.nef)", home), "~/<photo>.jpg (<photo>.nef)");
     }
 
     #[test]

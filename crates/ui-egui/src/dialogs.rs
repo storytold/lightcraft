@@ -579,6 +579,8 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
                     | Dialog::LensDatabase { .. }
+                    // a report that can't be written or opened keeps what was typed (#1128 review)
+                    | Dialog::ReportBug { .. }
             ) =>
         {
             app.toast(ctx, e)
