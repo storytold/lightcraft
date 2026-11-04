@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-03
+
+### Invalid XMP pixel dimensions are ignored
+- Fractional and out-of-range dimensions no longer become truncated or saturated pixel sizes. A valid alternate EXIF dimension can still fill the field, while the original XMP property remains available in metadata details.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
