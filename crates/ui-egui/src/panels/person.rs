@@ -445,10 +445,10 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());
-    if more {
-        crate::widgets::announce(&resp, name.to_string());
-    } else {
+    if !more && app.ui.person_selection.active {
         crate::widgets::announce_selected(&resp, name.to_string(), app.ui.person_selection.faces.contains(&(f.photo, f.index)));
+    } else {
+        crate::widgets::announce(&resp, name.to_string());
     }
     register(ui, format!("{salt}:{}:{}", f.photo, f.index), r);
     // the × is added after the tile, so it wins where they overlap
@@ -595,8 +595,9 @@ mod tests {
     #[test]
     fn confirmed_tiles_announce_selection() {
         use egui_kittest::{Harness, kittest::NodeT};
-        for selected in [false, true] {
+        for (active, selected) in [(false, false), (false, true), (true, false), (true, true)] {
             let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            app.ui.person_selection.active = active;
             if selected {
                 app.ui.person_selection.faces.insert((99, 0));
             }
@@ -621,7 +622,7 @@ mod tests {
             let node = h.root().children_recursive().find(|n| n.accesskit_node().label().as_deref() == Some("Person")).unwrap();
             assert_eq!(
                 node.accesskit_node().toggled(),
-                Some(if selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
+                active.then_some(if selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
             );
         }
     }

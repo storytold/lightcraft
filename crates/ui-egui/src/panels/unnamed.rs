@@ -70,12 +70,21 @@ pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
     }
     let v = app.session.execute("faces.unnamed", &json!({})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
-    if app.caches.unnamed.as_ref().is_some_and(|(old, _, _, _)| *old != rev) {
-        // A removed region can leave another face at the same index. Do not transfer the
-        // reviewed selection to that face, even when its photo/index pair still exists.
-        app.ui.unnamed_selected.clear();
-        app.ui.unnamed_anchor = None;
-        app.ui.unnamed_focus = false;
+    if let Some((_, _, _, old)) = &app.caches.unnamed {
+        // Keep selections across unrelated edits and background detections, but never transfer
+        // one to a different box that reuses its photo/index pair. Validate every refetch, since
+        // recognition can also change display boxes/order without a catalog revision.
+        let before: std::collections::HashMap<_, _> = old.faces.iter().map(|f| ((f.photo, f.index), f.view)).collect();
+        let current: std::collections::HashMap<_, _> = list.faces.iter().map(|f| ((f.photo, f.index), f.view)).collect();
+        app.ui.unnamed_selected.retain(|key| matches!((before.get(key), current.get(key)), (Some(a), Some(b)) if a == b));
+        // The anchor refers to a position, not a face key. Rating/suggestion changes keep it;
+        // changed ordering or geometry invalidates it before another Shift-click can use it.
+        if !old.faces.iter().map(|f| (f.photo, f.index, f.view)).eq(list.faces.iter().map(|f| (f.photo, f.index, f.view))) {
+            app.ui.unnamed_anchor = None;
+        }
+        if app.ui.unnamed_selected.is_empty() {
+            app.ui.unnamed_focus = false;
+        }
     }
     // what was selected and has since been named (or removed) is no longer selected
     let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
@@ -302,6 +311,43 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_unnamed_faces_survive_unrelated_changes_but_not_index_reuse() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let ids: Vec<_> = app.session.catalog.photos().take(2).map(|p| p.id).collect();
+        let regions: Vec<_> = (0..2)
+            .map(|i| lightcraft_meta::Region {
+                rect: lightcraft_geom::Rect { x0: 0.1 + f64::from(i) * 0.3, y0: 0.1, x1: 0.3 + f64::from(i) * 0.3, y1: 0.4 },
+                kind: lightcraft_meta::RegionKind::Face,
+                name: None,
+                description: None,
+            })
+            .collect();
+        let mut meta = app.session.catalog.photo(ids[0]).unwrap().meta.clone();
+        meta.regions = regions.clone();
+        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id: ids[0], meta: Box::new(meta) }).unwrap();
+        let list = faces(&mut app, 0.0);
+        click(&mut app, &list, 0, false);
+        assert!(app.ui.unnamed_focus);
+        app.session.execute("photo.rate", &json!({"ids": [ids[0].0], "rating": 3})).unwrap();
+        faces(&mut app, 1.0);
+        assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
+        assert_eq!(app.ui.unnamed_anchor, Some(0));
+        assert!(app.ui.unnamed_focus);
+        let mut meta = app.session.catalog.photo(ids[1]).unwrap().meta.clone();
+        meta.regions = regions;
+        app.session.commit("background detections", lightcraft_catalog::Op::SetMeta { id: ids[1], meta: Box::new(meta) }).unwrap();
+        faces(&mut app, 2.0);
+        assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
+        assert!(app.ui.unnamed_anchor.is_none(), "a positional anchor cannot outlive a changed list");
+        assert!(app.ui.unnamed_focus);
+        app.session.execute("photo.removeRegion", &json!({"id": ids[0].0, "index": 0})).unwrap();
+        faces(&mut app, 3.0);
+        assert!(app.ui.unnamed_selected.is_empty());
+        assert!(app.ui.unnamed_anchor.is_none());
+        assert!(!app.ui.unnamed_focus);
+    }
 
     #[test]
     fn the_engines_answer_becomes_a_list_and_odd_entries_are_left_out() {
