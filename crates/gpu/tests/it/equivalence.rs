@@ -793,7 +793,7 @@ fn overlays_match() {
             let req = RenderRequest { overlay: o, ..RenderRequest::fit(640, 640) };
             if matches!(o, Overlay::ClipHighlights | Overlay::ClipShadows) {
                 // a binary view: a 1-LSB difference at 0 / 255 flips a channel, so compare shares
-                let cpu = render(&src, &raw, &s, &req).image;
+                let cpu = render(&src, &raw, &s, &req).unwrap().image;
                 let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu").image;
                 let differ = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| a != b).count() as f64 / cpu.data.len() as f64;
                 assert!(differ < 0.002, "{o:?} sharpen {amount}: {differ}");
@@ -802,7 +802,7 @@ fn overlays_match() {
             } else {
                 // the sharpening views amplify the detail planes (the mask through a steep
                 // smoothstep): allow a few larger differences where the planes differ slightly
-                let cpu = render(&src, &raw, &s, &req).image;
+                let cpu = render(&src, &raw, &s, &req).unwrap().image;
                 let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu").image;
                 let (mean, max, _) = diff(&cpu, &gpu);
                 let far = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| a[0].abs_diff(b[0]) > 8).count() as f64 / cpu.data.len() as f64;

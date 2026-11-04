@@ -936,7 +936,7 @@ fn noisy_render(noise: f32) -> lightcraft_pipeline::Rendered {
         [0, 1, 2].map(|c| (base[c] + noise * hash(x, y, c)).max(0.0))
     });
     let req = lightcraft_pipeline::RenderRequest { depth: OutputDepth::U16, ..lightcraft_pipeline::RenderRequest::fit(w, h) };
-    lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req)
+    lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req).unwrap()
 }
 
 /// Issue #2882: a 16-bit TIFF with ZIP (the default) is never larger than the same render

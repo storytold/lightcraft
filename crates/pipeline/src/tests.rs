@@ -1036,7 +1036,7 @@ fn zero_width_crop_with_grain_renders_finite_pixels() {
     s.crop.geometry.rect = lightcraft_geom::Rect::new(0.5, 0.1, 0.5, 0.9);
     let mut req = RenderRequest::fit(240, 240);
     req.depth = crate::OutputDepth::F32Linear;
-    let r = render(&scene(), &SourceInfo::default(), &s, &req);
+    let r = render(&scene(), &SourceInfo::default(), &s, &req).unwrap();
     if let Some(d) = r.deep
         && let crate::DeepSamples::F32(v) = d.samples
     {

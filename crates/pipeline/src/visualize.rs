@@ -583,9 +583,9 @@ mod tests {
         s.light.blacks = -100.0;
         s.light.whites = 100.0;
         let req = |o| RenderRequest { overlay: o, ..RenderRequest::fit(60, 20) };
-        let plain = render(&src, &info, &s, &req(Overlay::None));
-        let hi = render(&src, &info, &s, &req(Overlay::ClipHighlights));
-        let lo = render(&src, &info, &s, &req(Overlay::ClipShadows));
+        let plain = render(&src, &info, &s, &req(Overlay::None)).unwrap();
+        let hi = render(&src, &info, &s, &req(Overlay::ClipHighlights)).unwrap();
+        let lo = render(&src, &info, &s, &req(Overlay::ClipShadows)).unwrap();
         let at = |i: &Rgba8, x: usize| i.data[10 * 60 + x];
         assert_eq!(at(&plain.image, 55), [255; 4], "the highlight clips");
         assert_eq!(at(&plain.image, 5), [0, 0, 0, 255], "the shadow clips");
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!((at(&lo.image, 5), at(&lo.image, 30), at(&lo.image, 55)), ([0, 0, 0, 255], [255; 4], [255; 4]));
         // a preview only: the histogram is the photo's
         assert_eq!(hi.histogram, plain.histogram);
-        assert_eq!(render(&src, &info, &s, &req(Overlay::None)).image, plain.image);
+        assert_eq!(render(&src, &info, &s, &req(Overlay::None)).unwrap().image, plain.image);
     }
 
     #[test]
@@ -603,7 +603,7 @@ mod tests {
         let info = SourceInfo::default();
         let mut s = DevelopSettings::default();
         s.detail.sharpen_amount = 60.0;
-        let shot = |s: &DevelopSettings, o| render(&src, &info, s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image;
+        let shot = |s: &DevelopSettings, o| render(&src, &info, s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).unwrap().image;
         let (flat, edge) = (20 * 80 + 20, 20 * 80 + 60);
         // Masking 0 sharpens everything: an all-white mask
         let m = shot(&s, Overlay::SharpenMask);
@@ -621,7 +621,7 @@ mod tests {
         assert!(d.data[edge][0] > 200 && d.data[edge - 1][0] < 60, "{:?} {:?}", d.data[edge], d.data[edge - 1]);
         // greyscale
         let src = Rgb32f::from_fn(8, 8, |_, _| [0.4, 0.1, 0.05]);
-        let g = render(&src, &info, &s, &RenderRequest { overlay: Overlay::Grayscale, ..RenderRequest::fit(8, 8) }).image;
+        let g = render(&src, &info, &s, &RenderRequest { overlay: Overlay::Grayscale, ..RenderRequest::fit(8, 8) }).unwrap().image;
         assert!(g.data.iter().all(|p| p[0] == p[1] && p[1] == p[2] && p[0] > 0));
     }
 
