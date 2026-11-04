@@ -147,10 +147,7 @@ impl CropView<'_> {
         let v = q - self.pan - c;
         let a = -self.angle.to_radians();
         let (s, co) = (a.sin(), a.cos());
-        let u = pos2(
-            c.x + v.x * co as f32 - v.y * s as f32,
-            c.y + v.x * s as f32 + v.y * co as f32,
-        );
+        let u = pos2(c.x + v.x * co as f32 - v.y * s as f32, c.y + v.x * s as f32 + v.y * co as f32);
         self.map.rect.contains(u)
     }
 
@@ -427,8 +424,11 @@ fn crop_keys(
         // the handle is already in the crop frame; Photoshop turns the box itself, so unturn it
         let angle = d.crop.geometry.angle;
         let to_q = at + vec2(dx as f32 * map.rect.width(), dy as f32 * map.rect.height());
-        let (from, to) =
-            if lr { (map.norm(at - pan), map.norm(to_q - pan)) } else { (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame)) };
+        let (from, to) = if lr {
+            (map.norm(at - pan), map.norm(to_q - pan))
+        } else {
+            (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame))
+        };
         let started = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null));
         if let Err(e) = started {
             app.ui.status = e;
