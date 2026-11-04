@@ -61,11 +61,11 @@ pub(super) fn crop_overlay(
         register(ui, "cropStraightenGrid", Rect::from_two_pos(pts[0], pts[2]));
     }
     if app.ui.tool == "straighten" {
-        straighten_overlay(app, ui, resp, false);
+        straighten_overlay(app, ui, resp, false, if lr { angle } else { 0.0 });
         return;
     }
     if cmd_drag || matches!(app.gesture, Some(Gesture::StraightenLine { .. })) {
-        straighten_overlay(app, ui, resp, true);
+        straighten_overlay(app, ui, resp, true, if lr { angle } else { 0.0 });
         return;
     }
     if resp.hovered() && ui.input(|i| i.modifiers.command) {
@@ -134,6 +134,26 @@ impl CropView<'_> {
         if self.lr { self.map.norm(q - self.pan) } else { to_straight(self.map.norm(q), angle, self.frame) }
     }
 
+    /// Whether `q` falls on the photo itself. In the Lightroom style the photo is drawn turned by
+    /// the angle and slid by the pan, so the flat `map.rect` (the unturned, unpanned display
+    /// rect) is not the right test: its corners are cut away by the rotation and the rotation's
+    /// corners stick out past it. Transform the pointer back through the display to test against
+    /// `map.rect`.
+    fn on_photo(&self, q: Pos2) -> bool {
+        if !self.lr {
+            return self.map.rect.contains(q);
+        }
+        let c = self.map.rect.center();
+        let v = q - self.pan - c;
+        let a = -self.angle.to_radians();
+        let (s, co) = (a.sin(), a.cos());
+        let u = pos2(
+            c.x + v.x * co as f32 - v.y * s as f32,
+            c.y + v.x * s as f32 + v.y * co as f32,
+        );
+        self.map.rect.contains(u)
+    }
+
     fn inside(&self, q: Pos2) -> bool {
         let s = self.to_crop_space(q, self.d.crop.geometry.angle);
         self.d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
@@ -186,7 +206,7 @@ impl CropView<'_> {
             // Lightroom style: the strip around the box is the straighten zone (a drag rotates)
             rotate_cursor(self.ui, q, rotate_cursor_turn(&self.pts, q, inside));
             egui::CursorIcon::None
-        } else if self.lr && self.map.rect.contains(q) {
+        } else if self.lr && self.on_photo(q) {
             // Lightroom style, in the dimmed area over the image: a drag draws a new box
             egui::CursorIcon::Crosshair
         } else {
@@ -238,8 +258,11 @@ impl CropView<'_> {
             // Lightroom style: a press in the strip around the box rotates â€” the straighten zone
             // sits next to the selection, not only in the margin beyond the photo
             None if self.lr && dist_to_quad(&self.pts, q) < ROTATE_BAND => rotate(),
-            // Lightroom style, over the dimmed image: draw a new box from the press point
-            None if self.lr && self.map.rect.contains(q) => {
+            // Lightroom style, over the dimmed image: draw a new box from the press point. The press
+            // must fall on the photo itself, which is drawn turned by the angle and slid by the pan:
+            // the flat `map.rect` would start a box in the corners the rotation cut away, or miss the
+            // corners the rotation brings out.
+            None if self.lr && self.on_photo(q) => {
                 let origin = self.ui.input(|i| i.pointer.press_origin()).unwrap_or(q);
                 Gesture::CropNewBox { a0: self.to_crop_space(origin, d.crop.geometry.angle) }
             }
@@ -385,6 +408,7 @@ fn crop_keys(
     d: &DevelopSettings,
     frame: &Frame,
 ) -> bool {
+    let pan = app.ui.crop_pan;
     let lr = app.ui.settings.crop_lightroom();
     let r = d.crop.geometry.rect;
     let centre = if pts.len() == 4 { pts.iter().fold(Pos2::ZERO, |acc, q| acc + q.to_vec2() / 4.0) } else { return false };
@@ -404,7 +428,7 @@ fn crop_keys(
         let angle = d.crop.geometry.angle;
         let to_q = at + vec2(dx as f32 * map.rect.width(), dy as f32 * map.rect.height());
         let (from, to) =
-            if lr { (map.norm(at), map.norm(to_q)) } else { (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame)) };
+            if lr { (map.norm(at - pan), map.norm(to_q - pan)) } else { (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame)) };
         let started = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null));
         if let Err(e) = started {
             app.ui.status = e;
@@ -769,9 +793,13 @@ fn frame_crop_quad(d: &DevelopSettings, frame: &Frame) -> [Point; 4] {
 }
 
 /// Straighten tool: drag along a horizon (or a vertical) to set the crop angle; double-click = Auto.
-/// The image is shown unrotated in the crop view, so the line's on-screen angle is its image angle.
+/// In the Photoshop style the image is shown unrotated, so the line's on-screen angle is its image
+/// angle. In the Lightroom style the image is already turned by the current angle, so the line's
+/// image angle is its screen angle minus that base, and the new angle is the base minus the line's
+/// screen angle (so a level line on the turned canvas leaves the angle where it is). `base` is the
+/// display's current rotation: 0 in the Photoshop style, the crop angle in the Lightroom style.
 /// `held`: drawn with ⌘ held in the crop tool, which stays active afterwards.
-fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
+fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool, base: f64) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if !held && resp.double_clicked() {
         app.auto_straighten(ui.ctx());
@@ -801,7 +829,7 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
             while deg < -45.0 {
                 deg += 90.0;
             }
-            let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
+            let _ = app.run("crop.straighten", json!({"angle": ((base - deg) * 100.0).round() / 100.0}));
         }
         if !held {
             app.ui.tool.clear();

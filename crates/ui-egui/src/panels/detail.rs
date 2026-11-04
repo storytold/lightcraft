@@ -307,6 +307,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let single = hover_key.is_none() && !split && !show_before && !split_view && !interacting;
     let camera_full = request_camera_full(app, &photo, single && !windows.is_empty(), native_long.min(texture_side));
     let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool, id);
+    let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool, id);
     let p = ui.painter_at(canvas);
     let turn = crop_lr.then_some((crop_pan, crop_angle));
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, &SlotDraw { slot, r, clip, turn });
@@ -427,6 +428,9 @@ fn crop_display(app: &mut LightcraftApp, d: &DevelopSettings, img_rect: Rect, cr
         app.ui.crop_pan_photo = None;
         return (false, egui::Vec2::ZERO, angle);
     }
+    // a pan survives the release but belongs to the photo it was made on: switching photos
+    // (while the crop tool stays open) clears it, so the new photo is not drawn with the
+    // previous one's offset
     if app.ui.crop_pan_photo != Some(id.0) {
         app.ui.crop_pan = egui::Vec2::ZERO;
         app.ui.crop_pan_photo = Some(id.0);

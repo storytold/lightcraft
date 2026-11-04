@@ -49,6 +49,10 @@ pub struct UiState {
     /// left it while the tool stays open; the tool closing (or another photo) clears it.
     #[serde(skip)]
     pub crop_pan: egui::Vec2,
+    /// Which photo the surviving pan (see `crop_pan`) belongs to: it is cleared when the active
+    /// photo changes, so the next photo is not drawn with the previous one's offset.
+    #[serde(skip)]
+    pub crop_pan_photo: Option<u64>,
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
@@ -404,6 +408,7 @@ impl Default for UiState {
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             crop_pan: egui::Vec2::ZERO,
+            crop_pan_photo: None,
             luminance_map_restore: None,
             view: ViewMode::Detail,
             left_panel: false,
