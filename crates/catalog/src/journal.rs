@@ -52,7 +52,8 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
-//! | 10 | uncropped source dimensions for Photo Merge | `Photo.source_width`, `Photo.source_height`, `Op::SetContent.source_width`, `Op::SetContent.source_height` |
+//! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
+//! | 11 | uncropped source dimensions for Photo Merge | `Photo.source_width`, `Photo.source_height`, `Op::SetContent.source_width`, `Op::SetContent.source_height` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -77,7 +78,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

@@ -1,4 +1,4 @@
-use super::files::{expand, probe_all};
+use super::files::{Seen, expand, probe_all, reusable_probes};
 use super::types::ImportCandidate;
 use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
@@ -123,20 +123,14 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let by_path = library_files(&input.library, &files);
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
-    // probes from a preceding `scan` are reused when the file is unchanged (same size)
-    let cached: Vec<Option<ProbeInfo>> = todo
-        .iter()
-        .map(|f| {
-            let info = input.cache.remove(f)?;
-            // (✕ set while the files' cached probes are checked: no more round trips to the disk; what is
-            // not reached counts as not probed, like the files after it)
-            if progress.cancel.load(Relaxed) {
-                return None;
-            }
-            let size = std::fs::metadata(f).map(|m| m.len()).ok();
-            (size.is_none() || size == Some(info.file_size)).then_some(info)
-        })
-        .collect();
+    // probes from a preceding `scan` are reused when the file is unchanged (same size); a file that
+    // can't be looked at counts as unchanged (✕ set while they are checked: no more round trips to the
+    // disk; what is not reached counts as not probed, like the files after it)
+    let cached = reusable_probes(&todo, &mut input.cache, &progress.cancel, |seen, info| match seen {
+        Seen::At { len, .. } => len == info.file_size,
+        Seen::Gone => true,
+        Seen::Unchecked => false,
+    });
     let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
     progress.done.store(todo.len() - missing.len(), Relaxed);
     let mut fresh = probe_all(input.probe.as_ref(), &missing, &progress.done, &progress.cancel).into_iter();

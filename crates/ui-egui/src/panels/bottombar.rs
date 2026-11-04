@@ -25,6 +25,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .exact_size(t.bottom_bar_h)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: 12, right: 12, top: 0, bottom: 0 }))
         .show(ui, |ui| {
+            crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Bottom bar"));
             let full = ui.max_rect();
             let compact_zoom = full.width() < 360.0;
             let right_start = right_side(app, ui, full, compact_zoom);
@@ -242,12 +243,45 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
     } else {
         // thumbnail size slider
         let (r, resp) = child.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
-        crate::widgets::announce(&resp, crate::i18n::tr("Thumbnail size"));
+        let (min, max) = (crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MAX);
+        // screen readers: a slider with its value and range, which Increment / Decrement (VoiceOver's
+        // Ctrl-Option-Up / Down) and the arrow keys move one step, as the Edit panel's sliders do
+        resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(app.ui.thumb_size), crate::i18n::tr("Thumbnail size")));
+        child.ctx().accesskit_node_builder(resp.id, |node| {
+            node.set_min_numeric_value(f64::from(min));
+            node.set_max_numeric_value(f64::from(max));
+            node.set_numeric_value_step(f64::from(crate::state::THUMB_SIZE_STEP));
+            node.add_action(egui::accesskit::Action::Increment);
+            node.add_action(egui::accesskit::Action::Decrement);
+        });
         register(&child, "slider:thumbSize", r);
+        let (inc, dec) = crate::widgets::accessibility_nudge(&child, &resp);
+        let (up, down) = if resp.has_focus() {
+            // ↑ and ↓ step the size instead of moving the focus to the thumbnail above
+            child.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
+            let keys = child.input_mut(|i| {
+                (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown))
+            });
+            if keys.0 || keys.1 {
+                // egui picked the neighbour to focus from this same key before the lock above could apply (the
+                // first arrow after Tab): cancel that move
+                child.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            }
+            keys
+        } else {
+            (false, false)
+        };
+        if inc || up {
+            app.ui.thumb_size = (app.ui.thumb_size + crate::state::THUMB_SIZE_STEP).min(max);
+        } else if dec || down {
+            app.ui.thumb_size = (app.ui.thumb_size - crate::state::THUMB_SIZE_STEP).max(min);
+        }
         let p = child.painter();
         let y = r.center().y;
         p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], egui::Stroke::new(2.0, t.track));
-        let (min, max) = (crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MAX);
+        if resp.has_focus() {
+            crate::widgets::focus_ring(p, r, &t);
+        }
         let f = (app.ui.thumb_size - min) / (max - min);
         let x = r.left() + f * r.width();
         p.rect_filled(Rect::from_center_size(pos2(x, y), vec2(3.0, 14.0)), 1.0, t.thumb_hover);

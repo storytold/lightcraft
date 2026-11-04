@@ -85,6 +85,11 @@ fn parses_cameras_lenses_and_skips_invalid_entries() {
 }
 
 #[test]
+fn rejects_mismatched_xml_closing_tags() {
+    assert!(LensDb::parse("<lensdatabase><lens><maker>X</lensdatabase><model>L</model></lens>").is_err());
+}
+
+#[test]
 fn malformed_documents_are_errors_not_panics() {
     assert!(LensDb::parse("").is_err());
     assert!(LensDb::parse("<lensdatabase><lens><maker>").is_ok_and(|d| d.lenses.is_empty()));
@@ -227,7 +232,8 @@ fn fisheyes_get_no_rectilinear_warp_and_bad_shots_none() {
 #[test]
 fn load_dir_reads_xml_files_and_reports_bad_ones() {
     let dir = std::env::temp_dir().join(format!("lensdb-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // exclusive: an existing (possibly planted) entry fails the test instead of being written through
+    std::fs::create_dir(&dir).unwrap();
     std::fs::write(dir.join("a.xml"), DB).unwrap();
     std::fs::write(dir.join("b.xml"), "<lensdatabase").unwrap();
     std::fs::write(dir.join("c.txt"), "ignored").unwrap();
@@ -286,4 +292,175 @@ fn a_named_profile_is_found_behind_a_tie() {
     assert_eq!(db.find_lens(None, &name, None).unwrap().maker, "Otherco", "a plain lookup keeps the first of a tie");
     assert_eq!(db.find_lens_named(None, &name, None).unwrap().maker, "Testcam");
     assert!(db.find_lens_named(None, "70-200mm f/4", None).is_none());
+}
+
+#[test]
+fn built_in_lens_matches_by_camera_mount_and_focal_range() {
+    let xml = r#"<lensdatabase>
+  <camera><maker>Canon</maker><model>Canon PowerShot S5 IS</model><model lang="en">PowerShot S5 IS</model><mount>canonS5</mount><cropfactor>6.0</cropfactor></camera>
+  <lens><maker>Canon</maker><model>Canon PowerShot S5 IS &amp; compatibles</model><mount>canonS5</mount><cropfactor>6.0</cropfactor>
+    <calibration><distortion model="poly3" focal="6" k1="0.01" /><distortion model="poly3" focal="72" k1="0.0" /></calibration></lens>
+  <lens><maker>Canon</maker><model>Canon EF 50mm f/1.8</model><mount>Canon EF</mount>
+    <calibration><distortion model="poly3" focal="50" k1="0.01" /></calibration></lens>
+</lensdatabase>"#;
+    let db = LensDb::parse(xml).unwrap();
+    let cam = db.find_camera("Canon", "Canon PowerShot S5 IS");
+    assert!(cam.is_some());
+    assert!(db.find_camera("Canon", "PowerShot S5 IS").is_some());
+    let l = db.find_lens(None, "6.0-72.0 mm f/2.7-3.5", cam).unwrap();
+    assert_eq!(l.mounts, ["canonS5"]);
+    assert!(db.find_lens(None, "6.0-72.0 mm f/2.7-3.5", None).is_none());
+    // a file with no make still finds the camera by its full model name
+    assert!(db.find_camera("", "Canon PowerShot S5 IS").is_some());
+    // the exact-name lookup never falls back to the camera's mount
+    assert!(db.find_lens_named(None, "6.0-72.0 mm f/2.7-3.5", cam).is_none());
+    // a focal length that overflows to infinity is ignored, not taken as an unbounded range
+    let huge = format!("6.0-{}9 mm f/2.7-3.5", "9".repeat(400));
+    assert_eq!(db.find_lens(None, &huge, cam).unwrap().mounts, ["canonS5"]);
+    assert_eq!(exif_focal_range(&tokens(&huge)), Some((6.0, 6.0)));
+}
+
+/// A hand-edited or corrupt database may carry any number: infinities, NaN, enormous or negative
+/// coefficients, absurd crop factors and aspect ratios. Whatever loads must give corrections that
+/// are `None` or entirely finite, for any shot including nonsense ones; names of any shape find
+/// nothing rather than panic.
+#[test]
+fn hostile_numbers_give_finite_corrections_or_none() {
+    let values = ["inf", "-inf", "NaN", "1e300", "-1e300", "1e-300", "0", "-1", "1e6", "99999"];
+    let mut cases = 0;
+    for v in values {
+        for xml in [
+            format!(
+                r#"<lens><maker>M</maker><model>M 1</model><cropfactor>{v}</cropfactor><aspect-ratio>{v}</aspect-ratio><calibration><distortion model="poly3" focal="24" k1="0.01"/><vignetting model="pa" focal="24" aperture="2.8" k1="-0.3"/></calibration></lens>"#
+            ),
+            format!(
+                r#"<lens><maker>M</maker><model>M 1</model><calibration cropfactor="{v}" aspect-ratio="{v}"><distortion model="ptlens" focal="24" a="{v}" b="{v}" c="{v}"/><tca model="poly3" focal="24" vr="{v}" vb="{v}" cr="{v}" cb="{v}" br="{v}" bb="{v}"/></calibration></lens>"#
+            ),
+            format!(
+                r#"<lens><maker>M</maker><model>M 1</model><calibration><distortion model="poly5" focal="{v}" k1="{v}" k2="{v}"/><distortion model="poly3" focal="50" k1="{v}"/><vignetting model="pa" focal="{v}" aperture="{v}" distance="{v}" k1="{v}" k2="{v}" k3="{v}"/><tca model="linear" focal="{v}" kr="{v}" kb="{v}"/></calibration></lens>"#
+            ),
+        ] {
+            let Ok(db) = LensDb::parse(&format!("<lensdatabase>{xml}</lensdatabase>")) else { continue };
+            for p in &db.lenses {
+                for focal in [f64::NAN, f64::INFINITY, -1.0, 0.0, 1e-9, 8.0, 24.0, 50.0, 1e9] {
+                    for (w, h) in [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (6000.0, 4000.0), (1e9, 1.0), (f64::NAN, 10.0), (f64::INFINITY, 4000.0)] {
+                        for aperture in [None, Some(f64::NAN), Some(-2.0), Some(0.0), Some(2.8), Some(1e9)] {
+                            for crop in [None, Some(0.0), Some(f64::NAN), Some(-1.0), Some(1.5), Some(1e9)] {
+                                let shot = Shot { focal, aperture, distance: Some(f64::NAN), crop_factor: crop, width: w, height: h };
+                                cases += 1;
+                                let Some(c) = p.correction(&shot) else { continue };
+                                let planes =
+                                    c.warp.iter().flat_map(|wp| wp.planes.iter().flatten().copied().chain([wp.radius, wp.center.x, wp.center.y]));
+                                let vig = c.vignette.iter().flat_map(|vg| vg.k.iter().copied().chain([vg.radius, vg.center.x, vg.center.y]));
+                                assert!(planes.chain(vig).all(f64::is_finite), "{v}: focal {focal} {w}x{h} {aperture:?} {crop:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(cases > 1000);
+
+    let db = db();
+    let long = "x".repeat(100_000);
+    for s in ["", " ", "\t\n", "\0", "ß İ ǅ", "....", "1.2.3.4mm", "-mm", long.as_str()] {
+        let _ = db.find_camera(s, s);
+        let _ = db.find_lens(Some(s), s, db.cameras.first());
+        let _ = db.find_lens(None, s, None);
+    }
+    assert!(db.find_camera("", "").is_none());
+    assert!(db.find_lens(None, "  ", None).is_none());
+}
+
+#[test]
+fn calibrations_past_the_shared_copy_budget_are_left_out() {
+    let name = "x".repeat(400_000);
+    let cal = "<calibration focal=\"50\"><distortion model=\"poly3\" focal=\"50\" k1=\"0.01\"/></calibration>";
+    let xml = format!("<lensdatabase><lens><maker>M</maker><model>{name}</model>{}</lens></lensdatabase>", cal.repeat(2000));
+    let db = LensDb::parse(&xml).unwrap();
+    assert!(!db.lenses.is_empty());
+    assert!(db.lenses.len() * 400_000 <= MAX_PROFILE_COPY_BYTES);
+}
+
+/// Unusable calibrations (nothing to apply) are not copied or charged, so they can't use up the
+/// budget a later usable one of the same lens needs.
+#[test]
+fn unusable_calibrations_do_not_spend_the_copy_budget() {
+    let name = "x".repeat(8 << 20);
+    let empty = "<calibration focal=\"50\"></calibration>";
+    let good = "<calibration focal=\"50\"><distortion model=\"poly3\" focal=\"50\" k1=\"0.01\"/></calibration>";
+    let xml = format!("<lensdatabase><lens><maker>M</maker><model>{name}</model>{}{good}</lens></lensdatabase>", empty.repeat(4));
+    let db = LensDb::parse(&xml).unwrap();
+    assert_eq!(db.lenses.len(), 1, "the usable calibration after the empty ones is kept");
+}
+
+/// Many tiny names cost their allocations, not only their bytes.
+#[test]
+fn many_tiny_names_are_charged_their_allocations() {
+    let models = "<model>a</model>".repeat(400_000);
+    let good = "<calibration focal=\"50\"><distortion model=\"poly3\" focal=\"50\" k1=\"0.01\"/></calibration>";
+    let xml = format!("<lensdatabase><lens><maker>M</maker>{models}{good}{good}{good}{good}</lens></lensdatabase>");
+    let db = LensDb::parse(&xml).unwrap();
+    let names: usize = db.lenses.iter().map(|p| p.models.len()).sum();
+    assert!(db.lenses.len() < 4 && names * std::mem::size_of::<String>() <= MAX_PROFILE_COPY_BYTES, "{} profiles", db.lenses.len());
+}
+
+#[cfg(unix)]
+#[test]
+fn load_dir_refuses_a_non_regular_xml_entry() {
+    let dir = std::env::temp_dir().join(format!("lensdb-test-dev-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    std::os::unix::fs::symlink("/dev/zero", dir.join("z.xml")).unwrap();
+    let (db, errs) = LensDb::load_dir(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(db.is_empty());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+}
+
+/// A FIFO named `*.xml` is refused without opening it: opening a FIFO for reading blocks until a writer appears.
+#[cfg(unix)]
+#[test]
+fn load_dir_refuses_a_fifo_without_blocking() {
+    let dir = std::env::temp_dir().join(format!("lensdb-test-fifo-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let fifo = dir.join("f.xml");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success());
+    if !made {
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+    let (db, errs) = LensDb::load_dir(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(db.is_empty());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+}
+
+#[test]
+fn teleconverter_combo_does_not_inherit_base_profile() {
+    // The database has only the bare 400 mm profile. A teleconverter combo is a
+    // different optical system, so find_lens must not return the base profile --
+    // not even when the converter is a digit-free suffix such as "Z TC".
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<lensdatabase version="2">
+  <lens>
+    <maker>Nikon</maker>
+    <model>NIKKOR Z 400mm f/4.5 VR S</model>
+    <mount>Z</mount>
+    <calibration>
+      <distortion model="poly3" focal="400" k1="0.001" />
+    </calibration>
+  </lens>
+</lensdatabase>"#;
+    let db = LensDb::parse(xml).unwrap();
+    assert!(db.find_lens(Some("Nikon"), "NIKKOR Z 400mm f/4.5 VR S", None).is_some(), "the base profile matches its own name");
+    // A digit-free teleconverter suffix must not inherit the 400 mm profile:
+    // name_score finds every base-profile number token present and would score 0.78.
+    assert!(db.find_lens(Some("Nikon"), "NIKKOR Z 400mm f/4.5 VR S Z TC", None).is_none(), "teleconverter combos do not inherit the base profile");
+    // A converter factor ("1.4") is a numeric token the base profile lacks, so the
+    // combo matches nothing either.
+    assert!(
+        db.find_lens(Some("Nikon"), "NIKKOR Z 400mm f/4.5 VR S Z TC-1.4x", None).is_none(),
+        "teleconverter combos do not inherit the base profile",
+    );
 }

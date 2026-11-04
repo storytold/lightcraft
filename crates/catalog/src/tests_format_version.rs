@@ -238,8 +238,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v10: uncropped source dimensions on photos and `Op::SetContent`.
-    const NEWEST_FIELDS: u32 = 10;
+    /// v11: uncropped source dimensions on photos and `Op::SetContent` (v10: `Mask.on_photo`).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

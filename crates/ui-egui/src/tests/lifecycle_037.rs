@@ -564,7 +564,7 @@ fn one_synthetic_batch_until_a_completed_pass_and_drops_wait_for_the_ui_phase() 
 
 #[test]
 fn first_headless_frame_runs_logic_and_uses_its_simulated_clock() {
-    let mut h = Headless::new(app(), [800.0, 600.0], 1.0);
+    let mut h = Headless::new(self::app(), [800.0, 600.0], 1.0);
     assert_eq!(h.time(), 0.0);
     h.step();
     assert!(h.app.styled, "the first frame at t=0 runs logic and installs fonts");
@@ -901,6 +901,48 @@ fn ui_scroll_carries_validated_unit_phase_and_source() {
     let error = crate::control::gesture_events(&mut app, &ctx, "ui.scroll", &serde_json::json!({"unit": "notch"})).expect_err("unknown unit");
     assert!(error.contains("unit"), "{error}");
     assert!(app.synthetic.is_empty());
+}
+
+/// A coordinate or delta too large for an `f32` became an infinite or NaN pointer position or
+/// scroll delta: egui panicked on the NaN in debug builds ("Comparing NaN vectors"), and a release
+/// build handed it to every widget. Such a gesture is refused and queues nothing.
+#[test]
+fn gestures_refuse_numbers_that_are_not_screen_positions() {
+    let (mut app, ctx) = (app(), egui::Context::default());
+    app.widgets.push(("finite:test".into(), egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0))));
+    app.image_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0)));
+    let refused = [
+        ("ui.click", serde_json::json!({"x": 1e308})),
+        ("ui.click", serde_json::json!({"y": -1e308})),
+        ("ui.move", serde_json::json!({"x": 1e300, "y": 1.0})),
+        ("ui.drag", serde_json::json!({"x": 1.0, "toY": 1e308})),
+        ("ui.dragWidget", serde_json::json!({"id": "finite:test", "dx": -1e308})),
+        ("ui.scroll", serde_json::json!({"dy": 1e308})),
+        ("ui.pointer", serde_json::json!({"events": [{"kind": "down", "x": 0.5}, {"kind": "move", "x": 1e308}]})),
+    ];
+    for (method, p) in refused {
+        let e = crate::control::gesture_events(&mut app, &ctx, method, &p).err().unwrap_or_else(|| panic!("{method} {p} was accepted"));
+        assert!(e.starts_with(method) && e.contains("between"), "{e}");
+        assert!(app.synthetic.is_empty(), "{method} {p} queued events");
+    }
+    // ordinary values still work, and count / steps are still clamped rather than refused
+    crate::control::gesture_events(&mut app, &ctx, "ui.click", &serde_json::json!({"x": 10.0, "y": -5.0, "count": u64::MAX})).unwrap();
+    crate::control::gesture_events(&mut app, &ctx, "ui.drag", &serde_json::json!({"x": 1.0, "toX": 999_999.0, "steps": 1e12})).unwrap();
+    assert!(!app.synthetic.is_empty());
+
+    // refused when the request is admitted: no pending slot, no wait for a layout
+    let (tx, rx) = reply_channel();
+    let e = app.admit_gesture(&ctx, "ui.click".into(), serde_json::json!({"x": 1e308}), tx).expect_err("refused at admission");
+    assert!(e.contains("between"), "{e}");
+    assert!(app.pending_gestures.is_empty());
+    drop(rx);
+
+    // through the whole control channel, as an agent sends it: an error, not a panic
+    let mut h = Headless::new(self::app(), [800.0, 600.0], 1.0);
+    h.step();
+    let r = h.request("ui.click", serde_json::json!({"x": 1e308}), Duration::from_secs(5));
+    assert_eq!(r["ok"], false, "{r}");
+    h.step();
 }
 
 #[test]

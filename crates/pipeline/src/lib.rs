@@ -34,12 +34,14 @@ pub mod geometry;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
+pub mod mask_space;
 pub mod masks;
 pub mod optics;
 pub mod output;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod straighten;
 pub mod tone;
 pub mod transform;
 pub mod upright;
@@ -173,6 +175,21 @@ impl PixelWindow {
     }
 }
 
+/// The longest output side a render may be asked for (TIFF/PNG/JPEG all fit within it).
+pub const MAX_OUTPUT_SIDE: usize = 65_535;
+/// The most output pixels a render may be asked for (the box it fits into, ≈ 1.07 Gpx).
+pub const MAX_OUTPUT_PIXELS: usize = 1 << 30;
+
+/// Rejects an output box past [`MAX_OUTPUT_SIDE`] or [`MAX_OUTPUT_PIXELS`] before anything is
+/// sized from it.
+pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
+    let pixels = max_w.checked_mul(max_h);
+    if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
+        return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
+}
+
 impl RenderRequest {
     pub fn fit(max_w: usize, max_h: usize) -> Self {
         Self {
@@ -236,6 +253,10 @@ pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_cro
     let mut frame = geometry::Frame::with_lens(src.width, src.height, s, apply_crop, info.lens.as_ref());
     if s.optics.remove_ca && s.section_enabled("optics") {
         frame.add_lateral_ca(optics::estimate_lateral_ca(src));
+        if apply_crop {
+            // The estimated CA moves the colour planes too: keep the crop inside every one of them.
+            frame.constrain_to_image(s.geometry.constrain_crop);
+        }
     }
     frame
 }
@@ -664,9 +685,12 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     Some(acc.map(|v| v / n))
 }
 
-/// The alpha plane a mask overlay shows: the one the render evaluated, or (for a hidden mask) a
-/// fresh evaluation.
+/// The plane an overlay shows: a sharpening view's detail plane, or the alpha of a mask overlay
+/// (the one the render evaluated, or for a hidden mask a fresh evaluation).
 fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
+    if o.reads_detail() {
+        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, prep.texture_blur.as_deref(), plan.px_per_long);
+    }
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
         return Some(e.alpha.clone());
@@ -734,6 +758,8 @@ mod tests_geometry;
 mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
+#[cfg(test)]
+mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]
