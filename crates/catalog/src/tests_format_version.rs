@@ -111,9 +111,9 @@ fn mask_curve_develop(c: &mut Catalog) -> (PhotoId, Op) {
     (id, Op::SetDevelop { id, settings: Arc::new(settings), label: "Mask curve".into(), edited: None })
 }
 
-/// v10 added `Mask.curve`. A v9 library (masks without a curve) opens as it was and is rewritten
-/// as v10; a v10 library with a mask curve keeps the curve across an unrelated op and the next
-/// snapshot. (Builds that don't know `Mask.curve` refuse a v10 library: `newer_snapshot_is_refused_untouched`.)
+/// v11 added `Mask.curve`. A v10 library (masks without a curve) opens as it was and is rewritten
+/// as v11; a v11 library with a mask curve keeps the curve across an unrelated op and the next
+/// snapshot. (Builds that don't know `Mask.curve` refuse a v11 library: `newer_snapshot_is_refused_untouched`.)
 #[test]
 fn mask_curve_survives_open_op_and_snapshot() {
     let mut c = Catalog::new();
@@ -124,12 +124,12 @@ fn mask_curve_survives_open_op_and_snapshot() {
     plain.masks.push(Mask { id: 1, ..Mask::default() });
     c.apply(Op::SetDevelop { id, settings: Arc::new(plain), label: "Mask".into(), edited: None }).unwrap();
 
-    // v9: a mask without a curve is upgraded to the current format
+    // v10: a mask without a curve is upgraded to the current format
     assert!(!serde_json::to_string(&c.photo(id).unwrap().develop.masks[0]).unwrap().contains("curve"), "an empty curve isn't written");
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(r.upgraded_from, Some(10));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     assert_eq!(loaded.to_snapshot(), c.to_snapshot());
 
@@ -297,8 +297,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v10: `Mask.curve` (a mask's local Curve, in the develop settings).
-    const NEWEST_FIELDS: u32 = 10;
+    /// v11: `Mask.curve` (a mask's local Curve, in the develop settings; v10: `Mask.on_photo`).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

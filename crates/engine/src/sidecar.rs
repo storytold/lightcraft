@@ -455,6 +455,11 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// Copy `path` to a new `<name>.bak-<stamp>` (`-1`, `-2`… if taken; never overwriting).
 fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
     use std::io::Write;
+    // only a plain file is copied aside: a link under the sidecar's name would have its target's
+    // contents copied into a new, readable file
+    if !std::fs::symlink_metadata(path)?.is_file() {
+        return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+    }
     let bytes = std::fs::read(path)?;
     let stamp: String = stamp.chars().filter(char::is_ascii_alphanumeric).collect();
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
