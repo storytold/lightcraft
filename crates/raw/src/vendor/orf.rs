@@ -463,7 +463,7 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
                 let t1 = if psel >= params.tag0x646 { params.tag0x648 } else { params.tag0x650 };
                 let t2 = if psel >= params.tag0x646 { params.tag0x647 } else { params.tag0x649 };
                 let tt = (highbitcount - t1).max(-1);
-                t2 + tt + 1
+                t2.saturating_add(tt).saturating_add(1)
             } else {
                 params.tag0x649
             };
@@ -544,9 +544,9 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
 
             let sum = gcode_adj.checked_add(n_val).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
             lpred = sum;
-            let pixel_final_value = (t640bits as i32).saturating_add(sum.checked_shl(params.tag0x640.min(15)).unwrap_or(0));
+            let pixel_final_value = i64::from(t640bits).saturating_add(i64::from(sum) << params.tag0x640.min(15));
             if let Some(px) = raw_image.get_mut(row_offset + col) {
-                *px = pixel_final_value.clamp(0, i32::from(u16::MAX)) as u16;
+                *px = pixel_final_value.clamp(0, i64::from(u16::MAX)) as u16;
             }
         }
     }
@@ -559,6 +559,7 @@ fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &Compresse
     Ok(raw_image)
 }
 
+/// Decode an Olympus ORF container into a mosaic raw image, supporting uncompressed 16-bit, packed 12-bit, and compressed formats.
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
