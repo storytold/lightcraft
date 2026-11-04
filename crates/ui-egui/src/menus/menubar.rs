@@ -49,6 +49,7 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
         || (id == "app.recentLibraries" && params.get("remove").is_some())
+        || (id == "app.showInAlbum" && params.get("album").is_some())
     {
         label
     } else {
@@ -279,6 +280,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.reload",
             "photo.readFocusPoints",
             "app.showInFinder",
+            "@Show in Album",
             "app.showInFolders",
             "dialog.rename",
             "dialog.captureTime",
@@ -469,6 +471,20 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
+        "Show in Album" => {
+            let Some(photo) = app.session.active() else {
+                return Some(vec![item("app.showInAlbum", Value::Null, "No containing albums", None, false, None)]);
+            };
+            let albums = super::files::albums_for_photo(app, photo);
+            if albums.is_empty() {
+                vec![item("app.showInAlbum", Value::Null, "No containing albums", None, false, None)]
+            } else {
+                albums
+                    .into_iter()
+                    .map(|(album, label)| item("app.showInAlbum", json!({"album": album.0, "id": photo.0}), label, None, true, None))
+                    .collect()
+            }
+        }
         "Previews" => {
             let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };

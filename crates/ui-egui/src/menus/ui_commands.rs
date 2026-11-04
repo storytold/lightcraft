@@ -277,6 +277,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("app.showInFolders", "Show in Folders", None, "Photo"),
+    ("app.showInAlbum", "Show in Album", None, ""),
     ("app.openSamModelFolder", "Show in File Manager", None, ""),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
     ("dialog.labelNames", "Edit Color Label Names…", None, ""),

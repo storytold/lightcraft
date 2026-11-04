@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Show a photo in a containing album
+- Photo ▸ Show in Album and the photo context menu list the regular and smart albums that contain the photo. Choosing one switches to that album, activates the target photo, reveals its nested album path in the sidebar, opens a collapsed stack hiding it, and scrolls the grid and filmstrip to it even on repeated navigation. Duplicate album names include their folder path. The current filter is preserved; if it hides the target photo, navigation is rejected without changing the source.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
