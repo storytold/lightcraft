@@ -258,6 +258,19 @@ fn template_folders(h: &Headless) -> Vec<(String, Option<String>)> {
     h.app.session.print_templates.iter().map(|t| (t.name.clone(), t.folder.clone())).collect()
 }
 
+/// The text the last frame painted inside the widget `id`.
+fn text_in(h: &Headless, id: &str) -> Vec<String> {
+    let r = rect(h, id);
+    h.view
+        .painted_shapes()
+        .into_iter()
+        .filter_map(|s| match s {
+            egui::epaint::Shape::Text(t) if r.contains(t.visual_bounding_rect().center()) => Some(t.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Drags the widget `from` onto the center of the widget `to`.
 fn drag_onto(h: &mut Headless, from: &str, to: &str) {
     let (a, b) = (rect(h, from).center(), rect(h, to).center());
@@ -311,8 +324,10 @@ fn saving_over_a_template_keeps_its_folder_until_one_is_picked() {
     h.app.ui.print.template_name = "Sheet".into();
     click(&mut h, "button:printSaveTemplate");
     assert_eq!(template_folders(&h), [("Sheet".into(), Some("Weddings".into()))], "the Folder selector was not touched");
+    assert_eq!(text_in(&h, "combo:printSaveFolder"), ["Weddings"], "the Folder selector shows the template's folder");
     click(&mut h, "combo:printSaveFolder");
     click(&mut h, "item:printSaveFolder-0");
+    assert_eq!(text_in(&h, "combo:printSaveFolder"), ["User Templates"], "the Folder selector shows the folder picked");
     click(&mut h, "button:printSaveTemplate");
     assert_eq!(template_folders(&h), [("Sheet".into(), None)], "User Templates was picked");
 }
