@@ -806,6 +806,10 @@ fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
         from += piece.len() + 1;
     }
     let piece = |p: &std::ops::Range<usize>| text.get(p.clone()).unwrap_or_default().trim();
+    // how many separators the names of `start` hold, each count once, the most first
+    let mut counts: Vec<usize> = start.iter().map(|c| c.path.matches(is_separator).count()).filter(|&n| n > 0).collect();
+    counts.sort_unstable_by(|a, b| b.cmp(a));
+    counts.dedup();
     let mut names = Vec::new();
     let mut i = 0;
     while let Some(first) = pieces.get(i) {
@@ -829,16 +833,11 @@ fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
         let one_each =
             |from: usize, to: usize| pieces.get(from..=to).is_some_and(|run| run.iter().all(|p| start.iter().any(|c| spells(piece(p), c))));
         let joined = quoted_run.or_else(|| {
-            start
-                .iter()
-                .map(|c| c.path.matches(is_separator).count())
-                .filter(|&separators| separators > 0)
-                .filter_map(|separators| {
-                    let last = pieces.get(i + separators)?;
-                    let s = text.get(first.start..last.end)?.trim();
-                    unnamed(s, &named).filter(|_| !one_each(i, i + separators)).map(|_| (separators, s))
-                })
-                .max_by_key(|&(separators, _)| separators)
+            counts.iter().find_map(|&separators| {
+                let last = pieces.get(i + separators)?;
+                let s = text.get(first.start..last.end)?.trim();
+                unnamed(s, &named).filter(|_| !one_each(i, i + separators)).map(|_| (separators, s))
+            })
         });
         let (separators, name) = joined.unwrap_or((0, text.get(first.clone()).unwrap_or_default().trim()));
         if let Some(n) = unnamed(name, &named) {
