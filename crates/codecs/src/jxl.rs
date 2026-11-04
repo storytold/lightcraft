@@ -93,7 +93,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         meta.icc = icc;
     }
     if let Ok(AuxBoxData::Data(ex)) = img.aux_boxes().first_exif() {
-        meta.exif = Some(ex.payload().to_vec());
+        meta.exif = usize::try_from(ex.tiff_header_offset()).ok().and_then(|offset| ex.payload().get(offset..)).map(<[u8]>::to_vec);
     }
     if let AuxBoxData::Data(x) = img.aux_boxes().first_xml() {
         meta.xmp = Some(String::from_utf8_lossy(x).trim_end_matches('\0').to_string());
