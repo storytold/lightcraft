@@ -111,14 +111,21 @@ impl ToneMap {
     /// gain map only lifts highlights), then the highlights gain up to `peak − 1` more as in
     /// [`ToneMap::hdr`].
     pub fn camera_hdr(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        let contrast = contrast.clamp(-100.0, 100.0);
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
+        let c = (contrast / 100.0) as f32;
+        // The camera curve's contrast is already baked into `y`, so a post-curve S-curve can
+        // only mildly compress it — at contrast = -100 the render stays too contrasty. Scale
+        // scene EV about grey *before* the curve instead: negative contrast compresses the
+        // input EV range and flattens the curve itself, positive contrast is unchanged.
+        let ev_scale = if c < 0.0 { 1.0 + c } else { 1.0 };
         let adjustment = Self::display(contrast, whites, blacks);
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
         let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
-                let y = curve.apply(GREY * 2f32.powf(ev));
+                let y = curve.apply(GREY * 2f32.powf(ev * ev_scale));
                 let o = if neutral { y } else { adjustment.apply(y) };
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })
@@ -392,6 +399,19 @@ mod tests {
                 assert!(t.apply(4.0) > 1.0 && t.apply(4.0) > sdr.apply(4.0) + 0.5, "{peak}: highlights lifted");
             }
         }
+    }
+
+    #[test]
+    fn camera_hdr_min_contrast_flattens_tone_curve() {
+        let curve = CameraTone::new(knots()).unwrap();
+        let flat = ToneMap::camera_hdr(&curve, -100.0, 0.0, 0.0, 1.0);
+        // Min contrast must flatten the camera curve's contrast, not just mildly
+        // compress it on top of the curve whose full contrast is already baked in.
+        let shadow = 0.01;
+        let highlight = 2.0;
+        let camera_gap = curve.apply(highlight) - curve.apply(shadow);
+        let flat_gap = flat.apply(highlight) - flat.apply(shadow);
+        assert!(flat_gap < camera_gap * 0.5, "min contrast leaves {flat_gap} of the camera curve's {camera_gap} contrast");
     }
 
     #[test]
