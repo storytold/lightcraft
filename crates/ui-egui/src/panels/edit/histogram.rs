@@ -364,7 +364,7 @@ mod tests {
     fn reset_tooltip_names_the_shortcut_of_this_platform() {
         let keymap = crate::shortcuts::Keymap::new();
         assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, false), "Reset all edits (Ctrl+Shift+R)");
-        assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, true), "Reset all edits (⌘⇧R)");
+        assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, true), "Reset all edits (⇧⌘R)");
         let rebound: crate::shortcuts::Keymap = [("develop.reset".to_string(), "Cmd+Alt+R".to_string())].into();
         assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &rebound, false), "Reset all edits (Ctrl+Alt+R)");
         let unbound: crate::shortcuts::Keymap = [("develop.reset".to_string(), String::new())].into();

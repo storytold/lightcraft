@@ -44,7 +44,7 @@ fn grid_menu_shortcut_hints_keep_native_toggle_dispatch() {
         assert_eq!(label, "Photo Grid");
         assert_eq!(accelerator, Some("G"));
         assert!(!native_menu_delivers(accelerator.unwrap()));
-        for (key, text) in [("Cmd+Shift+G", "⌘⇧G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
+        for (key, text) in [("Cmd+Shift+G", "⇧⌘G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
             crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.gridToggle", Some(key)).unwrap();
             let (label, accelerator) =
                 native_item_presentation(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, id, &Value::Null, "Photo Grid", Some(key));
