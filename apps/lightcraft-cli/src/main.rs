@@ -196,7 +196,12 @@ fn main() -> ExitCode {
 }
 
 /// Raw files below `path` (or `path` itself), skipping hidden and NAS metadata folders.
-fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
+///
+/// Folders go through the engine's bounded walk ([`lightcraft_engine::walk::files_in`]): it enters
+/// a folder reached through a link once at most and stops at a depth and an entry budget. A
+/// folder of links pointing back at their parents made the old recursive walk re-read the same
+/// folders exponentially often before its depth limit cut it off (CWE-400).
+fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
     let is_raw = |p: &Path| {
         p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf", "crw"].iter().any(|x| e.eq_ignore_ascii_case(x)))
     };
@@ -206,17 +211,20 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
         }
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else { return };
-    if depth > 32 {
-        return;
+    // (hidden entries are left out by the walk; `@eaDir` and other NAS metadata folders and files
+    // here, folders before they are listed so their entries do not use up the walk's budget)
+    let nas_metadata = |p: &Path| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+    let walked = lightcraft_engine::walk::files_in_entering(
+        path,
+        None,
+        lightcraft_engine::walk::Limits::default(),
+        |p| is_raw(p) && !nas_metadata(p) && p.is_file(),
+        |p| !nas_metadata(p),
+    );
+    if walked.truncated {
+        eprintln!("calibrate: {} has more folders or entries than a walk looks at; the rest is left out", path.display());
     }
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with(['.', '@']) {
-            continue;
-        }
-        raw_files(&entry.path(), out, depth + 1);
-    }
+    out.extend(walked.files);
 }
 
 fn calibrate(args: &[String]) -> Result<(), String> {
@@ -238,7 +246,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     }
     let mut files = Vec::new();
     for input in &inputs {
-        raw_files(Path::new(input), &mut files, 0);
+        raw_files(Path::new(input), &mut files);
     }
     files.sort();
     files.dedup();
@@ -1068,6 +1076,35 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
 #[cfg(not(feature = "denoise"))]
 fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
+}
+
+#[cfg(all(test, unix))]
+mod raw_files_tests {
+    use super::raw_files;
+
+    /// Links back to their own folders are entered once, not once per path that reaches them: a
+    /// handful of such links made the old walk list the same folders exponentially often.
+    #[test]
+    fn folder_links_back_up_are_walked_once() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-cli-raw-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = dir.join("a");
+        std::fs::create_dir_all(a.join("@eaDir")).unwrap();
+        std::fs::write(a.join("one.NEF"), b"").unwrap();
+        std::fs::write(a.join("@eaDir").join("thumb.nef"), b"").unwrap();
+        std::fs::write(a.join("notes.txt"), b"").unwrap();
+        for i in 0..8 {
+            std::os::unix::fs::symlink(&dir, a.join(format!("up{i}"))).unwrap();
+        }
+        // a named pipe with a raw extension: not a file, so never opened (a read would block)
+        assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
+        let started = std::time::Instant::now();
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
+        assert_eq!(files, vec![a.join("one.NEF")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
